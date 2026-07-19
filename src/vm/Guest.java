@@ -7,6 +7,8 @@ package vm;
  * M4: runtime class loading on bare metal (PLAN.md §4).
  */
 public class Guest {
+    static int base;             // a static field, backed by the loader's statics block
+
     public static int answer() {
         int r = 0;
         int i = 0;
@@ -14,6 +16,8 @@ public class Guest {
             r = r + 7;
             i = i + 1;
         }
-        return r;                // 42 = 0x2A = '*'
+        base = r;                // putstatic
+        base = base + 0;         // getstatic + putstatic
+        return base;             // getstatic -> 42 = 0x2A = '*'
     }
 }

@@ -18,11 +18,15 @@ import magic.Magic;
 public final class Loader {
     private Loader() {}
 
+    private static long gbase;      // class blob base address
     private static long gp;         // parse cursor
-    private static int[] gutf8;     // byte offset of each Utf8 constant-pool entry
+    private static int[] gcp;       // byte offset of each constant-pool entry body
     private static int gcodeLen;    // length of the located method's bytecode
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen, gdescLen;
+    private static long gStatics;   // this class's statics block
+    private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
+    private static int gsfCount;
 
     private static int u1(long p) { return Magic.load8(p) & 0xFF; }
     private static int u2(long p) { return (u1(p) << 8) | u1(p + 1); }
@@ -35,6 +39,7 @@ public final class Loader {
     /** Compile+run a no-arg static method matching the current seek key in {@code bytes}. */
     private static int load0(long bytes) {
         parseConstPool(bytes);
+        parseFields();
         long code = findMethod(bytes);
         if (code == 0L) return 0;
         return compileAndRun(code, gcodeLen);
@@ -43,6 +48,7 @@ public final class Loader {
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
     private static long load2(long bytes, long a, long b) {
         parseConstPool(bytes);
+        parseFields();
         long code = findMethod(bytes);
         if (code == 0L) return 0L;
         long buf = compile(code, gcodeLen);
@@ -61,15 +67,17 @@ public final class Loader {
         return (int) load2(VM.mathBytes, 0x4DL, 0x21L);
     }
 
-    /** Walk the constant pool, recording Utf8 offsets; leave {@code gp} just past it. */
+    /** Walk the constant pool, recording each entry's body offset; leave {@code gp} just past it. */
     private static void parseConstPool(long base) {
+        gbase = base;
         long p = base + 8;                              // skip magic(4) + minor/major(4)
         int cpCount = u2(p); p += 2;
-        gutf8 = new int[cpCount];
+        gcp = new int[cpCount];
         int i = 1;
         while (i < cpCount) {
             int tag = u1(p); p += 1;
-            if (tag == 1) { gutf8[i] = (int) (p - base); p += 2 + u2(p); }   // Utf8
+            gcp[i] = (int) (p - base);                  // body starts right after the tag
+            if (tag == 1) { p += 2 + u2(p); }           // Utf8
             else if (tag == 5 || tag == 6) { p += 8; i += 1; }              // Long/Double: two slots
             else if (tag == 15) { p += 3; }                                 // MethodHandle
             else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20) { p += 2; }
@@ -79,12 +87,42 @@ public final class Loader {
         gp = p;
     }
 
-    /** From {@code gp}, skip to the methods and return the bytecode address of the sought method. */
-    private static long findMethod(long base) {
+    /** Parse the fields, assigning each static field a slot; allocate a zeroed statics block. */
+    private static void parseFields() {
         long p = gp;
         p += 6;                                         // access_flags, this_class, super_class
         p += 2 + u2(p) * 2;                             // interfaces
-        p = skipMembers(p);                             // fields
+        int fcount = u2(p); p += 2;
+        gsfName = new int[fcount + 1];
+        int slot = 0, f = 0;
+        while (f < fcount) {
+            int access = u2(p);
+            int nameIdx = u2(p + 2);
+            p += 6;                                     // access, name, descriptor
+            if ((access & 0x0008) != 0) { gsfName[slot] = gcp[nameIdx]; slot += 1; }   // ACC_STATIC
+            int attrs = u2(p); p += 2;
+            p = skipAttributes(p, attrs);
+            f += 1;
+        }
+        gsfCount = slot;
+        gStatics = Heap.alloc(slot * 8 + 8);
+        int z = 0;
+        while (z < slot) { Magic.store64(gStatics + z * 8, 0L); z += 1; }   // statics default to 0
+        gp = p;
+    }
+
+    /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
+    private static long staticAddr(int idx) {
+        int natIdx = u2(gbase + gcp[idx] + 2);          // Fieldref -> NameAndType
+        int nameOff = gcp[u2(gbase + gcp[natIdx])];     // NameAndType -> name Utf8 offset
+        int s = 0;
+        while (s < gsfCount) { if (gsfName[s] == nameOff) return gStatics + s * 8; s += 1; }
+        return gStatics;
+    }
+
+    /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
+    private static long findMethod(long base) {
+        long p = gp;
         int mcount = u2(p); p += 2;
         int m = 0;
         while (m < mcount) {
@@ -93,8 +131,8 @@ public final class Loader {
             int descIdx = u2(p + 2);
             p += 4;
             int attrs = u2(p); p += 2;
-            if (isName(base, gutf8[nameIdx], gnameP, gnameLen)
-                    && isName(base, gutf8[descIdx], gdescP, gdescLen)) {
+            if (isName(base, gcp[nameIdx], gnameP, gnameLen)
+                    && isName(base, gcp[descIdx], gdescP, gdescLen)) {
                 long code = findCode(base, p, attrs);
                 if (code != 0L) return code;
             } else {
@@ -111,7 +149,7 @@ public final class Loader {
         while (a < attrs) {
             int anIdx = u2(p); p += 2;
             int alen = u4(p); p += 4;
-            if (isName(base, gutf8[anIdx], 0x436f6465L, 4)) {          // "Code"
+            if (isName(base, gcp[anIdx], 0x436f6465L, 4)) {            // "Code"
                 gcodeLen = u4(p + 4);                   // after max_stack(2) + max_locals(2)
                 return p + 8;
             }
@@ -119,13 +157,6 @@ public final class Loader {
             a += 1;
         }
         return 0L;
-    }
-
-    private static long skipMembers(long p) {
-        int n = u2(p); p += 2;
-        int k = 0;
-        while (k < n) { p += 6; int attrs = u2(p); p += 2; p = skipAttributes(p, attrs); k += 1; }
-        return p;
     }
 
     private static long skipAttributes(long p, int attrs) {
@@ -204,6 +235,14 @@ public final class Loader {
         else if (op >= 0x9f && op <= 0xa4) { csp -= 2; rec(target(code, pc)); emit(0xEB00001F | ((9 + csp + 1) << 16) | ((9 + csp) << 5)); emitBc(icmpCond(op), target(code, pc)); }
         else if (op == 0xa7) { rec(target(code, pc)); emit(0x14000000 | (((cbc[target(code, pc)] - curWord()) & 0x3FFFFFF))); }  // goto
         else if (op == 0xac) { csp -= 1; emit(mov(0, 9 + csp)); emit(0xD65F03C0); }                 // ireturn
+        else if (op == 0xb2) { emitAddr16(staticAddr(u2(code + pc + 1))); emit(0xB9800000 | (16 << 5) | (9 + csp)); csp += 1; }  // getstatic (ldrsw)
+        else if (op == 0xb3) { csp -= 1; emitAddr16(staticAddr(u2(code + pc + 1))); emit(0xB9000000 | (16 << 5) | (9 + csp)); }  // putstatic (strw)
+    }
+
+    /** Load a &lt;4 GiB address into x16 (MOVZ low16 + MOVK bits16..31). */
+    private static void emitAddr16(long addr) {
+        emit(0xD2800000 | ((((int) addr) & 0xFFFF) << 5) | 16);
+        emit(0xF2A00000 | ((((int) (addr >> 16)) & 0xFFFF) << 5) | 16);
     }
 
     private static void emitIinc(long code, int pc) {
@@ -231,6 +270,7 @@ public final class Loader {
     }
 
     private static int wordsFor(int op) {
+        if (op == 0xb2 || op == 0xb3) return 3;               // get/putstatic: movz + movk + ldrsw/strw
         if (op == 0xac) return 2;                              // ireturn: mov x0 + ret
         if ((op >= 0x99 && op <= 0x9e) || (op >= 0x9f && op <= 0xa4)) return 2;  // if / if_icmp: cmp + b.cond
         return 1;
@@ -238,7 +278,8 @@ public final class Loader {
 
     private static int opLen(int op) {
         if (op == 0x10 || op == 0x15 || op == 0x36) return 2;                     // bipush/iload/istore
-        if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7) return 3;
+        if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
+                || op == 0xb2 || op == 0xb3) return 3;                            // ... / get/putstatic
         return 1;
     }
 }
