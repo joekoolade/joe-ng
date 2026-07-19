@@ -54,13 +54,12 @@ public final class Magic {
     public static void store64(long addr, long value) { throw intrinsic(); }
     public static long load64(long addr)              { throw intrinsic(); }
 
-    // ----- image data pool (temporary bridge until real Strings/arrays) ----
     /**
-     * Absolute address of the method's appended data blob (the boot message).
-     * The compiler reserves the address and the writer fills it in once the blob
-     * is laid out. Placeholder until the object model gives us real char arrays.
+     * Type adapter for string literals: a {@code String} constant is interned by
+     * the compiler as a real heap-layout {@code byte[]} object in the image (ASCII
+     * bytes), so {@code ldc "..."} already yields a {@code byte[]} reference. This
+     * call is lowered to nothing — it only lets Java source name the bytes without
+     * a {@code java.lang.String} class (which joe2 does not yet have).
      */
-    public static long message()    { throw intrinsic(); }
-    /** Length in bytes of {@link #message()}'s blob. */
-    public static int  messageLen() { throw intrinsic(); }
+    public static byte[] bytes(String literal) { throw intrinsic(); }
 }

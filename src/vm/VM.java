@@ -53,20 +53,15 @@ public final class VM {
      * heap object, mutate its field, and print the result.
      */
     static void run() {
-        Uart.puts(Magic.message(), Magic.messageLen());
+        Uart.write(Magic.bytes("hello from joe2\r\n"));   // real interned string literal (byte[])
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
         Uart.putc(c.get());                // virtual dispatch: read the field back
         Uart.putc(0x0A);                   // newline
 
-        // heap byte array: allocate, fill, iterate (newarray/bastore/baload/arraylength)
-        byte[] a = new byte[3];
+        byte[] a = new byte[3];            // runtime heap array (newarray/bastore)
         a[0] = 0x41; a[1] = 0x42; a[2] = 0x0A;   // "AB\n"
-        int i = 0;
-        while (i < a.length) {
-            Uart.putc(a[i]);
-            i = i + 1;
-        }
+        Uart.write(a);
     }
 }

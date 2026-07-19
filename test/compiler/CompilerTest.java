@@ -5,7 +5,9 @@ import asm.CodeBuffer;
 import classfile.ClassFile;
 import harness.T;
 import writer.BuildCompiledSpinImage;
+import writer.BuildRuntimeImage;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -135,6 +137,10 @@ public final class CompilerTest {
         lenWant.add(A64.addImm(31, 31, 16));
         lenWant.add(A64.ret());
         T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
+
+        // ---- string literals: interned as a byte[] object laid out in the image ----
+        String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
+        T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);
 
         T.summary("compiler");
     }

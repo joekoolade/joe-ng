@@ -38,14 +38,15 @@ public final class BaselineCompiler {
     public interface ClassResolver { ClassFile resolve(String owner); }
 
     /** A single compiled method: its words and the fixups awaiting relocation. */
-    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs) {}
+    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs, List<StrRef> strRefs) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
     public record TibRef(int wordIndex, int reg, String className) {}
+    /** A reserved address load for an interned string literal ({@code ldc}). */
+    public record StrRef(int wordIndex, int reg, String text) {}
 
     private final ClassFile cf;
-    private final byte[] imageData;
     private final ClassResolver resolver;
 
     private int sp;
@@ -53,19 +54,17 @@ public final class BaselineCompiler {
     private int frameSize, localSaveBase, spillBase, maxLocals;
     private boolean saveLR, nonLeaf;
     private final List<Fixup> fixups = new ArrayList<>();
-    private final List<AddrSlot> messageSlots = new ArrayList<>();
     private final List<CallSite> callSites = new ArrayList<>();
     private final List<TibRef> tibRefs = new ArrayList<>();
+    private final List<StrRef> strRefs = new ArrayList<>();
 
-    public BaselineCompiler(ClassFile cf)                  { this(cf, null, null); }
-    public BaselineCompiler(ClassFile cf, byte[] imageData) { this(cf, imageData, null); }
-    public BaselineCompiler(ClassFile cf, byte[] imageData, ClassResolver resolver) {
-        this.cf = cf; this.imageData = imageData; this.resolver = resolver;
+    public BaselineCompiler(ClassFile cf)                     { this(cf, null); }
+    public BaselineCompiler(ClassFile cf, ClassResolver resolver) {
+        this.cf = cf; this.resolver = resolver;
     }
 
     private interface BranchEnc { int encode(int byteOffset); }
     private record Fixup(int wordIndex, int targetBc, BranchEnc enc) {}
-    private record AddrSlot(int wordIndex, int reg) {}
 
     /** Method key used for call resolution: {@code owner.name+descriptor}. */
     public static String key(String owner, String name, String desc) { return owner + "." + name + desc; }
@@ -73,7 +72,7 @@ public final class BaselineCompiler {
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb) {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
-        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty())
+        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty())
             throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         for (int w : cm.words) cb.emit(w);
     }
@@ -112,13 +111,7 @@ public final class BaselineCompiler {
             if (target < 0) throw new IllegalStateException("branch to non-instruction bc=" + f.targetBc);
             cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
         }
-        if (!messageSlots.isEmpty()) {
-            if (imageData == null) throw new IllegalStateException("Magic.message() used but no image data provided");
-            long dataAddr = cb.here();
-            emitBytes(cb, imageData);
-            for (AddrSlot s : messageSlots) cb.patchAddr(s.wordIndex, s.reg, dataAddr);
-        }
-        return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs));
+        return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs), List.copyOf(strRefs));
     }
 
     // ----- prologue / epilogue --------------------------------------------
@@ -157,8 +150,8 @@ public final class BaselineCompiler {
             case 0x0A -> { loadConst(cb, 1); return 1; }
             case 0x10 -> { loadConst(cb, (byte) code[pos + 1]); return 2; }
             case 0x11 -> { loadConst(cb, (short) u2(code, pos + 1)); return 3; }
-            case 0x12 -> { loadConst(cb, cf.intAt(code[pos + 1] & 0xFF)); return 2; }
-            case 0x13 -> { loadConst(cb, cf.intAt(u2(code, pos + 1))); return 3; }
+            case 0x12 -> { ldc(cb, code[pos + 1] & 0xFF); return 2; }
+            case 0x13 -> { ldc(cb, u2(code, pos + 1)); return 3; }
             case 0x14 -> { loadConst(cb, cf.longAt(u2(code, pos + 1))); return 3; }
 
             case 0x15, 0x16, 0x19 -> { load(cb, code[pos + 1] & 0xFF); return 2; }     // iload/lload/aload
@@ -445,8 +438,7 @@ public final class BaselineCompiler {
             case "load8(J)I"    -> { int addr = popReg(), r = pushReg(); cb.emit(A64.ldrb(r, addr, 0)); }
             case "load64(J)J"   -> { int addr = popReg(), r = pushReg(); cb.emit(A64.ldrx(r, addr, 0)); }
 
-            case "message()J"    -> { int r = pushReg(); messageSlots.add(new AddrSlot(cb.reserveAddr(r), r)); }
-            case "messageLen()I" -> loadConst(cb, imageData == null ? 0 : imageData.length);
+            case "bytes(Ljava/lang/String;)[B" -> { /* no-op: the operand is already an interned byte[] ref */ }
 
             default -> throw new UnsupportedOperationException("unknown intrinsic magic/Magic." + key);
         }
@@ -516,15 +508,15 @@ public final class BaselineCompiler {
 
     private static void set64(CodeBuffer cb, int rd, long v) { cb.emitAll(A64.loadImm64(rd, v)); }
 
-    private static void emitBytes(CodeBuffer cb, byte[] bytes) {
-        int padded = (bytes.length + 3) & ~3;
-        for (int i = 0; i < padded; i += 4) {
-            int w = 0;
-            for (int b = 0; b < 4; b++) {
-                int idx = i + b;
-                if (idx < bytes.length) w |= (bytes[idx] & 0xFF) << (b * 8);
-            }
-            cb.emit(w);
+    /** ldc/ldc_w: int constant, or a String literal interned as a byte[] object. */
+    private void ldc(CodeBuffer cb, int cpIndex) {
+        if (cf.isStringConst(cpIndex)) {
+            int r = pushReg();
+            strRefs.add(new StrRef(cb.reserveAddr(r), r, cf.stringAt(cpIndex)));
+        } else if (cf.isIntConst(cpIndex)) {
+            loadConst(cb, cf.intAt(cpIndex));
+        } else {
+            throw new UnsupportedOperationException("ldc of unsupported constant #" + cpIndex);
         }
     }
 

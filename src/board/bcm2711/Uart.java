@@ -33,12 +33,12 @@ public final class Uart {
         Magic.store8(Bcm2711.AUX_MU_IO_REG, c);
     }
 
-    /** Write {@code n} bytes starting at absolute address {@code p}. */
-    public static void puts(long p, int n) {
-        while (n != 0) {
-            putc(Magic.load8(p));
-            p = p + 1L;
-            n = n - 1;
+    /** Write every byte of {@code s} (a real heap byte[], e.g. an interned string literal). */
+    public static void write(byte[] s) {
+        int i = 0;
+        while (i < s.length) {
+            putc(s[i]);
+            i = i + 1;
         }
     }
 }

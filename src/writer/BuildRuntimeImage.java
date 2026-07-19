@@ -3,7 +3,6 @@ package writer;
 import asm.CodeBuffer;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 /**
@@ -19,10 +18,9 @@ import java.nio.file.Path;
 public final class BuildRuntimeImage {
 
     private static final String ENTRY = "vm/VM.boot()V";
-    private static final byte[] MESSAGE = "hello from joe2\r\n".getBytes(StandardCharsets.US_ASCII);
 
     public static CodeBuffer build(Path classesDir) throws IOException {
-        return new ImageBuilder(classesDir, MESSAGE).build(ENTRY);
+        return new ImageBuilder(classesDir).build(ENTRY);
     }
 
     public static void main(String[] args) throws IOException {

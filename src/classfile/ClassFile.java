@@ -102,6 +102,8 @@ public final class ClassFile {
     public int intAt(int i)      { require(i, INTEGER); return ref1[i]; }
     public long longAt(int i)    { require(i, LONG);    return longVal[i]; }
     public String stringAt(int i){ require(i, STRING);  return utf8(ref1[i]); }
+    public boolean isIntConst(int i)    { return tag[i] == INTEGER; }
+    public boolean isStringConst(int i) { return tag[i] == STRING; }
     public String classAt(int i) { require(i, CLASS);   return utf8(ref1[i]); }
 
     /** Resolve a Methodref/InterfaceMethodref/Fieldref index to owner/name/descriptor. */

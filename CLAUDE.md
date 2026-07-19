@@ -146,10 +146,19 @@ defines the minimum the assembler must encode.
   header (null TIB for now; array TIBs come with GC/instanceof). Alloc rounds the
   bump to keep objects 8-aligned (MMU off → unaligned faults). QEMU prints `AB`
   from a filled+iterated heap `byte[]`. Added `MUL` and `ADD (shifted reg)`.
+- **String literals DONE — `message()` bridge retired.** `ldc "..."` interns the
+  literal as a real heap-layout **byte[] object** in the image (writer lays out
+  `[null TIB][status][length][ASCII bytes]`, 8-aligned; the `ldc` address load is
+  relocated like TIB refs). `Magic.bytes(String):byte[]` is a compile-time type
+  adapter lowered to a no-op (joe2 has no `java.lang.String` yet, so this lets
+  Java source name the bytes). `Uart.write(byte[])` iterates it. The old
+  appended-blob `message()`/`messageLen()` and the compiler's `imageData`
+  plumbing are gone. `CompilerTest` asserts the interned bytes land in the image.
 - **M2 remaining:** static fields (`getstatic`/`putstatic`), `instanceof`/
-  `checkcast`, char/short arrays (need `ldrh`/`strh`), class hierarchies (super
-  calls, vtable inheritance), and real String literals (`ldc` String → interned
-  char[] + String object) to retire the `message()` bridge. GC is still M6.
+  `checkcast`, char/short arrays (`ldrh`/`strh`), and class hierarchies (super
+  calls, vtable inheritance). A real `String` class (wrapping the byte[]) is a
+  later class-library step. GC is still M6. `baload` still zero-extends (fine for
+  ASCII; `ldrsb` for signed bytes later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
