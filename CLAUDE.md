@@ -136,8 +136,22 @@ defines the minimum the assembler must encode.
     loaded class's own `<clinit>` runs (Math keeps its no-`<clinit>` path — its
     initializer uses doubles/native, out of scope). No eager multi-class init order
     or per-class guards yet (single loaded class).
-  - **Still to do on-metal:** `invokevirtual`/interfaces on loaded objects (needs an
-    on-metal TIB), and cross-class loading.
+  - **`invokevirtual` DONE (on-metal, single class):** the loader now builds a
+    **TIB on the metal**. `parseVtable` assigns each virtual method (instance,
+    non-private, non-`<init>`/`<clinit>`) a vtable slot in declaration order and
+    records its name/descriptor/Code. During a compile, all virtual methods are
+    seeded into the program (so the vtable is complete even if some aren't called),
+    and after placement `buildTib` allocates `{Type=null, code0, code1, ...}` in the
+    heap filled with each slot's compiled-buffer address. `new` now stores that TIB
+    into the object header (was null), and `invokevirtual` dispatches
+    `ldr tib,[this]; ldr code,[tib + 8 + slot*8]; blr` (x16 scratch) after the same
+    128-byte receiver+args spill as a call. QEMU's `*` now flows through
+    `g.compute()` (a real vtable call) reading an instance field and a `<clinit>`
+    static. **Limits:** single loaded class — vtable = the class's own virtual
+    methods, no inherited/overridden slots (needs the superclass's classfile), no
+    interfaces, `Type` is null so still no `instanceof`/`checkcast` on loaded objects.
+  - **Still to do on-metal:** interfaces (`invokeinterface`), cross-class loading /
+    class hierarchies, and a real `Type` for `instanceof` on loaded objects.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds

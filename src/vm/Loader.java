@@ -33,6 +33,12 @@ public final class Loader
     private static int gifCount;
     private static int gThisNameOff;     // Utf8 offset of this class's own name
     private static long gMethodsStart;   // address of the methods_count (for callee lookup)
+    private static int[] gvName;    // vtable: virtual method name Utf8 offset (index = slot)
+    private static int[] gvDesc;    // ... descriptor Utf8 offset
+    private static long[] gvCode;   // ... bytecode address
+    private static int[] gvLen;     // ... bytecode length
+    private static int gvCount;     // number of virtual methods (vtable slots)
+    private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
 
     private static int u1(long p)
     {
@@ -92,6 +98,7 @@ public final class Loader
         parseConstPool(VM.guestBytes);
         parseFields();
         runClinit(VM.guestBytes);                      // initialize statics before first use
+        parseVtable(VM.guestBytes);                    // assign vtable slots for invokevirtual
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
@@ -185,6 +192,8 @@ public final class Loader
         }
         gsfCount = slot;
         gifCount = islot;
+        gvCount = 0;                                    // no vtable unless parseVtable runs
+        gMethodsStart = p;                              // methods_count follows the fields
         gStatics = Heap.alloc(slot * 8 + 8);
         int z = 0;
         while (z < slot)
@@ -193,6 +202,58 @@ public final class Loader
             z += 1;
         }
         gp = p;
+    }
+
+    /**
+     * Assign a vtable slot to each virtual method (non-static, non-constructor,
+     * non-private), in declaration order, recording its name/descriptor/Code so the
+     * loader can build the TIB and resolve {@code invokevirtual}. No inheritance:
+     * slots are this class's own virtual methods only (Object's aren't in the file).
+     */
+    private static void parseVtable(long bytes)
+    {
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        gvName = new int[mcount + 1];
+        gvDesc = new int[mcount + 1];
+        gvCode = new long[mcount + 1];
+        gvLen = new int[mcount + 1];
+        int slot = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);                      // access, name, descriptor, attrs
+            if (isVirtual(u2(p), gcp[u2(p + 2)]))
+            {
+                gvName[slot] = gcp[u2(p + 2)];
+                gvDesc[slot] = gcp[u2(p + 4)];
+                gvCode[slot] = findCode(bytes, p + 8, attrs);   // sets gcodeLen
+                gvLen[slot] = gcodeLen;
+                slot += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        gvCount = slot;
+    }
+
+    /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
+    private static boolean isVirtual(int access, int nameOff)
+    {
+        if ((access & 0x0008) != 0 || (access & 0x0002) != 0)
+        {
+            return false;                               // static or private
+        }
+        if (isName(gbase, nameOff, 0x3C696E69743EL, 6))
+        {
+            return false;                               // "<init>"
+        }
+        if (isName(gbase, nameOff, 0x3C636C696E69743EL, 8))
+        {
+            return false;                               // "<clinit>"
+        }
+        return true;
     }
 
     /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
@@ -337,6 +398,15 @@ public final class Loader
         mBuf = new long[MAXM];
         mCount = 0;
         addMethod(code, len);
+        int v = 0;
+        while (v < gvCount)                             // seed all virtual methods (vtable must be
+        {                                               // complete even if some aren't called)
+            if (gvCode[v] != 0L)
+            {
+                addMethod(gvCode[v], gvLen[v]);
+            }
+            v += 1;
+        }
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -349,6 +419,7 @@ public final class Loader
             sizeMethod(i);
             i += 1;
         }
+        buildTib();                                     // vtable now that all buffers are placed
         i = 0;
         while (i < mCount)                              // emit
         {
@@ -448,6 +519,41 @@ public final class Loader
             i += 1;
         }
         return cbuf;                                     // unreachable when discovery is complete
+    }
+
+    /**
+     * Build this class's TIB in the heap: slot 0 is the Type (null — no
+     * instanceof/checkcast on loaded objects yet), then one vtable entry per
+     * virtual method pointing at its compiled buffer. {@code new} stores this into
+     * each instance's header so {@code invokevirtual} can dispatch through it.
+     */
+    private static void buildTib()
+    {
+        gTib = Heap.alloc((1 + gvCount) * 8);
+        Magic.store64(gTib, 0L);                         // TIB[0] = Type
+        int s = 0;
+        while (s < gvCount)
+        {
+            Magic.store64(gTib + 8 + s * 8, bufOf(gvCode[s]));   // TIB[1+slot] = method code
+            s += 1;
+        }
+    }
+
+    /** Vtable slot of the virtual method named by Methodref {@code idx}. */
+    private static int vtableSlotOf(int idx)
+    {
+        int nameOff = mrefNameOff(idx);
+        int descOff = mrefDescOff(idx);
+        int s = 0;
+        while (s < gvCount)
+        {
+            if (utf8Eq(gvName[s], nameOff) && utf8Eq(gvDesc[s], descOff))
+            {
+                return s;
+            }
+            s += 1;
+        }
+        return 0;
     }
 
     private static void rec(int tbc)
@@ -635,6 +741,10 @@ public final class Loader
         {
             emitInvokeSpecial(code, pc);    // invokespecial (constructor)
         }
+        else if (op == 0xb6)
+        {
+            emitInvokeVirtual(code, pc);    // invokevirtual (TIB vtable dispatch)
+        }
         else if (op == 0xb1)
         {
             emit(0xD65F03C0);    // return (void)
@@ -749,9 +859,55 @@ public final class Loader
             k += 1;
         }
         emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
-        emit(strx(31, 0, 0));                              // header.tib = xzr (null)
+        emitAddr16(gTib);                                  // x16 = &TIB
+        emit(strx(16, 0, 0));                              // header.tib = &TIB (vtable for dispatch)
         emit(mov(9 + csp, 0));                             // push the reference
         csp += 1;
+    }
+
+    /**
+     * invokevirtual: dispatch through the receiver's TIB vtable. Same 128-byte
+     * spill / arg-move as a static call (receiver is the leading arg), but instead
+     * of a fixed {@code BL} it loads the code address from
+     * {@code [[this] + 8 + slot*8]} and {@code BLR}s it (x16 scratch).
+     */
+    private static void emitInvokeVirtual(long code, int pc)
+    {
+        int idx = u2(code + pc + 1);
+        int descOff = mrefDescOff(idx);
+        int argc = argSlots(descOff) + 1;                  // + receiver
+        int hasRet = retSlots(descOff);
+        int slot = vtableSlotOf(idx);
+        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(strx(30, 31, 0));
+        int k = 1;
+        while (k <= 15)
+        {
+            emit(strx(k, 31, k * 8));
+            k += 1;
+        }
+        int t = 0;
+        while (t < argc)                                   // this + args -> x1..x(argc)
+        {
+            emit(mov(1 + t, 9 + csp - argc + t));
+            t += 1;
+        }
+        emit(ldrx(16, 1, 0));                              // x16 = [this]        (TIB)
+        emit(ldrx(16, 16, 8 + slot * 8));                  // x16 = [TIB + slot]  (code)
+        emit(0xD63F0000 | (16 << 5));                      // blr x16
+        emit(ldrx(30, 31, 0));
+        k = 1;
+        while (k <= 15)
+        {
+            emit(ldrx(k, 31, k * 8));
+            k += 1;
+        }
+        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        if (hasRet == 1)
+        {
+            emit(mov(9 + csp - argc, 0));
+        }
+        csp = csp - argc + hasRet;
     }
 
     /** Instance-field byte offset for the field named by {@code *ref} index (same class). */
@@ -1000,9 +1156,14 @@ public final class Loader
             int descOff = mrefDescOff(idx);
             return 35 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
         }
+        if (op == 0xb6)                                    // invokevirtual
+        {
+            int descOff = mrefDescOff(u2(code + pc + 1));
+            return 38 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + ldr/ldr/blr + result
+        }
         if (op == 0xbb)
         {
-            return 38;    // new: 128-byte spill + movz size + bl + null-tib + push
+            return 40;    // new: 128-byte spill + movz size + bl + tib addr/store + push
         }
         if (op == 0xb2 || op == 0xb3)
         {
@@ -1027,7 +1188,7 @@ public final class Loader
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
                 || op == 0xb2 || op == 0xb3 || op == 0xb8
-                || op == 0xb4 || op == 0xb5 || op == 0xb7 || op == 0xbb)
+                || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xbb)
         {
             return 3;    // ... get/putstatic / invoke* / get/putfield / new
         }

@@ -6,19 +6,22 @@ package vm;
  * parses those bytes, compiles {@code answer()} to A64, and executes it. This is
  * M4: runtime class loading on bare metal (PLAN.md §4).
  *
- * <p>{@code answer()} builds a real object on the metal: {@code new Guest()} calls
- * the image's {@code Heap.alloc}, the default constructor runs (an
- * {@code invokespecial} whose {@code Object.<init>} target is a no-op), and the
- * instance fields round-trip through {@code putfield}/{@code getfield}. The value
- * for {@code extra} comes from {@code bias}, a static the loader initializes by
- * running {@code <clinit>} first — so a correct {@code 42} proves the initializer
- * ran (an uninitialized {@code bias} would leave {@code 20}).
+ * <p>{@code answer()} builds a real object on the metal ({@code new Guest()} +
+ * default {@code <init>}), fills a field via a static call chain, then calls a
+ * <em>virtual</em> method on it: {@code g.compute()} dispatches through the
+ * instance's TIB vtable (built by the loader), and {@code compute()} in turn reads
+ * an instance field and a {@code <clinit>}-initialized static. A correct {@code 42}
+ * means the whole stack works — allocation, dispatch, fields, and static init.
  */
 public class Guest
 {
-    int value;                   // instance fields at +16 / +24 (object model)
-    int extra;
-    static int bias = 22;        // set by <clinit> (non-final, so not inlined at the use site)
+    int value;                   // instance field at +16 (object model)
+    static int bias = 20;        // set by <clinit> (non-final, so not inlined at the use site)
+
+    int compute()
+    {
+        return value + bias;     // virtual: getfield (this.value) + getstatic (bias)
+    }
 
     static int inner(int n)
     {
@@ -32,9 +35,8 @@ public class Guest
 
     public static int answer()
     {
-        Guest g = new Guest();   // new + invokespecial <init> (Object.<init> is a no-op)
-        g.value = outer(10);     // putfield @16 <- invokestatic chain (20)
-        g.extra = bias;          // putfield @24 <- getstatic bias (22, from <clinit>)
-        return g.value + g.extra;   // getfield @16 + getfield @24 -> 42 = '*'
+        Guest g = new Guest();   // new (stores the TIB) + invokespecial <init>
+        g.value = outer(11);     // putfield @16 <- invokestatic chain (22)
+        return g.compute();      // invokevirtual: TIB vtable dispatch -> 22 + 20 = 42 = '*'
     }
 }
