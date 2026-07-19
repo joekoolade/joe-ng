@@ -241,6 +241,7 @@ public final class VM
 
     // ----- runtime class loading (M4) --------------------------------------
     static long guestBytes, guestLen;   // raw Guest.class blob, filled by the writer
+    static long helperBytes, helperLen; // raw Helper.class blob (Guest links to it cross-class)
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
     static long heapAlloc;              // address of Heap.alloc(I)J, so on-metal `new` can BL it
 

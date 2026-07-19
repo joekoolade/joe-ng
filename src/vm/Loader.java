@@ -40,6 +40,17 @@ public final class Loader
     private static int gvCount;     // number of virtual methods (vtable slots)
     private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
 
+    // Global method registry across all loaded classes, so a call in one class can
+    // link to a method compiled in another. Each entry captures where its class /
+    // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
+    private static final int MAXREG = 128;
+    private static long[] rgBase;   // declaring class blob base (holds its Utf8 strings)
+    private static int[] rgClassOff;   // class name Utf8 offset
+    private static int[] rgNameOff;    // method name Utf8 offset
+    private static int[] rgDescOff;    // descriptor Utf8 offset
+    private static long[] rgBuf;    // compiled buffer address
+    private static int rgCount;
+
     private static int u1(long p)
     {
         return Magic.load8(p) & 0xFF;
@@ -92,20 +103,34 @@ public final class Loader
         return Magic.call2(buf, a, b);
     }
 
-    /** M4: our own Guest class — run &lt;clinit&gt; then compile+run answer() (42 = '*'). */
+    /**
+     * M4/cross-class — load two classes and link them on the metal. Helper is
+     * compiled and registered first (Guest depends on it); then Guest is compiled
+     * with its cross-class {@code invokestatic Helper.*} resolved through the
+     * registry, and {@code answer()} runs. Returns 42 = '*'.
+     */
     static int loadGuest()
     {
-        parseConstPool(VM.guestBytes);
-        parseFields();
-        runClinit(VM.guestBytes);                      // initialize statics before first use
-        parseVtable(VM.guestBytes);                    // assign vtable slots for invokevirtual
+        rgBase = new long[MAXREG];
+        rgClassOff = new int[MAXREG];
+        rgNameOff = new int[MAXREG];
+        rgDescOff = new int[MAXREG];
+        rgBuf = new long[MAXREG];
+        rgCount = 0;
+        setClass(VM.helperBytes);                      // dependency first (no cross-class cycles)
+        compileClass(VM.helperBytes);
+        registerAll();
+        setClass(VM.guestBytes);
+        runClinit(VM.guestBytes);                      // initialize Guest's statics
+        compileClass(VM.guestBytes);                   // cross-class calls link via the registry
+        registerAll();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
         {
             return 0;
         }
-        return compileAndRun(code, gcodeLen);
+        return (int) Magic.call0(bufOf(code));
     }
 
     /** Load java.lang.Math from java.base and run Math.max(0x4D, 0x21) -> 'M'. */
@@ -379,11 +404,6 @@ public final class Loader
     private static long[] mBuf;       // ... and the buffer assigned to it
     private static int mCount;
 
-    private static int compileAndRun(long code, int len)
-    {
-        return (int) Magic.call0(compile(code, len));
-    }
-
     /**
      * Compile the entry method and every static method it transitively calls,
      * then return the entry's buffer. Three flat passes — discover (BFS the call
@@ -429,6 +449,59 @@ public final class Loader
         Magic.dsb();                                    // publish all buffers (caches are off)
         Magic.isb();
         return mBuf[0];
+    }
+
+    /**
+     * Compile <em>every</em> method of the current class into its own buffer (in
+     * this class's context), then publish. Used for cross-class loading: each class
+     * is compiled whole so its methods can be registered and linked from others.
+     * Cross-class calls in the body resolve through the global registry, so classes
+     * a method depends on must be compiled+registered first (no cross-class cycles).
+     */
+    private static void compileClass(long bytes)
+    {
+        mCode = new long[MAXM];
+        mLen = new int[MAXM];
+        mBuf = new long[MAXM];
+        mCount = 0;
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)                              // seed all of the class's methods
+        {
+            int attrs = u2(p + 6);
+            long code = findCode(bytes, p + 8, attrs);
+            if (code != 0L)
+            {
+                addMethod(code, gcodeLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        int i = 0;
+        while (i < mCount)                              // place
+        {
+            sizeMethod(i);
+            i += 1;
+        }
+        buildTib();
+        i = 0;
+        while (i < mCount)                              // emit
+        {
+            emitMethod(i);
+            i += 1;
+        }
+        Magic.dsb();
+        Magic.isb();
+    }
+
+    /** Establish the current-class context: constant pool, fields/statics, vtable. */
+    private static void setClass(long bytes)
+    {
+        parseConstPool(bytes);
+        parseFields();
+        parseVtable(bytes);
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
@@ -518,7 +591,73 @@ public final class Loader
             }
             i += 1;
         }
-        return cbuf;                                     // unreachable when discovery is complete
+        return 0L;                                       // not one of this class's compiled methods
+    }
+
+    // ----- cross-class linking (global method registry) --------------------
+    /** Register a compiled method so other classes can link to it by class+name+descriptor. */
+    private static void register(long base, int classOff, int nameOff, int descOff, long buf)
+    {
+        rgBase[rgCount] = base;
+        rgClassOff[rgCount] = classOff;
+        rgNameOff[rgCount] = nameOff;
+        rgDescOff[rgCount] = descOff;
+        rgBuf[rgCount] = buf;
+        rgCount += 1;
+    }
+
+    /** Register every compiled method of the current class (walk its methods table). */
+    private static void registerAll()
+    {
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            long code = findCode(gbase, p + 8, attrs);
+            if (code != 0L)
+            {
+                long buf = bufOf(code);
+                if (buf != 0L)
+                {
+                    register(gbase, gThisNameOff, gcp[u2(p + 2)], gcp[u2(p + 4)], buf);
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+    }
+
+    /** Buffer of the method named by Methodref {@code idx} in another loaded class (registry lookup). */
+    private static long globalBuf(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        int descOff = mrefDescOff(idx);
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(gbase, classOff, rgBase[i], rgClassOff[i])
+                    && utf8EqAt(gbase, nameOff, rgBase[i], rgNameOff[i])
+                    && utf8EqAt(gbase, descOff, rgBase[i], rgDescOff[i]))
+            {
+                return rgBuf[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Buffer to BL for a static/special call: this class's own method, else the registry. */
+    private static long resolveCallBuf(int idx)
+    {
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
+        {
+            return bufOf(calleeCodeOf(idx));            // same class: local buffer
+        }
+        return globalBuf(idx);                          // cross class: another loaded class
     }
 
     /**
@@ -768,7 +907,7 @@ public final class Loader
     private static void emitInvokeStatic(long code, int pc)
     {
         int idx = u2(code + pc + 1);
-        emitCallSeq(idx, bufOf(calleeCodeOf(idx)), 0);
+        emitCallSeq(idx, resolveCallBuf(idx), 0);       // same-class or cross-class (registry)
     }
 
     /**
@@ -1031,23 +1170,28 @@ public final class Loader
         return 1;
     }
 
-    /** Compare two constant-pool Utf8 entries by length + bytes. */
+    /** Compare two Utf8 entries in the current class by length + bytes. */
     private static boolean utf8Eq(int offA, int offB)
     {
-        if (offA == offB)
+        return utf8EqAt(gbase, offA, gbase, offB);
+    }
+
+    /** Compare a Utf8 entry in {@code baseA} against one in {@code baseB} (may be different classes). */
+    private static boolean utf8EqAt(long baseA, int offA, long baseB, int offB)
+    {
+        if (baseA == baseB && offA == offB)
         {
             return true;
         }
-        int la = u2(gbase + offA);
-        int lb = u2(gbase + offB);
-        if (la != lb)
+        int la = u2(baseA + offA);
+        if (la != u2(baseB + offB))
         {
             return false;
         }
         int j = 0;
         while (j < la)
         {
-            if (u1(gbase + offA + 2 + j) != u1(gbase + offB + 2 + j))
+            if (u1(baseA + offA + 2 + j) != u1(baseB + offB + 2 + j))
             {
                 return false;
             }

@@ -160,8 +160,29 @@ defines the minimum the assembler must encode.
     like the writer side) only becomes necessary once several loaded classes
     implement the same interface at different vtable positions — that waits on
     cross-class loading.
-  - **Still to do on-metal:** cross-class loading / class hierarchies (which brings
-    inherited vtable slots, real itables, and a `Type` for `instanceof`).
+  - **Cross-class loading DONE (static calls):** the loader now loads more than one
+    class and links calls between them. A **global method registry** (`register`/
+    `registerAll`/`globalBuf`) records each compiled method's class/name/descriptor
+    Utf8 (captured by blob base+offset, compared with a two-base `utf8EqAt`) plus its
+    buffer. New per-class helpers: `setClass` (parse cp+fields+vtable for a blob) and
+    `compileClass` (compile *every* method of a class in its own context, so it can
+    be registered whole). The driver loads dependencies first: it compiles+registers
+    `Helper`, then `Guest`, whose `invokestatic Helper.scale` resolves via
+    `resolveCallBuf` (same-class → local buffer, else the registry) to Helper's
+    compiled buffer and `BL`s it. QEMU's `*` now flows `Guest.answer` →
+    `Helper.scale(11)=22` (cross-class) → field → `speak()`=42. `BuildRuntimeImage`
+    embeds `Helper.class` as a second raw blob. **Limits:** cross-class **static
+    calls only** — cross-class `new`/fields/`invokevirtual` would need each class's
+    TIB/field-layout/statics cached in the registry (the current single-class
+    context statics only hold the class being compiled); dependency order is manual
+    (`Helper` before `Guest`), no cross-class cycles; resolution is class+name+
+    descriptor (sound), not verified against the interface/super chain.
+    - **Gotcha fixed:** the registry arrays must be `new`'d — this VM emits no null
+      checks, so a store to a null array silently scribbles low RAM instead of
+      faulting (it corrupted the compile until the arrays were allocated).
+  - **Still to do on-metal:** cross-class `new`/fields/virtual dispatch (per-class
+    metadata in the registry), class hierarchies (inherited vtable slots, real
+    itables, a `Type` for `instanceof`), and dependency auto-ordering.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds

@@ -27,6 +27,8 @@ public final class BuildRuntimeImage
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
         ib.addBlob("vm/VM.guestBytes", "vm/VM.guestLen",
                    Files.readAllBytes(classesDir.resolve("vm/Guest.class")));
+        ib.addBlob("vm/VM.helperBytes", "vm/VM.helperLen",
+                   Files.readAllBytes(classesDir.resolve("vm/Helper.class")));
         // A real class from the JDK's java.base module (extracted from lib/modules).
         try (var in = Integer.class.getResourceAsStream("/java/lang/Math.class"))
         {
