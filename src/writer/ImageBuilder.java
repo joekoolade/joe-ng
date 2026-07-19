@@ -121,7 +121,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Map<String, Integer> strWord = new HashMap<>();
         for (String s : strings) { strWord.put(s, cur); cur += stringWords(s); }
         Map<String, Integer> staticWord = new HashMap<>();          // one 8-byte slot per static field, zero-init
+        int staticsRegionStart = cur;
         for (String s : statics) { staticWord.put(s, cur); cur += WORDS_PER_SLOT; }
+        int staticsRegionEnd = cur;
         // itables: per instantiated class, a directory of {interfaceType, itable} plus the itables.
         Map<String, Integer> itableDirWord = new HashMap<>();       // class -> directory
         Map<String, Integer> itableWord = new HashMap<>();          // "class|iface" -> itable
@@ -232,6 +234,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         fillStatic(image, staticWord, "vm/VM.frameCount",   frameEntries.size());
         fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
+        fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
+        fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (String s : strings) writeStringObject(image, strWord.get(s), s);

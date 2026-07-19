@@ -198,6 +198,7 @@ public final class BaselineCompiler {
             case 0x3B, 0x3C, 0x3D, 0x3E -> { store(cb, op - 0x3B); return 1; }        // istore_0..3
             case 0x3F, 0x40, 0x41, 0x42 -> { store(cb, op - 0x3F); return 1; }        // lstore_0..3
             case 0x4B, 0x4C, 0x4D, 0x4E -> { store(cb, op - 0x4B); return 1; }        // astore_0..3
+            case 0x57 -> { popReg(); return 1; }                                      // pop (discard result)
             case 0x59 -> { dup(cb); return 1; }                                       // dup
             case 0x84 -> { iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]); return 3; }
 
@@ -502,6 +503,20 @@ public final class BaselineCompiler {
         cb.emit(A64.b((h - cb.wordCount()) * 4));                // spin
     }
 
+    /** Magic.gc(): spill x19..x28 (+LR) so live refs are scannable, call the collector, restore. */
+    private void lowerGc(CodeBuffer cb) {
+        int frame = 96;                                          // 10 locals (80) + LR (8), 16-aligned
+        cb.emit(A64.subImm(31, 31, frame));
+        cb.emit(A64.strx(30, 31, 80));                          // save LR (we make a call)
+        for (int i = 0; i < 10; i++) cb.emit(A64.strx(19 + i, 31, i * 8));  // spill x19..x28
+        cb.emit(A64.movFromSp(0));                              // x0 = scanFrom (bottom of spilled regs)
+        int w = cb.emit(A64.bl(0));
+        callSites.add(new CallSite(w, "vm/VM.gcCollect(J)V"));
+        for (int i = 0; i < 10; i++) cb.emit(A64.ldrx(19 + i, 31, i * 8));  // restore
+        cb.emit(A64.ldrx(30, 31, 80));
+        cb.emit(A64.addImm(31, 31, frame));
+    }
+
     /** A real call: args to x0.. (receiver first if any), BL placeholder, result from x0. */
     private void lowerCall(ClassFile.MemberRef ref, CodeBuffer cb, boolean hasReceiver) {
         emitCall(cb, key(ref.owner(), ref.name(), ref.descriptor()), ref.descriptor(), hasReceiver);
@@ -575,6 +590,7 @@ public final class BaselineCompiler {
         switch (key) {
             case "wfe()V"  -> cb.emit(A64.wfe());
             case "isb()V"  -> cb.emit(A64.isb());
+            case "gc()V"   -> lowerGc(cb);
             case "eret()V" -> cb.emit(A64.eret());
             case "dropToEL1()V" -> lowerDropToEL1(cb);
 

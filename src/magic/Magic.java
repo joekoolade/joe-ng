@@ -23,6 +23,13 @@ public final class Magic {
     public static void wfe() { throw intrinsic(); }
     public static void isb() { throw intrinsic(); }
 
+    /**
+     * Run a garbage collection. Lowered to a sequence that spills the callee-saved
+     * registers (so live references held there become scannable on the stack) and
+     * calls the conservative collector, then restores them.
+     */
+    public static void gc() { throw intrinsic(); }
+
     // ----- exception-level control (EL2 -> EL1 drop) -----------------------
     /**
      * Drop from EL2 to EL1 in one privileged step (skipped if already at EL1).

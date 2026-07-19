@@ -209,9 +209,20 @@ defines the minimum the assembler must encode.
   **Limitation:** callee-saved locals are NOT restored during the walk, so a
   handler must not read a *pre-try* local (it may be stale). No `finally`-specific
   handling beyond catch-all entries.
-- **M2 complete.** Remaining niceties: super-interfaces / default methods,
-  char/short arrays (`ldrh`/`strh`), a real `String`/`Throwable` class, restoring
-  locals on unwind. GC is still M6. `baload` zero-extends (fine for ASCII).
+- **GC — conservative mark-sweep DONE (first cut of M6).** Each object records its
+  allocation size in the status word (low bit = mark), so the heap is walkable and
+  objects are sizable without per-type maps. `Magic.gc()` spills x19..x28 (so live
+  refs there are scannable), then `VM.gcCollect` marks from roots — the stack
+  ([spilled SP, 0x80000)) and the statics region (writer-filled
+  `VM.staticsStart/End`) — traces marked objects' bodies to a fixpoint, and sweeps
+  dead objects onto `Heap`'s free list, which `alloc` reuses (first-fit) before
+  bumping. QEMU prints `R` (a post-GC allocation served from the free list).
+  Objects are **not moved** (no precise stack maps needed); it may **over-retain**
+  via false roots (conservative). No generations/incrementality.
+- **M2 complete; M6 GC has a working collector.** Remaining niceties:
+  super-interfaces / default methods, char/short arrays (`ldrh`/`strh`), a real
+  `String`/`Throwable` class, restoring locals on unwind, a moving/precise GC.
+  `baload` zero-extends (fine for ASCII).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

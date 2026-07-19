@@ -138,6 +138,70 @@ public final class VM {
         return 0L;
     }
 
+    // ----- garbage collection (conservative mark-sweep) --------------------
+    static final long STACK_TOP = 0x80000L;   // SP init; the stack grows down from here
+    static long staticsStart, staticsEnd;     // image statics region, filled by the writer
+
+    /**
+     * Conservative mark-sweep, entered via {@code Magic.gc()} (which spills the
+     * callee-saved registers so live references there are on the stack). Roots are
+     * the stack [{@code scanFrom}, STACK_TOP) and the statics region; anything
+     * transitively reachable survives, everything else is swept onto the free list.
+     * Object sizes come from the status word — no per-type maps, and objects aren't
+     * moved (so no precise stack maps are needed). May over-retain (false roots).
+     */
+    static void gcCollect(long scanFrom) {
+        markRange(scanFrom, STACK_TOP);
+        markRange(staticsStart, staticsEnd);
+        boolean changed = true;                       // trace: mark fields of marked objects to a fixpoint
+        while (changed) {
+            changed = false;
+            long o = Heap.BASE;
+            while (o < Magic.load64(Heap.PTR_CELL)) {
+                long st = Magic.load64(o + 8L);
+                long size = st & -8L;
+                if (size == 0L) { o = Magic.load64(Heap.PTR_CELL); }   // corrupt: stop
+                else {
+                    if ((st & 1L) != 0L && markRange(o + 16L, o + size)) changed = true;
+                    o = o + size;
+                }
+            }
+        }
+        Heap.resetFreeList();                          // sweep
+        reclaimed = 0L;
+        long o = Heap.BASE;
+        while (o < Magic.load64(Heap.PTR_CELL)) {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L) { o = Magic.load64(Heap.PTR_CELL); }
+            else {
+                if ((st & 1L) != 0L) { Magic.store64(o + 8L, size); }   // unmark (clear bit0)
+                else { Heap.addFree(o, size); reclaimed = reclaimed + size; }
+                o = o + size;
+            }
+        }
+    }
+
+    static long reclaimed;   // bytes freed by the last collection
+
+    /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
+    private static boolean markRange(long lo, long hi) {
+        boolean any = false;
+        while (lo < hi) {
+            long w = Magic.load64(lo);
+            if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L) {
+                long st = Magic.load64(w + 8L);
+                long size = st & -8L;
+                if (size != 0L && (st & 1L) == 0L && w + size <= Magic.load64(Heap.PTR_CELL)) {
+                    Magic.store64(w + 8L, st + 1L);    // set mark bit
+                    any = true;
+                }
+            }
+            lo = lo + 8L;
+        }
+        return any;
+    }
+
     /**
      * The program proper — a framed method (so operand values can spill across
      * calls). Prints the banner, then exercises the object model: allocate a
@@ -196,6 +260,22 @@ public final class VM {
         // cross-method: thrower() throws, catcher() (its caller) catches
         catcher();                                         // -> 'U'
         Uart.putc(0x0A);
+
+        // GC: allocate garbage, collect, then show a freed block is reused
+        gcGarbage();
+        Magic.gc();
+        Cell fresh = new Cell(0x2A);                       // should come from the free list
+        Uart.putc(Heap.lastFromFreeList != 0 ? 0x52 : 0x4E); // 'R' reused / 'N' fresh bump
+        Uart.putc(0x0A);
+    }
+
+    /** Allocate objects that become unreachable, giving the collector something to reclaim. */
+    private static void gcGarbage() {
+        int i = 0;
+        while (i < 8) {
+            Cell junk = new Cell(i);                       // dead as soon as the next iteration overwrites it
+            i = i + 1;
+        }
     }
 
     private static void thrower() {

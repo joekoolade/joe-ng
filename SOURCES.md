@@ -64,3 +64,7 @@ logs what informed each piece so encodings and boot facts are auditable.
 - **Jikes RVM** and **JOE / bare-metal JVM** writeups — *ideas only* for the
   boot-image writer, VM magic (unboxed Address/Word), TIB / object model, and
   baseline compiler shape. No code is ported; those ISAs were IA-32/PPC anyway.
+- **Boehm–Demers–Weiser conservative GC** — *concept only* for the conservative
+  mark-sweep: scan the stack/registers/statics for anything that looks like a
+  heap pointer, no precise stack maps, non-moving. Our collector is written from
+  scratch (size-in-status heap walk, free-list reuse).
