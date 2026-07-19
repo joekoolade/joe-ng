@@ -73,10 +73,19 @@ YNW
 RP
 E
 U
+R
+*M
 ```
 
-Then the board parks (`wfe`). That's the whole M2 feature run — compiled Java on
-bare metal — on real hardware.
+Then the board parks (`wfe`). That's the full feature run — compiled Java on bare
+metal — on real hardware. The lines walk the milestones: the banner + object
+model + arrays + statics + `<clinit>` + class hierarchy + `instanceof` +
+interfaces (`hello…`→`RP`), exceptions (`E`, `U`), the mark-sweep GC (`R`), and
+finally the **on-metal runtime class loader** (`*M`) — `*` (0x2A) from two
+cross-class Guest/Helper classes parsed, JIT-compiled and linked on the metal,
+and `M` from `java.lang.Math.max` loaded out of the JDK's `java.base`. The last
+line is the newest and most demanding, so if silicon stops before `*M`, note the
+last character: it pinpoints how far the metacircular loader got.
 
 ## Troubleshooting
 
