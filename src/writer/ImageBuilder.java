@@ -36,6 +36,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     private static final int WORDS_PER_SLOT = ObjectModel.WORD / 4;   // 8-byte slot = 2 image ints
     private static final int TYPE_WORDS = WORDS_PER_SLOT;             // Type = { instanceSize } for now
+    /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
+    private static final String INIT_CLASSES = "vm/VM.initClasses()V";
 
     private final Path classesDir;
     private final Map<String, ClassFile> classes = new HashMap<>();
@@ -66,21 +68,31 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Set<String> tibClasses = new LinkedHashSet<>();
         Set<String> strings = new LinkedHashSet<>();
         Set<String> statics = new LinkedHashSet<>();
+        Set<String> usedClasses = new LinkedHashSet<>();
+        List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
         List<String> worklist = new ArrayList<>(List.of(entryKey));
         while (!worklist.isEmpty()) {
             String k = worklist.remove(0);
-            if (sizeWords.containsKey(k)) continue;
+            if (k.equals(INIT_CLASSES) || sizeWords.containsKey(k)) continue;   // init body is generated
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
             cm.strRefs().forEach(s -> strings.add(s.text()));
-            cm.staticRefs().forEach(s -> statics.add(s.fieldKey()));
+            cm.tibRefs().forEach(t -> use(t.className(), usedClasses, clinitOrder, worklist));
+            cm.staticRefs().forEach(s -> {
+                statics.add(s.fieldKey());
+                use(ownerOf(s.fieldKey()), usedClasses, clinitOrder, worklist);
+            });
+            use(ownerOf(k), usedClasses, clinitOrder, worklist);
             for (var t : cm.tibRefs()) {
                 if (tibClasses.add(t.className()))
                     for (ClassFile.Method vm : resolve(t.className()).virtualMethods())
                         worklist.add(BaselineCompiler.key(t.className(), vm.name, vm.descriptor));
             }
         }
+        // Generate VM.initClasses(): call each discovered <clinit> once, in first-use order.
+        CompiledMethod initBody = generateInitClasses(clinitOrder);
+        sizeWords.put(INIT_CLASSES, initBody.words().length);
 
         // --- lay out: [method code] [Types] [TIBs] [interned strings], 8-byte aligned ---
         Map<String, Integer> wordOffset = new HashMap<>();
@@ -105,7 +117,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         List<GlobalStatic> stats = new ArrayList<>();
         for (String k : sizeWords.keySet()) {
             int base = wordOffset.get(k);
-            CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
+            CompiledMethod cm = k.equals(INIT_CLASSES) ? initBody
+                    : compile(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
             if (cm.words().length != sizeWords.get(k)) throw new IllegalStateException("size drift for " + k);
             System.arraycopy(cm.words(), 0, image, base, cm.words().length);
             cm.callSites().forEach(cs -> calls.add(new GlobalCall(base + cs.wordIndex(), cs.calleeKey())));
@@ -153,6 +166,37 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
     }
 
     private int vtableLength(String cls) { return resolve(cls).virtualMethods().size(); }
+
+    /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
+    private void use(String cls, Set<String> used, List<String> clinitOrder, List<String> worklist) {
+        if (used.add(cls) && resolve(cls).hasClinit()) {
+            String ck = cls + ".<clinit>()V";
+            clinitOrder.add(ck);
+            worklist.add(ck);
+        }
+    }
+
+    /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
+    private static String ownerOf(String key) {
+        int paren = key.indexOf('(');
+        return key.substring(0, key.lastIndexOf('.', paren >= 0 ? paren : key.length()));
+    }
+
+    /** Generate VM.initClasses()'s body: save LR, BL each &lt;clinit&gt;, restore, ret. */
+    private CompiledMethod generateInitClasses(List<String> clinits) {
+        int frame = A64.align16(8);                                 // LR only
+        List<Integer> w = new ArrayList<>();
+        List<BaselineCompiler.CallSite> calls = new ArrayList<>();
+        w.add(A64.subImm(31, 31, frame));
+        w.add(A64.strx(30, 31, 0));
+        for (String c : clinits) { calls.add(new BaselineCompiler.CallSite(w.size(), c)); w.add(A64.bl(0)); }
+        w.add(A64.ldrx(30, 31, 0));
+        w.add(A64.addImm(31, 31, frame));
+        w.add(A64.ret());
+        int[] words = new int[w.size()];
+        for (int i = 0; i < words.length; i++) words[i] = w.get(i);
+        return new CompiledMethod(words, calls, List.of(), List.of(), List.of());
+    }
 
     /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */
     private static int stringWords(String s) {

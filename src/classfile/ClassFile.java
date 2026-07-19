@@ -97,6 +97,12 @@ public final class ClassFile {
         throw new IllegalArgumentException("no method " + name + descriptor + " in " + thisClass);
     }
 
+    /** True if this class has a static initializer {@code <clinit>()V}. */
+    public boolean hasClinit() {
+        for (Method m : methods) if (m.name.equals("<clinit>") && m.descriptor.equals("()V")) return true;
+        return false;
+    }
+
     // ----- constant-pool accessors -----------------------------------------
     public String utf8(int i)    { require(i, UTF8);    return utf8[i]; }
     public int intAt(int i)      { require(i, INTEGER); return ref1[i]; }

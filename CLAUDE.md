@@ -161,10 +161,17 @@ defines the minimum the assembler must encode.
   `putstatic` works. No `<clinit>` yet (fields default to 0; javac inlines
   compile-time-constant statics as `ldc`). QEMU prints `3` from a bumped static
   counter. `CompilerTest` pins the `getstatic` lowering.
+- **`<clinit>` DONE (eager, closed-world):** the writer discovers each used
+  class's `<clinit>()V` (on first use — method owner, `new`, or static access),
+  lays them out, and **generates the body of `VM.initClasses()`** as a sequence of
+  `BL`s to each. `VM.boot` calls `initClasses()` after Heap/stack setup, before
+  `run()`, so all statics are initialized once before the program. QEMU prints `7`
+  from `Config.mark` set in a static block. (Naive first-use ordering — no
+  dependency-topological order or per-class init guards yet.)
 - **M2 remaining:** `instanceof`/`checkcast`, char/short arrays (`ldrh`/`strh`),
-  class hierarchies (super calls, vtable inheritance), and `<clinit>` (static
-  initializers). A real `String` class over the byte[] is a later class-library
-  step. GC is still M6. `baload` zero-extends (fine for ASCII; `ldrsb` later).
+  and class hierarchies (super calls, vtable inheritance). A real `String` class
+  over the byte[] is a later class-library step. GC is still M6. `baload`
+  zero-extends (fine for ASCII; `ldrsb` later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

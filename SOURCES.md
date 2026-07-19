@@ -46,7 +46,9 @@ logs what informed each piece so encodings and boot facts are auditable.
   invokestatic/invokespecial/invokevirtual, new, dup, getfield/putfield,
   aload/astore, newarray, arraylength, array load/store (b/i/l/a), ldc of int
   and String constants (strings interned as byte[] objects), getstatic/putstatic
-  (image statics area). The parser and lowering are written from the
+  (image statics area). Static initializers (`<clinit>`) run eagerly at boot via
+  a writer-generated init sequence (JVMS §5.5 initialization, simplified to
+  closed-world eager order). The parser and lowering are written from the
   spec; the object layout (`objectmodel`), the calling convention, and the
   `magic.Magic` intrinsic set + A64 lowering are ours.
 

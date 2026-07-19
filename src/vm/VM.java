@@ -40,11 +40,20 @@ public final class VM {
 
         Heap.init();
         Uart.init();
+        initClasses();                     // run static initializers (writer-generated body)
         run();
 
         while (true) {
             Magic.wfe();
         }
+    }
+
+    /**
+     * Runs every used class's {@code <clinit>} once, eagerly, before the program.
+     * The body is empty here — the boot-image writer replaces it with a sequence
+     * of calls to the discovered static initializers (closed-world eager init).
+     */
+    static void initClasses() {
     }
 
     /**
@@ -68,6 +77,9 @@ public final class VM {
         Counter.bump();
         Counter.bump();
         Uart.putc(0x30 + Counter.get());   // '3'  (getstatic/putstatic)
+        Uart.putc(0x0A);
+
+        Uart.putc(Config.mark);            // '7' — set by Config's <clinit> at boot
         Uart.putc(0x0A);
     }
 }
