@@ -92,12 +92,16 @@ defines the minimum the assembler must encode.
     if/if_icmp/goto branches, and the Magic intrinsics. Unsupported opcodes throw.
   - `test/compiler/CompilerTest`: spin/pokeWord/writeReg pinned exactly (66 A64
     encoding checks + compiler checks run in `build.sh`).
-- **Next: M2 (object model + multi-class).** First resolve the **standing
-  object-model decision** (header size, TIB contents, references as direct
-  pointers vs handles) — it gates M2 and is expensive to change later. Then grow
-  the compiler to real method calls (BL + frames), fields, arrays, and a
-  multi-class layout in the writer. Retire the `message()` bridge once char
-  arrays exist.
+- **Object model DECIDED (gates M2).** Source of truth: `objectmodel/ObjectModel`.
+  Direct 8-byte pointer refs (8-aligned, null=0); two-word header (`+0` TIB,
+  `+8` status word reserved to ~M6); fields at `+16`; arrays `+16` length / `+24`
+  elements; TIB = `[0]`Type + `[1..]`vtable. All offsets centralized here so
+  header growth is a one-file change. Pinned by `test/objectmodel/ObjectModelTest`.
+  Full rationale in PLAN.md "Decided".
+- **Next: M2 (object model + multi-class).** Build `Type`/TIB construction in the
+  writer, then grow the compiler to real method calls (BL + frames), field
+  access (getfield/putfield), and arrays against `ObjectModel`. Retire the
+  `message()` bridge once char arrays exist.
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

@@ -294,10 +294,26 @@ joe2/
 
 ---
 
+## Decided
+
+- **Object-model shape (resolved 2026-07-18; gates M2).** Source of truth:
+  `src/objectmodel/ObjectModel.java`.
+  - **References:** direct 64-bit pointers (not handles), 8-byte aligned,
+    `null = 0`. Chosen for access speed (one load per field); a future moving GC
+    updates the pointers. 8-byte alignment leaves 3 free low bits for GC/lock
+    tagging. No compressed references for now.
+  - **Header: two words (16 bytes).** `+0` = TIB pointer; `+8` = status word
+    (identity hash / GC state / thin-lock), reserved and unused until ~M6.
+  - **Fields** start at `+16` (one 8-byte slot each for now; packing later).
+    **Arrays:** `+16` length, `+24` elements.
+  - **TIB** (itself a word array): slot 0 → `Type` (name, superclass,
+    instance size, array element type, field reference-map, vtable length);
+    slots 1.. = virtual method code addresses (vtable).
+  - All offsets/sizes live only in `ObjectModel` so the layout is a one-file
+    change and the writer's layout-dump/diff can catch relocation bugs.
+
 ## Open questions to resolve
 
-- **Object-model shape:** header size, TIB contents, reference format (direct
-  pointers vs handles) — decide before M2, hard to change after.
 - **Class area delivery for M4:** appended to the image vs loaded over UART/net.
 - **When to enable the MMU:** keep it off through M3 for simplicity, or bring up a
   flat map earlier for cache performance and correct device memory?

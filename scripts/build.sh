@@ -20,6 +20,9 @@ javac -d "$OUT" $(find "$ROOT/src" "$ROOT/test" -name '*.java')
 echo "== A64 encoding tests (bit-for-bit vs ARM ARM) =="
 java -cp "$OUT" asm.A64Test
 
+echo "== object-model layout test =="
+java -cp "$OUT" objectmodel.ObjectModelTest
+
 echo "== compiler tests (bytecode -> A64) =="
 java -cp "$OUT" compiler.CompilerTest "$OUT"
 
