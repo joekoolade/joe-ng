@@ -24,7 +24,8 @@ public final class Loader
     private static int[] gcp;       // byte offset of each constant-pool entry body
     private static int gcodeLen;    // length of the located method's bytecode
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
-    private static int gnameLen, gdescLen;
+    private static int gnameLen;
+    private static int gdescLen;
     private static long gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int gsfCount;
@@ -140,7 +141,8 @@ public final class Loader
         int fcount = u2(p);
         p += 2;
         gsfName = new int[fcount + 1];
-        int slot = 0, f = 0;
+        int slot = 0;
+        int f = 0;
         while (f < fcount)
         {
             int access = u2(p);
@@ -326,7 +328,8 @@ public final class Loader
     /** First pass: map each bytecode offset to its A64 word index (for branch targets). */
     private static void pass1(long code, int len)
     {
-        int pc = 0, w = 0;
+        int pc = 0;
+        int w = 0;
         while (pc < len)
         {
             cbc[pc] = w;

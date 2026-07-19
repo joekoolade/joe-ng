@@ -30,8 +30,10 @@ public final class ClassFile
     /** A method with its bytecode. */
     public static final class Method
     {
-        public final String name, descriptor;
-        public final int maxStack, maxLocals;
+        public final String name;
+        public final String descriptor;
+        public final int maxStack;
+        public final int maxLocals;
         public final boolean isStatic;
         public final byte[] code;
         public final ExceptionEntry[] exceptions;
@@ -55,10 +57,23 @@ public final class ClassFile
     }
 
     // Constant-pool tags (JVMS Table 4.4-A).
-    private static final int UTF8=1, INTEGER=3, FLOAT=4, LONG=5, DOUBLE=6, CLASS=7,
-                             STRING=8, FIELDREF=9, METHODREF=10, IFACEMETHODREF=11, NAMEANDTYPE=12,
-                             METHODHANDLE=15, METHODTYPE=16, DYNAMIC=17, INVOKEDYNAMIC=18,
-                             MODULE=19, PACKAGE=20;
+    private static final int UTF8 = 1;
+    private static final int INTEGER = 3;
+    private static final int FLOAT = 4;
+    private static final int LONG = 5;
+    private static final int DOUBLE = 6;
+    private static final int CLASS = 7;
+    private static final int STRING = 8;
+    private static final int FIELDREF = 9;
+    private static final int METHODREF = 10;
+    private static final int IFACEMETHODREF = 11;
+    private static final int NAMEANDTYPE = 12;
+    private static final int METHODHANDLE = 15;
+    private static final int METHODTYPE = 16;
+    private static final int DYNAMIC = 17;
+    private static final int INVOKEDYNAMIC = 18;
+    private static final int MODULE = 19;
+    private static final int PACKAGE = 20;
 
     private final int[] tag;
     private final int[] ref1;     // first index-ish operand (or int value / utf8 slot)
@@ -391,7 +406,8 @@ public final class ClassFile
             String name = utf8(in.readUnsignedShort());
             String desc = utf8(in.readUnsignedShort());
             int attrs = in.readUnsignedShort();
-            int maxStack = 0, maxLocals = 0;
+            int maxStack = 0;
+            int maxLocals = 0;
             byte[] code = null;
             ExceptionEntry[] exceptions = new ExceptionEntry[0];
             for (int a = 0; a < attrs; a++)

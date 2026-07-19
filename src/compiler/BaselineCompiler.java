@@ -32,8 +32,10 @@ import java.util.List;
 public final class BaselineCompiler
 {
 
-    private static final int OP_BASE = 9,  OP_MAX = 7;    // operand stack -> x9..x15
-    private static final int LOC_BASE = 19, LOC_MAX = 10; // locals -> x19..x28
+    private static final int OP_BASE = 9;    // operand stack -> x9..x15
+    private static final int OP_MAX = 7;
+    private static final int LOC_BASE = 19;  // locals -> x19..x28
+    private static final int LOC_MAX = 10;
 
     /** Resolves an owner class name (e.g. "vm/Cell") to its parsed classfile. */
     public interface ClassResolver
@@ -68,8 +70,12 @@ public final class BaselineCompiler
     private int[] bcDepth;         // operand-stack depth at each branch target, or -1
     private ClassFile.ExceptionEntry[] exceptions;
     private boolean isEntry;
-    private int frameSize, localSaveBase, spillBase, maxLocals;
-    private boolean saveLR, nonLeaf;
+    private int frameSize;
+    private int localSaveBase;
+    private int spillBase;
+    private int maxLocals;
+    private boolean saveLR;
+    private boolean nonLeaf;
     private final List<Fixup> fixups = new ArrayList<>();
     private final List<CallSite> callSites = new ArrayList<>();
     private final List<TibRef> tibRefs = new ArrayList<>();
@@ -205,7 +211,8 @@ public final class BaselineCompiler
         }
         // move incoming arguments (x0..) into their local registers;
         // instance methods receive `this` as x0 -> local slot 0.
-        int arg = 0, slot = 0;
+        int arg = 0;
+        int slot = 0;
         if (!method.isStatic)
         {
             cb.emit(A64.movReg(localReg(0), 0));

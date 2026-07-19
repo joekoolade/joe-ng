@@ -108,8 +108,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
             cm.strRefs().forEach(s -> strings.add(s.text()));
             cm.typeRefs().forEach(t -> typeRefClasses.add(t.className()));
-            cm.interfaceRefs().forEach(t -> { typeRefClasses.add(t.className()); usedInterfaces.add(t.className()); });
-            cm.handlers().forEach(h -> { if (h.catchClass() != null) typeRefClasses.add(h.catchClass()); });
+            cm.interfaceRefs().forEach(t ->
+            {
+                typeRefClasses.add(t.className());
+                usedInterfaces.add(t.className());
+            });
+            cm.handlers().forEach(h ->
+            {
+                if (h.catchClass() != null)
+                {
+                    typeRefClasses.add(h.catchClass());
+                }
+            });
             if (cm.frameSize() > 0)
             {
                 frameCount++;

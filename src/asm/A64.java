@@ -468,8 +468,21 @@ public final class A64
     // Conditional / compare-and-branch / test-and-branch — C6.2
     // =======================================================================
     /** Condition codes for {@link #bcond}. */
-    public static final int EQ=0, NE=1, HS=2, LO=3, MI=4, PL=5, VS=6, VC=7,
-                            HI=8, LS=9, GE=10, LT=11, GT=12, LE=13, AL=14;
+    public static final int EQ = 0;
+    public static final int NE = 1;
+    public static final int HS = 2;
+    public static final int LO = 3;
+    public static final int MI = 4;
+    public static final int PL = 5;
+    public static final int VS = 6;
+    public static final int VC = 7;
+    public static final int HI = 8;
+    public static final int LS = 9;
+    public static final int GE = 10;
+    public static final int LT = 11;
+    public static final int GT = 12;
+    public static final int LE = 13;
+    public static final int AL = 14;
 
     /** {@code B.cond #byteOffset} — conditional branch. */
     public static int bcond(int cond, int byteOffset)
