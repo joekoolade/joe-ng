@@ -193,10 +193,19 @@ defines the minimum the assembler must encode.
   scratch. QEMU prints `RP` (Robot vs Phone via a `Speaker` reference).
   `ClassFile` now parses `interfaces` + `interfaceMethods`/`allInterfaces`/
   `findImpl`.
-- **M2 essentially complete.** Remaining niceties: super-interfaces / default
-  methods, abstract-method markers, char/short arrays (`ldrh`/`strh`), a real
-  `String` class over the byte[]. GC is still M6. No exceptions yet (`checkCast`
-  and traps just halt). `baload` zero-extends (fine for ASCII; `ldrsb` later).
+- **Exceptions — same-method try/catch DONE.** `athrow` stashes the exception in
+  a synthetic statics slot, then for each covering exception-table entry tests the
+  thrown type against the catch type (`VM.instanceOf`) and branches to the handler
+  (exception on the operand stack). `ClassFile` parses the exception table.
+  Throwables extend JDK classes we don't compile, so `java/*` supers are treated
+  as roots (`ClassFile.isRoot`) and `java/*` `<init>` calls are no-ops — enough for
+  `catch` by exact type. QEMU prints `E`. **Cross-method unwinding is NOT done**
+  (an uncaught exception, or a throw whose handler is in a caller, just halts) —
+  it needs per-frame unwind metadata.
+- **M2 essentially complete.** Remaining niceties: cross-method exception
+  unwinding, super-interfaces / default methods, char/short arrays (`ldrh`/`strh`),
+  a real `String`/`Throwable` class. GC is still M6. `baload` zero-extends (fine
+  for ASCII; `ldrsb` later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

@@ -181,6 +181,12 @@ public final class CompilerTest {
         T.eq("Speaker.speak itable slot", 0, res.apply("vm/Speaker").interfaceSlot("speak", "()I"));
         T.eq("Phone.speak impl is Phone", 1, ClassFile.findImpl("vm/Phone", "speak", "()I", res).equals("vm/Phone") ? 1 : 0);
 
+        // ---- exceptions: the try/catch table is parsed with its catch type ----
+        ClassFile vmcf = ClassFile.parse(classesDir.resolve("vm/VM.class"));
+        ClassFile.Method runM = vmcf.method("run", "()V");
+        T.eq("run() has a try/catch entry", 1, runM.exceptions.length >= 1 ? 1 : 0);
+        T.eq("catch type is MyExc", 1, vmcf.classAt(runM.exceptions[0].catchType()).equals("vm/MyExc") ? 1 : 0);
+
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);

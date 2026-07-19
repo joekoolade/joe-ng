@@ -129,5 +129,13 @@ public final class VM {
         Uart.putc(s1.speak());                             // 'R'
         Uart.putc(s2.speak());                             // 'P'
         Uart.putc(0x0A);
+
+        // exceptions: throw and catch by type in the same method
+        try {
+            throw new MyExc();
+        } catch (MyExc e) {
+            Uart.putc(0x45);                               // 'E' — caught
+        }
+        Uart.putc(0x0A);
     }
 }

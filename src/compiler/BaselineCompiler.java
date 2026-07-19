@@ -55,8 +55,12 @@ public final class BaselineCompiler {
     private final ClassFile cf;
     private final ClassResolver resolver;
 
+    /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
+    private static final String EXCEPTION_KEY = "vm/VM.$exception";
+
     private int sp;
     private int[] bcDepth;         // operand-stack depth at each branch target, or -1
+    private ClassFile.ExceptionEntry[] exceptions;
     private boolean isEntry;
     private int frameSize, localSaveBase, spillBase, maxLocals;
     private boolean saveLR, nonLeaf;
@@ -95,6 +99,7 @@ public final class BaselineCompiler {
 
         this.isEntry = isEntry;
         this.maxLocals = method.maxLocals;
+        this.exceptions = method.exceptions;
         this.nonLeaf = isNonLeaf(code);
         this.saveLR = !isEntry && nonLeaf;
         // frame: [LR?][locals...][operand-stack spill area for calls]
@@ -230,6 +235,7 @@ public final class BaselineCompiler {
             case 0xB9 -> { lowerInvokeInterface(u2(code, pos + 1), cb); return 5; } // invokeinterface
             case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
             case 0xBC -> { lowerNewArray(code[pos + 1] & 0xFF, cb); return 2; }
+            case 0xBF -> { athrow(cb, pos); return 1; }                                    // athrow
             case 0xC0 -> { typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J"); return 3; }  // checkcast
             case 0xC1 -> { typeCheck(cb, u2(code, pos + 1), "instanceOf", "(JJ)I"); return 3; } // instanceof
 
@@ -284,16 +290,18 @@ public final class BaselineCompiler {
     }
 
     // ----- static fields: absolute address in the image statics area --------
-    private void getstatic(CodeBuffer cb, int cpIndex) {
-        int r = pushReg();
-        staticRefs.add(new StaticRef(cb.reserveAddr(r), r, staticKey(cf.memberRef(cpIndex))));
-        cb.emit(A64.ldrx(r, r, 0));                              // value = *addr
-    }
+    private void getstatic(CodeBuffer cb, int cpIndex) { emitLoadStatic(cb, staticKey(cf.memberRef(cpIndex)), pushReg()); }
+    private void putstatic(CodeBuffer cb, int cpIndex) { emitStoreStatic(cb, staticKey(cf.memberRef(cpIndex)), popReg()); }
 
-    private void putstatic(CodeBuffer cb, int cpIndex) {
-        int val = popReg();
-        staticRefs.add(new StaticRef(cb.reserveAddr(16), 16, staticKey(cf.memberRef(cpIndex)))); // x16 = &field
-        cb.emit(A64.strx(val, 16, 0));                          // *addr = value
+    /** Load static field {@code key} into {@code destReg}. */
+    private void emitLoadStatic(CodeBuffer cb, String key, int destReg) {
+        staticRefs.add(new StaticRef(cb.reserveAddr(destReg), destReg, key));
+        cb.emit(A64.ldrx(destReg, destReg, 0));
+    }
+    /** Store {@code valReg} to static field {@code key} (via x16 for the address). */
+    private void emitStoreStatic(CodeBuffer cb, String key, int valReg) {
+        staticRefs.add(new StaticRef(cb.reserveAddr(16), 16, key));
+        cb.emit(A64.strx(valReg, 16, 0));
     }
 
     private static String staticKey(ClassFile.MemberRef ref) { return ref.owner() + "." + ref.name(); }
@@ -430,11 +438,47 @@ public final class BaselineCompiler {
 
     private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb) {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        if (ref.owner().equals("java/lang/Object") && ref.name().equals("<init>")) {
-            popReg();                                            // trivial super() — discard receiver
+        if (ClassFile.isRoot(ref.owner()) && ref.name().equals("<init>")) {
+            popReg();                                            // super() into a JDK class — discard receiver
             return;
         }
         lowerCall(ref, cb, true);                                // constructor: receiver is arg0
+    }
+
+    /**
+     * athrow: stash the exception, then for each covering try/catch entry test the
+     * thrown type against the catch type ({@code VM.instanceOf}) and branch to the
+     * handler (exception on the operand stack). No matching handler in this method
+     * halts — cross-method unwinding is not implemented yet.
+     */
+    private void athrow(CodeBuffer cb, int pos) {
+        emitStoreStatic(cb, EXCEPTION_KEY, popReg());            // $exception = ref
+        for (ClassFile.ExceptionEntry en : exceptions) {
+            if (en.startPc() > pos || pos >= en.endPc()) continue;
+            if (en.catchType() == 0) { emitCatch(cb, en.handlerPc()); return; }  // finally / catch-all
+            int obj = pushReg(); emitLoadStatic(cb, EXCEPTION_KEY, obj);
+            int t = pushReg(); typeRefs.add(new TypeRef(cb.reserveAddr(t), t, cf.classAt(en.catchType())));
+            emitCall(cb, "vm/VM.instanceOf(JJ)I", "(JJ)I", false);  // (exc, catchType) -> int
+            int cond = popReg();
+            int skip = cb.emit(A64.cbz(cond, 0));
+            emitCatch(cb, en.handlerPc());                       // matched
+            cb.set(skip, A64.cbz(cond, (cb.wordCount() - skip) * 4));
+        }
+        emitHalt(cb);                                            // uncaught
+    }
+
+    /** Push the pending exception and branch to a handler (which expects it at depth 1). */
+    private void emitCatch(CodeBuffer cb, int handlerPc) {
+        emitLoadStatic(cb, EXCEPTION_KEY, pushReg());
+        int w = cb.emit(A64.b(0));
+        fixups.add(new Fixup(w, handlerPc, A64::b));
+        recordDepth(handlerPc);
+        sp = 0;                                                  // fall-through (next check) resumes empty
+    }
+
+    private void emitHalt(CodeBuffer cb) {
+        int h = cb.emit(A64.wfe());
+        cb.emit(A64.b((h - cb.wordCount()) * 4));                // spin
     }
 
     /** A real call: args to x0.. (receiver first if any), BL placeholder, result from x0. */
@@ -573,14 +617,14 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xB9 || op == 0xC0 || op == 0xC1) return true; // new/newarray/invokevirtual/invokeinterface/checkcast/instanceof
+            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xB9 || op == 0xBF || op == 0xC0 || op == 0xC1) return true; // new/newarray/invokevirtual/invokeinterface/athrow/checkcast/instanceof
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
             }
             if (op == 0xB7) {                                    // invokespecial
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
-                if (!(ref.owner().equals("java/lang/Object") && ref.name().equals("<init>"))) return true;
+                if (!(ClassFile.isRoot(ref.owner()) && ref.name().equals("<init>"))) return true;
             }
             pos += opLen(op, code, pos);
         }

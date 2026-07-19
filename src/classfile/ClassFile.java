@@ -23,17 +23,25 @@ public final class ClassFile {
 
     private static final int ACC_STATIC = 0x0008;
 
+    /** A try/catch entry: bytecode range [startPc,endPc), handler, and catch-type cp index (0 = any). */
+    public record ExceptionEntry(int startPc, int endPc, int handlerPc, int catchType) {}
+
     /** A method with its bytecode. */
     public static final class Method {
         public final String name, descriptor;
         public final int maxStack, maxLocals;
         public final boolean isStatic;
         public final byte[] code;
-        Method(String name, String descriptor, boolean isStatic, int maxStack, int maxLocals, byte[] code) {
+        public final ExceptionEntry[] exceptions;
+        Method(String name, String descriptor, boolean isStatic, int maxStack, int maxLocals,
+               byte[] code, ExceptionEntry[] exceptions) {
             this.name = name; this.descriptor = descriptor; this.isStatic = isStatic;
-            this.maxStack = maxStack; this.maxLocals = maxLocals; this.code = code;
+            this.maxStack = maxStack; this.maxLocals = maxLocals; this.code = code; this.exceptions = exceptions;
         }
     }
+
+    /** A class name we don't compile (JDK {@code java/*}) — treated as a root, like Object. */
+    public static boolean isRoot(String cls) { return cls == null || cls.startsWith("java/"); }
 
     // Constant-pool tags (JVMS Table 4.4-A).
     private static final int UTF8=1, INTEGER=3, FLOAT=4, LONG=5, DOUBLE=6, CLASS=7,
@@ -96,7 +104,7 @@ public final class ClassFile {
     public static java.util.List<VSlot> vtable(String cls, java.util.function.Function<String, ClassFile> resolve) {
         ClassFile cf = resolve.apply(cls);
         String sup = cf.superClass;
-        java.util.List<VSlot> slots = (sup == null || sup.equals("java/lang/Object"))
+        java.util.List<VSlot> slots = isRoot(sup)
                 ? new java.util.ArrayList<>() : new java.util.ArrayList<>(vtable(sup, resolve));
         for (Method m : cf.virtualMethods()) {
             VSlot s = new VSlot(cls, m.name, m.descriptor);
@@ -137,14 +145,14 @@ public final class ClassFile {
     /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet). */
     public static java.util.Set<String> allInterfaces(String cls, java.util.function.Function<String, ClassFile> resolve) {
         java.util.Set<String> out = new java.util.LinkedHashSet<>();
-        for (String c = cls; c != null && !c.equals("java/lang/Object"); c = resolve.apply(c).superClass)
+        for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
             for (String i : resolve.apply(c).interfaces) out.add(i);
         return out;
     }
 
     /** The class providing {@code cls}'s implementation of {@code name+descriptor} (walk supers). */
     public static String findImpl(String cls, String name, String descriptor, java.util.function.Function<String, ClassFile> resolve) {
-        for (String c = cls; c != null && !c.equals("java/lang/Object"); c = resolve.apply(c).superClass)
+        for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
             for (Method m : resolve.apply(c).methods)
                 if (!m.isStatic && m.code != null && m.name.equals(name) && m.descriptor.equals(descriptor)) return c;
         throw new IllegalArgumentException("no implementation of " + name + descriptor + " in " + cls);
@@ -252,6 +260,7 @@ public final class ClassFile {
             int attrs = in.readUnsignedShort();
             int maxStack = 0, maxLocals = 0;
             byte[] code = null;
+            ExceptionEntry[] exceptions = new ExceptionEntry[0];
             for (int a = 0; a < attrs; a++) {
                 String an = utf8(in.readUnsignedShort());
                 int len = in.readInt();
@@ -262,13 +271,16 @@ public final class ClassFile {
                     code = new byte[codeLen];
                     in.readFully(code);
                     int exc = in.readUnsignedShort();
-                    in.skipBytes(exc * 8);
+                    exceptions = new ExceptionEntry[exc];
+                    for (int e = 0; e < exc; e++)
+                        exceptions[e] = new ExceptionEntry(in.readUnsignedShort(), in.readUnsignedShort(),
+                                in.readUnsignedShort(), in.readUnsignedShort());
                     skipAttributes(in);
                 } else {
                     in.skipBytes(len);
                 }
             }
-            ms[i] = new Method(name, desc, (access & ACC_STATIC) != 0, maxStack, maxLocals, code);
+            ms[i] = new Method(name, desc, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions);
         }
         return ms;
     }

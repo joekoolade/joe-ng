@@ -159,7 +159,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
                     ObjectModel.scalarSize(resolve(cls).instanceFieldCount()));
             String sup = resolve(cls).superClassName();
-            long superAddr = (sup == null || sup.equals("java/lang/Object")) ? 0 : addr(typeWord.get(sup));
+            long superAddr = ClassFile.isRoot(sup) ? 0 : addr(typeWord.get(sup));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
             long dir = itableDirWord.containsKey(cls) ? addr(itableDirWord.get(cls)) : 0;
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
@@ -229,7 +229,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     /** Add {@code cls} and all its superclasses (up to Object) to {@code set}. */
     private void addTypeClass(String cls, Set<String> set) {
-        while (cls != null && !cls.equals("java/lang/Object") && set.add(cls)) {
+        while (!ClassFile.isRoot(cls) && set.add(cls)) {
             cls = resolve(cls).superClassName();
         }
     }
