@@ -1,0 +1,19 @@
+# Raspberry Pi 4 (BCM2711) boot config for joe2.
+# The GPU firmware reads this, then loads kernel8.img to 0x80000 and starts the
+# ARM cores. 64-bit is NOT auto-enabled on the Pi 4 — arm_64bit=1 is required.
+arm_64bit=1
+
+# Load our raw image as the kernel. (kernel8.img is also the default name the
+# firmware looks for in 64-bit mode; named explicitly for clarity.)
+kernel=kernel8.img
+
+# Keep firmware from moving the start address; joe2 links everything to 0x80000.
+kernel_address=0x80000
+
+# Route the PL011 UART to the GPIO header (mini-UART is our first console; this
+# keeps clocks stable for serial). 115200 8N1 on a USB-TTL adapter.
+enable_uart=1
+
+# No device tree — joe2 talks to the hardware directly, no OS.
+device_tree=
+disable_commandline_tags=1
