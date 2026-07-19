@@ -77,11 +77,22 @@ defines the minimum the assembler must encode.
   Build/test/emit: `scripts/build.sh`; QEMU smoke test: `scripts/qemu.sh`.
   **Not yet run on real hardware; mini-UART baud divisor needs on-silicon
   calibration (QEMU ignores it).**
-- **Next concrete step — M1c (the metacircular half):** stand up `magic/`
-  (Address/Word + privileged-op intrinsics) and a minimal `classfile/` parser +
-  `compiler/` baseline that compiles the same boot logic from a real `VM.boot`
-  Java method's bytecode; its output should match `EmitBoot`'s words. That closes
-  M1's stated done-criteria (compiled Java, not hand-emitted, on the metal).
+- **M1c in progress (the metacircular half):** the compile path exists and is
+  proven. `magic/Magic` = the intrinsic markers (privileged ops + raw MMIO).
+  `classfile/ClassFile` parses real `.class` files (constant pool, methods, Code).
+  `compiler/BaselineCompiler` lowers bytecode → A64. `writer/BuildCompiledSpinImage`
+  compiles `vm.VM.spin()` from javac bytecode into an image **bit-identical to the
+  M0 hand-emitted spin loop**. Coverage so far: nop/return/goto, constant pushes
+  (iconst/bipush/sipush/ldc/ldc2_w), no-arg intrinsics (wfe/isb/eret), and
+  constant-arg intrinsics (system-register writes, writeSP, store32/store8).
+  Checked in `test/compiler/CompilerTest` (spin + pokeWord + writeReg, exact).
+  Unsupported opcodes throw loudly (never silent). Compiler runs in `build.sh`.
+- **Next concrete step — finish M1c to a compiled printing boot:** needs runtime
+  values + control flow the print loop uses — locals (iload/istore/iinc),
+  readCurrentEL, conditionals/loops (if_icmp*, ifeq), and a strategy for the
+  self-referential `ELR_EL2 = &continuation` (likely a `Magic.dropToEL1()`
+  intrinsic that owns the whole EL2→EL1 drop). Then compile a real `VM.boot`
+  whose image prints "hello from joe2" — matching `EmitBoot` functionally.
 - **Still open (decide before M2):** object-model shape (header size, TIB
   contents, references as direct pointers vs handles) — expensive to change later.
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light

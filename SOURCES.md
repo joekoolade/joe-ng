@@ -36,6 +36,15 @@ logs what informed each piece so encodings and boot facts are auditable.
   `board/bcm2711/Bcm2711.java`, used by M1 `vm/EmitBoot.java`. Baud divisor for
   115200 depends on the pinned core clock and needs on-silicon calibration.
 
+## Classfile format + bytecode (classfile/ClassFile.java, compiler/BaselineCompiler.java)
+
+- **The Java Virtual Machine Specification (JVMS), Java SE** — §4 ClassFile
+  structure and constant pool (tags, Methodref/Class/NameAndType/Utf8/Long/
+  Integer), §4.7.3 the Code attribute, and §6 the bytecode instruction set
+  (opcodes: nop, return, goto, iconst/bipush/sipush/ldc/ldc2_w, invokestatic).
+  The parser and the opcode lowering are written from the spec; the intrinsic
+  set (`magic.Magic`) and its A64 lowering are ours.
+
 ## Concepts (not code) referenced
 
 - **Jikes RVM** and **JOE / bare-metal JVM** writeups — *ideas only* for the

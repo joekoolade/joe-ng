@@ -20,6 +20,9 @@ javac -d "$OUT" $(find "$ROOT/src" "$ROOT/test" -name '*.java')
 echo "== A64 encoding tests (bit-for-bit vs ARM ARM) =="
 java -cp "$OUT" asm.A64Test
 
+echo "== compiler tests (bytecode -> A64) =="
+java -cp "$OUT" compiler.CompilerTest "$OUT"
+
 echo "== emitting kernel8.img (M1 first light: mini-UART hello) =="
 java -cp "$OUT" writer.BuildBootImage "$IMG"
 
