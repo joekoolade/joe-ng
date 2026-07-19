@@ -44,8 +44,10 @@ public final class Bcm2711 {
 
     /**
      * Baud divisor for 115200. mini-UART baud = core_clock / (8*(divisor+1)).
-     * With {@code enable_uart=1} pinning the core clock near 500 MHz this is
-     * ~541 — CALIBRATE ON REAL SILICON; QEMU ignores the divisor. See config.txt.
+     * Pinned to a 250 MHz core clock via {@code core_freq=250} in config.txt (the
+     * documented mini-UART-stable setup): 250e6/(8*115200) - 1 ≈ 270. QEMU ignores
+     * the divisor. If real-hardware output is garbled, the core clock differs — try
+     * 541 with a 500 MHz core (see scripts/flash.md).
      */
-    public static final int  BAUD_115200 = 541;
+    public static final int  BAUD_115200 = 270;
 }

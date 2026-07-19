@@ -217,6 +217,16 @@ defines the minimum the assembler must encode.
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
   M6+ GC, interrupts, SMP, exceptions, class library.
 
+## Real-hardware flashing
+
+- `scripts/sdcard.sh` builds the image and assembles `sdcard/` (kernel8.img +
+  config.txt + fetched GPU firmware start4.elf/fixup4.dat). Copy to a FAT32 SD
+  card. `scripts/flash.md` is the full guide (serial wiring GPIO14/15, 115200 8N1,
+  troubleshooting). The user runs the flash + serial monitor themselves.
+- mini-UART baud is pinned via `core_freq=250` in config.txt with
+  `Bcm2711.BAUD_115200 = 270`; if silicon output is garbled, the core clock
+  differs — fall back to 500 MHz / divisor 541. Not yet confirmed on real silicon.
+
 ## Working agreements for the agent
 
 - Validate on a **real Pi 4** (USB-TTL serial) from M0 onward; QEMU `raspi4b` is

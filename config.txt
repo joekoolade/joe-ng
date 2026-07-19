@@ -10,9 +10,11 @@ kernel=kernel8.img
 # Keep firmware from moving the start address; joe2 links everything to 0x80000.
 kernel_address=0x80000
 
-# Route the PL011 UART to the GPIO header (mini-UART is our first console; this
-# keeps clocks stable for serial). 115200 8N1 on a USB-TTL adapter.
+# Serial console on the GPIO header, 115200 8N1 via a USB-TTL adapter.
+# joe2 outputs on the mini-UART (UART1, GPIO14/15). Pin the VideoCore core clock
+# so the mini-UART baud is stable and matches Bcm2711.BAUD_115200 (=270 @ 250MHz).
 enable_uart=1
+core_freq=250
 
 # No device tree — joe2 talks to the hardware directly, no OS.
 device_tree=
