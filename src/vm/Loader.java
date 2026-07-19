@@ -741,9 +741,9 @@ public final class Loader
         {
             emitInvokeSpecial(code, pc);    // invokespecial (constructor)
         }
-        else if (op == 0xb6)
+        else if (op == 0xb6 || op == 0xb9)
         {
-            emitInvokeVirtual(code, pc);    // invokevirtual (TIB vtable dispatch)
+            emitInvokeVirtual(code, pc);    // invokevirtual / invokeinterface (TIB vtable dispatch)
         }
         else if (op == 0xb1)
         {
@@ -866,10 +866,13 @@ public final class Loader
     }
 
     /**
-     * invokevirtual: dispatch through the receiver's TIB vtable. Same 128-byte
-     * spill / arg-move as a static call (receiver is the leading arg), but instead
-     * of a fixed {@code BL} it loads the code address from
-     * {@code [[this] + 8 + slot*8]} and {@code BLR}s it (x16 scratch).
+     * invokevirtual / invokeinterface: dispatch through the receiver's TIB vtable.
+     * Same 128-byte spill / arg-move as a static call (receiver is the leading arg),
+     * but instead of a fixed {@code BL} it loads the code address from
+     * {@code [[this] + 8 + slot*8]} and {@code BLR}s it (x16 scratch). With a single
+     * loaded class, an interface method resolves to that class's own vtable slot by
+     * name+descriptor, so both opcodes share this path (a real per-interface itable
+     * only matters once several classes implement the interface).
      */
     private static void emitInvokeVirtual(long code, int pc)
     {
@@ -1156,7 +1159,7 @@ public final class Loader
             int descOff = mrefDescOff(idx);
             return 35 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
         }
-        if (op == 0xb6)                                    // invokevirtual
+        if (op == 0xb6 || op == 0xb9)                      // invokevirtual / invokeinterface
         {
             int descOff = mrefDescOff(u2(code + pc + 1));
             return 38 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + ldr/ldr/blr + result
@@ -1185,6 +1188,10 @@ public final class Loader
         if (op == 0x10 || op == 0x15 || op == 0x36 || op == 0x19 || op == 0x3a)
         {
             return 2;    // bipush/iload/istore/aload/astore
+        }
+        if (op == 0xb9)
+        {
+            return 5;    // invokeinterface: index(2) + count(1) + zero(1)
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
                 || op == 0xb2 || op == 0xb3 || op == 0xb8

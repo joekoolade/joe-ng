@@ -150,8 +150,18 @@ defines the minimum the assembler must encode.
     static. **Limits:** single loaded class — vtable = the class's own virtual
     methods, no inherited/overridden slots (needs the superclass's classfile), no
     interfaces, `Type` is null so still no `instanceof`/`checkcast` on loaded objects.
-  - **Still to do on-metal:** interfaces (`invokeinterface`), cross-class loading /
-    class hierarchies, and a real `Type` for `instanceof` on loaded objects.
+  - **`invokeinterface` DONE (on-metal, single class):** with one concrete loaded
+    class, an interface method resolves directly to that class's own vtable slot by
+    name+descriptor (the InterfaceMethodref's class — e.g. `vm/Speaker` — is
+    ignored), so `invokeinterface` shares `invokevirtual`'s TIB-dispatch path
+    (`vtableSlotOf` matches on name+descriptor, not class). Only the opcode length
+    differs (5 bytes: index + count + zero). QEMU's `*` now flows through
+    `((Speaker) g).speak()`. A real per-interface **itable** (Type→itable directory,
+    like the writer side) only becomes necessary once several loaded classes
+    implement the same interface at different vtable positions — that waits on
+    cross-class loading.
+  - **Still to do on-metal:** cross-class loading / class hierarchies (which brings
+    inherited vtable slots, real itables, and a `Type` for `instanceof`).
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds

@@ -7,20 +7,21 @@ package vm;
  * M4: runtime class loading on bare metal (PLAN.md §4).
  *
  * <p>{@code answer()} builds a real object on the metal ({@code new Guest()} +
- * default {@code <init>}), fills a field via a static call chain, then calls a
- * <em>virtual</em> method on it: {@code g.compute()} dispatches through the
- * instance's TIB vtable (built by the loader), and {@code compute()} in turn reads
- * an instance field and a {@code <clinit>}-initialized static. A correct {@code 42}
- * means the whole stack works — allocation, dispatch, fields, and static init.
+ * default {@code <init>}), fills a field via a static call chain, then calls
+ * through the <em>interface</em> {@link Speaker}: {@code s.speak()} is an
+ * {@code invokeinterface} that the loader resolves to Guest's own vtable slot and
+ * dispatches through the instance's TIB. {@code speak()} in turn reads an instance
+ * field and a {@code <clinit>}-initialized static. A correct {@code 42} means the
+ * whole stack works — allocation, interface dispatch, fields, and static init.
  */
-public class Guest
+public class Guest implements Speaker
 {
     int value;                   // instance field at +16 (object model)
     static int bias = 20;        // set by <clinit> (non-final, so not inlined at the use site)
 
-    int compute()
+    public int speak()
     {
-        return value + bias;     // virtual: getfield (this.value) + getstatic (bias)
+        return value + bias;     // implements Speaker.speak: getfield + getstatic
     }
 
     static int inner(int n)
@@ -37,6 +38,7 @@ public class Guest
     {
         Guest g = new Guest();   // new (stores the TIB) + invokespecial <init>
         g.value = outer(11);     // putfield @16 <- invokestatic chain (22)
-        return g.compute();      // invokevirtual: TIB vtable dispatch -> 22 + 20 = 42 = '*'
+        Speaker s = g;           // widen to the interface type
+        return s.speak();        // invokeinterface: resolve to the vtable slot -> 22 + 20 = 42 = '*'
     }
 }
