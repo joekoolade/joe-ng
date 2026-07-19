@@ -3,6 +3,7 @@ package compiler;
 import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
+import harness.T;
 import writer.BuildCompiledSpinImage;
 
 import java.nio.file.Path;
@@ -19,14 +20,12 @@ import java.util.List;
  */
 public final class CompilerTest {
 
-    private static int failures;
-
     public static void main(String[] args) throws Exception {
         Path classesDir = Path.of(args.length > 0 ? args[0] : "out");
 
         // ---- spin() must equal the M0 hand-emitted spin loop ----
         int[] spin = BuildCompiledSpinImage.compileSpin(classesDir).toWords();
-        expect("spin()", new int[]{ A64.wfe(), A64.b(-4) }, spin);
+        T.eqWords("spin()", new int[]{ A64.wfe(), A64.b(-4) }, spin);
 
         // ---- constant-arg intrinsics lower exactly ----
         ClassFile fx = ClassFile.parse(classesDir.resolve("compiler/Fixtures.class"));
@@ -37,13 +36,13 @@ public final class CompilerTest {
         pokeWant.addAll(A64.loadImm64(10, 1L));          // value   -> x10
         pokeWant.add(A64.strw(10, 9, 0));                // STR w10,[x9]
         pokeWant.add(A64.ret());
-        expect("pokeWord()", toArray(pokeWant), compile(fx, "pokeWord"));
+        T.eqWords("pokeWord()", toArray(pokeWant), compile(fx, "pokeWord"));
 
         List<Integer> regWant = new ArrayList<>();
         regWant.addAll(A64.loadImm64(9, 0x80000000L));   // value -> x9
         regWant.add(A64.msr(A64.HCR_EL2, 9));            // MSR HCR_EL2, x9
         regWant.add(A64.ret());
-        expect("writeReg()", toArray(regWant), compile(fx, "writeReg", "()V"));
+        T.eqWords("writeReg()", toArray(regWant), compile(fx, "writeReg", "()V"));
 
         // ---- calling convention: frame prologue/epilogue + return value ----
         List<Integer> addWant = new ArrayList<>();
@@ -57,10 +56,9 @@ public final class CompilerTest {
         addWant.add(A64.ldrx(19, 31, 0));                // restore x19
         addWant.add(A64.addImm(31, 31, 16));             // add sp,sp,#16
         addWant.add(A64.ret());
-        expect("addOne(int)", toArray(addWant), compile(fx, "addOne", "(I)I"));
+        T.eqWords("addOne(int)", toArray(addWant), compile(fx, "addOne", "(I)I"));
 
-        System.out.printf("%n%s%n", failures == 0 ? "all compiler checks passed" : failures + " FAILURES");
-        if (failures > 0) System.exit(1);
+        T.summary("compiler");
     }
 
     private static int[] compile(ClassFile cf, String method) { return compile(cf, method, "()V"); }
@@ -71,24 +69,9 @@ public final class CompilerTest {
         return cb.toWords();
     }
 
-    private static void expect(String name, int[] want, int[] got) {
-        if (java.util.Arrays.equals(want, got)) {
-            System.out.printf("PASS %-12s %s%n", name, hex(got));
-        } else {
-            failures++;
-            System.out.printf("FAIL %-12s%n  want %s%n  got  %s%n", name, hex(want), hex(got));
-        }
-    }
-
     private static int[] toArray(List<Integer> l) {
         int[] a = new int[l.size()];
         for (int i = 0; i < a.length; i++) a[i] = l.get(i);
         return a;
-    }
-
-    private static String hex(int[] a) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < a.length; i++) sb.append(i > 0 ? ", " : "").append(String.format("0x%08X", a[i]));
-        return sb.append("]").toString();
     }
 }
