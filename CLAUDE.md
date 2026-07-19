@@ -139,10 +139,17 @@ defines the minimum the assembler must encode.
   method's position among the class's virtual methods (no inheritance beyond
   Object yet — revisit slot assignment when class hierarchies arrive). QEMU's `k`
   now flows through `c.inc()`/`c.get()` virtual calls.
-- **M2 remaining:** arrays (`newarray`/`aload`/`astore`/`arraylength`), static
-  fields (`getstatic`/`putstatic`), `instanceof`/`checkcast`, and class
-  hierarchies (super calls, vtable inheritance). Retire the `message()` bridge
-  once char arrays exist. GC is still M6 (bump-only today).
+- **Arrays DONE:** `new byte[]`/`int[]`, `arraylength`, and element load/store
+  (`baload`/`bastore`, `iaload`/`iastore`, `laload`/`aaload` etc.). Layout per
+  `ObjectModel`: `[header][length @16][elements @24]`, element addr = base +
+  `index<<scale`. `vm/Heap.allocArray(length, elemSize)` allocates + writes the
+  header (null TIB for now; array TIBs come with GC/instanceof). Alloc rounds the
+  bump to keep objects 8-aligned (MMU off → unaligned faults). QEMU prints `AB`
+  from a filled+iterated heap `byte[]`. Added `MUL` and `ADD (shifted reg)`.
+- **M2 remaining:** static fields (`getstatic`/`putstatic`), `instanceof`/
+  `checkcast`, char/short arrays (need `ldrh`/`strh`), class hierarchies (super
+  calls, vtable inheritance), and real String literals (`ldc` String → interned
+  char[] + String object) to retire the `message()` bridge. GC is still M6.
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

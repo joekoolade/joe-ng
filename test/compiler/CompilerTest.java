@@ -108,6 +108,34 @@ public final class CompilerTest {
         vWant.add(A64.ret());
         T.eqWords("FieldFixture.callVal", toArray(vWant), compile(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
 
+        // ---- arrays: baload (base+index<<0) and arraylength (@16) ----
+        List<Integer> elemWant = new ArrayList<>();
+        elemWant.add(A64.subImm(31, 31, 16));
+        elemWant.add(A64.strx(19, 31, 0));
+        elemWant.add(A64.movReg(19, 0));                 // a -> slot0
+        elemWant.add(A64.movReg(9, 19));                 // aload_0
+        elemWant.addAll(A64.loadImm64(10, 0));           // iconst_0 (index)
+        elemWant.add(A64.addImm(9, 9, 24));              // &elem0
+        elemWant.add(A64.addRegLsl(9, 9, 10, 0));        // &elem[index]
+        elemWant.add(A64.ldrb(9, 9, 0));                 // baload
+        elemWant.add(A64.movReg(0, 9));                  // ireturn
+        elemWant.add(A64.ldrx(19, 31, 0));
+        elemWant.add(A64.addImm(31, 31, 16));
+        elemWant.add(A64.ret());
+        T.eqWords("arrElem0(byte[])", toArray(elemWant), compile(fx, "arrElem0", "([B)I"));
+
+        List<Integer> lenWant = new ArrayList<>();
+        lenWant.add(A64.subImm(31, 31, 16));
+        lenWant.add(A64.strx(19, 31, 0));
+        lenWant.add(A64.movReg(19, 0));
+        lenWant.add(A64.movReg(9, 19));                  // aload_0
+        lenWant.add(A64.ldrx(9, 9, 16));                 // arraylength @16
+        lenWant.add(A64.movReg(0, 9));                   // ireturn
+        lenWant.add(A64.ldrx(19, 31, 0));
+        lenWant.add(A64.addImm(31, 31, 16));
+        lenWant.add(A64.ret());
+        T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
+
         T.summary("compiler");
     }
 

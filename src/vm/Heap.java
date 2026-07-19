@@ -1,6 +1,7 @@
 package vm;
 
 import magic.Magic;
+import objectmodel.ObjectModel;
 
 /**
  * The heap — a bump allocator, written in Java (metacircular: the allocator the
@@ -26,10 +27,21 @@ public final class Heap {
         Magic.store64(PTR_CELL, BASE);
     }
 
-    /** Allocate {@code size} bytes (already header-inclusive and aligned). */
+    /** Allocate {@code size} bytes, rounding the bump up to keep objects 8-aligned
+     *  (the MMU is off, so unaligned 8-byte accesses would fault). */
     public static long alloc(int size) {
         long p = Magic.load64(PTR_CELL);
-        Magic.store64(PTR_CELL, p + size);
+        int aligned = (size + 7) & -8;
+        Magic.store64(PTR_CELL, p + aligned);
+        return p;
+    }
+
+    /** Allocate an array of {@code length} elements of {@code elemSize} bytes and
+     *  write its header (null TIB for now, then the length). Returns the reference. */
+    public static long allocArray(int length, int elemSize) {
+        long p = alloc(ObjectModel.ARRAY_BASE_OFFSET + length * elemSize);
+        Magic.store64(p + ObjectModel.TIB_OFFSET, 0L);           // array TIBs come with GC/instanceof
+        Magic.store64(p + ObjectModel.ARRAY_LENGTH_OFFSET, length);
         return p;
     }
 }

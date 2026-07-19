@@ -59,5 +59,14 @@ public final class VM {
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
         Uart.putc(c.get());                // virtual dispatch: read the field back
         Uart.putc(0x0A);                   // newline
+
+        // heap byte array: allocate, fill, iterate (newarray/bastore/baload/arraylength)
+        byte[] a = new byte[3];
+        a[0] = 0x41; a[1] = 0x42; a[2] = 0x0A;   // "AB\n"
+        int i = 0;
+        while (i < a.length) {
+            Uart.putc(a[i]);
+            i = i + 1;
+        }
     }
 }

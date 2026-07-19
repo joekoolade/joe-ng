@@ -18,4 +18,9 @@ public final class Fixtures {
 
     /** A leaf method with a parameter and a return value — exercises the frame. */
     public static int addOne(int x) { return x + 1; }
+
+    /** Array element load (baload: base + index<<0). */
+    public static int arrElem0(byte[] a) { return a[0]; }
+    /** Array length (ldr at ARRAY_LENGTH_OFFSET). */
+    public static int arrLen(int[] a) { return a.length; }
 }

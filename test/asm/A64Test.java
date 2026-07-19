@@ -94,8 +94,10 @@ public final class A64Test {
 
         // ---- data-processing (shifted register) ----------------------------
         T.eqWord("ADD x0,x1,x2", 0x8B020020, A64.addReg(0, 1, 2));
+        T.eqWord("ADD x0,x1,x2,LSL#2", 0x8B020820, A64.addRegLsl(0, 1, 2, 2));
         T.eqWord("SUB x0,x1,x2", 0xCB020020, A64.subReg(0, 1, 2));
         T.eqWord("AND x0,x1,x2", 0x8A020020, A64.andReg(0, 1, 2));
+        T.eqWord("MUL x0,x1,x2", 0x9B027C20, A64.mulReg(0, 1, 2));
         T.eqWord("CMP x1,x2",    0xEB02003F, A64.cmpReg(1, 2));
         T.eqWord("CMP x0,#0",    0xF100001F, A64.cmpImm(0, 0));
 

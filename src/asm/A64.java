@@ -238,11 +238,18 @@ public final class A64 {
     // Data-processing (shifted register), 64-bit, no shift — C6.
     // =======================================================================
     /** {@code ADD Xd, Xn, Xm}. */
-    public static int addReg(int rd, int rn, int rm) { return 0x8B00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int addReg(int rd, int rn, int rm) { return addRegLsl(rd, rn, rm, 0); }
+    /** {@code ADD Xd, Xn, Xm, LSL #shift} — for array element addressing (base + index<<scale). */
+    public static int addRegLsl(int rd, int rn, int rm, int shift) {
+        if (shift < 0 || shift > 63) throw new IllegalArgumentException("bad shift: " + shift);
+        return 0x8B00_0000 | (reg(rm) << 16) | (shift << 10) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code SUB Xd, Xn, Xm}. */
     public static int subReg(int rd, int rn, int rm) { return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code AND Xd, Xn, Xm}. */
     public static int andReg(int rd, int rn, int rm) { return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code MUL Xd, Xn, Xm} — alias of MADD Xd, Xn, Xm, XZR. */
+    public static int mulReg(int rd, int rn, int rm) { return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
     /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */

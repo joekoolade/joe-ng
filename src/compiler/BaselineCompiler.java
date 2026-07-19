@@ -173,8 +173,20 @@ public final class BaselineCompiler {
             case 0x59 -> { dup(cb); return 1; }                                       // dup
             case 0x84 -> { iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]); return 3; }
 
+            // ---- array element load/store (base + index<<scale) ----
+            case 0x33 -> { arrayLoad(cb, 0, false); return 1; }   // baload  (byte)
+            case 0x2E -> { arrayLoad(cb, 2, true);  return 1; }   // iaload  (int)
+            case 0x2F -> { arrayLoad(cb, 3, false); return 1; }   // laload  (long)
+            case 0x32 -> { arrayLoad(cb, 3, false); return 1; }   // aaload  (ref)
+            case 0x54 -> { arrayStore(cb, 0); return 1; }         // bastore
+            case 0x4F -> { arrayStore(cb, 2); return 1; }         // iastore
+            case 0x50 -> { arrayStore(cb, 3); return 1; }         // lastore
+            case 0x53 -> { arrayStore(cb, 3); return 1; }         // aastore
+            case 0xBE -> { arrayLength(cb); return 1; }           // arraylength
+
             case 0x60, 0x61 -> { binop(cb, Bin.ADD); return 1; }
             case 0x64, 0x65 -> { binop(cb, Bin.SUB); return 1; }
+            case 0x68, 0x69 -> { binop(cb, Bin.MUL); return 1; }
             case 0x7E, 0x7F -> { binop(cb, Bin.AND); return 1; }
 
             case 0x85, 0x88, 0x91, 0x92 -> { return 1; }               // i2l/l2i/i2b/i2c: no-op
@@ -205,13 +217,14 @@ public final class BaselineCompiler {
             case 0xB7 -> { lowerInvokeSpecial(u2(code, pos + 1), cb); return 3; }
             case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
             case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
+            case 0xBC -> { lowerNewArray(code[pos + 1] & 0xFF, cb); return 2; }
 
             default -> throw new UnsupportedOperationException(
                     String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
         }
     }
 
-    private enum Bin { ADD, SUB, AND }
+    private enum Bin { ADD, SUB, MUL, AND }
 
     // ----- register allocation ---------------------------------------------
     private int pushReg() { if (sp >= OP_MAX) throw new IllegalStateException("operand stack too deep"); return OP_BASE + sp++; }
@@ -238,6 +251,7 @@ public final class BaselineCompiler {
         cb.emit(switch (kind) {
             case ADD -> A64.addReg(r, a, b);
             case SUB -> A64.subReg(r, a, b);
+            case MUL -> A64.mulReg(r, a, b);
             case AND -> A64.andReg(r, a, b);
         });
     }
@@ -340,15 +354,56 @@ public final class BaselineCompiler {
 
     /** A real call: args to x0.. (receiver first if any), BL placeholder, result from x0. */
     private void lowerCall(ClassFile.MemberRef ref, CodeBuffer cb, boolean hasReceiver) {
-        int nargs = paramTypes(ref.descriptor()).length + (hasReceiver ? 1 : 0);
+        emitCall(cb, key(ref.owner(), ref.name(), ref.descriptor()), ref.descriptor(), hasReceiver);
+    }
+
+    /** Emit a direct call to {@code calleeKey}: args to x0.., BL placeholder, result from x0. */
+    private void emitCall(CodeBuffer cb, String calleeKey, String descriptor, boolean hasReceiver) {
+        int nargs = paramTypes(descriptor).length + (hasReceiver ? 1 : 0);
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++) src[k] = popReg();       // src[0] = last arg (top of stack)
         for (int k = 0; k < nargs; k++) cb.emit(A64.movReg(nargs - 1 - k, src[k])); // -> x(argIndex)
         spillLive(cb);                                           // preserve operand values below the args
         int w = cb.emit(A64.bl(0));
-        callSites.add(new CallSite(w, key(ref.owner(), ref.name(), ref.descriptor())));
+        callSites.add(new CallSite(w, calleeKey));
         reloadLive(cb);
-        if (returnType(ref.descriptor()) != 'V') cb.emit(A64.movReg(pushReg(), 0));
+        if (returnType(descriptor) != 'V') cb.emit(A64.movReg(pushReg(), 0));
+    }
+
+    // ----- arrays: [header][length @16][elements @24], element = base + index<<scale -----
+    private void lowerNewArray(int atype, CodeBuffer cb) {
+        loadConst(cb, arrayElemSize(atype));                     // push elemSize
+        emitCall(cb, "vm/Heap.allocArray(II)J", "(II)J", false); // (length, elemSize) -> ref
+    }
+
+    private void arrayLength(CodeBuffer cb) {
+        int arr = popReg(), r = pushReg();
+        cb.emit(A64.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
+    }
+
+    private void arrayLoad(CodeBuffer cb, int scale, boolean word32) {
+        int index = popReg(), arr = popReg(), r = pushReg();     // r == arr's register
+        cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
+        cb.emit(A64.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
+        cb.emit(scale == 0 ? A64.ldrb(r, arr, 0) : word32 ? A64.ldrw(r, arr, 0) : A64.ldrx(r, arr, 0));
+    }
+
+    private void arrayStore(CodeBuffer cb, int scale) {
+        int val = popReg(), index = popReg(), arr = popReg();
+        cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
+        cb.emit(A64.addRegLsl(arr, arr, index, scale));
+        cb.emit(scale == 0 ? A64.strb(val, arr, 0) : scale == 2 ? A64.strw(val, arr, 0) : A64.strx(val, arr, 0));
+    }
+
+    /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */
+    private static int arrayElemSize(int atype) {
+        return switch (atype) {
+            case 4, 8 -> 1;              // boolean, byte
+            case 5, 9 -> 2;              // char, short
+            case 6, 10 -> 4;             // float, int
+            case 7, 11 -> 8;             // double, long
+            default -> throw new UnsupportedOperationException("bad newarray atype " + atype);
+        };
     }
 
     /** Spill operand-stack values (x9..) to the frame so a call can't clobber them. */
@@ -434,7 +489,7 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xB6) return true;            // new -> Heap.alloc; invokevirtual
+            if (op == 0xBB || op == 0xBC || op == 0xB6) return true; // new/newarray -> Heap.*; invokevirtual
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
@@ -451,7 +506,7 @@ public final class BaselineCompiler {
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
     private static int opLen(int op, byte[] code, int pos) {
         return switch (op) {
-            case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A -> 2; // bipush/ldc/iload/lload/aload/istore/lstore/astore
+            case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A, 0xBC -> 2; // …/aload/istore/lstore/astore/newarray
             case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
                  0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
                  0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB -> 3;         // getfield/putfield/invoke*/new
