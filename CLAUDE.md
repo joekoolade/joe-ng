@@ -184,10 +184,19 @@ defines the minimum the assembler must encode.
   exceptions yet). QEMU prints `YNW`. Added `lcmp` (long compare via CSET/CSINV)
   and — importantly — the compiler now tracks **operand-stack depth at branch
   merges** (so ternaries / values-live-across-branches work), pinned by `tern`.
-- **M2 remaining:** interfaces (`invokeinterface`), abstract methods, char/short
-  arrays (`ldrh`/`strh`). A real `String` class over the byte[] is a later
-  class-library step. GC is still M6. `baload` zero-extends (fine for ASCII;
-  `ldrsb` later). No exceptions yet (`checkCast`/traps just halt).
+- **Interfaces DONE (`invokeinterface`):** each `Type` gains an itable-directory
+  pointer (`{instanceSize, superType, itableDir}`); the writer builds, per
+  instantiated class, an itable per implemented interface (method→impl code addr)
+  and a directory of `{interfaceType, itable}` entries. The compiler lowers
+  `invokeinterface` to an **inline itable search** (walk the receiver's directory
+  for the interface's Type, index the itable by slot, `blr`) using x16/x17/x9
+  scratch. QEMU prints `RP` (Robot vs Phone via a `Speaker` reference).
+  `ClassFile` now parses `interfaces` + `interfaceMethods`/`allInterfaces`/
+  `findImpl`.
+- **M2 essentially complete.** Remaining niceties: super-interfaces / default
+  methods, abstract-method markers, char/short arrays (`ldrh`/`strh`), a real
+  `String` class over the byte[]. GC is still M6. No exceptions yet (`checkCast`
+  and traps just halt). `baload` zero-extends (fine for ASCII; `ldrsb` later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

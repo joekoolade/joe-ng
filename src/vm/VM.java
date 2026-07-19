@@ -122,5 +122,12 @@ public final class VM {
         Dog cast = (Dog) dog;                              // checkcast succeeds
         Uart.putc(cast.sound());                           // 'W'
         Uart.putc(0x0A);
+
+        // interface dispatch via itables (invokeinterface)
+        Speaker s1 = new Robot();
+        Speaker s2 = new Phone();
+        Uart.putc(s1.speak());                             // 'R'
+        Uart.putc(s2.speak());                             // 'P'
+        Uart.putc(0x0A);
     }
 }

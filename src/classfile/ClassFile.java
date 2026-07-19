@@ -49,13 +49,15 @@ public final class ClassFile {
 
     private final String thisClass;
     private final String superClass;   // null only for java/lang/Object
+    private final String[] interfaces; // directly-implemented interfaces
     private final Method[] methods;
     private final FieldInfo[] fields;
 
-    public String thisClassName()  { return thisClass; }
-    public String superClassName() { return superClass; }
-    public Method[] methods()      { return methods; }
-    public FieldInfo[] fields()    { return fields; }
+    public String thisClassName()   { return thisClass; }
+    public String superClassName()  { return superClass; }
+    public String[] interfaceNames(){ return interfaces; }
+    public Method[] methods()       { return methods; }
+    public FieldInfo[] fields()     { return fields; }
 
     /** Number of instance (non-static) fields — the object's field-slot count. */
     public int instanceFieldCount() {
@@ -113,6 +115,39 @@ public final class ClassFile {
         for (int i = 0; i < slots.size(); i++)
             if (slots.get(i).name().equals(name) && slots.get(i).descriptor().equals(descriptor)) return i;
         throw new IllegalArgumentException("no virtual method " + name + descriptor + " in " + cls);
+    }
+
+    // ----- interfaces ------------------------------------------------------
+    /** An interface's methods (its abstract members), in declaration order = itable slots. */
+    public java.util.List<Method> interfaceMethods() {
+        java.util.List<Method> ms = new java.util.ArrayList<>();
+        for (Method m : methods)
+            if (!m.isStatic && !m.name.equals("<init>") && !m.name.equals("<clinit>")) ms.add(m);
+        return ms;
+    }
+
+    /** itable slot of interface method {@code name+descriptor}. */
+    public int interfaceSlot(String name, String descriptor) {
+        java.util.List<Method> ms = interfaceMethods();
+        for (int i = 0; i < ms.size(); i++)
+            if (ms.get(i).name.equals(name) && ms.get(i).descriptor.equals(descriptor)) return i;
+        throw new IllegalArgumentException("no interface method " + name + descriptor + " in " + thisClass);
+    }
+
+    /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet). */
+    public static java.util.Set<String> allInterfaces(String cls, java.util.function.Function<String, ClassFile> resolve) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (String c = cls; c != null && !c.equals("java/lang/Object"); c = resolve.apply(c).superClass)
+            for (String i : resolve.apply(c).interfaces) out.add(i);
+        return out;
+    }
+
+    /** The class providing {@code cls}'s implementation of {@code name+descriptor} (walk supers). */
+    public static String findImpl(String cls, String name, String descriptor, java.util.function.Function<String, ClassFile> resolve) {
+        for (String c = cls; c != null && !c.equals("java/lang/Object"); c = resolve.apply(c).superClass)
+            for (Method m : resolve.apply(c).methods)
+                if (!m.isStatic && m.code != null && m.name.equals(name) && m.descriptor.equals(descriptor)) return c;
+        throw new IllegalArgumentException("no implementation of " + name + descriptor + " in " + cls);
     }
 
     public Method method(String name, String descriptor) {
@@ -185,8 +220,9 @@ public final class ClassFile {
         thisClass = classAt(in.readUnsignedShort());
         int sup = in.readUnsignedShort();
         superClass = sup == 0 ? null : classAt(sup);
-        int ifaces = in.readUnsignedShort();
-        for (int i = 0; i < ifaces; i++) in.readUnsignedShort();
+        int ifaceCount = in.readUnsignedShort();
+        interfaces = new String[ifaceCount];
+        for (int i = 0; i < ifaceCount; i++) interfaces[i] = classAt(in.readUnsignedShort());
 
         fields = readFields(in);
         methods = readMethods(in);

@@ -69,7 +69,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Set<String> tibClasses = new LinkedHashSet<>();
         Set<String> strings = new LinkedHashSet<>();
         Set<String> statics = new LinkedHashSet<>();
-        Set<String> typeRefClasses = new LinkedHashSet<>();          // instanceof/checkcast targets
+        Set<String> typeRefClasses = new LinkedHashSet<>();          // instanceof/checkcast/interface targets
+        Set<String> usedInterfaces = new LinkedHashSet<>();          // invokeinterface targets (itable build)
         Set<String> usedClasses = new LinkedHashSet<>();
         List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
         List<String> worklist = new ArrayList<>(List.of(entryKey));
@@ -81,6 +82,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
             cm.strRefs().forEach(s -> strings.add(s.text()));
             cm.typeRefs().forEach(t -> typeRefClasses.add(t.className()));
+            cm.interfaceRefs().forEach(t -> { typeRefClasses.add(t.className()); usedInterfaces.add(t.className()); });
             cm.tibRefs().forEach(t -> use(t.className(), usedClasses, clinitOrder, worklist));
             cm.staticRefs().forEach(s -> {
                 statics.add(s.fieldKey());
@@ -115,6 +117,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         for (String s : strings) { strWord.put(s, cur); cur += stringWords(s); }
         Map<String, Integer> staticWord = new HashMap<>();          // one 8-byte slot per static field, zero-init
         for (String s : statics) { staticWord.put(s, cur); cur += WORDS_PER_SLOT; }
+        // itables: per instantiated class, a directory of {interfaceType, itable} plus the itables.
+        Map<String, Integer> itableDirWord = new HashMap<>();       // class -> directory
+        Map<String, Integer> itableWord = new HashMap<>();          // "class|iface" -> itable
+        for (String c : tibClasses) {
+            List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
+            if (impls.isEmpty()) continue;
+            itableDirWord.put(c, cur);
+            cur += impls.size() * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+            for (String i : impls) {
+                itableWord.put(c + "|" + i, cur);
+                cur += resolve(i).interfaceMethods().size() * WORDS_PER_SLOT;
+            }
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -135,9 +150,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.strRefs().forEach(s -> strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text())));
             cm.staticRefs().forEach(s -> stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey())));
             cm.typeRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
+            cm.interfaceRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
         }
 
-        // --- Types: { instanceSize, superType } — superType links the hierarchy ---
+        // --- Types: { instanceSize, superType, itableDir } ---
         for (String cls : typeClasses) {
             int tw = typeWord.get(cls);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
@@ -145,6 +161,31 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             String sup = resolve(cls).superClassName();
             long superAddr = (sup == null || sup.equals("java/lang/Object")) ? 0 : addr(typeWord.get(sup));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
+            long dir = itableDirWord.containsKey(cls) ? addr(itableDirWord.get(cls)) : 0;
+            writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
+        }
+
+        // --- itable directories and itables (interface method dispatch) ---
+        for (String c : tibClasses) {
+            List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
+            if (impls.isEmpty()) continue;
+            int dw = itableDirWord.get(c);
+            for (int e = 0; e < impls.size(); e++) {
+                String i = impls.get(e);
+                int entry = dw + e * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+                writeLong(image, entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET / 4, addr(typeWord.get(i)));
+                writeLong(image, entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET / 4, addr(itableWord.get(c + "|" + i)));
+            }
+            for (String i : impls) {
+                int iw = itableWord.get(c + "|" + i);
+                var ims = resolve(i).interfaceMethods();
+                for (int s = 0; s < ims.size(); s++) {
+                    ClassFile.Method m = ims.get(s);
+                    String impl = ClassFile.findImpl(c, m.name, m.descriptor, this::resolve);
+                    int mbase = wordOffset.get(BaselineCompiler.key(impl, m.name, m.descriptor));
+                    writeLong(image, iw + s * WORDS_PER_SLOT, addr(mbase));
+                }
+            }
         }
 
         // --- TIBs: [Type ptr][vtable code addresses] ---
@@ -195,6 +236,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     private int vtableLength(String cls) { return ClassFile.vtable(cls, this::resolve).size(); }
 
+    /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
+    private List<String> implementedUsedInterfaces(String cls, Set<String> usedInterfaces) {
+        Set<String> all = ClassFile.allInterfaces(cls, this::resolve);
+        List<String> out = new ArrayList<>();
+        for (String i : usedInterfaces) if (all.contains(i)) out.add(i);
+        return out;
+    }
+
     /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
     private void use(String cls, Set<String> used, List<String> clinitOrder, List<String> worklist) {
         if (used.add(cls) && resolve(cls).hasClinit()) {
@@ -223,7 +272,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         w.add(A64.ret());
         int[] words = new int[w.size()];
         for (int i = 0; i < words.length; i++) words[i] = w.get(i);
-        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of());
+        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */

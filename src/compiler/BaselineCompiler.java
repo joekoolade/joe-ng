@@ -39,7 +39,8 @@ public final class BaselineCompiler {
 
     /** A single compiled method: its words and the fixups awaiting relocation. */
     public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs,
-                                 List<StrRef> strRefs, List<StaticRef> staticRefs, List<TypeRef> typeRefs) {}
+                                 List<StrRef> strRefs, List<StaticRef> staticRefs, List<TypeRef> typeRefs,
+                                 List<TypeRef> interfaceRefs) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
@@ -65,6 +66,7 @@ public final class BaselineCompiler {
     private final List<StrRef> strRefs = new ArrayList<>();
     private final List<StaticRef> staticRefs = new ArrayList<>();
     private final List<TypeRef> typeRefs = new ArrayList<>();
+    private final List<TypeRef> interfaceRefs = new ArrayList<>();   // interface Type address loads
 
     public BaselineCompiler(ClassFile cf)                     { this(cf, null); }
     public BaselineCompiler(ClassFile cf, ClassResolver resolver) {
@@ -81,7 +83,7 @@ public final class BaselineCompiler {
     public void compile(ClassFile.Method method, CodeBuffer cb) {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
         if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty()
-                || !cm.staticRefs.isEmpty() || !cm.typeRefs.isEmpty())
+                || !cm.staticRefs.isEmpty() || !cm.typeRefs.isEmpty() || !cm.interfaceRefs.isEmpty())
             throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         for (int w : cm.words) cb.emit(w);
     }
@@ -124,7 +126,7 @@ public final class BaselineCompiler {
             cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
         }
         return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs),
-                List.copyOf(strRefs), List.copyOf(staticRefs), List.copyOf(typeRefs));
+                List.copyOf(strRefs), List.copyOf(staticRefs), List.copyOf(typeRefs), List.copyOf(interfaceRefs));
     }
 
     // ----- prologue / epilogue --------------------------------------------
@@ -225,6 +227,7 @@ public final class BaselineCompiler {
             case 0xB6 -> { lowerInvokeVirtual(u2(code, pos + 1), cb); return 3; }
             case 0xB7 -> { lowerInvokeSpecial(u2(code, pos + 1), cb); return 3; }
             case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
+            case 0xB9 -> { lowerInvokeInterface(u2(code, pos + 1), cb); return 5; } // invokeinterface
             case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
             case 0xBC -> { lowerNewArray(code[pos + 1] & 0xFF, cb); return 2; }
             case 0xC0 -> { typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J"); return 3; }  // checkcast
@@ -391,6 +394,40 @@ public final class BaselineCompiler {
         if (returnType(ref.descriptor()) != 'V') cb.emit(A64.movReg(pushReg(), 0));
     }
 
+    /**
+     * Interface dispatch: move args to x0.., then inline-search the receiver's
+     * itable directory (Type→dir of {interfaceType, itable}) for the target
+     * interface's Type, index the itable by the method's slot, and {@code blr}.
+     * Uses x16 (target/code), x17 (walker), x9 (temp) — args in x0..x7 untouched.
+     */
+    private void lowerInvokeInterface(int cpIndex, CodeBuffer cb) {
+        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
+        int slot = resolve(ref.owner()).interfaceSlot(ref.name(), ref.descriptor());
+        int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
+        int[] src = new int[nargs];
+        for (int k = 0; k < nargs; k++) src[k] = popReg();
+        for (int k = 0; k < nargs; k++) cb.emit(A64.movReg(nargs - 1 - k, src[k])); // x0 = receiver
+        spillLive(cb);
+
+        interfaceRefs.add(new TypeRef(cb.reserveAddr(16), 16, ref.owner()));        // x16 = &interfaceType
+        cb.emit(A64.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
+        cb.emit(A64.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
+        cb.emit(A64.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
+        int search = cb.wordCount();
+        cb.emit(A64.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
+        cb.emit(A64.cmpReg(9, 16));
+        int beq = cb.emit(A64.bcond(A64.EQ, 0));                                    // found?
+        cb.emit(A64.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
+        cb.emit(A64.b((search - cb.wordCount()) * 4));                              // loop
+        int found = cb.wordCount();
+        cb.set(beq, A64.bcond(A64.EQ, (found - beq) * 4));
+        cb.emit(A64.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
+        cb.emit(A64.ldrx(16, 17, slot * ObjectModel.WORD));                        // x16 = code addr
+        cb.emit(A64.blr(16));
+        reloadLive(cb);
+        if (returnType(ref.descriptor()) != 'V') cb.emit(A64.movReg(pushReg(), 0));
+    }
+
     private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb) {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         if (ref.owner().equals("java/lang/Object") && ref.name().equals("<init>")) {
@@ -536,7 +573,7 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xC0 || op == 0xC1) return true; // new/newarray/invokevirtual/checkcast/instanceof call
+            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xB9 || op == 0xC0 || op == 0xC1) return true; // new/newarray/invokevirtual/invokeinterface/checkcast/instanceof
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
@@ -558,6 +595,7 @@ public final class BaselineCompiler {
                  0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
                  0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB,
                  0xC0, 0xC1 -> 3;                                 // get/putstatic/field/invoke*/new/checkcast/instanceof
+            case 0xB9 -> 5;                                       // invokeinterface (idx, count, 0)
             default -> 1;
         };
     }

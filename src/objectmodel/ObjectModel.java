@@ -49,8 +49,15 @@ public final class ObjectModel {
     public static final int TYPE_INSTANCE_SIZE_OFFSET = 0;
     /** Type field: pointer to the superclass's Type (0 at the root / Object). */
     public static final int TYPE_SUPER_OFFSET = WORD;      // 8
+    /** Type field: pointer to the itable directory ({interfaceType, itable} entries, 0-terminated). */
+    public static final int TYPE_ITABLE_DIR_OFFSET = 2 * WORD; // 16
     /** Total Type size. */
-    public static final int TYPE_SIZE = 2 * WORD;          // 16
+    public static final int TYPE_SIZE = 3 * WORD;          // 24
+
+    /** itable-directory entry: interface Type pointer, then the itable pointer. */
+    public static final int ITABLE_ENTRY_IFACE_OFFSET = 0;
+    public static final int ITABLE_ENTRY_TABLE_OFFSET = WORD;  // 8
+    public static final int ITABLE_ENTRY_SIZE = 2 * WORD;      // 16
 
     // ----- TIB (a word array) ----------------------------------------------
     /** TIB slot 0 → the {@code Type} metadata object. */

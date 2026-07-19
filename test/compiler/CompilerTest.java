@@ -176,6 +176,11 @@ public final class CompilerTest {
         T.eq("Dog.sound shares slot 0", 0, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
         T.eq("Dog slot 0 impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(0).owner().equals("vm/Dog") ? 1 : 0);
 
+        // ---- interfaces: implements set, itable slot, resolved implementation ----
+        T.eq("Robot implements Speaker", 1, ClassFile.allInterfaces("vm/Robot", res).contains("vm/Speaker") ? 1 : 0);
+        T.eq("Speaker.speak itable slot", 0, res.apply("vm/Speaker").interfaceSlot("speak", "()I"));
+        T.eq("Phone.speak impl is Phone", 1, ClassFile.findImpl("vm/Phone", "speak", "()I", res).equals("vm/Phone") ? 1 : 0);
+
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);
