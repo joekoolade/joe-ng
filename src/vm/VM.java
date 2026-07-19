@@ -83,6 +83,61 @@ public final class VM {
         return ref;
     }
 
+    // ----- exception unwinding --------------------------------------------
+    // Addresses/counts of the handler and frame tables, filled by the writer.
+    static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
+    static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
+
+    /**
+     * Unwind the stack looking for a handler for {@code exc}, starting at machine
+     * PC {@code pc} with stack pointer {@code sp}. At each frame: if a try/catch
+     * covers the PC and the type matches, resume there; otherwise pop the frame
+     * (via its frame-table size, reading the saved LR at [sp]) and continue in the
+     * caller. Halts if the exception reaches the top uncaught. (Callee-saved locals
+     * are not restored during the walk — a handler must not read pre-try locals.)
+     */
+    static void unwind(long exc, long pc, long sp) {
+        while (true) {
+            long h = findHandler(pc, exc);
+            if (h != 0L) {
+                Magic.resume(h, sp, exc);          // never returns
+            }
+            long fs = frameSizeAt(pc);
+            if (fs == 0L) {
+                while (true) { Magic.wfe(); }       // uncaught at the top
+            }
+            pc = Magic.load64(sp) - 4L;             // the call site (return address - one instruction)
+            sp = sp + fs;                           // pop this frame
+        }
+    }
+
+    private static long findHandler(long pc, long exc) {
+        long i = 0L;
+        while (i < handlerCount) {
+            long e = handlerTable + i * 32L;
+            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L)) {
+                long catchType = Magic.load64(e + 24L);
+                if (catchType == 0L || instanceOf(exc, catchType) != 0) {
+                    return Magic.load64(e + 16L);
+                }
+            }
+            i = i + 1L;
+        }
+        return 0L;
+    }
+
+    private static long frameSizeAt(long pc) {
+        long i = 0L;
+        while (i < frameCount) {
+            long e = frameTable + i * 24L;
+            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L)) {
+                return Magic.load64(e + 16L);
+            }
+            i = i + 1L;
+        }
+        return 0L;
+    }
+
     /**
      * The program proper — a framed method (so operand values can spill across
      * calls). Prints the banner, then exercises the object model: allocate a
@@ -137,5 +192,21 @@ public final class VM {
             Uart.putc(0x45);                               // 'E' — caught
         }
         Uart.putc(0x0A);
+
+        // cross-method: thrower() throws, catcher() (its caller) catches
+        catcher();                                         // -> 'U'
+        Uart.putc(0x0A);
+    }
+
+    private static void thrower() {
+        throw new MyExc();
+    }
+
+    private static void catcher() {
+        try {
+            thrower();                                     // throws; unwinds into this frame
+        } catch (MyExc e) {
+            Uart.putc(0x55);                               // 'U' — caught after unwinding
+        }
     }
 }

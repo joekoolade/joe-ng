@@ -37,10 +37,12 @@ public final class BaselineCompiler {
     /** Resolves an owner class name (e.g. "vm/Cell") to its parsed classfile. */
     public interface ClassResolver { ClassFile resolve(String owner); }
 
-    /** A single compiled method: its words and the fixups awaiting relocation. */
+    /** A single compiled method: its words, relocation fixups, and unwind metadata. */
     public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs,
                                  List<StrRef> strRefs, List<StaticRef> staticRefs, List<TypeRef> typeRefs,
-                                 List<TypeRef> interfaceRefs) {}
+                                 List<TypeRef> interfaceRefs, int frameSize, List<HandlerRange> handlers) {}
+    /** A try/catch region as word indices, for the writer's machine-PC handler table. */
+    public record HandlerRange(int startWord, int endWord, int handlerWord, String catchClass) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
@@ -117,6 +119,8 @@ public final class BaselineCompiler {
         java.util.Arrays.fill(bcToWord, -1);
         bcDepth = new int[code.length];
         java.util.Arrays.fill(bcDepth, -1);
+        for (ClassFile.ExceptionEntry en : method.exceptions)   // handler entry: exception on stack (depth 1)
+            bcDepth[en.handlerPc()] = 1;
         int pos = 0;
         while (pos < code.length) {
             bcToWord[pos] = cb.wordCount();
@@ -130,8 +134,19 @@ public final class BaselineCompiler {
             if (target < 0) throw new IllegalStateException("branch to non-instruction bc=" + f.targetBc);
             cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
         }
+        // Machine-PC ranges for the writer's handler table (bytecode PCs -> word indices).
+        int codeWords = cb.wordCount();
+        List<HandlerRange> handlers = new ArrayList<>();
+        for (ClassFile.ExceptionEntry en : method.exceptions) {
+            int startW = bcToWord[en.startPc()];
+            int endW = en.endPc() < code.length ? bcToWord[en.endPc()] : codeWords;
+            int handlerW = bcToWord[en.handlerPc()];
+            String catchClass = en.catchType() == 0 ? null : cf.classAt(en.catchType());
+            handlers.add(new HandlerRange(startW, endW, handlerW, catchClass));
+        }
         return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs),
-                List.copyOf(strRefs), List.copyOf(staticRefs), List.copyOf(typeRefs), List.copyOf(interfaceRefs));
+                List.copyOf(strRefs), List.copyOf(staticRefs), List.copyOf(typeRefs), List.copyOf(interfaceRefs),
+                frameSize, List.copyOf(handlers));
     }
 
     // ----- prologue / epilogue --------------------------------------------
@@ -452,6 +467,7 @@ public final class BaselineCompiler {
      * halts — cross-method unwinding is not implemented yet.
      */
     private void athrow(CodeBuffer cb, int pos) {
+        int athrowStart = cb.wordCount();
         emitStoreStatic(cb, EXCEPTION_KEY, popReg());            // $exception = ref
         for (ClassFile.ExceptionEntry en : exceptions) {
             if (en.startPc() > pos || pos >= en.endPc()) continue;
@@ -464,7 +480,12 @@ public final class BaselineCompiler {
             emitCatch(cb, en.handlerPc());                       // matched
             cb.set(skip, A64.cbz(cond, (cb.wordCount() - skip) * 4));
         }
-        emitHalt(cb);                                            // uncaught
+        // no local handler: unwind the stack — unwind(exc, thisPC, SP)
+        int exc = pushReg(); emitLoadStatic(cb, EXCEPTION_KEY, exc);
+        int pc = pushReg(); cb.patchAddr(cb.reserveAddr(pc), pc, cb.pcAt(athrowStart)); // a PC inside this method
+        int sp = pushReg(); cb.emit(A64.movFromSp(sp));
+        emitCall(cb, "vm/VM.unwind(JJJ)V", "(JJJ)V", false);
+        emitHalt(cb);                                            // unwind never returns
     }
 
     /** Push the pending exception and branch to a handler (which expects it at depth 1). */
@@ -566,6 +587,14 @@ public final class BaselineCompiler {
             case "writeELR_EL2(J)V"     -> cb.emit(A64.msr(A64.ELR_EL2, popReg()));
             case "writeCPACR_EL1(J)V"   -> cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
             case "writeSP(J)V"          -> cb.emit(A64.movToSp(popReg()));
+            case "readSP()J"            -> cb.emit(A64.movFromSp(pushReg()));
+            case "resume(JJJ)V" -> {                             // exc->x9, SP=sp, br pc (no return)
+                int exc = popReg(), spv = popReg(), pc = popReg();
+                cb.emit(A64.movReg(16, pc));                     // target -> scratch (x9 gets clobbered next)
+                cb.emit(A64.movReg(9, exc));                     // exception -> handler's stack slot
+                cb.emit(A64.movToSp(spv));
+                cb.emit(A64.br(16));
+            }
 
             case "store32(JI)V" -> { int val = popReg(), addr = popReg(); cb.emit(A64.strw(val, addr, 0)); }
             case "store8(JI)V"  -> { int val = popReg(), addr = popReg(); cb.emit(A64.strb(val, addr, 0)); }

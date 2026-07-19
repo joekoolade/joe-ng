@@ -45,6 +45,15 @@ public final class Magic {
 
     // ----- stack -----------------------------------------------------------
     public static void writeSP(long v)            { throw intrinsic(); }
+    /** Read the current stack pointer (for the exception unwinder). */
+    public static long readSP()                   { throw intrinsic(); }
+
+    /**
+     * Resume execution at a handler: set SP, place {@code exc} in the handler's
+     * operand-stack slot (x9), and branch to {@code pc}. Never returns — used by
+     * the exception unwinder to transfer control to a catch block in a caller.
+     */
+    public static void resume(long pc, long sp, long exc) { throw intrinsic(); }
 
     // ----- raw memory (MMIO) ----------------------------------------------
     public static void store32(long addr, int value) { throw intrinsic(); }

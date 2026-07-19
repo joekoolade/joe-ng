@@ -47,9 +47,10 @@ logs what informed each piece so encodings and boot facts are auditable.
   aload/astore, newarray, arraylength, array load/store (b/i/l/a), ldc of int
   and String constants (strings interned as byte[] objects), getstatic/putstatic
   (image statics area), lcmp, instanceof/checkcast (Type superclass-chain walk),
-  invokeinterface (per-class itables, inline directory search), athrow +
-  same-method try/catch (JVMS §2.10/§4.7.3 exception table; type-matched, halts
-  on uncaught — no cross-method unwinding yet).
+  invokeinterface (per-class itables, inline directory search), athrow + try/catch
+  with cross-method unwinding (JVMS §2.10/§4.7.3 exception table). The unwinder
+  walks frames using writer-built handler/frame tables (machine-PC ranges);
+  callee-saved locals are not restored during the walk (our simplification).
   Static initializers (`<clinit>`) run eagerly at boot via
   a writer-generated init sequence (JVMS §5.5 initialization, simplified to
   closed-world eager order). Class hierarchies use a flattened vtable (superclass

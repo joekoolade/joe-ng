@@ -193,19 +193,25 @@ defines the minimum the assembler must encode.
   scratch. QEMU prints `RP` (Robot vs Phone via a `Speaker` reference).
   `ClassFile` now parses `interfaces` + `interfaceMethods`/`allInterfaces`/
   `findImpl`.
-- **Exceptions — same-method try/catch DONE.** `athrow` stashes the exception in
-  a synthetic statics slot, then for each covering exception-table entry tests the
-  thrown type against the catch type (`VM.instanceOf`) and branches to the handler
-  (exception on the operand stack). `ClassFile` parses the exception table.
-  Throwables extend JDK classes we don't compile, so `java/*` supers are treated
-  as roots (`ClassFile.isRoot`) and `java/*` `<init>` calls are no-ops — enough for
-  `catch` by exact type. QEMU prints `E`. **Cross-method unwinding is NOT done**
-  (an uncaught exception, or a throw whose handler is in a caller, just halts) —
-  it needs per-frame unwind metadata.
-- **M2 essentially complete.** Remaining niceties: cross-method exception
-  unwinding, super-interfaces / default methods, char/short arrays (`ldrh`/`strh`),
-  a real `String`/`Throwable` class. GC is still M6. `baload` zero-extends (fine
-  for ASCII; `ldrsb` later).
+- **Exceptions — same-method AND cross-method DONE.** `athrow` tests each covering
+  exception-table entry's catch type inline; on a local match it branches to the
+  handler (exception on the operand stack). On no local match it calls
+  `VM.unwind(exc, pc, sp)`, which walks the stack using two writer-built tables —
+  a **handler table** (machine-PC ranges → handler + catch Type, from every
+  method's exception table) and a **frame table** (codeStart/end → frameSize).
+  At each frame: if a handler covers the PC and the type matches, `Magic.resume`
+  (set SP, exception in x9, branch) transfers to it; else pop the frame (read
+  saved LR at [sp], `sp += frameSize`) and retry at the caller's call site
+  (`LR - 4`). QEMU prints `E` (same-method) and `U` (thrown in `thrower()`, caught
+  in `catcher()`). `java/*` supers/`<init>` are roots/no-ops so throwables extend
+  JDK classes cleanly (`ClassFile.isRoot`). Table locations live in writer-filled
+  statics (`VM.frameTable`/`frameCount`/`handlerTable`/`handlerCount`).
+  **Limitation:** callee-saved locals are NOT restored during the walk, so a
+  handler must not read a *pre-try* local (it may be stale). No `finally`-specific
+  handling beyond catch-all entries.
+- **M2 complete.** Remaining niceties: super-interfaces / default methods,
+  char/short arrays (`ldrh`/`strh`), a real `String`/`Throwable` class, restoring
+  locals on unwind. GC is still M6. `baload` zero-extends (fine for ASCII).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

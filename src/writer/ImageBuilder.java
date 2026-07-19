@@ -73,6 +73,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Set<String> usedInterfaces = new LinkedHashSet<>();          // invokeinterface targets (itable build)
         Set<String> usedClasses = new LinkedHashSet<>();
         List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
+        int frameCount = 0, handlerCount = 0;                        // unwind-table entry counts
         List<String> worklist = new ArrayList<>(List.of(entryKey));
         while (!worklist.isEmpty()) {
             String k = worklist.remove(0);
@@ -83,6 +84,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.strRefs().forEach(s -> strings.add(s.text()));
             cm.typeRefs().forEach(t -> typeRefClasses.add(t.className()));
             cm.interfaceRefs().forEach(t -> { typeRefClasses.add(t.className()); usedInterfaces.add(t.className()); });
+            cm.handlers().forEach(h -> { if (h.catchClass() != null) typeRefClasses.add(h.catchClass()); });
+            if (cm.frameSize() > 0) frameCount++;
+            handlerCount += cm.handlers().size();
             cm.tibRefs().forEach(t -> use(t.className(), usedClasses, clinitOrder, worklist));
             cm.staticRefs().forEach(s -> {
                 statics.add(s.fieldKey());
@@ -98,6 +102,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         // Generate VM.initClasses(): call each discovered <clinit> once, in first-use order.
         CompiledMethod initBody = generateInitClasses(clinitOrder);
         sizeWords.put(INIT_CLASSES, initBody.words().length);
+        if (initBody.frameSize() > 0) frameCount++;
 
         // --- lay out: [method code] [Types] [TIBs] [interned strings], 8-byte aligned ---
         Map<String, Integer> wordOffset = new HashMap<>();
@@ -130,6 +135,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
                 cur += resolve(i).interfaceMethods().size() * WORDS_PER_SLOT;
             }
         }
+        // unwind tables: frame entries {start,end,frameSize} (6 words), handler
+        // entries {start,end,handler,catchType} (8 words).
+        int frameTableWord = cur;   cur += frameCount * 6;
+        int handlerTableWord = cur; cur += handlerCount * 8;
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -139,6 +148,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         List<GlobalStr> strs = new ArrayList<>();
         List<GlobalStatic> stats = new ArrayList<>();
         List<GlobalType> types = new ArrayList<>();
+        List<long[]> frameEntries = new ArrayList<>();       // {codeStart, codeEnd, frameSize}
+        List<long[]> handlerEntries = new ArrayList<>();     // {machStart, machEnd, handler, catchType}
         for (String k : sizeWords.keySet()) {
             int base = wordOffset.get(k);
             CompiledMethod cm = k.equals(INIT_CLASSES) ? initBody
@@ -151,6 +162,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.staticRefs().forEach(s -> stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey())));
             cm.typeRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
             cm.interfaceRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
+            if (cm.frameSize() > 0)
+                frameEntries.add(new long[]{addr(base), addr(base + cm.words().length), cm.frameSize()});
+            for (var hr : cm.handlers()) {
+                long ct = hr.catchClass() == null ? 0 : addr(typeWord.get(hr.catchClass()));
+                handlerEntries.add(new long[]{addr(base + hr.startWord()), addr(base + hr.endWord()),
+                        addr(base + hr.handlerWord()), ct});
+            }
         }
 
         // --- Types: { instanceSize, superType, itableDir } ---
@@ -199,6 +217,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
                 writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
             }
         }
+
+        // --- unwind tables + their location statics ---
+        for (int i = 0; i < frameEntries.size(); i++) {
+            long[] e = frameEntries.get(i); int w = frameTableWord + i * 6;
+            writeLong(image, w, e[0]); writeLong(image, w + 2, e[1]); writeLong(image, w + 4, e[2]);
+        }
+        for (int i = 0; i < handlerEntries.size(); i++) {
+            long[] e = handlerEntries.get(i); int w = handlerTableWord + i * 8;
+            writeLong(image, w, e[0]); writeLong(image, w + 2, e[1]);
+            writeLong(image, w + 4, e[2]); writeLong(image, w + 6, e[3]);
+        }
+        fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
+        fillStatic(image, staticWord, "vm/VM.frameCount",   frameEntries.size());
+        fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
+        fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (String s : strings) writeStringObject(image, strWord.get(s), s);
@@ -272,7 +305,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         w.add(A64.ret());
         int[] words = new int[w.size()];
         for (int i = 0; i < words.length; i++) words[i] = w.get(i);
-        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of(), List.of());
+        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of(), List.of(),
+                frame, List.of());
     }
 
     /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */
@@ -301,6 +335,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
     private static void writeLong(int[] image, int w, long v) {
         image[w]     = (int) (v & 0xFFFFFFFFL);
         image[w + 1] = (int) (v >>> 32);
+    }
+
+    /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
+    private static void fillStatic(int[] image, Map<String, Integer> staticWord, String key, long value) {
+        Integer w = staticWord.get(key);
+        if (w != null) writeLong(image, w, value);
     }
 
     private CompiledMethod compile(String key, long base, boolean isEntry) throws IOException {
