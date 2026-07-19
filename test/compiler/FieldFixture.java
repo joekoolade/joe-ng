@@ -11,4 +11,7 @@ public final class FieldFixture {
 
     public static int  get(FieldFixture f)        { return f.value; }
     public static void set(FieldFixture f, int v)  { f.value = v; }
+
+    public int val() { return value; }                          // virtual (vtable slot 0)
+    public static int callVal(FieldFixture f) { return f.val(); } // invokevirtual dispatch
 }

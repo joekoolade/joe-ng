@@ -88,6 +88,26 @@ public final class CompilerTest {
         setWant.add(A64.ret());
         T.eqWords("FieldFixture.set", toArray(setWant), compile(ff, "set", "(Lcompiler/FieldFixture;I)V"));
 
+        // ---- invokevirtual: dispatch through the TIB vtable (val() = slot 0) ----
+        // frame: LR + 1 local + 7-slot spill area = align16(72) = 80
+        List<Integer> vWant = new ArrayList<>();
+        vWant.add(A64.subImm(31, 31, 80));
+        vWant.add(A64.strx(30, 31, 0));                  // save LR (non-leaf)
+        vWant.add(A64.strx(19, 31, 8));
+        vWant.add(A64.movReg(19, 0));                    // f -> slot0
+        vWant.add(A64.movReg(9, 19));                    // aload_0
+        vWant.add(A64.movReg(0, 9));                     // receiver -> x0
+        vWant.add(A64.ldrx(16, 0, 0));                   // x16 = receiver.tib
+        vWant.add(A64.ldrx(16, 16, 8));                  // x16 = tib[vmethod 0]  (offset 8)
+        vWant.add(A64.blr(16));                          // dispatch
+        vWant.add(A64.movReg(9, 0));                     // result -> stack
+        vWant.add(A64.movReg(0, 9));                     // ireturn
+        vWant.add(A64.ldrx(30, 31, 0));
+        vWant.add(A64.ldrx(19, 31, 8));
+        vWant.add(A64.addImm(31, 31, 80));
+        vWant.add(A64.ret());
+        T.eqWords("FieldFixture.callVal", toArray(vWant), compile(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
+
         T.summary("compiler");
     }
 

@@ -73,6 +73,24 @@ public final class ClassFile {
         throw new IllegalArgumentException("no instance field " + name + " in " + thisClass);
     }
 
+    /** Virtual methods (non-static instance methods, excluding constructors), in declaration order.
+     *  Their positions are the vtable slots. (No inheritance beyond Object yet — a subclass would
+     *  keep superclass slots first and append/override; revisit when class hierarchies arrive.) */
+    public java.util.List<Method> virtualMethods() {
+        java.util.List<Method> vs = new java.util.ArrayList<>();
+        for (Method m : methods)
+            if (!m.isStatic && !m.name.equals("<init>")) vs.add(m);
+        return vs;
+    }
+
+    /** Vtable slot of instance method {@code name+descriptor}. */
+    public int vtableSlot(String name, String descriptor) {
+        java.util.List<Method> vs = virtualMethods();
+        for (int i = 0; i < vs.size(); i++)
+            if (vs.get(i).name.equals(name) && vs.get(i).descriptor.equals(descriptor)) return i;
+        throw new IllegalArgumentException("no virtual method " + name + descriptor + " in " + thisClass);
+    }
+
     public Method method(String name, String descriptor) {
         for (Method m : methods)
             if (m.name.equals(name) && m.descriptor.equals(descriptor)) return m;

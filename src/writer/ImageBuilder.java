@@ -33,7 +33,8 @@ import java.util.Set;
  */
 public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
-    private static final int TIB_WORDS = ObjectModel.tibSize(0) / 4;  // Type slot only, for now
+    private static final int WORDS_PER_SLOT = ObjectModel.WORD / 4;   // 8-byte slot = 2 image ints
+    private static final int TYPE_WORDS = WORDS_PER_SLOT;             // Type = { instanceSize } for now
 
     private final Path classesDir;
     private final byte[] imageData;
@@ -57,7 +58,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     /** Build the whole image with {@code entryKey} (e.g. "vm/VM.boot()V") at 0x80000. */
     public CodeBuffer build(String entryKey) throws IOException {
-        // --- discovery + sizing: BFS over calls; collect instantiated classes ---
+        // --- discovery + sizing: BFS over calls; collect instantiated classes.
+        //     Instantiating a class pulls in all its virtual methods so their code
+        //     is laid out and the vtable can point at it (even if not directly called).
         Map<String, Integer> sizeWords = new LinkedHashMap<>();     // layout order, entry first
         Set<String> tibClasses = new LinkedHashSet<>();
         List<String> worklist = new ArrayList<>(List.of(entryKey));
@@ -67,17 +70,23 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
-            cm.tibRefs().forEach(t -> tibClasses.add(t.className()));
+            for (var t : cm.tibRefs()) {
+                if (tibClasses.add(t.className()))
+                    for (ClassFile.Method vm : resolve(t.className()).virtualMethods())
+                        worklist.add(BaselineCompiler.key(t.className(), vm.name, vm.descriptor));
+            }
         }
 
-        // --- assign method bases, then TIB region (8-byte aligned) ---
+        // --- lay out: [method code] [Types] [TIBs], each 8-byte aligned ---
         Map<String, Integer> wordOffset = new HashMap<>();
-        int off = 0;
-        for (var e : sizeWords.entrySet()) { wordOffset.put(e.getKey(), off); off += e.getValue(); }
-        int tibRegion = off + (off % 2);                            // pad to an 8-byte boundary
+        int cur = 0;
+        for (var e : sizeWords.entrySet()) { wordOffset.put(e.getKey(), cur); cur += e.getValue(); }
+        cur += cur % 2;                                             // pad to 8 bytes before data
+        Map<String, Integer> typeWord = new HashMap<>();
+        for (String cls : tibClasses) { typeWord.put(cls, cur); cur += TYPE_WORDS; }
         Map<String, Integer> tibWord = new HashMap<>();
-        for (String cls : tibClasses) { tibWord.put(cls, tibRegion); tibRegion += TIB_WORDS; }
-        int totalWords = tibRegion;
+        for (String cls : tibClasses) { tibWord.put(cls, cur); cur += ObjectModel.tibSize(vtableLength(cls)) / 4; }
+        int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
         int[] image = new int[totalWords];
@@ -92,9 +101,22 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.tibRefs().forEach(t -> tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className())));
         }
 
-        CodeBuffer cb = new CodeBuffer();                           // base = LOAD_ADDRESS
-        for (int w : image) cb.emit(w);                            // TIB slots are zero (Type placeholder)
+        // --- Types (instanceSize) and TIBs (Type ptr + vtable code addresses) ---
+        for (String cls : tibClasses) {
+            ClassFile cf = resolve(cls);
+            writeLong(image, typeWord.get(cls), ObjectModel.scalarSize(cf.instanceFieldCount()));
+            int tw = tibWord.get(cls);
+            writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
+            var vmethods = cf.virtualMethods();
+            for (int slot = 0; slot < vmethods.size(); slot++) {
+                ClassFile.Method vm = vmethods.get(slot);
+                int mbase = wordOffset.get(BaselineCompiler.key(cls, vm.name, vm.descriptor));
+                writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
+            }
+        }
 
+        CodeBuffer cb = new CodeBuffer();                           // base = LOAD_ADDRESS
+        for (int w : image) cb.emit(w);
         for (GlobalCall c : calls) {
             Integer calleeBase = wordOffset.get(c.calleeKey());
             if (calleeBase == null) throw new IllegalStateException("unresolved call to " + c.calleeKey());
@@ -103,9 +125,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         for (GlobalTib t : tibs) {
             Integer w = tibWord.get(t.className());
             if (w == null) throw new IllegalStateException("no TIB for " + t.className());
-            cb.patchAddr(t.siteWord(), t.reg(), cb.pcAt(w));        // store absolute TIB address
+            cb.patchAddr(t.siteWord(), t.reg(), addr(w));          // store absolute TIB address
         }
         return cb;
+    }
+
+    private int vtableLength(String cls) { return resolve(cls).virtualMethods().size(); }
+
+    /** Absolute address of image word index {@code w}. */
+    private static long addr(int w) { return CodeBuffer.LOAD_ADDRESS + (long) w * 4; }
+
+    /** Write a 64-bit value as two little-endian image ints at word index {@code w}. */
+    private static void writeLong(int[] image, int w, long v) {
+        image[w]     = (int) (v & 0xFFFFFFFFL);
+        image[w + 1] = (int) (v >>> 32);
     }
 
     private CompiledMethod compile(String key, long base, boolean isEntry) throws IOException {

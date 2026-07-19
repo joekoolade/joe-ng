@@ -92,6 +92,8 @@ public final class A64 {
     // =======================================================================
     /** {@code BR Xn} — branch to address in register. */
     public static int br(int rn)  { return 0xD61F_0000 | (reg(rn) << 5); }
+    /** {@code BLR Xn} — branch-with-link to address in register (virtual dispatch). */
+    public static int blr(int rn) { return 0xD63F_0000 | (reg(rn) << 5); }
     /** {@code RET Xn} — return; RET with no operand uses LR (x30). */
     public static int ret(int rn) { return 0xD65F_0000 | (reg(rn) << 5); }
     /** {@code RET} — return to LR (x30). */

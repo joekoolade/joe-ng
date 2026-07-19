@@ -126,16 +126,23 @@ defines the minimum the assembler must encode.
     **spill to the frame across calls** so mid-expression calls (e.g. `new X()`'s
     constructor) don't clobber live refs. `ClassResolver` gives field offsets /
     instance sizes across classes.
-  - Writer: `ImageBuilder` lays out one TIB per instantiated class after the code
-    and relocates each `new`'s TIB-pointer load. (TIB is a Type-slot placeholder
-    for now — real Type/vtable arrive with invokevirtual/instanceof/GC.)
-  - `classfile/ClassFile` now parses fields + method access flags. Tests:
-    `FieldFixture` pins getfield/putfield; `qemu-check.sh` gates the banner and
-    the heap-field print.
-- **M2 remaining:** `invokevirtual` via the TIB vtable (needs a real Type),
-  arrays (`newarray`/`aload`/`astore`/`arraylength`), static fields
-  (`getstatic`/`putstatic`), `instanceof`/`checkcast`. Retire the `message()`
-  bridge once char arrays exist. GC is still M6 (bump-only today).
+  - Writer: `ImageBuilder` lays out, per instantiated class, a `Type`
+    (`{instanceSize}` for now) and a real **TIB = [Type ptr, vtable...]** after the
+    code; it relocates each `new`'s TIB-pointer load and fills vtable slots with
+    the virtual methods' code addresses (pulling all of an instantiated class's
+    virtual methods into the layout).
+  - `classfile/ClassFile` parses fields + method access flags + `virtualMethods`/
+    `vtableSlot`. Tests: `FieldFixture` pins getfield/putfield and invokevirtual
+    dispatch; `qemu-check.sh` gates the banner and the heap-field print.
+- **`invokevirtual` DONE:** dispatch through the receiver's TIB vtable
+  (`ldr tib,[recv]; ldr code,[tib+slot]; blr`), using x16 scratch. Vtable slot =
+  method's position among the class's virtual methods (no inheritance beyond
+  Object yet — revisit slot assignment when class hierarchies arrive). QEMU's `k`
+  now flows through `c.inc()`/`c.get()` virtual calls.
+- **M2 remaining:** arrays (`newarray`/`aload`/`astore`/`arraylength`), static
+  fields (`getstatic`/`putstatic`), `instanceof`/`checkcast`, and class
+  hierarchies (super calls, vtable inheritance). Retire the `message()` bridge
+  once char arrays exist. GC is still M6 (bump-only today).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

@@ -201,6 +201,7 @@ public final class BaselineCompiler {
 
             case 0xB4 -> { getfield(cb, u2(code, pos + 1)); return 3; }
             case 0xB5 -> { putfield(cb, u2(code, pos + 1)); return 3; }
+            case 0xB6 -> { lowerInvokeVirtual(u2(code, pos + 1), cb); return 3; }
             case 0xB7 -> { lowerInvokeSpecial(u2(code, pos + 1), cb); return 3; }
             case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
             case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
@@ -312,6 +313,22 @@ public final class BaselineCompiler {
         lowerCall(ref, cb, false);
     }
 
+    /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
+    private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb) {
+        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
+        int slot = resolve(ref.owner()).vtableSlot(ref.name(), ref.descriptor());
+        int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
+        int[] src = new int[nargs];
+        for (int k = 0; k < nargs; k++) src[k] = popReg();
+        for (int k = 0; k < nargs; k++) cb.emit(A64.movReg(nargs - 1 - k, src[k])); // x0 = receiver
+        spillLive(cb);
+        cb.emit(A64.ldrx(16, 0, ObjectModel.TIB_OFFSET));       // x16 = receiver.tib
+        cb.emit(A64.ldrx(16, 16, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)))); // x16 = code
+        cb.emit(A64.blr(16));
+        reloadLive(cb);
+        if (returnType(ref.descriptor()) != 'V') cb.emit(A64.movReg(pushReg(), 0));
+    }
+
     private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb) {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         if (ref.owner().equals("java/lang/Object") && ref.name().equals("<init>")) {
@@ -417,7 +434,7 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB) return true;                          // new -> calls Heap.alloc
+            if (op == 0xBB || op == 0xB6) return true;            // new -> Heap.alloc; invokevirtual
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
@@ -437,7 +454,7 @@ public final class BaselineCompiler {
             case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A -> 2; // bipush/ldc/iload/lload/aload/istore/lstore/astore
             case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
                  0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
-                 0xB4, 0xB5, 0xB7, 0xB8, 0xBB -> 3;               // getfield/putfield/invokespecial/invokestatic/new
+                 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB -> 3;         // getfield/putfield/invoke*/new
             default -> 1;
         };
     }

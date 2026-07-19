@@ -42,8 +42,8 @@ logs what informed each piece so encodings and boot facts are auditable.
   structure and constant pool, fields and method access flags, §4.7.3 the Code
   attribute, and §6 the instruction set. Opcodes lowered so far: nop/return/
   Xreturn, goto, const pushes, local load/store + iinc, add/sub/and,
-  i2l/l2i/i2b/i2c, if/if_icmp branches, invokestatic/invokespecial, new, dup,
-  getfield/putfield, aload/astore. The parser and lowering are written from the
+  i2l/l2i/i2b/i2c, if/if_icmp branches, invokestatic/invokespecial/invokevirtual,
+  new, dup, getfield/putfield, aload/astore. The parser and lowering are written from the
   spec; the object layout (`objectmodel`), the calling convention, and the
   `magic.Magic` intrinsic set + A64 lowering are ours.
 

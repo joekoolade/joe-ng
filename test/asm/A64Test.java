@@ -35,6 +35,7 @@ public final class A64Test {
         T.eqWord("RET (x30)", 0xD65F03C0, A64.ret());
         T.eqWord("RET x0",    0xD65F0000, A64.ret(0));
         T.eqWord("BR x1",     0xD61F0020, A64.br(1));
+        T.eqWord("BLR x16",   0xD63F0200, A64.blr(16));
 
         // ---- wide moves (64-bit) -------------------------------------------
         T.eqWord("MOVZ x0,#0",        0xD2800000, A64.movz(0, 0, 0));

@@ -56,8 +56,8 @@ public final class VM {
         Uart.puts(Magic.message(), Magic.messageLen());
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
-        c.value = c.value + 1;             // getfield + putfield -> 'k'
-        Uart.putc(c.value);
+        c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
+        Uart.putc(c.get());                // virtual dispatch: read the field back
         Uart.putc(0x0A);                   // newline
     }
 }
