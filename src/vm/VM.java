@@ -13,7 +13,8 @@ import objectmodel.ObjectModel;
  * Methods are added here as the baseline compiler's bytecode coverage grows,
  * milestone by milestone (CLAUDE.md working agreements).
  */
-public final class VM {
+public final class VM
+{
     private VM() {}
 
     /**
@@ -21,8 +22,10 @@ public final class VM {
      * compiler (M1c step 1). Compiles to {@code wfe; b .-4}, identical to the M0
      * hand-emitted spin image.
      */
-    public static void spin() {
-        while (true) {
+    public static void spin()
+    {
+        while (true)
+        {
             Magic.wfe();
         }
     }
@@ -33,7 +36,8 @@ public final class VM {
      * {@code vm.EmitBoot}: drop EL2→EL1, enable FP, set a stack, bring up the AUX
      * mini-UART, print the boot message, then park.
      */
-    public static void boot() {
+    public static void boot()
+    {
         Magic.dropToEL1();
         Magic.writeCPACR_EL1(0x300000L);   // CPACR_EL1.FPEN = 0b11 (no FP trap)
         Magic.isb();
@@ -44,7 +48,8 @@ public final class VM {
         initClasses();                     // run static initializers (writer-generated body)
         run();
 
-        while (true) {
+        while (true)
+        {
             Magic.wfe();
         }
     }
@@ -54,7 +59,8 @@ public final class VM {
      * The body is empty here — the boot-image writer replaces it with a sequence
      * of calls to the discovered static initializers (closed-world eager init).
      */
-    static void initClasses() {
+    static void initClasses()
+    {
     }
 
     /**
@@ -64,11 +70,19 @@ public final class VM {
      * pointers, Types are laid out by the writer). The compiler synthesizes calls
      * to this for the {@code instanceof} bytecode.
      */
-    static int instanceOf(long ref, long targetType) {
-        if (ref == 0L) return 0;                       // null is never an instance
+    static int instanceOf(long ref, long targetType)
+    {
+        if (ref == 0L)
+        {
+            return 0;    // null is never an instance
+        }
         long type = Magic.load64(Magic.load64(ref));   // header→TIB (@0), TIB→Type (@0)
-        while (type != 0L) {
-            if (type == targetType) return 1;
+        while (type != 0L)
+        {
+            if (type == targetType)
+            {
+                return 1;
+            }
             type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
         }
         return 0;
@@ -76,9 +90,14 @@ public final class VM {
 
     /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
      *  (no exceptions yet). Null always passes. */
-    static long checkCast(long ref, long targetType) {
-        if (ref != 0L && instanceOf(ref, targetType) == 0) {
-            while (true) { Magic.wfe(); }
+    static long checkCast(long ref, long targetType)
+    {
+        if (ref != 0L && instanceOf(ref, targetType) == 0)
+        {
+            while (true)
+            {
+                Magic.wfe();
+            }
         }
         return ref;
     }
@@ -96,28 +115,39 @@ public final class VM {
      * caller. Halts if the exception reaches the top uncaught. (Callee-saved locals
      * are not restored during the walk — a handler must not read pre-try locals.)
      */
-    static void unwind(long exc, long pc, long sp) {
-        while (true) {
+    static void unwind(long exc, long pc, long sp)
+    {
+        while (true)
+        {
             long h = findHandler(pc, exc);
-            if (h != 0L) {
+            if (h != 0L)
+            {
                 Magic.resume(h, sp, exc);          // never returns
             }
             long fs = frameSizeAt(pc);
-            if (fs == 0L) {
-                while (true) { Magic.wfe(); }       // uncaught at the top
+            if (fs == 0L)
+            {
+                while (true)
+                {
+                    Magic.wfe();    // uncaught at the top
+                }
             }
             pc = Magic.load64(sp) - 4L;             // the call site (return address - one instruction)
             sp = sp + fs;                           // pop this frame
         }
     }
 
-    private static long findHandler(long pc, long exc) {
+    private static long findHandler(long pc, long exc)
+    {
         long i = 0L;
-        while (i < handlerCount) {
+        while (i < handlerCount)
+        {
             long e = handlerTable + i * 32L;
-            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L)) {
+            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            {
                 long catchType = Magic.load64(e + 24L);
-                if (catchType == 0L || instanceOf(exc, catchType) != 0) {
+                if (catchType == 0L || instanceOf(exc, catchType) != 0)
+                {
                     return Magic.load64(e + 16L);
                 }
             }
@@ -126,11 +156,14 @@ public final class VM {
         return 0L;
     }
 
-    private static long frameSizeAt(long pc) {
+    private static long frameSizeAt(long pc)
+    {
         long i = 0L;
-        while (i < frameCount) {
+        while (i < frameCount)
+        {
             long e = frameTable + i * 24L;
-            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L)) {
+            if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
+            {
                 return Magic.load64(e + 16L);
             }
             i = i + 1L;
@@ -150,19 +183,29 @@ public final class VM {
      * Object sizes come from the status word — no per-type maps, and objects aren't
      * moved (so no precise stack maps are needed). May over-retain (false roots).
      */
-    static void gcCollect(long scanFrom) {
+    static void gcCollect(long scanFrom)
+    {
         markRange(scanFrom, STACK_TOP);
         markRange(staticsStart, staticsEnd);
         boolean changed = true;                       // trace: mark fields of marked objects to a fixpoint
-        while (changed) {
+        while (changed)
+        {
             changed = false;
             long o = Heap.BASE;
-            while (o < Magic.load64(Heap.PTR_CELL)) {
+            while (o < Magic.load64(Heap.PTR_CELL))
+            {
                 long st = Magic.load64(o + 8L);
                 long size = st & -8L;
-                if (size == 0L) { o = Magic.load64(Heap.PTR_CELL); }   // corrupt: stop
-                else {
-                    if ((st & 1L) != 0L && markRange(o + 16L, o + size)) changed = true;
+                if (size == 0L)
+                {
+                    o = Magic.load64(Heap.PTR_CELL);    // corrupt: stop
+                }
+                else
+                {
+                    if ((st & 1L) != 0L && markRange(o + 16L, o + size))
+                    {
+                        changed = true;
+                    }
                     o = o + size;
                 }
             }
@@ -170,13 +213,25 @@ public final class VM {
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
         long o = Heap.BASE;
-        while (o < Magic.load64(Heap.PTR_CELL)) {
+        while (o < Magic.load64(Heap.PTR_CELL))
+        {
             long st = Magic.load64(o + 8L);
             long size = st & -8L;
-            if (size == 0L) { o = Magic.load64(Heap.PTR_CELL); }
-            else {
-                if ((st & 1L) != 0L) { Magic.store64(o + 8L, size); }   // unmark (clear bit0)
-                else { Heap.addFree(o, size); reclaimed = reclaimed + size; }
+            if (size == 0L)
+            {
+                o = Magic.load64(Heap.PTR_CELL);
+            }
+            else
+            {
+                if ((st & 1L) != 0L)
+                {
+                    Magic.store64(o + 8L, size);    // unmark (clear bit0)
+                }
+                else
+                {
+                    Heap.addFree(o, size);
+                    reclaimed = reclaimed + size;
+                }
                 o = o + size;
             }
         }
@@ -189,14 +244,18 @@ public final class VM {
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
-    private static boolean markRange(long lo, long hi) {
+    private static boolean markRange(long lo, long hi)
+    {
         boolean any = false;
-        while (lo < hi) {
+        while (lo < hi)
+        {
             long w = Magic.load64(lo);
-            if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L) {
+            if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L)
+            {
                 long st = Magic.load64(w + 8L);
                 long size = st & -8L;
-                if (size != 0L && (st & 1L) == 0L && w + size <= Magic.load64(Heap.PTR_CELL)) {
+                if (size != 0L && (st & 1L) == 0L && w + size <= Magic.load64(Heap.PTR_CELL))
+                {
                     Magic.store64(w + 8L, st + 1L);    // set mark bit
                     any = true;
                 }
@@ -211,7 +270,8 @@ public final class VM {
      * calls). Prints the banner, then exercises the object model: allocate a
      * heap object, mutate its field, and print the result.
      */
-    static void run() {
+    static void run()
+    {
         Uart.write(Magic.bytes("hello from joe2\r\n"));   // real interned string literal (byte[])
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
@@ -220,7 +280,9 @@ public final class VM {
         Uart.putc(0x0A);                   // newline
 
         byte[] a = new byte[3];            // runtime heap array (newarray/bastore)
-        a[0] = 0x41; a[1] = 0x42; a[2] = 0x0A;   // "AB\n"
+        a[0] = 0x41;
+        a[1] = 0x42;
+        a[2] = 0x0A;   // "AB\n"
         Uart.write(a);
 
         Counter.bump();                    // static field in the image statics area
@@ -254,9 +316,12 @@ public final class VM {
         Uart.putc(0x0A);
 
         // exceptions: throw and catch by type in the same method
-        try {
+        try
+        {
             throw new MyExc();
-        } catch (MyExc e) {
+        }
+        catch (MyExc e)
+        {
             Uart.putc(0x45);                               // 'E' — caught
         }
         Uart.putc(0x0A);
@@ -279,22 +344,29 @@ public final class VM {
     }
 
     /** Allocate objects that become unreachable, giving the collector something to reclaim. */
-    private static void gcGarbage() {
+    private static void gcGarbage()
+    {
         int i = 0;
-        while (i < 8) {
+        while (i < 8)
+        {
             Cell junk = new Cell(i);                       // dead as soon as the next iteration overwrites it
             i = i + 1;
         }
     }
 
-    private static void thrower() {
+    private static void thrower()
+    {
         throw new MyExc();
     }
 
-    private static void catcher() {
-        try {
+    private static void catcher()
+    {
+        try
+        {
             thrower();                                     // throws; unwinds into this frame
-        } catch (MyExc e) {
+        }
+        catch (MyExc e)
+        {
             Uart.putc(0x55);                               // 'U' — caught after unwinding
         }
     }

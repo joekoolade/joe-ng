@@ -6,14 +6,17 @@ package vm;
  * (the statics area is zero-initialized, matching JVM semantics) — no static
  * initializer, so no {@code <clinit>} is needed yet.
  */
-public final class Counter {
+public final class Counter
+{
     static int count;
 
-    public static void bump() {
+    public static void bump()
+    {
         count = count + 1;
     }
 
-    public static int get() {
+    public static int get()
+    {
         return count;
     }
 }

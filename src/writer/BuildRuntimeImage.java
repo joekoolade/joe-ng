@@ -16,23 +16,27 @@ import java.nio.file.Path;
  *
  * Usage: {@code java writer.BuildRuntimeImage [classesDir] [output]}.
  */
-public final class BuildRuntimeImage {
+public final class BuildRuntimeImage
+{
 
     private static final String ENTRY = "vm/VM.boot()V";
 
-    public static CodeBuffer build(Path classesDir) throws IOException {
+    public static CodeBuffer build(Path classesDir) throws IOException
+    {
         ImageBuilder ib = new ImageBuilder(classesDir);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
         ib.addBlob("vm/VM.guestBytes", "vm/VM.guestLen",
-                Files.readAllBytes(classesDir.resolve("vm/Guest.class")));
+                   Files.readAllBytes(classesDir.resolve("vm/Guest.class")));
         // A real class from the JDK's java.base module (extracted from lib/modules).
-        try (var in = Integer.class.getResourceAsStream("/java/lang/Math.class")) {
+        try (var in = Integer.class.getResourceAsStream("/java/lang/Math.class"))
+        {
             ib.addBlob("vm/VM.mathBytes", "vm/VM.mathLen", in.readAllBytes());
         }
         return ib.build(ENTRY);
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException
+    {
         Path classesDir = Path.of(args.length > 0 ? args[0] : "out");
         Path out = Path.of(args.length > 1 ? args[1] : "kernel8.img");
 
@@ -41,6 +45,6 @@ public final class BuildRuntimeImage {
         writer.writeImage(out);
 
         System.out.printf("wrote %s (%s + reachable methods, %d bytes)%n",
-                out.toAbsolutePath(), ENTRY, code.wordCount() * 4);
+                          out.toAbsolutePath(), ENTRY, code.wordCount() * 4);
     }
 }

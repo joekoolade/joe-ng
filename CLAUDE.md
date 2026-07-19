@@ -7,6 +7,15 @@ Raspberry Pi 4 (BCM2711, quad Cortex-A72, AArch64)** with **no OS underneath**.
 Read `PLAN.md` for the full plan — it is the source of truth. This file is just
 the standing rules and current state so we don't re-litigate them each session.
 
+## Coding style (follow for all new/edited code)
+
+- **Braces on their own line (Allman).** The opening `{` goes on its own line,
+  not at the end of the preceding line, for classes, methods, `if`/`else`,
+  `while`/`for`, `switch`, etc. The closing `}` is already on its own line.
+- **One statement per line.** No two statements separated by `;` on one line
+  (e.g. not `p += 1; i += 1;`). One variable declaration per line (no
+  `int a = 0, b = 0;`). Every control-flow body is braced, even one-liners.
+
 ## Hard constraints (do not violate)
 
 - **Everything is Java.** Assembler, compiler, boot-image writer, runtime, and

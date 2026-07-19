@@ -24,11 +24,13 @@ import static board.bcm2711.Bcm2711.*;
  * bytecode via the baseline compiler — is the next step (M1c); when it lands,
  * its output should match these words.
  */
-public final class EmitBoot {
+public final class EmitBoot
+{
 
     private static final byte[] MESSAGE = "hello from joe2\r\n".getBytes(StandardCharsets.US_ASCII);
 
-    public static CodeBuffer build() {
+    public static CodeBuffer build()
+    {
         CodeBuffer cb = new CodeBuffer();               // links at 0x80000, entry = word 0
 
         // === _start: are we at EL2? CurrentEL holds the EL in bits[3:2]. ===
@@ -36,19 +38,28 @@ public final class EmitBoot {
         int tbzToEl1 = cb.emit(tbz(0, 3, 0));           // bit3==0 => already EL1, skip drop
 
         // --- drop EL2 -> EL1 (primary core; PLAN.md §5.1 B) ---
-        set64(cb, 0, 0x8000_0000L); cb.emit(msr(HCR_EL2, 0));      // HCR_EL2.RW = 1 (EL1 is AArch64)
-        set64(cb, 0, 0x33FFL);      cb.emit(msr(CPTR_EL2, 0));     // don't trap FP/SIMD to EL2
-        set64(cb, 0, 0x3L);         cb.emit(msr(CNTHCTL_EL2, 0));  // EL1 physical timer access
+        set64(cb, 0, 0x8000_0000L);
+        cb.emit(msr(HCR_EL2, 0));      // HCR_EL2.RW = 1 (EL1 is AArch64)
+        set64(cb, 0, 0x33FFL);
+        cb.emit(msr(CPTR_EL2, 0));     // don't trap FP/SIMD to EL2
+        set64(cb, 0, 0x3L);
+        cb.emit(msr(CNTHCTL_EL2, 0));  // EL1 physical timer access
         cb.emit(msr(CNTVOFF_EL2, A64.XZR));                        // CNTVOFF_EL2 = 0
-        set64(cb, 0, 0x30D0_0800L); cb.emit(msr(SCTLR_EL1, 0));    // MMU/caches off, RES1 bits set
-        set64(cb, 0, 0x3C5L);       cb.emit(msr(SPSR_EL2, 0));     // target PSTATE = EL1h, DAIF masked
-        int elrSlot = cb.reserveAddr(0); cb.emit(msr(ELR_EL2, 0)); // ELR_EL2 = &el1
+        set64(cb, 0, 0x30D0_0800L);
+        cb.emit(msr(SCTLR_EL1, 0));    // MMU/caches off, RES1 bits set
+        set64(cb, 0, 0x3C5L);
+        cb.emit(msr(SPSR_EL2, 0));     // target PSTATE = EL1h, DAIF masked
+        int elrSlot = cb.reserveAddr(0);
+        cb.emit(msr(ELR_EL2, 0)); // ELR_EL2 = &el1
         cb.emit(eret());
 
         // === el1: running at EL1 now ===
         int el1 = cb.wordCount();
-        set64(cb, 0, 0x30_0000L); cb.emit(msr(CPACR_EL1, 0)); cb.emit(isb()); // FPEN=0b11
-        set64(cb, 0, 0x8_0000L);  cb.emit(movToSp(0));                        // SP = 0x80000
+        set64(cb, 0, 0x30_0000L);
+        cb.emit(msr(CPACR_EL1, 0));
+        cb.emit(isb()); // FPEN=0b11
+        set64(cb, 0, 0x8_0000L);
+        cb.emit(movToSp(0));                        // SP = 0x80000
 
         // === mini-UART bring-up (AUX / UART1) ===
         store32(cb, AUX_ENABLES,      1);                 // enable mini-UART
@@ -95,26 +106,34 @@ public final class EmitBoot {
     }
 
     /** Byte offset from the instruction at {@code fromIdx} to word {@code toIdx}. */
-    private static int rel(int toIdx, int fromIdx) { return (toIdx - fromIdx) * 4; }
+    private static int rel(int toIdx, int fromIdx)
+    {
+        return (toIdx - fromIdx) * 4;
+    }
 
     /** Materialize a 64-bit constant into x{@code rd}. */
-    private static void set64(CodeBuffer cb, int rd, long value) {
+    private static void set64(CodeBuffer cb, int rd, long value)
+    {
         cb.emitAll(A64.loadImm64(rd, value));
     }
 
     /** Store a 32-bit {@code value} to MMIO {@code addr} (clobbers x0, x1). */
-    private static void store32(CodeBuffer cb, long addr, long value) {
+    private static void store32(CodeBuffer cb, long addr, long value)
+    {
         set64(cb, 0, addr);
         set64(cb, 1, value);
         cb.emit(strw(1, 0, 0));
     }
 
     /** Append raw bytes as little-endian words (zero-padded to a word). */
-    private static void emitBytes(CodeBuffer cb, byte[] bytes) {
+    private static void emitBytes(CodeBuffer cb, byte[] bytes)
+    {
         int padded = (bytes.length + 3) & ~3;
-        for (int i = 0; i < padded; i += 4) {
+        for (int i = 0; i < padded; i += 4)
+        {
             int w = 0;
-            for (int b = 0; b < 4; b++) {
+            for (int b = 0; b < 4; b++)
+            {
                 int idx = i + b;
                 int v = idx < bytes.length ? (bytes[idx] & 0xFF) : 0;
                 w |= v << (b * 8);

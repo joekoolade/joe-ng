@@ -22,16 +22,19 @@ import java.nio.file.Path;
  *
  * Usage: {@code java writer.BuildSpinImage [output-path]} (default kernel8.img).
  */
-public final class BuildSpinImage {
+public final class BuildSpinImage
+{
 
-    public static CodeBuffer buildSpinLoop() {
+    public static CodeBuffer buildSpinLoop()
+    {
         CodeBuffer code = new CodeBuffer();          // links at 0x80000
         int wfe = code.emit(A64.wfe());              // 0x80000: wfe
         code.emit(A64.b((int) (code.pcAt(wfe) - code.here()))); // 0x80004: b .-4 -> wfe
         return code;
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException
+    {
         Path out = Path.of(args.length > 0 ? args[0] : "kernel8.img");
 
         CodeBuffer code = buildSpinLoop();

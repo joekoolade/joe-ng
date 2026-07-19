@@ -6,5 +6,6 @@ package vm;
  * roots and the {@code super()} call as a no-op, so only MyExc's own Type is laid
  * out — enough for {@code catch (MyExc e)} to match by exact type.
  */
-public final class MyExc extends RuntimeException {
+public final class MyExc extends RuntimeException
+{
 }

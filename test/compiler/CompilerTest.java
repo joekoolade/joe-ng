@@ -20,14 +20,16 @@ import java.util.List;
  *
  * Run: {@code java compiler.CompilerTest <classesDir>}
  */
-public final class CompilerTest {
+public final class CompilerTest
+{
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws Exception
+    {
         Path classesDir = Path.of(args.length > 0 ? args[0] : "out");
 
         // ---- spin() must equal the M0 hand-emitted spin loop ----
         int[] spin = BuildCompiledSpinImage.compileSpin(classesDir).toWords();
-        T.eqWords("spin()", new int[]{ A64.wfe(), A64.b(-4) }, spin);
+        T.eqWords("spin()", new int[] { A64.wfe(), A64.b(-4) }, spin);
 
         // ---- constant-arg intrinsics lower exactly ----
         ClassFile fx = ClassFile.parse(classesDir.resolve("compiler/Fixtures.class"));
@@ -157,18 +159,26 @@ public final class CompilerTest {
         // ---- static field: reserved address load + ldr from the statics area ----
         ClassFile counter = ClassFile.parse(classesDir.resolve("vm/Counter.class"));
         int[] getStatic = new BaselineCompiler(counter)
-                .compileMethod(counter.method("get", "()I"), CodeBuffer.LOAD_ADDRESS, false).words();
-        int[] getStaticWant = {
-                A64.movz(9, 0, 0), A64.movk(9, 0, 1),   // reserved &Counter.count (patched by writer)
-                A64.ldrx(9, 9, 0),                       // getstatic: value = *addr
-                A64.movReg(0, 9), A64.ret(),             // ireturn (leaf, no frame)
+        .compileMethod(counter.method("get", "()I"), CodeBuffer.LOAD_ADDRESS, false).words();
+        int[] getStaticWant =
+        {
+            A64.movz(9, 0, 0), A64.movk(9, 0, 1),   // reserved &Counter.count (patched by writer)
+            A64.ldrx(9, 9, 0),                       // getstatic: value = *addr
+            A64.movReg(0, 9), A64.ret(),             // ireturn (leaf, no frame)
         };
         T.eqWords("Counter.get (getstatic)", getStaticWant, getStatic);
 
         // ---- class hierarchy: flattened vtable (override in place, shared slot) ----
-        java.util.function.Function<String, ClassFile> res = c -> {
-            try { return ClassFile.parse(classesDir.resolve(c + ".class")); }
-            catch (Exception e) { throw new RuntimeException(e); }
+        java.util.function.Function<String, ClassFile> res = c ->
+        {
+            try
+            {
+                return ClassFile.parse(classesDir.resolve(c + ".class"));
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
         };
         T.eq("Animal vtable size", 1, ClassFile.vtable("vm/Animal", res).size());
         T.eq("Dog vtable size (override, not append)", 1, ClassFile.vtable("vm/Dog", res).size());
@@ -194,17 +204,25 @@ public final class CompilerTest {
         T.summary("compiler");
     }
 
-    private static int[] compile(ClassFile cf, String method) { return compile(cf, method, "()V"); }
+    private static int[] compile(ClassFile cf, String method)
+    {
+        return compile(cf, method, "()V");
+    }
 
-    private static int[] compile(ClassFile cf, String method, String desc) {
+    private static int[] compile(ClassFile cf, String method, String desc)
+    {
         CodeBuffer cb = new CodeBuffer();
         new BaselineCompiler(cf).compile(cf.method(method, desc), cb);
         return cb.toWords();
     }
 
-    private static int[] toArray(List<Integer> l) {
+    private static int[] toArray(List<Integer> l)
+    {
         int[] a = new int[l.size()];
-        for (int i = 0; i < a.length; i++) a[i] = l.get(i);
+        for (int i = 0; i < a.length; i++)
+        {
+            a[i] = l.get(i);
+        }
         return a;
     }
 }

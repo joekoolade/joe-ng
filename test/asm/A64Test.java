@@ -12,9 +12,11 @@ import java.util.List;
  *
  * Run: {@code java asm.A64Test}
  */
-public final class A64Test {
+public final class A64Test
+{
 
-    public static void main(String[] args) {
+    public static void main(String[] args)
+    {
         // ---- hints (C6.2, HINT space) --------------------------------------
         T.eqWord("NOP",  0xD503201F, A64.nop());
         T.eqWord("YIELD",0xD503203F, A64.yield());
@@ -57,10 +59,10 @@ public final class A64Test {
         T.eq("loadImm64(0x1122...).size==4", 4, A64.loadImm64(0, 0x1122_3344_5566_7788L).size());
 
         // ---- little-endian serialization -----------------------------------
-        byte[] b = A64.wordsToLittleEndian(new int[]{0xD503205F, 0x17FFFFFF});
+        byte[] b = A64.wordsToLittleEndian(new int[] {0xD503205F, 0x17FFFFFF});
         T.eqBytes("spin loop bytes",
-                new byte[]{0x5F, 0x20, 0x03, (byte) 0xD5, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x17},
-                b);
+                  new byte[] {0x5F, 0x20, 0x03, (byte) 0xD5, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x17},
+                  b);
 
         // ---- system register moves (MRS/MSR) -------------------------------
         T.eqWord("MRS x0,MPIDR_EL1", 0xD53800A0, A64.mrs(0, A64.MPIDR_EL1));

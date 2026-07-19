@@ -9,11 +9,13 @@ import magic.Magic;
  * {@code BL} calls with arguments and returns, laid out and relocated by the
  * writer (PLAN.md §4 M2).
  */
-public final class Uart {
+public final class Uart
+{
     private Uart() {}
 
     /** Bring up the mini-UART: GPIO14/15 → ALT5, 8-bit, clear FIFOs, enable tx/rx. */
-    public static void init() {
+    public static void init()
+    {
         Magic.store32(Bcm2711.AUX_ENABLES, 1);
         Magic.store32(Bcm2711.AUX_MU_CNTL_REG, 0);
         Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);
@@ -27,16 +29,20 @@ public final class Uart {
     }
 
     /** Write one byte, spinning until the TX FIFO can accept it (LSR bit5). */
-    public static void putc(int c) {
-        while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & 0x20) == 0) {
+    public static void putc(int c)
+    {
+        while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & 0x20) == 0)
+        {
         }
         Magic.store8(Bcm2711.AUX_MU_IO_REG, c);
     }
 
     /** Write every byte of {@code s} (a real heap byte[], e.g. an interned string literal). */
-    public static void write(byte[] s) {
+    public static void write(byte[] s)
+    {
         int i = 0;
-        while (i < s.length) {
+        while (i < s.length)
+        {
             putc(s[i]);
             i = i + 1;
         }

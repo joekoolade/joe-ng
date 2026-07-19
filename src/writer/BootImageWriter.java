@@ -20,14 +20,19 @@ import java.nio.file.Path;
  * <p>For M0 the payload is a spin loop; later milestones append compiled
  * methods, TIBs, statics, and the object graph, relocated to the load address.
  */
-public final class BootImageWriter {
+public final class BootImageWriter
+{
 
     private final CodeBuffer code;
 
-    public BootImageWriter(CodeBuffer code) { this.code = code; }
+    public BootImageWriter(CodeBuffer code)
+    {
+        this.code = code;
+    }
 
     /** Write the raw image bytes to {@code path}. */
-    public void writeImage(Path path) throws IOException {
+    public void writeImage(Path path) throws IOException
+    {
         byte[] bytes = code.toBytes();
         Files.write(path, bytes);
     }
@@ -36,12 +41,14 @@ public final class BootImageWriter {
      * Human-readable layout dump for diffing images across changes — relocation
      * bugs are the classic silent failure, so we make layout visible (PLAN.md §6).
      */
-    public String layoutDump() {
+    public String layoutDump()
+    {
         int[] words = code.toWords();
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("kernel8.img  load=0x%X  words=%d  bytes=%d%n",
-                code.base(), words.length, words.length * 4));
-        for (int i = 0; i < words.length; i++) {
+                                code.base(), words.length, words.length * 4));
+        for (int i = 0; i < words.length; i++)
+        {
             sb.append(String.format("  0x%08X:  0x%08X%n", code.pcAt(i), words[i]));
         }
         return sb.toString();

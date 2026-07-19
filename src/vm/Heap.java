@@ -13,7 +13,8 @@ import objectmodel.ObjectModel;
  * <p>The MMU is off (flat RAM); objects stay 8-byte aligned so unaligned 8-byte
  * accesses don't fault.
  */
-public final class Heap {
+public final class Heap
+{
     private Heap() {}
 
     /** 8-byte cell holding the bump pointer (free RAM below the heap). */
@@ -25,21 +26,32 @@ public final class Heap {
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
 
     /** Seed the bump pointer. Call once, early in boot, before any {@code new}. */
-    public static void init() {
+    public static void init()
+    {
         Magic.store64(PTR_CELL, BASE);
         freeHead = 0L;
     }
 
     /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump. */
-    public static long alloc(int size) {
+    public static long alloc(int size)
+    {
         int aligned = (size + 7) & -8;
         long prev = 0L;
         long f = freeHead;
-        while (f != 0L) {                                   // first fit
+        while (f != 0L)                                     // first fit
+        {
             long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
-            if (fsize >= aligned) {
+            if (fsize >= aligned)
+            {
                 long next = Magic.load64(f);
-                if (prev == 0L) { freeHead = next; } else { Magic.store64(prev, next); }
+                if (prev == 0L)
+                {
+                    freeHead = next;
+                }
+                else
+                {
+                    Magic.store64(prev, next);
+                }
                 lastFromFreeList = 1;
                 return f;                                   // status already holds the block size
             }
@@ -54,7 +66,8 @@ public final class Heap {
     }
 
     /** Allocate an array of {@code length} elements of {@code elemSize} bytes. */
-    public static long allocArray(int length, int elemSize) {
+    public static long allocArray(int length, int elemSize)
+    {
         long p = alloc(ObjectModel.ARRAY_BASE_OFFSET + length * elemSize);
         Magic.store64(p + ObjectModel.TIB_OFFSET, 0L);           // array TIBs come with typed GC
         Magic.store64(p + ObjectModel.ARRAY_LENGTH_OFFSET, length);
@@ -62,10 +75,14 @@ public final class Heap {
     }
 
     /** Reset the free list (start of a sweep). */
-    static void resetFreeList() { freeHead = 0L; }
+    static void resetFreeList()
+    {
+        freeHead = 0L;
+    }
 
     /** Add a reclaimed block to the free list. */
-    static void addFree(long addr, long size) {
+    static void addFree(long addr, long size)
+    {
         Magic.store64(addr, freeHead);                           // next
         Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);   // size
         freeHead = addr;

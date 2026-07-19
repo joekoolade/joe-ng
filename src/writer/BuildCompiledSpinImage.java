@@ -15,9 +15,11 @@ import java.nio.file.Path;
  *
  * Usage: {@code java writer.BuildCompiledSpinImage [classesDir] [output]}.
  */
-public final class BuildCompiledSpinImage {
+public final class BuildCompiledSpinImage
+{
 
-    public static CodeBuffer compileSpin(Path classesDir) throws IOException {
+    public static CodeBuffer compileSpin(Path classesDir) throws IOException
+    {
         ClassFile vm = ClassFile.parse(classesDir.resolve("vm/VM.class"));
         ClassFile.Method spin = vm.method("spin", "()V");
         CodeBuffer cb = new CodeBuffer();
@@ -25,7 +27,8 @@ public final class BuildCompiledSpinImage {
         return cb;
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException
+    {
         Path classesDir = Path.of(args.length > 0 ? args[0] : "out");
         Path out = Path.of(args.length > 1 ? args[1] : "kernel8.img");
 

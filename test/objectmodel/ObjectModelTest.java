@@ -7,8 +7,10 @@ import harness.T;
  * writer relocates against these numbers; a silent shift corrupts images).
  * Run: {@code java objectmodel.ObjectModelTest}
  */
-public final class ObjectModelTest {
-    public static void main(String[] args) {
+public final class ObjectModelTest
+{
+    public static void main(String[] args)
+    {
         T.eq("WORD", 8, ObjectModel.WORD);
         T.eq("HEADER_SIZE", 16, ObjectModel.HEADER_SIZE);
         T.eq("TIB_OFFSET", 0, ObjectModel.TIB_OFFSET);

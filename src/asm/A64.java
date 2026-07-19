@@ -21,7 +21,8 @@ import java.util.List;
  * of the runtime JIT. Same source, two homes — so it stays plain Java with no
  * host dependencies.
  */
-public final class A64 {
+public final class A64
+{
 
     // ----- register aliases -------------------------------------------------
     /** Link register. */
@@ -39,23 +40,42 @@ public final class A64 {
     // =======================================================================
     private static final int HINT_BASE = 0xD503_201F;
 
-    private static int hint(int crmOp2) {
+    private static int hint(int crmOp2)
+    {
         // crmOp2 occupies bits [11:5] (CRm at [11:8], op2 at [7:5]).
         return HINT_BASE | ((crmOp2 & 0x7F) << 5);
     }
 
     /** {@code NOP} — no operation. */
-    public static int nop()  { return hint(0b0000_000); } // 0xD503201F
+    public static int nop()
+    {
+        return hint(0b0000_000);    // 0xD503201F
+    }
     /** {@code YIELD}. */
-    public static int yield(){ return hint(0b0000_001); } // 0xD503203F
+    public static int yield()
+    {
+        return hint(0b0000_001);    // 0xD503203F
+    }
     /** {@code WFE} — wait for event (used to park secondary cores). */
-    public static int wfe()  { return hint(0b0000_010); } // 0xD503205F
+    public static int wfe()
+    {
+        return hint(0b0000_010);    // 0xD503205F
+    }
     /** {@code WFI} — wait for interrupt. */
-    public static int wfi()  { return hint(0b0000_011); } // 0xD503207F
+    public static int wfi()
+    {
+        return hint(0b0000_011);    // 0xD503207F
+    }
     /** {@code SEV} — send event (wake parked cores). */
-    public static int sev()  { return hint(0b0000_100); } // 0xD503209F
+    public static int sev()
+    {
+        return hint(0b0000_100);    // 0xD503209F
+    }
     /** {@code SEVL} — send event local. */
-    public static int sevl() { return hint(0b0000_101); } // 0xD50320BF
+    public static int sevl()
+    {
+        return hint(0b0000_101);    // 0xD50320BF
+    }
 
     // =======================================================================
     // Unconditional branch (immediate) — C6.2.26
@@ -71,17 +91,28 @@ public final class A64 {
      * is measured from this instruction and must be a multiple of 4 within
      * ±128 MiB. {@code b(0)} is a branch-to-self spin.
      */
-    public static int b(int byteOffset)  { return B_BASE  | imm26(byteOffset); }
+    public static int b(int byteOffset)
+    {
+        return B_BASE  | imm26(byteOffset);
+    }
 
     /** {@code BL #byteOffset} — branch with link (return address in LR). */
-    public static int bl(int byteOffset) { return BL_BASE | imm26(byteOffset); }
+    public static int bl(int byteOffset)
+    {
+        return BL_BASE | imm26(byteOffset);
+    }
 
-    private static int imm26(int byteOffset) {
+    private static int imm26(int byteOffset)
+    {
         if ((byteOffset & 0b11) != 0)
+        {
             throw new IllegalArgumentException("branch offset not 4-byte aligned: " + byteOffset);
+        }
         int imm = byteOffset >> 2;
         if (imm < -(1 << 25) || imm >= (1 << 25))
+        {
             throw new IllegalArgumentException("branch offset out of ±128MiB range: " + byteOffset);
+        }
         return imm & 0x03FF_FFFF;
     }
 
@@ -91,13 +122,25 @@ public final class A64 {
     //   RET Xn : 1101011 0 0 10 11111 0000 00 Rn 00000   (base 0xD65F_0000)
     // =======================================================================
     /** {@code BR Xn} — branch to address in register. */
-    public static int br(int rn)  { return 0xD61F_0000 | (reg(rn) << 5); }
+    public static int br(int rn)
+    {
+        return 0xD61F_0000 | (reg(rn) << 5);
+    }
     /** {@code BLR Xn} — branch-with-link to address in register (virtual dispatch). */
-    public static int blr(int rn) { return 0xD63F_0000 | (reg(rn) << 5); }
+    public static int blr(int rn)
+    {
+        return 0xD63F_0000 | (reg(rn) << 5);
+    }
     /** {@code RET Xn} — return; RET with no operand uses LR (x30). */
-    public static int ret(int rn) { return 0xD65F_0000 | (reg(rn) << 5); }
+    public static int ret(int rn)
+    {
+        return 0xD65F_0000 | (reg(rn) << 5);
+    }
     /** {@code RET} — return to LR (x30). */
-    public static int ret()       { return ret(LR); }
+    public static int ret()
+    {
+        return ret(LR);
+    }
 
     // =======================================================================
     // Wide immediate moves — C6.2.191/192/190
@@ -111,17 +154,31 @@ public final class A64 {
     private static final int MOVK_BASE = 0xF280_0000;
 
     /** {@code MOVZ Xd, #imm16, LSL #(hw*16)} — move zero-extended 16-bit immediate. */
-    public static int movz(int rd, int imm16, int hw) { return MOVZ_BASE | movImm(rd, imm16, hw); }
+    public static int movz(int rd, int imm16, int hw)
+    {
+        return MOVZ_BASE | movImm(rd, imm16, hw);
+    }
     /** {@code MOVK Xd, #imm16, LSL #(hw*16)} — keep other bits, insert 16-bit field. */
-    public static int movk(int rd, int imm16, int hw) { return MOVK_BASE | movImm(rd, imm16, hw); }
+    public static int movk(int rd, int imm16, int hw)
+    {
+        return MOVK_BASE | movImm(rd, imm16, hw);
+    }
     /** {@code MOVN Xd, #imm16, LSL #(hw*16)} — move NOT of the 16-bit immediate. */
-    public static int movn(int rd, int imm16, int hw) { return MOVN_BASE | movImm(rd, imm16, hw); }
+    public static int movn(int rd, int imm16, int hw)
+    {
+        return MOVN_BASE | movImm(rd, imm16, hw);
+    }
 
-    private static int movImm(int rd, int imm16, int hw) {
+    private static int movImm(int rd, int imm16, int hw)
+    {
         if (hw < 0 || hw > 3)
+        {
             throw new IllegalArgumentException("hw must be 0..3 (64-bit): " + hw);
+        }
         if ((imm16 & ~0xFFFF) != 0)
+        {
             throw new IllegalArgumentException("imm16 out of range: " + imm16);
+        }
         return (hw << 21) | (imm16 << 5) | reg(rd);
     }
 
@@ -149,7 +206,8 @@ public final class A64 {
     public static final Sys ELR_EL2     = new Sys(3, 4,  4, 0, 1);
     public static final Sys VBAR_EL1    = new Sys(3, 0, 12, 0, 0);
 
-    private static int sysMove(boolean read, Sys s, int rt) {
+    private static int sysMove(boolean read, Sys s, int rt)
+    {
         // [31:22]=1101010100 and [20]=1 are fixed (op0 high bit; op0 is 2/3).
         int w = 0xD510_0000;                 // fixed bits
         w |= (read ? 1 : 0) << 21;           // L  (1=MRS read, 0=MSR write)
@@ -162,12 +220,21 @@ public final class A64 {
     }
 
     /** {@code MRS Xt, sysreg} — read a system register into a general register. */
-    public static int mrs(int rt, Sys s) { return sysMove(true,  s, rt); }
+    public static int mrs(int rt, Sys s)
+    {
+        return sysMove(true,  s, rt);
+    }
     /** {@code MSR sysreg, Xt} — write a general register into a system register. */
-    public static int msr(Sys s, int rt) { return sysMove(false, s, rt); }
+    public static int msr(Sys s, int rt)
+    {
+        return sysMove(false, s, rt);
+    }
 
     /** {@code ERET} — exception return (the EL2→EL1 drop). */
-    public static int eret() { return 0xD69F_03E0; }
+    public static int eret()
+    {
+        return 0xD69F_03E0;
+    }
 
     // =======================================================================
     // Barriers — C6.2. Base 0xD5033000; [11:8]=CRm(option), [7:5]=opc.
@@ -177,114 +244,223 @@ public final class A64 {
     /** Full-system option for barriers. */
     public static final int SY = 0b1111;
     /** {@code DSB} — data synchronization barrier (default SY). */
-    public static int dsb(int option) { return BARRIER | (option << 8) | (0b100 << 5); }
-    public static int dsb()           { return dsb(SY); }   // 0xD5033F9F
+    public static int dsb(int option)
+    {
+        return BARRIER | (option << 8) | (0b100 << 5);
+    }
+    public static int dsb()
+    {
+        return dsb(SY);    // 0xD5033F9F
+    }
     /** {@code DMB} — data memory barrier (MMIO ordering). */
-    public static int dmb(int option) { return BARRIER | (option << 8) | (0b101 << 5); }
-    public static int dmb()           { return dmb(SY); }   // 0xD5033FBF
+    public static int dmb(int option)
+    {
+        return BARRIER | (option << 8) | (0b101 << 5);
+    }
+    public static int dmb()
+    {
+        return dmb(SY);    // 0xD5033FBF
+    }
     /** {@code ISB} — instruction synchronization barrier. */
-    public static int isb()           { return BARRIER | (SY << 8)     | (0b110 << 5); } // 0xD5033FDF
+    public static int isb()
+    {
+        return BARRIER | (SY << 8)     | (0b110 << 5);    // 0xD5033FDF
+    }
 
     // =======================================================================
     // Load/store (immediate, unsigned offset) — C6. Base by size/opc:
     //   size: 0=byte 1=half 2=word 3=dword ; opc: 0=store 1=load(zero-ext).
     //   imm12 is the byte offset scaled down by the access size.
     // =======================================================================
-    private static int ldst(int size, int opc, int rt, int rn, int byteOffset) {
+    private static int ldst(int size, int opc, int rt, int rn, int byteOffset)
+    {
         int scale = size;                         // log2(access bytes)
         if ((byteOffset & ((1 << scale) - 1)) != 0)
+        {
             throw new IllegalArgumentException("offset not aligned to access size: " + byteOffset);
+        }
         int imm12 = byteOffset >> scale;
         if (imm12 < 0 || imm12 > 0xFFF)
+        {
             throw new IllegalArgumentException("ldst offset out of unsigned range: " + byteOffset);
+        }
         int base = (size << 30) | (0b111 << 27) | (0b01 << 24) | (opc << 22);
         return base | (imm12 << 10) | (reg(rn) << 5) | reg(rt);
     }
     /** {@code STR Wt, [Xn, #off]} — store 32-bit. */
-    public static int strw(int rt, int rn, int off) { return ldst(2, 0, rt, rn, off); }
+    public static int strw(int rt, int rn, int off)
+    {
+        return ldst(2, 0, rt, rn, off);
+    }
     /** {@code LDR Wt, [Xn, #off]} — load 32-bit (zero-extended). */
-    public static int ldrw(int rt, int rn, int off) { return ldst(2, 1, rt, rn, off); }
+    public static int ldrw(int rt, int rn, int off)
+    {
+        return ldst(2, 1, rt, rn, off);
+    }
     /** {@code LDRSW Xt, [Xn, #off]} — load 32-bit sign-extended to 64 (for signed int arrays). */
-    public static int ldrsw(int rt, int rn, int off) {
-        if ((off & 3) != 0) throw new IllegalArgumentException("offset not word-aligned: " + off);
+    public static int ldrsw(int rt, int rn, int off)
+    {
+        if ((off & 3) != 0)
+        {
+            throw new IllegalArgumentException("offset not word-aligned: " + off);
+        }
         return 0xB980_0000 | ((off >> 2) << 10) | (reg(rn) << 5) | reg(rt);
     }
     /** {@code STR Xt, [Xn, #off]} — store 64-bit. */
-    public static int strx(int rt, int rn, int off) { return ldst(3, 0, rt, rn, off); }
+    public static int strx(int rt, int rn, int off)
+    {
+        return ldst(3, 0, rt, rn, off);
+    }
     /** {@code LDR Xt, [Xn, #off]} — load 64-bit. */
-    public static int ldrx(int rt, int rn, int off) { return ldst(3, 1, rt, rn, off); }
+    public static int ldrx(int rt, int rn, int off)
+    {
+        return ldst(3, 1, rt, rn, off);
+    }
     /** {@code STRB Wt, [Xn, #off]} — store byte. */
-    public static int strb(int rt, int rn, int off) { return ldst(0, 0, rt, rn, off); }
+    public static int strb(int rt, int rn, int off)
+    {
+        return ldst(0, 0, rt, rn, off);
+    }
     /** {@code LDRB Wt, [Xn, #off]} — load byte (zero-extended). */
-    public static int ldrb(int rt, int rn, int off) { return ldst(0, 1, rt, rn, off); }
+    public static int ldrb(int rt, int rn, int off)
+    {
+        return ldst(0, 1, rt, rn, off);
+    }
 
     // =======================================================================
     // Add/subtract (immediate) — C6. 64-bit, no shift. Reg 31 = SP here.
     //   ADD base 0x91000000, SUB base 0xD1000000.
     // =======================================================================
-    private static int addSubImm(int base, int rd, int rn, int imm12) {
+    private static int addSubImm(int base, int rd, int rn, int imm12)
+    {
         if (imm12 < 0 || imm12 > 0xFFF)
+        {
             throw new IllegalArgumentException("add/sub imm12 out of range: " + imm12);
+        }
         return base | (imm12 << 10) | (reg(rn) << 5) | reg(rd);
     }
     /** {@code ADD Xd, Xn, #imm12}. */
-    public static int addImm(int rd, int rn, int imm12) { return addSubImm(0x9100_0000, rd, rn, imm12); }
+    public static int addImm(int rd, int rn, int imm12)
+    {
+        return addSubImm(0x9100_0000, rd, rn, imm12);
+    }
     /** {@code SUB Xd, Xn, #imm12}. */
-    public static int subImm(int rd, int rn, int imm12) { return addSubImm(0xD100_0000, rd, rn, imm12); }
+    public static int subImm(int rd, int rn, int imm12)
+    {
+        return addSubImm(0xD100_0000, rd, rn, imm12);
+    }
     /** {@code MOV SP, Xn} — via ADD SP, Xn, #0 (reg 31 = SP in add-immediate). */
-    public static int movToSp(int rn)   { return addImm(31, rn, 0); }
+    public static int movToSp(int rn)
+    {
+        return addImm(31, rn, 0);
+    }
     /** {@code MOV Xd, SP} — via ADD Xd, SP, #0. */
-    public static int movFromSp(int rd) { return addImm(rd, 31, 0); }
+    public static int movFromSp(int rd)
+    {
+        return addImm(rd, 31, 0);
+    }
 
     /** {@code MOV Xd, Xm} — alias of ORR Xd, XZR, Xm. */
-    public static int movReg(int rd, int rm) { return 0xAA00_03E0 | (reg(rm) << 16) | reg(rd); }
+    public static int movReg(int rd, int rm)
+    {
+        return 0xAA00_03E0 | (reg(rm) << 16) | reg(rd);
+    }
 
     // =======================================================================
     // Data-processing (shifted register), 64-bit, no shift — C6.
     // =======================================================================
     /** {@code ADD Xd, Xn, Xm}. */
-    public static int addReg(int rd, int rn, int rm) { return addRegLsl(rd, rn, rm, 0); }
+    public static int addReg(int rd, int rn, int rm)
+    {
+        return addRegLsl(rd, rn, rm, 0);
+    }
     /** {@code ADD Xd, Xn, Xm, LSL #shift} — for array element addressing (base + index<<scale). */
-    public static int addRegLsl(int rd, int rn, int rm, int shift) {
-        if (shift < 0 || shift > 63) throw new IllegalArgumentException("bad shift: " + shift);
+    public static int addRegLsl(int rd, int rn, int rm, int shift)
+    {
+        if (shift < 0 || shift > 63)
+        {
+            throw new IllegalArgumentException("bad shift: " + shift);
+        }
         return 0x8B00_0000 | (reg(rm) << 16) | (shift << 10) | (reg(rn) << 5) | reg(rd);
     }
     /** {@code SUB Xd, Xn, Xm}. */
-    public static int subReg(int rd, int rn, int rm) { return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int subReg(int rd, int rn, int rm)
+    {
+        return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code AND Xd, Xn, Xm}. */
-    public static int andReg(int rd, int rn, int rm) { return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int andReg(int rd, int rn, int rm)
+    {
+        return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code ORR Xd, Xn, Xm}. */
-    public static int orrReg(int rd, int rn, int rm) { return 0xAA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int orrReg(int rd, int rn, int rm)
+    {
+        return 0xAA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code EOR Xd, Xn, Xm}. */
-    public static int eorReg(int rd, int rn, int rm) { return 0xCA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int eorReg(int rd, int rn, int rm)
+    {
+        return 0xCA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code MUL Xd, Xn, Xm} — alias of MADD Xd, Xn, Xm, XZR. */
-    public static int mulReg(int rd, int rn, int rm) { return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int mulReg(int rd, int rn, int rm)
+    {
+        return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
-    public static int lslv(int rd, int rn, int rm) { return 0x9AC0_2000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int lslv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code LSR Xd, Xn, Xm} — logical shift right by a register (LSRV). */
-    public static int lsrv(int rd, int rn, int rm) { return 0x9AC0_2400 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int lsrv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2400 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code ASR Xd, Xn, Xm} — arithmetic shift right by a register (ASRV). */
-    public static int asrv(int rd, int rn, int rm) { return 0x9AC0_2800 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    public static int asrv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2800 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
-    public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
+    public static int cmpReg(int rn, int rm)
+    {
+        return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31;
+    }
     /** {@code SXTB Xd, Wn} — sign-extend byte (i2b). */
-    public static int sxtb(int rd, int rn) { return 0x9340_1C00 | (reg(rn) << 5) | reg(rd); }
+    public static int sxtb(int rd, int rn)
+    {
+        return 0x9340_1C00 | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code SXTH Xd, Wn} — sign-extend halfword (i2s). */
-    public static int sxth(int rd, int rn) { return 0x9340_3C00 | (reg(rn) << 5) | reg(rd); }
+    public static int sxth(int rd, int rn)
+    {
+        return 0x9340_3C00 | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
-    public static int uxth(int rd, int rn) { return 0x5300_3C00 | (reg(rn) << 5) | reg(rd); }
+    public static int uxth(int rd, int rn)
+    {
+        return 0x5300_3C00 | (reg(rn) << 5) | reg(rd);
+    }
 
     /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
-    public static int cset(int rd, int cond) {
+    public static int cset(int rd, int cond)
+    {
         return 0x9A80_0400 | (31 << 16) | ((cond ^ 1) << 12) | (31 << 5) | reg(rd);
     }
     /** {@code CSINV Xd, Xn, Xm, cond} — Xd = cond ? Xn : ~Xm. */
-    public static int csinv(int rd, int rn, int rm, int cond) {
+    public static int csinv(int rd, int rn, int rm, int cond)
+    {
         return 0xDA80_0000 | (reg(rm) << 16) | (cond << 12) | (reg(rn) << 5) | reg(rd);
     }
     /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */
-    public static int cmpImm(int rn, int imm12) {
-        if (imm12 < 0 || imm12 > 0xFFF) throw new IllegalArgumentException("cmp imm12 out of range: " + imm12);
+    public static int cmpImm(int rn, int imm12)
+    {
+        if (imm12 < 0 || imm12 > 0xFFF)
+        {
+            throw new IllegalArgumentException("cmp imm12 out of range: " + imm12);
+        }
         return 0xF100_0000 | (imm12 << 10) | (reg(rn) << 5) | 31;
     }
 
@@ -296,69 +472,117 @@ public final class A64 {
                             HI=8, LS=9, GE=10, LT=11, GT=12, LE=13, AL=14;
 
     /** {@code B.cond #byteOffset} — conditional branch. */
-    public static int bcond(int cond, int byteOffset) {
+    public static int bcond(int cond, int byteOffset)
+    {
         return 0x5400_0000 | (imm19(byteOffset) << 5) | (cond & 0xF);
     }
     /** {@code CBZ Xt, #byteOffset} — branch if register is zero (64-bit). */
-    public static int cbz(int rt, int byteOffset)  { return 0xB400_0000 | (imm19(byteOffset) << 5) | reg(rt); }
+    public static int cbz(int rt, int byteOffset)
+    {
+        return 0xB400_0000 | (imm19(byteOffset) << 5) | reg(rt);
+    }
     /** {@code CBNZ Xt, #byteOffset} — branch if register is non-zero (64-bit). */
-    public static int cbnz(int rt, int byteOffset) { return 0xB500_0000 | (imm19(byteOffset) << 5) | reg(rt); }
+    public static int cbnz(int rt, int byteOffset)
+    {
+        return 0xB500_0000 | (imm19(byteOffset) << 5) | reg(rt);
+    }
 
     /** {@code TBZ Xt, #bit, #byteOffset} — branch if bit clear. */
-    public static int tbz(int rt, int bit, int byteOffset)  { return tbit(0x3600_0000, rt, bit, byteOffset); }
+    public static int tbz(int rt, int bit, int byteOffset)
+    {
+        return tbit(0x3600_0000, rt, bit, byteOffset);
+    }
     /** {@code TBNZ Xt, #bit, #byteOffset} — branch if bit set. */
-    public static int tbnz(int rt, int bit, int byteOffset) { return tbit(0x3700_0000, rt, bit, byteOffset); }
+    public static int tbnz(int rt, int bit, int byteOffset)
+    {
+        return tbit(0x3700_0000, rt, bit, byteOffset);
+    }
 
-    private static int tbit(int base, int rt, int bit, int byteOffset) {
-        if (bit < 0 || bit > 63) throw new IllegalArgumentException("bad bit index: " + bit);
+    private static int tbit(int base, int rt, int bit, int byteOffset)
+    {
+        if (bit < 0 || bit > 63)
+        {
+            throw new IllegalArgumentException("bad bit index: " + bit);
+        }
         int w = base | ((bit & 0x20) << 26)   // b5 -> [31]
-                     | ((bit & 0x1F) << 19)    // b40 -> [23:19]
-                     | (imm14(byteOffset) << 5)
-                     | reg(rt);
+                | ((bit & 0x1F) << 19)    // b40 -> [23:19]
+                | (imm14(byteOffset) << 5)
+                | reg(rt);
         return w;
     }
 
-    private static int imm19(int byteOffset) { return immBranch(byteOffset, 19); }
-    private static int imm14(int byteOffset) { return immBranch(byteOffset, 14); }
+    private static int imm19(int byteOffset)
+    {
+        return immBranch(byteOffset, 19);
+    }
+    private static int imm14(int byteOffset)
+    {
+        return immBranch(byteOffset, 14);
+    }
 
-    private static int immBranch(int byteOffset, int bits) {
+    private static int immBranch(int byteOffset, int bits)
+    {
         if ((byteOffset & 0b11) != 0)
+        {
             throw new IllegalArgumentException("branch offset not 4-byte aligned: " + byteOffset);
+        }
         int imm = byteOffset >> 2;
         int lim = 1 << (bits - 1);
         if (imm < -lim || imm >= lim)
+        {
             throw new IllegalArgumentException("branch offset out of range: " + byteOffset);
+        }
         return imm & ((1 << bits) - 1);
     }
 
     /** Round up to a 16-byte boundary (AArch64 stack-pointer alignment). */
-    public static int align16(int n) { return (n + 15) & ~15; }
+    public static int align16(int n)
+    {
+        return (n + 15) & ~15;
+    }
 
     // ----- helpers ----------------------------------------------------------
-    private static int reg(int r) {
-        if (r < 0 || r > 31) throw new IllegalArgumentException("bad register x" + r);
+    private static int reg(int r)
+    {
+        if (r < 0 || r > 31)
+        {
+            throw new IllegalArgumentException("bad register x" + r);
+        }
         return r;
     }
 
     /** Convert a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
-    public static List<Integer> loadImm64(int rd, long value) {
+    public static List<Integer> loadImm64(int rd, long value)
+    {
         List<Integer> out = new ArrayList<>(4);
         boolean any = false;
-        for (int hw = 0; hw < 4; hw++) {
+        for (int hw = 0; hw < 4; hw++)
+        {
             int lane = (int) ((value >>> (hw * 16)) & 0xFFFF);
-            if (lane == 0 && any) continue;      // MOVZ already zeroed upper lanes
-            if (lane == 0 && hw != 3 && value != 0) continue;
+            if (lane == 0 && any)
+            {
+                continue;    // MOVZ already zeroed upper lanes
+            }
+            if (lane == 0 && hw != 3 && value != 0)
+            {
+                continue;
+            }
             out.add(any ? movk(rd, lane, hw) : movz(rd, lane, hw));
             any = true;
         }
-        if (!any) out.add(movz(rd, 0, 0));       // value == 0
+        if (!any)
+        {
+            out.add(movz(rd, 0, 0));    // value == 0
+        }
         return out;
     }
 
     /** Little-endian byte serialization of an instruction-word stream (A64 = LE). */
-    public static byte[] wordsToLittleEndian(int[] words) {
+    public static byte[] wordsToLittleEndian(int[] words)
+    {
         byte[] b = new byte[words.length * 4];
-        for (int i = 0; i < words.length; i++) {
+        for (int i = 0; i < words.length; i++)
+        {
             int w = words[i];
             b[i * 4]     = (byte) (w);
             b[i * 4 + 1] = (byte) (w >>> 8);

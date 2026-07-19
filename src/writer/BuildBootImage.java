@@ -13,8 +13,10 @@ import java.nio.file.Path;
  *
  * Usage: {@code java writer.BuildBootImage [output-path]} (default kernel8.img).
  */
-public final class BuildBootImage {
-    public static void main(String[] args) throws IOException {
+public final class BuildBootImage
+{
+    public static void main(String[] args) throws IOException
+    {
         Path out = Path.of(args.length > 0 ? args[0] : "kernel8.img");
 
         CodeBuffer code = EmitBoot.build();

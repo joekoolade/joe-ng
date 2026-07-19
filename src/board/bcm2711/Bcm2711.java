@@ -11,7 +11,8 @@ package board.bcm2711;
  * {@code Address} loads/stores lowered by the compiler — for M1 they are
  * emitted directly by {@code vm.EmitBoot}.
  */
-public final class Bcm2711 {
+public final class Bcm2711
+{
     private Bcm2711() {}
 
     /** ARM-side peripheral base (low-peripheral mode). */
