@@ -45,6 +45,7 @@ public final class Loader
     private static long[] gvImplCode;  // this class's own method bytecode (0 => inherited)
     private static int gvCount;     // flattened vtable size
     private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
+    private static long gType;      // this class's Type { superType } — a metal instanceof chain node
     private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
 
     // Global method registry across all loaded classes, so a call in one class can
@@ -66,6 +67,7 @@ public final class Loader
     private static long[] clTib;
     private static int[] clFieldCount;
     private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
+    private static long[] clType;        // each class's Type node (for instanceof/checkcast)
     private static int clCount;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
@@ -161,6 +163,7 @@ public final class Loader
         clTib = new long[MAXCLASS];
         clFieldCount = new int[MAXCLASS];
         clVtCount = new int[MAXCLASS];
+        clType = new long[MAXCLASS];
         clCount = 0;
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
@@ -778,6 +781,7 @@ public final class Loader
         clBase[clCount] = gbase;
         clNameOff[clCount] = gThisNameOff;
         clTib[clCount] = gTib;
+        clType[clCount] = gType;
         clFieldCount[clCount] = gifCount;
         clVtCount[clCount] = gvCount;
         clCount += 1;
@@ -935,15 +939,18 @@ public final class Loader
     }
 
     /**
-     * Build this class's TIB in the heap: slot 0 is the Type (null — no
-     * instanceof/checkcast on loaded objects yet), then one vtable entry per
-     * virtual method pointing at its compiled buffer. {@code new} stores this into
-     * each instance's header so {@code invokevirtual} can dispatch through it.
+     * Build this class's Type (a one-word node holding its superclass's Type, so
+     * {@code instanceof} can walk the chain) and its TIB: slot 0 is the Type, then
+     * one vtable entry per flattened slot. {@code new} stores the TIB into each
+     * instance's header, so an object reaches both its vtable and its Type.
      */
     private static void buildTib()
     {
+        int sr = classRegByName(gSuperNameOff);
+        gType = Heap.alloc(8);
+        Magic.store64(gType, sr >= 0 ? clType[sr] : 0L);   // Type.superType (0 at Object)
         gTib = Heap.alloc((1 + gvCount) * 8);
-        Magic.store64(gTib, 0L);                         // TIB[0] = Type
+        Magic.store64(gTib, gType);                      // TIB[0] = Type
         int s = 0;
         while (s < gvCount)
         {
@@ -1169,6 +1176,14 @@ public final class Loader
         else if (op == 0xb6 || op == 0xb9)
         {
             emitInvokeVirtual(code, pc);    // invokevirtual / invokeinterface (TIB vtable dispatch)
+        }
+        else if (op == 0xc1)
+        {
+            emitInstanceof(u2(code + pc + 1));    // instanceof (walk the Type chain)
+        }
+        else if (op == 0xc0)
+        {
+            emitCheckcast(u2(code + pc + 1));    // checkcast
         }
         else if (op == 0xb1)
         {
@@ -1518,9 +1533,65 @@ public final class Loader
     /** Load a &lt;4 GiB address into x16 (MOVZ low16 + MOVK bits16..31). */
     private static void emitAddr16(long addr)
     {
-        emit(0xD2800000 | ((((int) addr) & 0xFFFF) << 5) | 16);
-        emit(0xF2A00000 | ((((int) (addr >> 16)) & 0xFFFF) << 5) | 16);
+        emitAddrReg(16, addr);
     }
+
+    /** Load a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
+    private static void emitAddrReg(int reg, long addr)
+    {
+        emit(0xD2800000 | ((((int) addr) & 0xFFFF) << 5) | reg);
+        emit(0xF2A00000 | ((((int) (addr >> 16)) & 0xFFFF) << 5) | reg);
+    }
+
+    /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
+    private static long typeOfClass(int classIdx)
+    {
+        int r = classRegOf(classIdx);
+        return r >= 0 ? clType[r] : 0L;
+    }
+
+    /**
+     * instanceof: pop the ref, push 1 if its Type chain reaches the target class's
+     * Type, else 0. Walks {@code [[obj]][0]} (the object's Type via its TIB) following
+     * {@code Type.superType} (offset 0) until it matches the target or hits 0.
+     * x16 = walker, x17 = target Type; the result lands in the popped register.
+     */
+    private static void emitInstanceof(int classIdx)
+    {
+        long target = typeOfClass(classIdx);
+        csp -= 1;
+        int r = 9 + csp;                                // obj reg, reused for the result
+        emit(ldrx(16, r, 0));                           // w0: x16 = TIB
+        emit(ldrx(16, 16, 0));                          // w1: x16 = Type
+        emitAddrReg(17, target);                        // w2,w3: x17 = target Type
+        emit(movz(r, 0));                               // w4: result = 0 (default)
+        emit(0xB4000000 | ((6 & 0x7FFFF) << 5) | 16);   // w5: cbz x16, end (w11)
+        emit(0xEB00001F | (17 << 16) | (16 << 5));      // w6: cmp x16, x17
+        emit(0x54000000 | ((3 & 0x7FFFF) << 5));        // w7: b.eq settrue (w10)
+        emit(ldrx(16, 16, 0));                          // w8: x16 = superType
+        emit(0x14000000 | ((-4) & 0x03FFFFFF));         // w9: b loop (w5)
+        emit(movz(r, 1));                               // w10: result = 1
+        csp += 1;                                       // w11: end
+    }
+
+    /**
+     * checkcast: leave the ref in place, but if its Type chain does not reach the
+     * target class's Type, halt (spin) — no ClassCastException object yet.
+     */
+    private static void emitCheckcast(int classIdx)
+    {
+        long target = typeOfClass(classIdx);
+        int r = 9 + csp - 1;                            // obj on top (not popped)
+        emit(ldrx(16, r, 0));                           // w0: x16 = TIB
+        emit(ldrx(16, 16, 0));                          // w1: x16 = Type
+        emitAddrReg(17, target);                        // w2,w3: x17 = target Type
+        emit(0xB4000000 | ((5 & 0x7FFFF) << 5) | 16);   // w4: cbz x16, fail (w9)
+        emit(0xEB00001F | (17 << 16) | (16 << 5));      // w5: cmp x16, x17
+        emit(0x54000000 | ((4 & 0x7FFFF) << 5));        // w6: b.eq ok (w10)
+        emit(ldrx(16, 16, 0));                          // w7: x16 = superType
+        emit(0x14000000 | ((-4) & 0x03FFFFFF));         // w8: b loop (w4)
+        emit(0x14000000);                               // w9: b . (halt — cast failed)
+    }                                                   // w10: ok (ref stays on the stack)
 
     private static void emitIinc(long code, int pc)
     {
@@ -1610,6 +1681,14 @@ public final class Loader
         {
             return 40;    // new: 128-byte spill + movz size + bl + tib addr/store + push
         }
+        if (op == 0xc1)
+        {
+            return 11;    // instanceof: load Type + target + walk loop + result
+        }
+        if (op == 0xc0)
+        {
+            return 10;    // checkcast: load Type + target + walk loop + halt-on-fail
+        }
         if (op == 0xb2 || op == 0xb3)
         {
             return 3;    // get/putstatic: movz + movk + ldrsw/strw
@@ -1637,9 +1716,10 @@ public final class Loader
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
                 || op == 0xb2 || op == 0xb3 || op == 0xb8
-                || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xbb)
+                || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xbb
+                || op == 0xc0 || op == 0xc1)
         {
-            return 3;    // ... get/putstatic / invoke* / get/putfield / new
+            return 3;    // ... get/putstatic / invoke* / get/putfield / new / cast / instanceof
         }
         return 1;
     }

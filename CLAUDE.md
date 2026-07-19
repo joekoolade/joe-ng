@@ -230,8 +230,22 @@ defines the minimum the assembler must encode.
     hierarchy, name-only fallbacks assume member names are unique across unrelated
     loaded classes, `Type` still null (no `instanceof` on loaded objects), manual
     superclass-first load order.
-  - **Still to do on-metal:** a real `Type` chain for `instanceof`/`checkcast` on
-    loaded objects, loaded interfaces with itables, and dependency auto-ordering.
+  - **`instanceof`/`checkcast` DONE (on-metal Type chain):** each loaded class now
+    builds a **Type** node — a one-word heap object holding its superclass's Type —
+    linked into a chain (`buildTib` allocates it, stores the super's Type from the
+    class registry, and puts it in TIB slot 0; `clType`/`registerClass` track it).
+    `instanceof` lowers to an inline walk: load the object's Type via
+    `[[obj]][0]`, then follow `Type.superType` (offset 0) comparing against the
+    target class's Type until a match (push 1) or 0 (push 0). `checkcast` does the
+    same walk but leaves the ref and spins on failure (no `ClassCastException` object
+    yet). QEMU's `*` is now gated by two checks — `p instanceof Pup` (true) and
+    `c2 instanceof Pup` for a plain `Critter` (false) — so `42` proves the walk
+    discriminates, not just always-true. **Limits:** only loaded classes have metal
+    Types (writer-built objects use the writer's Types); the target of
+    instanceof/checkcast must be a loaded class; no interface `instanceof`; failed
+    checkcast halts rather than throwing.
+  - **Still to do on-metal:** loaded interfaces with itables, and dependency
+    auto-ordering.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
