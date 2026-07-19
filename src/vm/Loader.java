@@ -29,6 +29,9 @@ public final class Loader
     private static long gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int gsfCount;
+    private static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
+    private static int gifCount;
+    private static int gThisNameOff;     // Utf8 offset of this class's own name
     private static long gMethodsStart;   // address of the methods_count (for callee lookup)
 
     private static int u1(long p)
@@ -137,12 +140,16 @@ public final class Loader
     private static void parseFields()
     {
         long p = gp;
+        int thisClass = u2(p + 2);                      // this_class -> Class -> name Utf8 offset
+        gThisNameOff = gcp[u2(gbase + gcp[thisClass])];
         p += 6;                                         // access_flags, this_class, super_class
         p += 2 + u2(p) * 2;                             // interfaces
         int fcount = u2(p);
         p += 2;
         gsfName = new int[fcount + 1];
+        gifName = new int[fcount + 1];
         int slot = 0;
+        int islot = 0;
         int f = 0;
         while (f < fcount)
         {
@@ -154,12 +161,18 @@ public final class Loader
                 gsfName[slot] = gcp[nameIdx];    // ACC_STATIC
                 slot += 1;
             }
+            else
+            {
+                gifName[islot] = gcp[nameIdx];   // instance field: assign the next slot
+                islot += 1;
+            }
             int attrs = u2(p);
             p += 2;
             p = skipAttributes(p, attrs);
             f += 1;
         }
         gsfCount = slot;
+        gifCount = islot;
         gStatics = Heap.alloc(slot * 8 + 8);
         int z = 0;
         while (z < slot)
@@ -359,7 +372,7 @@ public final class Loader
         while (pc < len)
         {
             int op = u1(code + pc);
-            if (op == 0xb8)
+            if (op == 0xb8 || op == 0xb7)                   // invokestatic / invokespecial
             {
                 long c = calleeCodeOf(u2(code + pc + 1));   // sets gcodeLen
                 if (c != 0L)
@@ -564,6 +577,62 @@ public final class Loader
         {
             emitInvokeStatic(code, pc);    // invokestatic (same class)
         }
+        else if (op >= 0x2a && op <= 0x2d)
+        {
+            emit(mov(9 + csp, 1 + (op - 0x2a)));    // aload_0..3 (ref = 64-bit mov)
+            csp += 1;
+        }
+        else if (op == 0x19)
+        {
+            emit(mov(9 + csp, 1 + u1(code + pc + 1)));    // aload
+            csp += 1;
+        }
+        else if (op >= 0x4b && op <= 0x4e)
+        {
+            csp -= 1;    // astore_0..3
+            emit(mov(1 + (op - 0x4b), 9 + csp));
+        }
+        else if (op == 0x3a)
+        {
+            csp -= 1;    // astore
+            emit(mov(1 + u1(code + pc + 1), 9 + csp));
+        }
+        else if (op == 0x59)
+        {
+            emit(mov(9 + csp, 9 + csp - 1));    // dup
+            csp += 1;
+        }
+        else if (op == 0xbb)
+        {
+            emitNew();    // new (same class)
+        }
+        else if (op == 0xb4)
+        {
+            csp -= 1;    // getfield: value = [obj + off]
+            emit(ldrx(9 + csp, 9 + csp, fieldOffsetOf(u2(code + pc + 1))));
+            csp += 1;
+        }
+        else if (op == 0xb5)
+        {
+            csp -= 1;    // putfield: pop value, then obj
+            int vreg = 9 + csp;
+            csp -= 1;
+            emit(strx(vreg, 9 + csp, fieldOffsetOf(u2(code + pc + 1))));
+        }
+        else if (op == 0xb7)
+        {
+            emitInvokeSpecial(code, pc);    // invokespecial (constructor)
+        }
+        else if (op == 0xb1)
+        {
+            emit(0xD65F03C0);    // return (void)
+        }
+        else if (op == 0xb0)
+        {
+            csp -= 1;    // areturn
+            emit(mov(0, 9 + csp));
+            emit(0xD65F03C0);
+        }
     }
 
     /**
@@ -577,21 +646,45 @@ public final class Loader
     private static void emitInvokeStatic(long code, int pc)
     {
         int idx = u2(code + pc + 1);
-        emitCallSeq(idx, bufOf(calleeCodeOf(idx)));
+        emitCallSeq(idx, bufOf(calleeCodeOf(idx)), 0);
     }
 
-    /** Emit the fixed spill / arg-move / {@code BL} / restore / result sequence. */
-    private static void emitCallSeq(int idx, long calleeBuf)
+    /**
+     * invokespecial to a constructor: {@code Guest.<init>} (same class) is a real
+     * call whose receiver is the {@code this} on the stack; {@code Object.<init>}
+     * (and any other cross-class target) resolves to nothing here, so it is just a
+     * pop of the receiver. No {@code super(...)} with args beyond {@code this} yet.
+     */
+    private static void emitInvokeSpecial(long code, int pc)
+    {
+        int idx = u2(code + pc + 1);
+        long c = calleeCodeOf(idx);
+        if (c == 0L)
+        {
+            csp -= 1;                                      // Object.<init>/unresolved: pop receiver
+        }
+        else
+        {
+            emitCallSeq(idx, bufOf(c), 1);                 // pass this as the extra leading arg
+        }
+    }
+
+    /**
+     * Emit the fixed spill / arg-move / {@code BL} / restore / result sequence.
+     * {@code thisArg} is 1 for an instance call (the receiver is the arg below the
+     * descriptor args), 0 for a static call.
+     */
+    private static void emitCallSeq(int idx, long calleeBuf, int thisArg)
     {
         int descOff = mrefDescOff(idx);
-        int argc = argSlots(descOff);
+        int argc = argSlots(descOff) + thisArg;
         int hasRet = retSlots(descOff);
         emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
-        emit(strSp(30, 0));                                // frame: [x30@0][x1..x15@8..120]
+        emit(strx(30, 31, 0));                             // frame: [x30@0][x1..x15@8..120]
         int k = 1;
         while (k <= 15)
         {
-            emit(strSp(k, k * 8));
+            emit(strx(k, 31, k * 8));
             k += 1;
         }
         int t = 0;
@@ -601,11 +694,11 @@ public final class Loader
             t += 1;
         }
         emitBl(calleeBuf);
-        emit(ldrSp(30, 0));
+        emit(ldrx(30, 31, 0));
         k = 1;
         while (k <= 15)
         {
-            emit(ldrSp(k, k * 8));
+            emit(ldrx(k, 31, k * 8));
             k += 1;
         }
         emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
@@ -616,9 +709,62 @@ public final class Loader
         csp = csp - argc + hasRet;
     }
 
+    /**
+     * new: allocate an instance by calling the image's {@code Heap.alloc} (whose
+     * address the writer stashes in {@code VM.heapAlloc}). Same 128-byte spill as a
+     * call — {@code Heap.alloc} clobbers the caller-saved value regs — then null the
+     * TIB header (no on-metal vtable for a loaded class) and push the reference.
+     * Fields are zero only on a fresh bump (Heap does not clear reused blocks).
+     */
+    private static void emitNew()
+    {
+        int size = 16 + gifCount * 8;                      // header(16) + one 8-byte slot per field
+        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(strx(30, 31, 0));
+        int k = 1;
+        while (k <= 15)
+        {
+            emit(strx(k, 31, k * 8));
+            k += 1;
+        }
+        emit(movz(0, size));                               // x0 = size (Heap.alloc arg)
+        emitBl(VM.heapAlloc);                              // x0 = object base
+        emit(ldrx(30, 31, 0));
+        k = 1;
+        while (k <= 15)
+        {
+            emit(ldrx(k, 31, k * 8));
+            k += 1;
+        }
+        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        emit(strx(31, 0, 0));                              // header.tib = xzr (null)
+        emit(mov(9 + csp, 0));                             // push the reference
+        csp += 1;
+    }
+
+    /** Instance-field byte offset for the field named by {@code *ref} index (same class). */
+    private static int fieldOffsetOf(int idx)
+    {
+        int nameOff = mrefNameOff(idx);                    // Fieldref layout == Methodref layout
+        int s = 0;
+        while (s < gifCount)
+        {
+            if (gifName[s] == nameOff)
+            {
+                return 16 + s * 8;                         // ObjectModel: fields start at +16
+            }
+            s += 1;
+        }
+        return 16;
+    }
+
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
     private static long calleeCodeOf(int idx)
     {
+        if (!utf8Eq(refClassNameOff(idx), gThisNameOff))
+        {
+            return 0L;                                  // not this class (Object.<init>, JDK, ...)
+        }
         int nameOff = mrefNameOff(idx);
         int descOff = mrefDescOff(idx);
         long p = gMethodsStart;
@@ -647,6 +793,13 @@ public final class Loader
     {
         int natIdx = u2(gbase + gcp[idx] + 2);          // Methodref -> NameAndType -> name
         return gcp[u2(gbase + gcp[natIdx])];
+    }
+
+    /** Class-name Utf8 offset of a {@code *ref} constant (Fieldref/Methodref layout). */
+    private static int refClassNameOff(int idx)
+    {
+        int classIdx = u2(gbase + gcp[idx]);            // *ref -> class_index
+        return gcp[u2(gbase + gcp[classIdx])];          // Class -> name Utf8 offset
     }
 
     /** Descriptor Utf8 offset of Methodref {@code idx}. */
@@ -732,15 +885,15 @@ public final class Loader
         return true;
     }
 
-    /** STR Xt, [SP, #off] — off a multiple of 8. */
-    private static int strSp(int rt, int off)
+    /** STR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP, rt=31 = xzr). */
+    private static int strx(int rt, int rn, int off)
     {
-        return 0xF9000000 | (((off >> 3) & 0xFFF) << 10) | (31 << 5) | rt;
+        return 0xF9000000 | (((off >> 3) & 0xFFF) << 10) | (rn << 5) | rt;
     }
-    /** LDR Xt, [SP, #off] — off a multiple of 8. */
-    private static int ldrSp(int rt, int off)
+    /** LDR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP). */
+    private static int ldrx(int rt, int rn, int off)
     {
-        return 0xF9400000 | (((off >> 3) & 0xFFF) << 10) | (31 << 5) | rt;
+        return 0xF9400000 | (((off >> 3) & 0xFFF) << 10) | (rn << 5) | rt;
     }
     /** BL to an absolute code address (relative to the current emit cursor). */
     private static void emitBl(long target)
@@ -825,6 +978,20 @@ public final class Loader
             int descOff = mrefDescOff(u2(code + pc + 1));   // invokestatic call sequence:
             return 35 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + bl + result
         }
+        if (op == 0xb7)                                     // invokespecial
+        {
+            int idx = u2(code + pc + 1);
+            if (calleeCodeOf(idx) == 0L)
+            {
+                return 0;    // Object.<init>/unresolved lowers to just a pop
+            }
+            int descOff = mrefDescOff(idx);
+            return 35 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
+        }
+        if (op == 0xbb)
+        {
+            return 38;    // new: 128-byte spill + movz size + bl + null-tib + push
+        }
         if (op == 0xb2 || op == 0xb3)
         {
             return 3;    // get/putstatic: movz + movk + ldrsw/strw
@@ -842,14 +1009,15 @@ public final class Loader
 
     private static int opLen(int op)
     {
-        if (op == 0x10 || op == 0x15 || op == 0x36)
+        if (op == 0x10 || op == 0x15 || op == 0x36 || op == 0x19 || op == 0x3a)
         {
-            return 2;    // bipush/iload/istore
+            return 2;    // bipush/iload/istore/aload/astore
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
-                || op == 0xb2 || op == 0xb3 || op == 0xb8)
+                || op == 0xb2 || op == 0xb3 || op == 0xb8
+                || op == 0xb4 || op == 0xb5 || op == 0xb7 || op == 0xbb)
         {
-            return 3;    // ... / get/putstatic / invokestatic
+            return 3;    // ... get/putstatic / invoke* / get/putfield / new
         }
         return 1;
     }

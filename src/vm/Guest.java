@@ -6,14 +6,17 @@ package vm;
  * parses those bytes, compiles {@code answer()} to A64, and executes it. This is
  * M4: runtime class loading on bare metal (PLAN.md §4).
  *
- * <p>{@code answer()} now calls across methods, so the loader exercises
- * {@code invokestatic}: it resolves and compiles each callee on demand and links
- * a real {@code BL}. The chain answer -&gt; outer -&gt; inner (twice) also drives a
- * two-deep recursive compile and a call whose result is combined on the stack.
+ * <p>{@code answer()} builds a real object on the metal: {@code new Guest()} calls
+ * the image's {@code Heap.alloc}, the default constructor runs (an
+ * {@code invokespecial} whose {@code Object.<init>} target is a no-op), and the
+ * instance fields round-trip through {@code putfield}/{@code getfield}. The values
+ * come from a static call chain (answer -&gt; outer -&gt; inner twice), and the final
+ * {@code outer(11)} runs with a loaded field value still live on the stack.
  */
 public class Guest
 {
-    static int seed;             // a static field, backed by the loader's statics block
+    int value;                   // instance fields at +16 / +24 (object model)
+    int extra;
 
     static int inner(int n)
     {
@@ -27,7 +30,8 @@ public class Guest
 
     public static int answer()
     {
-        seed = 21;               // putstatic
-        return outer(seed);      // getstatic + invokestatic -> 21 + 21 = 42 = 0x2A = '*'
+        Guest g = new Guest();   // new + invokespecial <init> (Object.<init> is a no-op)
+        g.value = outer(10);     // putfield <- invokestatic chain (20)
+        return g.value + outer(11);   // getfield (20) + invokestatic outer (22) -> 42 = '*'
     }
 }

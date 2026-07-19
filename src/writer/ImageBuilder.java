@@ -350,6 +350,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
+        Integer heapAllocWord = wordOffset.get("vm/Heap.alloc(I)J");   // on-metal `new` BLs here
+        if (heapAllocWord != null)
+        {
+            fillStatic(image, staticWord, "vm/VM.heapAlloc", addr(heapAllocWord));
+        }
         for (int b = 0; b < blobs.size(); b++)
         {
             Blob blob = blobs.get(b);

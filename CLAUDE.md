@@ -109,8 +109,26 @@ defines the minimum the assembler must encode.
     `invokevirtual`/`special`); no int-slot args beyond the ≤8-local convention;
     a callee reached from N classes-of-scope is fine but there's no recursion/cycle
     support beyond dedup, and each distinct method compiles once.
-  - **Still to do on-metal:** instance fields (`getfield`/`putfield` — need
-    `new` + the object model on the metal), and `<clinit>`.
+  - **`new` + instance fields DONE (same-class):** the loader now assigns each
+    instance field a slot (offset `16 + slot*8` per `ObjectModel`) alongside the
+    static slots, and captures the class's own name so a same-class check
+    distinguishes `Guest.<init>` from `Object.<init>`. `new` allocates by calling
+    the image's real `Heap.alloc` — its address is stashed in a writer-filled static
+    `VM.heapAlloc`, and the on-metal `new` spills x1..x15 (same 128-byte frame as a
+    call, since `Heap.alloc` clobbers the value regs), `movz` the size into x0, `BL`s
+    it, nulls the TIB header, and pushes the ref. `getfield`/`putfield` lower to
+    `ldr`/`str Xt,[obj,#off]`; `invokespecial` calls a same-class `<init>` with the
+    receiver as the leading arg (reusing the call sequence with `thisArg=1`) and
+    treats `Object.<init>` (any cross-class target) as a pop. Added `dup`,
+    `aload/astore` (+_0..3), `areturn`, and void `return`. QEMU's `*` now flows
+    through `new Guest()` → default `<init>` → `putfield`/`getfield` (values fed by
+    the static call chain, with a loaded field live across a call).
+    **Limits:** same-class `new`/fields only (no cross-class or JDK types); no
+    virtual dispatch on loaded objects (null TIB); fields are zero only on a fresh
+    bump (`Heap.alloc` doesn't clear reused blocks); constructors take no args beyond
+    `this` (no real `super(...)`/field-init args).
+  - **Still to do on-metal:** `<clinit>`, `invokevirtual`/interfaces on loaded
+    objects (needs an on-metal TIB), and cross-class loading.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds

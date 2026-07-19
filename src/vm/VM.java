@@ -242,6 +242,7 @@ public final class VM
     // ----- runtime class loading (M4) --------------------------------------
     static long guestBytes, guestLen;   // raw Guest.class blob, filled by the writer
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
+    static long heapAlloc;              // address of Heap.alloc(I)J, so on-metal `new` can BL it
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
