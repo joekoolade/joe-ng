@@ -28,8 +28,23 @@ public final class Uart
         Magic.store32(Bcm2711.AUX_MU_CNTL_REG, 3);
     }
 
-    /** Write one byte, spinning until the TX FIFO can accept it (LSR bit5). */
+    /**
+     * Write one byte, translating LF to CRLF. A raw serial console (screen/minicom)
+     * treats a bare {@code \n} as line-feed only — no column reset — so without the
+     * carriage return each line staircases further right. Emitting {@code \r\n} is
+     * the convention for serial output.
+     */
     public static void putc(int c)
+    {
+        if (c == 0x0A)
+        {
+            putRaw(0x0D);
+        }
+        putRaw(c);
+    }
+
+    /** Write one raw byte, spinning until the TX FIFO can accept it (LSR bit5). */
+    private static void putRaw(int c)
     {
         while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & 0x20) == 0)
         {

@@ -274,7 +274,7 @@ public final class VM
      */
     static void run()
     {
-        Uart.write(Magic.bytes("hello from joe2\r\n"));   // real interned string literal (byte[])
+        Uart.write(Magic.bytes("hello from joe2\n"));     // putc turns \n into \r\n
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
