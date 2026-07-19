@@ -33,12 +33,19 @@ public final class Loader
     private static int gifCount;
     private static int gThisNameOff;     // Utf8 offset of this class's own name
     private static long gMethodsStart;   // address of the methods_count (for callee lookup)
-    private static int[] gvName;    // vtable: virtual method name Utf8 offset (index = slot)
-    private static int[] gvDesc;    // ... descriptor Utf8 offset
-    private static long[] gvCode;   // ... bytecode address
-    private static int[] gvLen;     // ... bytecode length
-    private static int gvCount;     // number of virtual methods (vtable slots)
+    // Flattened vtable of the class being built: superclass slots first, overrides
+    // replacing in place, new methods appended. Each slot's signature may live in a
+    // superclass's blob (gvBase), and its implementation is either an inherited
+    // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
+    private static final int MAXMV = 64;
+    private static long[] gvBase;   // blob holding this slot's name/descriptor
+    private static int[] gvName;    // method name Utf8 offset (in gvBase)
+    private static int[] gvDesc;    // descriptor Utf8 offset (in gvBase)
+    private static long[] gvImplBuf;   // inherited impl buffer (0 => this class's own)
+    private static long[] gvImplCode;  // this class's own method bytecode (0 => inherited)
+    private static int gvCount;     // flattened vtable size
     private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
+    private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
 
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
@@ -58,6 +65,7 @@ public final class Loader
     private static int[] clNameOff;
     private static long[] clTib;
     private static int[] clFieldCount;
+    private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
     private static int clCount;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
@@ -73,11 +81,13 @@ public final class Loader
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
     private static final int MAXVT = 128;
-    private static long[] vtBase;
+    private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
+    private static long[] vtNameBase;    // method signature blob (may be a superclass's)
     private static int[] vtNameOff;
     private static int[] vtDescOff;
     private static int[] vtSlot;
+    private static long[] vtBuf;         // slot's implementation buffer
     private static int vtCount;
 
     private static int u1(long p)
@@ -133,10 +143,10 @@ public final class Loader
     }
 
     /**
-     * M4/cross-class — load two classes and link them on the metal. Helper is
-     * compiled and registered first (Guest depends on it); then Guest is compiled
-     * with its cross-class {@code invokestatic Helper.*} resolved through the
-     * registry, and {@code answer()} runs. Returns 42 = '*'.
+     * Load a small class hierarchy on the metal and run it. Animal is loaded first,
+     * then Dog (which inherits Animal's fields and flattened vtable and overrides a
+     * method), then Guest (which {@code new}s a Dog and dispatches through an
+     * Animal-typed reference). Returns 42 = '*'.
      */
     static int loadGuest()
     {
@@ -150,27 +160,29 @@ public final class Loader
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
         clFieldCount = new int[MAXCLASS];
+        clVtCount = new int[MAXCLASS];
         clCount = 0;
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
         fldSlot = new int[MAXFIELD];
         fldCount = 0;
-        vtBase = new long[MAXVT];
+        vtClassBase = new long[MAXVT];
         vtClassOff = new int[MAXVT];
+        vtNameBase = new long[MAXVT];
         vtNameOff = new int[MAXVT];
         vtDescOff = new int[MAXVT];
         vtSlot = new int[MAXVT];
+        vtBuf = new long[MAXVT];
         vtCount = 0;
-        setClass(VM.helperBytes);                      // dependency first (no cross-class cycles)
-        compileClass(VM.helperBytes);
-        registerAll();
-        registerClass();                               // Helper's TIB + field layout, for Guest's new/fields
-        setClass(VM.guestBytes);
-        runClinit(VM.guestBytes);                      // initialize Guest's statics
-        compileClass(VM.guestBytes);                   // cross-class new/fields/calls link via the registry
-        registerAll();
-        registerClass();
+        gvBase = new long[MAXMV];
+        gvName = new int[MAXMV];
+        gvDesc = new int[MAXMV];
+        gvImplBuf = new long[MAXMV];
+        gvImplCode = new long[MAXMV];
+        loadOne(VM.critterBytes);                      // superclass first
+        loadOne(VM.pupBytes);                          // subclass: inherits + overrides
+        loadOne(VM.guestBytes);                        // entry: new Pup(), dispatch via Critter ref
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
@@ -231,16 +243,16 @@ public final class Loader
     private static void parseFields()
     {
         long p = gp;
-        int thisClass = u2(p + 2);                      // this_class -> Class -> name Utf8 offset
-        gThisNameOff = gcp[u2(gbase + gcp[thisClass])];
+        gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> Class -> name Utf8 offset
+        gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
+        int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p += 6;                                         // access_flags, this_class, super_class
         p += 2 + u2(p) * 2;                             // interfaces
         int fcount = u2(p);
         p += 2;
         gsfName = new int[fcount + 1];
-        gifName = new int[fcount + 1];
+        gifName = new int[fcount + islot + 1];
         int slot = 0;
-        int islot = 0;
         int f = 0;
         while (f < fcount)
         {
@@ -254,7 +266,7 @@ public final class Loader
             }
             else
             {
-                gifName[islot] = gcp[nameIdx];   // instance field: assign the next slot
+                gifName[islot] = gcp[nameIdx];   // instance field at the next inherited+own slot
                 islot += 1;
             }
             int attrs = u2(p);
@@ -263,7 +275,7 @@ public final class Loader
             f += 1;
         }
         gsfCount = slot;
-        gifCount = islot;
+        gifCount = islot;                               // total: inherited + own
         gvCount = 0;                                    // no vtable unless parseVtable runs
         gMethodsStart = p;                              // methods_count follows the fields
         gStatics = Heap.alloc(slot * 8 + 8);
@@ -277,37 +289,90 @@ public final class Loader
     }
 
     /**
-     * Assign a vtable slot to each virtual method (non-static, non-constructor,
-     * non-private), in declaration order, recording its name/descriptor/Code so the
-     * loader can build the TIB and resolve {@code invokevirtual}. No inheritance:
-     * slots are this class's own virtual methods only (Object's aren't in the file).
+     * Build this class's flattened vtable: inherit the superclass's slots (copied
+     * from the super's registered vtable — signature + already-compiled impl
+     * buffer), then walk this class's own virtual methods, an override replacing the
+     * inherited slot in place (so it keeps the super's index) and a new method
+     * appending. buildTib later fills the TIB from these slots.
      */
     private static void parseVtable(long bytes)
     {
+        gvCount = 0;
+        int superReg = classRegByName(gSuperNameOff);
+        if (superReg >= 0)
+        {
+            inheritVtable(gSuperNameOff);               // copy the super's flattened slots
+        }
         long p = gMethodsStart;
         int mcount = u2(p);
         p += 2;
-        gvName = new int[mcount + 1];
-        gvDesc = new int[mcount + 1];
-        gvCode = new long[mcount + 1];
-        gvLen = new int[mcount + 1];
-        int slot = 0;
         int m = 0;
         while (m < mcount)
         {
             int attrs = u2(p + 6);                      // access, name, descriptor, attrs
             if (isVirtual(u2(p), gcp[u2(p + 2)]))
             {
+                int slot = findVtSlot(gcp[u2(p + 2)], gcp[u2(p + 4)]);   // override an inherited slot?
+                if (slot < 0)
+                {
+                    slot = gvCount;                     // else append a new slot
+                    gvCount += 1;
+                }
+                gvBase[slot] = gbase;
                 gvName[slot] = gcp[u2(p + 2)];
                 gvDesc[slot] = gcp[u2(p + 4)];
-                gvCode[slot] = findCode(bytes, p + 8, attrs);   // sets gcodeLen
-                gvLen[slot] = gcodeLen;
-                slot += 1;
+                gvImplCode[slot] = findCode(bytes, p + 8, attrs);   // this class's own impl
+                gvImplBuf[slot] = 0L;
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
-        gvCount = slot;
+    }
+
+    /** Copy the registered flattened vtable of the class named {@code superOff} into gv[]. */
+    private static void inheritVtable(int superOff)
+    {
+        int i = 0;
+        while (i < vtCount)
+        {
+            if (utf8EqAt(gbase, superOff, vtClassBase[i], vtClassOff[i]))
+            {
+                int slot = vtSlot[i];
+                gvBase[slot] = vtNameBase[i];
+                gvName[slot] = vtNameOff[i];
+                gvDesc[slot] = vtDescOff[i];
+                gvImplBuf[slot] = vtBuf[i];             // inherited (already-compiled) impl
+                gvImplCode[slot] = 0L;
+                if (slot + 1 > gvCount)
+                {
+                    gvCount = slot + 1;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /** Flattened-vtable slot whose name+descriptor match, or -1 (used for override detection). */
+    private static int findVtSlot(int nameOff, int descOff)
+    {
+        int s = 0;
+        while (s < gvCount)
+        {
+            if (utf8EqAt(gbase, nameOff, gvBase[s], gvName[s])
+                    && utf8EqAt(gbase, descOff, gvBase[s], gvDesc[s]))
+            {
+                return s;
+            }
+            s += 1;
+        }
+        return -1;
+    }
+
+    /** Instance-field count of the superclass (inherited fields), 0 if super is Object/unloaded. */
+    private static int superFieldCount()
+    {
+        int r = classRegByName(gSuperNameOff);
+        return r >= 0 ? clFieldCount[r] : 0;
     }
 
     /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
@@ -465,15 +530,6 @@ public final class Loader
         mBuf = new long[MAXM];
         mCount = 0;
         addMethod(code, len);
-        int v = 0;
-        while (v < gvCount)                             // seed all virtual methods (vtable must be
-        {                                               // complete even if some aren't called)
-            if (gvCode[v] != 0L)
-            {
-                addMethod(gvCode[v], gvLen[v]);
-            }
-            v += 1;
-        }
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -543,12 +599,21 @@ public final class Loader
         Magic.isb();
     }
 
-    /** Establish the current-class context: constant pool, fields/statics, vtable. */
-    private static void setClass(long bytes)
+    /**
+     * Load one class end to end: parse it, run its {@code <clinit>}, build its
+     * flattened vtable against the (already-loaded) superclass, compile every
+     * method, and register it. Classes must be loaded superclass/dependency-first
+     * so the registries are populated when a subclass or user is compiled.
+     */
+    private static void loadOne(long bytes)
     {
         parseConstPool(bytes);
-        parseFields();
-        parseVtable(bytes);
+        parseFields();                                  // hierarchy-aware field layout
+        runClinit(bytes);                               // gvCount==0 here (vtable not built yet)
+        parseVtable(bytes);                             // flatten against the superclass
+        compileClass(bytes);                            // compile all methods; buildTib fills the TIB
+        registerAll();                                  // methods
+        registerClass();                                // class + fields + flattened vtable
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
@@ -714,28 +779,53 @@ public final class Loader
         clNameOff[clCount] = gThisNameOff;
         clTib[clCount] = gTib;
         clFieldCount[clCount] = gifCount;
+        clVtCount[clCount] = gvCount;
         clCount += 1;
         int s = 0;
         while (s < gifCount)
         {
-            fldBase[fldCount] = gbase;
-            fldClassOff[fldCount] = gThisNameOff;
-            fldNameOff[fldCount] = gifName[s];
-            fldSlot[fldCount] = s;
-            fldCount += 1;
+            if (gifName[s] != 0)                        // skip inherited slots (registered by the super)
+            {
+                fldBase[fldCount] = gbase;
+                fldClassOff[fldCount] = gThisNameOff;
+                fldNameOff[fldCount] = gifName[s];
+                fldSlot[fldCount] = s;
+                fldCount += 1;
+            }
             s += 1;
         }
         int v = 0;
-        while (v < gvCount)
+        while (v < gvCount)                            // register the whole flattened vtable
         {
-            vtBase[vtCount] = gbase;
+            vtClassBase[vtCount] = gbase;
             vtClassOff[vtCount] = gThisNameOff;
+            vtNameBase[vtCount] = gvBase[v];           // signature blob (a super's, for inherited slots)
             vtNameOff[vtCount] = gvName[v];
             vtDescOff[vtCount] = gvDesc[v];
             vtSlot[vtCount] = v;
+            vtBuf[vtCount] = slotBuf(v);
             vtCount += 1;
             v += 1;
         }
+    }
+
+    /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
+    private static int classRegByName(int nameOff)
+    {
+        if (nameOff == 0)
+        {
+            return -1;
+        }
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8EqAt(gbase, nameOff, clBase[i], clNameOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
     }
 
     /**
@@ -753,19 +843,19 @@ public final class Loader
         int i = 0;
         while (i < vtCount)                             // class-qualified (invokevirtual)
         {
-            if (utf8EqAt(gbase, classOff, vtBase[i], vtClassOff[i])
-                    && utf8EqAt(gbase, nameOff, vtBase[i], vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtBase[i], vtDescOff[i]))
+            if (utf8EqAt(gbase, classOff, vtClassBase[i], vtClassOff[i])
+                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
             {
                 return vtSlot[i];
             }
             i += 1;
         }
         i = 0;
-        while (i < vtCount)                             // name+descriptor (invokeinterface)
+        while (i < vtCount)                             // name+descriptor (invokeinterface / inherited)
         {
-            if (utf8EqAt(gbase, nameOff, vtBase[i], vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtBase[i], vtDescOff[i]))
+            if (utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
             {
                 return vtSlot[i];
             }
@@ -812,16 +902,30 @@ public final class Loader
         return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
     }
 
-    /** Instance-field offset for a cross-class Fieldref (registry lookup by class+name). */
+    /**
+     * Instance-field offset for a Fieldref in another class (or an inherited field
+     * named through a subclass). A class-qualified match wins; failing that (the ref
+     * names a subclass for a field its superclass declares), a name-only match finds
+     * the inherited field's slot — the flattened layout keeps it consistent.
+     */
     private static int globalFieldOffset(int idx)
     {
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
         int i = 0;
-        while (i < fldCount)
+        while (i < fldCount)                            // class-qualified
         {
             if (utf8EqAt(gbase, classOff, fldBase[i], fldClassOff[i])
                     && utf8EqAt(gbase, nameOff, fldBase[i], fldNameOff[i]))
+            {
+                return 16 + fldSlot[i] * 8;
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < fldCount)                            // name-only (inherited field via subclass)
+        {
+            if (utf8EqAt(gbase, nameOff, fldBase[i], fldNameOff[i]))
             {
                 return 16 + fldSlot[i] * 8;
             }
@@ -843,9 +947,19 @@ public final class Loader
         int s = 0;
         while (s < gvCount)
         {
-            Magic.store64(gTib + 8 + s * 8, bufOf(gvCode[s]));   // TIB[1+slot] = method code
+            Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
+    }
+
+    /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
+    private static long slotBuf(int s)
+    {
+        if (gvImplBuf[s] != 0L)
+        {
+            return gvImplBuf[s];                         // inherited from a superclass
+        }
+        return bufOf(gvImplCode[s]);                     // this class's own method
     }
 
     /**
@@ -858,16 +972,10 @@ public final class Loader
     {
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
-            int nameOff = mrefNameOff(idx);
-            int descOff = mrefDescOff(idx);
-            int s = 0;
-            while (s < gvCount)
+            int s = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));   // this class's flattened vtable
+            if (s >= 0)
             {
-                if (utf8Eq(gvName[s], nameOff) && utf8Eq(gvDesc[s], descOff))
-                {
-                    return s;
-                }
-                s += 1;
+                return s;
             }
         }
         return globalVtableSlot(idx);
@@ -1239,24 +1347,23 @@ public final class Loader
         csp = csp - argc + hasRet;
     }
 
-    /** Instance-field byte offset for the field named by {@code *ref} index (same class). */
+    /** Instance-field byte offset for the field named by {@code *ref} index. */
     private static int fieldOffsetOf(int idx)
     {
-        if (!utf8Eq(refClassNameOff(idx), gThisNameOff))
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
-            return globalFieldOffset(idx);                 // field of another loaded class
-        }
-        int nameOff = mrefNameOff(idx);                    // Fieldref layout == Methodref layout
-        int s = 0;
-        while (s < gifCount)
-        {
-            if (gifName[s] == nameOff)
+            int nameOff = mrefNameOff(idx);                // Fieldref layout == Methodref layout
+            int s = 0;
+            while (s < gifCount)
             {
-                return 16 + s * 8;                         // ObjectModel: fields start at +16
+                if (gifName[s] == nameOff)
+                {
+                    return 16 + s * 8;                     // this class's own field (ObjectModel: +16)
+                }
+                s += 1;
             }
-            s += 1;
         }
-        return 16;
+        return globalFieldOffset(idx);                     // another class, or an inherited field
     }
 
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */

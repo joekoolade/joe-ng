@@ -6,28 +6,22 @@ package vm;
  * parses those bytes, compiles {@code answer()} to A64, and executes it. This is
  * M4: runtime class loading on bare metal (PLAN.md §4).
  *
- * <p>{@code answer()} works entirely across the class boundary: it {@code new}s a
- * {@link Helper} (a different loaded class — allocated at Helper's size, its TIB
- * and constructor linked through the registry), writes Helper's instance fields
- * (one from a cross-class static call, one from a {@code <clinit>} static), then
- * dispatches a <em>virtual</em> method on it — {@code h.sum()} loads Helper's TIB
- * from the object and calls Helper's slot. A correct {@code 42} means cross-class
- * new, fields, calls, virtual dispatch, and static init all work on the metal.
+ * <p>{@code answer()} drives a <em>class hierarchy</em> loaded on the metal:
+ * {@code new Pup()} allocates a {@link Pup} (a subclass of {@link Critter}) at the
+ * inherited size and runs {@code super()}; the inherited field {@code base} is
+ * written through a {@code Critter} reference; then {@code c.sound()} dispatches
+ * <em>virtually</em> on a {@code Critter}-typed reference and lands on Pup's
+ * override — which itself reads the inherited field and calls the inherited
+ * {@code legs()}. A correct {@code 42} means inheritance, flattened vtables,
+ * override dispatch, and inherited fields all work on the metal.
  */
 public class Guest
 {
-    static int bias = 20;        // set by <clinit> (non-final, so not inlined at the use site)
-
-    static int inner(int n)
-    {
-        return n;                // intra-class leaf callee
-    }
-
     public static int answer()
     {
-        Helper h = new Helper();             // cross-class new + Helper.<init>
-        h.a = Helper.scale(inner(11));       // cross-class putfield @16 <- cross-class call (22)
-        h.b = bias;                          // cross-class putfield @24 <- getstatic bias (20)
-        return h.sum();                      // cross-class invokevirtual (Helper.sum) -> 42 = '*'
+        Pup p = new Pup();           // cross-class new of a subclass (+ super() constructor)
+        Critter c = p;               // widen to the superclass type
+        c.base = 20;                 // write the inherited field (Critter.base) on the Pup
+        return c.sound();            // virtual dispatch -> Pup.sound: 20 + legs(4) + 18 = 42 = '*'
     }
 }

@@ -207,8 +207,31 @@ defines the minimum the assembler must encode.
     Helper's own fields (`22 + 20 = 42`). **Limits:** manual dependency order; no
     class hierarchies (inherited/overridden slots need the superclass's file); `Type`
     still null so no `instanceof` on loaded objects.
-  - **Still to do on-metal:** class hierarchies (inherited vtable slots, real
-    itables, a `Type` for `instanceof`), and dependency auto-ordering.
+  - **Class hierarchies DONE (loaded superclass + subclass):** the loader loads a
+    superclass then a subclass and links them. `parseFields` reads `super_class` and
+    lays a subclass's own fields *after* the inherited ones (super's field count from
+    the class registry); `parseVtable` builds a **flattened vtable** — `inheritVtable`
+    copies the super's registered slots (signature + already-compiled impl buffer,
+    read from its registered vtable), then each own method either **overrides** an
+    inherited slot in place (`findVtSlot` matches name+descriptor, keeping the super's
+    index) or **appends**. `buildTib` fills each slot from its inherited buffer or
+    this class's own (`slotBuf`). The class/field/vtable registries gained inheritance
+    support: `clVtCount`, a dual-base vtable registry (a slot's class vs its signature
+    blob can differ), a `classRegByName`, and name-only fallbacks in
+    `globalFieldOffset`/`globalVtableSlot` so an inherited member named through the
+    subclass (javac emits `Pup.base`/`Pup.legs`) still resolves. The driver is now a
+    per-class `loadOne` pipeline (parse → `<clinit>` → flatten → compile → register),
+    run superclass-first. QEMU's `*`: `new Pup()` (subclass of `Critter`, allocated at
+    the inherited size, `super()` run) → write inherited `Critter.base` → `c.sound()`
+    on a `Critter`-typed ref dispatches to Pup's **override**, which reads the
+    inherited field and calls the inherited `legs()` (`20 + 4 + 18 = 42`). The
+    inherited-method call *requires* flattening — a naive own-methods-only vtable
+    wouldn't have Pup's slot 1. **Limits:** single inheritance, no interfaces in the
+    hierarchy, name-only fallbacks assume member names are unique across unrelated
+    loaded classes, `Type` still null (no `instanceof` on loaded objects), manual
+    superclass-first load order.
+  - **Still to do on-metal:** a real `Type` chain for `instanceof`/`checkcast` on
+    loaded objects, loaded interfaces with itables, and dependency auto-ordering.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
