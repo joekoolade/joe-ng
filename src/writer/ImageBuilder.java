@@ -41,9 +41,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     private final Path classesDir;
     private final Map<String, ClassFile> classes = new HashMap<>();
+    private final List<Blob> blobs = new ArrayList<>();
+
+    /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics. */
+    private record Blob(String addrKey, String lenKey, byte[] bytes) {}
 
     public ImageBuilder(Path classesDir) {
         this.classesDir = classesDir;
+    }
+
+    /** Embed {@code bytes} verbatim; the runtime finds them via the given statics (e.g. a raw .class). */
+    public void addBlob(String addrKey, String lenKey, byte[] bytes) {
+        blobs.add(new Blob(addrKey, lenKey, bytes));
     }
 
     @Override public ClassFile resolve(String owner) {
@@ -141,6 +150,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         // entries {start,end,handler,catchType} (8 words).
         int frameTableWord = cur;   cur += frameCount * 6;
         int handlerTableWord = cur; cur += handlerCount * 8;
+        // embedded blobs (e.g. a raw .class for the runtime loader), 8-byte aligned.
+        int[] blobWord = new int[blobs.size()];
+        for (int b = 0; b < blobs.size(); b++) {
+            blobWord[b] = cur;
+            cur += ((blobs.get(b).bytes().length + 7) & ~7) / 4;
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -236,6 +251,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
+        for (int b = 0; b < blobs.size(); b++) {
+            Blob blob = blobs.get(b);
+            writeBytes(image, blobWord[b], blob.bytes());
+            fillStatic(image, staticWord, blob.addrKey(), addr(blobWord[b]));
+            fillStatic(image, staticWord, blob.lenKey(),  blob.bytes().length);
+        }
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (String s : strings) writeStringObject(image, strWord.get(s), s);
@@ -345,6 +366,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
     private static void fillStatic(int[] image, Map<String, Integer> staticWord, String key, long value) {
         Integer w = staticWord.get(key);
         if (w != null) writeLong(image, w, value);
+    }
+
+    /** Pack raw {@code bytes} into image words (little-endian) starting at word {@code w}. */
+    private static void writeBytes(int[] image, int w, byte[] bytes) {
+        for (int i = 0; i < bytes.length; i++) image[w + i / 4] |= (bytes[i] & 0xFF) << ((i % 4) * 8);
     }
 
     private CompiledMethod compile(String key, long base, boolean isEntry) throws IOException {

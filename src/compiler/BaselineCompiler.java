@@ -216,7 +216,12 @@ public final class BaselineCompiler {
             case 0x60, 0x61 -> { binop(cb, Bin.ADD); return 1; }
             case 0x64, 0x65 -> { binop(cb, Bin.SUB); return 1; }
             case 0x68, 0x69 -> { binop(cb, Bin.MUL); return 1; }
+            case 0x78, 0x79 -> { binop(cb, Bin.SHL); return 1; }        // ishl/lshl
+            case 0x7A, 0x7B -> { binop(cb, Bin.ASR); return 1; }        // ishr/lshr
+            case 0x7C, 0x7D -> { binop(cb, Bin.LSR); return 1; }        // iushr/lushr
             case 0x7E, 0x7F -> { binop(cb, Bin.AND); return 1; }
+            case 0x80, 0x81 -> { binop(cb, Bin.OR); return 1; }        // ior/lor
+            case 0x82, 0x83 -> { binop(cb, Bin.XOR); return 1; }       // ixor/lxor
             case 0x94 -> { lcmp(cb); return 1; }                        // lcmp -> -1/0/1
 
             case 0x85, 0x88, 0x91, 0x92 -> { return 1; }               // i2l/l2i/i2b/i2c: no-op
@@ -260,7 +265,7 @@ public final class BaselineCompiler {
         }
     }
 
-    private enum Bin { ADD, SUB, MUL, AND }
+    private enum Bin { ADD, SUB, MUL, AND, OR, XOR, SHL, ASR, LSR }
 
     // ----- register allocation ---------------------------------------------
     private int pushReg() { if (sp >= OP_MAX) throw new IllegalStateException("operand stack too deep"); return OP_BASE + sp++; }
@@ -289,6 +294,11 @@ public final class BaselineCompiler {
             case SUB -> A64.subReg(r, a, b);
             case MUL -> A64.mulReg(r, a, b);
             case AND -> A64.andReg(r, a, b);
+            case OR  -> A64.orrReg(r, a, b);
+            case XOR -> A64.eorReg(r, a, b);
+            case SHL -> A64.lslv(r, a, b);
+            case ASR -> A64.asrv(r, a, b);
+            case LSR -> A64.lsrv(r, a, b);
         });
     }
 
@@ -590,7 +600,9 @@ public final class BaselineCompiler {
         switch (key) {
             case "wfe()V"  -> cb.emit(A64.wfe());
             case "isb()V"  -> cb.emit(A64.isb());
+            case "dsb()V"  -> cb.emit(A64.dsb());
             case "gc()V"   -> lowerGc(cb);
+            case "call0(J)J" -> { int addr = popReg(); cb.emit(A64.blr(addr)); cb.emit(A64.movReg(pushReg(), 0)); }
             case "eret()V" -> cb.emit(A64.eret());
             case "dropToEL1()V" -> lowerDropToEL1(cb);
 
@@ -666,6 +678,7 @@ public final class BaselineCompiler {
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
+                if (ref.name().equals("gc") || ref.name().equals("call0")) return true; // these emit BL/BLR
             }
             if (op == 0xB7) {                                    // invokespecial
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));

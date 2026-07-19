@@ -63,7 +63,20 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **Phase: M2 in progress — multi-class runtime with real cross-class calls.**
+- **Phase: M4 reached (minimal) — runtime class loading on the metal.**
+- **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
+  `vm/Guest.class` as raw bytes only (never compiles it); at runtime the on-metal
+  `vm/Loader` (compiled into the image by our own baseline compiler) parses the
+  classfile it has never seen — constant pool, methods, Code — finds `answer()`,
+  compiles its bytecode to A64 in a heap buffer, publishes it (`DSB`+`ISB`; caches
+  are off so no dc/ic maintenance), and executes it via `Magic.call0`. QEMU prints
+  `Z` (0x5A, from `Guest.answer()` JIT-compiled on the metal). Loader is JDK-free
+  (primitive arrays + `Magic` byte access; state in statics because methods are
+  capped at 10 local slots) and its mini-compiler handles only `return <const>`.
+  Full parser/compiler self-hosting (M5) is far larger — our writer-side
+  `classfile`/`compiler` depend on the JDK (collections/strings) and can't be
+  compiled into the image yet.
+- **Earlier phase note (M2/M6): multi-class runtime with real cross-class calls.**
 - **M0 (done):** all-Java pipeline end to end. `asm/A64` encoder + `asm/CodeBuffer`
   + `writer/BootImageWriter` emit a raw, header-less `kernel8.img`;
   `writer/BuildSpinImage` = the 8-byte `wfe; b .-4` park loop at `0x80000`.

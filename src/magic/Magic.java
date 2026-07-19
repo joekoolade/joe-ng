@@ -22,6 +22,12 @@ public final class Magic {
     // ----- hints / parking -------------------------------------------------
     public static void wfe() { throw intrinsic(); }
     public static void isb() { throw intrinsic(); }
+    /** Data synchronization barrier (full system) — publish stores before a fetch. */
+    public static void dsb() { throw intrinsic(); }
+
+    /** Call freshly-written machine code at {@code addr} (no args); return x0.
+     *  Used by the runtime class loader to run a method it just JIT-compiled. */
+    public static long call0(long addr) { throw intrinsic(); }
 
     /**
      * Run a garbage collection. Lowered to a sequence that spills the callee-saved

@@ -248,8 +248,18 @@ public final class A64 {
     public static int subReg(int rd, int rn, int rm) { return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code AND Xd, Xn, Xm}. */
     public static int andReg(int rd, int rn, int rm) { return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code ORR Xd, Xn, Xm}. */
+    public static int orrReg(int rd, int rn, int rm) { return 0xAA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code EOR Xd, Xn, Xm}. */
+    public static int eorReg(int rd, int rn, int rm) { return 0xCA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code MUL Xd, Xn, Xm} — alias of MADD Xd, Xn, Xm, XZR. */
     public static int mulReg(int rd, int rn, int rm) { return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
+    public static int lslv(int rd, int rn, int rm) { return 0x9AC0_2000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code LSR Xd, Xn, Xm} — logical shift right by a register (LSRV). */
+    public static int lsrv(int rd, int rn, int rm) { return 0x9AC0_2400 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code ASR Xd, Xn, Xm} — arithmetic shift right by a register (ASRV). */
+    public static int asrv(int rd, int rn, int rm) { return 0x9AC0_2800 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
     /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */

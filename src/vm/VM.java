@@ -184,6 +184,9 @@ public final class VM {
 
     static long reclaimed;   // bytes freed by the last collection
 
+    // ----- runtime class loading (M4) --------------------------------------
+    static long guestBytes, guestLen;   // raw Guest.class blob, filled by the writer
+
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi) {
         boolean any = false;
@@ -266,6 +269,10 @@ public final class VM {
         Magic.gc();
         Cell fresh = new Cell(0x2A);                       // should come from the free list
         Uart.putc(Heap.lastFromFreeList != 0 ? 0x52 : 0x4E); // 'R' reused / 'N' fresh bump
+        Uart.putc(0x0A);
+
+        // M4: parse+compile+run a class embedded only as raw bytes, on the metal
+        Uart.putc(Loader.loadGuest());                     // 'Z' from Guest.answer(), JIT'd at runtime
         Uart.putc(0x0A);
     }
 

@@ -3,6 +3,7 @@ package writer;
 import asm.CodeBuffer;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -20,7 +21,11 @@ public final class BuildRuntimeImage {
     private static final String ENTRY = "vm/VM.boot()V";
 
     public static CodeBuffer build(Path classesDir) throws IOException {
-        return new ImageBuilder(classesDir).build(ENTRY);
+        ImageBuilder ib = new ImageBuilder(classesDir);
+        // Embed vm/Guest.class raw bytes for the on-metal loader (M4) — NOT compiled here.
+        ib.addBlob("vm/VM.guestBytes", "vm/VM.guestLen",
+                Files.readAllBytes(classesDir.resolve("vm/Guest.class")));
+        return ib.build(ENTRY);
     }
 
     public static void main(String[] args) throws IOException {
