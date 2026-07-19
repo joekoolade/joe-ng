@@ -6,12 +6,13 @@ package vm;
  * parses those bytes, compiles {@code answer()} to A64, and executes it. This is
  * M4: runtime class loading on bare metal (PLAN.md §4).
  *
- * <p>{@code answer()} now works entirely across the class boundary: it
- * {@code new}s a {@link Helper} (a different loaded class — allocated at Helper's
- * size, its TIB and constructor linked through the registry), writes and reads
- * Helper's instance fields, and folds in a cross-class static call plus a
- * {@code <clinit>}-initialized local static. A correct {@code 42} means cross-class
- * new, fields, calls, and static init all work on the metal.
+ * <p>{@code answer()} works entirely across the class boundary: it {@code new}s a
+ * {@link Helper} (a different loaded class — allocated at Helper's size, its TIB
+ * and constructor linked through the registry), writes Helper's instance fields
+ * (one from a cross-class static call, one from a {@code <clinit>} static), then
+ * dispatches a <em>virtual</em> method on it — {@code h.sum()} loads Helper's TIB
+ * from the object and calls Helper's slot. A correct {@code 42} means cross-class
+ * new, fields, calls, virtual dispatch, and static init all work on the metal.
  */
 public class Guest
 {
@@ -27,6 +28,6 @@ public class Guest
         Helper h = new Helper();             // cross-class new + Helper.<init>
         h.a = Helper.scale(inner(11));       // cross-class putfield @16 <- cross-class call (22)
         h.b = bias;                          // cross-class putfield @24 <- getstatic bias (20)
-        return h.a + h.b;                    // cross-class getfield x2 -> 42 = '*'
+        return h.sum();                      // cross-class invokevirtual (Helper.sum) -> 42 = '*'
     }
 }

@@ -69,6 +69,17 @@ public final class Loader
     private static int[] fldSlot;
     private static int fldCount;
 
+    // Vtable-slot registry: per virtual method of each class, its class/name/desc
+    // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
+    // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
+    private static final int MAXVT = 128;
+    private static long[] vtBase;
+    private static int[] vtClassOff;
+    private static int[] vtNameOff;
+    private static int[] vtDescOff;
+    private static int[] vtSlot;
+    private static int vtCount;
+
     private static int u1(long p)
     {
         return Magic.load8(p) & 0xFF;
@@ -145,6 +156,12 @@ public final class Loader
         fldNameOff = new int[MAXFIELD];
         fldSlot = new int[MAXFIELD];
         fldCount = 0;
+        vtBase = new long[MAXVT];
+        vtClassOff = new int[MAXVT];
+        vtNameOff = new int[MAXVT];
+        vtDescOff = new int[MAXVT];
+        vtSlot = new int[MAXVT];
+        vtCount = 0;
         setClass(VM.helperBytes);                      // dependency first (no cross-class cycles)
         compileClass(VM.helperBytes);
         registerAll();
@@ -708,6 +725,53 @@ public final class Loader
             fldCount += 1;
             s += 1;
         }
+        int v = 0;
+        while (v < gvCount)
+        {
+            vtBase[vtCount] = gbase;
+            vtClassOff[vtCount] = gThisNameOff;
+            vtNameOff[vtCount] = gvName[v];
+            vtDescOff[vtCount] = gvDesc[v];
+            vtSlot[vtCount] = v;
+            vtCount += 1;
+            v += 1;
+        }
+    }
+
+    /**
+     * Vtable slot of a cross-class virtual/interface method. For invokevirtual the
+     * ref's class is the (loaded) declaring class, so a class+name+descriptor match
+     * finds the slot. For invokeinterface the ref's class is the interface (not a
+     * loaded class), so that match fails and we fall back to name+descriptor — sound
+     * while a single loaded class implements it.
+     */
+    private static int globalVtableSlot(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        int descOff = mrefDescOff(idx);
+        int i = 0;
+        while (i < vtCount)                             // class-qualified (invokevirtual)
+        {
+            if (utf8EqAt(gbase, classOff, vtBase[i], vtClassOff[i])
+                    && utf8EqAt(gbase, nameOff, vtBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtBase[i], vtDescOff[i]))
+            {
+                return vtSlot[i];
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < vtCount)                             // name+descriptor (invokeinterface)
+        {
+            if (utf8EqAt(gbase, nameOff, vtBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtBase[i], vtDescOff[i]))
+            {
+                return vtSlot[i];
+            }
+            i += 1;
+        }
+        return 0;
     }
 
     /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
@@ -784,21 +848,29 @@ public final class Loader
         }
     }
 
-    /** Vtable slot of the virtual method named by Methodref {@code idx}. */
+    /**
+     * Vtable slot of the virtual method named by Methodref {@code idx}. Same-class
+     * calls use this class's own vtable; a call whose ref names another class (a
+     * cross-class {@code invokevirtual}) or an interface resolves via the global
+     * vtable registry against the receiver class's layout.
+     */
     private static int vtableSlotOf(int idx)
     {
-        int nameOff = mrefNameOff(idx);
-        int descOff = mrefDescOff(idx);
-        int s = 0;
-        while (s < gvCount)
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
-            if (utf8Eq(gvName[s], nameOff) && utf8Eq(gvDesc[s], descOff))
+            int nameOff = mrefNameOff(idx);
+            int descOff = mrefDescOff(idx);
+            int s = 0;
+            while (s < gvCount)
             {
-                return s;
+                if (utf8Eq(gvName[s], nameOff) && utf8Eq(gvDesc[s], descOff))
+                {
+                    return s;
+                }
+                s += 1;
             }
-            s += 1;
         }
-        return 0;
+        return globalVtableSlot(idx);
     }
 
     private static void rec(int tbc)

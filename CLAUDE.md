@@ -192,15 +192,23 @@ defines the minimum the assembler must encode.
     `globalFieldOffset`); and `invokespecial vm/Helper.<init>` is now a *real*
     cross-class constructor call (`emitInvokeSpecial`/`wordsFor` use `isRealSpecial`
     = same-class or a loaded class, so only `Object.<init>` stays a pop). QEMU's `*`
-    now runs entirely across the boundary: `new Helper()`, `h.a = Helper.scale(11)`,
-    `h.b = bias`, `h.a + h.b = 42`. **Limits:** still no cross-class
-    `invokevirtual`/`invokeinterface` (the vtable slot is resolved against the
-    *current* class's vtable, not the receiver's — fine only same-class); cross-class
-    objects get the right TIB but dispatch on them isn't wired; manual dependency
-    order; no `instanceof` (Type still null).
-  - **Still to do on-metal:** cross-class virtual/interface dispatch (resolve the
-    slot against the receiver class's vtable), class hierarchies (inherited vtable
-    slots, real itables, a `Type` for `instanceof`), and dependency auto-ordering.
+    now runs across the boundary: `new Helper()`, `h.a = Helper.scale(11)`,
+    `h.b = bias`, `h.a + h.b = 42`.
+  - **Cross-class virtual dispatch DONE:** the dispatch code was already correct
+    cross-class (it loads the TIB from the *receiver* object, which carries the
+    right class's TIB from `new`); only the vtable **slot** was resolved against the
+    wrong class. A **vtable-slot registry** (`registerClass` records each class's
+    virtual methods as class+name+descriptor→slot; `globalVtableSlot` looks them up)
+    fixes it: `vtableSlotOf` keeps the same-class fast path and routes cross-class /
+    interface refs to the registry (class-qualified for `invokevirtual`; name+
+    descriptor fallback for `invokeinterface`, whose ref class is the unloaded
+    interface). QEMU's `*` now ends in `h.sum()` — a cross-class `invokevirtual`
+    that loads Helper's TIB from the object and calls Helper's slot, `sum()` reading
+    Helper's own fields (`22 + 20 = 42`). **Limits:** manual dependency order; no
+    class hierarchies (inherited/overridden slots need the superclass's file); `Type`
+    still null so no `instanceof` on loaded objects.
+  - **Still to do on-metal:** class hierarchies (inherited vtable slots, real
+    itables, a `Type` for `instanceof`), and dependency auto-ordering.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
