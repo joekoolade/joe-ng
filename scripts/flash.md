@@ -93,9 +93,11 @@ last character: it pinpoints how far the metacircular loader got.
   partition root (not in a subfolder). Confirm `start4.elf`/`fixup4.dat` are
   present. Try a known-good SD card.
 - **Garbled / wrong characters (but steady stream).** The baud is off because the
-  core clock differs from the assumed 250 MHz. Either: remove `core_freq=250` and
-  set `Bcm2711.BAUD_115200 = 541` (500 MHz assumption) and rebuild, or try other
-  divisors. mini-UART baud = `core_clock / (8 * (divisor + 1))`.
+  core clock differs from what the divisor assumes. joe2 now targets a **500 MHz**
+  core (`core_freq=500`, `Bcm2711.BAUD_115200 = 541`) — this is what real Pi 4
+  silicon uses; the old Pi 3 recipe (`core_freq=250` / `270`) ran ~2× too fast and
+  garbled. If 500 MHz still garbles, set `core_freq=250` + `BAUD_115200 = 270` and
+  rebuild, or sweep other divisors. mini-UART baud = `core_clock / (8*(divisor+1))`.
 - **A little output then it stops.** A hang in the boot/EL-drop/UART path — that's
   real-silicon behavior QEMU didn't exercise. The last character printed tells you
   how far it got.

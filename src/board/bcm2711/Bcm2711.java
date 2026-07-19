@@ -45,10 +45,12 @@ public final class Bcm2711
 
     /**
      * Baud divisor for 115200. mini-UART baud = core_clock / (8*(divisor+1)).
-     * Pinned to a 250 MHz core clock via {@code core_freq=250} in config.txt (the
-     * documented mini-UART-stable setup): 250e6/(8*115200) - 1 ≈ 270. QEMU ignores
-     * the divisor. If real-hardware output is garbled, the core clock differs — try
-     * 541 with a 500 MHz core (see scripts/flash.md).
+     * Pinned to a 500 MHz core clock via {@code core_freq=500} in config.txt:
+     * 500e6/(8*115200) - 1 ≈ 541 → 115313 baud (+0.1%). On real Pi 4 silicon the
+     * mini-UART clock tracks the 500 MHz VPU core, not the 250 MHz the Pi 3 recipe
+     * assumes — divisor 270 (250 MHz) came out ~2× too fast and garbled. QEMU
+     * ignores the divisor. If silicon is still garbled, the core clock differs
+     * again — try 270 (250 MHz) or other divisors (see scripts/flash.md).
      */
-    public static final int  BAUD_115200 = 270;
+    public static final int  BAUD_115200 = 541;
 }
