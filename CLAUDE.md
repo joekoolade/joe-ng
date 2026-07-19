@@ -85,13 +85,31 @@ defines the minimum the assembler must encode.
   two-pass bytecode→A64 compiler (branch-target word map; JVM locals x1..x8,
   operand stack x9..x15; **operand-stack depth tracked at branch merges** like the
   writer-side compiler). Covers iconst/bipush/sipush, iload/istore, iadd/isub/imul,
-  iinc, if/if_icmp, goto, ireturn, and **getstatic/putstatic** — the loader parses
-  the class's fields, assigns static slots, allocates a zeroed statics block, and
-  resolves field refs (via all-cp-entry offsets: Fieldref→NameAndType→name). QEMU's
-  `*` now round-trips through a loaded static field.
-  - **Still to do on-metal:** calls (`invokestatic` — needs frames to preserve
-    callee-saved locals + on-demand recursive callee compilation, which fights the
-    loader's ≤10-local ceiling), instance fields (`getfield`/`putfield` — need
+  iinc, if/if_icmp, goto, ireturn, **getstatic/putstatic**, and now
+  **`invokestatic`** — the loader parses the class's fields, assigns static slots,
+  allocates a zeroed statics block, and resolves field refs (via all-cp-entry
+  offsets: Fieldref→NameAndType→name). QEMU's `*` now round-trips through a loaded
+  static field.
+  - **`invokestatic` DONE (same-class):** the loader now compiles a whole *program*
+    — the entry method plus every static method it transitively calls — in three
+    flat passes: **discover** (BFS the call graph, resolving each Methodref→
+    NameAndType to a same-class method's Code, deduped by bytecode address so cycles
+    don't loop), **place** (pass1-size each method and hand it its own heap buffer),
+    **emit** (now every `BL` target address is known). Each call lowers to a
+    fixed-shape sequence: spill x30 + x1..x15 to a 128-byte SP frame, move the top
+    `argc` operand-stack entries into x1.., `BL` the callee buffer, restore, and
+    land `x0` on the stack. The **full spill** (all 15 value regs) keeps the emitted
+    size independent of operand depth, so pass1 can size it, and makes a call whose
+    result is combined with a still-live stack value correct. Args/return follow the
+    loader convention (slot k = x(1+k), result x0). Three flat passes (not on-the-fly
+    recursive compilation) sidestep the shared static compile-state and the
+    writer-side ≤10-local ceiling. QEMU's `*` now flows through `Guest.answer()`
+    → `outer()` → `inner()`×2 (`21+21=42`), a two-deep chain with a below-args call.
+    **Limits:** same-class static calls only (no cross-class/JDK targets, no
+    `invokevirtual`/`special`); no int-slot args beyond the ≤8-local convention;
+    a callee reached from N classes-of-scope is fine but there's no recursion/cycle
+    support beyond dedup, and each distinct method compiles once.
+  - **Still to do on-metal:** instance fields (`getfield`/`putfield` — need
     `new` + the object model on the metal), and `<clinit>`.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).

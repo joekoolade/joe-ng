@@ -29,6 +29,7 @@ public final class Loader
     private static long gStatics;   // this class's statics block
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int gsfCount;
+    private static long gMethodsStart;   // address of the methods_count (for callee lookup)
 
     private static int u1(long p)
     {
@@ -190,6 +191,7 @@ public final class Loader
     private static long findMethod(long base)
     {
         long p = gp;
+        gMethodsStart = p;                              // remember for on-demand callee lookup
         int mcount = u2(p);
         p += 2;
         int m = 0;
@@ -281,18 +283,109 @@ public final class Loader
     private static int[] cdepth;      // operand-stack depth at each branch target (-1 = unset)
     private static int csp;           // operand stack depth
 
+    // A method and its callees form a small program; we assign every reachable
+    // method a buffer before emitting any, so invokestatic's BL targets are known
+    // without compiling nested-and-reentrant (the shared static compile state and
+    // the writer-side 10-local ceiling both make on-the-fly recursion awkward).
+    private static final int MAXM = 64;
+    private static long[] mCode;      // each reachable method's bytecode address
+    private static int[] mLen;        // ... and its length
+    private static long[] mBuf;       // ... and the buffer assigned to it
+    private static int mCount;
+
     private static int compileAndRun(long code, int len)
     {
         return (int) Magic.call0(compile(code, len));
     }
 
-    /** Compile bytecode [code, code+len) to A64 in a fresh heap buffer; return the buffer. */
+    /**
+     * Compile the entry method and every static method it transitively calls,
+     * then return the entry's buffer. Three flat passes — discover (BFS the call
+     * graph), place (size each method and hand it a buffer), emit (now every BL
+     * target address is known) — so no method's compile nests inside another's.
+     * Scope: same-class static callees, no recursion/cycles beyond dedup.
+     */
     private static long compile(long code, int len)
     {
-        long buf = Heap.alloc(256);
-        cbuf = buf;
-        cout = buf;
-        csp = 0;
+        mCode = new long[MAXM];
+        mLen = new int[MAXM];
+        mBuf = new long[MAXM];
+        mCount = 0;
+        addMethod(code, len);
+        int i = 0;
+        while (i < mCount)                              // discover
+        {
+            scanCallees(mCode[i], mLen[i]);
+            i += 1;
+        }
+        i = 0;
+        while (i < mCount)                              // place
+        {
+            sizeMethod(i);
+            i += 1;
+        }
+        i = 0;
+        while (i < mCount)                              // emit
+        {
+            emitMethod(i);
+            i += 1;
+        }
+        Magic.dsb();                                    // publish all buffers (caches are off)
+        Magic.isb();
+        return mBuf[0];
+    }
+
+    /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
+    private static void addMethod(long code, int len)
+    {
+        int i = 0;
+        while (i < mCount)
+        {
+            if (mCode[i] == code)
+            {
+                return;
+            }
+            i += 1;
+        }
+        mCode[mCount] = code;
+        mLen[mCount] = len;
+        mCount += 1;
+    }
+
+    /** Add every same-class static method {@code code} calls to the work set. */
+    private static void scanCallees(long code, int len)
+    {
+        int pc = 0;
+        while (pc < len)
+        {
+            int op = u1(code + pc);
+            if (op == 0xb8)
+            {
+                long c = calleeCodeOf(u2(code + pc + 1));   // sets gcodeLen
+                if (c != 0L)
+                {
+                    addMethod(c, gcodeLen);
+                }
+            }
+            pc += opLen(op);
+        }
+    }
+
+    /** Size method {@code i} (pass1) and allocate its buffer. */
+    private static void sizeMethod(int i)
+    {
+        long code = mCode[i];
+        int len = mLen[i];
+        cbc = new int[len + 1];
+        pass1(code, len);
+        mBuf[i] = Heap.alloc((cbc[len] + 4) * 4);       // calls are big; size to the code
+    }
+
+    /** Emit method {@code i}'s A64 into its assigned buffer (pass2). */
+    private static void emitMethod(int i)
+    {
+        long code = mCode[i];
+        int len = mLen[i];
         cbc = new int[len + 1];
         cdepth = new int[len];
         int j = 0;
@@ -301,7 +394,10 @@ public final class Loader
             cdepth[j] = -1;
             j += 1;
         }
-        pass1(code, len);
+        pass1(code, len);                               // rebuild the branch-target map
+        cbuf = mBuf[i];
+        cout = mBuf[i];
+        csp = 0;
         int pc = 0;
         while (pc < len)
         {
@@ -312,9 +408,21 @@ public final class Loader
             emitOp(code, pc);
             pc += opLen(u1(code + pc));
         }
-        Magic.dsb();                                    // publish the code (caches are off)
-        Magic.isb();
-        return buf;
+    }
+
+    /** Buffer assigned to the method whose bytecode is at {@code code}. */
+    private static long bufOf(long code)
+    {
+        int i = 0;
+        while (i < mCount)
+        {
+            if (mCode[i] == code)
+            {
+                return mBuf[i];
+            }
+            i += 1;
+        }
+        return cbuf;                                     // unreachable when discovery is complete
     }
 
     private static void rec(int tbc)
@@ -334,7 +442,7 @@ public final class Loader
         {
             cbc[pc] = w;
             int op = u1(code + pc);
-            w += wordsFor(op);
+            w += wordsFor(code, pc, op);
             pc += opLen(op);
         }
         cbc[len] = w;
@@ -452,6 +560,193 @@ public final class Loader
             emitAddr16(staticAddr(u2(code + pc + 1)));
             emit(0xB9000000 | (16 << 5) | (9 + csp));
         }
+        else if (op == 0xb8)
+        {
+            emitInvokeStatic(code, pc);    // invokestatic (same class)
+        }
+    }
+
+    /**
+     * invokestatic to a same-class method whose buffer was assigned in the place
+     * pass: emit a fixed-shape call — spill the caller's live registers (x30 +
+     * x1..x15) to a 128-byte SP frame, move the args into x1.., {@code BL} the
+     * callee's buffer, restore, and land its {@code x0} result on the operand
+     * stack. The full spill keeps the emitted size independent of the operand
+     * depth, so pass1 can size it.
+     */
+    private static void emitInvokeStatic(long code, int pc)
+    {
+        int idx = u2(code + pc + 1);
+        emitCallSeq(idx, bufOf(calleeCodeOf(idx)));
+    }
+
+    /** Emit the fixed spill / arg-move / {@code BL} / restore / result sequence. */
+    private static void emitCallSeq(int idx, long calleeBuf)
+    {
+        int descOff = mrefDescOff(idx);
+        int argc = argSlots(descOff);
+        int hasRet = retSlots(descOff);
+        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(strSp(30, 0));                                // frame: [x30@0][x1..x15@8..120]
+        int k = 1;
+        while (k <= 15)
+        {
+            emit(strSp(k, k * 8));
+            k += 1;
+        }
+        int t = 0;
+        while (t < argc)                                   // args: stack top -> x1..x(argc)
+        {
+            emit(mov(1 + t, 9 + csp - argc + t));
+            t += 1;
+        }
+        emitBl(calleeBuf);
+        emit(ldrSp(30, 0));
+        k = 1;
+        while (k <= 15)
+        {
+            emit(ldrSp(k, k * 8));
+            k += 1;
+        }
+        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        if (hasRet == 1)
+        {
+            emit(mov(9 + csp - argc, 0));                   // result replaces the args
+        }
+        csp = csp - argc + hasRet;
+    }
+
+    /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
+    private static long calleeCodeOf(int idx)
+    {
+        int nameOff = mrefNameOff(idx);
+        int descOff = mrefDescOff(idx);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);                      // access, name, descriptor, attrs
+            if (utf8Eq(gcp[u2(p + 2)], nameOff) && utf8Eq(gcp[u2(p + 4)], descOff))
+            {
+                long c = findCode(gbase, p + 8, attrs);
+                if (c != 0L)
+                {
+                    return c;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0L;
+    }
+
+    /** Name Utf8 offset of Methodref {@code idx}. */
+    private static int mrefNameOff(int idx)
+    {
+        int natIdx = u2(gbase + gcp[idx] + 2);          // Methodref -> NameAndType -> name
+        return gcp[u2(gbase + gcp[natIdx])];
+    }
+
+    /** Descriptor Utf8 offset of Methodref {@code idx}. */
+    private static int mrefDescOff(int idx)
+    {
+        int natIdx = u2(gbase + gcp[idx] + 2);          // Methodref -> NameAndType -> descriptor
+        return gcp[u2(gbase + gcp[natIdx] + 2)];
+    }
+
+    /** Argument slot count of a method descriptor at {@code descOff} (long/double = 2). */
+    private static int argSlots(int descOff)
+    {
+        long q = gbase + descOff + 2 + 1;               // skip u2 length and '('
+        int n = 0;
+        while (u1(q) != 0x29)                           // ')'
+        {
+            int c = u1(q);
+            if (c == 0x5b)                              // '[' — array prefix, not itself a slot
+            {
+                q += 1;
+            }
+            else if (c == 0x4c)                        // 'L...;' — object ref, one slot
+            {
+                while (u1(q) != 0x3b)
+                {
+                    q += 1;
+                }
+                q += 1;
+                n += 1;
+            }
+            else if (c == 0x4a || c == 0x44)           // 'J' long / 'D' double — two slots
+            {
+                q += 1;
+                n += 2;
+            }
+            else                                       // I B C S Z F — one slot
+            {
+                q += 1;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    /** Return-slot count of a method descriptor at {@code descOff} (void = 0, else 1). */
+    private static int retSlots(int descOff)
+    {
+        long q = gbase + descOff + 2;
+        while (u1(q) != 0x29)                           // ')'
+        {
+            q += 1;
+        }
+        q += 1;
+        if (u1(q) == 0x56)                              // 'V'
+        {
+            return 0;
+        }
+        return 1;
+    }
+
+    /** Compare two constant-pool Utf8 entries by length + bytes. */
+    private static boolean utf8Eq(int offA, int offB)
+    {
+        if (offA == offB)
+        {
+            return true;
+        }
+        int la = u2(gbase + offA);
+        int lb = u2(gbase + offB);
+        if (la != lb)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < la)
+        {
+            if (u1(gbase + offA + 2 + j) != u1(gbase + offB + 2 + j))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
+    }
+
+    /** STR Xt, [SP, #off] — off a multiple of 8. */
+    private static int strSp(int rt, int off)
+    {
+        return 0xF9000000 | (((off >> 3) & 0xFFF) << 10) | (31 << 5) | rt;
+    }
+    /** LDR Xt, [SP, #off] — off a multiple of 8. */
+    private static int ldrSp(int rt, int off)
+    {
+        return 0xF9400000 | (((off >> 3) & 0xFFF) << 10) | (31 << 5) | rt;
+    }
+    /** BL to an absolute code address (relative to the current emit cursor). */
+    private static void emitBl(long target)
+    {
+        int off = (int) ((target - cout) >> 2);
+        emit(0x94000000 | (off & 0x03FFFFFF));
     }
 
     /** Load a &lt;4 GiB address into x16 (MOVZ low16 + MOVK bits16..31). */
@@ -523,8 +818,13 @@ public final class Loader
         return 13;              // le
     }
 
-    private static int wordsFor(int op)
+    private static int wordsFor(long code, int pc, int op)
     {
+        if (op == 0xb8)
+        {
+            int descOff = mrefDescOff(u2(code + pc + 1));   // invokestatic call sequence:
+            return 35 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + bl + result
+        }
         if (op == 0xb2 || op == 0xb3)
         {
             return 3;    // get/putstatic: movz + movk + ldrsw/strw
@@ -547,9 +847,9 @@ public final class Loader
             return 2;    // bipush/iload/istore
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
-                || op == 0xb2 || op == 0xb3)
+                || op == 0xb2 || op == 0xb3 || op == 0xb8)
         {
-            return 3;    // ... / get/putstatic
+            return 3;    // ... / get/putstatic / invokestatic
         }
         return 1;
     }
