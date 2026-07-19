@@ -105,6 +105,9 @@ public final class A64Test {
         T.eqWord("ASR x0,x1,x2", 0x9AC22820, A64.asrv(0, 1, 2));
         T.eqWord("CMP x1,x2",    0xEB02003F, A64.cmpReg(1, 2));
         T.eqWord("CMP x0,#0",    0xF100001F, A64.cmpImm(0, 0));
+        T.eqWord("SXTB x0,w0",   0x93401C00, A64.sxtb(0, 0));
+        T.eqWord("SXTH x0,w0",   0x93403C00, A64.sxth(0, 0));
+        T.eqWord("UXTH w0,w0",   0x53003C00, A64.uxth(0, 0));
         T.eqWord("CSET x0,EQ",   0x9A9F17E0, A64.cset(0, A64.EQ));
         T.eqWord("CSINV x0,x0,xzr,GE", 0xDA9FA000, A64.csinv(0, 0, 31, A64.GE));
 

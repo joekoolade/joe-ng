@@ -8,6 +8,12 @@ package vm;
  */
 public class Guest {
     public static int answer() {
-        return 0x5A;   // 'Z'
+        int r = 0;
+        int i = 0;
+        while (i < 6) {          // computed at runtime (no constant folding): 6 * 7
+            r = r + 7;
+            i = i + 1;
+        }
+        return r;                // 42 = 0x2A = '*'
     }
 }

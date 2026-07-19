@@ -216,6 +216,7 @@ public final class BaselineCompiler {
             case 0x60, 0x61 -> { binop(cb, Bin.ADD); return 1; }
             case 0x64, 0x65 -> { binop(cb, Bin.SUB); return 1; }
             case 0x68, 0x69 -> { binop(cb, Bin.MUL); return 1; }
+            case 0x74, 0x75 -> { int r = OP_BASE + sp - 1; cb.emit(A64.subReg(r, A64.XZR, r)); return 1; } // ineg/lneg
             case 0x78, 0x79 -> { binop(cb, Bin.SHL); return 1; }        // ishl/lshl
             case 0x7A, 0x7B -> { binop(cb, Bin.ASR); return 1; }        // ishr/lshr
             case 0x7C, 0x7D -> { binop(cb, Bin.LSR); return 1; }        // iushr/lushr
@@ -224,7 +225,10 @@ public final class BaselineCompiler {
             case 0x82, 0x83 -> { binop(cb, Bin.XOR); return 1; }       // ixor/lxor
             case 0x94 -> { lcmp(cb); return 1; }                        // lcmp -> -1/0/1
 
-            case 0x85, 0x88, 0x91, 0x92 -> { return 1; }               // i2l/l2i/i2b/i2c: no-op
+            case 0x85, 0x88 -> { return 1; }                           // i2l/l2i: no-op (values fit 64-bit)
+            case 0x91 -> { int r = OP_BASE + sp - 1; cb.emit(A64.sxtb(r, r)); return 1; }  // i2b
+            case 0x92 -> { int r = OP_BASE + sp - 1; cb.emit(A64.uxth(r, r)); return 1; }  // i2c
+            case 0x93 -> { int r = OP_BASE + sp - 1; cb.emit(A64.sxth(r, r)); return 1; }  // i2s
 
             case 0x99 -> { branchZero(cb, code, pos, true);  return 3; }
             case 0x9A -> { branchZero(cb, code, pos, false); return 3; }

@@ -262,6 +262,13 @@ public final class A64 {
     public static int asrv(int rd, int rn, int rm) { return 0x9AC0_2800 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
+    /** {@code SXTB Xd, Wn} — sign-extend byte (i2b). */
+    public static int sxtb(int rd, int rn) { return 0x9340_1C00 | (reg(rn) << 5) | reg(rd); }
+    /** {@code SXTH Xd, Wn} — sign-extend halfword (i2s). */
+    public static int sxth(int rd, int rn) { return 0x9340_3C00 | (reg(rn) << 5) | reg(rd); }
+    /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
+    public static int uxth(int rd, int rn) { return 0x5300_3C00 | (reg(rn) << 5) | reg(rd); }
+
     /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
     public static int cset(int rd, int cond) {
         return 0x9A80_0400 | (31 << 16) | ((cond ^ 1) << 12) | (31 << 5) | reg(rd);

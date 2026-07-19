@@ -115,24 +115,88 @@ public final class Loader {
         return got == expected;
     }
 
-    /** Compile {@code return &lt;const&gt;} bytecode to A64, publish it, and run it. */
+    // ----- on-metal bytecode -> A64 compiler (JVM local slot k -> x(1+k), operand
+    //       stack -> x9..x15, result in x0). Two passes so branches can resolve. --
+    private static long cbuf, cout;   // code buffer base / emit cursor
+    private static int[] cbc;         // bytecode offset -> word index
+    private static int csp;           // operand stack depth
+
     private static int compileAndRun(long code, int len) {
-        long buf = Heap.alloc(64);                      // 8-aligned code buffer
-        long out = buf;
+        long buf = Heap.alloc(256);
+        cbuf = buf; cout = buf; csp = 0;
+        cbc = new int[len + 1];
+        pass1(code, len);
         int pc = 0;
-        while (pc < len) {
-            int op = u1(code + pc);
-            if (op == 0x10) { Magic.store32(out, movzX0(u1(code + pc + 1))); out += 4; pc += 2; }        // bipush
-            else if (op == 0x11) { Magic.store32(out, movzX0(u2(code + pc + 1))); out += 4; pc += 3; }   // sipush
-            else if (op >= 0x03 && op <= 0x08) { Magic.store32(out, movzX0(op - 0x03)); out += 4; pc += 1; } // iconst
-            else if (op == 0xAC) { Magic.store32(out, 0xD65F03C0); out += 4; pc += 1; }                  // ireturn -> ret
-            else { pc += 1; }
-        }
+        while (pc < len) { emitOp(code, pc); pc += opLen(u1(code + pc)); }
         Magic.dsb();                                    // publish the code (caches are off)
         Magic.isb();
         return (int) Magic.call0(buf);
     }
 
-    /** {@code MOVZ X0, #imm16} — the value a trivial answer() returns. */
-    private static int movzX0(int imm) { return 0xD2800000 | ((imm & 0xFFFF) << 5); }
+    /** First pass: map each bytecode offset to its A64 word index (for branch targets). */
+    private static void pass1(long code, int len) {
+        int pc = 0, w = 0;
+        while (pc < len) { cbc[pc] = w; int op = u1(code + pc); w += wordsFor(op); pc += opLen(op); }
+        cbc[len] = w;
+    }
+
+    private static void emit(int word) { Magic.store32(cout, word); cout += 4; }
+    private static int curWord() { return (int) ((cout - cbuf) >> 2); }
+    private static int target(long code, int pc) { return pc + (short) ((u1(code + pc + 1) << 8) | u1(code + pc + 2)); }
+    private static void emitBc(int cond, int tbc) { emit(0x54000000 | (((cbc[tbc] - curWord()) & 0x7FFFF) << 5) | cond); }
+
+    private static void emitOp(long code, int pc) {
+        int op = u1(code + pc);
+        if (op >= 0x03 && op <= 0x08) { emit(movz(9 + csp, op - 0x03)); csp += 1; }                 // iconst_0..5
+        else if (op == 0x10) { emit(movz(9 + csp, u1(code + pc + 1))); csp += 1; }                  // bipush (>=0)
+        else if (op == 0x11) { emit(movz(9 + csp, u2(code + pc + 1))); csp += 1; }                  // sipush
+        else if (op >= 0x1a && op <= 0x1d) { emit(mov(9 + csp, 1 + (op - 0x1a))); csp += 1; }       // iload_0..3
+        else if (op == 0x15) { emit(mov(9 + csp, 1 + u1(code + pc + 1))); csp += 1; }               // iload
+        else if (op >= 0x3b && op <= 0x3e) { csp -= 1; emit(mov(1 + (op - 0x3b), 9 + csp)); }       // istore_0..3
+        else if (op == 0x36) { csp -= 1; emit(mov(1 + u1(code + pc + 1), 9 + csp)); }               // istore
+        else if (op == 0x60) { csp -= 1; emit(dp(0x8B000000, 9 + csp - 1, 9 + csp - 1, 9 + csp)); } // iadd
+        else if (op == 0x64) { csp -= 1; emit(dp(0xCB000000, 9 + csp - 1, 9 + csp - 1, 9 + csp)); } // isub
+        else if (op == 0x68) { csp -= 1; emit(dp(0x9B007C00, 9 + csp - 1, 9 + csp - 1, 9 + csp)); } // imul
+        else if (op == 0x84) { emitIinc(code, pc); }                                                // iinc
+        else if (op >= 0x99 && op <= 0x9e) { csp -= 1; emit(0xF100001F | ((9 + csp) << 5)); emitBc(ifCond(op), target(code, pc)); }
+        else if (op >= 0x9f && op <= 0xa4) { csp -= 2; emit(0xEB00001F | ((9 + csp + 1) << 16) | ((9 + csp) << 5)); emitBc(icmpCond(op), target(code, pc)); }
+        else if (op == 0xa7) { emit(0x14000000 | (((cbc[target(code, pc)] - curWord()) & 0x3FFFFFF))); }  // goto
+        else if (op == 0xac) { csp -= 1; emit(mov(0, 9 + csp)); emit(0xD65F03C0); }                 // ireturn
+    }
+
+    private static void emitIinc(long code, int pc) {
+        int rd = 1 + u1(code + pc + 1);
+        int d = (byte) u1(code + pc + 2);
+        if (d >= 0) emit(0x91000000 | ((d & 0xFFF) << 10) | (rd << 5) | rd);
+        else        emit(0xD1000000 | (((-d) & 0xFFF) << 10) | (rd << 5) | rd);
+    }
+
+    // encodings (pure int math — JDK-free)
+    private static int movz(int rd, int imm) { return 0xD2800000 | ((imm & 0xFFFF) << 5) | rd; }
+    private static int mov(int rd, int rm)   { return 0xAA0003E0 | (rm << 16) | rd; }
+    private static int dp(int base, int rd, int rn, int rm) { return base | (rm << 16) | (rn << 5) | rd; }
+
+    // condition codes (EQ=0 NE=1 GE=10 LT=11 GT=12 LE=13)
+    private static int ifCond(int op)   { return code6(op - 0x99); }
+    private static int icmpCond(int op) { return code6(op - 0x9f); }
+    private static int code6(int k) {
+        if (k == 0) return 0;   // eq
+        if (k == 1) return 1;   // ne
+        if (k == 2) return 11;  // lt
+        if (k == 3) return 10;  // ge
+        if (k == 4) return 12;  // gt
+        return 13;              // le
+    }
+
+    private static int wordsFor(int op) {
+        if (op == 0xac) return 2;                              // ireturn: mov x0 + ret
+        if ((op >= 0x99 && op <= 0x9e) || (op >= 0x9f && op <= 0xa4)) return 2;  // if / if_icmp: cmp + b.cond
+        return 1;
+    }
+
+    private static int opLen(int op) {
+        if (op == 0x10 || op == 0x15 || op == 0x36) return 2;                     // bipush/iload/istore
+        if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7) return 3;
+        return 1;
+    }
 }
