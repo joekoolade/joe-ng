@@ -21,18 +21,44 @@ public final class Loader {
     private static long gp;         // parse cursor
     private static int[] gutf8;     // byte offset of each Utf8 constant-pool entry
     private static int gcodeLen;    // length of the located method's bytecode
+    private static long gnameP, gdescP;   // packed name/descriptor being searched for
+    private static int gnameLen, gdescLen;
 
     private static int u1(long p) { return Magic.load8(p) & 0xFF; }
     private static int u2(long p) { return (u1(p) << 8) | u1(p + 1); }
     private static int u4(long p) { return (u2(p) << 16) | u2(p + 2); }
 
-    /** Parse the embedded Guest class, compile+run {@code answer()}, return its result. */
-    static int loadGuest() {
-        long base = VM.guestBytes;
-        parseConstPool(base);
-        long code = findAnswer(base);
+    private static void seek(long nameP, int nameLen, long descP, int descLen) {
+        gnameP = nameP; gnameLen = nameLen; gdescP = descP; gdescLen = descLen;
+    }
+
+    /** Compile+run a no-arg static method matching the current seek key in {@code bytes}. */
+    private static int load0(long bytes) {
+        parseConstPool(bytes);
+        long code = findMethod(bytes);
         if (code == 0L) return 0;
         return compileAndRun(code, gcodeLen);
+    }
+
+    /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
+    private static long load2(long bytes, long a, long b) {
+        parseConstPool(bytes);
+        long code = findMethod(bytes);
+        if (code == 0L) return 0L;
+        long buf = compile(code, gcodeLen);
+        return Magic.call2(buf, a, b);
+    }
+
+    /** M4: our own Guest class — compile+run answer() (returns 42 = '*'). */
+    static int loadGuest() {
+        seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
+        return load0(VM.guestBytes);
+    }
+
+    /** Load java.lang.Math from java.base and run Math.max(0x4D, 0x21) -> 'M'. */
+    static int loadMath() {
+        seek(0x6d6178L, 3, 0x2849492949L, 5);          // "max" "(II)I"
+        return (int) load2(VM.mathBytes, 0x4DL, 0x21L);
     }
 
     /** Walk the constant pool, recording Utf8 offsets; leave {@code gp} just past it. */
@@ -53,8 +79,8 @@ public final class Loader {
         gp = p;
     }
 
-    /** From {@code gp}, skip to the methods and return the address of answer()'s bytecode (0 if none). */
-    private static long findAnswer(long base) {
+    /** From {@code gp}, skip to the methods and return the bytecode address of the sought method. */
+    private static long findMethod(long base) {
         long p = gp;
         p += 6;                                         // access_flags, this_class, super_class
         p += 2 + u2(p) * 2;                             // interfaces
@@ -63,9 +89,12 @@ public final class Loader {
         int m = 0;
         while (m < mcount) {
             p += 2;                                     // access_flags
-            int nameIdx = u2(p); p += 4;               // name_index, descriptor_index
+            int nameIdx = u2(p);
+            int descIdx = u2(p + 2);
+            p += 4;
             int attrs = u2(p); p += 2;
-            if (isName(base, gutf8[nameIdx], 0x616e73776572L, 6)) {   // "answer"
+            if (isName(base, gutf8[nameIdx], gnameP, gnameLen)
+                    && isName(base, gutf8[descIdx], gdescP, gdescLen)) {
                 long code = findCode(base, p, attrs);
                 if (code != 0L) return code;
             } else {
@@ -119,19 +148,32 @@ public final class Loader {
     //       stack -> x9..x15, result in x0). Two passes so branches can resolve. --
     private static long cbuf, cout;   // code buffer base / emit cursor
     private static int[] cbc;         // bytecode offset -> word index
+    private static int[] cdepth;      // operand-stack depth at each branch target (-1 = unset)
     private static int csp;           // operand stack depth
 
-    private static int compileAndRun(long code, int len) {
+    private static int compileAndRun(long code, int len) { return (int) Magic.call0(compile(code, len)); }
+
+    /** Compile bytecode [code, code+len) to A64 in a fresh heap buffer; return the buffer. */
+    private static long compile(long code, int len) {
         long buf = Heap.alloc(256);
         cbuf = buf; cout = buf; csp = 0;
         cbc = new int[len + 1];
+        cdepth = new int[len];
+        int j = 0;
+        while (j < len) { cdepth[j] = -1; j += 1; }
         pass1(code, len);
         int pc = 0;
-        while (pc < len) { emitOp(code, pc); pc += opLen(u1(code + pc)); }
+        while (pc < len) {
+            if (cdepth[pc] >= 0) csp = cdepth[pc];      // merge point: adopt the branch-edge depth
+            emitOp(code, pc);
+            pc += opLen(u1(code + pc));
+        }
         Magic.dsb();                                    // publish the code (caches are off)
         Magic.isb();
-        return (int) Magic.call0(buf);
+        return buf;
     }
+
+    private static void rec(int tbc) { if (cdepth[tbc] < 0) cdepth[tbc] = csp; }
 
     /** First pass: map each bytecode offset to its A64 word index (for branch targets). */
     private static void pass1(long code, int len) {
@@ -158,9 +200,9 @@ public final class Loader {
         else if (op == 0x64) { csp -= 1; emit(dp(0xCB000000, 9 + csp - 1, 9 + csp - 1, 9 + csp)); } // isub
         else if (op == 0x68) { csp -= 1; emit(dp(0x9B007C00, 9 + csp - 1, 9 + csp - 1, 9 + csp)); } // imul
         else if (op == 0x84) { emitIinc(code, pc); }                                                // iinc
-        else if (op >= 0x99 && op <= 0x9e) { csp -= 1; emit(0xF100001F | ((9 + csp) << 5)); emitBc(ifCond(op), target(code, pc)); }
-        else if (op >= 0x9f && op <= 0xa4) { csp -= 2; emit(0xEB00001F | ((9 + csp + 1) << 16) | ((9 + csp) << 5)); emitBc(icmpCond(op), target(code, pc)); }
-        else if (op == 0xa7) { emit(0x14000000 | (((cbc[target(code, pc)] - curWord()) & 0x3FFFFFF))); }  // goto
+        else if (op >= 0x99 && op <= 0x9e) { csp -= 1; rec(target(code, pc)); emit(0xF100001F | ((9 + csp) << 5)); emitBc(ifCond(op), target(code, pc)); }
+        else if (op >= 0x9f && op <= 0xa4) { csp -= 2; rec(target(code, pc)); emit(0xEB00001F | ((9 + csp + 1) << 16) | ((9 + csp) << 5)); emitBc(icmpCond(op), target(code, pc)); }
+        else if (op == 0xa7) { rec(target(code, pc)); emit(0x14000000 | (((cbc[target(code, pc)] - curWord()) & 0x3FFFFFF))); }  // goto
         else if (op == 0xac) { csp -= 1; emit(mov(0, 9 + csp)); emit(0xD65F03C0); }                 // ireturn
     }
 

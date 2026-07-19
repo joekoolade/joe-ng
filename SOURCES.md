@@ -51,8 +51,11 @@ logs what informed each piece so encodings and boot facts are auditable.
   athrow + try/catch
   with cross-method unwinding (JVMS §2.10/§4.7.3 exception table). The runtime
   on-metal loader (`vm/Loader`) parses classfiles per JVMS §4 and JIT-compiles
-  `return <const>` methods; new code is published with DSB+ISB (caches off, so no
-  DC/IC maintenance — JVMS-independent, ARM ARM cache-coherency rules). The unwinder
+  methods with locals/arithmetic/control-flow (matching methods by name+descriptor;
+  depth-tracked branch merges). It runs a real `java.base` method
+  (`java.lang.Math.max`) extracted from the seed JDK's module image. New code is
+  published with DSB+ISB (caches off, so no DC/IC maintenance — ARM ARM cache
+  rules). The unwinder
   walks frames using writer-built handler/frame tables (machine-PC ranges);
   callee-saved locals are not restored during the walk (our simplification).
   Static initializers (`<clinit>`) run eagerly at boot via

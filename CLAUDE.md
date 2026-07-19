@@ -63,7 +63,22 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **Phase: M4 reached (minimal) — runtime class loading on the metal.**
+- **Phase: M4 done + M5 started + loading java.base classes on the metal.**
+- **Loading a real JDK class on bare metal.** `BuildRuntimeImage` extracts
+  `java/lang/Math.class` from the seed JDK's `java.base` (via
+  `getResourceAsStream`, since it lives in `lib/modules`) and embeds the raw
+  bytes. On the metal, `vm/Loader` parses it, finds `max(int,int)` by name+
+  descriptor, JIT-compiles it, and runs it: QEMU prints `M` from
+  `Math.max(0x4D,0x21)`. Works because `Math.max` is a pure leaf (iload/if_icmp/
+  goto/ireturn) — no calls, fields, `<clinit>`, or native methods. Args are
+  passed via `Magic.call2` (loader convention: slot0=x1, slot1=x2).
+- **M5 (self-hosting) — first step.** `vm/Loader`'s mini-JIT is now a real
+  two-pass bytecode→A64 compiler (branch-target word map; JVM locals x1..x8,
+  operand stack x9..x15; **operand-stack depth tracked at branch merges** like the
+  writer-side compiler). Covers iconst/bipush/sipush, iload/istore, iadd/isub/imul,
+  iinc, if/if_icmp, goto, ireturn. Still a SEPARATE compiler from the writer-side
+  one — true self-hosting needs a single JDK-free ClassFile+BaselineCompiler used
+  in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
   `vm/Guest.class` as raw bytes only (never compiles it); at runtime the on-metal
   `vm/Loader` (compiled into the image by our own baseline compiler) parses the

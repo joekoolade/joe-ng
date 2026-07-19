@@ -29,6 +29,10 @@ public final class Magic {
      *  Used by the runtime class loader to run a method it just JIT-compiled. */
     public static long call0(long addr) { throw intrinsic(); }
 
+    /** Call JIT'd code at {@code addr} with two int args (in the loader's
+     *  local-slot convention: slot0=x1, slot1=x2); return x0. */
+    public static long call2(long addr, long a, long b) { throw intrinsic(); }
+
     /**
      * Run a garbage collection. Lowered to a sequence that spills the callee-saved
      * registers (so live references held there become scannable on the stack) and

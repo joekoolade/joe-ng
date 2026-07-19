@@ -186,6 +186,7 @@ public final class VM {
 
     // ----- runtime class loading (M4) --------------------------------------
     static long guestBytes, guestLen;   // raw Guest.class blob, filled by the writer
+    static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi) {
@@ -272,7 +273,8 @@ public final class VM {
         Uart.putc(0x0A);
 
         // M4: parse+compile+run a class embedded only as raw bytes, on the metal
-        Uart.putc(Loader.loadGuest());                     // 'Z' from Guest.answer(), JIT'd at runtime
+        Uart.putc(Loader.loadGuest());                     // '*' from Guest.answer(), JIT'd at runtime
+        Uart.putc(Loader.loadMath());                      // 'M' from java.base java.lang.Math.max(0x4D,0x21)
         Uart.putc(0x0A);
     }
 

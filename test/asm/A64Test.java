@@ -79,6 +79,7 @@ public final class A64Test {
         T.eqWord("STR  w0,[x1]",   0xB9000020, A64.strw(0, 1, 0));
         T.eqWord("STR  w1,[x0]",   0xB9000001, A64.strw(1, 0, 0));
         T.eqWord("LDR  w0,[x1]",   0xB9400020, A64.ldrw(0, 1, 0));
+        T.eqWord("LDRSW x0,[x1]",  0xB9800020, A64.ldrsw(0, 1, 0));
         T.eqWord("STR  x0,[x1]",   0xF9000020, A64.strx(0, 1, 0));
         T.eqWord("LDR  x0,[x1]",   0xF9400020, A64.ldrx(0, 1, 0));
         T.eqWord("STRB w0,[x1]",   0x39000020, A64.strb(0, 1, 0));

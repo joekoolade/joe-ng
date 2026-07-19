@@ -204,6 +204,11 @@ public final class A64 {
     public static int strw(int rt, int rn, int off) { return ldst(2, 0, rt, rn, off); }
     /** {@code LDR Wt, [Xn, #off]} — load 32-bit (zero-extended). */
     public static int ldrw(int rt, int rn, int off) { return ldst(2, 1, rt, rn, off); }
+    /** {@code LDRSW Xt, [Xn, #off]} — load 32-bit sign-extended to 64 (for signed int arrays). */
+    public static int ldrsw(int rt, int rn, int off) {
+        if ((off & 3) != 0) throw new IllegalArgumentException("offset not word-aligned: " + off);
+        return 0xB980_0000 | ((off >> 2) << 10) | (reg(rn) << 5) | reg(rt);
+    }
     /** {@code STR Xt, [Xn, #off]} — store 64-bit. */
     public static int strx(int rt, int rn, int off) { return ldst(3, 0, rt, rn, off); }
     /** {@code LDR Xt, [Xn, #off]} — load 64-bit. */

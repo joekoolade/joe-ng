@@ -203,10 +203,10 @@ public final class BaselineCompiler {
             case 0x84 -> { iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]); return 3; }
 
             // ---- array element load/store (base + index<<scale) ----
-            case 0x33 -> { arrayLoad(cb, 0, false); return 1; }   // baload  (byte)
-            case 0x2E -> { arrayLoad(cb, 2, true);  return 1; }   // iaload  (int)
-            case 0x2F -> { arrayLoad(cb, 3, false); return 1; }   // laload  (long)
-            case 0x32 -> { arrayLoad(cb, 3, false); return 1; }   // aaload  (ref)
+            case 0x33 -> { arrayLoad(cb, 0); return 1; }          // baload  (byte, zero-ext)
+            case 0x2E -> { arrayLoad(cb, 2); return 1; }          // iaload  (int, sign-ext)
+            case 0x2F -> { arrayLoad(cb, 3); return 1; }          // laload  (long)
+            case 0x32 -> { arrayLoad(cb, 3); return 1; }          // aaload  (ref)
             case 0x54 -> { arrayStore(cb, 0); return 1; }         // bastore
             case 0x4F -> { arrayStore(cb, 2); return 1; }         // iastore
             case 0x50 -> { arrayStore(cb, 3); return 1; }         // lastore
@@ -560,11 +560,13 @@ public final class BaselineCompiler {
         cb.emit(A64.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
     }
 
-    private void arrayLoad(CodeBuffer cb, int scale, boolean word32) {
+    private void arrayLoad(CodeBuffer cb, int scale) {
         int index = popReg(), arr = popReg(), r = pushReg();     // r == arr's register
         cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
-        cb.emit(scale == 0 ? A64.ldrb(r, arr, 0) : word32 ? A64.ldrw(r, arr, 0) : A64.ldrx(r, arr, 0));
+        cb.emit(scale == 0 ? A64.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
+                : scale == 2 ? A64.ldrsw(r, arr, 0)              // int (sign-ext)
+                : A64.ldrx(r, arr, 0));                          // long / ref
     }
 
     private void arrayStore(CodeBuffer cb, int scale) {
@@ -607,6 +609,14 @@ public final class BaselineCompiler {
             case "dsb()V"  -> cb.emit(A64.dsb());
             case "gc()V"   -> lowerGc(cb);
             case "call0(J)J" -> { int addr = popReg(); cb.emit(A64.blr(addr)); cb.emit(A64.movReg(pushReg(), 0)); }
+            case "call2(JJJ)J" -> {                              // addr, a->x1, b->x2, blr, result x0
+                int b = popReg(), a = popReg(), addr = popReg();
+                cb.emit(A64.movReg(16, addr));
+                cb.emit(A64.movReg(1, a));
+                cb.emit(A64.movReg(2, b));
+                cb.emit(A64.blr(16));
+                cb.emit(A64.movReg(pushReg(), 0));
+            }
             case "eret()V" -> cb.emit(A64.eret());
             case "dropToEL1()V" -> lowerDropToEL1(cb);
 
@@ -682,7 +692,7 @@ public final class BaselineCompiler {
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
-                if (ref.name().equals("gc") || ref.name().equals("call0")) return true; // these emit BL/BLR
+                if (ref.name().equals("gc") || ref.name().equals("call0") || ref.name().equals("call2")) return true; // emit BL/BLR
             }
             if (op == 0xB7) {                                    // invokespecial
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
