@@ -43,15 +43,31 @@ public final class CompilerTest {
         regWant.addAll(A64.loadImm64(9, 0x80000000L));   // value -> x9
         regWant.add(A64.msr(A64.HCR_EL2, 9));            // MSR HCR_EL2, x9
         regWant.add(A64.ret());
-        expect("writeReg()", toArray(regWant), compile(fx, "writeReg"));
+        expect("writeReg()", toArray(regWant), compile(fx, "writeReg", "()V"));
+
+        // ---- calling convention: frame prologue/epilogue + return value ----
+        List<Integer> addWant = new ArrayList<>();
+        addWant.add(A64.subImm(31, 31, 16));             // sub sp,sp,#16
+        addWant.add(A64.strx(19, 31, 0));                // str x19,[sp]  (save callee-saved local)
+        addWant.add(A64.movReg(19, 0));                  // mov x19,x0    (param x -> local slot0)
+        addWant.add(A64.movReg(9, 19));                  // iload_0
+        addWant.addAll(A64.loadImm64(10, 1));            // iconst_1
+        addWant.add(A64.addReg(9, 9, 10));               // iadd
+        addWant.add(A64.movReg(0, 9));                   // ireturn: result -> x0
+        addWant.add(A64.ldrx(19, 31, 0));                // restore x19
+        addWant.add(A64.addImm(31, 31, 16));             // add sp,sp,#16
+        addWant.add(A64.ret());
+        expect("addOne(int)", toArray(addWant), compile(fx, "addOne", "(I)I"));
 
         System.out.printf("%n%s%n", failures == 0 ? "all compiler checks passed" : failures + " FAILURES");
         if (failures > 0) System.exit(1);
     }
 
-    private static int[] compile(ClassFile cf, String method) {
+    private static int[] compile(ClassFile cf, String method) { return compile(cf, method, "()V"); }
+
+    private static int[] compile(ClassFile cf, String method, String desc) {
         CodeBuffer cb = new CodeBuffer();
-        new BaselineCompiler(cf).compile(cf.method(method, "()V"), cb);
+        new BaselineCompiler(cf).compile(cf.method(method, desc), cb);
         return cb.toWords();
     }
 

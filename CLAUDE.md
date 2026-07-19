@@ -63,7 +63,7 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **Phase: M1 COMPLETE — first light from compiled Java. Next: M2 object model.**
+- **Phase: M2 in progress — multi-class runtime with real cross-class calls.**
 - **M0 (done):** all-Java pipeline end to end. `asm/A64` encoder + `asm/CodeBuffer`
   + `writer/BootImageWriter` emit a raw, header-less `kernel8.img`;
   `writer/BuildSpinImage` = the 8-byte `wfe; b .-4` park loop at `0x80000`.
@@ -98,10 +98,27 @@ defines the minimum the assembler must encode.
   elements; TIB = `[0]`Type + `[1..]`vtable. All offsets centralized here so
   header growth is a one-file change. Pinned by `test/objectmodel/ObjectModelTest`.
   Full rationale in PLAN.md "Decided".
-- **Next: M2 (object model + multi-class).** Build `Type`/TIB construction in the
-  writer, then grow the compiler to real method calls (BL + frames), field
-  access (getfield/putfield), and arrays against `ObjectModel`. Retire the
-  `message()` bridge once char arrays exist.
+- **M2 so far (multi-class + real calls DONE):** the boot is now split across
+  classes (`vm.VM.boot` → `board.bcm2711.Uart.init`/`puts` → `Uart.putc`) and
+  compiled as a multi-method program that **still prints "hello from joe2"** under
+  QEMU. New machinery:
+  - `compiler/BaselineCompiler` calling convention: args x0..x7, return x0, locals
+    in callee-saved x19.., per-method prologue/epilogue (save x30 if non-leaf,
+    save+restore used locals, move params in). Entry method (`boot`) is frameless
+    and sets its own SP. `ireturn/lreturn/areturn` return in x0. Real static calls
+    lower to `BL` placeholders + recorded call sites; `Magic.*` still inlines.
+  - `writer/ImageBuilder`: mini class loader + layout + relocation. From an entry
+    key it BFS-discovers reachable methods, sizes them (sizes are
+    layout-independent), assigns bases (entry at 0x80000), recompiles at final
+    bases, concatenates, and patches every `BL` to its callee's entry.
+  - `writer/BuildRuntimeImage` is now the default image `build.sh` emits.
+  - Tests: `addOne(int)` pins the frame/return sequence; `qemu-check.sh` is the
+    functional gate. (Old single-method `BuildCompiledBootImage` removed.)
+- **M2 remaining:** instances — `new` + object header/TIB construction in the
+  writer, `getfield`/`putfield`, arrays (`newarray`/`aload`/`astore`/
+  `arraylength`), `invokevirtual` via the TIB vtable, and static fields
+  (`getstatic`/`putstatic`). Retire the `message()` bridge once char arrays exist.
+  (Note: `new`/heap allocation is where M2 meets M3 — decide split as we go.)
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

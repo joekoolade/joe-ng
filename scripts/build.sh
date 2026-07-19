@@ -26,8 +26,8 @@ java -cp "$OUT" objectmodel.ObjectModelTest
 echo "== compiler tests (bytecode -> A64) =="
 java -cp "$OUT" compiler.CompilerTest "$OUT"
 
-echo "== emitting kernel8.img (M1c: boot compiled from vm.VM.boot bytecode) =="
-java -cp "$OUT" writer.BuildCompiledBootImage "$OUT" "$IMG" | tail -1
+echo "== emitting kernel8.img (M2: multi-class runtime compiled from bytecode) =="
+java -cp "$OUT" writer.BuildRuntimeImage "$OUT" "$IMG"
 # (writer.BuildBootImage still emits the equivalent hand-assembled first-light image)
 
 echo "== image =="

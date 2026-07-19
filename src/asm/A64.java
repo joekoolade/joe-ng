@@ -292,6 +292,9 @@ public final class A64 {
         return imm & ((1 << bits) - 1);
     }
 
+    /** Round up to a 16-byte boundary (AArch64 stack-pointer alignment). */
+    public static int align16(int n) { return (n + 15) & ~15; }
+
     // ----- helpers ----------------------------------------------------------
     private static int reg(int r) {
         if (r < 0 || r > 31) throw new IllegalArgumentException("bad register x" + r);

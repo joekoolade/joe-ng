@@ -15,4 +15,7 @@ public final class Fixtures {
 
     /** One system-register write with a constant value. */
     public static void writeReg() { Magic.writeHCR_EL2(0x80000000L); }
+
+    /** A leaf method with a parameter and a return value — exercises the frame. */
+    public static int addOne(int x) { return x + 1; }
 }
