@@ -127,8 +127,17 @@ defines the minimum the assembler must encode.
     virtual dispatch on loaded objects (null TIB); fields are zero only on a fresh
     bump (`Heap.alloc` doesn't clear reused blocks); constructors take no args beyond
     `this` (no real `super(...)`/field-init args).
-  - **Still to do on-metal:** `<clinit>`, `invokevirtual`/interfaces on loaded
-    objects (needs an on-metal TIB), and cross-class loading.
+  - **`<clinit>` DONE (on-metal):** after `parseFields` (statics block exists) and
+    before the entry method, the loader seeks `<clinit>()V`; if present it compiles
+    and runs it (`Magic.call0`) so the initializer's `putstatic`s land before first
+    use. It's just another method the loader compiles — no special casing. QEMU's
+    `*` now depends on `Guest.bias` (a non-final static set only by `<clinit>`); an
+    un-run initializer would leave `bias=0` and yield `20` instead of `42`. Only the
+    loaded class's own `<clinit>` runs (Math keeps its no-`<clinit>` path — its
+    initializer uses doubles/native, out of scope). No eager multi-class init order
+    or per-class guards yet (single loaded class).
+  - **Still to do on-metal:** `invokevirtual`/interfaces on loaded objects (needs an
+    on-metal TIB), and cross-class loading.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds

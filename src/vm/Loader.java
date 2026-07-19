@@ -55,17 +55,21 @@ public final class Loader
         gdescLen = descLen;
     }
 
-    /** Compile+run a no-arg static method matching the current seek key in {@code bytes}. */
-    private static int load0(long bytes)
+    /**
+     * Run the class's static initializer if it has one. Called after
+     * {@link #parseFields} (so the statics block exists) and before the entry
+     * method, so {@code <clinit>}'s {@code putstatic}s land before first use. It is
+     * just another method the loader compiles and runs; it dirties the seek key, so
+     * the caller sets the entry seek afterwards.
+     */
+    private static void runClinit(long bytes)
     {
-        parseConstPool(bytes);
-        parseFields();
+        seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
         long code = findMethod(bytes);
-        if (code == 0L)
+        if (code != 0L)
         {
-            return 0;
+            long unused = Magic.call0(compile(code, gcodeLen));   // run <clinit>; discard result
         }
-        return compileAndRun(code, gcodeLen);
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -82,11 +86,19 @@ public final class Loader
         return Magic.call2(buf, a, b);
     }
 
-    /** M4: our own Guest class — compile+run answer() (returns 42 = '*'). */
+    /** M4: our own Guest class — run &lt;clinit&gt; then compile+run answer() (42 = '*'). */
     static int loadGuest()
     {
+        parseConstPool(VM.guestBytes);
+        parseFields();
+        runClinit(VM.guestBytes);                      // initialize statics before first use
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
-        return load0(VM.guestBytes);
+        long code = findMethod(VM.guestBytes);
+        if (code == 0L)
+        {
+            return 0;
+        }
+        return compileAndRun(code, gcodeLen);
     }
 
     /** Load java.lang.Math from java.base and run Math.max(0x4D, 0x21) -> 'M'. */
