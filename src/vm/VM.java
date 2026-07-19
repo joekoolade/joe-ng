@@ -63,5 +63,11 @@ public final class VM {
         byte[] a = new byte[3];            // runtime heap array (newarray/bastore)
         a[0] = 0x41; a[1] = 0x42; a[2] = 0x0A;   // "AB\n"
         Uart.write(a);
+
+        Counter.bump();                    // static field in the image statics area
+        Counter.bump();
+        Counter.bump();
+        Uart.putc(0x30 + Counter.get());   // '3'  (getstatic/putstatic)
+        Uart.putc(0x0A);
     }
 }

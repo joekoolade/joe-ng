@@ -138,6 +138,17 @@ public final class CompilerTest {
         lenWant.add(A64.ret());
         T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
 
+        // ---- static field: reserved address load + ldr from the statics area ----
+        ClassFile counter = ClassFile.parse(classesDir.resolve("vm/Counter.class"));
+        int[] getStatic = new BaselineCompiler(counter)
+                .compileMethod(counter.method("get", "()I"), CodeBuffer.LOAD_ADDRESS, false).words();
+        int[] getStaticWant = {
+                A64.movz(9, 0, 0), A64.movk(9, 0, 1),   // reserved &Counter.count (patched by writer)
+                A64.ldrx(9, 9, 0),                       // getstatic: value = *addr
+                A64.movReg(0, 9), A64.ret(),             // ireturn (leaf, no frame)
+        };
+        T.eqWords("Counter.get (getstatic)", getStaticWant, getStatic);
+
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);

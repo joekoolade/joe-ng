@@ -38,13 +38,16 @@ public final class BaselineCompiler {
     public interface ClassResolver { ClassFile resolve(String owner); }
 
     /** A single compiled method: its words and the fixups awaiting relocation. */
-    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs, List<StrRef> strRefs) {}
+    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs,
+                                 List<StrRef> strRefs, List<StaticRef> staticRefs) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
     public record TibRef(int wordIndex, int reg, String className) {}
     /** A reserved address load for an interned string literal ({@code ldc}). */
     public record StrRef(int wordIndex, int reg, String text) {}
+    /** A reserved address load for a static field ({@code getstatic}/{@code putstatic}). */
+    public record StaticRef(int wordIndex, int reg, String fieldKey) {}
 
     private final ClassFile cf;
     private final ClassResolver resolver;
@@ -57,6 +60,7 @@ public final class BaselineCompiler {
     private final List<CallSite> callSites = new ArrayList<>();
     private final List<TibRef> tibRefs = new ArrayList<>();
     private final List<StrRef> strRefs = new ArrayList<>();
+    private final List<StaticRef> staticRefs = new ArrayList<>();
 
     public BaselineCompiler(ClassFile cf)                     { this(cf, null); }
     public BaselineCompiler(ClassFile cf, ClassResolver resolver) {
@@ -72,7 +76,7 @@ public final class BaselineCompiler {
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb) {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
-        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty())
+        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty() || !cm.staticRefs.isEmpty())
             throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         for (int w : cm.words) cb.emit(w);
     }
@@ -111,7 +115,8 @@ public final class BaselineCompiler {
             if (target < 0) throw new IllegalStateException("branch to non-instruction bc=" + f.targetBc);
             cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
         }
-        return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs), List.copyOf(strRefs));
+        return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs),
+                List.copyOf(strRefs), List.copyOf(staticRefs));
     }
 
     // ----- prologue / epilogue --------------------------------------------
@@ -204,6 +209,8 @@ public final class BaselineCompiler {
                 return 3;
             }
 
+            case 0xB2 -> { getstatic(cb, u2(code, pos + 1)); return 3; }
+            case 0xB3 -> { putstatic(cb, u2(code, pos + 1)); return 3; }
             case 0xB4 -> { getfield(cb, u2(code, pos + 1)); return 3; }
             case 0xB5 -> { putfield(cb, u2(code, pos + 1)); return 3; }
             case 0xB6 -> { lowerInvokeVirtual(u2(code, pos + 1), cb); return 3; }
@@ -253,6 +260,21 @@ public final class BaselineCompiler {
         int top = OP_BASE + sp - 1;
         cb.emit(A64.movReg(pushReg(), top));
     }
+
+    // ----- static fields: absolute address in the image statics area --------
+    private void getstatic(CodeBuffer cb, int cpIndex) {
+        int r = pushReg();
+        staticRefs.add(new StaticRef(cb.reserveAddr(r), r, staticKey(cf.memberRef(cpIndex))));
+        cb.emit(A64.ldrx(r, r, 0));                              // value = *addr
+    }
+
+    private void putstatic(CodeBuffer cb, int cpIndex) {
+        int val = popReg();
+        staticRefs.add(new StaticRef(cb.reserveAddr(16), 16, staticKey(cf.memberRef(cpIndex)))); // x16 = &field
+        cb.emit(A64.strx(val, 16, 0));                          // *addr = value
+    }
+
+    private static String staticKey(ClassFile.MemberRef ref) { return ref.owner() + "." + ref.name(); }
 
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
     private void getfield(CodeBuffer cb, int cpIndex) {
@@ -501,7 +523,7 @@ public final class BaselineCompiler {
             case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A, 0xBC -> 2; // …/aload/istore/lstore/astore/newarray
             case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
                  0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
-                 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB -> 3;         // getfield/putfield/invoke*/new
+                 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB -> 3; // get/putstatic/field/invoke*/new
             default -> 1;
         };
     }

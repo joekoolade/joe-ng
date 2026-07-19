@@ -45,8 +45,8 @@ logs what informed each piece so encodings and boot facts are auditable.
   i2l/l2i/i2b/i2c, add/sub/mul/and, if/if_icmp branches,
   invokestatic/invokespecial/invokevirtual, new, dup, getfield/putfield,
   aload/astore, newarray, arraylength, array load/store (b/i/l/a), ldc of int
-  and String constants (strings interned as byte[] objects).
-  The parser and lowering are written from the
+  and String constants (strings interned as byte[] objects), getstatic/putstatic
+  (image statics area). The parser and lowering are written from the
   spec; the object layout (`objectmodel`), the calling convention, and the
   `magic.Magic` intrinsic set + A64 lowering are ours.
 

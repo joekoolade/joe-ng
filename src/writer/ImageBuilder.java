@@ -55,6 +55,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
     private record GlobalCall(int siteWord, String calleeKey) {}
     private record GlobalTib(int siteWord, int reg, String className) {}
     private record GlobalStr(int siteWord, int reg, String text) {}
+    private record GlobalStatic(int siteWord, int reg, String fieldKey) {}
 
     /** Build the whole image with {@code entryKey} (e.g. "vm/VM.boot()V") at 0x80000. */
     public CodeBuffer build(String entryKey) throws IOException {
@@ -64,6 +65,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Map<String, Integer> sizeWords = new LinkedHashMap<>();     // layout order, entry first
         Set<String> tibClasses = new LinkedHashSet<>();
         Set<String> strings = new LinkedHashSet<>();
+        Set<String> statics = new LinkedHashSet<>();
         List<String> worklist = new ArrayList<>(List.of(entryKey));
         while (!worklist.isEmpty()) {
             String k = worklist.remove(0);
@@ -72,6 +74,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             sizeWords.put(k, cm.words().length);
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
             cm.strRefs().forEach(s -> strings.add(s.text()));
+            cm.staticRefs().forEach(s -> statics.add(s.fieldKey()));
             for (var t : cm.tibRefs()) {
                 if (tibClasses.add(t.className()))
                     for (ClassFile.Method vm : resolve(t.className()).virtualMethods())
@@ -90,6 +93,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         for (String cls : tibClasses) { tibWord.put(cls, cur); cur += ObjectModel.tibSize(vtableLength(cls)) / 4; }
         Map<String, Integer> strWord = new HashMap<>();
         for (String s : strings) { strWord.put(s, cur); cur += stringWords(s); }
+        Map<String, Integer> staticWord = new HashMap<>();          // one 8-byte slot per static field, zero-init
+        for (String s : statics) { staticWord.put(s, cur); cur += WORDS_PER_SLOT; }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -97,6 +102,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         List<GlobalCall> calls = new ArrayList<>();
         List<GlobalTib> tibs = new ArrayList<>();
         List<GlobalStr> strs = new ArrayList<>();
+        List<GlobalStatic> stats = new ArrayList<>();
         for (String k : sizeWords.keySet()) {
             int base = wordOffset.get(k);
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
@@ -105,6 +111,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.callSites().forEach(cs -> calls.add(new GlobalCall(base + cs.wordIndex(), cs.calleeKey())));
             cm.tibRefs().forEach(t -> tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className())));
             cm.strRefs().forEach(s -> strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text())));
+            cm.staticRefs().forEach(s -> stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey())));
         }
 
         // --- Types (instanceSize) and TIBs (Type ptr + vtable code addresses) ---
@@ -138,6 +145,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         }
         for (GlobalStr s : strs) {
             cb.patchAddr(s.siteWord(), s.reg(), addr(strWord.get(s.text())));   // store byte[] address
+        }
+        for (GlobalStatic s : stats) {
+            cb.patchAddr(s.siteWord(), s.reg(), addr(staticWord.get(s.fieldKey()))); // static field address
         }
         return cb;
     }

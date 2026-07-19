@@ -154,11 +154,17 @@ defines the minimum the assembler must encode.
   Java source name the bytes). `Uart.write(byte[])` iterates it. The old
   appended-blob `message()`/`messageLen()` and the compiler's `imageData`
   plumbing are gone. `CompilerTest` asserts the interned bytes land in the image.
-- **M2 remaining:** static fields (`getstatic`/`putstatic`), `instanceof`/
-  `checkcast`, char/short arrays (`ldrh`/`strh`), and class hierarchies (super
-  calls, vtable inheritance). A real `String` class (wrapping the byte[]) is a
-  later class-library step. GC is still M6. `baload` still zero-extends (fine for
-  ASCII; `ldrsb` for signed bytes later).
+- **Static fields DONE:** `getstatic`/`putstatic` against an image **statics area**
+  — one zero-initialized 8-byte slot per unique static field (`owner.name`), laid
+  out by `ImageBuilder` after the strings; the address load is relocated like TIB/
+  string refs. Statics live in RAM (image is loaded writable, MMU off), so
+  `putstatic` works. No `<clinit>` yet (fields default to 0; javac inlines
+  compile-time-constant statics as `ldc`). QEMU prints `3` from a bumped static
+  counter. `CompilerTest` pins the `getstatic` lowering.
+- **M2 remaining:** `instanceof`/`checkcast`, char/short arrays (`ldrh`/`strh`),
+  class hierarchies (super calls, vtable inheritance), and `<clinit>` (static
+  initializers). A real `String` class over the byte[] is a later class-library
+  step. GC is still M6. `baload` zero-extends (fine for ASCII; `ldrsb` later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
