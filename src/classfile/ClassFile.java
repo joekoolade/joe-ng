@@ -18,13 +18,19 @@ public final class ClassFile {
     /** A resolved symbolic reference to a member: owner/name/descriptor. */
     public record MemberRef(String owner, String name, String descriptor) {}
 
+    /** An instance/static field declaration. */
+    public record FieldInfo(String name, String descriptor, boolean isStatic) {}
+
+    private static final int ACC_STATIC = 0x0008;
+
     /** A method with its bytecode. */
     public static final class Method {
         public final String name, descriptor;
         public final int maxStack, maxLocals;
+        public final boolean isStatic;
         public final byte[] code;
-        Method(String name, String descriptor, int maxStack, int maxLocals, byte[] code) {
-            this.name = name; this.descriptor = descriptor;
+        Method(String name, String descriptor, boolean isStatic, int maxStack, int maxLocals, byte[] code) {
+            this.name = name; this.descriptor = descriptor; this.isStatic = isStatic;
             this.maxStack = maxStack; this.maxLocals = maxLocals; this.code = code;
         }
     }
@@ -43,9 +49,29 @@ public final class ClassFile {
 
     private final String thisClass;
     private final Method[] methods;
+    private final FieldInfo[] fields;
 
     public String thisClassName() { return thisClass; }
     public Method[] methods()     { return methods; }
+    public FieldInfo[] fields()   { return fields; }
+
+    /** Number of instance (non-static) fields — the object's field-slot count. */
+    public int instanceFieldCount() {
+        int n = 0;
+        for (FieldInfo f : fields) if (!f.isStatic()) n++;
+        return n;
+    }
+
+    /** Index of instance field {@code name} in declaration order (its slot in the object). */
+    public int instanceFieldIndex(String name) {
+        int i = 0;
+        for (FieldInfo f : fields) {
+            if (f.isStatic()) continue;
+            if (f.name().equals(name)) return i;
+            i++;
+        }
+        throw new IllegalArgumentException("no instance field " + name + " in " + thisClass);
+    }
 
     public Method method(String name, String descriptor) {
         for (Method m : methods)
@@ -111,24 +137,29 @@ public final class ClassFile {
         int ifaces = in.readUnsignedShort();
         for (int i = 0; i < ifaces; i++) in.readUnsignedShort();
 
-        skipMembers(in);                                       // fields
+        fields = readFields(in);
         methods = readMethods(in);
         // class attributes ignored
     }
 
-    private void skipMembers(DataInputStream in) throws IOException {
+    private FieldInfo[] readFields(DataInputStream in) throws IOException {
         int n = in.readUnsignedShort();
+        FieldInfo[] fs = new FieldInfo[n];
         for (int i = 0; i < n; i++) {
-            in.readUnsignedShort(); in.readUnsignedShort(); in.readUnsignedShort(); // flags,name,desc
+            int access = in.readUnsignedShort();
+            String name = utf8(in.readUnsignedShort());
+            String desc = utf8(in.readUnsignedShort());
             skipAttributes(in);
+            fs[i] = new FieldInfo(name, desc, (access & ACC_STATIC) != 0);
         }
+        return fs;
     }
 
     private Method[] readMethods(DataInputStream in) throws IOException {
         int n = in.readUnsignedShort();
         Method[] ms = new Method[n];
         for (int i = 0; i < n; i++) {
-            in.readUnsignedShort();                            // access_flags
+            int access = in.readUnsignedShort();
             String name = utf8(in.readUnsignedShort());
             String desc = utf8(in.readUnsignedShort());
             int attrs = in.readUnsignedShort();
@@ -150,7 +181,7 @@ public final class ClassFile {
                     in.skipBytes(len);
                 }
             }
-            ms[i] = new Method(name, desc, maxStack, maxLocals, code);
+            ms[i] = new Method(name, desc, (access & ACC_STATIC) != 0, maxStack, maxLocals, code);
         }
         return ms;
     }

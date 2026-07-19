@@ -58,6 +58,36 @@ public final class CompilerTest {
         addWant.add(A64.ret());
         T.eqWords("addOne(int)", toArray(addWant), compile(fx, "addOne", "(I)I"));
 
+        // ---- object fields: getfield/putfield at offset 16 (header=16) ----
+        ClassFile ff = ClassFile.parse(classesDir.resolve("compiler/FieldFixture.class"));
+
+        List<Integer> getWant = new ArrayList<>();
+        getWant.add(A64.subImm(31, 31, 16));
+        getWant.add(A64.strx(19, 31, 0));
+        getWant.add(A64.movReg(19, 0));                  // this-less: static param f -> slot0
+        getWant.add(A64.movReg(9, 19));                  // aload_0
+        getWant.add(A64.ldrx(9, 9, 16));                 // getfield value @16
+        getWant.add(A64.movReg(0, 9));                   // ireturn
+        getWant.add(A64.ldrx(19, 31, 0));
+        getWant.add(A64.addImm(31, 31, 16));
+        getWant.add(A64.ret());
+        T.eqWords("FieldFixture.get", toArray(getWant), compile(ff, "get", "(Lcompiler/FieldFixture;)I"));
+
+        List<Integer> setWant = new ArrayList<>();
+        setWant.add(A64.subImm(31, 31, 16));
+        setWant.add(A64.strx(19, 31, 0));
+        setWant.add(A64.strx(20, 31, 8));
+        setWant.add(A64.movReg(19, 0));                  // f -> slot0
+        setWant.add(A64.movReg(20, 1));                  // v -> slot1
+        setWant.add(A64.movReg(9, 19));                  // aload_0
+        setWant.add(A64.movReg(10, 20));                 // iload_1
+        setWant.add(A64.strx(10, 9, 16));                // putfield value @16
+        setWant.add(A64.ldrx(19, 31, 0));
+        setWant.add(A64.ldrx(20, 31, 8));
+        setWant.add(A64.addImm(31, 31, 16));
+        setWant.add(A64.ret());
+        T.eqWords("FieldFixture.set", toArray(setWant), compile(ff, "set", "(Lcompiler/FieldFixture;I)V"));
+
         T.summary("compiler");
     }
 

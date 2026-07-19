@@ -39,11 +39,13 @@ logs what informed each piece so encodings and boot facts are auditable.
 ## Classfile format + bytecode (classfile/ClassFile.java, compiler/BaselineCompiler.java)
 
 - **The Java Virtual Machine Specification (JVMS), Java SE** — §4 ClassFile
-  structure and constant pool (tags, Methodref/Class/NameAndType/Utf8/Long/
-  Integer), §4.7.3 the Code attribute, and §6 the bytecode instruction set
-  (opcodes: nop, return, goto, iconst/bipush/sipush/ldc/ldc2_w, invokestatic).
-  The parser and the opcode lowering are written from the spec; the intrinsic
-  set (`magic.Magic`) and its A64 lowering are ours.
+  structure and constant pool, fields and method access flags, §4.7.3 the Code
+  attribute, and §6 the instruction set. Opcodes lowered so far: nop/return/
+  Xreturn, goto, const pushes, local load/store + iinc, add/sub/and,
+  i2l/l2i/i2b/i2c, if/if_icmp branches, invokestatic/invokespecial, new, dup,
+  getfield/putfield, aload/astore. The parser and lowering are written from the
+  spec; the object layout (`objectmodel`), the calling convention, and the
+  `magic.Magic` intrinsic set + A64 lowering are ours.
 
 ## Concepts (not code) referenced
 

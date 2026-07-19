@@ -38,11 +38,26 @@ public final class VM {
         Magic.isb();
         Magic.writeSP(0x80000L);           // stack below the image (needed before any call)
 
+        Heap.init();
         Uart.init();
-        Uart.puts(Magic.message(), Magic.messageLen());
+        run();
 
         while (true) {
             Magic.wfe();
         }
+    }
+
+    /**
+     * The program proper — a framed method (so operand values can spill across
+     * calls). Prints the banner, then exercises the object model: allocate a
+     * heap object, mutate its field, and print the result.
+     */
+    static void run() {
+        Uart.puts(Magic.message(), Magic.messageLen());
+
+        Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
+        c.value = c.value + 1;             // getfield + putfield -> 'k'
+        Uart.putc(c.value);
+        Uart.putc(0x0A);                   // newline
     }
 }

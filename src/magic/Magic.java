@@ -51,6 +51,8 @@ public final class Magic {
     public static int  load32(long addr)              { throw intrinsic(); }
     public static void store8(long addr, int value)   { throw intrinsic(); }
     public static int  load8(long addr)               { throw intrinsic(); }
+    public static void store64(long addr, long value) { throw intrinsic(); }
+    public static long load64(long addr)              { throw intrinsic(); }
 
     // ----- image data pool (temporary bridge until real Strings/arrays) ----
     /**

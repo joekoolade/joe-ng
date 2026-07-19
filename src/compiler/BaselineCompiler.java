@@ -3,6 +3,7 @@ package compiler;
 import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
+import objectmodel.ObjectModel;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,24 +34,34 @@ public final class BaselineCompiler {
     private static final int OP_BASE = 9,  OP_MAX = 7;    // operand stack -> x9..x15
     private static final int LOC_BASE = 19, LOC_MAX = 10; // locals -> x19..x28
 
-    /** A single compiled method: its words and the calls awaiting relocation. */
-    public record CompiledMethod(int[] words, List<CallSite> callSites) {}
+    /** Resolves an owner class name (e.g. "vm/Cell") to its parsed classfile. */
+    public interface ClassResolver { ClassFile resolve(String owner); }
+
+    /** A single compiled method: its words and the fixups awaiting relocation. */
+    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
+    /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
+    public record TibRef(int wordIndex, int reg, String className) {}
 
     private final ClassFile cf;
     private final byte[] imageData;
+    private final ClassResolver resolver;
 
     private int sp;
     private boolean isEntry;
-    private int frameSize, localSaveBase, maxLocals;
-    private boolean saveLR;
+    private int frameSize, localSaveBase, spillBase, maxLocals;
+    private boolean saveLR, nonLeaf;
     private final List<Fixup> fixups = new ArrayList<>();
     private final List<AddrSlot> messageSlots = new ArrayList<>();
     private final List<CallSite> callSites = new ArrayList<>();
+    private final List<TibRef> tibRefs = new ArrayList<>();
 
-    public BaselineCompiler(ClassFile cf)                  { this(cf, null); }
-    public BaselineCompiler(ClassFile cf, byte[] imageData) { this.cf = cf; this.imageData = imageData; }
+    public BaselineCompiler(ClassFile cf)                  { this(cf, null, null); }
+    public BaselineCompiler(ClassFile cf, byte[] imageData) { this(cf, imageData, null); }
+    public BaselineCompiler(ClassFile cf, byte[] imageData, ClassResolver resolver) {
+        this.cf = cf; this.imageData = imageData; this.resolver = resolver;
+    }
 
     private interface BranchEnc { int encode(int byteOffset); }
     private record Fixup(int wordIndex, int targetBc, BranchEnc enc) {}
@@ -62,8 +73,8 @@ public final class BaselineCompiler {
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb) {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
-        if (!cm.callSites.isEmpty())
-            throw new IllegalStateException("compile(Method,CodeBuffer) is for call-free methods; use ImageBuilder");
+        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty())
+            throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         for (int w : cm.words) cb.emit(w);
     }
 
@@ -74,14 +85,18 @@ public final class BaselineCompiler {
 
         this.isEntry = isEntry;
         this.maxLocals = method.maxLocals;
-        this.saveLR = !isEntry && isNonLeaf(code);
-        int numSaved = (saveLR ? 1 : 0) + maxLocals;
+        this.nonLeaf = isNonLeaf(code);
+        this.saveLR = !isEntry && nonLeaf;
+        // frame: [LR?][locals...][operand-stack spill area for calls]
         this.localSaveBase = saveLR ? 8 : 0;
-        this.frameSize = isEntry ? 0 : A64.align16(numSaved * 8);
+        this.spillBase = localSaveBase + maxLocals * 8;
+        int spillWords = (!isEntry && nonLeaf) ? OP_MAX : 0;
+        int savedWords = (saveLR ? 1 : 0) + maxLocals + spillWords;
+        this.frameSize = isEntry ? 0 : A64.align16(savedWords * 8);
         sp = 0;
 
         CodeBuffer cb = new CodeBuffer(base);
-        if (!isEntry) emitPrologue(cb, method.descriptor);
+        if (!isEntry) emitPrologue(cb, method);
 
         int[] bcToWord = new int[code.length];
         java.util.Arrays.fill(bcToWord, -1);
@@ -103,17 +118,19 @@ public final class BaselineCompiler {
             emitBytes(cb, imageData);
             for (AddrSlot s : messageSlots) cb.patchAddr(s.wordIndex, s.reg, dataAddr);
         }
-        return new CompiledMethod(cb.toWords(), List.copyOf(callSites));
+        return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs));
     }
 
     // ----- prologue / epilogue --------------------------------------------
-    private void emitPrologue(CodeBuffer cb, String descriptor) {
+    private void emitPrologue(CodeBuffer cb, ClassFile.Method method) {
         if (frameSize > 0) cb.emit(A64.subImm(31, 31, frameSize));      // sub sp, sp, #frame
         if (saveLR) cb.emit(A64.strx(30, 31, 0));                        // str x30, [sp]
         for (int i = 0; i < maxLocals; i++) cb.emit(A64.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
-        // move incoming arguments (x0..) into their local registers
+        // move incoming arguments (x0..) into their local registers;
+        // instance methods receive `this` as x0 -> local slot 0.
         int arg = 0, slot = 0;
-        for (char t : paramTypes(descriptor)) {
+        if (!method.isStatic) { cb.emit(A64.movReg(localReg(0), 0)); arg = 1; slot = 1; }
+        for (char t : paramTypes(method.descriptor)) {
             cb.emit(A64.movReg(localReg(slot), arg));
             arg++;
             slot += (t == 'J' || t == 'D') ? 2 : 1;
@@ -144,13 +161,16 @@ public final class BaselineCompiler {
             case 0x13 -> { loadConst(cb, cf.intAt(u2(code, pos + 1))); return 3; }
             case 0x14 -> { loadConst(cb, cf.longAt(u2(code, pos + 1))); return 3; }
 
-            case 0x15, 0x16 -> { load(cb, code[pos + 1] & 0xFF); return 2; }
-            case 0x1A, 0x1B, 0x1C, 0x1D -> { load(cb, op - 0x1A); return 1; }
-            case 0x1E, 0x1F, 0x20, 0x21 -> { load(cb, op - 0x1E); return 1; }
+            case 0x15, 0x16, 0x19 -> { load(cb, code[pos + 1] & 0xFF); return 2; }     // iload/lload/aload
+            case 0x1A, 0x1B, 0x1C, 0x1D -> { load(cb, op - 0x1A); return 1; }         // iload_0..3
+            case 0x1E, 0x1F, 0x20, 0x21 -> { load(cb, op - 0x1E); return 1; }         // lload_0..3
+            case 0x2A, 0x2B, 0x2C, 0x2D -> { load(cb, op - 0x2A); return 1; }         // aload_0..3
 
-            case 0x36, 0x37 -> { store(cb, code[pos + 1] & 0xFF); return 2; }
-            case 0x3B, 0x3C, 0x3D, 0x3E -> { store(cb, op - 0x3B); return 1; }
-            case 0x3F, 0x40, 0x41, 0x42 -> { store(cb, op - 0x3F); return 1; }
+            case 0x36, 0x37, 0x3A -> { store(cb, code[pos + 1] & 0xFF); return 2; }   // istore/lstore/astore
+            case 0x3B, 0x3C, 0x3D, 0x3E -> { store(cb, op - 0x3B); return 1; }        // istore_0..3
+            case 0x3F, 0x40, 0x41, 0x42 -> { store(cb, op - 0x3F); return 1; }        // lstore_0..3
+            case 0x4B, 0x4C, 0x4D, 0x4E -> { store(cb, op - 0x4B); return 1; }        // astore_0..3
+            case 0x59 -> { dup(cb); return 1; }                                       // dup
             case 0x84 -> { iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]); return 3; }
 
             case 0x60, 0x61 -> { binop(cb, Bin.ADD); return 1; }
@@ -179,7 +199,11 @@ public final class BaselineCompiler {
                 return 3;
             }
 
+            case 0xB4 -> { getfield(cb, u2(code, pos + 1)); return 3; }
+            case 0xB5 -> { putfield(cb, u2(code, pos + 1)); return 3; }
+            case 0xB7 -> { lowerInvokeSpecial(u2(code, pos + 1), cb); return 3; }
             case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
+            case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
 
             default -> throw new UnsupportedOperationException(
                     String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
@@ -217,6 +241,43 @@ public final class BaselineCompiler {
         });
     }
 
+    private void dup(CodeBuffer cb) {
+        int top = OP_BASE + sp - 1;
+        cb.emit(A64.movReg(pushReg(), top));
+    }
+
+    // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
+    private void getfield(CodeBuffer cb, int cpIndex) {
+        int off = fieldOffset(cf.memberRef(cpIndex));
+        int obj = popReg(), r = pushReg();
+        cb.emit(A64.ldrx(r, obj, off));
+    }
+
+    private void putfield(CodeBuffer cb, int cpIndex) {
+        int off = fieldOffset(cf.memberRef(cpIndex));
+        int val = popReg(), obj = popReg();
+        cb.emit(A64.strx(val, obj, off));
+    }
+
+    private int fieldOffset(ClassFile.MemberRef ref) {
+        ClassFile owner = resolve(ref.owner());
+        return ObjectModel.fieldOffset(owner.instanceFieldIndex(ref.name()));
+    }
+
+    // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
+    private void lowerNew(int classIndex, CodeBuffer cb) {
+        expectEmpty("new");
+        String className = cf.classAt(classIndex);
+        int size = ObjectModel.scalarSize(resolve(className).instanceFieldCount());
+        cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
+        int w = cb.emit(A64.bl(0));                               // x0 = object base
+        callSites.add(new CallSite(w, "vm/Heap.alloc(I)J"));
+        int t = cb.reserveAddr(1);                                // x1 = &TIB (patched by ImageBuilder)
+        tibRefs.add(new TibRef(t, 1, className));
+        cb.emit(A64.strx(1, 0, ObjectModel.TIB_OFFSET));          // header.tib = &TIB
+        cb.emit(A64.movReg(pushReg(), 0));                        // push the reference
+    }
+
     // ----- branches --------------------------------------------------------
     private void branchZero(CodeBuffer cb, byte[] code, int pos, boolean eq) {
         int v = popReg();
@@ -248,21 +309,43 @@ public final class BaselineCompiler {
     private void lowerInvokeStatic(int cpIndex, CodeBuffer cb) {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         if (ref.owner().equals("magic/Magic")) { lowerIntrinsic(ref, cb); return; }
-        lowerCall(ref, cb);
+        lowerCall(ref, cb, false);
     }
 
-    /** A real static call: args to x0.., BL placeholder, result from x0. */
-    private void lowerCall(ClassFile.MemberRef ref, CodeBuffer cb) {
-        char[] params = paramTypes(ref.descriptor());
-        int nargs = params.length;
-        // pop args: top of stack is the last argument
+    private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb) {
+        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
+        if (ref.owner().equals("java/lang/Object") && ref.name().equals("<init>")) {
+            popReg();                                            // trivial super() — discard receiver
+            return;
+        }
+        lowerCall(ref, cb, true);                                // constructor: receiver is arg0
+    }
+
+    /** A real call: args to x0.. (receiver first if any), BL placeholder, result from x0. */
+    private void lowerCall(ClassFile.MemberRef ref, CodeBuffer cb, boolean hasReceiver) {
+        int nargs = paramTypes(ref.descriptor()).length + (hasReceiver ? 1 : 0);
         int[] src = new int[nargs];
-        for (int k = 0; k < nargs; k++) src[k] = popReg();      // src[0]=last arg
+        for (int k = 0; k < nargs; k++) src[k] = popReg();       // src[0] = last arg (top of stack)
         for (int k = 0; k < nargs; k++) cb.emit(A64.movReg(nargs - 1 - k, src[k])); // -> x(argIndex)
-        expectEmpty("call");
-        int w = cb.emit(A64.bl(0));                             // placeholder; resolved after layout
+        spillLive(cb);                                           // preserve operand values below the args
+        int w = cb.emit(A64.bl(0));
         callSites.add(new CallSite(w, key(ref.owner(), ref.name(), ref.descriptor())));
+        reloadLive(cb);
         if (returnType(ref.descriptor()) != 'V') cb.emit(A64.movReg(pushReg(), 0));
+    }
+
+    /** Spill operand-stack values (x9..) to the frame so a call can't clobber them. */
+    private void spillLive(CodeBuffer cb) {
+        for (int i = 0; i < sp; i++) cb.emit(A64.strx(OP_BASE + i, 31, spillBase + i * 8));
+    }
+    private void reloadLive(CodeBuffer cb) {
+        for (int i = 0; i < sp; i++) cb.emit(A64.ldrx(OP_BASE + i, 31, spillBase + i * 8));
+    }
+
+    private ClassFile resolve(String owner) {
+        if (owner.equals(cf.thisClassName())) return cf;
+        if (resolver == null) throw new IllegalStateException("no class resolver for " + owner);
+        return resolver.resolve(owner);
     }
 
     private void lowerIntrinsic(ClassFile.MemberRef ref, CodeBuffer cb) {
@@ -285,8 +368,10 @@ public final class BaselineCompiler {
 
             case "store32(JI)V" -> { int val = popReg(), addr = popReg(); cb.emit(A64.strw(val, addr, 0)); }
             case "store8(JI)V"  -> { int val = popReg(), addr = popReg(); cb.emit(A64.strb(val, addr, 0)); }
+            case "store64(JJ)V" -> { int val = popReg(), addr = popReg(); cb.emit(A64.strx(val, addr, 0)); }
             case "load32(J)I"   -> { int addr = popReg(), r = pushReg(); cb.emit(A64.ldrw(r, addr, 0)); }
             case "load8(J)I"    -> { int addr = popReg(), r = pushReg(); cb.emit(A64.ldrb(r, addr, 0)); }
+            case "load64(J)J"   -> { int addr = popReg(), r = pushReg(); cb.emit(A64.ldrx(r, addr, 0)); }
 
             case "message()J"    -> { int r = pushReg(); messageSlots.add(new AddrSlot(cb.reserveAddr(r), r)); }
             case "messageLen()I" -> loadConst(cb, imageData == null ? 0 : imageData.length);
@@ -332,9 +417,14 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
+            if (op == 0xBB) return true;                          // new -> calls Heap.alloc
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
+            }
+            if (op == 0xB7) {                                    // invokespecial
+                ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
+                if (!(ref.owner().equals("java/lang/Object") && ref.name().equals("<init>"))) return true;
             }
             pos += opLen(op, code, pos);
         }
@@ -344,9 +434,10 @@ public final class BaselineCompiler {
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
     private static int opLen(int op, byte[] code, int pos) {
         return switch (op) {
-            case 0x10, 0x12, 0x15, 0x16, 0x36, 0x37 -> 2;        // bipush/ldc/iload/lload/istore/lstore
+            case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A -> 2; // bipush/ldc/iload/lload/aload/istore/lstore/astore
             case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
-                 0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7, 0xB8 -> 3;
+                 0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
+                 0xB4, 0xB5, 0xB7, 0xB8, 0xBB -> 3;               // getfield/putfield/invokespecial/invokestatic/new
             default -> 1;
         };
     }

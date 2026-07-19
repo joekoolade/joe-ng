@@ -114,11 +114,28 @@ defines the minimum the assembler must encode.
   - `writer/BuildRuntimeImage` is now the default image `build.sh` emits.
   - Tests: `addOne(int)` pins the frame/return sequence; `qemu-check.sh` is the
     functional gate. (Old single-method `BuildCompiledBootImage` removed.)
-- **M2 remaining:** instances — `new` + object header/TIB construction in the
-  writer, `getfield`/`putfield`, arrays (`newarray`/`aload`/`astore`/
-  `arraylength`), `invokevirtual` via the TIB vtable, and static fields
-  (`getstatic`/`putstatic`). Retire the `message()` bridge once char arrays exist.
-  (Note: `new`/heap allocation is where M2 meets M3 — decide split as we go.)
+- **Instances DONE (M2/M3 overlap): `new` + heap + TIB + fields + constructors.**
+  The runtime now allocates on a heap and uses object fields; QEMU prints the
+  banner then `k` computed from `new Cell(0x6A); c.value = c.value + 1`.
+  - `vm/Heap`: Java bump allocator (metacircular) over a fixed region
+    (`PTR_CELL`=0xF0000, `BASE`=0x100000); `Heap.init()` seeds it in boot, no GC.
+  - Compiler: `new` (→ `Heap.alloc(size)` + store TIB pointer in the header),
+    `dup`, `getfield`/`putfield` (8-byte slots via `ObjectModel`), `invokespecial`
+    (constructor calls; `Object.<init>` is a no-op), `aload/astore`, `load64/
+    store64`. Instance-method prologue maps `this`→slot0. Operand values now
+    **spill to the frame across calls** so mid-expression calls (e.g. `new X()`'s
+    constructor) don't clobber live refs. `ClassResolver` gives field offsets /
+    instance sizes across classes.
+  - Writer: `ImageBuilder` lays out one TIB per instantiated class after the code
+    and relocates each `new`'s TIB-pointer load. (TIB is a Type-slot placeholder
+    for now — real Type/vtable arrive with invokevirtual/instanceof/GC.)
+  - `classfile/ClassFile` now parses fields + method access flags. Tests:
+    `FieldFixture` pins getfield/putfield; `qemu-check.sh` gates the banner and
+    the heap-field print.
+- **M2 remaining:** `invokevirtual` via the TIB vtable (needs a real Type),
+  arrays (`newarray`/`aload`/`astore`/`arraylength`), static fields
+  (`getstatic`/`putstatic`), `instanceof`/`checkcast`. Retire the `message()`
+  bridge once char arrays exist. GC is still M6 (bump-only today).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
