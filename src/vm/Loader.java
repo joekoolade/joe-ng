@@ -51,6 +51,24 @@ public final class Loader
     private static long[] rgBuf;    // compiled buffer address
     private static int rgCount;
 
+    // Class registry: per loaded class, what another class needs to `new` it and
+    // dispatch through it — its name (base+offset), TIB, and instance-field count.
+    private static final int MAXCLASS = 32;
+    private static long[] clBase;
+    private static int[] clNameOff;
+    private static long[] clTib;
+    private static int[] clFieldCount;
+    private static int clCount;
+
+    // Field registry: per instance field of each class, its class/name (base+offset)
+    // and slot, so a cross-class get/putfield can find the offset.
+    private static final int MAXFIELD = 128;
+    private static long[] fldBase;
+    private static int[] fldClassOff;
+    private static int[] fldNameOff;
+    private static int[] fldSlot;
+    private static int fldCount;
+
     private static int u1(long p)
     {
         return Magic.load8(p) & 0xFF;
@@ -117,13 +135,25 @@ public final class Loader
         rgDescOff = new int[MAXREG];
         rgBuf = new long[MAXREG];
         rgCount = 0;
+        clBase = new long[MAXCLASS];
+        clNameOff = new int[MAXCLASS];
+        clTib = new long[MAXCLASS];
+        clFieldCount = new int[MAXCLASS];
+        clCount = 0;
+        fldBase = new long[MAXFIELD];
+        fldClassOff = new int[MAXFIELD];
+        fldNameOff = new int[MAXFIELD];
+        fldSlot = new int[MAXFIELD];
+        fldCount = 0;
         setClass(VM.helperBytes);                      // dependency first (no cross-class cycles)
         compileClass(VM.helperBytes);
         registerAll();
+        registerClass();                               // Helper's TIB + field layout, for Guest's new/fields
         setClass(VM.guestBytes);
         runClinit(VM.guestBytes);                      // initialize Guest's statics
-        compileClass(VM.guestBytes);                   // cross-class calls link via the registry
+        compileClass(VM.guestBytes);                   // cross-class new/fields/calls link via the registry
         registerAll();
+        registerClass();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
@@ -660,6 +690,82 @@ public final class Loader
         return globalBuf(idx);                          // cross class: another loaded class
     }
 
+    /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
+    private static void registerClass()
+    {
+        clBase[clCount] = gbase;
+        clNameOff[clCount] = gThisNameOff;
+        clTib[clCount] = gTib;
+        clFieldCount[clCount] = gifCount;
+        clCount += 1;
+        int s = 0;
+        while (s < gifCount)
+        {
+            fldBase[fldCount] = gbase;
+            fldClassOff[fldCount] = gThisNameOff;
+            fldNameOff[fldCount] = gifName[s];
+            fldSlot[fldCount] = s;
+            fldCount += 1;
+            s += 1;
+        }
+    }
+
+    /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
+    private static int classRegOf(int classIdx)
+    {
+        int nameOff = gcp[u2(gbase + gcp[classIdx])];   // Class entry -> name Utf8 offset
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8EqAt(gbase, nameOff, clBase[i], clNameOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** True if the class of {@code *ref} {@code idx} is a loaded (registered) class. */
+    private static boolean refClassRegistered(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8EqAt(gbase, classOff, clBase[i], clNameOff[i]))
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** invokespecial is a real call (not an Object.&lt;init&gt; pop) if its class is loaded. */
+    private static boolean isRealSpecial(int idx)
+    {
+        return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
+    }
+
+    /** Instance-field offset for a cross-class Fieldref (registry lookup by class+name). */
+    private static int globalFieldOffset(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        int i = 0;
+        while (i < fldCount)
+        {
+            if (utf8EqAt(gbase, classOff, fldBase[i], fldClassOff[i])
+                    && utf8EqAt(gbase, nameOff, fldBase[i], fldNameOff[i]))
+            {
+                return 16 + fldSlot[i] * 8;
+            }
+            i += 1;
+        }
+        return 16;
+    }
+
     /**
      * Build this class's TIB in the heap: slot 0 is the Type (null — no
      * instanceof/checkcast on loaded objects yet), then one vtable entry per
@@ -861,7 +967,7 @@ public final class Loader
         }
         else if (op == 0xbb)
         {
-            emitNew();    // new (same class)
+            emitNew(u2(code + pc + 1));    // new (same or cross class)
         }
         else if (op == 0xb4)
         {
@@ -919,14 +1025,13 @@ public final class Loader
     private static void emitInvokeSpecial(long code, int pc)
     {
         int idx = u2(code + pc + 1);
-        long c = calleeCodeOf(idx);
-        if (c == 0L)
+        if (isRealSpecial(idx))                            // same class or a loaded cross-class ctor
         {
-            csp -= 1;                                      // Object.<init>/unresolved: pop receiver
+            emitCallSeq(idx, resolveCallBuf(idx), 1);      // pass this as the extra leading arg
         }
         else
         {
-            emitCallSeq(idx, bufOf(c), 1);                 // pass this as the extra leading arg
+            csp -= 1;                                      // Object.<init>/unresolved: pop receiver
         }
     }
 
@@ -973,13 +1078,23 @@ public final class Loader
     /**
      * new: allocate an instance by calling the image's {@code Heap.alloc} (whose
      * address the writer stashes in {@code VM.heapAlloc}). Same 128-byte spill as a
-     * call — {@code Heap.alloc} clobbers the caller-saved value regs — then null the
-     * TIB header (no on-metal vtable for a loaded class) and push the reference.
+     * call — {@code Heap.alloc} clobbers the caller-saved value regs — then store the
+     * class's TIB into the header and push the reference. The target class may be
+     * another loaded class (size + TIB from the class registry); if it isn't
+     * registered yet it is the current class being compiled (use its context).
      * Fields are zero only on a fresh bump (Heap does not clear reused blocks).
      */
-    private static void emitNew()
+    private static void emitNew(int classIdx)
     {
-        int size = 16 + gifCount * 8;                      // header(16) + one 8-byte slot per field
+        int c = classRegOf(classIdx);
+        int fields = gifCount;                             // default: the current class
+        long tib = gTib;
+        if (c >= 0)
+        {
+            fields = clFieldCount[c];                       // another loaded class
+            tib = clTib[c];
+        }
+        int size = 16 + fields * 8;                        // header(16) + one 8-byte slot per field
         emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
         emit(strx(30, 31, 0));
         int k = 1;
@@ -998,7 +1113,7 @@ public final class Loader
             k += 1;
         }
         emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
-        emitAddr16(gTib);                                  // x16 = &TIB
+        emitAddr16(tib);                                   // x16 = &TIB
         emit(strx(16, 0, 0));                              // header.tib = &TIB (vtable for dispatch)
         emit(mov(9 + csp, 0));                             // push the reference
         csp += 1;
@@ -1055,6 +1170,10 @@ public final class Loader
     /** Instance-field byte offset for the field named by {@code *ref} index (same class). */
     private static int fieldOffsetOf(int idx)
     {
+        if (!utf8Eq(refClassNameOff(idx), gThisNameOff))
+        {
+            return globalFieldOffset(idx);                 // field of another loaded class
+        }
         int nameOff = mrefNameOff(idx);                    // Fieldref layout == Methodref layout
         int s = 0;
         while (s < gifCount)
@@ -1296,7 +1415,7 @@ public final class Loader
         if (op == 0xb7)                                     // invokespecial
         {
             int idx = u2(code + pc + 1);
-            if (calleeCodeOf(idx) == 0L)
+            if (!isRealSpecial(idx))
             {
                 return 0;    // Object.<init>/unresolved lowers to just a pop
             }

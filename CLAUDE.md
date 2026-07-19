@@ -180,9 +180,27 @@ defines the minimum the assembler must encode.
     - **Gotcha fixed:** the registry arrays must be `new`'d — this VM emits no null
       checks, so a store to a null array silently scribbles low RAM instead of
       faulting (it corrupted the compile until the arrays were allocated).
-  - **Still to do on-metal:** cross-class `new`/fields/virtual dispatch (per-class
-    metadata in the registry), class hierarchies (inherited vtable slots, real
-    itables, a `Type` for `instanceof`), and dependency auto-ordering.
+  - **Cross-class `new` + fields + constructors DONE:** two more registries make a
+    class's *shape* visible to others. A **class registry** (`registerClass`/
+    `classRegOf`) records each loaded class's name, TIB, and instance-field count;
+    a **field registry** (`globalFieldOffset`) records each instance field's
+    class+name+slot. Now when Guest compiles `new Helper()` it allocates at Helper's
+    size and stores Helper's TIB (`emitNew` resolves the target via `classRegOf`,
+    falling back to the current class when the target isn't registered yet — i.e. a
+    same-class `new` mid-compile); `getfield`/`putfield vm/Helper.a` resolve the
+    offset through the field registry (`fieldOffsetOf` routes cross-class refs to
+    `globalFieldOffset`); and `invokespecial vm/Helper.<init>` is now a *real*
+    cross-class constructor call (`emitInvokeSpecial`/`wordsFor` use `isRealSpecial`
+    = same-class or a loaded class, so only `Object.<init>` stays a pop). QEMU's `*`
+    now runs entirely across the boundary: `new Helper()`, `h.a = Helper.scale(11)`,
+    `h.b = bias`, `h.a + h.b = 42`. **Limits:** still no cross-class
+    `invokevirtual`/`invokeinterface` (the vtable slot is resolved against the
+    *current* class's vtable, not the receiver's — fine only same-class); cross-class
+    objects get the right TIB but dispatch on them isn't wired; manual dependency
+    order; no `instanceof` (Type still null).
+  - **Still to do on-metal:** cross-class virtual/interface dispatch (resolve the
+    slot against the receiver class's vtable), class hierarchies (inherited vtable
+    slots, real itables, a `Type` for `instanceof`), and dependency auto-ordering.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
