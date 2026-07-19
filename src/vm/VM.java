@@ -81,5 +81,12 @@ public final class VM {
 
         Uart.putc(Config.mark);            // '7' — set by Config's <clinit> at boot
         Uart.putc(0x0A);
+
+        // class hierarchy: virtual dispatch on the static supertype hits the override
+        Animal dog = new Dog();
+        Uart.putc(dog.sound());            // 'W' — Dog overrides Animal.sound (same vtable slot)
+        Animal animal = new Animal();
+        Uart.putc(animal.sound());         // '?' — base implementation
+        Uart.putc(0x0A);
     }
 }

@@ -345,7 +345,7 @@ public final class BaselineCompiler {
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb) {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        int slot = resolve(ref.owner()).vtableSlot(ref.name(), ref.descriptor());
+        int slot = ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(), this::resolve);
         int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++) src[k] = popReg();

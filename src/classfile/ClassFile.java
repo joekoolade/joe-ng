@@ -48,12 +48,14 @@ public final class ClassFile {
     private final String[] utf8;
 
     private final String thisClass;
+    private final String superClass;   // null only for java/lang/Object
     private final Method[] methods;
     private final FieldInfo[] fields;
 
-    public String thisClassName() { return thisClass; }
-    public Method[] methods()     { return methods; }
-    public FieldInfo[] fields()   { return fields; }
+    public String thisClassName()  { return thisClass; }
+    public String superClassName() { return superClass; }
+    public Method[] methods()      { return methods; }
+    public FieldInfo[] fields()    { return fields; }
 
     /** Number of instance (non-static) fields — the object's field-slot count. */
     public int instanceFieldCount() {
@@ -73,9 +75,7 @@ public final class ClassFile {
         throw new IllegalArgumentException("no instance field " + name + " in " + thisClass);
     }
 
-    /** Virtual methods (non-static instance methods, excluding constructors), in declaration order.
-     *  Their positions are the vtable slots. (No inheritance beyond Object yet — a subclass would
-     *  keep superclass slots first and append/override; revisit when class hierarchies arrive.) */
+    /** This class's own virtual methods (non-static, non-constructor), in declaration order. */
     public java.util.List<Method> virtualMethods() {
         java.util.List<Method> vs = new java.util.ArrayList<>();
         for (Method m : methods)
@@ -83,12 +83,36 @@ public final class ClassFile {
         return vs;
     }
 
-    /** Vtable slot of instance method {@code name+descriptor}. */
-    public int vtableSlot(String name, String descriptor) {
-        java.util.List<Method> vs = virtualMethods();
-        for (int i = 0; i < vs.size(); i++)
-            if (vs.get(i).name.equals(name) && vs.get(i).descriptor.equals(descriptor)) return i;
-        throw new IllegalArgumentException("no virtual method " + name + descriptor + " in " + thisClass);
+    /** One vtable slot: the class providing the implementation, plus name/descriptor. */
+    public record VSlot(String owner, String name, String descriptor) {}
+
+    /**
+     * The flattened vtable for {@code cls}: superclass slots first (so a subclass
+     * shares its parent's slot indices), with overrides replacing the inherited
+     * slot in place and new methods appended. {@code resolve} loads each class.
+     */
+    public static java.util.List<VSlot> vtable(String cls, java.util.function.Function<String, ClassFile> resolve) {
+        ClassFile cf = resolve.apply(cls);
+        String sup = cf.superClass;
+        java.util.List<VSlot> slots = (sup == null || sup.equals("java/lang/Object"))
+                ? new java.util.ArrayList<>() : new java.util.ArrayList<>(vtable(sup, resolve));
+        for (Method m : cf.virtualMethods()) {
+            VSlot s = new VSlot(cls, m.name, m.descriptor);
+            int idx = -1;
+            for (int i = 0; i < slots.size(); i++)
+                if (slots.get(i).name().equals(m.name) && slots.get(i).descriptor().equals(m.descriptor)) { idx = i; break; }
+            if (idx >= 0) slots.set(idx, s); else slots.add(s);   // override in place, or append
+        }
+        return slots;
+    }
+
+    /** Vtable slot index of {@code name+descriptor} in {@code cls}'s flattened vtable. */
+    public static int vtableSlot(String cls, String name, String descriptor,
+                                 java.util.function.Function<String, ClassFile> resolve) {
+        java.util.List<VSlot> slots = vtable(cls, resolve);
+        for (int i = 0; i < slots.size(); i++)
+            if (slots.get(i).name().equals(name) && slots.get(i).descriptor().equals(descriptor)) return i;
+        throw new IllegalArgumentException("no virtual method " + name + descriptor + " in " + cls);
     }
 
     public Method method(String name, String descriptor) {
@@ -159,7 +183,8 @@ public final class ClassFile {
 
         in.readUnsignedShort();                                // access_flags
         thisClass = classAt(in.readUnsignedShort());
-        in.readUnsignedShort();                                // super_class
+        int sup = in.readUnsignedShort();
+        superClass = sup == 0 ? null : classAt(sup);
         int ifaces = in.readUnsignedShort();
         for (int i = 0; i < ifaces; i++) in.readUnsignedShort();
 

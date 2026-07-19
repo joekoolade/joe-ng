@@ -86,8 +86,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             use(ownerOf(k), usedClasses, clinitOrder, worklist);
             for (var t : cm.tibRefs()) {
                 if (tibClasses.add(t.className()))
-                    for (ClassFile.Method vm : resolve(t.className()).virtualMethods())
-                        worklist.add(BaselineCompiler.key(t.className(), vm.name, vm.descriptor));
+                    for (ClassFile.VSlot s : ClassFile.vtable(t.className(), this::resolve))
+                        worklist.add(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
             }
         }
         // Generate VM.initClasses(): call each discovered <clinit> once, in first-use order.
@@ -133,10 +133,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             writeLong(image, typeWord.get(cls), ObjectModel.scalarSize(cf.instanceFieldCount()));
             int tw = tibWord.get(cls);
             writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
-            var vmethods = cf.virtualMethods();
-            for (int slot = 0; slot < vmethods.size(); slot++) {
-                ClassFile.Method vm = vmethods.get(slot);
-                int mbase = wordOffset.get(BaselineCompiler.key(cls, vm.name, vm.descriptor));
+            var slots = ClassFile.vtable(cls, this::resolve);
+            for (int slot = 0; slot < slots.size(); slot++) {
+                ClassFile.VSlot s = slots.get(slot);
+                int mbase = wordOffset.get(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
                 writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
             }
         }
@@ -165,7 +165,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         return cb;
     }
 
-    private int vtableLength(String cls) { return resolve(cls).virtualMethods().size(); }
+    private int vtableLength(String cls) { return ClassFile.vtable(cls, this::resolve).size(); }
 
     /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
     private void use(String cls, Set<String> used, List<String> clinitOrder, List<String> worklist) {

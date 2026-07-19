@@ -149,6 +149,17 @@ public final class CompilerTest {
         };
         T.eqWords("Counter.get (getstatic)", getStaticWant, getStatic);
 
+        // ---- class hierarchy: flattened vtable (override in place, shared slot) ----
+        java.util.function.Function<String, ClassFile> res = c -> {
+            try { return ClassFile.parse(classesDir.resolve(c + ".class")); }
+            catch (Exception e) { throw new RuntimeException(e); }
+        };
+        T.eq("Animal vtable size", 1, ClassFile.vtable("vm/Animal", res).size());
+        T.eq("Dog vtable size (override, not append)", 1, ClassFile.vtable("vm/Dog", res).size());
+        T.eq("Animal.sound slot", 0, ClassFile.vtableSlot("vm/Animal", "sound", "()I", res));
+        T.eq("Dog.sound shares slot 0", 0, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
+        T.eq("Dog slot 0 impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(0).owner().equals("vm/Dog") ? 1 : 0);
+
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);

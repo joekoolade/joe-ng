@@ -168,10 +168,18 @@ defines the minimum the assembler must encode.
   `run()`, so all statics are initialized once before the program. QEMU prints `7`
   from `Config.mark` set in a static block. (Naive first-use ordering — no
   dependency-topological order or per-class init guards yet.)
-- **M2 remaining:** `instanceof`/`checkcast`, char/short arrays (`ldrh`/`strh`),
-  and class hierarchies (super calls, vtable inheritance). A real `String` class
-  over the byte[] is a later class-library step. GC is still M6. `baload`
-  zero-extends (fine for ASCII; `ldrsb` later).
+- **Class hierarchies DONE:** superclass parsed (`ClassFile.superClassName`) and a
+  **flattened vtable** (`ClassFile.vtable`) — superclass slots first, overrides
+  replace in place, new methods append. `invokevirtual` on a static supertype hits
+  the runtime override at the shared slot; `super(...)` constructor calls work
+  (`invokespecial` to a non-Object `<init>` is a real call). The writer fills each
+  class's TIB vtable with the most-derived impl per slot and lays out all slot
+  implementations. QEMU prints `W?` — `Dog` override vs `Animal` base via an
+  `Animal`-typed reference. (No interfaces / abstract dispatch yet.)
+- **M2 remaining:** `instanceof`/`checkcast` (needs the Type/superclass chain),
+  char/short arrays (`ldrh`/`strh`), interfaces. A real `String` class over the
+  byte[] is a later class-library step. GC is still M6. `baload` zero-extends
+  (fine for ASCII; `ldrsb` later).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →

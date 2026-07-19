@@ -48,7 +48,9 @@ logs what informed each piece so encodings and boot facts are auditable.
   and String constants (strings interned as byte[] objects), getstatic/putstatic
   (image statics area). Static initializers (`<clinit>`) run eagerly at boot via
   a writer-generated init sequence (JVMS §5.5 initialization, simplified to
-  closed-world eager order). The parser and lowering are written from the
+  closed-world eager order). Class hierarchies use a flattened vtable (superclass
+  slots first, overrides in place) — JVMS §5.4.5 overriding, our own
+  single-inheritance vtable layout. The parser and lowering are written from the
   spec; the object layout (`objectmodel`), the calling convention, and the
   `magic.Magic` intrinsic set + A64 lowering are ours.
 
