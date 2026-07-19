@@ -112,10 +112,13 @@ public final class ClassFile
     public int instanceFieldCount()
     {
         int n = 0;
-        for (FieldInfo f : fields) if (!f.isStatic())
+        for (FieldInfo f : fields)
+        {
+            if (!f.isStatic())
             {
                 n++;
             }
+        }
         return n;
     }
 
@@ -143,10 +146,12 @@ public final class ClassFile
     {
         java.util.List<Method> vs = new java.util.ArrayList<>();
         for (Method m : methods)
+        {
             if (!m.isStatic && !m.name.equals("<init>"))
             {
                 vs.add(m);
             }
+        }
         return vs;
     }
 
@@ -169,11 +174,13 @@ public final class ClassFile
             VSlot s = new VSlot(cls, m.name, m.descriptor);
             int idx = -1;
             for (int i = 0; i < slots.size(); i++)
+            {
                 if (slots.get(i).name().equals(m.name) && slots.get(i).descriptor().equals(m.descriptor))
                 {
                     idx = i;
                     break;
                 }
+            }
             if (idx >= 0)
             {
                 slots.set(idx, s);
@@ -192,10 +199,12 @@ public final class ClassFile
     {
         java.util.List<VSlot> slots = vtable(cls, resolve);
         for (int i = 0; i < slots.size(); i++)
+        {
             if (slots.get(i).name().equals(name) && slots.get(i).descriptor().equals(descriptor))
             {
                 return i;
             }
+        }
         throw new IllegalArgumentException("no virtual method " + name + descriptor + " in " + cls);
     }
 
@@ -205,10 +214,12 @@ public final class ClassFile
     {
         java.util.List<Method> ms = new java.util.ArrayList<>();
         for (Method m : methods)
+        {
             if (!m.isStatic && !m.name.equals("<init>") && !m.name.equals("<clinit>"))
             {
                 ms.add(m);
             }
+        }
         return ms;
     }
 
@@ -217,10 +228,12 @@ public final class ClassFile
     {
         java.util.List<Method> ms = interfaceMethods();
         for (int i = 0; i < ms.size(); i++)
+        {
             if (ms.get(i).name.equals(name) && ms.get(i).descriptor.equals(descriptor))
             {
                 return i;
             }
+        }
         throw new IllegalArgumentException("no interface method " + name + descriptor + " in " + thisClass);
     }
 
@@ -229,10 +242,12 @@ public final class ClassFile
     {
         java.util.Set<String> out = new java.util.LinkedHashSet<>();
         for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
+        {
             for (String i : resolve.apply(c).interfaces)
             {
                 out.add(i);
             }
+        }
         return out;
     }
 
@@ -240,31 +255,40 @@ public final class ClassFile
     public static String findImpl(String cls, String name, String descriptor, java.util.function.Function<String, ClassFile> resolve)
     {
         for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
+        {
             for (Method m : resolve.apply(c).methods)
+            {
                 if (!m.isStatic && m.code != null && m.name.equals(name) && m.descriptor.equals(descriptor))
                 {
                     return c;
                 }
+            }
+        }
         throw new IllegalArgumentException("no implementation of " + name + descriptor + " in " + cls);
     }
 
     public Method method(String name, String descriptor)
     {
         for (Method m : methods)
+        {
             if (m.name.equals(name) && m.descriptor.equals(descriptor))
             {
                 return m;
             }
+        }
         throw new IllegalArgumentException("no method " + name + descriptor + " in " + thisClass);
     }
 
     /** True if this class has a static initializer {@code <clinit>()V}. */
     public boolean hasClinit()
     {
-        for (Method m : methods) if (m.name.equals("<clinit>") && m.descriptor.equals("()V"))
+        for (Method m : methods)
+        {
+            if (m.name.equals("<clinit>") && m.descriptor.equals("()V"))
             {
                 return true;
             }
+        }
         return false;
     }
 
@@ -319,8 +343,10 @@ public final class ClassFile
     private void require(int i, int expected)
     {
         if (i <= 0 || i >= tag.length || tag[i] != expected)
+        {
             throw new IllegalStateException("cp#" + i + " expected tag " + expected + " got "
                                             + (i < tag.length ? tag[i] : "oob"));
+        }
     }
 
     // ----- parsing ---------------------------------------------------------
@@ -353,14 +379,22 @@ public final class ClassFile
             {
             case UTF8 -> utf8[i] = in.readUTF();
             case INTEGER, FLOAT -> ref1[i] = in.readInt();
-            case LONG, DOUBLE -> { longVal[i] = in.readLong(); i++; } // takes two slots
+            case LONG, DOUBLE ->
+            {
+                longVal[i] = in.readLong();
+                i++;
+            }  // takes two slots
                 case CLASS, STRING, METHODTYPE, MODULE, PACKAGE -> ref1[i] = in.readUnsignedShort();
             case FIELDREF, METHODREF, IFACEMETHODREF, NAMEANDTYPE, DYNAMIC, INVOKEDYNAMIC ->
             {
                 ref1[i] = in.readUnsignedShort();
                 ref2[i] = in.readUnsignedShort();
             }
-            case METHODHANDLE -> { ref1[i] = in.readUnsignedByte(); ref2[i] = in.readUnsignedShort(); }
+            case METHODHANDLE ->
+            {
+                ref1[i] = in.readUnsignedByte();
+                ref2[i] = in.readUnsignedShort();
+            }
                     default -> throw new IOException("unknown constant-pool tag " + t + " at #" + i);
             }
         }
@@ -424,8 +458,10 @@ public final class ClassFile
                     int exc = in.readUnsignedShort();
                     exceptions = new ExceptionEntry[exc];
                     for (int e = 0; e < exc; e++)
+                    {
                         exceptions[e] = new ExceptionEntry(in.readUnsignedShort(), in.readUnsignedShort(),
                                                            in.readUnsignedShort(), in.readUnsignedShort());
+                    }
                     skipAttributes(in);
                 }
                 else

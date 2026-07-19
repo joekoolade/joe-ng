@@ -254,72 +254,307 @@ public final class BaselineCompiler
     {
         switch (op)
         {
-        case 0x00 -> { return 1; }                                  // nop
-            case 0xB1 -> { emitEpilogue(cb); return 1; }               // return
-                case 0xAC, 0xAD, 0xB0 -> { cb.emit(A64.movReg(0, popReg())); emitEpilogue(cb); return 1; } // ireturn/lreturn/areturn
+        case 0x00 ->
+        {
+            return 1;
+        }  // nop
+            case 0xB1 ->
+            {
+                emitEpilogue(cb);
+                return 1;
+            }  // return
+                case 0xAC, 0xAD, 0xB0 ->
+                {
+                    cb.emit(A64.movReg(0, popReg()));
+                    emitEpilogue(cb);
+                    return 1;
+                }  // ireturn/lreturn/areturn
 
-                    case 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 -> { loadConst(cb, op - 0x03); return 1; }
-                        case 0x09 -> { loadConst(cb, 0); return 1; }
-                            case 0x0A -> { loadConst(cb, 1); return 1; }
-                                case 0x10 -> { loadConst(cb, (byte) code[pos + 1]); return 2; }
-                                    case 0x11 -> { loadConst(cb, (short) u2(code, pos + 1)); return 3; }
-                                        case 0x12 -> { ldc(cb, code[pos + 1] & 0xFF); return 2; }
-                                            case 0x13 -> { ldc(cb, u2(code, pos + 1)); return 3; }
-                                                case 0x14 -> { loadConst(cb, cf.longAt(u2(code, pos + 1))); return 3; }
+                    case 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 ->
+                    {
+                        loadConst(cb, op - 0x03);
+                        return 1;
+                    }
+                        case 0x09 ->
+                        {
+                            loadConst(cb, 0);
+                            return 1;
+                        }
+                            case 0x0A ->
+                            {
+                                loadConst(cb, 1);
+                                return 1;
+                            }
+                                case 0x10 ->
+                                {
+                                    loadConst(cb, (byte) code[pos + 1]);
+                                    return 2;
+                                }
+                                    case 0x11 ->
+                                    {
+                                        loadConst(cb, (short) u2(code, pos + 1));
+                                        return 3;
+                                    }
+                                        case 0x12 ->
+                                        {
+                                            ldc(cb, code[pos + 1] & 0xFF);
+                                            return 2;
+                                        }
+                                            case 0x13 ->
+                                            {
+                                                ldc(cb, u2(code, pos + 1));
+                                                return 3;
+                                            }
+                                                case 0x14 ->
+                                                {
+                                                    loadConst(cb, cf.longAt(u2(code, pos + 1)));
+                                                    return 3;
+                                                }
 
-                                                    case 0x15, 0x16, 0x19 -> { load(cb, code[pos + 1] & 0xFF); return 2; }     // iload/lload/aload
-                                                        case 0x1A, 0x1B, 0x1C, 0x1D -> { load(cb, op - 0x1A); return 1; }         // iload_0..3
-                                                            case 0x1E, 0x1F, 0x20, 0x21 -> { load(cb, op - 0x1E); return 1; }         // lload_0..3
-                                                                case 0x2A, 0x2B, 0x2C, 0x2D -> { load(cb, op - 0x2A); return 1; }         // aload_0..3
+                                                    case 0x15, 0x16, 0x19 ->
+                                                    {
+                                                        load(cb, code[pos + 1] & 0xFF);
+                                                        return 2;
+                                                    }  // iload/lload/aload
+                                                        case 0x1A, 0x1B, 0x1C, 0x1D ->
+                                                        {
+                                                            load(cb, op - 0x1A);
+                                                            return 1;
+                                                        }  // iload_0..3
+                                                            case 0x1E, 0x1F, 0x20, 0x21 ->
+                                                            {
+                                                                load(cb, op - 0x1E);
+                                                                return 1;
+                                                            }  // lload_0..3
+                                                                case 0x2A, 0x2B, 0x2C, 0x2D ->
+                                                                {
+                                                                    load(cb, op - 0x2A);
+                                                                    return 1;
+                                                                }  // aload_0..3
 
-                                                                    case 0x36, 0x37, 0x3A -> { store(cb, code[pos + 1] & 0xFF); return 2; }   // istore/lstore/astore
-                                                                        case 0x3B, 0x3C, 0x3D, 0x3E -> { store(cb, op - 0x3B); return 1; }        // istore_0..3
-                                                                            case 0x3F, 0x40, 0x41, 0x42 -> { store(cb, op - 0x3F); return 1; }        // lstore_0..3
-                                                                                case 0x4B, 0x4C, 0x4D, 0x4E -> { store(cb, op - 0x4B); return 1; }        // astore_0..3
-                                                                                    case 0x57 -> { popReg(); return 1; }                                      // pop (discard result)
-                                                                                        case 0x59 -> { dup(cb); return 1; }                                       // dup
-                                                                                            case 0x84 -> { iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]); return 3; }
+                                                                    case 0x36, 0x37, 0x3A ->
+                                                                    {
+                                                                        store(cb, code[pos + 1] & 0xFF);
+                                                                        return 2;
+                                                                    }  // istore/lstore/astore
+                                                                        case 0x3B, 0x3C, 0x3D, 0x3E ->
+                                                                        {
+                                                                            store(cb, op - 0x3B);
+                                                                            return 1;
+                                                                        }  // istore_0..3
+                                                                            case 0x3F, 0x40, 0x41, 0x42 ->
+                                                                            {
+                                                                                store(cb, op - 0x3F);
+                                                                                return 1;
+                                                                            }  // lstore_0..3
+                                                                                case 0x4B, 0x4C, 0x4D, 0x4E ->
+                                                                                {
+                                                                                    store(cb, op - 0x4B);
+                                                                                    return 1;
+                                                                                }  // astore_0..3
+                                                                                    case 0x57 ->
+                                                                                    {
+                                                                                        popReg();
+                                                                                        return 1;
+                                                                                    }  // pop (discard result)
+                                                                                        case 0x59 ->
+                                                                                        {
+                                                                                            dup(cb);
+                                                                                            return 1;
+                                                                                        }  // dup
+                                                                                            case 0x84 ->
+                                                                                            {
+                                                                                                iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]);
+                                                                                                return 3;
+                                                                                            }
 
                                                                                                 // ---- array element load/store (base + index<<scale) ----
-                                                                                                case 0x33 -> { arrayLoad(cb, 0); return 1; }          // baload  (byte, zero-ext)
-                                                                                                    case 0x2E -> { arrayLoad(cb, 2); return 1; }          // iaload  (int, sign-ext)
-                                                                                                        case 0x2F -> { arrayLoad(cb, 3); return 1; }          // laload  (long)
-                                                                                                            case 0x32 -> { arrayLoad(cb, 3); return 1; }          // aaload  (ref)
-                                                                                                                case 0x54 -> { arrayStore(cb, 0); return 1; }         // bastore
-                                                                                                                    case 0x4F -> { arrayStore(cb, 2); return 1; }         // iastore
-                                                                                                                        case 0x50 -> { arrayStore(cb, 3); return 1; }         // lastore
-                                                                                                                            case 0x53 -> { arrayStore(cb, 3); return 1; }         // aastore
-                                                                                                                                case 0xBE -> { arrayLength(cb); return 1; }           // arraylength
+                                                                                                case 0x33 ->
+                                                                                                {
+                                                                                                    arrayLoad(cb, 0);
+                                                                                                    return 1;
+                                                                                                }  // baload  (byte, zero-ext)
+                                                                                                    case 0x2E ->
+                                                                                                    {
+                                                                                                        arrayLoad(cb, 2);
+                                                                                                        return 1;
+                                                                                                    }  // iaload  (int, sign-ext)
+                                                                                                        case 0x2F ->
+                                                                                                        {
+                                                                                                            arrayLoad(cb, 3);
+                                                                                                            return 1;
+                                                                                                        }  // laload  (long)
+                                                                                                            case 0x32 ->
+                                                                                                            {
+                                                                                                                arrayLoad(cb, 3);
+                                                                                                                return 1;
+                                                                                                            }  // aaload  (ref)
+                                                                                                                case 0x54 ->
+                                                                                                                {
+                                                                                                                    arrayStore(cb, 0);
+                                                                                                                    return 1;
+                                                                                                                }  // bastore
+                                                                                                                    case 0x4F ->
+                                                                                                                    {
+                                                                                                                        arrayStore(cb, 2);
+                                                                                                                        return 1;
+                                                                                                                    }  // iastore
+                                                                                                                        case 0x50 ->
+                                                                                                                        {
+                                                                                                                            arrayStore(cb, 3);
+                                                                                                                            return 1;
+                                                                                                                        }  // lastore
+                                                                                                                            case 0x53 ->
+                                                                                                                            {
+                                                                                                                                arrayStore(cb, 3);
+                                                                                                                                return 1;
+                                                                                                                            }  // aastore
+                                                                                                                                case 0xBE ->
+                                                                                                                                {
+                                                                                                                                    arrayLength(cb);
+                                                                                                                                    return 1;
+                                                                                                                                }  // arraylength
 
-                                                                                                                                    case 0x60, 0x61 -> { binop(cb, Bin.ADD); return 1; }
-                                                                                                                                        case 0x64, 0x65 -> { binop(cb, Bin.SUB); return 1; }
-                                                                                                                                            case 0x68, 0x69 -> { binop(cb, Bin.MUL); return 1; }
-                                                                                                                                                case 0x74, 0x75 -> { int r = OP_BASE + sp - 1; cb.emit(A64.subReg(r, A64.XZR, r)); return 1; } // ineg/lneg
-                                                                                                                                                    case 0x78, 0x79 -> { binop(cb, Bin.SHL); return 1; }        // ishl/lshl
-                                                                                                                                                        case 0x7A, 0x7B -> { binop(cb, Bin.ASR); return 1; }        // ishr/lshr
-                                                                                                                                                            case 0x7C, 0x7D -> { binop(cb, Bin.LSR); return 1; }        // iushr/lushr
-                                                                                                                                                                case 0x7E, 0x7F -> { binop(cb, Bin.AND); return 1; }
-                                                                                                                                                                    case 0x80, 0x81 -> { binop(cb, Bin.OR); return 1; }        // ior/lor
-                                                                                                                                                                        case 0x82, 0x83 -> { binop(cb, Bin.XOR); return 1; }       // ixor/lxor
-                                                                                                                                                                            case 0x94 -> { lcmp(cb); return 1; }                        // lcmp -> -1/0/1
+                                                                                                                                    case 0x60, 0x61 ->
+                                                                                                                                    {
+                                                                                                                                        binop(cb, Bin.ADD);
+                                                                                                                                        return 1;
+                                                                                                                                    }
+                                                                                                                                        case 0x64, 0x65 ->
+                                                                                                                                        {
+                                                                                                                                            binop(cb, Bin.SUB);
+                                                                                                                                            return 1;
+                                                                                                                                        }
+                                                                                                                                            case 0x68, 0x69 ->
+                                                                                                                                            {
+                                                                                                                                                binop(cb, Bin.MUL);
+                                                                                                                                                return 1;
+                                                                                                                                            }
+                                                                                                                                                case 0x74, 0x75 ->
+                                                                                                                                                {
+                                                                                                                                                    int r = OP_BASE + sp - 1;
+                                                                                                                                                    cb.emit(A64.subReg(r, A64.XZR, r));
+                                                                                                                                                    return 1;
+                                                                                                                                                }  // ineg/lneg
+                                                                                                                                                    case 0x78, 0x79 ->
+                                                                                                                                                    {
+                                                                                                                                                        binop(cb, Bin.SHL);
+                                                                                                                                                        return 1;
+                                                                                                                                                    }  // ishl/lshl
+                                                                                                                                                        case 0x7A, 0x7B ->
+                                                                                                                                                        {
+                                                                                                                                                            binop(cb, Bin.ASR);
+                                                                                                                                                            return 1;
+                                                                                                                                                        }  // ishr/lshr
+                                                                                                                                                            case 0x7C, 0x7D ->
+                                                                                                                                                            {
+                                                                                                                                                                binop(cb, Bin.LSR);
+                                                                                                                                                                return 1;
+                                                                                                                                                            }  // iushr/lushr
+                                                                                                                                                                case 0x7E, 0x7F ->
+                                                                                                                                                                {
+                                                                                                                                                                    binop(cb, Bin.AND);
+                                                                                                                                                                    return 1;
+                                                                                                                                                                }
+                                                                                                                                                                    case 0x80, 0x81 ->
+                                                                                                                                                                    {
+                                                                                                                                                                        binop(cb, Bin.OR);
+                                                                                                                                                                        return 1;
+                                                                                                                                                                    }  // ior/lor
+                                                                                                                                                                        case 0x82, 0x83 ->
+                                                                                                                                                                        {
+                                                                                                                                                                            binop(cb, Bin.XOR);
+                                                                                                                                                                            return 1;
+                                                                                                                                                                        }  // ixor/lxor
+                                                                                                                                                                            case 0x94 ->
+                                                                                                                                                                            {
+                                                                                                                                                                                lcmp(cb);
+                                                                                                                                                                                return 1;
+                                                                                                                                                                            }  // lcmp -> -1/0/1
 
-                                                                                                                                                                                case 0x85, 0x88 -> { return 1; }                           // i2l/l2i: no-op (values fit 64-bit)
-                                                                                                                                                                                    case 0x91 -> { int r = OP_BASE + sp - 1; cb.emit(A64.sxtb(r, r)); return 1; }  // i2b
-                                                                                                                                                                                        case 0x92 -> { int r = OP_BASE + sp - 1; cb.emit(A64.uxth(r, r)); return 1; }  // i2c
-                                                                                                                                                                                            case 0x93 -> { int r = OP_BASE + sp - 1; cb.emit(A64.sxth(r, r)); return 1; }  // i2s
+                                                                                                                                                                                case 0x85, 0x88 ->
+                                                                                                                                                                                {
+                                                                                                                                                                                    return 1;
+                                                                                                                                                                                }  // i2l/l2i: no-op (values fit 64-bit)
+                                                                                                                                                                                    case 0x91 ->
+                                                                                                                                                                                    {
+                                                                                                                                                                                        int r = OP_BASE + sp - 1;
+                                                                                                                                                                                        cb.emit(A64.sxtb(r, r));
+                                                                                                                                                                                        return 1;
+                                                                                                                                                                                    }  // i2b
+                                                                                                                                                                                        case 0x92 ->
+                                                                                                                                                                                        {
+                                                                                                                                                                                            int r = OP_BASE + sp - 1;
+                                                                                                                                                                                            cb.emit(A64.uxth(r, r));
+                                                                                                                                                                                            return 1;
+                                                                                                                                                                                        }  // i2c
+                                                                                                                                                                                            case 0x93 ->
+                                                                                                                                                                                            {
+                                                                                                                                                                                                int r = OP_BASE + sp - 1;
+                                                                                                                                                                                                cb.emit(A64.sxth(r, r));
+                                                                                                                                                                                                return 1;
+                                                                                                                                                                                            }  // i2s
 
-                                                                                                                                                                                                case 0x99 -> { branchZero(cb, code, pos, true);  return 3; }
-                                                                                                                                                                                                    case 0x9A -> { branchZero(cb, code, pos, false); return 3; }
-                                                                                                                                                                                                        case 0x9B -> { branchCmpZero(cb, code, pos, A64.LT); return 3; }
-                                                                                                                                                                                                            case 0x9C -> { branchCmpZero(cb, code, pos, A64.GE); return 3; }
-                                                                                                                                                                                                                case 0x9D -> { branchCmpZero(cb, code, pos, A64.GT); return 3; }
-                                                                                                                                                                                                                    case 0x9E -> { branchCmpZero(cb, code, pos, A64.LE); return 3; }
-                                                                                                                                                                                                                        case 0x9F -> { branchCmp(cb, code, pos, A64.EQ); return 3; }
-                                                                                                                                                                                                                            case 0xA0 -> { branchCmp(cb, code, pos, A64.NE); return 3; }
-                                                                                                                                                                                                                                case 0xA1 -> { branchCmp(cb, code, pos, A64.LT); return 3; }
-                                                                                                                                                                                                                                    case 0xA2 -> { branchCmp(cb, code, pos, A64.GE); return 3; }
-                                                                                                                                                                                                                                        case 0xA3 -> { branchCmp(cb, code, pos, A64.GT); return 3; }
-                                                                                                                                                                                                                                            case 0xA4 -> { branchCmp(cb, code, pos, A64.LE); return 3; }
+                                                                                                                                                                                                case 0x99 ->
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    branchZero(cb, code, pos, true);
+                                                                                                                                                                                                    return 3;
+                                                                                                                                                                                                }
+                                                                                                                                                                                                    case 0x9A ->
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        branchZero(cb, code, pos, false);
+                                                                                                                                                                                                        return 3;
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                        case 0x9B ->
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                            branchCmpZero(cb, code, pos, A64.LT);
+                                                                                                                                                                                                            return 3;
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                            case 0x9C ->
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                branchCmpZero(cb, code, pos, A64.GE);
+                                                                                                                                                                                                                return 3;
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                                case 0x9D ->
+                                                                                                                                                                                                                {
+                                                                                                                                                                                                                    branchCmpZero(cb, code, pos, A64.GT);
+                                                                                                                                                                                                                    return 3;
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                                    case 0x9E ->
+                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                        branchCmpZero(cb, code, pos, A64.LE);
+                                                                                                                                                                                                                        return 3;
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                        case 0x9F ->
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                            branchCmp(cb, code, pos, A64.EQ);
+                                                                                                                                                                                                                            return 3;
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                            case 0xA0 ->
+                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                branchCmp(cb, code, pos, A64.NE);
+                                                                                                                                                                                                                                return 3;
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                case 0xA1 ->
+                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                    branchCmp(cb, code, pos, A64.LT);
+                                                                                                                                                                                                                                    return 3;
+                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                    case 0xA2 ->
+                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                        branchCmp(cb, code, pos, A64.GE);
+                                                                                                                                                                                                                                        return 3;
+                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                        case 0xA3 ->
+                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                            branchCmp(cb, code, pos, A64.GT);
+                                                                                                                                                                                                                                            return 3;
+                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                            case 0xA4 ->
+                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                branchCmp(cb, code, pos, A64.LE);
+                                                                                                                                                                                                                                                return 3;
+                                                                                                                                                                                                                                            }
                                                                                                                                                                                                                                                 case 0xA7 ->
                                                                                                                                                                                                                                                 {
                                                                                                                                                                                                                                                     int target = pos + s2(code, pos + 1);
@@ -329,19 +564,71 @@ public final class BaselineCompiler
                                                                                                                                                                                                                                                     return 3;
                                                                                                                                                                                                                                                 }
 
-        case 0xB2 -> { getstatic(cb, u2(code, pos + 1)); return 3; }
-            case 0xB3 -> { putstatic(cb, u2(code, pos + 1)); return 3; }
-                case 0xB4 -> { getfield(cb, u2(code, pos + 1)); return 3; }
-                    case 0xB5 -> { putfield(cb, u2(code, pos + 1)); return 3; }
-                        case 0xB6 -> { lowerInvokeVirtual(u2(code, pos + 1), cb); return 3; }
-                            case 0xB7 -> { lowerInvokeSpecial(u2(code, pos + 1), cb); return 3; }
-                                case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
-                                    case 0xB9 -> { lowerInvokeInterface(u2(code, pos + 1), cb); return 5; } // invokeinterface
-                                        case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
-                                            case 0xBC -> { lowerNewArray(code[pos + 1] & 0xFF, cb); return 2; }
-                                                case 0xBF -> { athrow(cb, pos); return 1; }                                    // athrow
-                                                    case 0xC0 -> { typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J"); return 3; }  // checkcast
-                                                        case 0xC1 -> { typeCheck(cb, u2(code, pos + 1), "instanceOf", "(JJ)I"); return 3; } // instanceof
+        case 0xB2 ->
+        {
+            getstatic(cb, u2(code, pos + 1));
+            return 3;
+        }
+            case 0xB3 ->
+            {
+                putstatic(cb, u2(code, pos + 1));
+                return 3;
+            }
+                case 0xB4 ->
+                {
+                    getfield(cb, u2(code, pos + 1));
+                    return 3;
+                }
+                    case 0xB5 ->
+                    {
+                        putfield(cb, u2(code, pos + 1));
+                        return 3;
+                    }
+                        case 0xB6 ->
+                        {
+                            lowerInvokeVirtual(u2(code, pos + 1), cb);
+                            return 3;
+                        }
+                            case 0xB7 ->
+                            {
+                                lowerInvokeSpecial(u2(code, pos + 1), cb);
+                                return 3;
+                            }
+                                case 0xB8 ->
+                                {
+                                    lowerInvokeStatic(u2(code, pos + 1), cb);
+                                    return 3;
+                                }
+                                    case 0xB9 ->
+                                    {
+                                        lowerInvokeInterface(u2(code, pos + 1), cb);
+                                        return 5;
+                                    }  // invokeinterface
+                                        case 0xBB ->
+                                        {
+                                            lowerNew(u2(code, pos + 1), cb);
+                                            return 3;
+                                        }
+                                            case 0xBC ->
+                                            {
+                                                lowerNewArray(code[pos + 1] & 0xFF, cb);
+                                                return 2;
+                                            }
+                                                case 0xBF ->
+                                                {
+                                                    athrow(cb, pos);
+                                                    return 1;
+                                                }  // athrow
+                                                    case 0xC0 ->
+                                                    {
+                                                        typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J");
+                                                        return 3;
+                                                    }  // checkcast
+                                                        case 0xC1 ->
+                                                        {
+                                                            typeCheck(cb, u2(code, pos + 1), "instanceOf", "(JJ)I");
+                                                            return 3;
+                                                        }  // instanceof
 
                                                                 default -> throw new UnsupportedOperationException(
                                                                     String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
@@ -406,7 +693,9 @@ public final class BaselineCompiler
 
     private void binop(CodeBuffer cb, Bin kind)
     {
-        int b = popReg(), a = popReg(), r = pushReg();
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();
         cb.emit(switch (kind)
     {
     case ADD -> A64.addReg(r, a, b);
@@ -430,7 +719,9 @@ public final class BaselineCompiler
     /** lcmp: push -1/0/1 for a&lt;b / a==b / a&gt;b (usually consumed by a following if). */
     private void lcmp(CodeBuffer cb)
     {
-        int b = popReg(), a = popReg(), r = pushReg();
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();
         cb.emit(A64.cmpReg(a, b));
         cb.emit(A64.cset(r, A64.GT));            // a>b -> 1, else 0
         cb.emit(A64.csinv(r, r, A64.XZR, A64.GE)); // a<b -> -1, else keep
@@ -477,14 +768,16 @@ public final class BaselineCompiler
     private void getfield(CodeBuffer cb, int cpIndex)
     {
         int off = fieldOffset(cf.memberRef(cpIndex));
-        int obj = popReg(), r = pushReg();
+        int obj = popReg();
+        int r = pushReg();
         cb.emit(A64.ldrx(r, obj, off));
     }
 
     private void putfield(CodeBuffer cb, int cpIndex)
     {
         int off = fieldOffset(cf.memberRef(cpIndex));
-        int val = popReg(), obj = popReg();
+        int val = popReg();
+        int obj = popReg();
         cb.emit(A64.strx(val, obj, off));
     }
 
@@ -531,7 +824,8 @@ public final class BaselineCompiler
 
     private void branchCmp(CodeBuffer cb, byte[] code, int pos, int cond)
     {
-        int b = popReg(), a = popReg();
+        int b = popReg();
+        int a = popReg();
         cb.emit(A64.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
@@ -762,7 +1056,8 @@ public final class BaselineCompiler
 
     private void arrayLength(CodeBuffer cb)
     {
-        int arr = popReg(), r = pushReg();
+        int arr = popReg();
+        int r = pushReg();
         cb.emit(A64.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
     }
 
@@ -778,7 +1073,9 @@ public final class BaselineCompiler
 
     private void arrayStore(CodeBuffer cb, int scale)
     {
-        int val = popReg(), index = popReg(), arr = popReg();
+        int val = popReg();
+        int index = popReg();
+        int arr = popReg();
         cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64.addRegLsl(arr, arr, index, scale));
         cb.emit(scale == 0 ? A64.strb(val, arr, 0) : scale == 2 ? A64.strw(val, arr, 0) : A64.strx(val, arr, 0));
@@ -843,7 +1140,9 @@ public final class BaselineCompiler
             }
             case "call2(JJJ)J" ->                                // addr, a->x1, b->x2, blr, result x0
                 {
-                    int b = popReg(), a = popReg(), addr = popReg();
+                    int b = popReg();
+                    int a = popReg();
+                    int addr = popReg();
                     cb.emit(A64.movReg(16, addr));
                     cb.emit(A64.movReg(1, a));
                     cb.emit(A64.movReg(2, b));
@@ -865,7 +1164,9 @@ public final class BaselineCompiler
         case "readSP()J"            -> cb.emit(A64.movFromSp(pushReg()));
         case "resume(JJJ)V" ->                               // exc->x9, SP=sp, br pc (no return)
             {
-                int exc = popReg(), spv = popReg(), pc = popReg();
+                int exc = popReg();
+                int spv = popReg();
+                int pc = popReg();
                 cb.emit(A64.movReg(16, pc));                     // target -> scratch (x9 gets clobbered next)
                 cb.emit(A64.movReg(9, exc));                     // exception -> handler's stack slot
                 cb.emit(A64.movToSp(spv));
@@ -874,36 +1175,45 @@ public final class BaselineCompiler
 
             case "store32(JI)V" ->
                 {
-                    int val = popReg(), addr = popReg();
+                    int val = popReg();
+                    int addr = popReg();
                     cb.emit(A64.strw(val, addr, 0));
                 }
                 case "store8(JI)V"  ->
                     {
-                        int val = popReg(), addr = popReg();
+                        int val = popReg();
+                        int addr = popReg();
                         cb.emit(A64.strb(val, addr, 0));
                     }
                     case "store64(JJ)V" ->
                         {
-                            int val = popReg(), addr = popReg();
+                            int val = popReg();
+                            int addr = popReg();
                             cb.emit(A64.strx(val, addr, 0));
                         }
                         case "load32(J)I"   ->
                             {
-                                int addr = popReg(), r = pushReg();
+                                int addr = popReg();
+                                int r = pushReg();
                                 cb.emit(A64.ldrw(r, addr, 0));
                             }
                             case "load8(J)I"    ->
                                 {
-                                    int addr = popReg(), r = pushReg();
+                                    int addr = popReg();
+                                    int r = pushReg();
                                     cb.emit(A64.ldrb(r, addr, 0));
                                 }
                                 case "load64(J)J"   ->
                                     {
-                                        int addr = popReg(), r = pushReg();
+                                        int addr = popReg();
+                                        int r = pushReg();
                                         cb.emit(A64.ldrx(r, addr, 0));
                                     }
 
-                                    case "bytes(Ljava/lang/String;)[B" -> { /* no-op: the operand is already an interned byte[] ref */ }
+                                    case "bytes(Ljava/lang/String;)[B" ->
+                                    {
+                                        /* no-op: the operand is already an interned byte[] ref */;
+                                    }
 
                                             default -> throw new UnsupportedOperationException("unknown intrinsic magic/Magic." + key);
         }

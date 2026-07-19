@@ -94,7 +94,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Set<String> usedInterfaces = new LinkedHashSet<>();          // invokeinterface targets (itable build)
         Set<String> usedClasses = new LinkedHashSet<>();
         List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
-        int frameCount = 0, handlerCount = 0;                        // unwind-table entry counts
+        int frameCount = 0;                                          // unwind-table entry counts
+        int handlerCount = 0;
         List<String> worklist = new ArrayList<>(List.of(entryKey));
         while (!worklist.isEmpty())
         {
@@ -135,10 +136,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             for (var t : cm.tibRefs())
             {
                 if (tibClasses.add(t.className()))
+                {
                     for (ClassFile.VSlot s : ClassFile.vtable(t.className(), this::resolve))
                     {
                         worklist.add(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
                     }
+                }
             }
         }
         // Generate VM.initClasses(): call each discovered <clinit> once, in first-use order.
@@ -254,7 +257,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             cm.typeRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
             cm.interfaceRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
             if (cm.frameSize() > 0)
+            {
                 frameEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.frameSize()});
+            }
             for (var hr : cm.handlers())
             {
                 long ct = hr.catchClass() == null ? 0 : addr(typeWord.get(hr.catchClass()));
@@ -416,10 +421,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     {
         Set<String> all = ClassFile.allInterfaces(cls, this::resolve);
         List<String> out = new ArrayList<>();
-        for (String i : usedInterfaces) if (all.contains(i))
+        for (String i : usedInterfaces)
+        {
+            if (all.contains(i))
             {
                 out.add(i);
             }
+        }
         return out;
     }
 
@@ -483,7 +491,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int base = w + ObjectModel.ARRAY_BASE_OFFSET / 4;
         for (int i = 0; i < b.length; i++)
         {
-            int word = base + i / 4, shift = (i % 4) * 8;
+            int word = base + i / 4;
+            int shift = (i % 4) * 8;
             image[word] |= (b[i] & 0xFF) << shift;
         }
     }
