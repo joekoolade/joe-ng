@@ -138,6 +138,22 @@ public final class CompilerTest {
         lenWant.add(A64.ret());
         T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
 
+        // ---- ternary: value survives the branch merge (same register both paths) ----
+        List<Integer> ternWant = new ArrayList<>();
+        ternWant.add(A64.subImm(31, 31, 16));
+        ternWant.add(A64.strx(19, 31, 0));
+        ternWant.add(A64.movReg(19, 0));                 // x -> slot0
+        ternWant.add(A64.movReg(9, 19));                 // iload_0
+        ternWant.add(A64.cbz(9, 12));                    // ifeq -> else
+        ternWant.addAll(A64.loadImm64(9, 0x41));         // bipush 0x41
+        ternWant.add(A64.b(8));                          // goto end
+        ternWant.addAll(A64.loadImm64(9, 0x42));         // else: bipush 0x42 (same reg x9)
+        ternWant.add(A64.movReg(0, 9));                  // ireturn
+        ternWant.add(A64.ldrx(19, 31, 0));
+        ternWant.add(A64.addImm(31, 31, 16));
+        ternWant.add(A64.ret());
+        T.eqWords("tern(int)", toArray(ternWant), compile(fx, "tern", "(I)I"));
+
         // ---- static field: reserved address load + ldr from the statics area ----
         ClassFile counter = ClassFile.parse(classesDir.resolve("vm/Counter.class"));
         int[] getStatic = new BaselineCompiler(counter)

@@ -39,7 +39,7 @@ public final class BaselineCompiler {
 
     /** A single compiled method: its words and the fixups awaiting relocation. */
     public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs,
-                                 List<StrRef> strRefs, List<StaticRef> staticRefs) {}
+                                 List<StrRef> strRefs, List<StaticRef> staticRefs, List<TypeRef> typeRefs) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
@@ -48,11 +48,14 @@ public final class BaselineCompiler {
     public record StrRef(int wordIndex, int reg, String text) {}
     /** A reserved address load for a static field ({@code getstatic}/{@code putstatic}). */
     public record StaticRef(int wordIndex, int reg, String fieldKey) {}
+    /** A reserved address load for a class's Type ({@code instanceof}/{@code checkcast}). */
+    public record TypeRef(int wordIndex, int reg, String className) {}
 
     private final ClassFile cf;
     private final ClassResolver resolver;
 
     private int sp;
+    private int[] bcDepth;         // operand-stack depth at each branch target, or -1
     private boolean isEntry;
     private int frameSize, localSaveBase, spillBase, maxLocals;
     private boolean saveLR, nonLeaf;
@@ -61,6 +64,7 @@ public final class BaselineCompiler {
     private final List<TibRef> tibRefs = new ArrayList<>();
     private final List<StrRef> strRefs = new ArrayList<>();
     private final List<StaticRef> staticRefs = new ArrayList<>();
+    private final List<TypeRef> typeRefs = new ArrayList<>();
 
     public BaselineCompiler(ClassFile cf)                     { this(cf, null); }
     public BaselineCompiler(ClassFile cf, ClassResolver resolver) {
@@ -76,7 +80,8 @@ public final class BaselineCompiler {
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb) {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
-        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty() || !cm.staticRefs.isEmpty())
+        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty()
+                || !cm.staticRefs.isEmpty() || !cm.typeRefs.isEmpty())
             throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         for (int w : cm.words) cb.emit(w);
     }
@@ -103,9 +108,12 @@ public final class BaselineCompiler {
 
         int[] bcToWord = new int[code.length];
         java.util.Arrays.fill(bcToWord, -1);
+        bcDepth = new int[code.length];
+        java.util.Arrays.fill(bcDepth, -1);
         int pos = 0;
         while (pos < code.length) {
             bcToWord[pos] = cb.wordCount();
+            if (bcDepth[pos] >= 0) sp = bcDepth[pos];   // merge point: adopt the branch-edge depth
             int op = code[pos] & 0xFF;
             pos += step(op, code, pos, cb);
         }
@@ -116,7 +124,7 @@ public final class BaselineCompiler {
             cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
         }
         return new CompiledMethod(cb.toWords(), List.copyOf(callSites), List.copyOf(tibRefs),
-                List.copyOf(strRefs), List.copyOf(staticRefs));
+                List.copyOf(strRefs), List.copyOf(staticRefs), List.copyOf(typeRefs));
     }
 
     // ----- prologue / epilogue --------------------------------------------
@@ -186,6 +194,7 @@ public final class BaselineCompiler {
             case 0x64, 0x65 -> { binop(cb, Bin.SUB); return 1; }
             case 0x68, 0x69 -> { binop(cb, Bin.MUL); return 1; }
             case 0x7E, 0x7F -> { binop(cb, Bin.AND); return 1; }
+            case 0x94 -> { lcmp(cb); return 1; }                        // lcmp -> -1/0/1
 
             case 0x85, 0x88, 0x91, 0x92 -> { return 1; }               // i2l/l2i/i2b/i2c: no-op
 
@@ -205,7 +214,7 @@ public final class BaselineCompiler {
                 int target = pos + s2(code, pos + 1);
                 int w = cb.emit(A64.b(0));
                 fixups.add(new Fixup(w, target, A64::b));
-                expectEmpty("goto");
+                recordDepth(target);
                 return 3;
             }
 
@@ -218,6 +227,8 @@ public final class BaselineCompiler {
             case 0xB8 -> { lowerInvokeStatic(u2(code, pos + 1), cb); return 3; }
             case 0xBB -> { lowerNew(u2(code, pos + 1), cb); return 3; }
             case 0xBC -> { lowerNewArray(code[pos + 1] & 0xFF, cb); return 2; }
+            case 0xC0 -> { typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J"); return 3; }  // checkcast
+            case 0xC1 -> { typeCheck(cb, u2(code, pos + 1), "instanceOf", "(JJ)I"); return 3; } // instanceof
 
             default -> throw new UnsupportedOperationException(
                     String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
@@ -261,6 +272,14 @@ public final class BaselineCompiler {
         cb.emit(A64.movReg(pushReg(), top));
     }
 
+    /** lcmp: push -1/0/1 for a&lt;b / a==b / a&gt;b (usually consumed by a following if). */
+    private void lcmp(CodeBuffer cb) {
+        int b = popReg(), a = popReg(), r = pushReg();
+        cb.emit(A64.cmpReg(a, b));
+        cb.emit(A64.cset(r, A64.GT));            // a>b -> 1, else 0
+        cb.emit(A64.csinv(r, r, A64.XZR, A64.GE)); // a<b -> -1, else keep
+    }
+
     // ----- static fields: absolute address in the image statics area --------
     private void getstatic(CodeBuffer cb, int cpIndex) {
         int r = pushReg();
@@ -275,6 +294,14 @@ public final class BaselineCompiler {
     }
 
     private static String staticKey(ClassFile.MemberRef ref) { return ref.owner() + "." + ref.name(); }
+
+    /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
+    private void typeCheck(CodeBuffer cb, int classIndex, String helper, String desc) {
+        String cls = cf.classAt(classIndex);
+        int r = pushReg();                                       // objref stays below; push targetType addr
+        typeRefs.add(new TypeRef(cb.reserveAddr(r), r, cls));
+        emitCall(cb, "vm/VM." + helper + desc, desc, false);     // (ref, targetType) -> int/ref
+    }
 
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
     private void getfield(CodeBuffer cb, int cpIndex) {
@@ -314,7 +341,7 @@ public final class BaselineCompiler {
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
         fixups.add(new Fixup(w, target, eq ? off -> A64.cbz(v, off) : off -> A64.cbnz(v, off)));
-        expectEmpty("if");
+        recordDepth(target);
     }
 
     private void branchCmpZero(CodeBuffer cb, byte[] code, int pos, int cond) {
@@ -323,7 +350,7 @@ public final class BaselineCompiler {
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
         fixups.add(new Fixup(w, target, off -> A64.bcond(cond, off)));
-        expectEmpty("if<cond>");
+        recordDepth(target);
     }
 
     private void branchCmp(CodeBuffer cb, byte[] code, int pos, int cond) {
@@ -332,7 +359,13 @@ public final class BaselineCompiler {
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
         fixups.add(new Fixup(w, target, off -> A64.bcond(cond, off)));
-        expectEmpty("if_icmp");
+        recordDepth(target);
+    }
+
+    /** Record the operand-stack depth on the edge into branch target {@code bc}. */
+    private void recordDepth(int bc) {
+        if (bcDepth[bc] < 0) bcDepth[bc] = sp;
+        else if (bcDepth[bc] != sp) throw new IllegalStateException("inconsistent stack depth at bc=" + bc);
     }
 
     // ----- calls / intrinsics ----------------------------------------------
@@ -503,7 +536,7 @@ public final class BaselineCompiler {
         int pos = 0;
         while (pos < code.length) {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xBC || op == 0xB6) return true; // new/newarray -> Heap.*; invokevirtual
+            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xC0 || op == 0xC1) return true; // new/newarray/invokevirtual/checkcast/instanceof call
             if (op == 0xB8) {                                    // invokestatic
                 ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
                 if (!ref.owner().equals("magic/Magic")) return true;
@@ -523,7 +556,8 @@ public final class BaselineCompiler {
             case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A, 0xBC -> 2; // …/aload/istore/lstore/astore/newarray
             case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
                  0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
-                 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB -> 3; // get/putstatic/field/invoke*/new
+                 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB,
+                 0xC0, 0xC1 -> 3;                                 // get/putstatic/field/invoke*/new/checkcast/instanceof
             default -> 1;
         };
     }

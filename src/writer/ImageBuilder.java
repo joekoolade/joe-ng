@@ -35,7 +35,7 @@ import java.util.Set;
 public final class ImageBuilder implements BaselineCompiler.ClassResolver {
 
     private static final int WORDS_PER_SLOT = ObjectModel.WORD / 4;   // 8-byte slot = 2 image ints
-    private static final int TYPE_WORDS = WORDS_PER_SLOT;             // Type = { instanceSize } for now
+    private static final int TYPE_WORDS = ObjectModel.TYPE_SIZE / 4;  // Type = { instanceSize, superType }
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
 
@@ -58,6 +58,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
     private record GlobalTib(int siteWord, int reg, String className) {}
     private record GlobalStr(int siteWord, int reg, String text) {}
     private record GlobalStatic(int siteWord, int reg, String fieldKey) {}
+    private record GlobalType(int siteWord, int reg, String className) {}
 
     /** Build the whole image with {@code entryKey} (e.g. "vm/VM.boot()V") at 0x80000. */
     public CodeBuffer build(String entryKey) throws IOException {
@@ -68,6 +69,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         Set<String> tibClasses = new LinkedHashSet<>();
         Set<String> strings = new LinkedHashSet<>();
         Set<String> statics = new LinkedHashSet<>();
+        Set<String> typeRefClasses = new LinkedHashSet<>();          // instanceof/checkcast targets
         Set<String> usedClasses = new LinkedHashSet<>();
         List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
         List<String> worklist = new ArrayList<>(List.of(entryKey));
@@ -78,6 +80,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             sizeWords.put(k, cm.words().length);
             cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
             cm.strRefs().forEach(s -> strings.add(s.text()));
+            cm.typeRefs().forEach(t -> typeRefClasses.add(t.className()));
             cm.tibRefs().forEach(t -> use(t.className(), usedClasses, clinitOrder, worklist));
             cm.staticRefs().forEach(s -> {
                 statics.add(s.fieldKey());
@@ -99,8 +102,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         int cur = 0;
         for (var e : sizeWords.entrySet()) { wordOffset.put(e.getKey(), cur); cur += e.getValue(); }
         cur += cur % 2;                                             // pad to 8 bytes before data
+        // Types are needed by every instantiated class (TIB[0]), every type-check
+        // target, and every superclass in those chains (the instanceof walk).
+        Set<String> typeClasses = new LinkedHashSet<>();
+        for (String c : tibClasses)     addTypeClass(c, typeClasses);
+        for (String c : typeRefClasses) addTypeClass(c, typeClasses);
         Map<String, Integer> typeWord = new HashMap<>();
-        for (String cls : tibClasses) { typeWord.put(cls, cur); cur += TYPE_WORDS; }
+        for (String cls : typeClasses) { typeWord.put(cls, cur); cur += TYPE_WORDS; }
         Map<String, Integer> tibWord = new HashMap<>();
         for (String cls : tibClasses) { tibWord.put(cls, cur); cur += ObjectModel.tibSize(vtableLength(cls)) / 4; }
         Map<String, Integer> strWord = new HashMap<>();
@@ -115,6 +123,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         List<GlobalTib> tibs = new ArrayList<>();
         List<GlobalStr> strs = new ArrayList<>();
         List<GlobalStatic> stats = new ArrayList<>();
+        List<GlobalType> types = new ArrayList<>();
         for (String k : sizeWords.keySet()) {
             int base = wordOffset.get(k);
             CompiledMethod cm = k.equals(INIT_CLASSES) ? initBody
@@ -125,12 +134,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
             cm.tibRefs().forEach(t -> tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className())));
             cm.strRefs().forEach(s -> strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text())));
             cm.staticRefs().forEach(s -> stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey())));
+            cm.typeRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
         }
 
-        // --- Types (instanceSize) and TIBs (Type ptr + vtable code addresses) ---
+        // --- Types: { instanceSize, superType } — superType links the hierarchy ---
+        for (String cls : typeClasses) {
+            int tw = typeWord.get(cls);
+            writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
+                    ObjectModel.scalarSize(resolve(cls).instanceFieldCount()));
+            String sup = resolve(cls).superClassName();
+            long superAddr = (sup == null || sup.equals("java/lang/Object")) ? 0 : addr(typeWord.get(sup));
+            writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
+        }
+
+        // --- TIBs: [Type ptr][vtable code addresses] ---
         for (String cls : tibClasses) {
-            ClassFile cf = resolve(cls);
-            writeLong(image, typeWord.get(cls), ObjectModel.scalarSize(cf.instanceFieldCount()));
             int tw = tibWord.get(cls);
             writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
             var slots = ClassFile.vtable(cls, this::resolve);
@@ -162,7 +180,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         for (GlobalStatic s : stats) {
             cb.patchAddr(s.siteWord(), s.reg(), addr(staticWord.get(s.fieldKey()))); // static field address
         }
+        for (GlobalType t : types) {
+            cb.patchAddr(t.siteWord(), t.reg(), addr(typeWord.get(t.className())));  // class Type address
+        }
         return cb;
+    }
+
+    /** Add {@code cls} and all its superclasses (up to Object) to {@code set}. */
+    private void addTypeClass(String cls, Set<String> set) {
+        while (cls != null && !cls.equals("java/lang/Object") && set.add(cls)) {
+            cls = resolve(cls).superClassName();
+        }
     }
 
     private int vtableLength(String cls) { return ClassFile.vtable(cls, this::resolve).size(); }
@@ -195,7 +223,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver {
         w.add(A64.ret());
         int[] words = new int[w.size()];
         for (int i = 0; i < words.length; i++) words[i] = w.get(i);
-        return new CompiledMethod(words, calls, List.of(), List.of(), List.of());
+        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of());
     }
 
     /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */

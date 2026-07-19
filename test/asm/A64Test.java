@@ -100,6 +100,8 @@ public final class A64Test {
         T.eqWord("MUL x0,x1,x2", 0x9B027C20, A64.mulReg(0, 1, 2));
         T.eqWord("CMP x1,x2",    0xEB02003F, A64.cmpReg(1, 2));
         T.eqWord("CMP x0,#0",    0xF100001F, A64.cmpImm(0, 0));
+        T.eqWord("CSET x0,EQ",   0x9A9F17E0, A64.cset(0, A64.EQ));
+        T.eqWord("CSINV x0,x0,xzr,GE", 0xDA9FA000, A64.csinv(0, 0, 31, A64.GE));
 
         // ---- conditional / compare / test branches -------------------------
         T.eqWord("B.EQ .",     0x54000000, A64.bcond(A64.EQ, 0));

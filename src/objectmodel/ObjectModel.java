@@ -44,6 +44,14 @@ public final class ObjectModel {
     /** Allocation size of an array of {@code length} elements of {@code elemSize} bytes, aligned. */
     public static int arraySize(int length, int elemSize) { return align(ARRAY_BASE_OFFSET + length * elemSize); }
 
+    // ----- Type object (pointed to by TIB[0]) ------------------------------
+    /** Type field: instance size in bytes. */
+    public static final int TYPE_INSTANCE_SIZE_OFFSET = 0;
+    /** Type field: pointer to the superclass's Type (0 at the root / Object). */
+    public static final int TYPE_SUPER_OFFSET = WORD;      // 8
+    /** Total Type size. */
+    public static final int TYPE_SIZE = 2 * WORD;          // 16
+
     // ----- TIB (a word array) ----------------------------------------------
     /** TIB slot 0 → the {@code Type} metadata object. */
     public static final int TIB_TYPE_SLOT    = 0;

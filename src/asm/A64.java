@@ -252,6 +252,14 @@ public final class A64 {
     public static int mulReg(int rd, int rn, int rm) { return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
+    /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
+    public static int cset(int rd, int cond) {
+        return 0x9A80_0400 | (31 << 16) | ((cond ^ 1) << 12) | (31 << 5) | reg(rd);
+    }
+    /** {@code CSINV Xd, Xn, Xm, cond} — Xd = cond ? Xn : ~Xm. */
+    public static int csinv(int rd, int rn, int rm, int cond) {
+        return 0xDA80_0000 | (reg(rm) << 16) | (cond << 12) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */
     public static int cmpImm(int rn, int imm12) {
         if (imm12 < 0 || imm12 > 0xFFF) throw new IllegalArgumentException("cmp imm12 out of range: " + imm12);

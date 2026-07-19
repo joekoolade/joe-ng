@@ -46,7 +46,8 @@ logs what informed each piece so encodings and boot facts are auditable.
   invokestatic/invokespecial/invokevirtual, new, dup, getfield/putfield,
   aload/astore, newarray, arraylength, array load/store (b/i/l/a), ldc of int
   and String constants (strings interned as byte[] objects), getstatic/putstatic
-  (image statics area). Static initializers (`<clinit>`) run eagerly at boot via
+  (image statics area), lcmp, instanceof/checkcast (Type superclass-chain walk).
+  Static initializers (`<clinit>`) run eagerly at boot via
   a writer-generated init sequence (JVMS §5.5 initialization, simplified to
   closed-world eager order). Class hierarchies use a flattened vtable (superclass
   slots first, overrides in place) — JVMS §5.4.5 overriding, our own

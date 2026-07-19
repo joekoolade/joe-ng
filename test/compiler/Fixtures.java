@@ -23,4 +23,7 @@ public final class Fixtures {
     public static int arrElem0(byte[] a) { return a[0]; }
     /** Array length (ldr at ARRAY_LENGTH_OFFSET). */
     public static int arrLen(int[] a) { return a.length; }
+
+    /** Ternary — leaves a value on the operand stack across a branch merge. */
+    public static int tern(int x) { return x != 0 ? 0x41 : 0x42; }
 }

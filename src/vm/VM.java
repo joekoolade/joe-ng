@@ -2,6 +2,7 @@ package vm;
 
 import board.bcm2711.Uart;
 import magic.Magic;
+import objectmodel.ObjectModel;
 
 /**
  * The runtime entry points, written as ordinary Java and compiled to A64 by our
@@ -57,6 +58,32 @@ public final class VM {
     }
 
     /**
+     * {@code instanceof} support: is {@code ref}'s class {@code targetType} or a
+     * subclass? Walks the object's Type up its superclass chain (TIB→Type→super).
+     * {@code ref}/{@code targetType} are raw addresses (references are direct
+     * pointers, Types are laid out by the writer). The compiler synthesizes calls
+     * to this for the {@code instanceof} bytecode.
+     */
+    static int instanceOf(long ref, long targetType) {
+        if (ref == 0L) return 0;                       // null is never an instance
+        long type = Magic.load64(Magic.load64(ref));   // header→TIB (@0), TIB→Type (@0)
+        while (type != 0L) {
+            if (type == targetType) return 1;
+            type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
+        }
+        return 0;
+    }
+
+    /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
+     *  (no exceptions yet). Null always passes. */
+    static long checkCast(long ref, long targetType) {
+        if (ref != 0L && instanceOf(ref, targetType) == 0) {
+            while (true) { Magic.wfe(); }
+        }
+        return ref;
+    }
+
+    /**
      * The program proper — a framed method (so operand values can spill across
      * calls). Prints the banner, then exercises the object model: allocate a
      * heap object, mutate its field, and print the result.
@@ -87,6 +114,13 @@ public final class VM {
         Uart.putc(dog.sound());            // 'W' — Dog overrides Animal.sound (same vtable slot)
         Animal animal = new Animal();
         Uart.putc(animal.sound());         // '?' — base implementation
+        Uart.putc(0x0A);
+
+        // instanceof / checkcast (subclass walk over the Type chain)
+        Uart.putc(dog instanceof Dog ? 0x59 : 0x4E);       // 'Y' — a Dog is a Dog
+        Uart.putc(animal instanceof Dog ? 0x59 : 0x4E);    // 'N' — an Animal is not a Dog
+        Dog cast = (Dog) dog;                              // checkcast succeeds
+        Uart.putc(cast.sound());                           // 'W'
         Uart.putc(0x0A);
     }
 }

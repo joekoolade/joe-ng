@@ -176,10 +176,18 @@ defines the minimum the assembler must encode.
   class's TIB vtable with the most-derived impl per slot and lays out all slot
   implementations. QEMU prints `W?` — `Dog` override vs `Animal` base via an
   `Animal`-typed reference. (No interfaces / abstract dispatch yet.)
-- **M2 remaining:** `instanceof`/`checkcast` (needs the Type/superclass chain),
-  char/short arrays (`ldrh`/`strh`), interfaces. A real `String` class over the
-  byte[] is a later class-library step. GC is still M6. `baload` zero-extends
-  (fine for ASCII; `ldrsb` later).
+- **`instanceof`/`checkcast` DONE:** `Type` now carries a superclass pointer
+  (`{instanceSize, superType}`); the writer interns one `Type` per class and links
+  the chain, and lays out Types for all type-check targets + their superclasses.
+  The compiler lowers both to a call to a Java helper (`VM.instanceOf`/`checkCast`)
+  that walks the object's Type→super chain; `checkCast` halts on failure (no
+  exceptions yet). QEMU prints `YNW`. Added `lcmp` (long compare via CSET/CSINV)
+  and — importantly — the compiler now tracks **operand-stack depth at branch
+  merges** (so ternaries / values-live-across-branches work), pinned by `tern`.
+- **M2 remaining:** interfaces (`invokeinterface`), abstract methods, char/short
+  arrays (`ldrh`/`strh`). A real `String` class over the byte[] is a later
+  class-library step. GC is still M6. `baload` zero-extends (fine for ASCII;
+  `ldrsb` later). No exceptions yet (`checkCast`/traps just halt).
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
