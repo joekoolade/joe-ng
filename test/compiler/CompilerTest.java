@@ -31,16 +31,17 @@ public final class CompilerTest {
         // ---- constant-arg intrinsics lower exactly ----
         ClassFile fx = ClassFile.parse(classesDir.resolve("compiler/Fixtures.class"));
 
+        // operand stack maps to x9 (addr), x10 (value)
         List<Integer> pokeWant = new ArrayList<>();
-        pokeWant.addAll(A64.loadImm64(0, 0xFE215004L));  // address -> x0
-        pokeWant.addAll(A64.loadImm64(1, 1L));           // value   -> x1
-        pokeWant.add(A64.strw(1, 0, 0));                 // STR w1,[x0]
+        pokeWant.addAll(A64.loadImm64(9, 0xFE215004L));  // address -> x9
+        pokeWant.addAll(A64.loadImm64(10, 1L));          // value   -> x10
+        pokeWant.add(A64.strw(10, 9, 0));                // STR w10,[x9]
         pokeWant.add(A64.ret());
         expect("pokeWord()", toArray(pokeWant), compile(fx, "pokeWord"));
 
         List<Integer> regWant = new ArrayList<>();
-        regWant.addAll(A64.loadImm64(0, 0x80000000L));   // value -> x0
-        regWant.add(A64.msr(A64.HCR_EL2, 0));            // MSR HCR_EL2, x0
+        regWant.addAll(A64.loadImm64(9, 0x80000000L));   // value -> x9
+        regWant.add(A64.msr(A64.HCR_EL2, 9));            // MSR HCR_EL2, x9
         regWant.add(A64.ret());
         expect("writeReg()", toArray(regWant), compile(fx, "writeReg"));
 

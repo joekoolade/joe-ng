@@ -23,8 +23,9 @@ java -cp "$OUT" asm.A64Test
 echo "== compiler tests (bytecode -> A64) =="
 java -cp "$OUT" compiler.CompilerTest "$OUT"
 
-echo "== emitting kernel8.img (M1 first light: mini-UART hello) =="
-java -cp "$OUT" writer.BuildBootImage "$IMG"
+echo "== emitting kernel8.img (M1c: boot compiled from vm.VM.boot bytecode) =="
+java -cp "$OUT" writer.BuildCompiledBootImage "$OUT" "$IMG" | tail -1
+# (writer.BuildBootImage still emits the equivalent hand-assembled first-light image)
 
 echo "== image =="
 ls -l "$IMG"

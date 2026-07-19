@@ -93,6 +93,13 @@ public final class A64Test {
         eq("MOV SP,x0",     0x9100001F, A64.movToSp(0));
         eq("MOV x0,x1",     0xAA0103E0, A64.movReg(0, 1));
 
+        // ---- data-processing (shifted register) ----------------------------
+        eq("ADD x0,x1,x2", 0x8B020020, A64.addReg(0, 1, 2));
+        eq("SUB x0,x1,x2", 0xCB020020, A64.subReg(0, 1, 2));
+        eq("AND x0,x1,x2", 0x8A020020, A64.andReg(0, 1, 2));
+        eq("CMP x1,x2",    0xEB02003F, A64.cmpReg(1, 2));
+        eq("CMP x0,#0",    0xF100001F, A64.cmpImm(0, 0));
+
         // ---- conditional / compare / test branches -------------------------
         eq("B.EQ .",     0x54000000, A64.bcond(A64.EQ, 0));
         eq("B.NE .+4",   0x54000021, A64.bcond(A64.NE, 4));

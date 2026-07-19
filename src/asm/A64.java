@@ -233,6 +233,23 @@ public final class A64 {
     public static int movReg(int rd, int rm) { return 0xAA00_03E0 | (reg(rm) << 16) | reg(rd); }
 
     // =======================================================================
+    // Data-processing (shifted register), 64-bit, no shift — C6.
+    // =======================================================================
+    /** {@code ADD Xd, Xn, Xm}. */
+    public static int addReg(int rd, int rn, int rm) { return 0x8B00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code SUB Xd, Xn, Xm}. */
+    public static int subReg(int rd, int rn, int rm) { return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code AND Xd, Xn, Xm}. */
+    public static int andReg(int rd, int rn, int rm) { return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd); }
+    /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
+    public static int cmpReg(int rn, int rm)         { return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31; }
+    /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */
+    public static int cmpImm(int rn, int imm12) {
+        if (imm12 < 0 || imm12 > 0xFFF) throw new IllegalArgumentException("cmp imm12 out of range: " + imm12);
+        return 0xF100_0000 | (imm12 << 10) | (reg(rn) << 5) | 31;
+    }
+
+    // =======================================================================
     // Conditional / compare-and-branch / test-and-branch — C6.2
     // =======================================================================
     /** Condition codes for {@link #bcond}. */

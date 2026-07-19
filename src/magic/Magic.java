@@ -24,6 +24,14 @@ public final class Magic {
     public static void isb() { throw intrinsic(); }
 
     // ----- exception-level control (EL2 -> EL1 drop) -----------------------
+    /**
+     * Drop from EL2 to EL1 in one privileged step (skipped if already at EL1).
+     * A single intrinsic because the EL2→EL1 drop is self-referential — it must
+     * set {@code ELR_EL2} to the address of the instruction right after itself,
+     * which ordinary Java bytecode cannot name. The compiler owns that address.
+     */
+    public static void dropToEL1()                { throw intrinsic(); }
+
     public static long readCurrentEL()            { throw intrinsic(); }
     public static void writeHCR_EL2(long v)       { throw intrinsic(); }
     public static void writeCPTR_EL2(long v)      { throw intrinsic(); }
@@ -42,4 +50,15 @@ public final class Magic {
     public static void store32(long addr, int value) { throw intrinsic(); }
     public static int  load32(long addr)              { throw intrinsic(); }
     public static void store8(long addr, int value)   { throw intrinsic(); }
+    public static int  load8(long addr)               { throw intrinsic(); }
+
+    // ----- image data pool (temporary bridge until real Strings/arrays) ----
+    /**
+     * Absolute address of the method's appended data blob (the boot message).
+     * The compiler reserves the address and the writer fills it in once the blob
+     * is laid out. Placeholder until the object model gives us real char arrays.
+     */
+    public static long message()    { throw intrinsic(); }
+    /** Length in bytes of {@link #message()}'s blob. */
+    public static int  messageLen() { throw intrinsic(); }
 }

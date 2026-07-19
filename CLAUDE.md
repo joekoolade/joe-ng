@@ -63,7 +63,7 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **Phase: M1 first light achieved (board-bringup half). Compiler half next.**
+- **Phase: M1 COMPLETE — first light from compiled Java. Next: M2 object model.**
 - **M0 (done):** all-Java pipeline end to end. `asm/A64` encoder + `asm/CodeBuffer`
   + `writer/BootImageWriter` emit a raw, header-less `kernel8.img`;
   `writer/BuildSpinImage` = the 8-byte `wfe; b .-4` park loop at `0x80000`.
@@ -77,24 +77,27 @@ defines the minimum the assembler must encode.
   Build/test/emit: `scripts/build.sh`; QEMU smoke test: `scripts/qemu.sh`.
   **Not yet run on real hardware; mini-UART baud divisor needs on-silicon
   calibration (QEMU ignores it).**
-- **M1c in progress (the metacircular half):** the compile path exists and is
-  proven. `magic/Magic` = the intrinsic markers (privileged ops + raw MMIO).
-  `classfile/ClassFile` parses real `.class` files (constant pool, methods, Code).
-  `compiler/BaselineCompiler` lowers bytecode → A64. `writer/BuildCompiledSpinImage`
-  compiles `vm.VM.spin()` from javac bytecode into an image **bit-identical to the
-  M0 hand-emitted spin loop**. Coverage so far: nop/return/goto, constant pushes
-  (iconst/bipush/sipush/ldc/ldc2_w), no-arg intrinsics (wfe/isb/eret), and
-  constant-arg intrinsics (system-register writes, writeSP, store32/store8).
-  Checked in `test/compiler/CompilerTest` (spin + pokeWord + writeReg, exact).
-  Unsupported opcodes throw loudly (never silent). Compiler runs in `build.sh`.
-- **Next concrete step — finish M1c to a compiled printing boot:** needs runtime
-  values + control flow the print loop uses — locals (iload/istore/iinc),
-  readCurrentEL, conditionals/loops (if_icmp*, ifeq), and a strategy for the
-  self-referential `ELR_EL2 = &continuation` (likely a `Magic.dropToEL1()`
-  intrinsic that owns the whole EL2→EL1 drop). Then compile a real `VM.boot`
-  whose image prints "hello from joe2" — matching `EmitBoot` functionally.
-- **Still open (decide before M2):** object-model shape (header size, TIB
-  contents, references as direct pointers vs handles) — expensive to change later.
+- **M1c DONE (the metacircular half):** `writer/BuildCompiledBootImage` compiles
+  `vm.VM.boot()` from javac bytecode — EL2→EL1 drop, FP enable, stack, mini-UART
+  bring-up, and the print loop — into a `kernel8.img` that **prints "hello from
+  joe2" under QEMU raspi4b** (functional check: `scripts/qemu-check.sh`). This is
+  now the default image `build.sh` emits. The equivalent hand-assembled path
+  (`vm.EmitBoot` / `writer.BuildBootImage`) is kept for reference.
+  - `magic/Magic`: intrinsic markers (privileged ops, raw MMIO, `dropToEL1`, and
+    a temporary `message()`/`messageLen()` data-pool bridge until real strings).
+  - `classfile/ClassFile`: JVMS classfile parser (constant pool, methods, Code).
+  - `compiler/BaselineCompiler`: bytecode → A64 with a register-backed operand
+    stack (x9..x15) and locals (x19..x28). Coverage: nop/return/goto, const
+    pushes, local load/store + iinc, add/sub/and, i2l/l2i/i2b/i2c no-ops,
+    if/if_icmp/goto branches, and the Magic intrinsics. Unsupported opcodes throw.
+  - `test/compiler/CompilerTest`: spin/pokeWord/writeReg pinned exactly (66 A64
+    encoding checks + compiler checks run in `build.sh`).
+- **Next: M2 (object model + multi-class).** First resolve the **standing
+  object-model decision** (header size, TIB contents, references as direct
+  pointers vs handles) — it gates M2 and is expensive to change later. Then grow
+  the compiler to real method calls (BL + frames), fields, arrays, and a
+  multi-class layout in the writer. Retire the `message()` bridge once char
+  arrays exist.
 - Milestones (see PLAN.md §4): M0 writer emits booting image → M1 first light
   (compiled `VM.boot` prints over UART) → M2 object model + multi-class → M3
   heap + `new` → M4 runtime class loading → M5 self-hosting (drop seed JVM) →
