@@ -1,17 +1,21 @@
 package classfile;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 /**
- * A minimal Java classfile parser (JVMS §4) — used by the boot-image writer now
- * and by the runtime class loader later (same code, two contexts; PLAN.md §2,
- * §5). It reads the constant pool, methods, and their Code attributes; it grows
- * as the compiler needs more (it currently ignores fields, most attributes, and
- * exception tables — the boot path has none).
+ * The writer-side classfile model (JVMS §4): the constant pool, fields, methods
+ * and their Code attributes, decoded into Strings, records and arrays for the
+ * boot-image writer to work with.
+ *
+ * <p>It no longer walks the format itself. The structure — constant-pool layout,
+ * section navigation, attribute skipping — is read by {@link ClassReader}, the
+ * shared JDK-free parser that is also compiled into the image and used by the
+ * on-metal loader (M5). So the classfile format is understood in exactly one
+ * place, and what remains here is only the rich host-side model built on top of
+ * it, none of which could exist on the metal.
  */
 public final class ClassFile
 {
@@ -350,138 +354,176 @@ public final class ClassFile
     }
 
     // ----- parsing ---------------------------------------------------------
+    // The classfile *structure* is walked by the shared, JDK-free ClassReader —
+    // the same code compiled into the image and used by the on-metal loader (M5),
+    // so the format is understood in exactly one place. What stays here is the
+    // writer-side model built on top of it: decoded Strings, records and arrays,
+    // none of which exist on the metal.
+
     public static ClassFile parse(Path classFile) throws IOException
     {
         return new ClassFile(Files.readAllBytes(classFile));
     }
 
-    public ClassFile(byte[] bytes) throws IOException
+    public ClassFile(byte[] b) throws IOException
     {
-        DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
-        if (in.readInt() != 0xCAFEBABE)
+        if (ClassReader.u4(b, 0) != 0xCAFEBABE)
         {
             throw new IOException("bad classfile magic");
         }
-        in.readUnsignedShort();
-        in.readUnsignedShort();        // minor, major
+        int n = ClassReader.cpCount(b);
+        int[] cpOff = new int[n];
+        tag = new int[n];
+        int afterCp = ClassReader.constantPool(b, cpOff, tag);
 
-        int cpCount = in.readUnsignedShort();
-        tag = new int[cpCount];
-        ref1 = new int[cpCount];
-        ref2 = new int[cpCount];
-        longVal = new long[cpCount];
-        utf8 = new String[cpCount];
-        for (int i = 1; i < cpCount; i++)
+        ref1 = new int[n];
+        ref2 = new int[n];
+        longVal = new long[n];
+        utf8 = new String[n];
+        for (int i = 1; i < n; i++)
         {
-            int t = in.readUnsignedByte();
-            tag[i] = t;
-            switch (t)
-            {
-            case UTF8 -> utf8[i] = in.readUTF();
-            case INTEGER, FLOAT -> ref1[i] = in.readInt();
-            case LONG, DOUBLE ->
-            {
-                longVal[i] = in.readLong();
-                i++;
-            }  // takes two slots
-                case CLASS, STRING, METHODTYPE, MODULE, PACKAGE -> ref1[i] = in.readUnsignedShort();
-            case FIELDREF, METHODREF, IFACEMETHODREF, NAMEANDTYPE, DYNAMIC, INVOKEDYNAMIC ->
-            {
-                ref1[i] = in.readUnsignedShort();
-                ref2[i] = in.readUnsignedShort();
-            }
-            case METHODHANDLE ->
-            {
-                ref1[i] = in.readUnsignedByte();
-                ref2[i] = in.readUnsignedShort();
-            }
-                    default -> throw new IOException("unknown constant-pool tag " + t + " at #" + i);
-            }
+            decodeEntry(b, i, cpOff[i]);
         }
 
-        in.readUnsignedShort();                                // access_flags
-        thisClass = classAt(in.readUnsignedShort());
-        int sup = in.readUnsignedShort();
+        thisClass = classAt(ClassReader.u2(b, afterCp + 2));    // after access_flags
+        int sup = ClassReader.u2(b, afterCp + 4);
         superClass = sup == 0 ? null : classAt(sup);
-        int ifaceCount = in.readUnsignedShort();
+        int ifaceCount = ClassReader.u2(b, afterCp + 6);
         interfaces = new String[ifaceCount];
         for (int i = 0; i < ifaceCount; i++)
         {
-            interfaces[i] = classAt(in.readUnsignedShort());
+            interfaces[i] = classAt(ClassReader.u2(b, afterCp + 8 + i * 2));
         }
 
-        fields = readFields(in);
-        methods = readMethods(in);
+        fields = readFields(b, ClassReader.fieldsStart(b, afterCp));
+        methods = readMethods(b, ClassReader.methodsStart(b, afterCp));
         // class attributes ignored
     }
 
-    private FieldInfo[] readFields(DataInputStream in) throws IOException
+    /** Decode one constant-pool entry whose body starts at {@code o}. */
+    private void decodeEntry(byte[] b, int i, int o) throws IOException
     {
-        int n = in.readUnsignedShort();
+        switch (tag[i])
+        {
+        case 0 -> { }                                           // second half of a Long/Double
+        case UTF8 -> utf8[i] = utf8At(b, o);
+        case INTEGER, FLOAT -> ref1[i] = ClassReader.u4(b, o);
+        case LONG, DOUBLE ->
+            longVal[i] = ((long) ClassReader.u4(b, o) << 32) | (ClassReader.u4(b, o + 4) & 0xFFFFFFFFL);
+        case CLASS, STRING, METHODTYPE, MODULE, PACKAGE -> ref1[i] = ClassReader.u2(b, o);
+        case FIELDREF, METHODREF, IFACEMETHODREF, NAMEANDTYPE, DYNAMIC, INVOKEDYNAMIC ->
+        {
+            ref1[i] = ClassReader.u2(b, o);
+            ref2[i] = ClassReader.u2(b, o + 2);
+        }
+        case METHODHANDLE ->
+        {
+            ref1[i] = ClassReader.u1(b, o);
+            ref2[i] = ClassReader.u2(b, o + 1);
+        }
+        default -> throw new IOException("unknown constant-pool tag " + tag[i] + " at #" + i);
+        }
+    }
+
+    /**
+     * Decode a Utf8 entry to a String. Classfiles use <em>modified</em> UTF-8, so
+     * this is the same 1/2/3-byte decoding {@code DataInputStream.readUTF} did —
+     * supplementary characters arrive as a surrogate pair of three-byte forms and
+     * decode correctly as two chars.
+     */
+    private static String utf8At(byte[] b, int off)
+    {
+        int len = ClassReader.u2(b, off);
+        StringBuilder sb = new StringBuilder(len);
+        int i = off + 2;
+        int end = i + len;
+        while (i < end)
+        {
+            int c = ClassReader.u1(b, i);
+            if (c < 0x80)
+            {
+                sb.append((char) c);
+                i += 1;
+            }
+            else if ((c & 0xE0) == 0xC0)
+            {
+                sb.append((char) (((c & 0x1F) << 6) | (ClassReader.u1(b, i + 1) & 0x3F)));
+                i += 2;
+            }
+            else
+            {
+                sb.append((char) (((c & 0x0F) << 12)
+                                  | ((ClassReader.u1(b, i + 1) & 0x3F) << 6)
+                                  | (ClassReader.u1(b, i + 2) & 0x3F)));
+                i += 3;
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Read the fields table; {@code p} points at {@code fields_count}. */
+    private FieldInfo[] readFields(byte[] b, int p)
+    {
+        int n = ClassReader.u2(b, p);
+        p += 2;
         FieldInfo[] fs = new FieldInfo[n];
         for (int i = 0; i < n; i++)
         {
-            int access = in.readUnsignedShort();
-            String name = utf8(in.readUnsignedShort());
-            String desc = utf8(in.readUnsignedShort());
-            skipAttributes(in);
+            int access = ClassReader.u2(b, p);
+            String name = utf8(ClassReader.u2(b, p + 2));
+            String desc = utf8(ClassReader.u2(b, p + 4));
+            p = ClassReader.skipAttributes(b, p + 6);
             fs[i] = new FieldInfo(name, desc, (access & ACC_STATIC) != 0);
         }
         return fs;
     }
 
-    private Method[] readMethods(DataInputStream in) throws IOException
+    /** Read the methods table; {@code p} points at {@code methods_count}. */
+    private Method[] readMethods(byte[] b, int p)
     {
-        int n = in.readUnsignedShort();
+        int n = ClassReader.u2(b, p);
+        p += 2;
         Method[] ms = new Method[n];
         for (int i = 0; i < n; i++)
         {
-            int access = in.readUnsignedShort();
-            String name = utf8(in.readUnsignedShort());
-            String desc = utf8(in.readUnsignedShort());
-            int attrs = in.readUnsignedShort();
+            int access = ClassReader.u2(b, p);
+            String name = utf8(ClassReader.u2(b, p + 2));
+            String desc = utf8(ClassReader.u2(b, p + 4));
+            int attrs = ClassReader.u2(b, p + 6);
+            p += 8;
             int maxStack = 0;
             int maxLocals = 0;
             byte[] code = null;
             ExceptionEntry[] exceptions = new ExceptionEntry[0];
             for (int a = 0; a < attrs; a++)
             {
-                String an = utf8(in.readUnsignedShort());
-                int len = in.readInt();
-                if (an.equals("Code"))
+                int body = p + 6;                               // name(2) + length(4)
+                if (utf8(ClassReader.u2(b, p)).equals("Code"))
                 {
-                    maxStack = in.readUnsignedShort();
-                    maxLocals = in.readUnsignedShort();
-                    int codeLen = in.readInt();
-                    code = new byte[codeLen];
-                    in.readFully(code);
-                    int exc = in.readUnsignedShort();
-                    exceptions = new ExceptionEntry[exc];
-                    for (int e = 0; e < exc; e++)
-                    {
-                        exceptions[e] = new ExceptionEntry(in.readUnsignedShort(), in.readUnsignedShort(),
-                                                           in.readUnsignedShort(), in.readUnsignedShort());
-                    }
-                    skipAttributes(in);
+                    maxStack = ClassReader.u2(b, body);
+                    maxLocals = ClassReader.u2(b, body + 2);
+                    int codeLen = ClassReader.u4(b, body + 4);
+                    code = Arrays.copyOfRange(b, body + 8, body + 8 + codeLen);
+                    exceptions = readExceptions(b, body + 8 + codeLen);
                 }
-                else
-                {
-                    in.skipBytes(len);
-                }
+                p = body + ClassReader.u4(b, p + 2);            // next attribute
             }
             ms[i] = new Method(name, desc, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions);
         }
         return ms;
     }
 
-    private void skipAttributes(DataInputStream in) throws IOException
+    /** Read a Code attribute's exception table; {@code p} points at its length. */
+    private static ExceptionEntry[] readExceptions(byte[] b, int p)
     {
-        int n = in.readUnsignedShort();
-        for (int i = 0; i < n; i++)
+        int n = ClassReader.u2(b, p);
+        ExceptionEntry[] es = new ExceptionEntry[n];
+        for (int e = 0; e < n; e++)
         {
-            in.readUnsignedShort();                            // name index
-            int len = in.readInt();
-            in.skipBytes(len);
+            int q = p + 2 + e * 8;
+            es[e] = new ExceptionEntry(ClassReader.u2(b, q), ClassReader.u2(b, q + 2),
+                                       ClassReader.u2(b, q + 4), ClassReader.u2(b, q + 6));
         }
+        return es;
     }
 }
