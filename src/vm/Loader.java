@@ -92,6 +92,19 @@ public final class Loader
     private static long[] vtBuf;         // slot's implementation buffer
     private static int vtCount;
 
+    // Interface-method registry. Every distinct interface method (name+descriptor)
+    // gets a global index; each implementing class then carries an "imap" indexed by
+    // it, holding that class's implementation. This is the itable: it decouples the
+    // call site from where the method happens to sit in a given class's vtable, so
+    // two classes implementing the same interface at different vtable slots both
+    // dispatch correctly. Interfaces are loaded before their implementors.
+    private static final int MAXIFM = 32;
+    private static long[] ifBase;        // interface blob holding the signature
+    private static int[] ifNameOff;
+    private static int[] ifDescOff;
+    private static int ifCount;
+    private static boolean gIsInterface; // is the class being loaded an interface?
+
     private static int u1(long p)
     {
         return Magic.load8(p) & 0xFF;
@@ -183,9 +196,14 @@ public final class Loader
         gvDesc = new int[MAXMV];
         gvImplBuf = new long[MAXMV];
         gvImplCode = new long[MAXMV];
-        loadOne(VM.critterBytes);                      // superclass first
-        loadOne(VM.pupBytes);                          // subclass: inherits + overrides
-        loadOne(VM.guestBytes);                        // entry: new Pup(), dispatch via Critter ref
+        ifBase = new long[MAXIFM];
+        ifNameOff = new int[MAXIFM];
+        ifDescOff = new int[MAXIFM];
+        ifCount = 0;
+        loadOne(VM.greeterBytes);                      // the interface first: fixes itable indices
+        loadOne(VM.alphaBytes);                        // implements greet() at its vtable slot 0
+        loadOne(VM.betaBytes);                         // implements greet() at slot 1 (filler shifts it)
+        loadOne(VM.guestBytes);                        // entry: dispatch both via the interface
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
@@ -246,6 +264,7 @@ public final class Loader
     private static void parseFields()
     {
         long p = gp;
+        gIsInterface = (u2(p) & 0x0200) != 0;             // ACC_INTERFACE
         gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> Class -> name Utf8 offset
         gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
@@ -612,9 +631,14 @@ public final class Loader
     {
         parseConstPool(bytes);
         parseFields();                                  // hierarchy-aware field layout
+        if (gIsInterface)
+        {
+            registerInterface();                        // give its methods global itable indices
+            return;                                     // nothing to compile: all methods abstract
+        }
         runClinit(bytes);                               // gvCount==0 here (vtable not built yet)
         parseVtable(bytes);                             // flatten against the superclass
-        compileClass(bytes);                            // compile all methods; buildTib fills the TIB
+        compileClass(bytes);                            // compile all methods; buildTib fills TIB+imap
         registerAll();                                  // methods
         registerClass();                                // class + fields + flattened vtable
     }
@@ -813,6 +837,99 @@ public final class Loader
         }
     }
 
+    /**
+     * Give every method of the interface being loaded a global interface-method
+     * index (deduped by name+descriptor). Implementors later build an imap indexed
+     * by it, and {@code invokeinterface} resolves a call site to the same index.
+     */
+    private static void registerInterface()
+    {
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (isVirtual(u2(p), gcp[u2(p + 2)])
+                    && ifIndexOf(gbase, gcp[u2(p + 2)], gcp[u2(p + 4)]) < 0)
+            {
+                ifBase[ifCount] = gbase;
+                ifNameOff[ifCount] = gcp[u2(p + 2)];
+                ifDescOff[ifCount] = gcp[u2(p + 4)];
+                ifCount += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+    }
+
+    /** Global interface-method index for an InterfaceMethodref call site (0 if unknown). */
+    private static int ifSlotOf(int idx)
+    {
+        int g = ifIndexOf(gbase, mrefNameOff(idx), mrefDescOff(idx));
+        return g >= 0 ? g : 0;
+    }
+
+    /** Global interface-method index for a name+descriptor in {@code base}, or -1. */
+    private static int ifIndexOf(long base, int nameOff, int descOff)
+    {
+        int i = 0;
+        while (i < ifCount)
+        {
+            if (utf8EqAt(base, nameOff, ifBase[i], ifNameOff[i])
+                    && utf8EqAt(base, descOff, ifBase[i], ifDescOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Build this class's imap: for each known interface method, the buffer of this
+     * class's implementation (matched against the flattened vtable by name+
+     * descriptor), or 0 if it does not implement it. Fixed size so an interface
+     * loaded later cannot leave an earlier class's imap short.
+     */
+    private static long buildImap()
+    {
+        long imap = Heap.alloc(MAXIFM * 8);
+        int g = 0;
+        while (g < MAXIFM)
+        {
+            long buf = 0L;
+            if (g < ifCount)
+            {
+                int s = findVtSlotAt(ifBase[g], ifNameOff[g], ifDescOff[g]);
+                if (s >= 0)
+                {
+                    buf = slotBuf(s);
+                }
+            }
+            Magic.store64(imap + g * 8, buf);
+            g += 1;
+        }
+        return imap;
+    }
+
+    /** Like {@link #findVtSlot} but for a name+descriptor living in another blob. */
+    private static int findVtSlotAt(long base, int nameOff, int descOff)
+    {
+        int s = 0;
+        while (s < gvCount)
+        {
+            if (utf8EqAt(base, nameOff, gvBase[s], gvName[s])
+                    && utf8EqAt(base, descOff, gvBase[s], gvDesc[s]))
+            {
+                return s;
+            }
+            s += 1;
+        }
+        return -1;
+    }
+
     /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
     private static int classRegByName(int nameOff)
     {
@@ -947,7 +1064,7 @@ public final class Loader
     private static void buildTib()
     {
         int sr = classRegByName(gSuperNameOff);
-        gType = Heap.alloc(8);
+        gType = Heap.alloc(16);                          // Type = { superType, imap }
         Magic.store64(gType, sr >= 0 ? clType[sr] : 0L);   // Type.superType (0 at Object)
         gTib = Heap.alloc((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type
@@ -957,6 +1074,7 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
+        Magic.store64(gType + 8, buildImap());           // Type.imap (needs the vtable filled)
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
@@ -1173,9 +1291,13 @@ public final class Loader
         {
             emitInvokeSpecial(code, pc);    // invokespecial (constructor)
         }
-        else if (op == 0xb6 || op == 0xb9)
+        else if (op == 0xb6)
         {
-            emitInvokeVirtual(code, pc);    // invokevirtual / invokeinterface (TIB vtable dispatch)
+            emitInvokeVirtual(code, pc, false);    // invokevirtual (vtable slot)
+        }
+        else if (op == 0xb9)
+        {
+            emitInvokeVirtual(code, pc, true);     // invokeinterface (imap / itable)
         }
         else if (op == 0xc1)
         {
@@ -1315,21 +1437,24 @@ public final class Loader
     }
 
     /**
-     * invokevirtual / invokeinterface: dispatch through the receiver's TIB vtable.
-     * Same 128-byte spill / arg-move as a static call (receiver is the leading arg),
-     * but instead of a fixed {@code BL} it loads the code address from
-     * {@code [[this] + 8 + slot*8]} and {@code BLR}s it (x16 scratch). With a single
-     * loaded class, an interface method resolves to that class's own vtable slot by
-     * name+descriptor, so both opcodes share this path (a real per-interface itable
-     * only matters once several classes implement the interface).
+     * invokevirtual / invokeinterface: dispatch on the receiver, with the same
+     * 128-byte spill / arg-move as a static call (receiver is the leading arg) but a
+     * computed {@code BLR} instead of a fixed {@code BL}.
+     *
+     * <p>The two differ only in how the target is found. invokevirtual indexes the
+     * receiver's <b>vtable</b> at a slot fixed at compile time — sound because
+     * flattening keeps a method at the same slot down a hierarchy. invokeinterface
+     * cannot do that: two classes may implement the same interface method at
+     * different vtable slots, so it indexes the receiver's <b>imap</b> (the itable)
+     * by the method's global interface index instead, reached via the Type:
+     * {@code [[[this]][1]][g]}.
      */
-    private static void emitInvokeVirtual(long code, int pc)
+    private static void emitInvokeVirtual(long code, int pc, boolean iface)
     {
         int idx = u2(code + pc + 1);
-        int descOff = mrefDescOff(idx);
-        int argc = argSlots(descOff) + 1;                  // + receiver
-        int hasRet = retSlots(descOff);
-        int slot = vtableSlotOf(idx);
+        int argc = argSlots(mrefDescOff(idx)) + 1;         // + receiver
+        int hasRet = retSlots(mrefDescOff(idx));
+        int slot = iface ? ifSlotOf(idx) : vtableSlotOf(idx);
         emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
         emit(strx(30, 31, 0));
         int k = 1;
@@ -1344,8 +1469,17 @@ public final class Loader
             emit(mov(1 + t, 9 + csp - argc + t));
             t += 1;
         }
-        emit(ldrx(16, 1, 0));                              // x16 = [this]        (TIB)
-        emit(ldrx(16, 16, 8 + slot * 8));                  // x16 = [TIB + slot]  (code)
+        emit(ldrx(16, 1, 0));                              // x16 = [this]  (TIB)
+        if (iface)
+        {
+            emit(ldrx(16, 16, 0));                         // x16 = Type    (TIB[0])
+            emit(ldrx(16, 16, 8));                         // x16 = imap    (Type[1])
+            emit(ldrx(16, 16, slot * 8));                  // x16 = imap[g] (code)
+        }
+        else
+        {
+            emit(ldrx(16, 16, 8 + slot * 8));              // x16 = vtable[slot] (code)
+        }
         emit(0xD63F0000 | (16 << 5));                      // blr x16
         emit(ldrx(30, 31, 0));
         k = 1;
@@ -1672,10 +1806,15 @@ public final class Loader
             int descOff = mrefDescOff(idx);
             return 35 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
         }
-        if (op == 0xb6 || op == 0xb9)                      // invokevirtual / invokeinterface
+        if (op == 0xb6)                                    // invokevirtual
         {
             int descOff = mrefDescOff(u2(code + pc + 1));
             return 38 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + ldr/ldr/blr + result
+        }
+        if (op == 0xb9)                                    // invokeinterface: 2 more loads (Type, imap)
+        {
+            int descOff = mrefDescOff(u2(code + pc + 1));
+            return 40 + argSlots(descOff) + retSlots(descOff);
         }
         if (op == 0xbb)
         {

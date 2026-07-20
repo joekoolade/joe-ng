@@ -244,8 +244,26 @@ defines the minimum the assembler must encode.
     Types (writer-built objects use the writer's Types); the target of
     instanceof/checkcast must be a loaded class; no interface `instanceof`; failed
     checkcast halts rather than throwing.
-  - **Still to do on-metal:** loaded interfaces with itables, and dependency
-    auto-ordering.
+  - **Loaded interfaces + itables DONE:** `invokeinterface` used to resolve by a
+    name-only fallback, which silently breaks once two loaded classes implement the
+    same interface method at *different* vtable slots. Now interfaces are loaded as
+    classes (`ACC_INTERFACE` → `registerInterface`, no compile since every method is
+    abstract) and each of their methods gets a **global interface-method index**.
+    Every implementing class then builds an **imap** (`buildImap`) indexed by that
+    global index, holding *its own* implementation (matched into its flattened
+    vtable by name+descriptor); the imap hangs off the Type, which grew to two words
+    `{superType, imap}`. `invokeinterface` dispatches
+    `[[[this]][1]][g]` — TIB → Type → imap → code — while `invokevirtual` keeps the
+    cheaper fixed vtable slot. Interfaces must be loaded before their implementors
+    (indices must be fixed first); imaps are a fixed `MAXIFM` wide so a later
+    interface can't leave an earlier imap short.
+    - **The demo is a real regression test:** `Alpha` puts `greet()` at vtable slot
+      0, `Beta` declares `filler()` first so `greet()` is at slot 1, and Guest calls
+      both through *the same* `invokeinterface` constant-pool entry. Verified by
+      temporarily reverting to vtable dispatch: the answer byte became `0x1B` (27 =
+      `20 + filler(7)` — Beta's call hit `filler`), vs `*` (42) with the itable.
+  - **Still to do on-metal:** dependency auto-ordering (load order is manual:
+    interfaces/superclasses before implementors/subclasses).
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
