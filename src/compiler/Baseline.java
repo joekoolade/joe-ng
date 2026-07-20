@@ -182,325 +182,323 @@ public final class Baseline
     // ----- opcode dispatch -------------------------------------------------
     private int step(int op, byte[] code, int pos, CodeBuffer cb)
     {
-        switch (op)
-        {
-        case 0x00 ->
+        if (op == 0x00)
         {
             return 1;
         }  // nop
-        case 0xB1 ->
+        else if (op == 0xB1)
         {
             emitEpilogue(cb);
             return 1;
         }  // return
-        case 0xAC, 0xAD, 0xB0 ->
+        else if (op == 0xAC || op == 0xAD || op == 0xB0)
         {
             cb.emit(A64.movReg(0, popReg()));
             emitEpilogue(cb);
             return 1;
         }  // ireturn/lreturn/areturn
 
-        case 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 ->
+        else if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07 || op == 0x08)
         {
             loadConst(cb, op - 0x03);
             return 1;
         }
-        case 0x01, 0x09 ->
+        else if (op == 0x01 || op == 0x09)
         {
             loadConst(cb, 0);    // aconst_null (null == 0) / lconst_0
             return 1;
         }
-        case 0x0A ->
+        else if (op == 0x0A)
         {
             loadConst(cb, 1);
             return 1;
         }
-        case 0x10 ->
+        else if (op == 0x10)
         {
             loadConst(cb, (byte) code[pos + 1]);
             return 2;
         }
-        case 0x11 ->
+        else if (op == 0x11)
         {
             loadConst(cb, (short) u2(code, pos + 1));
             return 3;
         }
-        case 0x12 ->
+        else if (op == 0x12)
         {
             ldc(cb, code[pos + 1] & 0xFF);
             return 2;
         }
-        case 0x13 ->
+        else if (op == 0x13)
         {
             ldc(cb, u2(code, pos + 1));
             return 3;
         }
-        case 0x14 ->
+        else if (op == 0x14)
         {
             loadConst(cb, ClassReader.longValue(classBytes, cpOff, u2(code, pos + 1)));
             return 3;
         }
 
-        case 0x15, 0x16, 0x19 ->
+        else if (op == 0x15 || op == 0x16 || op == 0x19)
         {
             load(cb, code[pos + 1] & 0xFF);
             return 2;
         }  // iload/lload/aload
-        case 0x1A, 0x1B, 0x1C, 0x1D ->
+        else if (op == 0x1A || op == 0x1B || op == 0x1C || op == 0x1D)
         {
             load(cb, op - 0x1A);
             return 1;
         }  // iload_0..3
-        case 0x1E, 0x1F, 0x20, 0x21 ->
+        else if (op == 0x1E || op == 0x1F || op == 0x20 || op == 0x21)
         {
             load(cb, op - 0x1E);
             return 1;
         }  // lload_0..3
-        case 0x2A, 0x2B, 0x2C, 0x2D ->
+        else if (op == 0x2A || op == 0x2B || op == 0x2C || op == 0x2D)
         {
             load(cb, op - 0x2A);
             return 1;
         }  // aload_0..3
 
-        case 0x36, 0x37, 0x3A ->
+        else if (op == 0x36 || op == 0x37 || op == 0x3A)
         {
             store(cb, code[pos + 1] & 0xFF);
             return 2;
         }  // istore/lstore/astore
-        case 0x3B, 0x3C, 0x3D, 0x3E ->
+        else if (op == 0x3B || op == 0x3C || op == 0x3D || op == 0x3E)
         {
             store(cb, op - 0x3B);
             return 1;
         }  // istore_0..3
-        case 0x3F, 0x40, 0x41, 0x42 ->
+        else if (op == 0x3F || op == 0x40 || op == 0x41 || op == 0x42)
         {
             store(cb, op - 0x3F);
             return 1;
         }  // lstore_0..3
-        case 0x4B, 0x4C, 0x4D, 0x4E ->
+        else if (op == 0x4B || op == 0x4C || op == 0x4D || op == 0x4E)
         {
             store(cb, op - 0x4B);
             return 1;
         }  // astore_0..3
-        case 0x57 ->
+        else if (op == 0x57)
         {
             popReg();
             return 1;
         }  // pop (discard result)
-        case 0x59 ->
+        else if (op == 0x59)
         {
             dup(cb);
             return 1;
         }  // dup
-        case 0x84 ->
+        else if (op == 0x84)
         {
             iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]);
             return 3;
         }
 
         // ---- array element load/store (base + index<<scale) ----
-        case 0x33 ->
+        else if (op == 0x33)
         {
             arrayLoad(cb, 0);
             return 1;
         }  // baload  (byte, zero-ext)
-        case 0x34 ->
+        else if (op == 0x34)
         {
             arrayLoad(cb, 1);
             return 1;
         }  // caload  (char, zero-ext)
-        case 0x55 ->
+        else if (op == 0x55)
         {
             arrayStore(cb, 1);
             return 1;
         }  // castore
-        case 0x2E ->
+        else if (op == 0x2E)
         {
             arrayLoad(cb, 2);
             return 1;
         }  // iaload  (int, sign-ext)
-        case 0x2F ->
+        else if (op == 0x2F)
         {
             arrayLoad(cb, 3);
             return 1;
         }  // laload  (long)
-        case 0x32 ->
+        else if (op == 0x32)
         {
             arrayLoad(cb, 3);
             return 1;
         }  // aaload  (ref)
-        case 0x54 ->
+        else if (op == 0x54)
         {
             arrayStore(cb, 0);
             return 1;
         }  // bastore
-        case 0x4F ->
+        else if (op == 0x4F)
         {
             arrayStore(cb, 2);
             return 1;
         }  // iastore
-        case 0x50 ->
+        else if (op == 0x50)
         {
             arrayStore(cb, 3);
             return 1;
         }  // lastore
-        case 0x53 ->
+        else if (op == 0x53)
         {
             arrayStore(cb, 3);
             return 1;
         }  // aastore
-        case 0xBE ->
+        else if (op == 0xBE)
         {
             arrayLength(cb);
             return 1;
         }  // arraylength
 
-        case 0x60, 0x61 ->
+        else if (op == 0x60 || op == 0x61)
         {
-            binop(cb, Bin.ADD);
+            binop(cb, BIN_ADD);
             return 1;
         }
-        case 0x64, 0x65 ->
+        else if (op == 0x64 || op == 0x65)
         {
-            binop(cb, Bin.SUB);
+            binop(cb, BIN_SUB);
             return 1;
         }
-        case 0x68, 0x69 ->
+        else if (op == 0x68 || op == 0x69)
         {
-            binop(cb, Bin.MUL);
+            binop(cb, BIN_MUL);
             return 1;
         }
-        case 0x6C, 0x6D ->
+        else if (op == 0x6C || op == 0x6D)
         {
-            binop(cb, Bin.DIV);
+            binop(cb, BIN_DIV);
             return 1;
         }
-        case 0x74, 0x75 ->
+        else if (op == 0x74 || op == 0x75)
         {
             int r = OP_BASE + sp - 1;
             cb.emit(A64.subReg(r, A64.XZR, r));
             return 1;
         }  // ineg/lneg
-        case 0x78, 0x79 ->
+        else if (op == 0x78 || op == 0x79)
         {
-            binop(cb, Bin.SHL);
+            binop(cb, BIN_SHL);
             return 1;
         }  // ishl/lshl
-        case 0x7A, 0x7B ->
+        else if (op == 0x7A || op == 0x7B)
         {
-            binop(cb, Bin.ASR);
+            binop(cb, BIN_ASR);
             return 1;
         }  // ishr/lshr
-        case 0x7C, 0x7D ->
+        else if (op == 0x7C || op == 0x7D)
         {
-            binop(cb, Bin.LSR);
+            binop(cb, BIN_LSR);
             return 1;
         }  // iushr/lushr
-        case 0x7E, 0x7F ->
+        else if (op == 0x7E || op == 0x7F)
         {
-            binop(cb, Bin.AND);
+            binop(cb, BIN_AND);
             return 1;
         }
-        case 0x80, 0x81 ->
+        else if (op == 0x80 || op == 0x81)
         {
-            binop(cb, Bin.OR);
+            binop(cb, BIN_OR);
             return 1;
         }  // ior/lor
-        case 0x82, 0x83 ->
+        else if (op == 0x82 || op == 0x83)
         {
-            binop(cb, Bin.XOR);
+            binop(cb, BIN_XOR);
             return 1;
         }  // ixor/lxor
-        case 0x94 ->
+        else if (op == 0x94)
         {
             lcmp(cb);
             return 1;
         }  // lcmp -> -1/0/1
 
-        case 0x85, 0x88 ->
+        else if (op == 0x85 || op == 0x88)
         {
             return 1;
         }  // i2l/l2i: no-op (values fit 64-bit)
-        case 0x91 ->
+        else if (op == 0x91)
         {
             int r = OP_BASE + sp - 1;
             cb.emit(A64.sxtb(r, r));
             return 1;
         }  // i2b
-        case 0x92 ->
+        else if (op == 0x92)
         {
             int r = OP_BASE + sp - 1;
             cb.emit(A64.uxth(r, r));
             return 1;
         }  // i2c
-        case 0x93 ->
+        else if (op == 0x93)
         {
             int r = OP_BASE + sp - 1;
             cb.emit(A64.sxth(r, r));
             return 1;
         }  // i2s
 
-        case 0x99, 0xC6 ->
+        else if (op == 0x99 || op == 0xC6)
         {
             branchZero(cb, code, pos, true);
             return 3;
         }  // ifeq / ifnull (null == 0)
-        case 0x9A, 0xC7 ->
+        else if (op == 0x9A || op == 0xC7)
         {
             branchZero(cb, code, pos, false);
             return 3;
         }  // ifne / ifnonnull
-        case 0x9B ->
+        else if (op == 0x9B)
         {
             branchCmpZero(cb, code, pos, A64.LT);
             return 3;
         }
-        case 0x9C ->
+        else if (op == 0x9C)
         {
             branchCmpZero(cb, code, pos, A64.GE);
             return 3;
         }
-        case 0x9D ->
+        else if (op == 0x9D)
         {
             branchCmpZero(cb, code, pos, A64.GT);
             return 3;
         }
-        case 0x9E ->
+        else if (op == 0x9E)
         {
             branchCmpZero(cb, code, pos, A64.LE);
             return 3;
         }
-        case 0x9F ->
+        else if (op == 0x9F)
         {
             branchCmp(cb, code, pos, A64.EQ);
             return 3;
         }
-        case 0xA0 ->
+        else if (op == 0xA0)
         {
             branchCmp(cb, code, pos, A64.NE);
             return 3;
         }
-        case 0xA1 ->
+        else if (op == 0xA1)
         {
             branchCmp(cb, code, pos, A64.LT);
             return 3;
         }
-        case 0xA2 ->
+        else if (op == 0xA2)
         {
             branchCmp(cb, code, pos, A64.GE);
             return 3;
         }
-        case 0xA3 ->
+        else if (op == 0xA3)
         {
             branchCmp(cb, code, pos, A64.GT);
             return 3;
         }
-        case 0xA4 ->
+        else if (op == 0xA4)
         {
             branchCmp(cb, code, pos, A64.LE);
             return 3;
         }
-        case 0xA7 ->
+        else if (op == 0xA7)
         {
             int target = pos + s2(code, pos + 1);
             int w = cb.emit(A64.b(0));
@@ -509,77 +507,89 @@ public final class Baseline
             return 3;
         }
 
-        case 0xB2 ->
+        else if (op == 0xB2)
         {
             getstatic(cb, u2(code, pos + 1));
             return 3;
         }
-        case 0xB3 ->
+        else if (op == 0xB3)
         {
             putstatic(cb, u2(code, pos + 1));
             return 3;
         }
-        case 0xB4 ->
+        else if (op == 0xB4)
         {
             getfield(cb, u2(code, pos + 1));
             return 3;
         }
-        case 0xB5 ->
+        else if (op == 0xB5)
         {
             putfield(cb, u2(code, pos + 1));
             return 3;
         }
-        case 0xB6 ->
+        else if (op == 0xB6)
         {
             lowerInvokeVirtual(u2(code, pos + 1), cb);
             return 3;
         }
-        case 0xB7 ->
+        else if (op == 0xB7)
         {
             lowerInvokeSpecial(u2(code, pos + 1), cb);
             return 3;
         }
-        case 0xB8 ->
+        else if (op == 0xB8)
         {
             lowerInvokeStatic(u2(code, pos + 1), cb);
             return 3;
         }
-        case 0xB9 ->
+        else if (op == 0xB9)
         {
             lowerInvokeInterface(u2(code, pos + 1), cb);
             return 5;
         }  // invokeinterface
-        case 0xBB ->
+        else if (op == 0xBB)
         {
             lowerNew(u2(code, pos + 1), cb);
             return 3;
         }
-        case 0xBC ->
+        else if (op == 0xBC)
         {
             lowerNewArray(code[pos + 1] & 0xFF, cb);
             return 2;
         }
-        case 0xBF ->
+        else if (op == 0xBF)
         {
             athrow(cb, pos);
             return 1;
         }  // athrow
-        case 0xC0 ->
+        else if (op == 0xC0)
         {
             typeCheck(cb, u2(code, pos + 1), Symbols.CHECK_CAST);
             return 3;
         }  // checkcast
-        case 0xC1 ->
+        else if (op == 0xC1)
         {
             typeCheck(cb, u2(code, pos + 1), Symbols.INSTANCE_OF);
             return 3;
         }  // instanceof
 
-        default -> throw unsupportedOpcode(op, pos);
+        else
+        {
+            throw unsupportedOpcode(op, pos);
         }
     }
 
-    private enum Bin { ADD, SUB, MUL, DIV, AND, OR, XOR, SHL, ASR, LSR }
+    // Binary-op kinds (plain ints, not an enum: the metal compiler has no enum support).
+    private static final int BIN_ADD = 0;
+    private static final int BIN_SUB = 1;
+    private static final int BIN_MUL = 2;
+    private static final int BIN_DIV = 3;
+    private static final int BIN_AND = 4;
+    private static final int BIN_OR = 5;
+    private static final int BIN_XOR = 6;
+    private static final int BIN_SHL = 7;
+    private static final int BIN_ASR = 8;
+    private static final int BIN_LSR = 9;
 
     // ----- register allocation ---------------------------------------------
     private int pushReg()
@@ -656,24 +666,21 @@ public final class Baseline
         cb.emit(A64.strx(r, 31, localMem(slot)));
     }
 
-    private void binop(CodeBuffer cb, Bin kind)
+    private void binop(CodeBuffer cb, int kind)
     {
         int b = popReg();
         int a = popReg();
         int r = pushReg();
-        cb.emit(switch (kind)
-        {
-        case ADD -> A64.addReg(r, a, b);
-        case SUB -> A64.subReg(r, a, b);
-        case MUL -> A64.mulReg(r, a, b);
-        case DIV -> A64.sdivReg(r, a, b);
-        case AND -> A64.andReg(r, a, b);
-        case OR  -> A64.orrReg(r, a, b);
-        case XOR -> A64.eorReg(r, a, b);
-        case SHL -> A64.lslv(r, a, b);
-        case ASR -> A64.asrv(r, a, b);
-        case LSR -> A64.lsrv(r, a, b);
-        });
+        cb.emit(kind == BIN_ADD ? A64.addReg(r, a, b)
+              : kind == BIN_SUB ? A64.subReg(r, a, b)
+              : kind == BIN_MUL ? A64.mulReg(r, a, b)
+              : kind == BIN_DIV ? A64.sdivReg(r, a, b)
+              : kind == BIN_AND ? A64.andReg(r, a, b)
+              : kind == BIN_OR ? A64.orrReg(r, a, b)
+              : kind == BIN_XOR ? A64.eorReg(r, a, b)
+              : kind == BIN_SHL ? A64.lslv(r, a, b)
+              : kind == BIN_ASR ? A64.asrv(r, a, b)
+              : A64.lsrv(r, a, b));                                // BIN_LSR
     }
 
     private void dup(CodeBuffer cb)
@@ -1078,14 +1085,16 @@ public final class Baseline
     /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */
     private static int arrayElemSize(int atype)
     {
-        return switch (atype)
+        int size = atype == 4 || atype == 8 ? 1             // boolean, byte
+                 : atype == 5 || atype == 9 ? 2             // char, short
+                 : atype == 6 || atype == 10 ? 4            // float, int
+                 : atype == 7 || atype == 11 ? 8            // double, long
+                 : 0;
+        if (size == 0)
         {
-        case 4, 8 -> 1;              // boolean, byte
-        case 5, 9 -> 2;              // char, short
-        case 6, 10 -> 4;             // float, int
-        case 7, 11 -> 8;             // double, long
-        default -> throw unsupported("bad newarray atype", atype);
-        };
+            throw unsupported("bad newarray atype", atype);
+        }
+        return size;
     }
 
     /** Spill operand-stack values (x9..) to the frame so a call can't clobber them. */
@@ -1111,19 +1120,30 @@ public final class Baseline
      */
     private void lowerIntrinsic(int id, CodeBuffer cb)
     {
-        switch (id)
+        if (id == Intrinsics.WFE)
         {
-        case Intrinsics.WFE -> cb.emit(A64.wfe());
-        case Intrinsics.ISB -> cb.emit(A64.isb());
-        case Intrinsics.DSB -> cb.emit(A64.dsb());
-        case Intrinsics.GC -> lowerGc(cb);
-        case Intrinsics.CALL0 ->
+            cb.emit(A64.wfe());
+        }
+        else if (id == Intrinsics.ISB)
+        {
+            cb.emit(A64.isb());
+        }
+        else if (id == Intrinsics.DSB)
+        {
+            cb.emit(A64.dsb());
+        }
+        else if (id == Intrinsics.GC)
+        {
+            lowerGc(cb);
+        }
+        else if (id == Intrinsics.CALL0)
         {
             int addr = popReg();
             cb.emit(A64.blr(addr));
             cb.emit(A64.movReg(pushReg(), 0));
         }
-        case Intrinsics.CALL2 ->                             // addr, a->x0, b->x1, blr, result x0
+        else if (id == Intrinsics.CALL2)
+        // addr, a->x0, b->x1, blr, result x0
         {
             int b = popReg();
             int a = popReg();
@@ -1134,20 +1154,57 @@ public final class Baseline
             cb.emit(A64.blr(16));
             cb.emit(A64.movReg(pushReg(), 0));
         }
-        case Intrinsics.ERET -> cb.emit(A64.eret());
-        case Intrinsics.DROP_TO_EL1 -> lowerDropToEL1(cb);
+        else if (id == Intrinsics.ERET)
+        {
+            cb.emit(A64.eret());
+        }
+        else if (id == Intrinsics.DROP_TO_EL1)
+        {
+            lowerDropToEL1(cb);
+        }
 
-        case Intrinsics.WRITE_HCR_EL2 -> cb.emit(A64.msr(A64.HCR_EL2, popReg()));
-        case Intrinsics.WRITE_CPTR_EL2 -> cb.emit(A64.msr(A64.CPTR_EL2, popReg()));
-        case Intrinsics.WRITE_CNTHCTL_EL2 -> cb.emit(A64.msr(A64.CNTHCTL_EL2, popReg()));
-        case Intrinsics.WRITE_CNTVOFF_EL2 -> cb.emit(A64.msr(A64.CNTVOFF_EL2, popReg()));
-        case Intrinsics.WRITE_SCTLR_EL1 -> cb.emit(A64.msr(A64.SCTLR_EL1, popReg()));
-        case Intrinsics.WRITE_SPSR_EL2 -> cb.emit(A64.msr(A64.SPSR_EL2, popReg()));
-        case Intrinsics.WRITE_ELR_EL2 -> cb.emit(A64.msr(A64.ELR_EL2, popReg()));
-        case Intrinsics.WRITE_CPACR_EL1 -> cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
-        case Intrinsics.WRITE_SP -> cb.emit(A64.movToSp(popReg()));
-        case Intrinsics.READ_SP -> cb.emit(A64.movFromSp(pushReg()));
-        case Intrinsics.RESUME ->                            // exc->x9, SP=sp, br pc (no return)
+        else if (id == Intrinsics.WRITE_HCR_EL2)
+        {
+            cb.emit(A64.msr(A64.HCR_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_CPTR_EL2)
+        {
+            cb.emit(A64.msr(A64.CPTR_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_CNTHCTL_EL2)
+        {
+            cb.emit(A64.msr(A64.CNTHCTL_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_CNTVOFF_EL2)
+        {
+            cb.emit(A64.msr(A64.CNTVOFF_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_SCTLR_EL1)
+        {
+            cb.emit(A64.msr(A64.SCTLR_EL1, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_SPSR_EL2)
+        {
+            cb.emit(A64.msr(A64.SPSR_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_ELR_EL2)
+        {
+            cb.emit(A64.msr(A64.ELR_EL2, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_CPACR_EL1)
+        {
+            cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_SP)
+        {
+            cb.emit(A64.movToSp(popReg()));
+        }
+        else if (id == Intrinsics.READ_SP)
+        {
+            cb.emit(A64.movFromSp(pushReg()));
+        }
+        else if (id == Intrinsics.RESUME)
+        // exc->x9, SP=sp, br pc (no return)
         {
             int exc = popReg();
             int spv = popReg();
@@ -1158,49 +1215,51 @@ public final class Baseline
             cb.emit(A64.br(16));
         }
 
-        case Intrinsics.STORE32 ->
+        else if (id == Intrinsics.STORE32)
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strw(val, addr, 0));
         }
-        case Intrinsics.STORE8 ->
+        else if (id == Intrinsics.STORE8)
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strb(val, addr, 0));
         }
-        case Intrinsics.STORE64 ->
+        else if (id == Intrinsics.STORE64)
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strx(val, addr, 0));
         }
-        case Intrinsics.LOAD32 ->
+        else if (id == Intrinsics.LOAD32)
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrw(r, addr, 0));
         }
-        case Intrinsics.LOAD8 ->
+        else if (id == Intrinsics.LOAD8)
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrb(r, addr, 0));
         }
-        case Intrinsics.LOAD64 ->
+        else if (id == Intrinsics.LOAD64)
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrx(r, addr, 0));
         }
 
-        case Intrinsics.BYTES ->
+        else if (id == Intrinsics.BYTES)
         {
             /* no-op: the operand is already an interned byte[] ref */;
         }
 
-        default -> throw unsupported("unknown intrinsic id ", id);
+        else
+        {
+            throw unsupported("unknown intrinsic id ", id);
         }
     }
 
@@ -1261,16 +1320,27 @@ public final class Baseline
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
     private static int opLen(int op, byte[] code, int pos)
     {
-        return switch (op)
+        // 2-byte: bipush/ldc/iload/lload/aload/istore/lstore/astore/newarray
+        if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x19
+            || op == 0x36 || op == 0x37 || op == 0x3A || op == 0xBC)
         {
-        case 0x10, 0x12, 0x15, 0x16, 0x19, 0x36, 0x37, 0x3A, 0xBC -> 2; // …/aload/istore/lstore/astore/newarray
-        case 0x11, 0x13, 0x14, 0x84, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E,
-        0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA7,
-        0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB,
-        0xC0, 0xC1 -> 3;                                 // get/putstatic/field/invoke*/new/checkcast/instanceof
-        case 0xB9 -> 5;                                       // invokeinterface (idx, count, 0)
-        default -> 1;
-        };
+            return 2;
+        }
+        if (op == 0xB9)                                      // invokeinterface (idx, count, 0)
+        {
+            return 5;
+        }
+        // 3-byte: sipush/ldc_w/ldc2_w/iinc/if*/goto/get-put static-field/invoke*/new/checkcast/instanceof
+        if (op == 0x11 || op == 0x13 || op == 0x14 || op == 0x84 || op == 0x99
+            || op == 0x9A || op == 0x9B || op == 0x9C || op == 0x9D || op == 0x9E
+            || op == 0x9F || op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3
+            || op == 0xA4 || op == 0xA7 || op == 0xB2 || op == 0xB3 || op == 0xB4
+            || op == 0xB5 || op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xBB
+            || op == 0xC0 || op == 0xC1)
+        {
+            return 3;
+        }
+        return 1;
     }
 
     private static void set64(CodeBuffer cb, int rd, long v)
@@ -1350,8 +1420,8 @@ public final class Baseline
         this.saveLR = !isEntry && nonLeaf;
         // Locals live in callee-saved x19..x28; a method needing more keeps the
         // overflow in the frame (see localMem). Slots 0..LOC_MAX-1 stay in registers.
-        this.regLocals = Math.min(maxLocals, LOC_MAX);
-        this.overflowLocals = Math.max(0, maxLocals - LOC_MAX);
+        this.regLocals = maxLocals < LOC_MAX ? maxLocals : LOC_MAX;
+        this.overflowLocals = maxLocals > LOC_MAX ? maxLocals - LOC_MAX : 0;
         // frame: [LR?][saved local regs][overflow locals][operand spill area]
         this.localSaveBase = saveLR ? 8 : 0;
         this.overflowBase = localSaveBase + regLocals * 8;
