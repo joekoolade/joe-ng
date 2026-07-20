@@ -22,6 +22,8 @@ public final class Loader
     private static long gbase;      // class blob base address
     private static long gp;         // parse cursor
     private static int[] gcp;       // byte offset of each constant-pool entry body
+    private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
+    private static int gcpCount;
     private static int gcodeLen;    // length of the located method's bytecode
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
@@ -104,6 +106,21 @@ public final class Loader
     private static int[] ifDescOff;
     private static int ifCount;
     private static boolean gIsInterface; // is the class being loaded an interface?
+
+    // Blobs handed to the loader, plus the dependencies between them, so load order
+    // is derived rather than hand-maintained. A class must be loaded after every
+    // class it names — its superclass and interfaces (needed for field layout,
+    // vtable flattening and itable indices) but also anything it instantiates,
+    // calls or type-tests (needed by the class/method/field registries).
+    private static final int MAXBLOB = 16;
+    private static long[] pdBase;        // blob address
+    private static int[] pdNameOff;      // its own this_class name Utf8 offset
+    private static int[] pdDone;         // 1 once loaded
+    private static int pdCount;
+    private static final int MAXDEP = 256;
+    private static int[] dpOwner;        // index into pd* of the blob that has this dependency
+    private static int[] dpOff;          // dependency's name Utf8 offset (in pdBase[dpOwner])
+    private static int dpCount;
 
     private static int u1(long p)
     {
@@ -200,10 +217,19 @@ public final class Loader
         ifNameOff = new int[MAXIFM];
         ifDescOff = new int[MAXIFM];
         ifCount = 0;
-        loadOne(VM.greeterBytes);                      // the interface first: fixes itable indices
-        loadOne(VM.alphaBytes);                        // implements greet() at its vtable slot 0
-        loadOne(VM.betaBytes);                         // implements greet() at slot 1 (filler shifts it)
-        loadOne(VM.guestBytes);                        // entry: dispatch both via the interface
+        pdBase = new long[MAXBLOB];
+        pdNameOff = new int[MAXBLOB];
+        pdDone = new int[MAXBLOB];
+        pdCount = 0;
+        dpOwner = new int[MAXDEP];
+        dpOff = new int[MAXDEP];
+        // Handed over deliberately worst-first — Guest depends on all three, and the
+        // implementors depend on the interface. loadAll derives the real order.
+        addBlob(VM.guestBytes);
+        addBlob(VM.betaBytes);
+        addBlob(VM.alphaBytes);
+        addBlob(VM.greeterBytes);
+        loadAll();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
         if (code == 0L)
@@ -228,12 +254,15 @@ public final class Loader
         int cpCount = u2(p);
         p += 2;
         gcp = new int[cpCount];
+        gcpTag = new int[cpCount];
+        gcpCount = cpCount;
         int i = 1;
         while (i < cpCount)
         {
             int tag = u1(p);
             p += 1;
             gcp[i] = (int) (p - base);                  // body starts right after the tag
+            gcpTag[i] = tag;                            // kept so we can find Class entries
             if (tag == 1)
             {
                 p += 2 + u2(p);    // Utf8
@@ -627,6 +656,106 @@ public final class Loader
      * method, and register it. Classes must be loaded superclass/dependency-first
      * so the registries are populated when a subclass or user is compiled.
      */
+    /** Hand the loader a class blob; {@link #loadAll} works out when to load it. */
+    private static void addBlob(long bytes)
+    {
+        pdBase[pdCount] = bytes;
+        pdDone[pdCount] = 0;
+        pdCount += 1;
+    }
+
+    /**
+     * Load every recorded blob, dependencies first. Repeatedly loads any blob whose
+     * dependencies are all satisfied (already loaded, or not among the blobs at all
+     * — {@code java/lang/Object} and other unloaded names never block). Stops if a
+     * pass makes no progress, which means a cycle or a missing class.
+     */
+    private static void loadAll()
+    {
+        probeAll();
+        int remaining = pdCount;
+        while (remaining > 0)
+        {
+            int progress = 0;
+            int i = 0;
+            while (i < pdCount)
+            {
+                if (pdDone[i] == 0 && ready(i))
+                {
+                    loadOne(pdBase[i]);
+                    pdDone[i] = 1;
+                    remaining -= 1;
+                    progress = 1;
+                }
+                i += 1;
+            }
+            if (progress == 0)
+            {
+                remaining = 0;                          // cycle / missing dependency: give up
+            }
+        }
+    }
+
+    /** Record each blob's own name and every class it names (its {@code Class} entries). */
+    private static void probeAll()
+    {
+        dpCount = 0;
+        int i = 0;
+        while (i < pdCount)
+        {
+            parseConstPool(pdBase[i]);
+            pdNameOff[i] = gcp[u2(gbase + gcp[u2(gp + 2)])];   // this_class -> name
+            int c = 1;
+            while (c < gcpCount)
+            {
+                if (gcpTag[c] == 7)                     // CONSTANT_Class
+                {
+                    addDep(i, gcp[u2(gbase + gcp[c])]);
+                }
+                c += 1;
+            }
+            i += 1;
+        }
+    }
+
+    private static void addDep(int owner, int nameOff)
+    {
+        dpOwner[dpCount] = owner;
+        dpOff[dpCount] = nameOff;
+        dpCount += 1;
+    }
+
+    /** True if no dependency of blob {@code i} names a blob that is still unloaded. */
+    private static boolean ready(int i)
+    {
+        int d = 0;
+        while (d < dpCount)
+        {
+            if (dpOwner[d] == i && blocked(i, dpOff[d]))
+            {
+                return false;
+            }
+            d += 1;
+        }
+        return true;
+    }
+
+    /** True if some other still-unloaded blob declares the class named at {@code off}. */
+    private static boolean blocked(int i, int off)
+    {
+        int j = 0;
+        while (j < pdCount)
+        {
+            if (j != i && pdDone[j] == 0
+                    && utf8EqAt(pdBase[i], off, pdBase[j], pdNameOff[j]))
+            {
+                return true;
+            }
+            j += 1;
+        }
+        return false;
+    }
+
     private static void loadOne(long bytes)
     {
         parseConstPool(bytes);

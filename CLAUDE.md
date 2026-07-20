@@ -262,8 +262,20 @@ defines the minimum the assembler must encode.
       both through *the same* `invokeinterface` constant-pool entry. Verified by
       temporarily reverting to vtable dispatch: the answer byte became `0x1B` (27 =
       `20 + filler(7)` — Beta's call hit `filler`), vs `*` (42) with the itable.
-  - **Still to do on-metal:** dependency auto-ordering (load order is manual:
-    interfaces/superclasses before implementors/subclasses).
+  - **Dependency auto-ordering DONE:** load order is now derived, not hand-kept.
+    `parseConstPool` records each entry's tag, so `probeAll` can read every blob's
+    own name plus every class it *names* (its `CONSTANT_Class` entries). That is the
+    right dependency set — not just superclass/interfaces (needed for field layout,
+    vtable flattening, itable indices) but anything it instantiates, calls or
+    type-tests (needed by the class/method/field registries). `loadAll` then loads
+    any blob whose dependencies are all satisfied — already loaded, or not among the
+    blobs at all, so `java/lang/Object` never blocks — repeating until done, and
+    stopping on a pass with no progress (cycle or missing class). The driver hands
+    blobs over deliberately worst-first (Guest, Beta, Alpha, Greeter) to prove the
+    order is computed; loading them in that given order instead crashes the loader
+    (Guest `new`s classes that aren't registered yet).
+  - **On-metal loader is feature-complete for single inheritance.** Remaining work is
+    M5 proper: one JDK-free ClassFile+BaselineCompiler shared by writer and runtime.
   - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
     single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
