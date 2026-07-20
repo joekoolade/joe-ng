@@ -76,6 +76,7 @@ E
 U
 R
 *M
+F
 ```
 
 The `core NNNMHz` line is the VPU core clock joe-ng read from the firmware over the

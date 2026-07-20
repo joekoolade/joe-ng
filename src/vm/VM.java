@@ -107,6 +107,31 @@ public final class VM
     static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
     static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
 
+    // A second frame table for methods JIT-compiled at runtime: their code isn't in
+    // the image, so the writer can't describe them. The loader appends one entry per
+    // compiled method (codeStart, codeEnd, frameSize) as it emits. Same triple
+    // layout as frameTable; frameSizeAt consults both, so unwinding can pop a JIT'd
+    // frame just like a compiled one.
+    static long jitFrameTable, jitFrameCount;
+
+    /** Record a JIT'd method's machine-PC range and frame size, so unwind can pop it. */
+    static void addJitFrame(long codeStart, long codeEnd, long frameSize)
+    {
+        if (jitFrameTable == 0L)
+        {
+            jitFrameTable = Heap.alloc(JIT_FRAME_MAX * 24);      // JIT_FRAME_MAX * 24 bytes
+        }
+        if (jitFrameCount < JIT_FRAME_MAX)
+        {
+            long e = jitFrameTable + jitFrameCount * 24L;
+            Magic.store64(e, codeStart);
+            Magic.store64(e + 8L, codeEnd);
+            Magic.store64(e + 16L, frameSize);
+            jitFrameCount = jitFrameCount + 1L;
+        }
+    }
+    static final int JIT_FRAME_MAX = 256;
+
     /**
      * Unwind the stack looking for a handler for {@code exc}, starting at machine
      * PC {@code pc} with stack pointer {@code sp}. At each frame: if a try/catch
@@ -156,12 +181,24 @@ public final class VM
         return 0L;
     }
 
-    private static long frameSizeAt(long pc)
+    /** Frame size covering machine PC {@code pc}, from either table (0 = none). Package-visible for the self-check. */
+    static long frameSizeAt(long pc)
+    {
+        long fs = frameSizeIn(frameTable, frameCount, pc);        // image methods
+        if (fs != 0L)
+        {
+            return fs;
+        }
+        return frameSizeIn(jitFrameTable, jitFrameCount, pc);     // runtime JIT'd methods
+    }
+
+    /** Frame size of the {codeStart,codeEnd,frameSize} entry covering {@code pc}, or 0. */
+    private static long frameSizeIn(long table, long count, long pc)
     {
         long i = 0L;
-        while (i < frameCount)
+        while (i < count)
         {
-            long e = frameTable + i * 24L;
+            long e = table + i * 24L;
             if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
             {
                 return Magic.load64(e + 16L);
@@ -370,6 +407,27 @@ public final class VM
         Uart.putc(Loader.loadGuest());                     // '*' from Guest.answer(), JIT'd at runtime
         Uart.putc(Loader.loadMath());                      // 'M' from java.base java.lang.Math.max(0x4D,0x21)
         Uart.putc(0x0A);
+
+        // The runs above JIT-compiled framed methods and registered their frames.
+        // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
+        // and check frameSizeAt finds it in range and rejects a PC just past it.
+        Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
+        Uart.putc(0x0A);
+    }
+
+    /** True if frameSizeAt resolves a real JIT'd frame but not a PC outside it. */
+    private static boolean jitUnwindReady()
+    {
+        if (jitFrameCount == 0L)
+        {
+            return false;                                  // no framed JIT'd method ran
+        }
+        long e = jitFrameTable;                            // first registered entry
+        long start = Magic.load64(e);
+        long end = Magic.load64(e + 8L);
+        long size = Magic.load64(e + 16L);
+        return frameSizeAt(start) == size                  // inside -> its frame size
+               && frameSizeAt(end) != size;                // just past the end -> not this frame
     }
 
     /** Allocate objects that become unreachable, giving the collector something to reclaim. */

@@ -984,6 +984,10 @@ public final class Loader
             emitOp(code, pc);
             pc += opLen(u1(code + pc));
         }
+        if (fFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
+        {
+            VM.addJitFrame(mBuf[i], cout, fFrameSize);
+        }
     }
 
     /** Buffer assigned to the method whose bytecode is at {@code code}. */

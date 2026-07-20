@@ -339,11 +339,17 @@ still reaching `*M`, which exercises prologue/epilogue, callee-saved locals, arg
 moves, operand-only spills, virtual and interface dispatch (receiver now in x0),
 `new`, `instanceof` and cross-class linking.
 
-*One of the two latent gaps closed for free:* JIT'd locals now live in x19..x28,
-which is exactly what `Magic.gc()` spills, so references held in loaded code are
-scannable. **Still open:** exception unwinding through JIT'd frames — the frames now
-exist, but the loader does not yet register frame-table entries for them, so
-`VM.unwind` cannot size a JIT'd frame to pop it.
+*Both latent gaps are now closed.* JIT'd locals live in x19..x28, exactly what
+`Magic.gc()` spills, so references in loaded code are scannable. And unwinding
+through JIT'd frames works: the loader appends each framed JIT'd method's
+`{codeStart, codeEnd, frameSize}` to a runtime `jitFrameTable` (`VM.addJitFrame`),
+and `frameSizeAt` consults it after the writer's table, so `VM.unwind` can pop a
+JIT'd frame exactly as it pops a compiled one. Proven on the metal: after the
+loader runs, a boot-time self-check confirms `frameSizeAt` resolves a real
+registered JIT frame in range and rejects a PC just past it — the new `F` line.
+(The JIT itself still emits no `athrow`/exception tables, so a JIT'd method cannot
+yet *originate* or *catch* an exception; the frame table is what lets one
+*propagate through* a JIT'd frame to a handler further up.)
 
 *Measured after the two completed items:* `invokedynamic` sites **21 → 10**, and
 methods blocked on it **8 → 5**. Both changes left the emitted image byte-for-byte
