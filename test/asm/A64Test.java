@@ -86,6 +86,10 @@ public final class A64Test
         T.eqWord("LDR  x0,[x1]",   0xF9400020, A64.ldrx(0, 1, 0));
         T.eqWord("STRB w0,[x1]",   0x39000020, A64.strb(0, 1, 0));
         T.eqWord("LDRB w0,[x1]",   0x39400020, A64.ldrb(0, 1, 0));
+        T.eqWord("STRH w0,[x1]",   0x79000020, A64.strh(0, 1, 0));
+        T.eqWord("LDRH w0,[x1]",   0x79400020, A64.ldrh(0, 1, 0));
+        T.eqWord("LDRH w0,[x1,#2]", 0x79400420, A64.ldrh(0, 1, 2));  // imm12 scaled by 2
+        T.throwsIAE("LDRH odd offset", () -> A64.ldrh(0, 1, 1));      // must be halfword-aligned
         T.eqWord("STR  w0,[x1,#4]",0xB9000420, A64.strw(0, 1, 4));   // imm12 scaled by 4
 
         // ---- add/sub immediate + moves -------------------------------------

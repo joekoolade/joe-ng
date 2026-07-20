@@ -386,6 +386,16 @@ public final class BaselineCompiler
                                                                                                     arrayLoad(cb, 0);
                                                                                                     return 1;
                                                                                                 }  // baload  (byte, zero-ext)
+                                                                                                    case 0x34 ->
+                                                                                                    {
+                                                                                                        arrayLoad(cb, 1);
+                                                                                                        return 1;
+                                                                                                    }  // caload  (char, zero-ext)
+                                                                                                    case 0x55 ->
+                                                                                                    {
+                                                                                                        arrayStore(cb, 1);
+                                                                                                        return 1;
+                                                                                                    }  // castore
                                                                                                     case 0x2E ->
                                                                                                     {
                                                                                                         arrayLoad(cb, 2);
@@ -512,16 +522,16 @@ public final class BaselineCompiler
                                                                                                                                                                                                 return 1;
                                                                                                                                                                                             }  // i2s
 
-                                                                                                                                                                                                case 0x99 ->
+                                                                                                                                                                                                case 0x99, 0xC6 ->
                                                                                                                                                                                                 {
                                                                                                                                                                                                     branchZero(cb, code, pos, true);
                                                                                                                                                                                                     return 3;
-                                                                                                                                                                                                }
-                                                                                                                                                                                                    case 0x9A ->
+                                                                                                                                                                                                }  // ifeq / ifnull (null == 0)
+                                                                                                                                                                                                    case 0x9A, 0xC7 ->
                                                                                                                                                                                                     {
                                                                                                                                                                                                         branchZero(cb, code, pos, false);
                                                                                                                                                                                                         return 3;
-                                                                                                                                                                                                    }
+                                                                                                                                                                                                    }  // ifne / ifnonnull
                                                                                                                                                                                                         case 0x9B ->
                                                                                                                                                                                                         {
                                                                                                                                                                                                             branchCmpZero(cb, code, pos, A64.LT);
@@ -1122,6 +1132,7 @@ public final class BaselineCompiler
         cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
         cb.emit(scale == 0 ? A64.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
+                : scale == 1 ? A64.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
                 : scale == 2 ? A64.ldrsw(r, arr, 0)              // int (sign-ext)
                 : A64.ldrx(r, arr, 0));                          // long / ref
     }
@@ -1133,7 +1144,10 @@ public final class BaselineCompiler
         int arr = popReg();
         cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64.addRegLsl(arr, arr, index, scale));
-        cb.emit(scale == 0 ? A64.strb(val, arr, 0) : scale == 2 ? A64.strw(val, arr, 0) : A64.strx(val, arr, 0));
+        cb.emit(scale == 0 ? A64.strb(val, arr, 0)
+                : scale == 1 ? A64.strh(val, arr, 0)             // char/short
+                : scale == 2 ? A64.strw(val, arr, 0)
+                : A64.strx(val, arr, 0));
     }
 
     /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */

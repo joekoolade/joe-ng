@@ -208,8 +208,18 @@ independently useful, verifiable by re-running the gap harness.
   saved and restored **x29 (the frame pointer)** as if it were a local. Three image
   methods did exactly that (`VM.markRange`, `Loader.load2`, `Loader.findMethod`);
   they compiled only because nothing ever *accessed* slot 10.
-- ☐ Add `caload` (0x34) — needs `LDRH` in the assembler (char/short arrays are a
-  known gap).
+- ✅ **Done:** `caload`/`castore` (0x34/0x55), adding `LDRH`/`STRH` to the
+  assembler (bit-for-bit checked, including the halfword-alignment rejection), plus
+  `ifnull`/`ifnonnull` (0xC6/0xC7) — identical to `ifeq`/`ifne` because null is 0
+  in this object model. `saload`/`sastore` remain open: `short` is signed, so they
+  need `LDRSH` rather than the zero-extending `LDRH`.
+
+**Stage 1 is complete.** Measured effect: 28 → **32 methods compiling**, and the
+three blockers it targeted are gone (`new` with a live stack, the local ceiling,
+the easy missing opcodes). The image is unchanged except where the local fix
+removed the redundant x29 save, and QEMU still runs to `*M`. What remains is
+almost entirely Stage 2 territory: **23 methods blocked on JDK references** and
+**8 on `invokedynamic`**, plus 2 switch statements.
 
 *Measured after the first item:* the `new`-with-live-stack blocker went from 14
 methods to **0**. The count that compiles moved only 28 → 29, because those

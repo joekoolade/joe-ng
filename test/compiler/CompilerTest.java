@@ -162,6 +162,18 @@ public final class CompilerTest
                 }
             }
         }
+        // ---- char[] elements: 2-byte access via LDRH/STRH ---------------------
+        int[] ce = compile(fx, "charElem", "([C)I");
+        boolean sawLdrh = false;
+        boolean sawStrh = false;
+        for (int w : ce)
+        {
+            sawLdrh |= (w & 0xFFC00000) == 0x79400000;
+            sawStrh |= (w & 0xFFC00000) == 0x79000000;
+        }
+        T.check("charElem uses LDRH (caload)", sawLdrh);
+        T.check("charElem uses STRH (castore)", sawStrh);
+
         T.check("manyLocals compiles (>10 locals)", ml.length > 0);
         T.check("overflow locals are stored to the frame", overflowStores > 0);
         T.check("overflow locals are loaded from the frame", overflowLoads > 0);

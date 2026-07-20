@@ -110,6 +110,16 @@ public final class A64Enc
     {
         return 0xB980_0000 | ((off >> 2) << 10) | (rn << 5) | rt;
     }
+    /** {@code STRH Wt, [Xn, #off]} — store halfword (char/short elements). */
+    public static int strh(int rt, int rn, int off)
+    {
+        return ldst(1, 0, rt, rn, off);
+    }
+    /** {@code LDRH Wt, [Xn, #off]} — load halfword, zero-extended (char is unsigned). */
+    public static int ldrh(int rt, int rn, int off)
+    {
+        return ldst(1, 1, rt, rn, off);
+    }
 
     // ----- branches (displacements in words) --------------------------------
     /** {@code B #wordOffset}. */

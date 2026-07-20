@@ -46,6 +46,13 @@ public final class Fixtures
         return x != 0 ? 0x41 : 0x42;
     }
 
+    /** char[] element access — 2-byte elements, so LDRH/STRH (char is unsigned). */
+    public static int charElem(char[] s)
+    {
+        s[1] = 'B';
+        return s[0] + s[1];
+    }
+
     /**
      * More locals than there are callee-saved registers (x19..x28). Slots 0..9 stay
      * in registers; the rest live in the frame, loaded and stored around each use.
