@@ -35,7 +35,8 @@ public final class BaselineCompiler
     private static final int OP_BASE = 9;    // operand stack -> x9..x15
     private static final int OP_MAX = 7;
     private static final int LOC_BASE = 19;  // locals -> x19..x28
-    private static final int LOC_MAX = 10;
+    private static final int LOC_MAX = 10;   // beyond this a local lives in the frame
+    private static final int SCRATCH = 16;   // IP0 — not a local or operand register
 
     /** Resolves an owner class name (e.g. "vm/Cell") to its parsed classfile. */
     public interface ClassResolver
@@ -73,6 +74,9 @@ public final class BaselineCompiler
     private int frameSize;
     private int localSaveBase;
     private int spillBase;
+    private int overflowBase;     // frame offset of local slot LOC_MAX
+    private int regLocals;        // locals held in x19.. (min(maxLocals, LOC_MAX))
+    private int overflowLocals;   // locals held in the frame (maxLocals - LOC_MAX)
     private int maxLocals;
     private boolean saveLR;
     private boolean nonLeaf;
@@ -135,11 +139,17 @@ public final class BaselineCompiler
         this.exceptions = method.exceptions;
         this.nonLeaf = isNonLeaf(code);
         this.saveLR = !isEntry && nonLeaf;
-        // frame: [LR?][locals...][operand-stack spill area for calls]
+        // Locals live in callee-saved x19..x28; a method needing more keeps the
+        // overflow in the frame (see localMem). Slots 0..LOC_MAX-1 stay in
+        // registers, so a method within the old limit gets exactly the old layout.
+        this.regLocals = Math.min(maxLocals, LOC_MAX);
+        this.overflowLocals = Math.max(0, maxLocals - LOC_MAX);
+        // frame: [LR?][saved local regs][overflow locals][operand spill area]
         this.localSaveBase = saveLR ? 8 : 0;
-        this.spillBase = localSaveBase + maxLocals * 8;
+        this.overflowBase = localSaveBase + regLocals * 8;
+        this.spillBase = overflowBase + overflowLocals * 8;
         int spillWords = (!isEntry && nonLeaf) ? OP_MAX : 0;
-        int savedWords = (saveLR ? 1 : 0) + maxLocals + spillWords;
+        int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords;
         this.frameSize = isEntry ? 0 : A64.align16(savedWords * 8);
         sp = 0;
 
@@ -205,12 +215,13 @@ public final class BaselineCompiler
         {
             cb.emit(A64.strx(30, 31, 0));    // str x30, [sp]
         }
-        for (int i = 0; i < maxLocals; i++)
+        for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
             cb.emit(A64.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
         }
-        // move incoming arguments (x0..) into their local registers;
-        // instance methods receive `this` as x0 -> local slot 0.
+        // move incoming arguments (x0..) into their locals; instance methods
+        // receive `this` as x0 -> local slot 0. A parameter landing beyond the
+        // register file is stored straight into its frame slot.
         int arg = 0;
         int slot = 0;
         if (!method.isStatic)
@@ -221,7 +232,8 @@ public final class BaselineCompiler
         }
         for (char t : paramTypes(method.descriptor))
         {
-            cb.emit(A64.movReg(localReg(slot), arg));
+            cb.emit(inReg(slot) ? A64.movReg(localReg(slot), arg)
+                                : A64.strx(arg, 31, localMem(slot)));
             arg++;
             slot += (t == 'J' || t == 'D') ? 2 : 1;
         }
@@ -238,7 +250,7 @@ public final class BaselineCompiler
         {
             cb.emit(A64.ldrx(30, 31, 0));
         }
-        for (int i = 0; i < maxLocals; i++)
+        for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
             cb.emit(A64.ldrx(LOC_BASE + i, 31, localSaveBase + i * 8));
         }
@@ -659,6 +671,7 @@ public final class BaselineCompiler
         }
         return OP_BASE + --sp;
     }
+    /** Register holding local {@code slot}. Only valid when {@link #inReg} says so. */
     private int localReg(int slot)
     {
         if (slot < 0 || slot >= LOC_MAX)
@@ -666,6 +679,16 @@ public final class BaselineCompiler
             throw new IllegalStateException("local slot out of range: " + slot);
         }
         return LOC_BASE + slot;
+    }
+    /** True if this local lives in a register rather than the frame. */
+    private static boolean inReg(int slot)
+    {
+        return slot < LOC_MAX;
+    }
+    /** Frame offset of an overflow local (slot &gt;= LOC_MAX). */
+    private int localMem(int slot)
+    {
+        return overflowBase + (slot - LOC_MAX) * 8;
     }
     private void expectEmpty(String where)
     {
@@ -682,18 +705,28 @@ public final class BaselineCompiler
     private void load(CodeBuffer cb, int slot)
     {
         int r = pushReg();
-        cb.emit(A64.movReg(r, localReg(slot)));
+        cb.emit(inReg(slot) ? A64.movReg(r, localReg(slot))
+                            : A64.ldrx(r, 31, localMem(slot)));
     }
     private void store(CodeBuffer cb, int slot)
     {
         int r = popReg();
-        cb.emit(A64.movReg(localReg(slot), r));
+        cb.emit(inReg(slot) ? A64.movReg(localReg(slot), r)
+                            : A64.strx(r, 31, localMem(slot)));
     }
 
     private void iinc(CodeBuffer cb, int slot, int delta)
     {
-        int r = localReg(slot);
+        if (inReg(slot))
+        {
+            int r = localReg(slot);
+            cb.emit(delta >= 0 ? A64.addImm(r, r, delta) : A64.subImm(r, r, -delta));
+            return;
+        }
+        int r = SCRATCH;                                   // read-modify-write in the frame
+        cb.emit(A64.ldrx(r, 31, localMem(slot)));
         cb.emit(delta >= 0 ? A64.addImm(r, r, delta) : A64.subImm(r, r, -delta));
+        cb.emit(A64.strx(r, 31, localMem(slot)));
     }
 
     private void binop(CodeBuffer cb, Bin kind)

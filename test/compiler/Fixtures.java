@@ -45,4 +45,25 @@ public final class Fixtures
     {
         return x != 0 ? 0x41 : 0x42;
     }
+
+    /**
+     * More locals than there are callee-saved registers (x19..x28). Slots 0..9 stay
+     * in registers; the rest live in the frame, loaded and stored around each use.
+     * A method shaped like this used to be rejected with "local slot out of range".
+     */
+    public static int manyLocals(int x)
+    {
+        int a = x + 1;
+        int b = x + 2;
+        int c = x + 3;
+        int d = x + 4;
+        int e = x + 5;
+        int f = x + 6;
+        int g = x + 7;
+        int h = x + 8;
+        int i = x + 9;
+        int j = x + 10;
+        int k = x + 11;
+        return a + b + c + d + e + f + g + h + i + j + k;
+    }
 }

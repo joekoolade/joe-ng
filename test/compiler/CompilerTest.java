@@ -138,6 +138,34 @@ public final class CompilerTest
         T.check("live operand spilled before Heap.alloc", spilled);
         T.check("live operand reloaded after Heap.alloc", reloaded);
 
+        // ---- more locals than callee-saved registers -------------------------
+        // Slots 0..9 stay in x19..x28; the rest live in the frame. Previously this
+        // was rejected with "local slot out of range".
+        int[] ml = compile(fx, "manyLocals", "(I)I");
+        int overflowStores = 0;
+        int overflowLoads = 0;
+        for (int w : ml)
+        {
+            // str/ldr Xt,[SP,#imm] where Xt is an operand register (x9..x15):
+            // the frame traffic for locals that didn't fit in registers.
+            int rt = w & 0x1F;
+            boolean sp = ((w >> 5) & 0x1F) == 31;
+            if (sp && rt >= 9 && rt <= 15)
+            {
+                if ((w & 0xFFC00000) == 0xF9000000)
+                {
+                    overflowStores++;
+                }
+                if ((w & 0xFFC00000) == 0xF9400000)
+                {
+                    overflowLoads++;
+                }
+            }
+        }
+        T.check("manyLocals compiles (>10 locals)", ml.length > 0);
+        T.check("overflow locals are stored to the frame", overflowStores > 0);
+        T.check("overflow locals are loaded from the frame", overflowLoads > 0);
+
         // ---- arrays: baload (base+index<<0) and arraylength (@16) ----
         List<Integer> elemWant = new ArrayList<>();
         elemWant.add(A64.subImm(31, 31, 16));

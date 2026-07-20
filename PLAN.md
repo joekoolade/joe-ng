@@ -201,10 +201,15 @@ independently useful, verifiable by re-running the gap harness.
 - ✅ **Done:** `lowerNew` now spills live operands across `Heap.alloc` exactly as
   ordinary calls do; `expectEmpty` survives only for the frameless entry method.
   Added `aconst_null` (0x01).
+- ✅ **Done:** the 10-local ceiling is lifted. Slots 0..9 stay in x19..x28; the
+  rest live in the frame and are loaded/stored around each use (`inReg`/`localMem`),
+  so a method within the old limit gets byte-identical code. This also fixed a
+  latent bug: the prologue looped to `maxLocals`, so a method declaring 11 slots
+  saved and restored **x29 (the frame pointer)** as if it were a local. Three image
+  methods did exactly that (`VM.markRange`, `Loader.load2`, `Loader.findMethod`);
+  they compiled only because nothing ever *accessed* slot 10.
 - ☐ Add `caload` (0x34) — needs `LDRH` in the assembler (char/short arrays are a
   known gap).
-- ☐ Lift the 10-local ceiling by spilling locals beyond x19..x28 to the frame.
-  *Unlocks 2, and removes a limit repeatedly hit while writing loader code.*
 
 *Measured after the first item:* the `new`-with-live-stack blocker went from 14
 methods to **0**. The count that compiles moved only 28 → 29, because those
