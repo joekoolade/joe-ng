@@ -23,9 +23,12 @@ public final class ClassReader
 {
     private ClassReader() {}
 
-    /** Constant-pool tags we need to size entries and spot classes. */
+    /** Constant-pool tags we need to size entries, spot classes and decode constants. */
     public static final int TAG_UTF8 = 1;
+    public static final int TAG_INTEGER = 3;
+    public static final int TAG_LONG = 5;
     public static final int TAG_CLASS = 7;
+    public static final int TAG_STRING = 8;
 
     public static int u1(byte[] b, int i)
     {
@@ -129,6 +132,61 @@ public final class ClassReader
     public static int intValue(byte[] b, int[] off, int idx)
     {
         return u4(b, off[idx]);
+    }
+
+    /** Value of the {@code Long} entry at {@code idx} (two u4 words, high then low). */
+    public static long longValue(byte[] b, int[] off, int idx)
+    {
+        long hi = u4(b, off[idx]) & 0xFFFFFFFFL;
+        long lo = u4(b, off[idx] + 4) & 0xFFFFFFFFL;
+        return (hi << 32) | lo;
+    }
+
+    // ----- method descriptors -----
+    // A descriptor's Utf8 body is at descOff: [u2 length][chars], chars starting
+    // "(params)ret". Each parameter maps to one argument register (a long/double
+    // still one register), so we count parameters, not slots. Internal class names
+    // contain no ')', so scanning raw for the params terminator is safe.
+
+    /** Parameter count of the method descriptor whose Utf8 body is at {@code descOff}. */
+    public static int descParamCount(byte[] b, int descOff)
+    {
+        int p = descOff + 2 + 1;                    // past u2 length and '('
+        int count = 0;
+        while (u1(b, p) != ')')
+        {
+            int c = u1(b, p);
+            if (c == 'L')
+            {
+                count += 1;
+                while (u1(b, p) != ';')
+                {
+                    p += 1;
+                }
+                p += 1;
+            }
+            else if (c == '[')
+            {
+                p += 1;                             // array prefix folds into its element
+            }
+            else
+            {
+                count += 1;
+                p += 1;
+            }
+        }
+        return count;
+    }
+
+    /** Return-type kind char ('V','I','J',...) of the descriptor at {@code descOff}. */
+    public static char descReturnKind(byte[] b, int descOff)
+    {
+        int p = descOff + 2 + 1;
+        while (u1(b, p) != ')')
+        {
+            p += 1;
+        }
+        return (char) u1(b, p + 1);
     }
 
     /** Utf8 offset of this class's own name. {@code afterCp} is {@link #constantPool}'s result. */

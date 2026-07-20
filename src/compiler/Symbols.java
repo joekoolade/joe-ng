@@ -76,4 +76,17 @@ public interface Symbols
 
     /** Itable slot of the interface method at InterfaceMethodref index {@code ifaceMethodCp}. */
     int interfaceSlot(int ifaceMethodCp);
+
+    // ----- call classification: which lowering path an invoke takes -----
+    // Name identity, resolved per world (writer: String compare; metal: Utf8-offset
+    // compare), so the lowering branches on a boolean rather than a String.
+
+    /** Whether the {@code invokestatic} at {@code methodCp} is a {@code magic/Magic} intrinsic. */
+    boolean isIntrinsicCall(int methodCp);
+
+    /** Whether that intrinsic itself emits a {@code BL}/{@code BLR} (so the caller is non-leaf). */
+    boolean intrinsicEmitsCall(int methodCp);
+
+    /** Whether the {@code invokespecial} at {@code methodCp} is a root-class {@code <init>} to skip. */
+    boolean isSkippableInit(int methodCp);
 }

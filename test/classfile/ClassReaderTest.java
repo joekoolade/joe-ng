@@ -80,8 +80,16 @@ public final class ClassReaderTest
                         utf8(b, ClassReader.refClassNameOff(b, off, i)));
                 T.eqStr(name + " ref#" + i + " name", m.name(),
                         utf8(b, ClassReader.refNameOff(b, off, i)));
-                T.eqStr(name + " ref#" + i + " desc", m.descriptor(),
-                        utf8(b, ClassReader.refDescOff(b, off, i)));
+                int descOff = ClassReader.refDescOff(b, off, i);
+                T.eqStr(name + " ref#" + i + " desc", m.descriptor(), utf8(b, descOff));
+                // Method refs also carry a descriptor the shared parsers decode.
+                if (t == 10 || t == 11)
+                {
+                    T.eq(name + " ref#" + i + " paramCount", paramCount(m.descriptor()),
+                         ClassReader.descParamCount(b, descOff));
+                    T.eq(name + " ref#" + i + " retKind", m.descriptor().charAt(m.descriptor().indexOf(')') + 1),
+                         ClassReader.descReturnKind(b, descOff));
+                }
             }
             else if (t == 8)                            // String
             {
@@ -92,11 +100,41 @@ public final class ClassReaderTest
             {
                 T.eq(name + " int#" + i, cf.intAt(i), ClassReader.intValue(b, off, i));
             }
+            else if (t == 5)                            // Long
+            {
+                T.check(name + " long#" + i, cf.longAt(i) == ClassReader.longValue(b, off, i));
+            }
         }
 
         // utf8Eq is the cross-classfile comparison the loader links with.
         int self = ClassReader.thisClassNameOff(b, off, afterCp);
         T.check(name + " utf8Eq reflexive", ClassReader.utf8Eq(b, self, b, self));
+    }
+
+    /** Count parameters of a descriptor the way {@link ClassReader#descParamCount} does. */
+    private static int paramCount(String desc)
+    {
+        int i = desc.indexOf('(') + 1;
+        int count = 0;
+        while (desc.charAt(i) != ')')
+        {
+            char c = desc.charAt(i);
+            if (c == 'L')
+            {
+                count++;
+                i = desc.indexOf(';', i) + 1;
+            }
+            else if (c == '[')
+            {
+                i++;
+            }
+            else
+            {
+                count++;
+                i++;
+            }
+        }
+        return count;
     }
 
     /** Decode a Utf8 entry to a String — test-side only; the reader itself has no String. */

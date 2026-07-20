@@ -79,6 +79,8 @@ public final class ClassFile
     private static final int MODULE = 19;
     private static final int PACKAGE = 20;
 
+    private final byte[] bytes;   // the raw classfile, retained for the shared ClassReader view
+    private final int[] cpOff;    // byte offset of each constant-pool entry body
     private final int[] tag;
     private final int[] ref1;     // first index-ish operand (or int value / utf8 slot)
     private final int[] ref2;     // second index-ish operand
@@ -90,6 +92,22 @@ public final class ClassFile
     private final String[] interfaces; // directly-implemented interfaces
     private final Method[] methods;
     private final FieldInfo[] fields;
+
+    /** The raw classfile bytes, for reading through the shared {@link ClassReader}. */
+    public byte[] bytes()
+    {
+        return bytes;
+    }
+    /** Byte offset of each constant-pool entry body (index by cp index). */
+    public int[] cpOff()
+    {
+        return cpOff;
+    }
+    /** Tag of each constant-pool entry (index by cp index). */
+    public int[] cpTag()
+    {
+        return tag;
+    }
 
     public String thisClassName()
     {
@@ -372,7 +390,8 @@ public final class ClassFile
             throw new IOException("bad classfile magic");
         }
         int n = ClassReader.cpCount(b);
-        int[] cpOff = new int[n];
+        bytes = b;
+        cpOff = new int[n];
         tag = new int[n];
         int afterCp = ClassReader.constantPool(b, cpOff, tag);
 

@@ -420,10 +420,30 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
     identical image. (The remaining above-seam checks are name-*identity* predicates
     — `magic/Magic`, root-`<init>` — which compare names rather than resolve a value;
     they fold naturally into 4.4b, where name access itself moves onto `ClassReader`.)
-  - ☐ **4.4b — parse view: `BaselineCompiler` off `ClassFile` onto `ClassReader`.**
+  - ◐ **4.4b — parse view: `BaselineCompiler` off `ClassFile` onto `ClassReader`.**
     So the compiler reads `byte[]`+offsets like the metal already does (4.3), not
-    JDK `ClassFile.Method` objects — the last thing keeping it off metal. The
-    `magic/Magic` and root-`<init>` predicates become Utf8-offset name compares here.
+    JDK `ClassFile` objects. Progress (each byte-identical):
+    - ✅ **b.1 cp view + constants.** `BaselineCompiler` holds `classBytes`/`cpOff`/
+      `cpTag` (handed over by `ClassFile`, which now retains its bytes); `ldc`/`ldc2_w`
+      read constants via `ClassReader.intValue`/`longValue` + the tag table.
+    - ✅ **b.2 descriptor arg parsing off strings.** `ClassReader.descParamCount`/
+      `descReturnKind` decode a descriptor's Utf8 in place; `emitCall` takes
+      `paramCount`/`returnsValue` (so helper calls need no `"(JJ)I"` literals —
+      metal has no `ldc`-string) and the invoke lowerings use them.
+    - ✅ **b.3 call-classification predicates.** `isIntrinsicCall`/`intrinsicEmitsCall`/
+      `isSkippableInit` join the seam; `invokestatic`/`invokespecial`/`isNonLeaf`
+      branch on booleans, not `String.equals`. `resolve`/`staticKey`/WriterSymbols
+      keep their `ClassFile` — they are writer-side, below the seam.
+    - ☐ **b.4 the last two shared-lowering `ClassFile` uses:** `lowerIntrinsic`'s
+      `String`-keyed magic switch (needs an int-id or length+byte dispatch — the
+      metal supports neither `String` switch nor `ldc`-string), and `athrow`'s
+      `ClassFile.ExceptionEntry[]` iteration (needs an offset-based exception-table
+      view). After b.4 the shared lowering references no `ClassFile` at all.
+    - ☐ **b.5 core/writer split.** Extract the shared lowering into a class holding
+      no `ClassFile` (only `classBytes`/`cpOff`/`cpTag`/`Symbols`); the writer driver
+      (`compileMethod`, `WriterSymbols`, `resolve`, exception→`HandlerRange`) wraps it.
+      Also convert `step`'s `switch` to if/else (metal has no `tableswitch`). This is
+      the boundary that makes the core compilable on metal, feeding 4.4c–e.
   - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
     (addresses + Utf8-offset compares), the other half of the seam.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the

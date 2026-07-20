@@ -3,6 +3,7 @@ package compiler;
 import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
+import classfile.ClassReader;
 import objectmodel.ObjectModel;
 
 import java.util.ArrayList;
@@ -64,6 +65,14 @@ public final class BaselineCompiler
     private final ClassFile cf;
     private final ClassResolver resolver;
 
+    // The shared cp view (byte[] + offset/tag tables) that the metal loader also
+    // parses (§4.3). The lowering above the Symbols seam reads constants,
+    // descriptors and names through ClassReader over these, never through the
+    // JDK-side ClassFile — which is what lets one lowering serve both worlds (§4.4).
+    private final byte[] classBytes;
+    private final int[] cpOff;
+    private final int[] cpTag;
+
     /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
     private static final String EXCEPTION_KEY = "vm/VM.$exception";
 
@@ -101,6 +110,9 @@ public final class BaselineCompiler
     {
         this.cf = cf;
         this.resolver = resolver;
+        this.classBytes = cf.bytes();
+        this.cpOff = cf.cpOff();
+        this.cpTag = cf.cpTag();
     }
 
     // ----- symbol seam (PLAN.md §M5.4.2) -----------------------------------
@@ -176,6 +188,20 @@ public final class BaselineCompiler
         {
             ClassFile.MemberRef ref = cf.memberRef(ifaceMethodCp);
             return resolve(ref.owner()).interfaceSlot(ref.name(), ref.descriptor());
+        }
+        public boolean isIntrinsicCall(int methodCp)
+        {
+            return cf.memberRef(methodCp).owner().equals("magic/Magic");
+        }
+        public boolean intrinsicEmitsCall(int methodCp)
+        {
+            String n = cf.memberRef(methodCp).name();
+            return n.equals("gc") || n.equals("call0") || n.equals("call2");
+        }
+        public boolean isSkippableInit(int methodCp)
+        {
+            ClassFile.MemberRef r = cf.memberRef(methodCp);
+            return ClassFile.isRoot(r.owner()) && r.name().equals("<init>");
         }
     }
 
@@ -491,7 +517,7 @@ public final class BaselineCompiler
                                             }
                                                 case 0x14 ->
                                                 {
-                                                    loadConst(cb, cf.longAt(u2(code, pos + 1)));
+                                                    loadConst(cb, ClassReader.longValue(classBytes, cpOff, u2(code, pos + 1)));
                                                     return 3;
                                                 }
 
@@ -820,12 +846,12 @@ public final class BaselineCompiler
                                                 }  // athrow
                                                     case 0xC0 ->
                                                     {
-                                                        typeCheck(cb, u2(code, pos + 1), "checkCast", "(JJ)J");
+                                                        typeCheck(cb, u2(code, pos + 1), Symbols.CHECK_CAST);
                                                         return 3;
                                                     }  // checkcast
                                                         case 0xC1 ->
                                                         {
-                                                            typeCheck(cb, u2(code, pos + 1), "instanceOf", "(JJ)I");
+                                                            typeCheck(cb, u2(code, pos + 1), Symbols.INSTANCE_OF);
                                                             return 3;
                                                         }  // instanceof
 
@@ -980,12 +1006,11 @@ public final class BaselineCompiler
     }
 
     /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
-    private void typeCheck(CodeBuffer cb, int classIndex, String helper, String desc)
+    private void typeCheck(CodeBuffer cb, int classIndex, int helper)
     {
         int r = pushReg();                                       // objref stays below; push targetType addr
         symbols.type(cb, r, classIndex);
-        emitCall(cb, desc, false, SYM_HELPER,
-                 helper.equals("instanceOf") ? Symbols.INSTANCE_OF : Symbols.CHECK_CAST);
+        emitCall(cb, 2, true, false, SYM_HELPER, helper);        // (objref, targetType) -> result
     }
 
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
@@ -1080,10 +1105,9 @@ public final class BaselineCompiler
     // ----- calls / intrinsics ----------------------------------------------
     private void lowerInvokeStatic(int cpIndex, CodeBuffer cb)
     {
-        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        if (ref.owner().equals("magic/Magic"))
+        if (symbols.isIntrinsicCall(cpIndex))
         {
-            lowerIntrinsic(ref, cb);
+            lowerIntrinsic(cpIndex, cb);
             return;
         }
         lowerCall(cpIndex, cb, false);
@@ -1092,9 +1116,8 @@ public final class BaselineCompiler
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb)
     {
-        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         int slot = symbols.vtableSlot(cpIndex);
-        int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
+        int nargs = paramCount(cpIndex) + 1;    // receiver + params
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++)
         {
@@ -1109,7 +1132,7 @@ public final class BaselineCompiler
         cb.emit(A64.ldrx(16, 16, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)))); // x16 = code
         cb.emit(A64.blr(16));
         reloadLive(cb);
-        if (returnType(ref.descriptor()) != 'V')
+        if (returnsValue(cpIndex))
         {
             cb.emit(A64.movReg(pushReg(), 0));
         }
@@ -1123,9 +1146,8 @@ public final class BaselineCompiler
      */
     private void lowerInvokeInterface(int cpIndex, CodeBuffer cb)
     {
-        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         int slot = symbols.interfaceSlot(cpIndex);
-        int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
+        int nargs = paramCount(cpIndex) + 1;    // receiver + params
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++)
         {
@@ -1153,7 +1175,7 @@ public final class BaselineCompiler
         cb.emit(A64.ldrx(16, 17, slot * ObjectModel.WORD));                        // x16 = code addr
         cb.emit(A64.blr(16));
         reloadLive(cb);
-        if (returnType(ref.descriptor()) != 'V')
+        if (returnsValue(cpIndex))
         {
             cb.emit(A64.movReg(pushReg(), 0));
         }
@@ -1161,8 +1183,7 @@ public final class BaselineCompiler
 
     private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb)
     {
-        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        if (ClassFile.isRoot(ref.owner()) && ref.name().equals("<init>"))
+        if (symbols.isSkippableInit(cpIndex))
         {
             popReg();                                            // super() into a JDK class — discard receiver
             return;
@@ -1195,7 +1216,7 @@ public final class BaselineCompiler
             emitLoadException(cb, obj);
             int t = pushReg();
             symbols.type(cb, t, en.catchType());
-            emitCall(cb, "(JJ)I", false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
+            emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
             int skip = cb.emit(A64.cbz(cond, 0));
             emitCatch(cb, en.handlerPc());                       // matched
@@ -1208,7 +1229,7 @@ public final class BaselineCompiler
         cb.patchAddr(cb.reserveAddr(pc), pc, cb.pcAt(athrowStart)); // a PC inside this method
         int sp = pushReg();
         cb.emit(A64.movFromSp(sp));
-        emitCall(cb, "(JJJ)V", false, SYM_HELPER, Symbols.UNWIND);
+        emitCall(cb, 3, false, false, SYM_HELPER, Symbols.UNWIND);
         emitHalt(cb);                                            // unwind never returns
     }
 
@@ -1251,17 +1272,31 @@ public final class BaselineCompiler
     /** A real call: args to x0.. (receiver first if any), BL to a cp method, result from x0. */
     private void lowerCall(int cpIndex, CodeBuffer cb, boolean hasReceiver)
     {
-        emitCall(cb, cf.memberRef(cpIndex).descriptor(), hasReceiver, SYM_CP, cpIndex);
+        emitCall(cb, paramCount(cpIndex), returnsValue(cpIndex), hasReceiver, SYM_CP, cpIndex);
+    }
+
+    /** Parameter count of the {@code *ref} at cp index {@code refCp} (each = one arg register). */
+    private int paramCount(int refCp)
+    {
+        return ClassReader.descParamCount(classBytes, ClassReader.refDescOff(classBytes, cpOff, refCp));
+    }
+
+    /** Whether the {@code *ref} at cp index {@code refCp} returns a value (non-void). */
+    private boolean returnsValue(int refCp)
+    {
+        return ClassReader.descReturnKind(classBytes, ClassReader.refDescOff(classBytes, cpOff, refCp)) != 'V';
     }
 
     /**
      * The calling convention around a symbolic call: move args to x0.., spill live
      * operands, delegate the BL to the {@link Symbols} seam, reload, land the result.
      * {@code symKind}/{@code symArg} name the target (a cp index, or a helper id).
+     * The signature is given as {@code paramCount}/{@code returnsValue} rather than a
+     * descriptor string so helper calls need no String literals (metal has no ldc-string).
      */
-    private void emitCall(CodeBuffer cb, String descriptor, boolean hasReceiver, int symKind, int symArg)
+    private void emitCall(CodeBuffer cb, int paramCount, boolean returnsValue, boolean hasReceiver, int symKind, int symArg)
     {
-        int nargs = paramTypes(descriptor).length + (hasReceiver ? 1 : 0);
+        int nargs = paramCount + (hasReceiver ? 1 : 0);
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++)
         {
@@ -1281,7 +1316,7 @@ public final class BaselineCompiler
             symbols.callHelper(cb, symArg);
         }
         reloadLive(cb);
-        if (returnType(descriptor) != 'V')
+        if (returnsValue)
         {
             cb.emit(A64.movReg(pushReg(), 0));
         }
@@ -1291,7 +1326,7 @@ public final class BaselineCompiler
     private void lowerNewArray(int atype, CodeBuffer cb)
     {
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
-        emitCall(cb, "(II)J", false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+        emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
     }
 
     private void arrayLength(CodeBuffer cb)
@@ -1367,8 +1402,9 @@ public final class BaselineCompiler
         return resolver.resolve(owner);
     }
 
-    private void lowerIntrinsic(ClassFile.MemberRef ref, CodeBuffer cb)
+    private void lowerIntrinsic(int cpIndex, CodeBuffer cb)
     {
+        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
         String key = ref.name() + ref.descriptor();
         switch (key)
         {
@@ -1534,20 +1570,15 @@ public final class BaselineCompiler
             }
             if (op == 0xB8)                                      // invokestatic
             {
-                ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
-                if (!ref.owner().equals("magic/Magic"))
+                int idx = u2(code, pos + 1);
+                if (!symbols.isIntrinsicCall(idx) || symbols.intrinsicEmitsCall(idx))
                 {
-                    return true;
-                }
-                if (ref.name().equals("gc") || ref.name().equals("call0") || ref.name().equals("call2"))
-                {
-                    return true;    // emit BL/BLR
+                    return true;    // real call, or an intrinsic that emits BL/BLR
                 }
             }
             if (op == 0xB7)                                      // invokespecial
             {
-                ClassFile.MemberRef ref = cf.memberRef(u2(code, pos + 1));
-                if (!(ClassFile.isRoot(ref.owner()) && ref.name().equals("<init>")))
+                if (!symbols.isSkippableInit(u2(code, pos + 1)))
                 {
                     return true;
                 }
@@ -1580,14 +1611,14 @@ public final class BaselineCompiler
     /** ldc/ldc_w: int constant, or a String literal interned as a byte[] object. */
     private void ldc(CodeBuffer cb, int cpIndex)
     {
-        if (cf.isStringConst(cpIndex))
+        if (cpTag[cpIndex] == ClassReader.TAG_STRING)
         {
             int r = pushReg();
             symbols.string(cb, r, cpIndex);
         }
-        else if (cf.isIntConst(cpIndex))
+        else if (cpTag[cpIndex] == ClassReader.TAG_INTEGER)
         {
-            loadConst(cb, cf.intAt(cpIndex));
+            loadConst(cb, ClassReader.intValue(classBytes, cpOff, cpIndex));
         }
         else
         {
