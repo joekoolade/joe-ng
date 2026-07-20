@@ -80,7 +80,12 @@ public final class BaselineCompiler
     private int maxLocals;
     private boolean saveLR;
     private boolean nonLeaf;
-    private final List<Fixup> fixups = new ArrayList<>();
+    // Branch fixups never leave this class, so they are plain data rather than a
+    // List: an array plus a count, grown by hand. Every future shape of this
+    // compiler needs branch patching, so this conversion survives the core/wrapper
+    // split (unlike the relocation records below, which are the writer's interface).
+    private Fixup[] fixups = new Fixup[8];
+    private int fixupCount;
     private final List<CallSite> callSites = new ArrayList<>();
     private final List<TibRef> tibRefs = new ArrayList<>();
     private final List<StrRef> strRefs = new ArrayList<>();
@@ -125,6 +130,22 @@ public final class BaselineCompiler
             this.kind = kind;
             this.arg = arg;
         }
+    }
+
+    /** Append a pending branch, growing the array by hand (no JDK collections). */
+    private void addFixup(int wordIndex, int targetBc, int kind, int arg)
+    {
+        if (fixupCount == fixups.length)
+        {
+            Fixup[] bigger = new Fixup[fixups.length * 2];
+            for (int i = 0; i < fixups.length; i++)
+            {
+                bigger[i] = fixups[i];
+            }
+            fixups = bigger;
+        }
+        fixups[fixupCount] = new Fixup(wordIndex, targetBc, kind, arg);
+        fixupCount += 1;
     }
 
     /** Encode a pending branch now that the distance to its target is known. */
@@ -251,8 +272,9 @@ public final class BaselineCompiler
             pos += step(op, code, pos, cb);
         }
 
-        for (Fixup f : fixups)
+        for (int fi = 0; fi < fixupCount; fi++)
         {
+            Fixup f = fixups[fi];
             int target = bcToWord[f.targetBc];
             if (target < 0)
             {
@@ -658,7 +680,7 @@ public final class BaselineCompiler
                                                                                                                                                                                                                                                 {
                                                                                                                                                                                                                                                     int target = pos + s2(code, pos + 1);
                                                                                                                                                                                                                                                     int w = cb.emit(A64.b(0));
-                                                                                                                                                                                                                                                    fixups.add(new Fixup(w, target, FIX_B, 0));
+                                                                                                                                                                                                                                                    addFixup(w, target, FIX_B, 0);
                                                                                                                                                                                                                                                     recordDepth(target);
                                                                                                                                                                                                                                                     return 3;
                                                                                                                                                                                                                                                 }
@@ -944,7 +966,7 @@ public final class BaselineCompiler
         int v = popReg();
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v));
+        addFixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v);
         recordDepth(target);
     }
 
@@ -954,7 +976,7 @@ public final class BaselineCompiler
         cb.emit(A64.cmpImm(v, 0));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, FIX_BCOND, cond));
+        addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
     }
 
@@ -965,7 +987,7 @@ public final class BaselineCompiler
         cb.emit(A64.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, FIX_BCOND, cond));
+        addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
     }
 
@@ -1122,7 +1144,7 @@ public final class BaselineCompiler
     {
         emitLoadStatic(cb, EXCEPTION_KEY, pushReg());
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, handlerPc, FIX_B, 0));
+        addFixup(w, handlerPc, FIX_B, 0);
         recordDepth(handlerPc);
         sp = 0;                                                  // fall-through (next check) resumes empty
     }
