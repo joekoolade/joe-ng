@@ -36,16 +36,18 @@ public final class ClassFile
     {
         public final String name;
         public final String descriptor;
+        public final int descOff;      // Utf8 body offset of the descriptor, for the shared ClassReader
         public final int maxStack;
         public final int maxLocals;
         public final boolean isStatic;
         public final byte[] code;
         public final ExceptionEntry[] exceptions;
-        Method(String name, String descriptor, boolean isStatic, int maxStack, int maxLocals,
+        Method(String name, String descriptor, int descOff, boolean isStatic, int maxStack, int maxLocals,
                byte[] code, ExceptionEntry[] exceptions)
         {
             this.name = name;
             this.descriptor = descriptor;
+            this.descOff = descOff;
             this.isStatic = isStatic;
             this.maxStack = maxStack;
             this.maxLocals = maxLocals;
@@ -507,7 +509,9 @@ public final class ClassFile
         {
             int access = ClassReader.u2(b, p);
             String name = utf8(ClassReader.u2(b, p + 2));
-            String desc = utf8(ClassReader.u2(b, p + 4));
+            int descIndex = ClassReader.u2(b, p + 4);
+            String desc = utf8(descIndex);
+            int descOff = cpOff[descIndex];                 // Utf8 body offset, for the core's prologue
             int attrs = ClassReader.u2(b, p + 6);
             p += 8;
             int maxStack = 0;
@@ -527,7 +531,7 @@ public final class ClassFile
                 }
                 p = body + ClassReader.u4(b, p + 2);            // next attribute
             }
-            ms[i] = new Method(name, desc, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions);
+            ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions);
         }
         return ms;
     }

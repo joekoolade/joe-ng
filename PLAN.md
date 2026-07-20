@@ -443,11 +443,26 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       **The shared lowering (step + all lower*/emit* helpers) now references no
       `ClassFile`** — every remaining use is in `WriterSymbols`/`resolve`/`staticKey`
       or the writer drivers. Byte-identical image throughout.
-    - ☐ **b.5 core/writer split.** Extract the shared lowering into a class holding
-      no `ClassFile` (only `classBytes`/`cpOff`/`cpTag`/`Symbols`); the writer driver
-      (`compileMethod`, `WriterSymbols`, `resolve`, exception→`HandlerRange`) wraps it.
-      Also convert `step`'s `switch` to if/else (metal has no `tableswitch`). This is
-      the boundary that makes the core compilable on metal, feeding 4.4c–e.
+    - ◐ **b.5 core/writer split.** The shared lowering now lives in `compiler/Baseline`
+      — a class holding **no `ClassFile`** (only `classBytes`/`cpOff`/`cpTag` + `Symbols`
+      + the lowering), constructed `(classBytes, cpOff, cpTag, symbols)` with a
+      `compileBody(code, descOff, isStatic, maxLocals, base, isEntry)` entry. Done in
+      two byte-identical stages:
+      - ✅ **stage A** — `WriterSymbols` extracted to its own class (with `resolve`,
+        the String keys, the six relocation-record lists).
+      - ✅ **stage B** — the ~1400-line lowering moved into `Baseline`; `BaselineCompiler`
+        is now a 100-line writer driver that parses with `ClassFile`, flattens the
+        exception table + `descOff` (new `ClassFile.Method.descOff`) into the core's
+        primitives, and zips the core's handler word-ranges with catch classes into
+        `CompiledMethod`. `emitPrologue` reads params via `ClassReader` over the
+        descriptor Utf8 (no `paramTypes`/`ClassFile.Method`). Image byte-identical;
+        QEMU `*M F`.
+      - ☐ **stage C (metal-compat)** — the core still uses constructs the metal
+        compiler can't yet handle: `switch` (int, String-free now, but still
+        `tableswitch`/`lookupswitch`) in `step`/`lowerIntrinsic`/`opLen`/`binop`/
+        `lowerNewArray`, the `Bin` enum, and `Math.min`/`Math.max`. Convert these to
+        if/else + int constants so `Baseline` itself compiles on metal. This is the
+        last thing before 4.4c–e can instantiate the core on the metal side.
   - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
     (addresses + Utf8-offset compares), the other half of the seam.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the
