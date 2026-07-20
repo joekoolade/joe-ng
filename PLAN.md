@@ -262,9 +262,69 @@ is now the dominant remaining work.
 
 **Revised order: do stage 4's split next, and let the remaining stage-2 items fall
 out of it.** The prerequisite is unchanged and now blocking: the two compilers must
-first agree a calling convention (writer: callee-saved locals with per-method
-frames; metal: x1..x8 with no frame, spilling around calls) and a symbol-resolution
-strategy. That decision is the real next piece of work.
+first agree a calling convention and a symbol-resolution strategy. That decision is
+§M5.2.
+
+#### M5.2 — Calling convention: the decision
+
+The two compilers disagree on where a method's state lives.
+
+| | writer (`BaselineCompiler`) | metal (`Loader`) |
+|---|---|---|
+| locals | x19..x28 (callee-saved), overflow to frame | x1..x8 (caller-saved) |
+| operand stack | x9..x15 | x9..x15 |
+| arguments | x0..x7, moved into locals by the prologue | land directly in the local registers |
+| frames | prologue/epilogue per method | none |
+| cost of a call | spill only the *live* operand values | spill x30 + x1..x15 unconditionally |
+
+**Measured:** a call in JIT'd code costs **35–40 instruction words**, of which 32 are
+the unconditional spill and reload of sixteen registers. The writer spills only the
+operand values actually live at that point — usually zero to two. That is roughly a
+**10–30× difference per call site**, and `new` pays it too.
+
+**Two consequences of the metal's frameless design that are easy to miss:**
+1. *Exceptions cannot unwind through JIT'd code.* `VM.unwind` walks frames using the
+   writer-built frame table (`codeStart, codeEnd, frameSize`); JIT'd methods have no
+   frames and no entries, so there is nothing to pop.
+2. *GC can miss live references in JIT'd code.* `Magic.gc()` spills x19..x28 so refs
+   held in locals become scannable on the stack. The JIT keeps locals in **x1..x8**,
+   which that spill does not cover — a reference held only in a JIT'd local at a
+   collection point is invisible to the collector. Latent today because nothing
+   collects during loaded code, but real.
+
+**Option A — unify on the writer's convention** (callee-saved locals + frames).
+- Far better code: no 32-instruction spill per call.
+- Fixes both consequences above for free: JIT'd methods get frame-table entries, so
+  unwinding works through them, and locals land in the registers `Magic.gc()`
+  already spills.
+- More locals (10 + frame overflow, vs 8).
+- Cost: the JIT must emit prologues/epilogues and track frame layout, and
+  `Magic.call0`/`call2` must pass arguments in x0..x7 rather than the loader's
+  slot convention.
+
+**Option B — unify on the metal's convention** (frameless, spill around calls).
+- Simpler codegen; leaf methods are very cheap.
+- But it would inflate every call in the image by ~32 words, cap locals at 8, and
+  *remove* the frames that exception unwinding is built on. A regression for the
+  side that is currently correct.
+
+**Option C — parameterise the core by convention.**
+- Keeps both, but the convention pervades register allocation, prologues, call
+  sequences and spills, so nearly every emit path would branch. It also defeats the
+  point: the goal is *one* compiler, and this leaves two behaviours to test and two
+  ways for self-hosting to be subtly wrong.
+
+**Decision: Option A.** The metal's convention exists for expedience — it was the
+cheapest thing that worked before frames existed — not by design. The writer's is
+the more developed model, produces far better code, and is already the one the
+runtime's own metadata (frame table, handler table, GC spill) assumes. Unifying on it
+turns two latent gaps into working features rather than porting a limitation.
+
+*Migration:* teach the on-metal JIT prologue/epilogue and frame layout (the logic
+already exists in `BaselineCompiler` and moves into the shared core); change
+`Magic.call0`/`call2` to the standard x0..x7 argument registers; keep the loader's
+registries as the metal's symbol-resolution strategy. Verify by the usual gate — the
+image unchanged where behaviour is unchanged, and QEMU still reaching `*M`.
 
 *Measured after the two completed items:* `invokedynamic` sites **21 → 10**, and
 methods blocked on it **8 → 5**. Both changes left the emitted image byte-for-byte
