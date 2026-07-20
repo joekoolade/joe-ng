@@ -406,8 +406,29 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
   `*M F`. Remaining: the metal's *cross-blob* comparisons stay address-based
   (registries hold `long` addresses, not `byte[]`) — unifying those is entangled
   with 4.4.
-- ☐ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
+- ◐ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
   `vm/Loader` through it, then delete `Loader`'s `emitOp`. One compiler at last.
+  The calling convention is already unified (M5.2), so what remains is that the
+  lowering must stop resolving symbols with `String` keys / `ClassFile` objects
+  above the seam — the metal resolves the same references through Utf8-offset
+  registries. Ordered, each slice verified byte-identical (writer) and `*M F` (metal):
+  - ✅ **4.4a — symbol seam: numeric query methods.** The values the lowering
+    resolved by `String`/`ClassFile` now come back through `Symbols` as `int`
+    queries: `fieldOffset(fieldCp)`, `objectSize(classCp)`, `vtableSlot(methodCp)`,
+    `interfaceSlot(ifaceMethodCp)`. `resolve`/`resolver` are now reached only from
+    inside `WriterSymbols` — symbol resolution sits wholly below the seam. Byte-
+    identical image. (The remaining above-seam checks are name-*identity* predicates
+    — `magic/Magic`, root-`<init>` — which compare names rather than resolve a value;
+    they fold naturally into 4.4b, where name access itself moves onto `ClassReader`.)
+  - ☐ **4.4b — parse view: `BaselineCompiler` off `ClassFile` onto `ClassReader`.**
+    So the compiler reads `byte[]`+offsets like the metal already does (4.3), not
+    JDK `ClassFile.Method` objects — the last thing keeping it off metal. The
+    `magic/Magic` and root-`<init>` predicates become Utf8-offset name compares here.
+  - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
+    (addresses + Utf8-offset compares), the other half of the seam.
+  - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the
+    branch model (writer fixups vs. metal two-pass `pass1`) onto one.
+  - ☐ **4.4e — route `Loader.emitMethod` through the shared lowering, delete `emitOp`.**
 
 **The crux, and the real risk.** The two compilers do not merely differ in
 dependencies, they differ in *calling convention*: the writer puts locals in

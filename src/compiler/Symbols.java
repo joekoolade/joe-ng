@@ -59,4 +59,21 @@ public interface Symbols
 
     /** Load into {@code reg} the address of the synthetic in-flight-exception static slot. */
     void exceptionSlot(CodeBuffer cb, int reg);
+
+    // ----- symbol queries: values the lowering needs but resolves per world -----
+    // These return a number rather than emitting; the writer resolves it from the
+    // classfile at compile time, the metal from its loaded-class registries. Either
+    // way the lowering names the target only by cp index (M5.4.4).
+
+    /** Byte offset of the instance field at Fieldref index {@code fieldCp} within its object. */
+    int fieldOffset(int fieldCp);
+
+    /** Scalar allocation size (bytes) of an instance of the class at {@code classCp} (for {@code new}). */
+    int objectSize(int classCp);
+
+    /** Vtable slot of the virtual method at Methodref index {@code methodCp}. */
+    int vtableSlot(int methodCp);
+
+    /** Itable slot of the interface method at InterfaceMethodref index {@code ifaceMethodCp}. */
+    int interfaceSlot(int ifaceMethodCp);
 }

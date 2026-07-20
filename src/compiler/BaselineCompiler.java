@@ -156,6 +156,27 @@ public final class BaselineCompiler
         {
             staticRefs.add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
         }
+        public int fieldOffset(int fieldCp)
+        {
+            ClassFile.MemberRef ref = cf.memberRef(fieldCp);
+            ClassFile owner = resolve(ref.owner());
+            return ObjectModel.fieldOffset(owner.instanceFieldIndex(ref.name()));
+        }
+        public int objectSize(int classCp)
+        {
+            return ObjectModel.scalarSize(resolve(cf.classAt(classCp)).instanceFieldCount());
+        }
+        public int vtableSlot(int methodCp)
+        {
+            ClassFile.MemberRef ref = cf.memberRef(methodCp);
+            return ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(),
+                                        BaselineCompiler.this::resolve);
+        }
+        public int interfaceSlot(int ifaceMethodCp)
+        {
+            ClassFile.MemberRef ref = cf.memberRef(ifaceMethodCp);
+            return resolve(ref.owner()).interfaceSlot(ref.name(), ref.descriptor());
+        }
     }
 
     private final Symbols symbols = new WriterSymbols();
@@ -970,7 +991,7 @@ public final class BaselineCompiler
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
     private void getfield(CodeBuffer cb, int cpIndex)
     {
-        int off = fieldOffset(cf.memberRef(cpIndex));
+        int off = symbols.fieldOffset(cpIndex);
         int obj = popReg();
         int r = pushReg();
         cb.emit(A64.ldrx(r, obj, off));
@@ -978,16 +999,10 @@ public final class BaselineCompiler
 
     private void putfield(CodeBuffer cb, int cpIndex)
     {
-        int off = fieldOffset(cf.memberRef(cpIndex));
+        int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
         int obj = popReg();
         cb.emit(A64.strx(val, obj, off));
-    }
-
-    private int fieldOffset(ClassFile.MemberRef ref)
-    {
-        ClassFile owner = resolve(ref.owner());
-        return ObjectModel.fieldOffset(owner.instanceFieldIndex(ref.name()));
     }
 
     // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
@@ -1008,8 +1023,7 @@ public final class BaselineCompiler
         {
             expectEmpty("new");                                   // frameless: nowhere to spill
         }
-        String className = cf.classAt(classIndex);
-        int size = ObjectModel.scalarSize(resolve(className).instanceFieldCount());
+        int size = symbols.objectSize(classIndex);
         cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
         spillLive(cb);                                            // Heap.alloc clobbers x9..
         symbols.callHelper(cb, Symbols.HEAP_ALLOC);               // x0 = object base
@@ -1079,7 +1093,7 @@ public final class BaselineCompiler
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb)
     {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        int slot = ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(), this::resolve);
+        int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++)
@@ -1110,7 +1124,7 @@ public final class BaselineCompiler
     private void lowerInvokeInterface(int cpIndex, CodeBuffer cb)
     {
         ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        int slot = resolve(ref.owner()).interfaceSlot(ref.name(), ref.descriptor());
+        int slot = symbols.interfaceSlot(cpIndex);
         int nargs = paramTypes(ref.descriptor()).length + 1;    // receiver + params
         int[] src = new int[nargs];
         for (int k = 0; k < nargs; k++)
