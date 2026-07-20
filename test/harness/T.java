@@ -3,9 +3,9 @@ package harness;
 import java.util.Arrays;
 
 /**
- * A tiny, dependency-free test harness — joe2's "only two external seeds" rule
+ * A tiny, dependency-free test harness — joe-ng's "only two external seeds" rule
  * (CLAUDE.md, PLAN.md §0) keeps third-party test frameworks out, and a
- * `main`-based assertion style also stays portable to running on joe2 itself
+ * `main`-based assertion style also stays portable to running on joe-ng itself
  * later. Each test class has a {@code main} that calls these assertions and ends
  * with {@link #summary}; {@code build.sh} runs them and a non-zero exit fails
  * the build.

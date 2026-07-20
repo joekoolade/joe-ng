@@ -16,7 +16,7 @@ package classfile;
  * {@code Files.readAllBytes}, the loader hands it a heap copy of an embedded blob.
  *
  * <p>Note {@code u1} masks with {@code 0xFF} deliberately: the JVM sign-extends
- * {@code baload} while joe2's compiler zero-extends it, and the mask makes both
+ * {@code baload} while joe-ng's compiler zero-extends it, and the mask makes both
  * agree.
  */
 public final class ClassReader

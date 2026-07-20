@@ -9,7 +9,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG="${1:-$ROOT/kernel8.img}"
-WANT="${2:-hello from joe2}"
+WANT="${2:-hello from joe-ng}"
 OUT="$(mktemp)"
 
 [ -f "$IMG" ] || { echo "no image at $IMG — run scripts/build.sh first" >&2; exit 1; }

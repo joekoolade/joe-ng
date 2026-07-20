@@ -8,7 +8,7 @@ import java.nio.file.Path;
 
 /**
  * M1 target: the writer emits a {@code kernel8.img} whose compiled boot code
- * prints "hello from joe2" over the mini-UART (PLAN.md §4). Same pipeline as M0
+ * prints "hello from joe-ng" over the mini-UART (PLAN.md §4). Same pipeline as M0
  * (our assembler → our writer → raw image), now driving real board bring-up.
  *
  * Usage: {@code java writer.BuildBootImage [output-path]} (default kernel8.img).

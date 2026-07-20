@@ -1,7 +1,7 @@
 package objectmodel;
 
 /**
- * The guest object model — the single source of truth for how joe2 lays objects
+ * The guest object model — the single source of truth for how joe-ng lays objects
  * out in memory (PLAN.md "Decided", CLAUDE.md). Every offset and size lives here
  * so the model is a one-file change: the compiler and the boot-image writer ask
  * this class, never hardcode a {@code +8}. That keeps the layout auditable and

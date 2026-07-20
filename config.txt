@@ -1,4 +1,4 @@
-# Raspberry Pi 4 (BCM2711) boot config for joe2.
+# Raspberry Pi 4 (BCM2711) boot config for joe-ng.
 # The GPU firmware reads this, then loads kernel8.img to 0x80000 and starts the
 # ARM cores. 64-bit is NOT auto-enabled on the Pi 4 — arm_64bit=1 is required.
 arm_64bit=1
@@ -7,17 +7,17 @@ arm_64bit=1
 # firmware looks for in 64-bit mode; named explicitly for clarity.)
 kernel=kernel8.img
 
-# Keep firmware from moving the start address; joe2 links everything to 0x80000.
+# Keep firmware from moving the start address; joe-ng links everything to 0x80000.
 kernel_address=0x80000
 
 # Serial console on the GPIO header, 115200 8N1 via a USB-TTL adapter.
-# joe2 outputs on the mini-UART (UART1, GPIO14/15), whose clock is the VPU core.
-# On real silicon core_freq did not pin the clock (250/270 and 500/541 both came
-# out too slow), so we match the divisor to the Pi 4's 200 MHz idle core:
-# Bcm2711.BAUD_115200 = 216. core_freq=200 keeps it at the idle floor either way.
+# joe-ng outputs on the mini-UART (UART1, GPIO14/15), whose clock is the VPU core.
+# The baud divisor is NOT pinned here: core_freq is only a request (silicon
+# reported 200 while actually running at 166), so joe-ng asks the firmware for the
+# measured core clock over the mailbox at boot and derives the divisor from it.
 enable_uart=1
 core_freq=200
 
-# No device tree — joe2 talks to the hardware directly, no OS.
+# No device tree — joe-ng talks to the hardware directly, no OS.
 device_tree=
 disable_commandline_tags=1

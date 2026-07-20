@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
-# Assemble everything the Pi 4 needs to boot joe2 into ./sdcard/, ready to copy
+# Assemble everything the Pi 4 needs to boot joe-ng into ./sdcard/, ready to copy
 # onto a FAT32 boot partition. Fetches the two GPU-firmware files (start4.elf,
 # fixup4.dat) from the official Raspberry Pi firmware repo — those are the one
-# external seed joe2 does not build (PLAN.md §0), not part of the VM.
+# external seed joe-ng does not build (PLAN.md §0), not part of the VM.
 #
 # Usage: scripts/sdcard.sh          (build image + assemble sdcard/)
 # Then:  cp sdcard/* /Volumes/BOOT/  (macOS)  or  /media/$USER/bootfs/ (Linux)

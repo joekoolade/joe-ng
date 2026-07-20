@@ -1,8 +1,8 @@
-# joe2 build — front door.
+# joe-ng build — front door.
 #
 # Java cross-compiles a whole source set (per-file make rules fight javac), so
 # this is a task runner with a stamp for skip-if-unchanged rather than a per-file
-# incremental build. Standard host tools only (make, javac, java) — nothing joe2
+# incremental build. Standard host tools only (make, javac, java) — nothing joe-ng
 # itself depends on; the VM is still all our own Java (PLAN.md §0).
 #
 # Targets:

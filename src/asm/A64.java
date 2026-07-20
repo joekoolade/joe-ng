@@ -5,7 +5,7 @@ import java.util.List;
 
 /**
  * AArch64 (A64) instruction encoder — emits raw 32-bit instruction words, not
- * assembly text. There is no external assembler in joe2; this is it.
+ * assembly text. There is no external assembler in joe-ng; this is it.
  *
  * Every encoding here is verified bit-for-bit against the ARM Architecture
  * Reference Manual (ARMv8-A, A64 instruction set) in {@code asm.A64Test}. A

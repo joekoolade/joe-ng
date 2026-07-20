@@ -1,6 +1,6 @@
-# joe2 — project memory for Claude Code
+# joe-ng — project memory for Claude Code
 
-joe2 is a **metacircular Java VM** whose foundation is a **boot-image writer**
+joe-ng is a **metacircular Java VM** whose foundation is a **boot-image writer**
 that turns Java classes into a raw `kernel8.img` running **bare-metal on a
 Raspberry Pi 4 (BCM2711, quad Cortex-A72, AArch64)** with **no OS underneath**.
 
@@ -38,7 +38,7 @@ the standing rules and current state so we don't re-litigate them each session.
   the runtime JIT.
 - **The only external seeds** (not things we build): a stock JVM to run the
   writer initially (gone after self-hosting, M5), and the Pi's GPU firmware that
-  loads `kernel8.img`. Nothing else touches joe2.
+  loads `kernel8.img`. Nothing else touches joe-ng.
 - **First-principles / learning project:** reference the ARM ARM, BCM2711 docs,
   and Jikes RVM / JOE *concepts* — write every line ourselves. Log sources in
   `SOURCES.md`.
@@ -294,7 +294,7 @@ defines the minimum the assembler must encode.
       against the JDK-based `ClassFile` (class/super names, interface-ness, member
       counts) over four real classfiles — 39 checks.
     - **Gotcha it encodes:** `u1` masks `& 0xFF` because the JVM sign-extends
-      `baload` while joe2's compiler zero-extends it; the mask makes both agree.
+      `baload` while joe-ng's compiler zero-extends it; the mask makes both agree.
     - **Still to migrate:** the writer's `ClassFile`/`BaselineCompiler` (JDK
       collections + String) and the rest of `Loader`'s bespoke parsing/codegen.
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
@@ -315,7 +315,7 @@ defines the minimum the assembler must encode.
   `writer/BuildSpinImage` = the 8-byte `wfe; b .-4` park loop at `0x80000`.
 - **M1b (done):** `vm/EmitBoot` emits the first-light routine — reads CurrentEL,
   drops EL2→EL1 via ERET, enables FP (CPACR_EL1.FPEN), sets SP, brings up the AUX
-  mini-UART (GPIO14/15 ALT5 + config), prints "hello from joe2\r\n", parks in wfe.
+  mini-UART (GPIO14/15 ALT5 + config), prints "hello from joe-ng\r\n", parks in wfe.
   `writer/BuildBootImage` emits it (344-byte image). **Prints correctly under
   QEMU `raspi4b`** (mini-UART = serial1). `asm/A64` now also encodes MRS/MSR
   (+boot sysregs), ERET, DSB/DMB/ISB, LDR/STR/LDRB/STRB, ADD/SUB imm, MOV,
@@ -326,7 +326,7 @@ defines the minimum the assembler must encode.
 - **M1c DONE (the metacircular half):** `writer/BuildCompiledBootImage` compiles
   `vm.VM.boot()` from javac bytecode — EL2→EL1 drop, FP enable, stack, mini-UART
   bring-up, and the print loop — into a `kernel8.img` that **prints "hello from
-  joe2" under QEMU raspi4b** (functional check: `scripts/qemu-check.sh`). This is
+  joe-ng" under QEMU raspi4b** (functional check: `scripts/qemu-check.sh`). This is
   now the default image `build.sh` emits. The equivalent hand-assembled path
   (`vm.EmitBoot` / `writer.BuildBootImage`) is kept for reference.
   - `magic/Magic`: intrinsic markers (privileged ops, raw MMIO, `dropToEL1`, and
@@ -346,7 +346,7 @@ defines the minimum the assembler must encode.
   Full rationale in PLAN.md "Decided".
 - **M2 so far (multi-class + real calls DONE):** the boot is now split across
   classes (`vm.VM.boot` → `board.bcm2711.Uart.init`/`puts` → `Uart.putc`) and
-  compiled as a multi-method program that **still prints "hello from joe2"** under
+  compiled as a multi-method program that **still prints "hello from joe-ng"** under
   QEMU. New machinery:
   - `compiler/BaselineCompiler` calling convention: args x0..x7, return x0, locals
     in callee-saved x19.., per-method prologue/epilogue (save x30 if non-leaf,
@@ -396,7 +396,7 @@ defines the minimum the assembler must encode.
   literal as a real heap-layout **byte[] object** in the image (writer lays out
   `[null TIB][status][length][ASCII bytes]`, 8-aligned; the `ldc` address load is
   relocated like TIB refs). `Magic.bytes(String):byte[]` is a compile-time type
-  adapter lowered to a no-op (joe2 has no `java.lang.String` yet, so this lets
+  adapter lowered to a no-op (joe-ng has no `java.lang.String` yet, so this lets
   Java source name the bytes). `Uart.write(byte[])` iterates it. The old
   appended-blob `message()`/`messageLen()` and the compiler's `imageData`
   plumbing are gone. `CompilerTest` asserts the interned bytes land in the image.

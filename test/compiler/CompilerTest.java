@@ -199,7 +199,7 @@ public final class CompilerTest
 
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
-        T.eq("interned 'hello from joe2' in image", 1, img.contains("hello from joe2") ? 1 : 0);
+        T.eq("interned 'hello from joe-ng' in image", 1, img.contains("hello from joe-ng") ? 1 : 0);
 
         T.summary("compiler");
     }

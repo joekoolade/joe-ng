@@ -1,4 +1,4 @@
-# joe2 — Project Plan (metacircular, all-Java, bare-metal AArch64 / Raspberry Pi 4)
+# joe-ng — Project Plan (metacircular, all-Java, bare-metal AArch64 / Raspberry Pi 4)
 
 A metacircular Java VM whose **foundation is a boot-image writer**: a program
 that takes Java classes and produces a raw `kernel8.img` that runs directly on a
@@ -19,15 +19,15 @@ Learning from first principles: read the ARM manuals and BCM2711 docs and the
 ## 0. The one unavoidable seed (stated honestly)
 
 A self-hosted system needs something to run its own builder the first time. For
-joe2 that is exactly two things you do **not** build and do **not** choose:
+joe-ng that is exactly two things you do **not** build and do **not** choose:
 
 1. **A stock JVM** — runs the boot-image writer for the very first image. It is a
-   *seed only*: once joe2 can run the writer itself (Milestone M5), the seed is
+   *seed only*: once joe-ng can run the writer itself (Milestone M5), the seed is
    no longer needed. Nothing you write depends on it beyond bootstrap.
 2. **The Pi's GPU firmware** — the SoC's built-in loader copies `kernel8.img` to
    `0x80000` and starts the ARM cores. It is not replaceable and not a build tool.
 
-Beyond those, no other tool touches joe2. This is the honest meaning of
+Beyond those, no other tool touches joe-ng. This is the honest meaning of
 "no other tools": everything in the *creation* of the VM is Java you author.
 
 ---
@@ -50,10 +50,10 @@ Beyond those, no other tool touches joe2. This is the honest meaning of
   compiled VM.boot (was Java, now A64):  EL2→EL1, stack, MMU, UART … runs Java
       │  contains a compiled copy of the baseline compiler + classfile parser
       ▼
-  runtime class loading: joe2 compiles NEW .class files itself, on bare metal
+  runtime class loading: joe-ng compiles NEW .class files itself, on bare metal
       │  eventually runs the boot-image writer itself →
       ▼
-  joe2 builds joe2  (self-hosting; seed JVM no longer required)
+  joe-ng builds joe-ng  (self-hosting; seed JVM no longer required)
 ```
 
 The key insight that keeps this "all Java, no other tools": the **classfile
@@ -131,7 +131,7 @@ it can handle.
 
 ### M1 — First light: compiled Java prints over UART (target: 1–2 wks)
 - Baseline compiler compiles **one** Java method, `VM.boot`, that: drops EL2→EL1,
-  sets a stack, inits mini-UART, and writes "hello from joe2" via a magic
+  sets a stack, inits mini-UART, and writes "hello from joe-ng" via a magic
   `Address` — all Java, privileged ops via intrinsics.
 - Writer compiles it, lays it at the entry point, emits the image.
 - **Done when:** the string prints, driven by compiled Java on bare metal. This
@@ -152,11 +152,11 @@ it can handle.
 - The image contains compiled copies of the classfile parser + baseline
   compiler. Append a class area to the image (or load over UART); the running VM
   parses and compiles **new** `.class` files on bare metal and runs their `main`.
-- **Done when:** joe2 takes Java classes it has never seen and runs them, on the
+- **Done when:** joe-ng takes Java classes it has never seen and runs them, on the
   metal, with no OS.
 
 ### M5 — Self-hosting closure (drop the seed JVM) (target: weeks)
-- Run the boot-image writer *inside* joe2, so joe2 builds its own next image.
+- Run the boot-image writer *inside* joe-ng, so joe-ng builds its own next image.
 - **Done when:** the seed JVM is no longer needed to produce an image. Fully
   metacircular, fully self-contained.
 
@@ -264,7 +264,7 @@ that set is enough for the entire boot path.
 ## 8. Suggested repo layout (all Java)
 
 ```
-joe2/
+joe-ng/
 ├── PLAN.md
 ├── config.txt                  # arm_64bit=1
 ├── src/

@@ -298,7 +298,7 @@ public final class VM
 
     static void run()
     {
-        Uart.write(Magic.bytes("hello from joe2\n"));     // putc turns \n into \r\n
+        Uart.write(Magic.bytes("hello from joe-ng\n"));     // putc turns \n into \r\n
         Uart.write(Magic.bytes("core "));                 // the clock we calibrated the baud to
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
         Uart.write(Magic.bytes("MHz\n"));

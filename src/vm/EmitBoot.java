@@ -14,7 +14,7 @@ import static board.bcm2711.Bcm2711.*;
  *   1. reads {@code CurrentEL} and, if at EL2, drops to EL1 via {@code ERET};
  *   2. enables FP/SIMD at EL1 (or Java floats would trap) and sets a stack;
  *   3. initializes the AUX mini-UART (GPIO alt5 + config + enable);
- *   4. writes "hello from joe2\r\n", polling the TX FIFO;
+ *   4. writes "hello from joe-ng\r\n", polling the TX FIFO;
  *   5. parks in a {@code wfe} spin.
  *
  * <p><b>This is the board-bringup half of M1, emitted directly against the
@@ -27,7 +27,7 @@ import static board.bcm2711.Bcm2711.*;
 public final class EmitBoot
 {
 
-    private static final byte[] MESSAGE = "hello from joe2\r\n".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] MESSAGE = "hello from joe-ng\r\n".getBytes(StandardCharsets.US_ASCII);
 
     public static CodeBuffer build()
     {

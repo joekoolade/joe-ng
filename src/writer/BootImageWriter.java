@@ -7,7 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * The boot-image writer — joe2's foundation (PLAN.md §2). It takes an assembled
+ * The boot-image writer — joe-ng's foundation (PLAN.md §2). It takes an assembled
  * {@link CodeBuffer} and emits a raw {@code kernel8.img}: the exact bytes the
  * Pi 4 GPU firmware copies to {@link CodeBuffer#LOAD_ADDRESS} and jumps to.
  *

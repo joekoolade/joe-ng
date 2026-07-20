@@ -1,4 +1,4 @@
-# Flashing joe2 to a real Raspberry Pi 4
+# Flashing joe-ng to a real Raspberry Pi 4
 
 QEMU is a test aid, not ground truth (PLAN.md §6). This is how to run the same
 `kernel8.img` on real silicon and watch it over serial. You need a Pi 4 (4 GB),
@@ -14,7 +14,7 @@ This builds `kernel8.img` and downloads the two GPU-firmware files into `sdcard/
 
 | file          | what it is                                         |
 |---------------|----------------------------------------------------|
-| `kernel8.img` | joe2 (our image)                                   |
+| `kernel8.img` | joe-ng (our image)                                   |
 | `config.txt`  | `arm_64bit=1`, `enable_uart=1`, `core_freq=250`    |
 | `start4.elf`  | Pi 4 GPU firmware (the one seed we don't build)    |
 | `fixup4.dat`  | Pi 4 GPU firmware                                   |
@@ -32,11 +32,11 @@ drop them in `sdcard/`.
   - Linux:  `cp sdcard/* /media/$USER/<NAME>/ && sync && umount /media/$USER/<NAME>`
 
 No `bootcode.bin` is needed on the Pi 4 (unlike the Pi 3). No device tree is
-loaded (`config.txt` leaves `device_tree=` empty) — joe2 owns all the hardware.
+loaded (`config.txt` leaves `device_tree=` empty) — joe-ng owns all the hardware.
 
 ## 3. Wire up the serial adapter
 
-joe2 prints on the **mini-UART (UART1)**, GPIO14/15. With the Pi powered OFF,
+joe-ng prints on the **mini-UART (UART1)**, GPIO14/15. With the Pi powered OFF,
 connect (see the 40-pin header pinout):
 
 | Pi header               | adapter |
@@ -63,7 +63,7 @@ Exit `screen` with `Ctrl-A` then `k` (macOS) / `Ctrl-A Ctrl-\` .
 Insert the SD card, plug in power. Within a second or two you should see:
 
 ```
-hello from joe2
+hello from joe-ng
 core 166MHz
 k
 AB
@@ -78,13 +78,13 @@ R
 *M
 ```
 
-The `core NNNMHz` line is the VPU core clock joe2 read from the firmware over the
+The `core NNNMHz` line is the VPU core clock joe-ng read from the firmware over the
 VideoCore mailbox and calibrated the mini-UART baud to. The number varies by board,
 firmware and `config.txt` — that is exactly why it is measured rather than assumed.
 `core 0MHz` means the firmware did not answer (QEMU, for one, does not implement the
 measured-rate tag) and the baud fell back to `Bcm2711.BAUD_115200`.
 
-Note joe2 asks for the **measured** rate (`GET_CLOCK_RATE_MEASURED`), not the
+Note joe-ng asks for the **measured** rate (`GET_CLOCK_RATE_MEASURED`), not the
 configured one: on real silicon the plain `GET_CLOCK_RATE` tag echoed back the
 `core_freq=200` from `config.txt` while the core was actually running at ~175 MHz —
 a 15% baud error, i.e. garbage.
@@ -107,7 +107,7 @@ last character: it pinpoints how far the metacircular loader got.
 - **Garbled / wrong characters (but steady stream).** The baud is off. The
   mini-UART is clocked by the VPU core, whose rate varies by firmware, `config.txt`
   and even which files are on the card (one carrying recovery files boots different
-  firmware) — hardcoded divisors broke every time the setup changed. joe2 therefore
+  firmware) — hardcoded divisors broke every time the setup changed. joe-ng therefore
   **asks the firmware** for the core clock over the VideoCore mailbox and computes
   `divisor = hz/(8*115200) - 1` at boot, printing the result as `core NNNMHz`.
   So: if you can read `core NNNMHz`, the baud is self-calibrated and correct. If the

@@ -7,7 +7,7 @@ import java.util.List;
  * A growable stream of A64 instruction words tied to a load address.
  *
  * The load address is where the first word will live in memory once the Pi
- * firmware places the image (joe2 links everything to {@code 0x80000}). Keeping
+ * firmware places the image (joe-ng links everything to {@code 0x80000}). Keeping
  * it here lets code that needs absolute PCs (branch targets, later relocations)
  * compute them from {@link #pcAt}. For M0 the only client is the spin loop, but
  * this is the seam where relocation grows in later milestones (PLAN.md §6).

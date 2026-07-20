@@ -165,7 +165,7 @@ public final class Magic
      * the compiler as a real heap-layout {@code byte[]} object in the image (ASCII
      * bytes), so {@code ldc "..."} already yields a {@code byte[]} reference. This
      * call is lowered to nothing — it only lets Java source name the bytes without
-     * a {@code java.lang.String} class (which joe2 does not yet have).
+     * a {@code java.lang.String} class (which joe-ng does not yet have).
      */
     public static byte[] bytes(String literal)
     {

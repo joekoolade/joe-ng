@@ -3,7 +3,7 @@
 # BCM2711 peripheral emulation is partial and is NOT ground truth (PLAN.md §6,
 # CLAUDE.md). Real validation is a Pi 4 over USB-TTL serial from M0 onward.
 #
-# M1 image prints "hello from joe2" then parks. The mini-UART (UART1) is QEMU's
+# M1 image prints "hello from joe-ng" then parks. The mini-UART (UART1) is QEMU's
 # SECOND serial, so we route serial0 (PL011) to null and serial1 to stdio.
 # Success: the line prints and the guest sits parked (no reset). Ctrl-A then X
 # to exit. (Real Pi 4 over USB-TTL serial is the actual ground truth.)
