@@ -378,15 +378,20 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
 - ✅ **4.1 — `CodeBuffer` JDK-free.** The core's emit target: `int[]` grown by hand
   (was `List<Integer>`), encodings via `A64Enc` not `A64`. `A64.loadImm64` now
   returns `int[]`. Prerequisite for the core to emit on the metal. Image identical.
-- ☐ **4.2 — the symbol seam.** Define how the core emits a symbolic reference
-  (call / TIB / string / static / Type load) without knowing whether it is being
-  relocated later (writer) or resolved now (metal). A resolver object the core
-  calls; the writer's implementation records `CallSite`/`TibRef`/… as today, the
-  metal's emits the resolved address from its registries. Do this on the writer
-  side first (byte-identical), so the interface exists before the metal implements
-  it. This is where the deferred stage-2 items land: with the seam in place the
-  core never holds a `String` key or a relocation `List` — those live in the
-  writer's resolver.
+- ✅ **4.2 — the symbol seam.** `compiler/Symbols` is the interface: the compiler
+  names a symbolic target by <em>constant-pool index</em> (or, for its own
+  synthesised runtime calls, a helper id) and the implementation decides what to
+  emit — a `call`/`callHelper` BL, or a `tib`/`type`/`interfaceType`/`staticField`/
+  `string`/`exceptionSlot` address load. The writer implementation (`WriterSymbols`,
+  an inner class) emits a placeholder and records `CallSite`/`TibRef`/… exactly as
+  before; all eight record-creations now live *only* there, so the ~2400 lines of
+  lowering beneath it never touch a relocation record. `emitCall` keeps the calling
+  convention and delegates just the BL; `getstatic`/`putstatic`/`ldc`/`new`/
+  `athrow`/`instanceof`/`invokeinterface` route their symbolic emit through the
+  seam. Byte-identical image. The metal implements the same interface in 4.4,
+  emitting resolved addresses from its registries — and that is where the deferred
+  stage-2 `String`-key and collection removals finally land, since the core above
+  the seam no longer holds either.
 - ☐ **4.3 — a shared cp/bytecode view.** The core reads the constant pool and
   bytecode through one abstraction backed by `ClassReader` (`byte[]` + offsets), so
   the writer's `ClassFile` and the metal's `gcp`/`gbase` stop being two ways to ask

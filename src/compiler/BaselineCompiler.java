@@ -103,6 +103,63 @@ public final class BaselineCompiler
         this.resolver = resolver;
     }
 
+    // ----- symbol seam (PLAN.md §M5.4.2) -----------------------------------
+    private static final int SYM_CP = 0;      // symbol identified by a constant-pool index
+    private static final int SYM_HELPER = 1;  // symbol is a synthesised runtime helper
+
+    /** Runtime-helper method keys, indexed by the ids in {@link Symbols}. */
+    private static final String[] HELPER_KEY =
+    {
+        "vm/Heap.alloc(I)J", "vm/Heap.allocArray(II)J", "vm/VM.gcCollect(J)V",
+        "vm/VM.instanceOf(JJ)I", "vm/VM.checkCast(JJ)J", "vm/VM.unwind(JJJ)V",
+    };
+
+    /**
+     * Writer implementation of the symbol seam: emit a fixed-width placeholder and
+     * record the site (with its resolved String key) for {@link writer.ImageBuilder}
+     * to relocate after layout. The record lists it fills are the ones returned in
+     * {@link CompiledMethod}. The metal will provide a different implementation that
+     * emits the resolved address instead of recording (M5.4.4).
+     */
+    private final class WriterSymbols implements Symbols
+    {
+        public void call(CodeBuffer cb, int methodCp)
+        {
+            ClassFile.MemberRef r = cf.memberRef(methodCp);
+            callSites.add(new CallSite(cb.emit(A64.bl(0)), key(r.owner(), r.name(), r.descriptor())));
+        }
+        public void callHelper(CodeBuffer cb, int helper)
+        {
+            callSites.add(new CallSite(cb.emit(A64.bl(0)), HELPER_KEY[helper]));
+        }
+        public void tib(CodeBuffer cb, int reg, int classCp)
+        {
+            tibRefs.add(new TibRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
+        }
+        public void type(CodeBuffer cb, int reg, int classCp)
+        {
+            typeRefs.add(new TypeRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
+        }
+        public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
+        {
+            interfaceRefs.add(new TypeRef(cb.reserveAddr(reg), reg, cf.memberRef(ifaceMethodCp).owner()));
+        }
+        public void staticField(CodeBuffer cb, int reg, int fieldCp)
+        {
+            staticRefs.add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));
+        }
+        public void string(CodeBuffer cb, int reg, int stringCp)
+        {
+            strRefs.add(new StrRef(cb.reserveAddr(reg), reg, cf.stringAt(stringCp)));
+        }
+        public void exceptionSlot(CodeBuffer cb, int reg)
+        {
+            staticRefs.add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
+        }
+    }
+
+    private final Symbols symbols = new WriterSymbols();
+
     // A forward branch is emitted before its target word index is known, so it is
     // patched later. Rather than carry a closure per branch, each fixup records
     // *what kind* of branch it is plus its single operand — a register for
@@ -872,23 +929,27 @@ public final class BaselineCompiler
     // ----- static fields: absolute address in the image statics area --------
     private void getstatic(CodeBuffer cb, int cpIndex)
     {
-        emitLoadStatic(cb, staticKey(cf.memberRef(cpIndex)), pushReg());
+        int r = pushReg();
+        symbols.staticField(cb, r, cpIndex);
+        cb.emit(A64.ldrx(r, r, 0));
     }
     private void putstatic(CodeBuffer cb, int cpIndex)
     {
-        emitStoreStatic(cb, staticKey(cf.memberRef(cpIndex)), popReg());
+        int v = popReg();
+        symbols.staticField(cb, 16, cpIndex);
+        cb.emit(A64.strx(v, 16, 0));
     }
 
-    /** Load static field {@code key} into {@code destReg}. */
-    private void emitLoadStatic(CodeBuffer cb, String key, int destReg)
+    /** Load the synthetic $exception static slot into {@code destReg}. */
+    private void emitLoadException(CodeBuffer cb, int destReg)
     {
-        staticRefs.add(new StaticRef(cb.reserveAddr(destReg), destReg, key));
+        symbols.exceptionSlot(cb, destReg);
         cb.emit(A64.ldrx(destReg, destReg, 0));
     }
-    /** Store {@code valReg} to static field {@code key} (via x16 for the address). */
-    private void emitStoreStatic(CodeBuffer cb, String key, int valReg)
+    /** Store {@code valReg} into the synthetic $exception static slot (via x16). */
+    private void emitStoreException(CodeBuffer cb, int valReg)
     {
-        staticRefs.add(new StaticRef(cb.reserveAddr(16), 16, key));
+        symbols.exceptionSlot(cb, 16);
         cb.emit(A64.strx(valReg, 16, 0));
     }
 
@@ -900,10 +961,10 @@ public final class BaselineCompiler
     /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
     private void typeCheck(CodeBuffer cb, int classIndex, String helper, String desc)
     {
-        String cls = cf.classAt(classIndex);
         int r = pushReg();                                       // objref stays below; push targetType addr
-        typeRefs.add(new TypeRef(cb.reserveAddr(r), r, cls));
-        emitCall(cb, "vm/VM." + helper + desc, desc, false);     // (ref, targetType) -> int/ref
+        symbols.type(cb, r, classIndex);
+        emitCall(cb, desc, false, SYM_HELPER,
+                 helper.equals("instanceOf") ? Symbols.INSTANCE_OF : Symbols.CHECK_CAST);
     }
 
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
@@ -951,11 +1012,9 @@ public final class BaselineCompiler
         int size = ObjectModel.scalarSize(resolve(className).instanceFieldCount());
         cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
         spillLive(cb);                                            // Heap.alloc clobbers x9..
-        int w = cb.emit(A64.bl(0));                               // x0 = object base
-        callSites.add(new CallSite(w, "vm/Heap.alloc(I)J"));
+        symbols.callHelper(cb, Symbols.HEAP_ALLOC);               // x0 = object base
         reloadLive(cb);
-        int t = cb.reserveAddr(1);                                // x1 = &TIB (patched by ImageBuilder)
-        tibRefs.add(new TibRef(t, 1, className));
+        symbols.tib(cb, 1, classIndex);                           // x1 = &TIB
         cb.emit(A64.strx(1, 0, ObjectModel.TIB_OFFSET));          // header.tib = &TIB
         cb.emit(A64.movReg(pushReg(), 0));                        // push the reference
     }
@@ -1013,7 +1072,7 @@ public final class BaselineCompiler
             lowerIntrinsic(ref, cb);
             return;
         }
-        lowerCall(ref, cb, false);
+        lowerCall(cpIndex, cb, false);
     }
 
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
@@ -1064,7 +1123,7 @@ public final class BaselineCompiler
         }
         spillLive(cb);
 
-        interfaceRefs.add(new TypeRef(cb.reserveAddr(16), 16, ref.owner()));        // x16 = &interfaceType
+        symbols.interfaceType(cb, 16, cpIndex);                                     // x16 = &interfaceType
         cb.emit(A64.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
         cb.emit(A64.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
         cb.emit(A64.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
@@ -1094,7 +1153,7 @@ public final class BaselineCompiler
             popReg();                                            // super() into a JDK class — discard receiver
             return;
         }
-        lowerCall(ref, cb, true);                                // constructor: receiver is arg0
+        lowerCall(cpIndex, cb, true);                            // constructor: receiver is arg0
     }
 
     /**
@@ -1106,7 +1165,7 @@ public final class BaselineCompiler
     private void athrow(CodeBuffer cb, int pos)
     {
         int athrowStart = cb.wordCount();
-        emitStoreStatic(cb, EXCEPTION_KEY, popReg());            // $exception = ref
+        emitStoreException(cb, popReg());                       // $exception = ref
         for (ClassFile.ExceptionEntry en : exceptions)
         {
             if (en.startPc() > pos || pos >= en.endPc())
@@ -1119,10 +1178,10 @@ public final class BaselineCompiler
                 return;
             }
             int obj = pushReg();
-            emitLoadStatic(cb, EXCEPTION_KEY, obj);
+            emitLoadException(cb, obj);
             int t = pushReg();
-            typeRefs.add(new TypeRef(cb.reserveAddr(t), t, cf.classAt(en.catchType())));
-            emitCall(cb, "vm/VM.instanceOf(JJ)I", "(JJ)I", false);  // (exc, catchType) -> int
+            symbols.type(cb, t, en.catchType());
+            emitCall(cb, "(JJ)I", false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
             int skip = cb.emit(A64.cbz(cond, 0));
             emitCatch(cb, en.handlerPc());                       // matched
@@ -1130,19 +1189,19 @@ public final class BaselineCompiler
         }
         // no local handler: unwind the stack — unwind(exc, thisPC, SP)
         int exc = pushReg();
-        emitLoadStatic(cb, EXCEPTION_KEY, exc);
+        emitLoadException(cb, exc);
         int pc = pushReg();
         cb.patchAddr(cb.reserveAddr(pc), pc, cb.pcAt(athrowStart)); // a PC inside this method
         int sp = pushReg();
         cb.emit(A64.movFromSp(sp));
-        emitCall(cb, "vm/VM.unwind(JJJ)V", "(JJJ)V", false);
+        emitCall(cb, "(JJJ)V", false, SYM_HELPER, Symbols.UNWIND);
         emitHalt(cb);                                            // unwind never returns
     }
 
     /** Push the pending exception and branch to a handler (which expects it at depth 1). */
     private void emitCatch(CodeBuffer cb, int handlerPc)
     {
-        emitLoadStatic(cb, EXCEPTION_KEY, pushReg());
+        emitLoadException(cb, pushReg());
         int w = cb.emit(A64.b(0));
         addFixup(w, handlerPc, FIX_B, 0);
         recordDepth(handlerPc);
@@ -1166,8 +1225,7 @@ public final class BaselineCompiler
             cb.emit(A64.strx(19 + i, 31, i * 8));    // spill x19..x28
         }
         cb.emit(A64.movFromSp(0));                              // x0 = scanFrom (bottom of spilled regs)
-        int w = cb.emit(A64.bl(0));
-        callSites.add(new CallSite(w, "vm/VM.gcCollect(J)V"));
+        symbols.callHelper(cb, Symbols.GC_COLLECT);
         for (int i = 0; i < 10; i++)
         {
             cb.emit(A64.ldrx(19 + i, 31, i * 8));    // restore
@@ -1176,14 +1234,18 @@ public final class BaselineCompiler
         cb.emit(A64.addImm(31, 31, frame));
     }
 
-    /** A real call: args to x0.. (receiver first if any), BL placeholder, result from x0. */
-    private void lowerCall(ClassFile.MemberRef ref, CodeBuffer cb, boolean hasReceiver)
+    /** A real call: args to x0.. (receiver first if any), BL to a cp method, result from x0. */
+    private void lowerCall(int cpIndex, CodeBuffer cb, boolean hasReceiver)
     {
-        emitCall(cb, key(ref.owner(), ref.name(), ref.descriptor()), ref.descriptor(), hasReceiver);
+        emitCall(cb, cf.memberRef(cpIndex).descriptor(), hasReceiver, SYM_CP, cpIndex);
     }
 
-    /** Emit a direct call to {@code calleeKey}: args to x0.., BL placeholder, result from x0. */
-    private void emitCall(CodeBuffer cb, String calleeKey, String descriptor, boolean hasReceiver)
+    /**
+     * The calling convention around a symbolic call: move args to x0.., spill live
+     * operands, delegate the BL to the {@link Symbols} seam, reload, land the result.
+     * {@code symKind}/{@code symArg} name the target (a cp index, or a helper id).
+     */
+    private void emitCall(CodeBuffer cb, String descriptor, boolean hasReceiver, int symKind, int symArg)
     {
         int nargs = paramTypes(descriptor).length + (hasReceiver ? 1 : 0);
         int[] src = new int[nargs];
@@ -1196,8 +1258,14 @@ public final class BaselineCompiler
             cb.emit(A64.movReg(nargs - 1 - k, src[k]));    // -> x(argIndex)
         }
         spillLive(cb);                                           // preserve operand values below the args
-        int w = cb.emit(A64.bl(0));
-        callSites.add(new CallSite(w, calleeKey));
+        if (symKind == SYM_CP)
+        {
+            symbols.call(cb, symArg);
+        }
+        else
+        {
+            symbols.callHelper(cb, symArg);
+        }
         reloadLive(cb);
         if (returnType(descriptor) != 'V')
         {
@@ -1209,7 +1277,7 @@ public final class BaselineCompiler
     private void lowerNewArray(int atype, CodeBuffer cb)
     {
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
-        emitCall(cb, "vm/Heap.allocArray(II)J", "(II)J", false); // (length, elemSize) -> ref
+        emitCall(cb, "(II)J", false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
     }
 
     private void arrayLength(CodeBuffer cb)
@@ -1501,7 +1569,7 @@ public final class BaselineCompiler
         if (cf.isStringConst(cpIndex))
         {
             int r = pushReg();
-            strRefs.add(new StrRef(cb.reserveAddr(r), r, cf.stringAt(cpIndex)));
+            symbols.string(cb, r, cpIndex);
         }
         else if (cf.isIntConst(cpIndex))
         {
