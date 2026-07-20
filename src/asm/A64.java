@@ -408,6 +408,11 @@ public final class A64
     {
         return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
     }
+    /** {@code SDIV Xd, Xn, Xm} — signed divide (divide-by-zero yields 0, per the ARM ARM). */
+    public static int sdivReg(int rd, int rn, int rm)
+    {
+        return 0x9AC0_0C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+    }
     /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
     public static int lslv(int rd, int rn, int rm)
     {

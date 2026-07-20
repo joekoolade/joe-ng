@@ -430,6 +430,11 @@ public final class BaselineCompiler
                                                                                                                                                 binop(cb, Bin.MUL);
                                                                                                                                                 return 1;
                                                                                                                                             }
+                                                                                                                                            case 0x6C, 0x6D ->
+                                                                                                                                            {
+                                                                                                                                                binop(cb, Bin.DIV);
+                                                                                                                                                return 1;
+                                                                                                                                            }
                                                                                                                                                 case 0x74, 0x75 ->
                                                                                                                                                 {
                                                                                                                                                     int r = OP_BASE + sp - 1;
@@ -635,7 +640,7 @@ public final class BaselineCompiler
         }
     }
 
-    private enum Bin { ADD, SUB, MUL, AND, OR, XOR, SHL, ASR, LSR }
+    private enum Bin { ADD, SUB, MUL, DIV, AND, OR, XOR, SHL, ASR, LSR }
 
     // ----- register allocation ---------------------------------------------
     private int pushReg()
@@ -701,6 +706,7 @@ public final class BaselineCompiler
     case ADD -> A64.addReg(r, a, b);
         case SUB -> A64.subReg(r, a, b);
         case MUL -> A64.mulReg(r, a, b);
+        case DIV -> A64.sdivReg(r, a, b);
         case AND -> A64.andReg(r, a, b);
         case OR  -> A64.orrReg(r, a, b);
         case XOR -> A64.eorReg(r, a, b);

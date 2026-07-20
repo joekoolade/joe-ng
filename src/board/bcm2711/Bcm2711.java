@@ -18,6 +18,23 @@ public final class Bcm2711
     /** ARM-side peripheral base (low-peripheral mode). */
     public static final long PERIPHERAL_BASE = 0xFE00_0000L;
 
+    // ----- VideoCore mailbox (property interface, channel 8) ----------------
+    // Used to ask the firmware what the core clock actually is, so the mini-UART
+    // baud divisor is computed rather than guessed (it varies by firmware/config).
+    public static final long MBOX_BASE   = PERIPHERAL_BASE + 0x00_B880; // 0xFE00B880
+    public static final long MBOX_READ   = MBOX_BASE + 0x00;
+    public static final long MBOX_STATUS = MBOX_BASE + 0x18;
+    public static final long MBOX_WRITE  = MBOX_BASE + 0x20;
+    public static final int  MBOX_FULL   = 0x8000_0000;   // status: can't write
+    public static final int  MBOX_EMPTY  = 0x4000_0000;   // status: nothing to read
+    public static final int  MBOX_CH_PROP = 8;            // ARM -> VC property channel
+    /** 16-byte-aligned scratch for the property buffer: above the image, below the heap. */
+    public static final long MBOX_BUFFER = 0x000E_0000L;
+    /** VC bus alias of ARM physical RAM (uncached view the firmware expects). */
+    public static final long MBOX_BUS_ALIAS = 0xC000_0000L;
+    public static final int  TAG_GET_CLOCK_RATE = 0x0003_0002;
+    public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
+
     // ----- GPIO ------------------------------------------------------------
     public static final long GPIO_BASE   = PERIPHERAL_BASE + 0x20_0000; // 0xFE200000
     /** Function select for GPIO10..19 (3 bits/pin). TXD1/RXD1 are GPIO14/15. */
@@ -44,14 +61,14 @@ public final class Bcm2711
     public static final int  LSR_TX_EMPTY = 5;
 
     /**
-     * Baud divisor for 115200. mini-UART baud = core_clock / (8*(divisor+1)).
-     * The real Pi 4 mini-UART clock tracks the VPU core, which idles at 200 MHz —
-     * and {@code core_freq} in config.txt did NOT pin it (both 250/270 and 500/541
-     * garbled: too slow, in proportion). 200e6/(8*115200) - 1 ≈ 216 → 115207 baud
-     * (+0.006%). We also set {@code core_freq=200} so the clock stays put whether or
-     * not the firmware honors it (200 is the idle floor either way). QEMU ignores
-     * the divisor. If silicon is still garbled: too-slow/stretched → clock > 200,
-     * raise the divisor; under-sampled/high-byte runs → clock < 200, lower it.
+     * <em>Fallback</em> baud divisor for 115200, used only if the mailbox does not
+     * report a core clock. mini-UART baud = core_clock / (8*(divisor+1)), so the
+     * divisor depends entirely on the VPU core clock — and that is not something we
+     * can assume: hardcoding it failed repeatedly on real silicon (270 for 250 MHz,
+     * 541 for 500 MHz, then 216 for the 200 MHz idle, which worked on one SD card
+     * and garbled on the next because a card carrying recovery files boots different
+     * firmware). {@link Mailbox#coreClockHz()} now asks the firmware and
+     * {@link Uart} computes the divisor; this constant is just the safety net.
      */
     public static final int  BAUD_115200 = 216;
 }

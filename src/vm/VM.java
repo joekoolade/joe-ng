@@ -273,9 +273,34 @@ public final class VM
      * calls). Prints the banner, then exercises the object model: allocate a
      * heap object, mutate its field, and print the result.
      */
+    /** Print {@code v} (0..9999) in decimal, no leading zeros. Uses only / and * (no irem). */
+    static void printDec(int v)
+    {
+        int th = v / 1000;
+        int hu = (v - th * 1000) / 100;
+        int te = (v - th * 1000 - hu * 100) / 10;
+        int on = v - th * 1000 - hu * 100 - te * 10;
+        if (th > 0)
+        {
+            Uart.putc(0x30 + th);
+        }
+        if (th > 0 || hu > 0)
+        {
+            Uart.putc(0x30 + hu);
+        }
+        if (th > 0 || hu > 0 || te > 0)
+        {
+            Uart.putc(0x30 + te);
+        }
+        Uart.putc(0x30 + on);
+    }
+
     static void run()
     {
         Uart.write(Magic.bytes("hello from joe2\n"));     // putc turns \n into \r\n
+        Uart.write(Magic.bytes("core "));                 // the clock we calibrated the baud to
+        printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
+        Uart.write(Magic.bytes("MHz\n"));
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'

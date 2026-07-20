@@ -22,11 +22,33 @@ public final class Uart
         Magic.store32(Bcm2711.AUX_MU_LCR_REG, 3);
         Magic.store32(Bcm2711.AUX_MU_MCR_REG, 0);
         Magic.store32(Bcm2711.AUX_MU_IIR_REG, 0xC6);
-        Magic.store32(Bcm2711.AUX_MU_BAUD_REG, Bcm2711.BAUD_115200);
+        Magic.store32(Bcm2711.AUX_MU_BAUD_REG, baudDivisor());
         Magic.store32(Bcm2711.GPFSEL1, (Bcm2711.ALT5 << 12) | (Bcm2711.ALT5 << 15));
         Magic.store32(Bcm2711.GPIO_PUP_PDN_CNTRL_REG0, 0);
         Magic.store32(Bcm2711.AUX_MU_CNTL_REG, 3);
     }
+
+    /**
+     * Baud divisor for 115200, computed from the core clock the firmware reports:
+     * mini-UART baud = core_clock / (8*(divisor+1)), so divisor = hz/921600 - 1.
+     * The core clock is not something we can assume — it differed across firmware
+     * builds and even SD cards on the same board — so we ask rather than guess. If
+     * the mailbox does not answer (or reports an implausible rate) we fall back to
+     * the compiled-in {@link Bcm2711#BAUD_115200}.
+     */
+    private static int baudDivisor()
+    {
+        int hz = Mailbox.coreClockHz();
+        coreHz = hz;                                     // kept so boot can report it
+        if (hz < 10_000_000 || hz > 1_500_000_000)
+        {
+            return Bcm2711.BAUD_115200;
+        }
+        return hz / (8 * 115200) - 1;
+    }
+
+    /** Core clock the mailbox reported at init, in Hz (0 = no answer, divisor fell back). */
+    public static int coreHz;
 
     /**
      * Write one byte, translating LF to CRLF. A raw serial console (screen/minicom)

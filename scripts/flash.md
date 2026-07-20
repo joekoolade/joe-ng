@@ -64,6 +64,7 @@ Insert the SD card, plug in power. Within a second or two you should see:
 
 ```
 hello from joe2
+core 200MHz
 k
 AB
 3
@@ -76,6 +77,12 @@ U
 R
 *M
 ```
+
+The `core NNNMHz` line is the VPU core clock joe2 read from the firmware over the
+VideoCore mailbox and calibrated the mini-UART baud to. The number varies by board,
+firmware and `config.txt` — that is exactly why it is measured rather than assumed.
+`core 0MHz` means the mailbox did not answer and the baud fell back to a compiled
+constant (likely garbled output).
 
 Then the board parks (`wfe`). That's the full feature run — compiled Java on bare
 metal — on real hardware. The lines walk the milestones: the banner + object
@@ -92,14 +99,17 @@ last character: it pinpoints how far the metacircular loader got.
 - **Nothing at all.** Re-seat the SD card and check the FAT32 files are at the
   partition root (not in a subfolder). Confirm `start4.elf`/`fixup4.dat` are
   present. Try a known-good SD card.
-- **Garbled / wrong characters (but steady stream).** The baud is off because the
-  core clock differs from what the divisor assumes. The mini-UART clock is the VPU
-  core, and on real Pi 4 silicon `core_freq` did **not** pin it — it idles at
-  **200 MHz**, so joe2 targets that (`core_freq=200`, `Bcm2711.BAUD_115200 = 216`).
-  If it still garbles, read the *pattern*: characters **too slow / stretched** (runs
-  of `p`, `|`, `~`) mean the clock is faster than 200 → **raise** the divisor;
-  **under-sampled** (bursts of high bytes / `0xFF`) means slower → **lower** it.
-  mini-UART baud = `core_clock / (8*(divisor+1))`; e.g. 216→200 MHz, 270→250, 541→500.
+- **Garbled / wrong characters (but steady stream).** The baud is off. The
+  mini-UART is clocked by the VPU core, whose rate varies by firmware, `config.txt`
+  and even which files are on the card (one carrying recovery files boots different
+  firmware) — hardcoded divisors broke every time the setup changed. joe2 therefore
+  **asks the firmware** for the core clock over the VideoCore mailbox and computes
+  `divisor = hz/(8*115200) - 1` at boot, printing the result as `core NNNMHz`.
+  So: if you can read `core NNNMHz`, the baud is self-calibrated and correct. If the
+  stream is garbled, the mailbox likely failed — the divisor fell back to
+  `Bcm2711.BAUD_115200`. Sanity-check `enable_uart=1` in `config.txt`, and as a last
+  resort set that constant to match your board (`hz/921600 - 1`; e.g. 216→200 MHz,
+  270→250, 541→500).
 - **A little output then it stops.** A hang in the boot/EL-drop/UART path — that's
   real-silicon behavior QEMU didn't exercise. The last character printed tells you
   how far it got.
