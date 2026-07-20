@@ -239,9 +239,32 @@ is now the dominant remaining work.
   in three methods instead of scattered across eight. Exception *types* are
   preserved, so an unsupported opcode still throws `UnsupportedOperationException`
   and stays loud. These helpers move to the writer-side wrapper in stage 4.
-- ☐ Replace `String` member keys with the identity the loader already uses:
-  `(blob, offset)` pairs compared via `utf8EqAt`, no allocation.
-- ☐ Replace `ArrayList`/`List` with `int[]` + count, as the loader's registries do.
+- ✅ **Done:** the branch-fixup table is an array plus a count, not an `ArrayList`.
+  It never escapes the compiler, and every future shape of it needs branch
+  patching, so this survives the split.
+- ⚠️ **Deferred to stage 4 — the ordering in this plan was wrong.** The remaining
+  `String` keys and the other six collections are not internal details; they *are*
+  the `BaselineCompiler`→`ImageBuilder` contract. Every record that escapes through
+  `CompiledMethod` carries a `String` key, and `ImageBuilder` uses those keys as map
+  keys for its whole layout pass — a method worklist, class sets, statics keys (16
+  call sites).
+
+  Converting them in place would mean giving `ImageBuilder` integer identities
+  (constant-pool indices, plus small ids for compiler-synthesised helpers like
+  `Heap.alloc`) and having it resolve index→name at every use. That is *worse* on
+  the writer side, which has a JDK and will never be compiled into the image, purely
+  to serve the metal side.
+
+  And stage 4 supersedes it anyway: in the split, the shared core should not emit
+  relocation records on the metal path at all — it should ask a resolver object what
+  address to emit, and the writer's implementation of that resolver keeps its
+  Strings and collections. Doing the conversion now is churn stage 4 would redo.
+
+**Revised order: do stage 4's split next, and let the remaining stage-2 items fall
+out of it.** The prerequisite is unchanged and now blocking: the two compilers must
+first agree a calling convention (writer: callee-saved locals with per-method
+frames; metal: x1..x8 with no frame, spilling around calls) and a symbol-resolution
+strategy. That decision is the real next piece of work.
 
 *Measured after the two completed items:* `invokedynamic` sites **21 → 10**, and
 methods blocked on it **8 → 5**. Both changes left the emitted image byte-for-byte
