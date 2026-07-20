@@ -129,7 +129,7 @@ public final class A64
     /** {@code BLR Xn} — branch-with-link to address in register (virtual dispatch). */
     public static int blr(int rn)
     {
-        return 0xD63F_0000 | (reg(rn) << 5);
+        return A64Enc.blr(reg(rn));
     }
     /** {@code RET Xn} — return; RET with no operand uses LR (x30). */
     public static int ret(int rn)
@@ -179,7 +179,7 @@ public final class A64
         {
             throw new IllegalArgumentException("imm16 out of range: " + imm16);
         }
-        return (hw << 21) | (imm16 << 5) | reg(rd);
+        return (hw << 21) | (imm16 << 5) | reg(rd);   // lanes; base added by caller
     }
 
     // =======================================================================
@@ -284,8 +284,8 @@ public final class A64
         {
             throw new IllegalArgumentException("ldst offset out of unsigned range: " + byteOffset);
         }
-        int base = (size << 30) | (0b111 << 27) | (0b01 << 24) | (opc << 22);
-        return base | (imm12 << 10) | (reg(rn) << 5) | reg(rt);
+        // imm12 is already scaled; A64Enc rescales, so hand it the byte offset.
+        return A64Enc.ldst(size, opc, reg(rt), reg(rn), imm12 << scale);
     }
     /** {@code STR Wt, [Xn, #off]} — store 32-bit. */
     public static int strw(int rt, int rn, int off)
@@ -304,7 +304,7 @@ public final class A64
         {
             throw new IllegalArgumentException("offset not word-aligned: " + off);
         }
-        return 0xB980_0000 | ((off >> 2) << 10) | (reg(rn) << 5) | reg(rt);
+        return A64Enc.ldrsw(reg(rt), reg(rn), off);
     }
     /** {@code STR Xt, [Xn, #off]} — store 64-bit. */
     public static int strx(int rt, int rn, int off)
@@ -363,7 +363,7 @@ public final class A64
     /** {@code MOV Xd, Xm} — alias of ORR Xd, XZR, Xm. */
     public static int movReg(int rd, int rm)
     {
-        return 0xAA00_03E0 | (reg(rm) << 16) | reg(rd);
+        return A64Enc.movReg(reg(rd), reg(rm));
     }
 
     // =======================================================================
@@ -386,7 +386,7 @@ public final class A64
     /** {@code SUB Xd, Xn, Xm}. */
     public static int subReg(int rd, int rn, int rm)
     {
-        return 0xCB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.subReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code AND Xd, Xn, Xm}. */
     public static int andReg(int rd, int rn, int rm)
@@ -406,7 +406,7 @@ public final class A64
     /** {@code MUL Xd, Xn, Xm} — alias of MADD Xd, Xn, Xm, XZR. */
     public static int mulReg(int rd, int rn, int rm)
     {
-        return 0x9B00_7C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.mulReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code SDIV Xd, Xn, Xm} — signed divide (divide-by-zero yields 0, per the ARM ARM). */
     public static int sdivReg(int rd, int rn, int rm)
@@ -431,7 +431,7 @@ public final class A64
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)
     {
-        return 0xEB00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | 31;
+        return A64Enc.cmpReg(reg(rn), reg(rm));
     }
     /** {@code SXTB Xd, Wn} — sign-extend byte (i2b). */
     public static int sxtb(int rd, int rn)
@@ -466,7 +466,7 @@ public final class A64
         {
             throw new IllegalArgumentException("cmp imm12 out of range: " + imm12);
         }
-        return 0xF100_0000 | (imm12 << 10) | (reg(rn) << 5) | 31;
+        return A64Enc.cmpImm(reg(rn), imm12);
     }
 
     // =======================================================================
@@ -492,12 +492,12 @@ public final class A64
     /** {@code B.cond #byteOffset} — conditional branch. */
     public static int bcond(int cond, int byteOffset)
     {
-        return 0x5400_0000 | (imm19(byteOffset) << 5) | (cond & 0xF);
+        return A64Enc.bcond(cond, imm19(byteOffset));
     }
     /** {@code CBZ Xt, #byteOffset} — branch if register is zero (64-bit). */
     public static int cbz(int rt, int byteOffset)
     {
-        return 0xB400_0000 | (imm19(byteOffset) << 5) | reg(rt);
+        return A64Enc.cbz(reg(rt), imm19(byteOffset));
     }
     /** {@code CBNZ Xt, #byteOffset} — branch if register is non-zero (64-bit). */
     public static int cbnz(int rt, int byteOffset)
