@@ -160,6 +160,84 @@ it can handle.
 - **Done when:** the seed JVM is no longer needed to produce an image. Fully
   metacircular, fully self-contained.
 
+#### M5 progress
+Two of the three pipeline stages are already shared — the same source runs on the
+seed JVM and is compiled into the image:
+- `classfile/ClassReader` — the classfile format, read from a `byte[]`. The
+  writer's `ClassFile` and the on-metal loader both use it.
+- `asm/A64Enc` — the instruction encodings as pure integer arithmetic. `A64` adds
+  validation for the writer; the on-metal JIT emits through it directly.
+
+The middle stage, `compiler/BaselineCompiler`, is the remaining work. Plan below.
+
+#### M5.1 — Migrating BaselineCompiler (the plan)
+
+**Measured, not guessed.** Running joe-ng's own compiler over
+`BaselineCompiler.class` (with a class resolver, so unresolved-class noise is
+excluded) gives the real gap:
+
+```
+65 methods total — 28 compile today, 37 blocked
+  14  `new` while the operand stack is non-empty   (compiler limitation)
+  12  reference a JDK class (String, ArrayList, List, IllegalStateException)
+   9  unsupported opcodes: invokedynamic x4, tableswitch x2,
+                           lookupswitch x1, aconst_null x1, caload x1
+   2  exceed the 10-local register ceiling
+```
+
+Two findings reshape the obvious plan:
+
+1. **The biggest blocker is not the JDK dependency.** It is `lowerNew`'s
+   `expectEmpty("new")` — the compiler refuses `new` unless the operand stack is
+   empty, which blocks 14 methods. That is our own limitation, fixable
+   independently, and worth fixing regardless of self-hosting.
+2. **The JDK usage is shallower than it looks.** Of 21 `invokedynamic` sites, 15
+   are `makeConcatWithConstants` — string building inside *error messages*, which
+   the metal does not need at all. Only 6 are real lambdas (the `Fixup`
+   closures).
+
+**Stage 1 — grow the compiler (no BaselineCompiler edits).** Pure capability,
+independently useful, verifiable by re-running the gap harness.
+- Spill live operand values across `Heap.alloc` in `lowerNew`, exactly as ordinary
+  calls already do; drop `expectEmpty`. *Unlocks ~14 methods.*
+- Add `aconst_null` (0x01) and `caload` (0x34). Trivial.
+- Lift the 10-local ceiling by spilling locals beyond x19..x28 to the frame.
+  *Unlocks 2, and removes a limit repeatedly hit while writing loader code.*
+
+**Stage 2 — de-string and defunctionalize BaselineCompiler.**
+- Replace the 6 lambda `Fixup`s with an int kind tag plus a switch (classic
+  defunctionalization) — removes the lambda `invokedynamic`s.
+- Drop concatenated error messages from the shared path; keep rich diagnostics in
+  the writer-side wrapper. Removes the remaining 15 `invokedynamic`s.
+- Replace `String` member keys with the identity the loader already uses:
+  `(blob, offset)` pairs compared via `utf8EqAt`, no allocation.
+- Replace `ArrayList`/`List` with `int[]` + count, as the loader's registries do.
+
+**Stage 3 — the switch statements.** 3 methods lower to `tableswitch`/
+`lookupswitch`. Either add jump-table support (a real feature, and the natural
+shape for opcode dispatch) or rewrite those switches as if/else chains. Decide by
+measuring; if/else is simpler and the JIT is not yet performance-critical.
+
+**Stage 4 — split, then delete the duplicate.** Apply the `ClassReader`/`A64Enc`
+pattern: a JDK-free core doing bytecode→A64, and a writer-side wrapper holding the
+`ClassFile` model, diagnostics and `ImageBuilder` integration. Then the on-metal
+loader's bespoke codegen is *deleted* in favour of the core — the moment there is
+genuinely one compiler.
+
+**The crux, and the real risk.** The two compilers do not merely differ in
+dependencies, they differ in *calling convention*: the writer puts locals in
+callee-saved x19.. with a proper frame per method, while the on-metal JIT keeps
+locals in x1..x8 and the operand stack in x9..x15 with no frame, spilling
+everything around calls. Symbol resolution differs too (writer: string keys
+relocated by `ImageBuilder`; metal: registries holding resolved addresses).
+**Unifying the convention is a prerequisite for Stage 4, not a detail to settle
+during it** — merging the code before agreeing the convention would produce a
+compiler that is correct in neither context.
+
+**Done when:** the shared core compiles *itself* and the output is identical to
+the seed JVM's compilation of it — a fixpoint, which is the honest proof of
+self-hosting.
+
 ### M6+ — Widening
 GC (bump → real collector); GIC-400 interrupts + timer; SMP (wake cores 1–3);
 exceptions; class-library subset; framebuffer via VideoCore mailbox.
