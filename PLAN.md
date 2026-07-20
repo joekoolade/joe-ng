@@ -229,13 +229,31 @@ expected shape of a layered blocker analysis, and it re-weights the plan: Stage 
 is now the dominant remaining work.
 
 **Stage 2 — de-string and defunctionalize BaselineCompiler.**
-- Replace the 6 lambda `Fixup`s with an int kind tag plus a switch (classic
-  defunctionalization) — removes the lambda `invokedynamic`s.
-- Drop concatenated error messages from the shared path; keep rich diagnostics in
-  the writer-side wrapper. Removes the remaining 15 `invokedynamic`s.
-- Replace `String` member keys with the identity the loader already uses:
+- ✅ **Done:** the branch `Fixup`s are defunctionalised — a closure per branch
+  became a kind tag plus its one operand (register or condition), patched by
+  `encodeBranch` with if/else rather than a `switch` expression, which would have
+  lowered to the still-unsupported `tableswitch`. `Fixup` also stopped being a
+  `record`, whose synthesised `equals`/`hashCode` carry their own `invokedynamic`.
+- ✅ **Done:** diagnostics are quarantined. Every message now goes through a few
+  `bad`/`unsupported` helpers, so the concatenation (and one `String.format`) sits
+  in three methods instead of scattered across eight. Exception *types* are
+  preserved, so an unsupported opcode still throws `UnsupportedOperationException`
+  and stays loud. These helpers move to the writer-side wrapper in stage 4.
+- ☐ Replace `String` member keys with the identity the loader already uses:
   `(blob, offset)` pairs compared via `utf8EqAt`, no allocation.
-- Replace `ArrayList`/`List` with `int[]` + count, as the loader's registries do.
+- ☐ Replace `ArrayList`/`List` with `int[]` + count, as the loader's registries do.
+
+*Measured after the two completed items:* `invokedynamic` sites **21 → 10**, and
+methods blocked on it **8 → 5**. Both changes left the emitted image byte-for-byte
+identical, so they are provably behaviour-preserving.
+
+Note the headline count moved the *wrong* way — 32 → 31 compiling, of 69 rather
+than 67 methods — because the helpers are themselves three new methods that carry
+the quarantined concatenation, and because methods freed from an opcode blocker
+now reach the JDK-reference blocker behind it. That blocker is now dominant at
+**29 methods**, and it is precisely the two remaining items: `String` keys and
+collections. Those are invasive rather than local, and they interact with the
+calling-convention question, so they are the natural next sitting.
 
 **Stage 3 — the switch statements.** 3 methods lower to `tableswitch`/
 `lookupswitch`. Either add jump-table support (a real feature, and the natural

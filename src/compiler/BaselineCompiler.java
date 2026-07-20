@@ -98,11 +98,83 @@ public final class BaselineCompiler
         this.resolver = resolver;
     }
 
-    private interface BranchEnc
+    // A forward branch is emitted before its target word index is known, so it is
+    // patched later. Rather than carry a closure per branch, each fixup records
+    // *what kind* of branch it is plus its single operand — a register for
+    // cbz/cbnz, a condition code for b.cond, nothing for an unconditional b.
+    //
+    // That defunctionalisation is not stylistic: a lambda compiles to
+    // invokedynamic, which needs a bootstrap-method runtime that does not exist on
+    // bare metal, so it would keep this compiler out of its own image (PLAN.md
+    // §M5.1). Plain data patches the same way and compiles anywhere.
+    private static final int FIX_B = 0;       // unconditional; arg unused
+    private static final int FIX_CBZ = 1;     // arg = register to test
+    private static final int FIX_CBNZ = 2;    // arg = register to test
+    private static final int FIX_BCOND = 3;   // arg = condition code
+
+    private static final class Fixup
     {
-        int encode(int byteOffset);
+        final int wordIndex;
+        final int targetBc;
+        final int kind;
+        final int arg;
+        Fixup(int wordIndex, int targetBc, int kind, int arg)
+        {
+            this.wordIndex = wordIndex;
+            this.targetBc = targetBc;
+            this.kind = kind;
+            this.arg = arg;
+        }
     }
-    private record Fixup(int wordIndex, int targetBc, BranchEnc enc) {}
+
+    /** Encode a pending branch now that the distance to its target is known. */
+    private static int encodeBranch(Fixup f, int byteOffset)
+    {
+        if (f.kind == FIX_CBZ)
+        {
+            return A64.cbz(f.arg, byteOffset);
+        }
+        if (f.kind == FIX_CBNZ)
+        {
+            return A64.cbnz(f.arg, byteOffset);
+        }
+        if (f.kind == FIX_BCOND)
+        {
+            return A64.bcond(f.arg, byteOffset);
+        }
+        return A64.b(byteOffset);
+    }
+
+    // Diagnostics build their text by concatenation (and String.format), which javac
+    // lowers to invokedynamic — a bootstrap-method runtime that does not exist on
+    // bare metal. Funnelling every message through these helpers quarantines that
+    // dependency in a handful of methods instead of scattering it across the
+    // compiler, so everything else can be compiled into the image. In the eventual
+    // core/wrapper split these stay on the writer side (PLAN.md §M5.1 stage 4).
+    // The exception *types* are preserved: an unsupported opcode must keep throwing
+    // UnsupportedOperationException, which is how gaps stay loud and how the M5Gap
+    // harness classifies them.
+    private static RuntimeException bad(String what, int value)
+    {
+        return new IllegalStateException(what + ": " + value);
+    }
+    private static RuntimeException bad(String what, String value)
+    {
+        return new IllegalStateException(what + ": " + value);
+    }
+    private static RuntimeException unsupported(String what, int value)
+    {
+        return new UnsupportedOperationException(what + " " + value);
+    }
+    private static RuntimeException unsupported(String what, String value)
+    {
+        return new UnsupportedOperationException(what + value);
+    }
+    private static RuntimeException unsupportedOpcode(int op, int pos)
+    {
+        return new UnsupportedOperationException(
+            String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
+    }
 
     /** Method key used for call resolution: {@code owner.name+descriptor}. */
     public static String key(String owner, String name, String desc)
@@ -131,7 +203,7 @@ public final class BaselineCompiler
         byte[] code = method.code;
         if (code == null)
         {
-            throw new IllegalArgumentException("method " + method.name + " has no Code");
+            throw bad("method has no Code", method.name);
         }
 
         this.isEntry = isEntry;
@@ -184,9 +256,9 @@ public final class BaselineCompiler
             int target = bcToWord[f.targetBc];
             if (target < 0)
             {
-                throw new IllegalStateException("branch to non-instruction bc=" + f.targetBc);
+                throw bad("branch to non-instruction bc", f.targetBc);
             }
-            cb.set(f.wordIndex, f.enc.encode((target - f.wordIndex) * 4));
+            cb.set(f.wordIndex, encodeBranch(f, (target - f.wordIndex) * 4));
         }
         // Machine-PC ranges for the writer's handler table (bytecode PCs -> word indices).
         int codeWords = cb.wordCount();
@@ -586,7 +658,7 @@ public final class BaselineCompiler
                                                                                                                                                                                                                                                 {
                                                                                                                                                                                                                                                     int target = pos + s2(code, pos + 1);
                                                                                                                                                                                                                                                     int w = cb.emit(A64.b(0));
-                                                                                                                                                                                                                                                    fixups.add(new Fixup(w, target, A64::b));
+                                                                                                                                                                                                                                                    fixups.add(new Fixup(w, target, FIX_B, 0));
                                                                                                                                                                                                                                                     recordDepth(target);
                                                                                                                                                                                                                                                     return 3;
                                                                                                                                                                                                                                                 }
@@ -657,8 +729,7 @@ public final class BaselineCompiler
                                                             return 3;
                                                         }  // instanceof
 
-                                                                default -> throw new UnsupportedOperationException(
-                                                                    String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
+                                                                default -> throw unsupportedOpcode(op, pos);
         }
     }
 
@@ -686,7 +757,7 @@ public final class BaselineCompiler
     {
         if (slot < 0 || slot >= LOC_MAX)
         {
-            throw new IllegalStateException("local slot out of range: " + slot);
+            throw bad("local slot out of range", slot);
         }
         return LOC_BASE + slot;
     }
@@ -704,7 +775,7 @@ public final class BaselineCompiler
     {
         if (sp != 0)
         {
-            throw new IllegalStateException("operand stack not empty (" + sp + ") at " + where);
+            throw bad("operand stack not empty at " + where, sp);
         }
     }
 
@@ -873,7 +944,7 @@ public final class BaselineCompiler
         int v = popReg();
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, eq ? off -> A64.cbz(v, off) : off -> A64.cbnz(v, off)));
+        fixups.add(new Fixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v));
         recordDepth(target);
     }
 
@@ -883,7 +954,7 @@ public final class BaselineCompiler
         cb.emit(A64.cmpImm(v, 0));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, off -> A64.bcond(cond, off)));
+        fixups.add(new Fixup(w, target, FIX_BCOND, cond));
         recordDepth(target);
     }
 
@@ -894,7 +965,7 @@ public final class BaselineCompiler
         cb.emit(A64.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, target, off -> A64.bcond(cond, off)));
+        fixups.add(new Fixup(w, target, FIX_BCOND, cond));
         recordDepth(target);
     }
 
@@ -907,7 +978,7 @@ public final class BaselineCompiler
         }
         else if (bcDepth[bc] != sp)
         {
-            throw new IllegalStateException("inconsistent stack depth at bc=" + bc);
+            throw bad("inconsistent stack depth at bc", bc);
         }
     }
 
@@ -1051,7 +1122,7 @@ public final class BaselineCompiler
     {
         emitLoadStatic(cb, EXCEPTION_KEY, pushReg());
         int w = cb.emit(A64.b(0));
-        fixups.add(new Fixup(w, handlerPc, A64::b));
+        fixups.add(new Fixup(w, handlerPc, FIX_B, 0));
         recordDepth(handlerPc);
         sp = 0;                                                  // fall-through (next check) resumes empty
     }
@@ -1159,7 +1230,7 @@ public final class BaselineCompiler
         case 5, 9 -> 2;              // char, short
         case 6, 10 -> 4;             // float, int
         case 7, 11 -> 8;             // double, long
-            default -> throw new UnsupportedOperationException("bad newarray atype " + atype);
+            default -> throw unsupported("bad newarray atype", atype);
         };
     }
 
@@ -1187,7 +1258,7 @@ public final class BaselineCompiler
         }
         if (resolver == null)
         {
-            throw new IllegalStateException("no class resolver for " + owner);
+            throw bad("no class resolver for", owner);
         }
         return resolver.resolve(owner);
     }
@@ -1284,7 +1355,7 @@ public final class BaselineCompiler
                                         /* no-op: the operand is already an interned byte[] ref */;
                                     }
 
-                                            default -> throw new UnsupportedOperationException("unknown intrinsic magic/Magic." + key);
+                                            default -> throw unsupported("unknown intrinsic magic/Magic.", key);
         }
     }
 
@@ -1416,7 +1487,7 @@ public final class BaselineCompiler
         }
         else
         {
-            throw new UnsupportedOperationException("ldc of unsupported constant #" + cpIndex);
+            throw unsupported("ldc of unsupported constant #", cpIndex);
         }
     }
 
