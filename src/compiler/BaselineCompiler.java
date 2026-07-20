@@ -78,7 +78,13 @@ public final class BaselineCompiler
 
     private int sp;
     private int[] bcDepth;         // operand-stack depth at each branch target, or -1
-    private ClassFile.ExceptionEntry[] exceptions;
+    // The method's exception table as parallel arrays (a catchType of 0 = catch-all),
+    // the metal-friendly form the shared athrow lowering iterates — no ClassFile.
+    private int[] exStartPc;
+    private int[] exEndPc;
+    private int[] exHandlerPc;
+    private int[] exCatchType;
+    private int exCount;
     private boolean isEntry;
     private int frameSize;
     private int localSaveBase;
@@ -197,6 +203,41 @@ public final class BaselineCompiler
         {
             String n = cf.memberRef(methodCp).name();
             return n.equals("gc") || n.equals("call0") || n.equals("call2");
+        }
+        public int intrinsicId(int methodCp)
+        {
+            ClassFile.MemberRef ref = cf.memberRef(methodCp);
+            String key = ref.name() + ref.descriptor();
+            return switch (key)
+            {
+            case "wfe()V" -> Intrinsics.WFE;
+            case "isb()V" -> Intrinsics.ISB;
+            case "dsb()V" -> Intrinsics.DSB;
+            case "gc()V" -> Intrinsics.GC;
+            case "call0(J)J" -> Intrinsics.CALL0;
+            case "call2(JJJ)J" -> Intrinsics.CALL2;
+            case "eret()V" -> Intrinsics.ERET;
+            case "dropToEL1()V" -> Intrinsics.DROP_TO_EL1;
+            case "writeHCR_EL2(J)V" -> Intrinsics.WRITE_HCR_EL2;
+            case "writeCPTR_EL2(J)V" -> Intrinsics.WRITE_CPTR_EL2;
+            case "writeCNTHCTL_EL2(J)V" -> Intrinsics.WRITE_CNTHCTL_EL2;
+            case "writeCNTVOFF_EL2(J)V" -> Intrinsics.WRITE_CNTVOFF_EL2;
+            case "writeSCTLR_EL1(J)V" -> Intrinsics.WRITE_SCTLR_EL1;
+            case "writeSPSR_EL2(J)V" -> Intrinsics.WRITE_SPSR_EL2;
+            case "writeELR_EL2(J)V" -> Intrinsics.WRITE_ELR_EL2;
+            case "writeCPACR_EL1(J)V" -> Intrinsics.WRITE_CPACR_EL1;
+            case "writeSP(J)V" -> Intrinsics.WRITE_SP;
+            case "readSP()J" -> Intrinsics.READ_SP;
+            case "resume(JJJ)V" -> Intrinsics.RESUME;
+            case "store32(JI)V" -> Intrinsics.STORE32;
+            case "store8(JI)V" -> Intrinsics.STORE8;
+            case "store64(JJ)V" -> Intrinsics.STORE64;
+            case "load32(J)I" -> Intrinsics.LOAD32;
+            case "load8(J)I" -> Intrinsics.LOAD8;
+            case "load64(J)J" -> Intrinsics.LOAD64;
+            case "bytes(Ljava/lang/String;)[B" -> Intrinsics.BYTES;
+            default -> throw unsupported("unknown intrinsic magic/Magic.", key);
+            };
         }
         public boolean isSkippableInit(int methodCp)
         {
@@ -322,6 +363,23 @@ public final class BaselineCompiler
         }
     }
 
+    /** Flatten the parsed exception table into the parallel int arrays athrow reads. */
+    private void loadExceptionTable(ClassFile.ExceptionEntry[] entries)
+    {
+        exCount = entries.length;
+        exStartPc = new int[exCount];
+        exEndPc = new int[exCount];
+        exHandlerPc = new int[exCount];
+        exCatchType = new int[exCount];
+        for (int i = 0; i < exCount; i++)
+        {
+            exStartPc[i] = entries[i].startPc();
+            exEndPc[i] = entries[i].endPc();
+            exHandlerPc[i] = entries[i].handlerPc();
+            exCatchType[i] = entries[i].catchType();
+        }
+    }
+
     /** Compile one method at absolute {@code base}; {@code isEntry} => no frame. */
     public CompiledMethod compileMethod(ClassFile.Method method, long base, boolean isEntry)
     {
@@ -333,7 +391,7 @@ public final class BaselineCompiler
 
         this.isEntry = isEntry;
         this.maxLocals = method.maxLocals;
-        this.exceptions = method.exceptions;
+        loadExceptionTable(method.exceptions);
         this.nonLeaf = isNonLeaf(code);
         this.saveLR = !isEntry && nonLeaf;
         // Locals live in callee-saved x19..x28; a method needing more keeps the
@@ -1107,7 +1165,7 @@ public final class BaselineCompiler
     {
         if (symbols.isIntrinsicCall(cpIndex))
         {
-            lowerIntrinsic(cpIndex, cb);
+            lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);
             return;
         }
         lowerCall(cpIndex, cb, false);
@@ -1201,25 +1259,25 @@ public final class BaselineCompiler
     {
         int athrowStart = cb.wordCount();
         emitStoreException(cb, popReg());                       // $exception = ref
-        for (ClassFile.ExceptionEntry en : exceptions)
+        for (int i = 0; i < exCount; i++)
         {
-            if (en.startPc() > pos || pos >= en.endPc())
+            if (exStartPc[i] > pos || pos >= exEndPc[i])
             {
                 continue;
             }
-            if (en.catchType() == 0)
+            if (exCatchType[i] == 0)
             {
-                emitCatch(cb, en.handlerPc());    // finally / catch-all
+                emitCatch(cb, exHandlerPc[i]);    // finally / catch-all
                 return;
             }
             int obj = pushReg();
             emitLoadException(cb, obj);
             int t = pushReg();
-            symbols.type(cb, t, en.catchType());
+            symbols.type(cb, t, exCatchType[i]);
             emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
             int skip = cb.emit(A64.cbz(cond, 0));
-            emitCatch(cb, en.handlerPc());                       // matched
+            emitCatch(cb, exHandlerPc[i]);                       // matched
             cb.set(skip, A64.cbz(cond, (cb.wordCount() - skip) * 4));
         }
         // no local handler: unwind the stack — unwind(exc, thisPC, SP)
@@ -1402,23 +1460,26 @@ public final class BaselineCompiler
         return resolver.resolve(owner);
     }
 
-    private void lowerIntrinsic(int cpIndex, CodeBuffer cb)
+    /**
+     * Emit a {@code magic/Magic} intrinsic, dispatched by its {@link Intrinsics} id
+     * (resolved per world behind {@link Symbols#intrinsicId}). Branching on an int
+     * rather than a {@code String} key keeps this compilable on metal.
+     */
+    private void lowerIntrinsic(int id, CodeBuffer cb)
     {
-        ClassFile.MemberRef ref = cf.memberRef(cpIndex);
-        String key = ref.name() + ref.descriptor();
-        switch (key)
+        switch (id)
         {
-        case "wfe()V"  -> cb.emit(A64.wfe());
-        case "isb()V"  -> cb.emit(A64.isb());
-        case "dsb()V"  -> cb.emit(A64.dsb());
-        case "gc()V"   -> lowerGc(cb);
-        case "call0(J)J" ->
+        case Intrinsics.WFE -> cb.emit(A64.wfe());
+        case Intrinsics.ISB -> cb.emit(A64.isb());
+        case Intrinsics.DSB -> cb.emit(A64.dsb());
+        case Intrinsics.GC -> lowerGc(cb);
+        case Intrinsics.CALL0 ->
         {
             int addr = popReg();
             cb.emit(A64.blr(addr));
             cb.emit(A64.movReg(pushReg(), 0));
         }
-        case "call2(JJJ)J" ->                                // addr, a->x0, b->x1, blr, result x0
+        case Intrinsics.CALL2 ->                             // addr, a->x0, b->x1, blr, result x0
         {
             int b = popReg();
             int a = popReg();
@@ -1429,20 +1490,20 @@ public final class BaselineCompiler
             cb.emit(A64.blr(16));
             cb.emit(A64.movReg(pushReg(), 0));
         }
-        case "eret()V" -> cb.emit(A64.eret());
-        case "dropToEL1()V" -> lowerDropToEL1(cb);
+        case Intrinsics.ERET -> cb.emit(A64.eret());
+        case Intrinsics.DROP_TO_EL1 -> lowerDropToEL1(cb);
 
-        case "writeHCR_EL2(J)V"     -> cb.emit(A64.msr(A64.HCR_EL2, popReg()));
-        case "writeCPTR_EL2(J)V"    -> cb.emit(A64.msr(A64.CPTR_EL2, popReg()));
-        case "writeCNTHCTL_EL2(J)V" -> cb.emit(A64.msr(A64.CNTHCTL_EL2, popReg()));
-        case "writeCNTVOFF_EL2(J)V" -> cb.emit(A64.msr(A64.CNTVOFF_EL2, popReg()));
-        case "writeSCTLR_EL1(J)V"   -> cb.emit(A64.msr(A64.SCTLR_EL1, popReg()));
-        case "writeSPSR_EL2(J)V"    -> cb.emit(A64.msr(A64.SPSR_EL2, popReg()));
-        case "writeELR_EL2(J)V"     -> cb.emit(A64.msr(A64.ELR_EL2, popReg()));
-        case "writeCPACR_EL1(J)V"   -> cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
-        case "writeSP(J)V"          -> cb.emit(A64.movToSp(popReg()));
-        case "readSP()J"            -> cb.emit(A64.movFromSp(pushReg()));
-        case "resume(JJJ)V" ->                               // exc->x9, SP=sp, br pc (no return)
+        case Intrinsics.WRITE_HCR_EL2 -> cb.emit(A64.msr(A64.HCR_EL2, popReg()));
+        case Intrinsics.WRITE_CPTR_EL2 -> cb.emit(A64.msr(A64.CPTR_EL2, popReg()));
+        case Intrinsics.WRITE_CNTHCTL_EL2 -> cb.emit(A64.msr(A64.CNTHCTL_EL2, popReg()));
+        case Intrinsics.WRITE_CNTVOFF_EL2 -> cb.emit(A64.msr(A64.CNTVOFF_EL2, popReg()));
+        case Intrinsics.WRITE_SCTLR_EL1 -> cb.emit(A64.msr(A64.SCTLR_EL1, popReg()));
+        case Intrinsics.WRITE_SPSR_EL2 -> cb.emit(A64.msr(A64.SPSR_EL2, popReg()));
+        case Intrinsics.WRITE_ELR_EL2 -> cb.emit(A64.msr(A64.ELR_EL2, popReg()));
+        case Intrinsics.WRITE_CPACR_EL1 -> cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
+        case Intrinsics.WRITE_SP -> cb.emit(A64.movToSp(popReg()));
+        case Intrinsics.READ_SP -> cb.emit(A64.movFromSp(pushReg()));
+        case Intrinsics.RESUME ->                            // exc->x9, SP=sp, br pc (no return)
         {
             int exc = popReg();
             int spv = popReg();
@@ -1453,49 +1514,49 @@ public final class BaselineCompiler
             cb.emit(A64.br(16));
         }
 
-        case "store32(JI)V" ->
+        case Intrinsics.STORE32 ->
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strw(val, addr, 0));
         }
-        case "store8(JI)V"  ->
+        case Intrinsics.STORE8 ->
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strb(val, addr, 0));
         }
-        case "store64(JJ)V" ->
+        case Intrinsics.STORE64 ->
         {
             int val = popReg();
             int addr = popReg();
             cb.emit(A64.strx(val, addr, 0));
         }
-        case "load32(J)I"   ->
+        case Intrinsics.LOAD32 ->
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrw(r, addr, 0));
         }
-        case "load8(J)I"    ->
+        case Intrinsics.LOAD8 ->
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrb(r, addr, 0));
         }
-        case "load64(J)J"   ->
+        case Intrinsics.LOAD64 ->
         {
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64.ldrx(r, addr, 0));
         }
 
-        case "bytes(Ljava/lang/String;)[B" ->
+        case Intrinsics.BYTES ->
         {
             /* no-op: the operand is already an interned byte[] ref */;
         }
 
-        default -> throw unsupported("unknown intrinsic magic/Magic.", key);
+        default -> throw unsupported("unknown intrinsic id ", id);
         }
     }
 

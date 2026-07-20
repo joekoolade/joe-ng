@@ -87,6 +87,9 @@ public interface Symbols
     /** Whether that intrinsic itself emits a {@code BL}/{@code BLR} (so the caller is non-leaf). */
     boolean intrinsicEmitsCall(int methodCp);
 
+    /** The {@link Intrinsics} id of the {@code magic/Magic} intrinsic at {@code methodCp}. */
+    int intrinsicId(int methodCp);
+
     /** Whether the {@code invokespecial} at {@code methodCp} is a root-class {@code <init>} to skip. */
     boolean isSkippableInit(int methodCp);
 }

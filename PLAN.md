@@ -434,11 +434,15 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       `isSkippableInit` join the seam; `invokestatic`/`invokespecial`/`isNonLeaf`
       branch on booleans, not `String.equals`. `resolve`/`staticKey`/WriterSymbols
       keep their `ClassFile` — they are writer-side, below the seam.
-    - ☐ **b.4 the last two shared-lowering `ClassFile` uses:** `lowerIntrinsic`'s
-      `String`-keyed magic switch (needs an int-id or length+byte dispatch — the
-      metal supports neither `String` switch nor `ldc`-string), and `athrow`'s
-      `ClassFile.ExceptionEntry[]` iteration (needs an offset-based exception-table
-      view). After b.4 the shared lowering references no `ClassFile` at all.
+    - ✅ **b.4 the last two shared-lowering `ClassFile` uses.** `lowerIntrinsic` now
+      dispatches on an `int` id (`compiler/Intrinsics`) resolved per world behind
+      `Symbols.intrinsicId` — the writer keeps its `String` switch, the shared side
+      branches on the id. `athrow` iterates the exception table as parallel `int`
+      arrays (`exStartPc`/`exEndPc`/`exHandlerPc`/`exCatchType`), which the writer
+      driver flattens from `ClassFile.ExceptionEntry[]` in `loadExceptionTable`.
+      **The shared lowering (step + all lower*/emit* helpers) now references no
+      `ClassFile`** — every remaining use is in `WriterSymbols`/`resolve`/`staticKey`
+      or the writer drivers. Byte-identical image throughout.
     - ☐ **b.5 core/writer split.** Extract the shared lowering into a class holding
       no `ClassFile` (only `classBytes`/`cpOff`/`cpTag`/`Symbols`); the writer driver
       (`compileMethod`, `WriterSymbols`, `resolve`, exception→`HandlerRange`) wraps it.
