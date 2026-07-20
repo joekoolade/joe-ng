@@ -1,5 +1,6 @@
 package vm;
 
+import asm.A64Enc;
 import classfile.ClassReader;
 import magic.Magic;
 
@@ -1265,7 +1266,7 @@ public final class Loader
     }
     private static void emitBc(int cond, int tbc)
     {
-        emit(0x54000000 | (((cbc[tbc] - curWord()) & 0x7FFFF) << 5) | cond);
+        emit(A64Enc.bcond(cond, cbc[tbc] - curWord()));
     }
 
     private static void emitOp(long code, int pc)
@@ -1309,17 +1310,17 @@ public final class Loader
         else if (op == 0x60)
         {
             csp -= 1;    // iadd
-            emit(dp(0x8B000000, 9 + csp - 1, 9 + csp - 1, 9 + csp));
+            emit(A64Enc.addReg(9 + csp - 1, 9 + csp - 1, 9 + csp));
         }
         else if (op == 0x64)
         {
             csp -= 1;    // isub
-            emit(dp(0xCB000000, 9 + csp - 1, 9 + csp - 1, 9 + csp));
+            emit(A64Enc.subReg(9 + csp - 1, 9 + csp - 1, 9 + csp));
         }
         else if (op == 0x68)
         {
             csp -= 1;    // imul
-            emit(dp(0x9B007C00, 9 + csp - 1, 9 + csp - 1, 9 + csp));
+            emit(A64Enc.mulReg(9 + csp - 1, 9 + csp - 1, 9 + csp));
         }
         else if (op == 0x84)
         {
@@ -1329,38 +1330,38 @@ public final class Loader
         {
             csp -= 1;
             rec(target(code, pc));
-            emit(0xF100001F | ((9 + csp) << 5));
+            emit(A64Enc.cmpImm(9 + csp, 0));
             emitBc(ifCond(op), target(code, pc));
         }
         else if (op >= 0x9f && op <= 0xa4)
         {
             csp -= 2;
             rec(target(code, pc));
-            emit(0xEB00001F | ((9 + csp + 1) << 16) | ((9 + csp) << 5));
+            emit(A64Enc.cmpReg(9 + csp, 9 + csp + 1));
             emitBc(icmpCond(op), target(code, pc));
         }
         else if (op == 0xa7)
         {
             rec(target(code, pc));    // goto
-            emit(0x14000000 | (((cbc[target(code, pc)] - curWord()) & 0x3FFFFFF)));
+            emit(A64Enc.b(cbc[target(code, pc)] - curWord()));
         }
         else if (op == 0xac)
         {
             csp -= 1;    // ireturn
             emit(mov(0, 9 + csp));
-            emit(0xD65F03C0);
+            emit(A64Enc.ret());
         }
         else if (op == 0xb2)
         {
             emitAddr16(staticAddr(u2(code + pc + 1)));    // getstatic (ldrsw)
-            emit(0xB9800000 | (16 << 5) | (9 + csp));
+            emit(A64Enc.ldrsw(9 + csp, 16, 0));
             csp += 1;
         }
         else if (op == 0xb3)
         {
             csp -= 1;    // putstatic (strw)
             emitAddr16(staticAddr(u2(code + pc + 1)));
-            emit(0xB9000000 | (16 << 5) | (9 + csp));
+            emit(A64Enc.strw(9 + csp, 16, 0));
         }
         else if (op == 0xb8)
         {
@@ -1430,13 +1431,13 @@ public final class Loader
         }
         else if (op == 0xb1)
         {
-            emit(0xD65F03C0);    // return (void)
+            emit(A64Enc.ret());    // return (void)
         }
         else if (op == 0xb0)
         {
             csp -= 1;    // areturn
             emit(mov(0, 9 + csp));
-            emit(0xD65F03C0);
+            emit(A64Enc.ret());
         }
     }
 
@@ -1483,7 +1484,7 @@ public final class Loader
         int descOff = mrefDescOff(idx);
         int argc = argSlots(descOff) + thisArg;
         int hasRet = retSlots(descOff);
-        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
         emit(strx(30, 31, 0));                             // frame: [x30@0][x1..x15@8..120]
         int k = 1;
         while (k <= 15)
@@ -1505,7 +1506,7 @@ public final class Loader
             emit(ldrx(k, 31, k * 8));
             k += 1;
         }
-        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
         if (hasRet == 1)
         {
             emit(mov(9 + csp - argc, 0));                   // result replaces the args
@@ -1533,7 +1534,7 @@ public final class Loader
             tib = clTib[c];
         }
         int size = 16 + fields * 8;                        // header(16) + one 8-byte slot per field
-        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
         emit(strx(30, 31, 0));
         int k = 1;
         while (k <= 15)
@@ -1550,7 +1551,7 @@ public final class Loader
             emit(ldrx(k, 31, k * 8));
             k += 1;
         }
-        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
         emitAddr16(tib);                                   // x16 = &TIB
         emit(strx(16, 0, 0));                              // header.tib = &TIB (vtable for dispatch)
         emit(mov(9 + csp, 0));                             // push the reference
@@ -1576,7 +1577,7 @@ public final class Loader
         int argc = argSlots(mrefDescOff(idx)) + 1;         // + receiver
         int hasRet = retSlots(mrefDescOff(idx));
         int slot = iface ? ifSlotOf(idx) : vtableSlotOf(idx);
-        emit(0xD1000000 | (128 << 10) | (31 << 5) | 31);   // sub sp, sp, #128
+        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
         emit(strx(30, 31, 0));
         int k = 1;
         while (k <= 15)
@@ -1601,7 +1602,7 @@ public final class Loader
         {
             emit(ldrx(16, 16, 8 + slot * 8));              // x16 = vtable[slot] (code)
         }
-        emit(0xD63F0000 | (16 << 5));                      // blr x16
+        emit(A64Enc.blr(16));                      // blr x16
         emit(ldrx(30, 31, 0));
         k = 1;
         while (k <= 15)
@@ -1609,7 +1610,7 @@ public final class Loader
             emit(ldrx(k, 31, k * 8));
             k += 1;
         }
-        emit(0x91000000 | (128 << 10) | (31 << 5) | 31);   // add sp, sp, #128
+        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
         if (hasRet == 1)
         {
             emit(mov(9 + csp - argc, 0));
@@ -1771,18 +1772,18 @@ public final class Loader
     /** STR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP, rt=31 = xzr). */
     private static int strx(int rt, int rn, int off)
     {
-        return 0xF9000000 | (((off >> 3) & 0xFFF) << 10) | (rn << 5) | rt;
+        return A64Enc.strx(rt, rn, off);
     }
     /** LDR Xt, [Xn, #off] — off a multiple of 8 (rn=31 = SP). */
     private static int ldrx(int rt, int rn, int off)
     {
-        return 0xF9400000 | (((off >> 3) & 0xFFF) << 10) | (rn << 5) | rt;
+        return A64Enc.ldrx(rt, rn, off);
     }
     /** BL to an absolute code address (relative to the current emit cursor). */
     private static void emitBl(long target)
     {
         int off = (int) ((target - cout) >> 2);
-        emit(0x94000000 | (off & 0x03FFFFFF));
+        emit(A64Enc.bl(off));
     }
 
     /** Load a &lt;4 GiB address into x16 (MOVZ low16 + MOVK bits16..31). */
@@ -1794,8 +1795,8 @@ public final class Loader
     /** Load a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
     private static void emitAddrReg(int reg, long addr)
     {
-        emit(0xD2800000 | ((((int) addr) & 0xFFFF) << 5) | reg);
-        emit(0xF2A00000 | ((((int) (addr >> 16)) & 0xFFFF) << 5) | reg);
+        emit(A64Enc.movz(reg, (int) addr, 0));
+        emit(A64Enc.movk(reg, (int) (addr >> 16), 1));
     }
 
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
@@ -1820,11 +1821,11 @@ public final class Loader
         emit(ldrx(16, 16, 0));                          // w1: x16 = Type
         emitAddrReg(17, target);                        // w2,w3: x17 = target Type
         emit(movz(r, 0));                               // w4: result = 0 (default)
-        emit(0xB4000000 | ((6 & 0x7FFFF) << 5) | 16);   // w5: cbz x16, end (w11)
-        emit(0xEB00001F | (17 << 16) | (16 << 5));      // w6: cmp x16, x17
-        emit(0x54000000 | ((3 & 0x7FFFF) << 5));        // w7: b.eq settrue (w10)
+        emit(A64Enc.cbz(16, 6));   // w5: cbz x16, end (w11)
+        emit(A64Enc.cmpReg(16, 17));      // w6: cmp x16, x17
+        emit(A64Enc.bcond(0, 3));        // w7: b.eq settrue (w10)
         emit(ldrx(16, 16, 0));                          // w8: x16 = superType
-        emit(0x14000000 | ((-4) & 0x03FFFFFF));         // w9: b loop (w5)
+        emit(A64Enc.b(-4));         // w9: b loop (w5)
         emit(movz(r, 1));                               // w10: result = 1
         csp += 1;                                       // w11: end
     }
@@ -1840,12 +1841,12 @@ public final class Loader
         emit(ldrx(16, r, 0));                           // w0: x16 = TIB
         emit(ldrx(16, 16, 0));                          // w1: x16 = Type
         emitAddrReg(17, target);                        // w2,w3: x17 = target Type
-        emit(0xB4000000 | ((5 & 0x7FFFF) << 5) | 16);   // w4: cbz x16, fail (w9)
-        emit(0xEB00001F | (17 << 16) | (16 << 5));      // w5: cmp x16, x17
-        emit(0x54000000 | ((4 & 0x7FFFF) << 5));        // w6: b.eq ok (w10)
+        emit(A64Enc.cbz(16, 5));   // w4: cbz x16, fail (w9)
+        emit(A64Enc.cmpReg(16, 17));      // w5: cmp x16, x17
+        emit(A64Enc.bcond(0, 4));        // w6: b.eq ok (w10)
         emit(ldrx(16, 16, 0));                          // w7: x16 = superType
-        emit(0x14000000 | ((-4) & 0x03FFFFFF));         // w8: b loop (w4)
-        emit(0x14000000);                               // w9: b . (halt — cast failed)
+        emit(A64Enc.b(-4));         // w8: b loop (w4)
+        emit(A64Enc.b(0));                               // w9: b . (halt — cast failed)
     }                                                   // w10: ok (ref stays on the stack)
 
     private static void emitIinc(long code, int pc)
@@ -1854,26 +1855,22 @@ public final class Loader
         int d = (byte) u1(code + pc + 2);
         if (d >= 0)
         {
-            emit(0x91000000 | ((d & 0xFFF) << 10) | (rd << 5) | rd);
+            emit(A64Enc.addImm(rd, rd, d));
         }
         else
         {
-            emit(0xD1000000 | (((-d) & 0xFFF) << 10) | (rd << 5) | rd);
+            emit(A64Enc.subImm(rd, rd, -d));
         }
     }
 
     // encodings (pure int math — JDK-free)
     private static int movz(int rd, int imm)
     {
-        return 0xD2800000 | ((imm & 0xFFFF) << 5) | rd;
+        return A64Enc.movz(rd, imm, 0);
     }
     private static int mov(int rd, int rm)
     {
-        return 0xAA0003E0 | (rm << 16) | rd;
-    }
-    private static int dp(int base, int rd, int rn, int rm)
-    {
-        return base | (rm << 16) | (rn << 5) | rd;
+        return A64Enc.movReg(rd, rm);
     }
 
     // condition codes (EQ=0 NE=1 GE=10 LT=11 GT=12 LE=13)

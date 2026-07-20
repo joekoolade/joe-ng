@@ -295,8 +295,30 @@ defines the minimum the assembler must encode.
       counts) over four real classfiles — 39 checks.
     - **Gotcha it encodes:** `u1` masks `& 0xFF` because the JVM sign-extends
       `baload` while joe-ng's compiler zero-extends it; the mask makes both agree.
-    - **Still to migrate:** the writer's `ClassFile`/`BaselineCompiler` (JDK
-      collections + String) and the rest of `Loader`'s bespoke parsing/codegen.
+    - **`ClassFile` migrated onto it:** the writer's parser no longer walks the
+      format itself (DataInputStream is gone) — it uses `ClassReader` for the cp
+      walk, section navigation and attribute skipping, keeping only the host-side
+      model (Strings, records) on top. Utf8 decoding is explicit (`utf8At`) because
+      classfiles use *modified* UTF-8, and `decodeEntry` ignores tag 0 since
+      `constantPool` already consumes a Long/Double's dead second slot. Verified by
+      the emitted image being byte-for-byte unchanged.
+  - **`asm/A64Enc` — the JDK-free half of the assembler (shared).** A64's javadoc
+    long claimed it was dual-context but it couldn't be: 14 operand checks throw
+    with concatenated messages, and String concat lowers to `invokedynamic`, which
+    has no runtime on metal. Split along that seam — `A64Enc` holds the encodings as
+    pure int arithmetic (no imports, exceptions or JDK types); `A64` keeps the
+    validation and delegates. The math was **moved, not retyped**, so A64's 80
+    bit-for-bit ARM ARM checks now verify `A64Enc` transitively.
+    - `vm/Loader` now emits through it: all **42 hand-written hex encodings are
+      gone**, so the on-metal JIT emits machine code from checked encoders instead
+      of typed literals — the difference between a verified encoding and a typo that
+      corrupts memory invisibly. Cross-checked all 21 distinct encodings against the
+      exact pre-migration literals (bit-identical), plus QEMU still runs to `*M`.
+    - Conventions differ where natural: `A64` takes branch displacements in bytes
+      and validates them, `A64Enc` in words (how the JIT computes them).
+  - **Still to migrate:** `BaselineCompiler` (collections, String keys, lambdas,
+    and `switch` expressions that lower to table/lookupswitch — unsupported
+    opcodes), and the rest of `Loader`'s bespoke parsing.
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
   `vm/Guest.class` as raw bytes only (never compiles it); at runtime the on-metal
   `vm/Loader` (compiled into the image by our own baseline compiler) parses the
