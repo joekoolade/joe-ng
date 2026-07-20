@@ -392,10 +392,20 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
   emitting resolved addresses from its registries — and that is where the deferred
   stage-2 `String`-key and collection removals finally land, since the core above
   the seam no longer holds either.
-- ☐ **4.3 — a shared cp/bytecode view.** The core reads the constant pool and
-  bytecode through one abstraction backed by `ClassReader` (`byte[]` + offsets), so
-  the writer's `ClassFile` and the metal's `gcp`/`gbase` stop being two ways to ask
-  the same question.
+- ✅ **4.3 — a shared cp/bytecode view.** `ClassReader` is now the single authority
+  on constant-pool *entry* layout: it gained JDK-free, offset-based decoders
+  `refClassNameOff`/`refNameOff`/`refDescOff` (the `*ref → class` and
+  `*ref → NameAndType → name/descriptor` chains), plus `stringUtf8Off`/`intValue`.
+  The metal `Loader`'s three duplicate readers (`mrefNameOff`/`mrefDescOff`/
+  `refClassNameOff`) and `staticAddr`'s inline copy now delegate to them over
+  `gbytes` (the heap copy `constantPool` already parses) — the `gcp` offsets are
+  blob-relative and content-identical, so the returned offsets stay valid against
+  `gbase` for the cross-blob `utf8EqAt` links. `ClassReaderTest` cross-validates
+  every member ref / String / Integer entry against `ClassFile` on the seed JVM
+  (class-reader 39 → 85 checks). Image behavior unchanged: QEMU still reaches
+  `*M F`. Remaining: the metal's *cross-blob* comparisons stay address-based
+  (registries hold `long` addresses, not `byte[]`) — unifying those is entangled
+  with 4.4.
 - ☐ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
   `vm/Loader` through it, then delete `Loader`'s `emitOp`. One compiler at last.
 

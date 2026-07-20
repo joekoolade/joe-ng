@@ -68,6 +68,32 @@ public final class ClassReaderTest
         }
         T.check(name + " has Class entries", classes > 0);
 
+        // Per-entry cp decoders (the layout knowledge the metal loader now shares).
+        // Cross-validate every member ref / String / Integer against ClassFile.
+        for (int i = 1; i < off.length; i++)
+        {
+            int t = tag[i];
+            if (t == 9 || t == 10 || t == 11)          // Fieldref / Methodref / InterfaceMethodref
+            {
+                ClassFile.MemberRef m = cf.memberRef(i);
+                T.eqStr(name + " ref#" + i + " owner", m.owner(),
+                        utf8(b, ClassReader.refClassNameOff(b, off, i)));
+                T.eqStr(name + " ref#" + i + " name", m.name(),
+                        utf8(b, ClassReader.refNameOff(b, off, i)));
+                T.eqStr(name + " ref#" + i + " desc", m.descriptor(),
+                        utf8(b, ClassReader.refDescOff(b, off, i)));
+            }
+            else if (t == 8)                            // String
+            {
+                T.eqStr(name + " string#" + i, cf.stringAt(i),
+                        utf8(b, ClassReader.stringUtf8Off(b, off, i)));
+            }
+            else if (t == 3)                            // Integer
+            {
+                T.eq(name + " int#" + i, cf.intAt(i), ClassReader.intValue(b, off, i));
+            }
+        }
+
         // utf8Eq is the cross-classfile comparison the loader links with.
         int self = ClassReader.thisClassNameOff(b, off, afterCp);
         T.check(name + " utf8Eq reflexive", ClassReader.utf8Eq(b, self, b, self));

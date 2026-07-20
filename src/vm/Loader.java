@@ -440,8 +440,7 @@ public final class Loader
     /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
     private static long staticAddr(int idx)
     {
-        int natIdx = u2(gbase + gcp[idx] + 2);          // Fieldref -> NameAndType
-        int nameOff = gcp[u2(gbase + gcp[natIdx])];     // NameAndType -> name Utf8 offset
+        int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
         int s = 0;
         while (s < gsfCount)
         {
@@ -1778,22 +1777,19 @@ public final class Loader
     /** Name Utf8 offset of Methodref {@code idx}. */
     private static int mrefNameOff(int idx)
     {
-        int natIdx = u2(gbase + gcp[idx] + 2);          // Methodref -> NameAndType -> name
-        return gcp[u2(gbase + gcp[natIdx])];
+        return ClassReader.refNameOff(gbytes, gcp, idx);
     }
 
     /** Class-name Utf8 offset of a {@code *ref} constant (Fieldref/Methodref layout). */
     private static int refClassNameOff(int idx)
     {
-        int classIdx = u2(gbase + gcp[idx]);            // *ref -> class_index
-        return gcp[u2(gbase + gcp[classIdx])];          // Class -> name Utf8 offset
+        return ClassReader.refClassNameOff(gbytes, gcp, idx);
     }
 
     /** Descriptor Utf8 offset of Methodref {@code idx}. */
     private static int mrefDescOff(int idx)
     {
-        int natIdx = u2(gbase + gcp[idx] + 2);          // Methodref -> NameAndType -> descriptor
-        return gcp[u2(gbase + gcp[natIdx] + 2)];
+        return ClassReader.refDescOff(gbytes, gcp, idx);
     }
 
     /** Argument slot count of a method descriptor at {@code descOff} (long/double = 2). */

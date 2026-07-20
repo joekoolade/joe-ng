@@ -95,6 +95,42 @@ public final class ClassReader
         return off[u2(b, off[idx])];
     }
 
+    // ----- *ref entries (Fieldref/Methodref/InterfaceMethodref: {class, NameAndType}) -----
+    // The single place that knows this layout, so the writer's parser and the metal
+    // loader stop each carrying their own copy (M5.4.3).
+
+    /** Utf8 offset of the declaring class's name for the {@code *ref} at {@code idx}. */
+    public static int refClassNameOff(byte[] b, int[] off, int idx)
+    {
+        return classNameOff(b, off, u2(b, off[idx]));              // *ref.class_index -> Class -> name
+    }
+
+    /** Utf8 offset of the member name for the {@code *ref} at {@code idx}. */
+    public static int refNameOff(byte[] b, int[] off, int idx)
+    {
+        int nat = u2(b, off[idx] + 2);                            // *ref.name_and_type_index
+        return off[u2(b, off[nat])];                              // NameAndType.name_index -> Utf8
+    }
+
+    /** Utf8 offset of the member descriptor for the {@code *ref} at {@code idx}. */
+    public static int refDescOff(byte[] b, int[] off, int idx)
+    {
+        int nat = u2(b, off[idx] + 2);
+        return off[u2(b, off[nat] + 2)];                          // NameAndType.descriptor_index -> Utf8
+    }
+
+    /** Utf8 offset of the string body of the {@code String} entry at {@code idx}. */
+    public static int stringUtf8Off(byte[] b, int[] off, int idx)
+    {
+        return off[u2(b, off[idx])];                              // String.string_index -> Utf8
+    }
+
+    /** Value of the {@code Integer} entry at {@code idx}. */
+    public static int intValue(byte[] b, int[] off, int idx)
+    {
+        return u4(b, off[idx]);
+    }
+
     /** Utf8 offset of this class's own name. {@code afterCp} is {@link #constantPool}'s result. */
     public static int thisClassNameOff(byte[] b, int[] off, int afterCp)
     {
