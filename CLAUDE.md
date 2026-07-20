@@ -276,8 +276,27 @@ defines the minimum the assembler must encode.
     (Guest `new`s classes that aren't registered yet).
   - **On-metal loader is feature-complete for single inheritance.** Remaining work is
     M5 proper: one JDK-free ClassFile+BaselineCompiler shared by writer and runtime.
-  - Still a SEPARATE compiler from the writer-side one — true self-hosting needs a
-    single JDK-free ClassFile+BaselineCompiler used in both contexts (large rewrite).
+  - **M5 proper STARTED — one parser, both worlds.** `classfile/ClassReader` is the
+    first genuinely *shared* component: strictly JDK-free (no String, collections,
+    streams or exceptions — only primitive arrays and int math; results written into
+    caller-supplied arrays; every method under the 10-local ceiling), so it both runs
+    on the seed JVM and compiles into the image with our own compiler. It reads a
+    `byte[]`, the one representation both sides can supply — the writer passes
+    `Files.readAllBytes`, the loader copies an embedded blob onto the heap
+    (`toBytes`; the offsets stay classfile-relative so they still line up with the
+    loader's `gbase + off` raw access). Covers the constant-pool walk (offsets +
+    tags), this/super class names, ACC_INTERFACE, section navigation
+    (interfaces/fields/methods) and cross-classfile `utf8Eq`.
+    - `vm/Loader.parseConstPool` now delegates to it, so the *same code* parses on
+      the metal — QEMU still ends in `*M`, and the image grew ~57K→67K as it was
+      compiled in.
+    - `test/classfile/ClassReaderTest` runs it on the seed JVM and cross-validates
+      against the JDK-based `ClassFile` (class/super names, interface-ness, member
+      counts) over four real classfiles — 39 checks.
+    - **Gotcha it encodes:** `u1` masks `& 0xFF` because the JVM sign-extends
+      `baload` while joe2's compiler zero-extends it; the mask makes both agree.
+    - **Still to migrate:** the writer's `ClassFile`/`BaselineCompiler` (JDK
+      collections + String) and the rest of `Loader`'s bespoke parsing/codegen.
 - **M4 (runtime class loading) — headline goal, minimal cut.** The writer embeds
   `vm/Guest.class` as raw bytes only (never compiles it); at runtime the on-metal
   `vm/Loader` (compiled into the image by our own baseline compiler) parses the

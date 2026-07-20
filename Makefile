@@ -34,6 +34,7 @@ $(OUT)/.stamp: $(SOURCES)
 test: build
 	$(JAVA) -cp $(OUT) asm.A64Test
 	$(JAVA) -cp $(OUT) objectmodel.ObjectModelTest
+	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
 	$(JAVA) -cp $(OUT) compiler.CompilerTest $(OUT)
 
 image: build

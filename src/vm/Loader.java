@@ -1,5 +1,6 @@
 package vm;
 
+import classfile.ClassReader;
 import magic.Magic;
 
 /**
@@ -22,6 +23,7 @@ public final class Loader
     private static long gbase;      // class blob base address
     private static long gp;         // parse cursor
     private static int[] gcp;       // byte offset of each constant-pool entry body
+    private static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
     private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
     private static int gcodeLen;    // length of the located method's bytecode
@@ -114,6 +116,7 @@ public final class Loader
     // calls or type-tests (needed by the class/method/field registries).
     private static final int MAXBLOB = 16;
     private static long[] pdBase;        // blob address
+    private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
     private static int[] pdDone;         // 1 once loaded
     private static int pdCount;
@@ -161,9 +164,9 @@ public final class Loader
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
-    private static long load2(long bytes, long a, long b)
+    private static long load2(long bytes, int len, long a, long b)
     {
-        parseConstPool(bytes);
+        parseConstPool(bytes, len);
         parseFields();
         long code = findMethod(bytes);
         if (code == 0L)
@@ -225,10 +228,11 @@ public final class Loader
         dpOff = new int[MAXDEP];
         // Handed over deliberately worst-first — Guest depends on all three, and the
         // implementors depend on the interface. loadAll derives the real order.
-        addBlob(VM.guestBytes);
-        addBlob(VM.betaBytes);
-        addBlob(VM.alphaBytes);
-        addBlob(VM.greeterBytes);
+        pdLen = new int[MAXBLOB];
+        addBlob(VM.guestBytes, (int) VM.guestLen);
+        addBlob(VM.betaBytes, (int) VM.betaLen);
+        addBlob(VM.alphaBytes, (int) VM.alphaLen);
+        addBlob(VM.greeterBytes, (int) VM.greeterLen);
         loadAll();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
@@ -243,50 +247,37 @@ public final class Loader
     static int loadMath()
     {
         seek(0x6d6178L, 3, 0x2849492949L, 5);          // "max" "(II)I"
-        return (int) load2(VM.mathBytes, 0x4DL, 0x21L);
+        return (int) load2(VM.mathBytes, (int) VM.mathLen, 0x4DL, 0x21L);
     }
 
-    /** Walk the constant pool, recording each entry's body offset; leave {@code gp} just past it. */
-    private static void parseConstPool(long base)
+    /**
+     * Parse the constant pool with the <em>shared</em> {@link ClassReader} — the same
+     * code the seed JVM runs, now compiled into the image by our own compiler (M5).
+     * It reads a {@code byte[]}, so the embedded blob is copied onto the heap first;
+     * its offsets are classfile-relative, so they still line up with the raw-address
+     * access ({@code gbase + off}) the rest of the loader uses.
+     */
+    private static void parseConstPool(long base, int len)
     {
         gbase = base;
-        long p = base + 8;                              // skip magic(4) + minor/major(4)
-        int cpCount = u2(p);
-        p += 2;
-        gcp = new int[cpCount];
-        gcpTag = new int[cpCount];
-        gcpCount = cpCount;
-        int i = 1;
-        while (i < cpCount)
+        gbytes = toBytes(base, len);
+        gcpCount = ClassReader.cpCount(gbytes);
+        gcp = new int[gcpCount];
+        gcpTag = new int[gcpCount];
+        gp = base + ClassReader.constantPool(gbytes, gcp, gcpTag);
+    }
+
+    /** Copy an embedded blob onto the heap so the shared reader can index it. */
+    private static byte[] toBytes(long addr, int len)
+    {
+        byte[] b = new byte[len];
+        int i = 0;
+        while (i < len)
         {
-            int tag = u1(p);
-            p += 1;
-            gcp[i] = (int) (p - base);                  // body starts right after the tag
-            gcpTag[i] = tag;                            // kept so we can find Class entries
-            if (tag == 1)
-            {
-                p += 2 + u2(p);    // Utf8
-            }
-            else if (tag == 5 || tag == 6)
-            {
-                p += 8;    // Long/Double: two slots
-                i += 1;
-            }
-            else if (tag == 15)
-            {
-                p += 3;    // MethodHandle
-            }
-            else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20)
-            {
-                p += 2;
-            }
-            else
-            {
-                p += 4;    // *ref / NameAndType / Dynamic
-            }
+            b[i] = (byte) Magic.load8(addr + i);
             i += 1;
         }
-        gp = p;
+        return b;
     }
 
     /** Parse the fields, assigning each static field a slot; allocate a zeroed statics block. */
@@ -657,9 +648,10 @@ public final class Loader
      * so the registries are populated when a subclass or user is compiled.
      */
     /** Hand the loader a class blob; {@link #loadAll} works out when to load it. */
-    private static void addBlob(long bytes)
+    private static void addBlob(long bytes, int len)
     {
         pdBase[pdCount] = bytes;
+        pdLen[pdCount] = len;
         pdDone[pdCount] = 0;
         pdCount += 1;
     }
@@ -682,7 +674,7 @@ public final class Loader
             {
                 if (pdDone[i] == 0 && ready(i))
                 {
-                    loadOne(pdBase[i]);
+                    loadOne(pdBase[i], pdLen[i]);
                     pdDone[i] = 1;
                     remaining -= 1;
                     progress = 1;
@@ -703,7 +695,7 @@ public final class Loader
         int i = 0;
         while (i < pdCount)
         {
-            parseConstPool(pdBase[i]);
+            parseConstPool(pdBase[i], pdLen[i]);
             pdNameOff[i] = gcp[u2(gbase + gcp[u2(gp + 2)])];   // this_class -> name
             int c = 1;
             while (c < gcpCount)
@@ -756,9 +748,9 @@ public final class Loader
         return false;
     }
 
-    private static void loadOne(long bytes)
+    private static void loadOne(long bytes, int len)
     {
-        parseConstPool(bytes);
+        parseConstPool(bytes, len);
         parseFields();                                  // hierarchy-aware field layout
         if (gIsInterface)
         {

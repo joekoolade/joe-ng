@@ -43,6 +43,28 @@ public final class T
         }
     }
 
+    /** Assert a boolean condition. */
+    public static void check(String name, boolean cond)
+    {
+        checks++;
+        if (!cond)
+        {
+            failures++;
+            System.out.printf("FAIL %-24s expected true%n", name);
+        }
+    }
+
+    /** Assert string equality. */
+    public static void eqStr(String name, String expected, String actual)
+    {
+        checks++;
+        if (!expected.equals(actual))
+        {
+            failures++;
+            System.out.printf("FAIL %-24s expected \"%s\" got \"%s\"%n", name, expected, actual);
+        }
+    }
+
     /** Assert a word sequence; echoes the words on pass (handy for compiled code). */
     public static void eqWords(String name, int[] expected, int[] actual)
     {
