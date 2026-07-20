@@ -136,3 +136,9 @@ This is a from-first-principles learning project. Every encoding is checked
 bit-for-bit against the ARM Architecture Reference Manual before it is relied on,
 because a mis-lowered store corrupts memory invisibly. Jikes RVM and JOE were
 referenced for *concepts* only; every line here was written for this project.
+
+## Licence
+
+[Eclipse Public License 2.0](LICENSE) — the same licence as Jikes RVM and
+OpenJ9, which keeps joe-ng compatible with the JVM prior art it draws concepts
+from.
