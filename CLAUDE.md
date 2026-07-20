@@ -272,8 +272,8 @@ defines the minimum the assembler must encode.
   (+boot sysregs), ERET, DSB/DMB/ISB, LDR/STR/LDRB/STRB, ADD/SUB imm, MOV,
   B.cond/CBZ/CBNZ/TBZ/TBNZ — 61 bit-for-bit checks in `test/asm/A64Test`.
   Build/test/emit: `scripts/build.sh`; QEMU smoke test: `scripts/qemu.sh`.
-  **Not yet run on real hardware; mini-UART baud divisor needs on-silicon
-  calibration (QEMU ignores it).**
+  **CONFIRMED ON REAL SILICON** — see "Real-hardware flashing" below; the baud is
+  now self-calibrating, so this no longer needs hand-tuning.
 - **M1c DONE (the metacircular half):** `writer/BuildCompiledBootImage` compiles
   `vm.VM.boot()` from javac bytecode — EL2→EL1 drop, FP enable, stack, mini-UART
   bring-up, and the print loop — into a `kernel8.img` that **prints "hello from
@@ -431,9 +431,28 @@ defines the minimum the assembler must encode.
   config.txt + fetched GPU firmware start4.elf/fixup4.dat). Copy to a FAT32 SD
   card. `scripts/flash.md` is the full guide (serial wiring GPIO14/15, 115200 8N1,
   troubleshooting). The user runs the flash + serial monitor themselves.
-- mini-UART baud is pinned via `core_freq=250` in config.txt with
-  `Bcm2711.BAUD_115200 = 270`; if silicon output is garbled, the core clock
-  differs — fall back to 500 MHz / divisor 541. Not yet confirmed on real silicon.
+- **VERIFIED ON REAL HARDWARE.** A Pi 4 boots the image and prints the whole
+  feature run over the mini-UART, ending in `*M` — the on-metal class loader
+  (hierarchies, cross-class linking, `instanceof`) and `java.lang.Math.max` from
+  `java.base`, all JIT-compiled on bare metal. QEMU is no longer the only witness.
+- **mini-UART baud is self-calibrating — do not hardcode a divisor.** The baud is
+  `core_clock / (8*(divisor+1))`, and the VPU core clock is not predictable: it
+  differed across firmware builds and even across SD cards (a card carrying
+  recovery files boots different firmware). Three hardcoded guesses each worked on
+  one setup and garbled on the next (270/250 MHz, 541/500 MHz, 216/200 MHz).
+  `board/bcm2711/Mailbox` now asks the firmware over the VideoCore mailbox and
+  `Uart.baudDivisor()` computes the divisor at boot; `Bcm2711.BAUD_115200` (179) is
+  only the fallback. Two hard-won details:
+  - Ask for **`GET_CLOCK_RATE_MEASURED` (0x00030047)**, not `GET_CLOCK_RATE` — the
+    latter echoes back the *requested* rate (it returned exactly our
+    `core_freq=200`) while the silicon actually ran at **166 MHz**.
+  - Boot prints `core NNNMHz` so the board reports what it calibrated to. When the
+    baud is wrong *every* message is unreadable — including any message about the
+    clock — so the way out was a **baud sweep**: print the same self-identifying
+    line once per candidate clock, each at that candidate's baud, and read whichever
+    line renders. Reach for that again if serial ever goes silent-but-garbled.
+- Serial output must be **CRLF** (`Uart.putc` translates `\n`); a raw console
+  staircases on bare `\n`, which QEMU's stdio hides.
 
 ## Working agreements for the agent
 

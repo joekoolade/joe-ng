@@ -77,8 +77,8 @@ public final class Bcm2711
      * firmware). {@link Mailbox#coreClockHz()} now asks the firmware and
      * {@link Uart} computes the divisor; this constant is just the safety net.
      *
-     * <p>188 matches the ~175 MHz a baud sweep measured on real hardware
-     * (175e6/(8*189) = 115,741 baud, +0.5%).
+     * <p>179 matches the 166 MHz a real Pi 4 reported via the measured-rate tag
+     * (166e6/(8*180) = 115,278 baud, +0.07%).
      */
-    public static final int  BAUD_115200 = 188;
+    public static final int  BAUD_115200 = 179;
 }

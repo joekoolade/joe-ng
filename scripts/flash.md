@@ -64,7 +64,7 @@ Insert the SD card, plug in power. Within a second or two you should see:
 
 ```
 hello from joe2
-core 200MHz
+core 166MHz
 k
 AB
 3
