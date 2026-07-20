@@ -372,7 +372,27 @@ measuring; if/else is simpler and the JIT is not yet performance-critical.
 pattern: a JDK-free core doing bytecode→A64, and a writer-side wrapper holding the
 `ClassFile` model, diagnostics and `ImageBuilder` integration. Then the on-metal
 loader's bespoke codegen is *deleted* in favour of the core — the moment there is
-genuinely one compiler.
+genuinely one compiler. This is the biggest single piece of M5, so it is broken
+into verifiable increments (each keeps the image byte-identical or QEMU at `*M`):
+
+- ✅ **4.1 — `CodeBuffer` JDK-free.** The core's emit target: `int[]` grown by hand
+  (was `List<Integer>`), encodings via `A64Enc` not `A64`. `A64.loadImm64` now
+  returns `int[]`. Prerequisite for the core to emit on the metal. Image identical.
+- ☐ **4.2 — the symbol seam.** Define how the core emits a symbolic reference
+  (call / TIB / string / static / Type load) without knowing whether it is being
+  relocated later (writer) or resolved now (metal). A resolver object the core
+  calls; the writer's implementation records `CallSite`/`TibRef`/… as today, the
+  metal's emits the resolved address from its registries. Do this on the writer
+  side first (byte-identical), so the interface exists before the metal implements
+  it. This is where the deferred stage-2 items land: with the seam in place the
+  core never holds a `String` key or a relocation `List` — those live in the
+  writer's resolver.
+- ☐ **4.3 — a shared cp/bytecode view.** The core reads the constant pool and
+  bytecode through one abstraction backed by `ClassReader` (`byte[]` + offsets), so
+  the writer's `ClassFile` and the metal's `gcp`/`gbase` stop being two ways to ask
+  the same question.
+- ☐ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
+  `vm/Loader` through it, then delete `Loader`'s `emitOp`. One compiler at last.
 
 **The crux, and the real risk.** The two compilers do not merely differ in
 dependencies, they differ in *calling convention*: the writer puts locals in

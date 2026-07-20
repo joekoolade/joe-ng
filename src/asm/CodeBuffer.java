@@ -1,16 +1,16 @@
 package asm;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /**
  * A growable stream of A64 instruction words tied to a load address.
  *
  * The load address is where the first word will live in memory once the Pi
  * firmware places the image (joe-ng links everything to {@code 0x80000}). Keeping
  * it here lets code that needs absolute PCs (branch targets, later relocations)
- * compute them from {@link #pcAt}. For M0 the only client is the spin loop, but
- * this is the seam where relocation grows in later milestones (PLAN.md §6).
+ * compute them from {@link #pcAt}.
+ *
+ * <p>Written JDK-free (an {@code int[]} grown by hand, encodings via
+ * {@link A64Enc}) so it can be compiled into the image: it is the emit target the
+ * shared core will use on the metal as well as in the writer (M5.4).
  */
 public final class CodeBuffer
 {
@@ -18,7 +18,8 @@ public final class CodeBuffer
     public static final long LOAD_ADDRESS = 0x8_0000L;
 
     private final long base;
-    private final List<Integer> words = new ArrayList<>();
+    private int[] words = new int[64];
+    private int count;
 
     public CodeBuffer()
     {
@@ -32,23 +33,37 @@ public final class CodeBuffer
     /** Append one already-encoded instruction word. Returns its word index. */
     public int emit(int word)
     {
-        words.add(word);
-        return words.size() - 1;
+        if (count == words.length)
+        {
+            int[] bigger = new int[words.length * 2];
+            int i = 0;
+            while (i < count)
+            {
+                bigger[i] = words[i];
+                i += 1;
+            }
+            words = bigger;
+        }
+        words[count] = word;
+        count += 1;
+        return count - 1;
     }
 
     /** Append several words (e.g. a {@code loadImm64} expansion). */
-    public void emitAll(List<Integer> ws)
+    public void emitAll(int[] ws)
     {
-        for (int w : ws)
+        int i = 0;
+        while (i < ws.length)
         {
-            emit(w);
+            emit(ws[i]);
+            i += 1;
         }
     }
 
     /** Overwrite the word at index {@code i} — used to backpatch forward refs. */
     public void set(int i, int word)
     {
-        words.set(i, word);
+        words[i] = word;
     }
 
     /**
@@ -59,16 +74,16 @@ public final class CodeBuffer
      */
     public int reserveAddr(int rd)
     {
-        int at = emit(A64.movz(rd, 0, 0));
-        emit(A64.movk(rd, 0, 1));
+        int at = emit(A64Enc.movz(rd, 0, 0));
+        emit(A64Enc.movk(rd, 0, 1));
         return at;
     }
 
     /** Fill a slot from {@link #reserveAddr} with {@code addr} (low/high 16 bits). */
     public void patchAddr(int at, int rd, long addr)
     {
-        set(at,     A64.movz(rd, (int) (addr & 0xFFFF), 0));
-        set(at + 1, A64.movk(rd, (int) ((addr >>> 16) & 0xFFFF), 1));
+        set(at,     A64Enc.movz(rd, (int) (addr & 0xFFFF), 0));
+        set(at + 1, A64Enc.movk(rd, (int) ((addr >>> 16) & 0xFFFF), 1));
     }
 
     /** Absolute PC of the instruction at word index {@code i}. */
@@ -80,12 +95,12 @@ public final class CodeBuffer
     /** Absolute PC of the next instruction to be emitted. */
     public long here()
     {
-        return pcAt(words.size());
+        return pcAt(count);
     }
 
     public int wordCount()
     {
-        return words.size();
+        return count;
     }
     public long base()
     {
@@ -94,15 +109,17 @@ public final class CodeBuffer
 
     public int[] toWords()
     {
-        int[] a = new int[words.size()];
-        for (int i = 0; i < a.length; i++)
+        int[] a = new int[count];
+        int i = 0;
+        while (i < count)
         {
-            a[i] = words.get(i);
+            a[i] = words[i];
+            i += 1;
         }
         return a;
     }
 
-    /** Raw little-endian bytes — this is the payload of {@code kernel8.img}. */
+    /** Raw little-endian bytes — this is the payload of {@code kernel8.img} (writer-side). */
     public byte[] toBytes()
     {
         return A64.wordsToLittleEndian(toWords());

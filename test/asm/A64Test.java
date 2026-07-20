@@ -49,14 +49,14 @@ public final class A64Test
 
         // ---- loadImm64 composition -----------------------------------------
         // 0x80000 = 0x0008_0000 -> MOVZ x0,#0x8,LSL#16 (single word).
-        List<Integer> ld = A64.loadImm64(0, 0x80000L);
-        T.eq("loadImm64(0x80000).size==1", 1, ld.size());
-        T.eqWord("loadImm64(0x80000)[0]", 0xD2A00100, ld.get(0));
+        int[] ld = A64.loadImm64(0, 0x80000L);
+        T.eq("loadImm64(0x80000).size==1", 1, ld.length);
+        T.eqWord("loadImm64(0x80000)[0]", 0xD2A00100, ld[0]);
         // 0 -> single MOVZ #0.
-        T.eq("loadImm64(0).size==1", 1, A64.loadImm64(3, 0).size());
-        T.eqWord("loadImm64(0)[0]", 0xD2800003, A64.loadImm64(3, 0).get(0));
+        T.eq("loadImm64(0).size==1", 1, A64.loadImm64(3, 0).length);
+        T.eqWord("loadImm64(0)[0]", 0xD2800003, A64.loadImm64(3, 0)[0]);
         // full 64-bit value touches all four lanes.
-        T.eq("loadImm64(0x1122...).size==4", 4, A64.loadImm64(0, 0x1122_3344_5566_7788L).size());
+        T.eq("loadImm64(0x1122...).size==4", 4, A64.loadImm64(0, 0x1122_3344_5566_7788L).length);
 
         // ---- little-endian serialization -----------------------------------
         byte[] b = A64.wordsToLittleEndian(new int[] {0xD503205F, 0x17FFFFFF});

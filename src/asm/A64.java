@@ -1,7 +1,5 @@
 package asm;
 
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * AArch64 (A64) instruction encoder — emits raw 32-bit instruction words, not
@@ -580,14 +578,14 @@ public final class A64
     }
 
     /** Convert a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
-    public static List<Integer> loadImm64(int rd, long value)
+    public static int[] loadImm64(int rd, long value)
     {
-        List<Integer> out = new ArrayList<>(4);
-        boolean any = false;
+        int[] tmp = new int[4];
+        int n = 0;
         for (int hw = 0; hw < 4; hw++)
         {
             int lane = (int) ((value >>> (hw * 16)) & 0xFFFF);
-            if (lane == 0 && any)
+            if (lane == 0 && n > 0)
             {
                 continue;    // MOVZ already zeroed upper lanes
             }
@@ -595,13 +593,15 @@ public final class A64
             {
                 continue;
             }
-            out.add(any ? movk(rd, lane, hw) : movz(rd, lane, hw));
-            any = true;
+            tmp[n] = n == 0 ? movz(rd, lane, hw) : movk(rd, lane, hw);   // first lane MOVZ, rest MOVK
+            n++;
         }
-        if (!any)
+        if (n == 0)
         {
-            out.add(movz(rd, 0, 0));    // value == 0
+            tmp[n++] = movz(rd, 0, 0);    // value == 0
         }
+        int[] out = new int[n];
+        System.arraycopy(tmp, 0, out, 0, n);
         return out;
     }
 

@@ -36,14 +36,14 @@ public final class CompilerTest
 
         // operand stack maps to x9 (addr), x10 (value)
         List<Integer> pokeWant = new ArrayList<>();
-        pokeWant.addAll(A64.loadImm64(9, 0xFE215004L));  // address -> x9
-        pokeWant.addAll(A64.loadImm64(10, 1L));          // value   -> x10
+        addAll(pokeWant, A64.loadImm64(9, 0xFE215004L));  // address -> x9
+        addAll(pokeWant, A64.loadImm64(10, 1L));          // value   -> x10
         pokeWant.add(A64.strw(10, 9, 0));                // STR w10,[x9]
         pokeWant.add(A64.ret());
         T.eqWords("pokeWord()", toArray(pokeWant), compile(fx, "pokeWord"));
 
         List<Integer> regWant = new ArrayList<>();
-        regWant.addAll(A64.loadImm64(9, 0x80000000L));   // value -> x9
+        addAll(regWant, A64.loadImm64(9, 0x80000000L));   // value -> x9
         regWant.add(A64.msr(A64.HCR_EL2, 9));            // MSR HCR_EL2, x9
         regWant.add(A64.ret());
         T.eqWords("writeReg()", toArray(regWant), compile(fx, "writeReg", "()V"));
@@ -54,7 +54,7 @@ public final class CompilerTest
         addWant.add(A64.strx(19, 31, 0));                // str x19,[sp]  (save callee-saved local)
         addWant.add(A64.movReg(19, 0));                  // mov x19,x0    (param x -> local slot0)
         addWant.add(A64.movReg(9, 19));                  // iload_0
-        addWant.addAll(A64.loadImm64(10, 1));            // iconst_1
+        addAll(addWant, A64.loadImm64(10, 1));            // iconst_1
         addWant.add(A64.addReg(9, 9, 10));               // iadd
         addWant.add(A64.movReg(0, 9));                   // ireturn: result -> x0
         addWant.add(A64.ldrx(19, 31, 0));                // restore x19
@@ -184,7 +184,7 @@ public final class CompilerTest
         elemWant.add(A64.strx(19, 31, 0));
         elemWant.add(A64.movReg(19, 0));                 // a -> slot0
         elemWant.add(A64.movReg(9, 19));                 // aload_0
-        elemWant.addAll(A64.loadImm64(10, 0));           // iconst_0 (index)
+        addAll(elemWant, A64.loadImm64(10, 0));           // iconst_0 (index)
         elemWant.add(A64.addImm(9, 9, 24));              // &elem0
         elemWant.add(A64.addRegLsl(9, 9, 10, 0));        // &elem[index]
         elemWant.add(A64.ldrb(9, 9, 0));                 // baload
@@ -213,9 +213,9 @@ public final class CompilerTest
         ternWant.add(A64.movReg(19, 0));                 // x -> slot0
         ternWant.add(A64.movReg(9, 19));                 // iload_0
         ternWant.add(A64.cbz(9, 12));                    // ifeq -> else
-        ternWant.addAll(A64.loadImm64(9, 0x41));         // bipush 0x41
+        addAll(ternWant, A64.loadImm64(9, 0x41));         // bipush 0x41
         ternWant.add(A64.b(8));                          // goto end
-        ternWant.addAll(A64.loadImm64(9, 0x42));         // else: bipush 0x42 (same reg x9)
+        addAll(ternWant, A64.loadImm64(9, 0x42));         // else: bipush 0x42 (same reg x9)
         ternWant.add(A64.movReg(0, 9));                  // ireturn
         ternWant.add(A64.ldrx(19, 31, 0));
         ternWant.add(A64.addImm(31, 31, 16));
@@ -290,5 +290,14 @@ public final class CompilerTest
             a[i] = l.get(i);
         }
         return a;
+    }
+
+    /** Append each word of {@code ws} to {@code l} (loadImm64 now returns int[]). */
+    private static void addAll(List<Integer> l, int[] ws)
+    {
+        for (int w : ws)
+        {
+            l.add(w);
+        }
     }
 }
