@@ -457,12 +457,22 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
         `CompiledMethod`. `emitPrologue` reads params via `ClassReader` over the
         descriptor Utf8 (no `paramTypes`/`ClassFile.Method`). Image byte-identical;
         QEMU `*M F`.
-      - ☐ **stage C (metal-compat)** — the core still uses constructs the metal
-        compiler can't yet handle: `switch` (int, String-free now, but still
-        `tableswitch`/`lookupswitch`) in `step`/`lowerIntrinsic`/`opLen`/`binop`/
-        `lowerNewArray`, the `Bin` enum, and `Math.min`/`Math.max`. Convert these to
-        if/else + int constants so `Baseline` itself compiles on metal. This is the
-        last thing before 4.4c–e can instantiate the core on the metal side.
+      - ✅ **stage C (metal-compat, part 1)** — removed the constructs the metal
+        compiler can't handle at all: the `switch`es in `step`/`lowerIntrinsic`/
+        `opLen`/`binop`/`arrayElemSize` became if/else-if chains and ternaries, the
+        `Bin` enum became `BIN_*` int constants, and `Math.min`/`Math.max` became
+        conditionals. Image byte-identical. Measured with `tools/M5Gap`: the core
+        `Baseline` now compiles **60 of its 70 methods** with joe-ng's own compiler.
+      - ☐ **stage C part 2 — the last self-host gaps** (from M5Gap on `Baseline`):
+        - **diagnostics** (`bad`/`unsupported`/`unsupportedOpcode`): `String` concat
+          and `String.format` lower to invokedynamic (0xBA), and they build JDK
+          `IllegalStateException`/`UnsupportedOperationException` — 7 methods. On metal
+          the error path has no strings or JDK exceptions; needs a message-free trap
+          (halt / a `Symbols`-provided fault) so the happy path stays identical.
+        - **anewarray (0xBD)** — 2 methods: `new Fixup[]` growth. The baseline compiler
+          emits `newarray` (primitive) but not `anewarray` (reference arrays); adding
+          it is a compiler feature, needed for the fixup array to allocate on metal.
+        These close the loop for 4.4c–e (a metal `Symbols` driving the core on metal).
   - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
     (addresses + Utf8-offset compares), the other half of the seam.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the
