@@ -81,8 +81,13 @@ R
 The `core NNNMHz` line is the VPU core clock joe2 read from the firmware over the
 VideoCore mailbox and calibrated the mini-UART baud to. The number varies by board,
 firmware and `config.txt` — that is exactly why it is measured rather than assumed.
-`core 0MHz` means the mailbox did not answer and the baud fell back to a compiled
-constant (likely garbled output).
+`core 0MHz` means the firmware did not answer (QEMU, for one, does not implement the
+measured-rate tag) and the baud fell back to `Bcm2711.BAUD_115200`.
+
+Note joe2 asks for the **measured** rate (`GET_CLOCK_RATE_MEASURED`), not the
+configured one: on real silicon the plain `GET_CLOCK_RATE` tag echoed back the
+`core_freq=200` from `config.txt` while the core was actually running at ~175 MHz —
+a 15% baud error, i.e. garbage.
 
 Then the board parks (`wfe`). That's the full feature run — compiled Java on bare
 metal — on real hardware. The lines walk the milestones: the banner + object

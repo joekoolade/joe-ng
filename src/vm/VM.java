@@ -1,6 +1,5 @@
 package vm;
 
-import board.bcm2711.Bcm2711;
 import board.bcm2711.Uart;
 import magic.Magic;
 import objectmodel.ObjectModel;
@@ -296,55 +295,8 @@ public final class VM
         Uart.putc(0x30 + on);
     }
 
-    /**
-     * Baud sweep — a bring-up diagnostic for the one thing we cannot observe: the
-     * VPU core clock that sets the mini-UART baud. A wrong divisor makes every
-     * message unreadable, including any message reporting the clock, so we print the
-     * same self-identifying line once per candidate clock, each at that candidate's
-     * baud. On the host (fixed at 115200) all the wrong ones are garbage and the one
-     * printed at the right baud is readable — and it names the clock in MHz. It also
-     * carries what the mailbox reported, so one boot tells us both whether the
-     * mailbox answered and what the true clock is.
-     */
-    static void baudSweep()
-    {
-        int mhz = 100;
-        while (mhz <= 800)
-        {
-            drainTx();                                    // never change baud mid-character
-            Magic.store32(Bcm2711.AUX_MU_BAUD_REG, mhz * 1000000 / 921600 - 1);
-            settle();
-            Uart.write(Magic.bytes("joe2 "));
-            printDec(mhz);
-            Uart.write(Magic.bytes("MHz mbox"));
-            printDec(Uart.coreHz / 1000000);
-            Uart.write(Magic.bytes("\n"));
-            mhz = mhz + 25;
-        }
-        drainTx();
-    }
-
-    /** Spin until the mini-UART has shifted out everything (LSR bit6 = transmitter idle). */
-    static void drainTx()
-    {
-        while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & 0x40) == 0)
-        {
-        }
-    }
-
-    /** Brief idle so the receiver can resynchronise after a baud change. */
-    static void settle()
-    {
-        int i = 0;
-        while (i < 200000)
-        {
-            i = i + 1;
-        }
-    }
-
     static void run()
     {
-        baudSweep();                                      // bring-up: find the real core clock
         Uart.write(Magic.bytes("hello from joe2\n"));     // putc turns \n into \r\n
         Uart.write(Magic.bytes("core "));                 // the clock we calibrated the baud to
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)

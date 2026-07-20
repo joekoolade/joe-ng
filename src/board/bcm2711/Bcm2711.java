@@ -32,7 +32,14 @@ public final class Bcm2711
     public static final long MBOX_BUFFER = 0x000E_0000L;
     /** VC bus alias of ARM physical RAM (uncached view the firmware expects). */
     public static final long MBOX_BUS_ALIAS = 0xC000_0000L;
-    public static final int  TAG_GET_CLOCK_RATE = 0x0003_0002;
+    /**
+     * Ask for the <em>measured</em> rate, not {@code GET_CLOCK_RATE} (0x00030002).
+     * That one reports the rate the firmware was <em>asked</em> for — on real
+     * silicon it returned exactly our {@code core_freq=200} while the core was
+     * really running at ~175 MHz, so the derived divisor was 15% off and garbled
+     * everything. The measured tag reports what the hardware actually does.
+     */
+    public static final int  TAG_GET_CLOCK_RATE_MEASURED = 0x0003_0047;
     public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
 
     // ----- GPIO ------------------------------------------------------------
@@ -69,6 +76,9 @@ public final class Bcm2711
      * and garbled on the next because a card carrying recovery files boots different
      * firmware). {@link Mailbox#coreClockHz()} now asks the firmware and
      * {@link Uart} computes the divisor; this constant is just the safety net.
+     *
+     * <p>188 matches the ~175 MHz a baud sweep measured on real hardware
+     * (175e6/(8*189) = 115,741 baud, +0.5%).
      */
-    public static final int  BAUD_115200 = 216;
+    public static final int  BAUD_115200 = 188;
 }

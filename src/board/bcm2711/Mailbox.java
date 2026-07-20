@@ -14,6 +14,11 @@ import magic.Magic;
  * garbage on the next. Instead of guessing, {@link #coreClockHz()} asks the
  * firmware for the actual rate and {@link Uart} computes the divisor from it.
  *
+ * <p>It asks for the <em>measured</em> rate. A baud sweep on real hardware showed
+ * the core running at ~175 MHz while the plain {@code GET_CLOCK_RATE} tag reported
+ * 200 MHz — the value {@code config.txt} requested, not the one the silicon
+ * delivers.
+ *
  * <p>Every wait is bounded: if the firmware never answers we return 0 and the
  * caller falls back to a compiled-in divisor, so a mailbox problem degrades to the
  * old behaviour rather than hanging the boot.
@@ -34,7 +39,7 @@ public final class Mailbox
         long b = Bcm2711.MBOX_BUFFER;
         Magic.store32(b, 32);                            // total size in bytes
         Magic.store32(b + 4, 0);                         // 0 = request
-        Magic.store32(b + 8, Bcm2711.TAG_GET_CLOCK_RATE);
+        Magic.store32(b + 8, Bcm2711.TAG_GET_CLOCK_RATE_MEASURED);
         Magic.store32(b + 12, 8);                        // value buffer is 8 bytes
         Magic.store32(b + 16, 0);                        // request code
         Magic.store32(b + 20, Bcm2711.CLOCK_ID_CORE);    // in: which clock
