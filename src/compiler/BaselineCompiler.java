@@ -275,9 +275,9 @@ public final class BaselineCompiler
                         loadConst(cb, op - 0x03);
                         return 1;
                     }
-                        case 0x09 ->
+                        case 0x01, 0x09 ->
                         {
-                            loadConst(cb, 0);
+                            loadConst(cb, 0);    // aconst_null (null == 0) / lconst_0
                             return 1;
                         }
                             case 0x0A ->
@@ -794,14 +794,30 @@ public final class BaselineCompiler
     }
 
     // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
+    /**
+     * {@code new} is a call underneath ({@code Heap.alloc}), so it clobbers the
+     * operand registers exactly like any other call — and is spilled around exactly
+     * like one. It used to demand an empty operand stack instead, which made
+     * ordinary expressions such as {@code f(new X())} or {@code a.b = new X()}
+     * uncompilable; that single restriction blocked 14 of BaselineCompiler's own
+     * methods from self-hosting (PLAN.md §M5.1).
+     *
+     * <p>The entry method is the exception: it is frameless (it sets up SP itself),
+     * so there is no spill area to use and the old requirement still holds.
+     */
     private void lowerNew(int classIndex, CodeBuffer cb)
     {
-        expectEmpty("new");
+        if (isEntry)
+        {
+            expectEmpty("new");                                   // frameless: nowhere to spill
+        }
         String className = cf.classAt(classIndex);
         int size = ObjectModel.scalarSize(resolve(className).instanceFieldCount());
         cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
+        spillLive(cb);                                            // Heap.alloc clobbers x9..
         int w = cb.emit(A64.bl(0));                               // x0 = object base
         callSites.add(new CallSite(w, "vm/Heap.alloc(I)J"));
+        reloadLive(cb);
         int t = cb.reserveAddr(1);                                // x1 = &TIB (patched by ImageBuilder)
         tibRefs.add(new TibRef(t, 1, className));
         cb.emit(A64.strx(1, 0, ObjectModel.TIB_OFFSET));          // header.tib = &TIB

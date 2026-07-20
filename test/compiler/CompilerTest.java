@@ -112,6 +112,32 @@ public final class CompilerTest
         vWant.add(A64.ret());
         T.eqWords("FieldFixture.callVal", toArray(vWant), compile(ff, "callVal", "(Lcompiler/FieldFixture;)I"));
 
+        // ---- new with a live operand stack ----------------------------------
+        // `x + new FieldFixture().value` pushes x, then allocates. Heap.alloc
+        // clobbers the operand registers, so x must survive across the call. This
+        // shape was rejected outright before (PLAN.md §M5.1). Match on encodings
+        // rather than a fixed offset, so the check doesn't pin the frame layout.
+        // (compileMethod, not compile(): `new` records a call site + TIB ref)
+        int[] nl = new BaselineCompiler(ff)
+        .compileMethod(ff.method("newWithLiveStack", "(I)I"), CodeBuffer.LOAD_ADDRESS, false).words();
+        int bl = -1;
+        boolean spilled = false;
+        boolean reloaded = false;
+        for (int i = 0; i < nl.length; i++)
+        {
+            boolean strX9Sp = (nl[i] & 0xFFC003FF) == (0xF9000000 | (31 << 5) | 9);
+            boolean ldrX9Sp = (nl[i] & 0xFFC003FF) == (0xF9400000 | (31 << 5) | 9);
+            if (bl < 0 && (nl[i] & 0xFC000000) == 0x94000000)
+            {
+                bl = i;                                  // the BL to Heap.alloc
+            }
+            spilled |= strX9Sp && bl < 0;                // stored before the call
+            reloaded |= ldrX9Sp && bl >= 0;              // restored after it
+        }
+        T.check("newWithLiveStack compiles", nl.length > 0);
+        T.check("live operand spilled before Heap.alloc", spilled);
+        T.check("live operand reloaded after Heap.alloc", reloaded);
+
         // ---- arrays: baload (base+index<<0) and arraylength (@16) ----
         List<Integer> elemWant = new ArrayList<>();
         elemWant.add(A64.subImm(31, 31, 16));

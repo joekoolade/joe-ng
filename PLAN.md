@@ -198,11 +198,20 @@ Two findings reshape the obvious plan:
 
 **Stage 1 — grow the compiler (no BaselineCompiler edits).** Pure capability,
 independently useful, verifiable by re-running the gap harness.
-- Spill live operand values across `Heap.alloc` in `lowerNew`, exactly as ordinary
-  calls already do; drop `expectEmpty`. *Unlocks ~14 methods.*
-- Add `aconst_null` (0x01) and `caload` (0x34). Trivial.
-- Lift the 10-local ceiling by spilling locals beyond x19..x28 to the frame.
+- ✅ **Done:** `lowerNew` now spills live operands across `Heap.alloc` exactly as
+  ordinary calls do; `expectEmpty` survives only for the frameless entry method.
+  Added `aconst_null` (0x01).
+- ☐ Add `caload` (0x34) — needs `LDRH` in the assembler (char/short arrays are a
+  known gap).
+- ☐ Lift the 10-local ceiling by spilling locals beyond x19..x28 to the frame.
   *Unlocks 2, and removes a limit repeatedly hit while writing loader code.*
+
+*Measured after the first item:* the `new`-with-live-stack blocker went from 14
+methods to **0**. The count that compiles moved only 28 → 29, because those
+methods now run further and hit their *next* blocker — JDK references rose 12 → 22
+and `invokedynamic` 4 → 8 as previously-hidden code became reachable. That is the
+expected shape of a layered blocker analysis, and it re-weights the plan: Stage 2
+is now the dominant remaining work.
 
 **Stage 2 — de-string and defunctionalize BaselineCompiler.**
 - Replace the 6 lambda `Fixup`s with an int kind tag plus a switch (classic

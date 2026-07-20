@@ -27,4 +27,16 @@ public final class FieldFixture
     {
         return f.val();    // invokevirtual dispatch
     }
+
+    /**
+     * {@code new} while a value is already on the operand stack: javac pushes
+     * {@code x}, then allocates. {@code Heap.alloc} clobbers the operand registers,
+     * so {@code x} must be spilled across that call and reloaded afterwards. This
+     * shape used to be rejected outright, and blocked 14 of the compiler's own
+     * methods from self-hosting (PLAN.md §M5.1).
+     */
+    public static int newWithLiveStack(int x)
+    {
+        return x + new FieldFixture().value;
+    }
 }
