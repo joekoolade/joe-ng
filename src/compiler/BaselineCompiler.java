@@ -1300,14 +1300,14 @@ public final class BaselineCompiler
                 cb.emit(A64.blr(addr));
                 cb.emit(A64.movReg(pushReg(), 0));
             }
-            case "call2(JJJ)J" ->                                // addr, a->x1, b->x2, blr, result x0
+            case "call2(JJJ)J" ->                                // addr, a->x0, b->x1, blr, result x0
                 {
                     int b = popReg();
                     int a = popReg();
                     int addr = popReg();
                     cb.emit(A64.movReg(16, addr));
-                    cb.emit(A64.movReg(1, a));
-                    cb.emit(A64.movReg(2, b));
+                    cb.emit(A64.movReg(0, a));
+                    cb.emit(A64.movReg(1, b));
                     cb.emit(A64.blr(16));
                     cb.emit(A64.movReg(pushReg(), 0));
                 }

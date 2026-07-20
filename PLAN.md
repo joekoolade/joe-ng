@@ -320,11 +320,30 @@ the more developed model, produces far better code, and is already the one the
 runtime's own metadata (frame table, handler table, GC spill) assumes. Unifying on it
 turns two latent gaps into working features rather than porting a limitation.
 
-*Migration:* teach the on-metal JIT prologue/epilogue and frame layout (the logic
-already exists in `BaselineCompiler` and moves into the shared core); change
-`Magic.call0`/`call2` to the standard x0..x7 argument registers; keep the loader's
-registries as the metal's symbol-resolution strategy. Verify by the usual gate — the
-image unchanged where behaviour is unchanged, and QEMU still reaching `*M`.
+*Migration:* ✅ **done.** The on-metal JIT now follows the writer's convention:
+per-method frames (`setFrame`/`emitPrologue`/`emitEpilogue`), locals in x19.., and
+arguments arriving in x0..x7 and moved into locals by the prologue. `Magic.call2`
+passes its arguments in x0/x1 accordingly. Because locals are callee-saved, a call
+spills only the caller-saved operand registers into the frame's spill area rather
+than sixteen registers into a scratch frame:
+
+| JIT'd sequence | before | after |
+|---|---|---|
+| static call | 35 + args | **15 + args** |
+| invokevirtual | 38 + args | **18 + args** |
+| invokeinterface | 40 + args | **20 + args** |
+| `new` | 40 | **20** |
+
+Roughly half the code, and the per-call cost no longer dominates. Verified by QEMU
+still reaching `*M`, which exercises prologue/epilogue, callee-saved locals, argument
+moves, operand-only spills, virtual and interface dispatch (receiver now in x0),
+`new`, `instanceof` and cross-class linking.
+
+*One of the two latent gaps closed for free:* JIT'd locals now live in x19..x28,
+which is exactly what `Magic.gc()` spills, so references held in loaded code are
+scannable. **Still open:** exception unwinding through JIT'd frames — the frames now
+exist, but the loader does not yet register frame-table entries for them, so
+`VM.unwind` cannot size a JIT'd frame to pop it.
 
 *Measured after the two completed items:* `invokedynamic` sites **21 → 10**, and
 methods blocked on it **8 → 5**. Both changes left the emitted image byte-for-byte

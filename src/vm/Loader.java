@@ -28,6 +28,7 @@ public final class Loader
     private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
     private static int gcodeLen;    // length of the located method's bytecode
+    private static int gMaxLocals;  // ... and its max_locals (frame sizing)
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
@@ -160,7 +161,7 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L)
         {
-            long unused = Magic.call0(compile(code, gcodeLen));   // run <clinit>; discard result
+            long unused = Magic.call0(compile(code, gcodeLen, 0));   // <clinit> is static ()V
         }
     }
 
@@ -174,7 +175,7 @@ public final class Loader
         {
             return 0L;
         }
-        long buf = compile(code, gcodeLen);
+        long buf = compile(code, gcodeLen, 2);          // two int args
         return Magic.call2(buf, a, b);
     }
 
@@ -499,7 +500,8 @@ public final class Loader
             p += 4;
             if (isName(base, gcp[anIdx], 0x436f6465L, 4))              // "Code"
             {
-                gcodeLen = u4(p + 4);                   // after max_stack(2) + max_locals(2)
+                gMaxLocals = u2(p + 2);                 // after max_stack(2)
+                gcodeLen = u4(p + 4);
                 return p + 8;
             }
             p += alen;
@@ -557,7 +559,140 @@ public final class Loader
     private static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
+    private static int[] mLocals;     // ... its max_locals
+    private static int[] mArgs;       // ... its incoming argument slots (including `this`)
     private static int mCount;
+
+    // Frame layout of the method currently being sized or emitted. The JIT follows
+    // the writer's calling convention (PLAN.md §M5.2): arguments arrive in x0..x7,
+    // locals live in callee-saved x19.., and each method builds a frame.
+    //
+    //   frame: [saved x30 (non-leaf)][saved locals x19..][operand spill area]
+    //
+    // Because locals are callee-saved, a call no longer has to preserve them — only
+    // the caller-saved operand registers x9..x15, into the frame's spill area. That
+    // is what makes a call cost ~14 words here instead of the 35 it cost when
+    // everything had to be spilled around it.
+    private static final int LOC_BASE = 19;   // locals -> x19..
+    private static final int OPS_BASE = 9;    // operand stack -> x9..x15
+    private static final int OPS_MAX = 7;
+    private static int fLocals;               // this method's local slots
+    private static int fArgs;                 // its incoming argument slots
+    private static boolean fNonLeaf;          // does it call anything?
+    private static int fFrameSize;            // bytes, 16-aligned (0 = no frame)
+    private static int fLocalBase;            // frame offset of saved x19
+    private static int fSpillBase;            // frame offset of the operand spill area
+
+    /** Work out the frame for method {@code i} before sizing or emitting it. */
+    private static void setFrame(int i)
+    {
+        fLocals = mLocals[i];
+        fArgs = mArgs[i];
+        fNonLeaf = scanNonLeaf(mCode[i], mLen[i]);
+        fLocalBase = fNonLeaf ? 8 : 0;                  // after the saved x30
+        fSpillBase = fLocalBase + fLocals * 8;
+        int words = (fNonLeaf ? 1 : 0) + fLocals + (fNonLeaf ? OPS_MAX : 0);
+        fFrameSize = (words * 8 + 15) & -16;
+    }
+
+    /** True if the method contains anything that emits a BL/BLR (so x30 must be saved). */
+    private static boolean scanNonLeaf(long code, int len)
+    {
+        int pc = 0;
+        while (pc < len)
+        {
+            int op = u1(code + pc);
+            if (op == 0xb6 || op == 0xb7 || op == 0xb8 || op == 0xb9 || op == 0xbb)
+            {
+                return true;                            // invoke* or new (calls Heap.alloc)
+            }
+            pc += opLen(op);
+        }
+        return false;
+    }
+
+    /** Words emitted by the prologue: frame, saved x30, saved locals, argument moves. */
+    private static int prologueWords()
+    {
+        if (fFrameSize == 0)
+        {
+            return fArgs;                               // leaf, no locals: just move args
+        }
+        return 1 + (fNonLeaf ? 1 : 0) + fLocals + fArgs;
+    }
+
+    /** Words emitted by each return: restore x30 and locals, drop the frame, ret. */
+    private static int epilogueWords()
+    {
+        if (fFrameSize == 0)
+        {
+            return 1;                                   // just ret
+        }
+        return (fNonLeaf ? 1 : 0) + fLocals + 2;        // restores + add sp + ret
+    }
+
+    private static void emitPrologue()
+    {
+        if (fFrameSize > 0)
+        {
+            emit(A64Enc.subImm(31, 31, fFrameSize));
+            if (fNonLeaf)
+            {
+                emit(A64Enc.strx(30, 31, 0));
+            }
+            int k = 0;
+            while (k < fLocals)
+            {
+                emit(A64Enc.strx(LOC_BASE + k, 31, fLocalBase + k * 8));
+                k += 1;
+            }
+        }
+        int a = 0;
+        while (a < fArgs)                               // x0.. -> x19..
+        {
+            emit(A64Enc.movReg(LOC_BASE + a, a));
+            a += 1;
+        }
+    }
+
+    private static void emitEpilogue()
+    {
+        if (fFrameSize > 0)
+        {
+            if (fNonLeaf)
+            {
+                emit(A64Enc.ldrx(30, 31, 0));
+            }
+            int k = 0;
+            while (k < fLocals)
+            {
+                emit(A64Enc.ldrx(LOC_BASE + k, 31, fLocalBase + k * 8));
+                k += 1;
+            }
+            emit(A64Enc.addImm(31, 31, fFrameSize));
+        }
+        emit(A64Enc.ret());
+    }
+
+    /** Spill the live operand registers to the frame; locals are callee-saved already. */
+    private static void spillOperands()
+    {
+        int i = 0;
+        while (i < OPS_MAX)
+        {
+            emit(A64Enc.strx(OPS_BASE + i, 31, fSpillBase + i * 8));
+            i += 1;
+        }
+    }
+    private static void reloadOperands()
+    {
+        int i = 0;
+        while (i < OPS_MAX)
+        {
+            emit(A64Enc.ldrx(OPS_BASE + i, 31, fSpillBase + i * 8));
+            i += 1;
+        }
+    }
 
     /**
      * Compile the entry method and every static method it transitively calls,
@@ -566,13 +701,15 @@ public final class Loader
      * target address is known) — so no method's compile nests inside another's.
      * Scope: same-class static callees, no recursion/cycles beyond dedup.
      */
-    private static long compile(long code, int len)
+    private static long compile(long code, int len, int args)
     {
         mCode = new long[MAXM];
         mLen = new int[MAXM];
         mBuf = new long[MAXM];
+        mLocals = new int[MAXM];
+        mArgs = new int[MAXM];
         mCount = 0;
-        addMethod(code, len);
+        addMethod(code, len, gMaxLocals, args);
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -609,6 +746,8 @@ public final class Loader
         mCode = new long[MAXM];
         mLen = new int[MAXM];
         mBuf = new long[MAXM];
+        mLocals = new int[MAXM];
+        mArgs = new int[MAXM];
         mCount = 0;
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -620,7 +759,8 @@ public final class Loader
             long code = findCode(bytes, p + 8, attrs);
             if (code != 0L)
             {
-                addMethod(code, gcodeLen);
+                addMethod(code, gcodeLen, gMaxLocals,
+                          argSlots(gcp[u2(p + 4)]) + ((u2(p) & 0x0008) != 0 ? 0 : 1));
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -766,7 +906,7 @@ public final class Loader
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
-    private static void addMethod(long code, int len)
+    private static void addMethod(long code, int len, int maxLocals, int args)
     {
         int i = 0;
         while (i < mCount)
@@ -779,6 +919,8 @@ public final class Loader
         }
         mCode[mCount] = code;
         mLen[mCount] = len;
+        mLocals[mCount] = maxLocals;
+        mArgs[mCount] = args;
         mCount += 1;
     }
 
@@ -791,10 +933,11 @@ public final class Loader
             int op = u1(code + pc);
             if (op == 0xb8 || op == 0xb7)                   // invokestatic / invokespecial
             {
-                long c = calleeCodeOf(u2(code + pc + 1));   // sets gcodeLen
+                long c = calleeCodeOf(u2(code + pc + 1));   // sets gcodeLen / gMaxLocals
                 if (c != 0L)
                 {
-                    addMethod(c, gcodeLen);
+                    addMethod(c, gcodeLen, gMaxLocals,
+                              argSlots(mrefDescOff(u2(code + pc + 1))) + (op == 0xb7 ? 1 : 0));
                 }
             }
             pc += opLen(op);
@@ -806,6 +949,7 @@ public final class Loader
     {
         long code = mCode[i];
         int len = mLen[i];
+        setFrame(i);
         cbc = new int[len + 1];
         pass1(code, len);
         mBuf[i] = Heap.alloc((cbc[len] + 4) * 4);       // calls are big; size to the code
@@ -824,10 +968,12 @@ public final class Loader
             cdepth[j] = -1;
             j += 1;
         }
+        setFrame(i);
         pass1(code, len);                               // rebuild the branch-target map
         cbuf = mBuf[i];
         cout = mBuf[i];
         csp = 0;
+        emitPrologue();                                 // frame, saved regs, args -> x19..
         int pc = 0;
         while (pc < len)
         {
@@ -1240,7 +1386,7 @@ public final class Loader
     private static void pass1(long code, int len)
     {
         int pc = 0;
-        int w = 0;
+        int w = prologueWords();                        // branch targets are buffer-relative
         while (pc < len)
         {
             cbc[pc] = w;
@@ -1289,23 +1435,23 @@ public final class Loader
         }
         else if (op >= 0x1a && op <= 0x1d)
         {
-            emit(mov(9 + csp, 1 + (op - 0x1a)));    // iload_0..3
+            emit(mov(9 + csp, LOC_BASE + (op - 0x1a)));    // iload_0..3
             csp += 1;
         }
         else if (op == 0x15)
         {
-            emit(mov(9 + csp, 1 + u1(code + pc + 1)));    // iload
+            emit(mov(9 + csp, LOC_BASE + u1(code + pc + 1)));    // iload
             csp += 1;
         }
         else if (op >= 0x3b && op <= 0x3e)
         {
             csp -= 1;    // istore_0..3
-            emit(mov(1 + (op - 0x3b), 9 + csp));
+            emit(mov(LOC_BASE + (op - 0x3b), 9 + csp));
         }
         else if (op == 0x36)
         {
             csp -= 1;    // istore
-            emit(mov(1 + u1(code + pc + 1), 9 + csp));
+            emit(mov(LOC_BASE + u1(code + pc + 1), 9 + csp));
         }
         else if (op == 0x60)
         {
@@ -1349,7 +1495,7 @@ public final class Loader
         {
             csp -= 1;    // ireturn
             emit(mov(0, 9 + csp));
-            emit(A64Enc.ret());
+            emitEpilogue();
         }
         else if (op == 0xb2)
         {
@@ -1369,23 +1515,23 @@ public final class Loader
         }
         else if (op >= 0x2a && op <= 0x2d)
         {
-            emit(mov(9 + csp, 1 + (op - 0x2a)));    // aload_0..3 (ref = 64-bit mov)
+            emit(mov(9 + csp, LOC_BASE + (op - 0x2a)));    // aload_0..3 (ref = 64-bit mov)
             csp += 1;
         }
         else if (op == 0x19)
         {
-            emit(mov(9 + csp, 1 + u1(code + pc + 1)));    // aload
+            emit(mov(9 + csp, LOC_BASE + u1(code + pc + 1)));    // aload
             csp += 1;
         }
         else if (op >= 0x4b && op <= 0x4e)
         {
             csp -= 1;    // astore_0..3
-            emit(mov(1 + (op - 0x4b), 9 + csp));
+            emit(mov(LOC_BASE + (op - 0x4b), 9 + csp));
         }
         else if (op == 0x3a)
         {
             csp -= 1;    // astore
-            emit(mov(1 + u1(code + pc + 1), 9 + csp));
+            emit(mov(LOC_BASE + u1(code + pc + 1), 9 + csp));
         }
         else if (op == 0x59)
         {
@@ -1431,13 +1577,13 @@ public final class Loader
         }
         else if (op == 0xb1)
         {
-            emit(A64Enc.ret());    // return (void)
+            emitEpilogue();    // return (void)
         }
         else if (op == 0xb0)
         {
             csp -= 1;    // areturn
             emit(mov(0, 9 + csp));
-            emit(A64Enc.ret());
+            emitEpilogue();
         }
     }
 
@@ -1484,29 +1630,15 @@ public final class Loader
         int descOff = mrefDescOff(idx);
         int argc = argSlots(descOff) + thisArg;
         int hasRet = retSlots(descOff);
-        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
-        emit(strx(30, 31, 0));                             // frame: [x30@0][x1..x15@8..120]
-        int k = 1;
-        while (k <= 15)
-        {
-            emit(strx(k, 31, k * 8));
-            k += 1;
-        }
+        spillOperands();                                   // x9..x15 -> frame spill area
         int t = 0;
-        while (t < argc)                                   // args: stack top -> x1..x(argc)
+        while (t < argc)                                   // args: stack top -> x0..x(argc-1)
         {
-            emit(mov(1 + t, 9 + csp - argc + t));
+            emit(mov(t, 9 + csp - argc + t));
             t += 1;
         }
         emitBl(calleeBuf);
-        emit(ldrx(30, 31, 0));
-        k = 1;
-        while (k <= 15)
-        {
-            emit(ldrx(k, 31, k * 8));
-            k += 1;
-        }
-        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
+        reloadOperands();
         if (hasRet == 1)
         {
             emit(mov(9 + csp - argc, 0));                   // result replaces the args
@@ -1534,24 +1666,10 @@ public final class Loader
             tib = clTib[c];
         }
         int size = 16 + fields * 8;                        // header(16) + one 8-byte slot per field
-        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
-        emit(strx(30, 31, 0));
-        int k = 1;
-        while (k <= 15)
-        {
-            emit(strx(k, 31, k * 8));
-            k += 1;
-        }
+        spillOperands();                                   // x9..x15 -> frame spill area
         emit(movz(0, size));                               // x0 = size (Heap.alloc arg)
         emitBl(VM.heapAlloc);                              // x0 = object base
-        emit(ldrx(30, 31, 0));
-        k = 1;
-        while (k <= 15)
-        {
-            emit(ldrx(k, 31, k * 8));
-            k += 1;
-        }
-        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
+        reloadOperands();
         emitAddr16(tib);                                   // x16 = &TIB
         emit(strx(16, 0, 0));                              // header.tib = &TIB (vtable for dispatch)
         emit(mov(9 + csp, 0));                             // push the reference
@@ -1577,21 +1695,14 @@ public final class Loader
         int argc = argSlots(mrefDescOff(idx)) + 1;         // + receiver
         int hasRet = retSlots(mrefDescOff(idx));
         int slot = iface ? ifSlotOf(idx) : vtableSlotOf(idx);
-        emit(A64Enc.subImm(31, 31, 128));   // sub sp, sp, #128
-        emit(strx(30, 31, 0));
-        int k = 1;
-        while (k <= 15)
-        {
-            emit(strx(k, 31, k * 8));
-            k += 1;
-        }
+        spillOperands();                                   // x9..x15 -> frame spill area
         int t = 0;
-        while (t < argc)                                   // this + args -> x1..x(argc)
+        while (t < argc)                                   // this + args -> x0..x(argc-1)
         {
-            emit(mov(1 + t, 9 + csp - argc + t));
+            emit(mov(t, 9 + csp - argc + t));
             t += 1;
         }
-        emit(ldrx(16, 1, 0));                              // x16 = [this]  (TIB)
+        emit(ldrx(16, 0, 0));                              // x16 = [this]  (TIB)
         if (iface)
         {
             emit(ldrx(16, 16, 0));                         // x16 = Type    (TIB[0])
@@ -1603,14 +1714,7 @@ public final class Loader
             emit(ldrx(16, 16, 8 + slot * 8));              // x16 = vtable[slot] (code)
         }
         emit(A64Enc.blr(16));                      // blr x16
-        emit(ldrx(30, 31, 0));
-        k = 1;
-        while (k <= 15)
-        {
-            emit(ldrx(k, 31, k * 8));
-            k += 1;
-        }
-        emit(A64Enc.addImm(31, 31, 128));   // add sp, sp, #128
+        reloadOperands();
         if (hasRet == 1)
         {
             emit(mov(9 + csp - argc, 0));
@@ -1851,7 +1955,7 @@ public final class Loader
 
     private static void emitIinc(long code, int pc)
     {
-        int rd = 1 + u1(code + pc + 1);
+        int rd = LOC_BASE + u1(code + pc + 1);
         int d = (byte) u1(code + pc + 2);
         if (d >= 0)
         {
@@ -1912,7 +2016,7 @@ public final class Loader
         if (op == 0xb8)
         {
             int descOff = mrefDescOff(u2(code + pc + 1));   // invokestatic call sequence:
-            return 35 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + bl + result
+            return 15 + argSlots(descOff) + retSlots(descOff);   // spill 7 + args + bl + reload 7 + result
         }
         if (op == 0xb7)                                     // invokespecial
         {
@@ -1922,21 +2026,21 @@ public final class Loader
                 return 0;    // Object.<init>/unresolved lowers to just a pop
             }
             int descOff = mrefDescOff(idx);
-            return 35 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
+            return 15 + argSlots(descOff) + 1 + retSlots(descOff);   // + the this arg
         }
         if (op == 0xb6)                                    // invokevirtual
         {
             int descOff = mrefDescOff(u2(code + pc + 1));
-            return 38 + argSlots(descOff) + retSlots(descOff);   // spill 16 + args + ldr/ldr/blr + result
+            return 18 + argSlots(descOff) + retSlots(descOff);   // + ldr TIB, ldr slot, blr
         }
         if (op == 0xb9)                                    // invokeinterface: 2 more loads (Type, imap)
         {
             int descOff = mrefDescOff(u2(code + pc + 1));
-            return 40 + argSlots(descOff) + retSlots(descOff);
+            return 20 + argSlots(descOff) + retSlots(descOff);   // + Type and imap loads
         }
         if (op == 0xbb)
         {
-            return 40;    // new: 128-byte spill + movz size + bl + tib addr/store + push
+            return 20;    // new: spill 7 + movz + bl + reload 7 + tib addr/store + push
         }
         if (op == 0xc1)
         {
@@ -1950,9 +2054,13 @@ public final class Loader
         {
             return 3;    // get/putstatic: movz + movk + ldrsw/strw
         }
-        if (op == 0xac)
+        if (op == 0xac || op == 0xb0)
         {
-            return 2;    // ireturn: mov x0 + ret
+            return 1 + epilogueWords();    // i/areturn: mov x0 + frame teardown
+        }
+        if (op == 0xb1)
+        {
+            return epilogueWords();        // void return
         }
         if ((op >= 0x99 && op <= 0x9e) || (op >= 0x9f && op <= 0xa4))
         {

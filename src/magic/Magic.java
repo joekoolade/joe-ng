@@ -43,8 +43,9 @@ public final class Magic
         throw intrinsic();
     }
 
-    /** Call JIT'd code at {@code addr} with two int args (in the loader's
-     *  local-slot convention: slot0=x1, slot1=x2); return x0. */
+    /** Call JIT'd code at {@code addr} with two int args in the standard argument
+     *  registers (x0, x1) — JIT'd methods follow the same convention as compiled
+     *  ones (PLAN.md §M5.2); return x0. */
     public static long call2(long addr, long a, long b)
     {
         throw intrinsic();
