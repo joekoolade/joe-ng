@@ -155,20 +155,37 @@ it can handle.
 - **Done when:** joe-ng takes Java classes it has never seen and runs them, on the
   metal, with no OS.
 
-### M5 — Self-hosting closure (drop the seed JVM) (target: weeks)
+### M5 — Self-hosting closure (drop the seed JVM) (compiler closure done; writer-on-metal remaining)
 - Run the boot-image writer *inside* joe-ng, so joe-ng builds its own next image.
-- **Done when:** the seed JVM is no longer needed to produce an image. Fully
-  metacircular, fully self-contained.
+- **Compiler closure ✅:** one `compiler/Baseline` compiles in both worlds — the
+  writer and the on-metal JIT — verified on QEMU. The metacircular *compiler* loop
+  is closed (M5.4); see progress below.
+- **Done when:** the seed JVM is no longer needed to produce an image — i.e. the
+  boot-image *writer* also runs on metal. Fully metacircular, fully self-contained.
 
 #### M5 progress
-Two of the three pipeline stages are already shared — the same source runs on the
-seed JVM and is compiled into the image:
+**The compiler closure is done (M5.4 ✅): one baseline compiler now serves both
+worlds.** All three pipeline stages are shared source — run on the seed JVM by the
+writer and compiled into the image for the on-metal JIT:
 - `classfile/ClassReader` — the classfile format, read from a `byte[]`. The
   writer's `ClassFile` and the on-metal loader both use it.
 - `asm/A64Enc` — the instruction encodings as pure integer arithmetic. `A64` adds
-  validation for the writer; the on-metal JIT emits through it directly.
+  validation for the writer; the shared core and on-metal JIT emit through it.
+- `compiler/Baseline` — the code generator, `ClassFile`-free (cp view via
+  `ClassReader`, every symbolic reference behind the `Symbols` seam). The writer
+  drives it via `BaselineCompiler`+`WriterSymbols`; the metal's `Loader.emitMethod`
+  drives the *same class* via `MetalSymbols`. M5Gap: `Baseline` self-compiles 66/66.
+  `Loader.emitOp` is deleted — there is no second compiler. Verified on QEMU: the
+  metal JIT compiles `Guest`/`Math` through `Baseline`, exercising `new`, virtual/
+  interface/static dispatch, class+interface `instanceof`, string literals, magic
+  intrinsics, and `throw`/`catch` (see §M5.4).
 
-The middle stage, `compiler/BaselineCompiler`, is the remaining work. Plan below.
+**Remaining for full M5 (drop the seed JVM):** run the boot-image *writer* itself
+(`ImageBuilder` — object/TIB/itable layout, relocation, `kernel8.img` emission) on
+metal, so joe-ng builds its own next image. The compiler and classfile parser it
+needs already run on metal; what's left is the layout/link/emit machinery and a
+metal filesystem/blob source for the input classes. Plan for the compiler stage,
+now complete, below.
 
 #### M5.1 — Migrating BaselineCompiler (the plan)
 
