@@ -25,6 +25,17 @@ public class Guest
         // a Beta (super-chain hit), an Alpha is not. This exercises the shared core's
         // instanceof lowering (a VM.instanceOf call) on on-metal-JIT'd objects (M5.4.e).
         int corrections = (b instanceof Beta ? 0 : 100) + (a instanceof Beta ? 100 : 0);
-        return a.greet() + b.greet() + corrections;   // one call site, two layouts -> 42
+        return a.greet() + b.greet() + corrections + bias();   // one call site, two layouts -> 42
+    }
+
+    /**
+     * A same-class static callee, so {@code answer()} contains an {@code invokestatic}.
+     * The on-metal JIT discovers it, places it in its own buffer, and resolves the
+     * {@code BL} to it — verifying the shared core's call lowering and the loader's
+     * two-pass (size-then-emit) buffer placement on metal (M5.4.e).
+     */
+    private static int bias()
+    {
+        return 0;
     }
 }
