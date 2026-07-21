@@ -484,21 +484,25 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
           and compiles via the overflow-locals path). Byte-identical image; QEMU `*M F`.
           This closes 4.4b: the code generator both is metal-instantiable (no `ClassFile`)
           and compiles under joe-ng's own compiler — ready for 4.4c (`MetalSymbols`).
-  - ◐ **4.4c — `MetalSymbols implements Symbols`**, the other half of the seam.
+  - ✅ **4.4c — `MetalSymbols implements Symbols`**, the other half of the seam.
     `vm/MetalSymbols` resolves each cp index to a concrete address *now* (the metal
     has already loaded its deps): calls → `Loader.resolveCallBuf`; helper calls →
     the writer-stashed `VM.heapAlloc`/`allocArray`/`gcCollect`/`instanceOfAddr`/
     `checkCastAddr`/`unwindAddr`; tib/type/interfaceType/staticField → `Loader.tibOfClass`/
-    `typeOfClass`/`ifaceTypeOfMethod`/`staticAddr` loaded via `loadImm64`; the int/bool
-    queries → `fieldOffsetOf`/`objectSizeOf`/`vtableSlotOf`/`ifSlotOf`/`isRealSpecial`;
-    `fail` halts. The needed `Loader` resolvers are now package-visible. **M5Gap: 20/20
-    methods self-compile.** Dead code until 4.4e wires it, so the image is byte-identical.
-    Deferred to 4.4d/e (stubbed with TODOs): interned-string and exception-slot
-    addresses on metal, magic-intrinsic recognition, and the object-model/dispatch
-    reconciliation — the metal indexes the imap by global slot while the shared core
-    searches an itable directory (`ObjectModel.TYPE_ITABLE_DIR_OFFSET`), so the metal's
-    Type/vtable/itable layout must line up with `ObjectModel` before the core can drive
-    invokeinterface on metal.
+    `typeOfClass`/`ifaceTypeOfMethod`/`staticAddr` loaded via fixed-width MOVZ+MOVK; the
+    int/bool queries → `fieldOffsetOf`/`objectSizeOf`/`vtableSlotOf`/`ifSlotOf`/
+    `isRealSpecial`; `fail` halts. The needed `Loader` resolvers are package-visible.
+    Every method is a real resolver — the initial stubs are all implemented:
+    - **interned strings** → `Loader.internString` allocates a heap `byte[]` (the
+      writer's array layout) and bakes in its address.
+    - **magic intrinsics** → `Loader.isMagicOwner` (Utf8 compare) + `magicId`
+      (packed-name compare for the memory/`bytes` ops a JIT'd class might use; an
+      unrecognised magic op halts).
+    - **exception slot** → a heap word, with `Loader.compileMethod` now extracting the
+      method's real exception table so JIT'd `try/catch` fires (was `NO_EX`).
+    All exercised on metal by `Guest.answer` → '*' (`Magic.bytes("*")[0]`, a
+    `throw new MyExc()`/`catch`). The object-model/dispatch reconciliation that this
+    depended on is 4.4e steps 1–2.
   - ◐ **4.4d — a metal-ready emit stack, code sink, and branch convergence.**
     Measured the shared emit stack with M5Gap: 222/232 methods self-compile; the sole
     blocker is `A64`'s 14 `throw new IllegalArgumentException(...)` — String concat
