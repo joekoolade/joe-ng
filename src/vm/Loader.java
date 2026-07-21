@@ -53,6 +53,8 @@ public final class Loader
     private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
     private static long gType;      // this class's Type { superType } — a metal instanceof chain node
     private static int gSuperNameOff;  // superclass name Utf8 offset (unloaded/Object => no inherit)
+    private static int[] gImplIfName;  // name Utf8 offsets of the interfaces this class implements
+    private static int gImplIfCount;
 
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
@@ -291,7 +293,16 @@ public final class Loader
         gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p += 6;                                         // access_flags, this_class, super_class
-        p += 2 + u2(p) * 2;                             // interfaces
+        gImplIfCount = u2(p);                           // interfaces this class implements
+        gImplIfName = new int[gImplIfCount];
+        int ii = 0;
+        while (ii < gImplIfCount)
+        {
+            int ci = u2(p + 2 + ii * 2);                // Class entry index
+            gImplIfName[ii] = gcp[u2(gbase + gcp[ci])]; // -> interface name Utf8 offset
+            ii += 1;
+        }
+        p += 2 + gImplIfCount * 2;                      // interfaces
         int fcount = u2(p);
         p += 2;
         gsfName = new int[fcount + 1];
@@ -895,6 +906,19 @@ public final class Loader
         if (gIsInterface)
         {
             registerInterface();                        // give its methods global itable indices
+            // Give the interface a Type and register it, so implementors' itable
+            // directories can key on it and the core's interfaceType resolves (M5.4.e).
+            gType = Heap.alloc(24);
+            Magic.store64(gType + 0, 0L);               // instanceSize (not instantiated)
+            Magic.store64(gType + 8, 0L);               // superType
+            Magic.store64(gType + 16, 0L);              // no itableDir
+            clBase[clCount] = gbase;
+            clNameOff[clCount] = gThisNameOff;
+            clTib[clCount] = 0L;
+            clType[clCount] = gType;
+            clFieldCount[clCount] = 0;
+            clVtCount[clCount] = 0;
+            clCount += 1;
             return;                                     // nothing to compile: all methods abstract
         }
         runClinit(bytes);                               // gvCount==0 here (vtable not built yet)
@@ -1350,7 +1374,32 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
-        Magic.store64(gType + 16, buildImap());          // TYPE_ITABLE_DIR_OFFSET (holds imap for now)
+        Magic.store64(gType + 16, buildItableDir(buildImap()));   // TYPE_ITABLE_DIR_OFFSET
+    }
+
+    /**
+     * itable directory (ObjectModel): one {@code {interfaceType, itable}} entry per
+     * implemented interface. Every entry shares this class's flat imap as its itable —
+     * the metal indexes the imap by the interface method's <em>global</em> slot
+     * ({@link #ifSlotOf}), so one table serves all interfaces. The directory adds the
+     * interfaceType-keyed lookup the shared core's {@code invokeinterface} searches for.
+     */
+    private static long buildItableDir(long imap)
+    {
+        if (gImplIfCount == 0)
+        {
+            return 0L;
+        }
+        long dir = Heap.alloc(gImplIfCount * 16);        // {interfaceType@0, itable@8}
+        int k = 0;
+        while (k < gImplIfCount)
+        {
+            int r = classRegByName(gImplIfName[k]);
+            Magic.store64(dir + k * 16 + 0, r >= 0 ? clType[r] : 0L);   // interfaceType
+            Magic.store64(dir + k * 16 + 8, imap);                      // itable (the shared imap)
+            k += 1;
+        }
+        return dir;
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
@@ -1713,9 +1762,10 @@ public final class Loader
         emit(ldrx(16, 0, 0));                              // x16 = [this]  (TIB)
         if (iface)
         {
-            emit(ldrx(16, 16, 0));                         // x16 = Type    (TIB[0])
-            emit(ldrx(16, 16, 16));                        // x16 = imap    (Type+16, itableDir slot)
-            emit(ldrx(16, 16, slot * 8));                  // x16 = imap[g] (code)
+            emit(ldrx(16, 16, 0));                         // x16 = Type       (TIB[0])
+            emit(ldrx(16, 16, 16));                        // x16 = itableDir  (Type+16)
+            emit(ldrx(16, 16, 8));                         // x16 = imap       (dir[0].itable)
+            emit(ldrx(16, 16, slot * 8));                  // x16 = imap[g]    (code)
         }
         else
         {
@@ -2062,10 +2112,10 @@ public final class Loader
             int descOff = mrefDescOff(u2(code + pc + 1));
             return 18 + argSlots(descOff) + retSlots(descOff);   // + ldr TIB, ldr slot, blr
         }
-        if (op == 0xb9)                                    // invokeinterface: 2 more loads (Type, imap)
+        if (op == 0xb9)                                    // invokeinterface: 3 more loads (Type, dir, imap)
         {
             int descOff = mrefDescOff(u2(code + pc + 1));
-            return 20 + argSlots(descOff) + retSlots(descOff);   // + Type and imap loads
+            return 21 + argSlots(descOff) + retSlots(descOff);   // + Type, itableDir, imap loads
         }
         if (op == 0xbb)
         {

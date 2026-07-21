@@ -539,14 +539,18 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
         `{instanceSize@0, super@8, itableDir@16}` `Type`; `emitInstanceof`/
         `emitCheckcast` walk `super` at `Type+8` and `emitInvokeVirtual` reads the imap
         from `Type+16`. The flat imap still occupies the `itableDir` slot. QEMU `*M F`.
-      - ☐ **step 2 — the itable directory.** The metal has *no `Type` for interfaces*
-        (its imap uses a global name+descriptor-dedup'd index, so it needs no interface
-        identity); the `ObjectModel` scheme keys a `{interfaceType, itable}` directory
-        by the interface's `Type`. So step 2 must: give each loaded interface a `Type`
-        (a `clType` entry); per class, build one itable per implemented interface
-        (methods by their slot *within that interface*) plus a directory at `Type+16`;
-        make `ifSlotOf` return the interface-local slot; and either update the metal's
-        `emitInvokeVirtual(iface)` to the directory search or go straight to the core.
+      - ✅ **step 2 — the itable directory.** Interfaces now get a `Type` + `clType`
+        entry when loaded; `parseFields` captures each class's implemented-interface
+        list; `buildTib` builds an `ObjectModel` `{interfaceType, itable}` directory at
+        `Type+16`. Since `Guest`/`Alpha`/`Beta`/`Greeter` are all metal-loaded (one
+        world), the global-slot imap stays consistent, so every directory entry shares
+        that flat imap as its itable and `ifSlotOf` keeps returning the global slot —
+        the directory just adds the interfaceType-keyed lookup the core searches for.
+        The metal's own `emitInvokeVirtual(iface)` reads `dir[0].itable` (one extra
+        load; `wordsFor` +1) to keep dispatching until the core takes over. QEMU still
+        prints `Guest.answer`→'*'. The metal's metadata is now `ObjectModel`-conformant,
+        and `interfaceType` resolves (interfaces have `clType`), so the core's
+        `invokeinterface` will work on JIT'd objects.
       - ☐ **step 3 — instanceof/checkcast via helpers.** Once JIT'd `Type`s are
         `ObjectModel`, the metal's inline walks can give way to the `VM.instanceOf`/
         `checkCast` calls the core emits (the addresses are already stashed, 4.4c).
