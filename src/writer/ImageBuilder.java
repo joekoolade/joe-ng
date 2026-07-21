@@ -40,7 +40,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     private final Path classesDir;
     private final Map<String, ClassFile> classes = new HashMap<>();
-    private final List<Blob> blobs = new ArrayList<>();
+    private final Vec<Blob> blobs = new Vec<>();
 
     /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics. */
     private record Blob(String addrKey, String lenKey, byte[] bytes) {}
@@ -91,13 +91,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         StrSet typeRefClasses = new StrSet();          // instanceof/checkcast/interface targets
         StrSet usedInterfaces = new StrSet();          // invokeinterface targets (itable build)
         StrSet usedClasses = new StrSet();
-        List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
+        Vec<String> clinitOrder = new Vec<>();               // <clinit>s to run, first-use order
         int frameCount = 0;                                          // unwind-table entry counts
         int handlerCount = 0;
-        List<String> worklist = new ArrayList<>(List.of(entryKey));
+        Vec<String> worklist = new Vec<>();
+        worklist.add(entryKey);
         while (!worklist.isEmpty())
         {
-            String k = worklist.remove(0);
+            String k = worklist.removeFirst();
             if (k.equals(INIT_CLASSES) || sizeWords.containsKey(k))
             {
                 continue;    // init body is generated
@@ -208,7 +209,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _s7 = 0; _s7 < tibClasses.size(); _s7++)
         {
             String c = tibClasses.at(_s7);
-            List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
+            Vec<String> impls = implementedUsedInterfaces(c, usedInterfaces);
             if (impls.isEmpty())
             {
                 continue;
@@ -217,8 +218,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             // +1 entry: a zeroed {interfaceType=0, itable=0} sentinel terminates the
             // directory so a bounded scan (VM.instanceOf) knows where it ends.
             cur += (impls.size() + 1) * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
-            for (String i : impls)
+            for (int _v1 = 0; _v1 < impls.size(); _v1++)
             {
+                String i = impls.get(_v1);
                 itableWord.put(c + "|" + i, cur);
                 cur += resolve(i).interfaceMethods().size() * WORDS_PER_SLOT;
             }
@@ -240,13 +242,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
         // --- final compile at real bases; concatenate; gather fixups ---
         int[] image = new int[totalWords];
-        List<GlobalCall> calls = new ArrayList<>();
-        List<GlobalTib> tibs = new ArrayList<>();
-        List<GlobalStr> strs = new ArrayList<>();
-        List<GlobalStatic> stats = new ArrayList<>();
-        List<GlobalType> types = new ArrayList<>();
-        List<long[]> frameEntries = new ArrayList<>();       // {codeStart, codeEnd, frameSize}
-        List<long[]> handlerEntries = new ArrayList<>();     // {machStart, machEnd, handler, catchType}
+        Vec<GlobalCall> calls = new Vec<>();
+        Vec<GlobalTib> tibs = new Vec<>();
+        Vec<GlobalStr> strs = new Vec<>();
+        Vec<GlobalStatic> stats = new Vec<>();
+        Vec<GlobalType> types = new Vec<>();
+        Vec<long[]> frameEntries = new Vec<>();       // {codeStart, codeEnd, frameSize}
+        Vec<long[]> handlerEntries = new Vec<>();     // {machStart, machEnd, handler, catchType}
         for (int si = 0; si < sizeWords.size(); si++)
         {
             String k = sizeWords.keyAt(si);
@@ -295,7 +297,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _s9 = 0; _s9 < tibClasses.size(); _s9++)
         {
             String c = tibClasses.at(_s9);
-            List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
+            Vec<String> impls = implementedUsedInterfaces(c, usedInterfaces);
             if (impls.isEmpty())
             {
                 continue;
@@ -308,8 +310,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 writeLong(image, entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET / 4, addr(typeWord.get(i)));
                 writeLong(image, entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET / 4, addr(itableWord.get(c + "|" + i)));
             }
-            for (String i : impls)
+            for (int _v2 = 0; _v2 < impls.size(); _v2++)
             {
+                String i = impls.get(_v2);
                 int iw = itableWord.get(c + "|" + i);
                 var ims = resolve(i).interfaceMethods();
                 for (int s = 0; s < ims.size(); s++)
@@ -389,8 +392,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             cb.emit(w);
         }
-        for (GlobalCall c : calls)
+        for (int _v3 = 0; _v3 < calls.size(); _v3++)
         {
+            GlobalCall c = calls.get(_v3);
             int calleeBase = wordOffset.get(c.calleeKey());
             if (calleeBase < 0)
             {
@@ -398,8 +402,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             cb.set(c.siteWord(), A64.bl((calleeBase - c.siteWord()) * 4));
         }
-        for (GlobalTib t : tibs)
+        for (int _v4 = 0; _v4 < tibs.size(); _v4++)
         {
+            GlobalTib t = tibs.get(_v4);
             int w = tibWord.get(t.className());
             if (w < 0)
             {
@@ -407,16 +412,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             cb.patchAddr(t.siteWord(), t.reg(), addr(w));          // store absolute TIB address
         }
-        for (GlobalStr s : strs)
+        for (int _v5 = 0; _v5 < strs.size(); _v5++)
         {
+            GlobalStr s = strs.get(_v5);
             cb.patchAddr(s.siteWord(), s.reg(), addr(strWord.get(s.text())));   // store byte[] address
         }
-        for (GlobalStatic s : stats)
+        for (int _v6 = 0; _v6 < stats.size(); _v6++)
         {
+            GlobalStatic s = stats.get(_v6);
             cb.patchAddr(s.siteWord(), s.reg(), addr(staticWord.get(s.fieldKey()))); // static field address
         }
-        for (GlobalType t : types)
+        for (int _v7 = 0; _v7 < types.size(); _v7++)
         {
+            GlobalType t = types.get(_v7);
             cb.patchAddr(t.siteWord(), t.reg(), addr(typeWord.get(t.className())));  // class Type address
         }
         return cb;
@@ -437,10 +445,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
-    private List<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
+    private Vec<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
     {
         Set<String> all = ClassFile.allInterfaces(cls, this::resolve);
-        List<String> out = new ArrayList<>();
+        Vec<String> out = new Vec<>();
         for (int _s12 = 0; _s12 < usedInterfaces.size(); _s12++)
         {
             String i = usedInterfaces.at(_s12);
@@ -453,7 +461,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
-    private void use(String cls, StrSet used, List<String> clinitOrder, List<String> worklist)
+    private void use(String cls, StrSet used, Vec<String> clinitOrder, Vec<String> worklist)
     {
         if (used.add(cls) && resolve(cls).hasClinit())
         {
@@ -471,16 +479,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Generate VM.initClasses()'s body: save LR, BL each &lt;clinit&gt;, restore, ret. */
-    private CompiledMethod generateInitClasses(List<String> clinits)
+    private CompiledMethod generateInitClasses(Vec<String> clinits)
     {
         int frame = A64.align16(8);                                 // LR only
-        List<Integer> w = new ArrayList<>();
-        List<BaselineCompiler.CallSite> calls = new ArrayList<>();
+        Vec<Integer> w = new Vec<>();
+        List<BaselineCompiler.CallSite> calls = new ArrayList<>();   // CompiledMethod's contract
         w.add(A64.subImm(31, 31, frame));
         w.add(A64.strx(30, 31, 0));
-        for (String c : clinits)
+        for (int ci = 0; ci < clinits.size(); ci++)
         {
-            calls.add(new BaselineCompiler.CallSite(w.size(), c));
+            calls.add(new BaselineCompiler.CallSite(w.size(), clinits.get(ci)));
             w.add(A64.bl(0));
         }
         w.add(A64.ldrx(30, 31, 0));
