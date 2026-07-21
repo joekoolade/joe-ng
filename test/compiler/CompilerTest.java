@@ -174,6 +174,21 @@ public final class CompilerTest
         T.check("charElem uses LDRH (caload)", sawLdrh);
         T.check("charElem uses STRH (castore)", sawStrh);
 
+        // ---- anewarray: reference array allocates like long[] (elemSize 8) ----
+        // (compileMethod, not compile(): the Heap.allocArray helper records a call site)
+        int[] ana = new BaselineCompiler(fx)
+        .compileMethod(fx.method("makeRefs", "(I)[Ljava/lang/Object;"), CodeBuffer.LOAD_ADDRESS, false).words();
+        boolean sawSize8 = false;
+        boolean sawBl = false;
+        for (int w : ana)
+        {
+            sawSize8 |= (w & 0xFFFFFFE0) == (0xD2800000 | (8 << 5));   // MOVZ x?,#8 (elemSize)
+            sawBl |= (w & 0xFC000000) == 0x94000000;                  // BL to Heap.allocArray
+        }
+        T.check("makeRefs (anewarray) compiles", ana.length > 0);
+        T.check("anewarray pushes element size 8", sawSize8);
+        T.check("anewarray calls the array allocator", sawBl);
+
         T.check("manyLocals compiles (>10 locals)", ml.length > 0);
         T.check("overflow locals are stored to the frame", overflowStores > 0);
         T.check("overflow locals are loaded from the frame", overflowLoads > 0);

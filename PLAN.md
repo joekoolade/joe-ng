@@ -420,7 +420,7 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
     identical image. (The remaining above-seam checks are name-*identity* predicates
     — `magic/Magic`, root-`<init>` — which compare names rather than resolve a value;
     they fold naturally into 4.4b, where name access itself moves onto `ClassReader`.)
-  - ◐ **4.4b — parse view: `BaselineCompiler` off `ClassFile` onto `ClassReader`.**
+  - ✅ **4.4b — parse view: `BaselineCompiler` off `ClassFile` onto `ClassReader`.**
     So the compiler reads `byte[]`+offsets like the metal already does (4.3), not
     JDK `ClassFile` objects. Progress (each byte-identical):
     - ✅ **b.1 cp view + constants.** `BaselineCompiler` holds `classBytes`/`cpOff`/
@@ -443,7 +443,7 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       **The shared lowering (step + all lower*/emit* helpers) now references no
       `ClassFile`** — every remaining use is in `WriterSymbols`/`resolve`/`staticKey`
       or the writer drivers. Byte-identical image throughout.
-    - ◐ **b.5 core/writer split.** The shared lowering now lives in `compiler/Baseline`
+    - ✅ **b.5 core/writer split.** The shared lowering now lives in `compiler/Baseline`
       — a class holding **no `ClassFile`** (only `classBytes`/`cpOff`/`cpTag` + `Symbols`
       + the lowering), constructed `(classBytes, cpOff, cpTag, symbols)` with a
       `compileBody(code, descOff, isStatic, maxLocals, base, isEntry)` entry. Done in
@@ -472,11 +472,18 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
           Fixing this surfaced a masked `dup_x1` (0x5A) from `sp++`/`--sp` on a field in
           `pushReg`/`popReg`; rewritten to `sp += 1` / `sp -= 1`. **`Baseline` now
           compiles 63 of its 65 methods**; the only remaining blocker is:
-        - ☐ **anewarray (0xBD)** — 2 methods: `new Fixup[]` growth. The baseline compiler
-          emits `newarray` (primitive) but not `anewarray` (reference arrays); adding
-          it is a compiler feature, needed for the fixup array to allocate on metal.
-        After anewarray the core is fully self-compilable, closing the loop for 4.4c–e
-        (a metal `Symbols` driving the same core on the metal side).
+        - ✅ **anewarray (0xBD)** — added: a reference array allocates exactly like a
+          `long[]` (8-byte pointer elements via `Heap.allocArray`), the element-class
+          operand unused (`aaload`/`aastore` are untyped). `opLen`/`isNonLeaf` updated,
+          `CompilerTest` covers it. Fixing it unmasked one more self-host gap —
+          `addFixup`'s `fixups[i] = new Fixup(a,b,c,d)` peaked at operand depth 8, one
+          past the 7 operand registers (`OP_MAX`); binding the `Fixup` to a local first
+          drops it to 6.
+        - ✅ **The core is now fully self-compilable: `tools/M5Gap` reports
+          `compiler/Baseline` at 66/66 methods, 0 blocked** (one method uses >10 locals
+          and compiles via the overflow-locals path). Byte-identical image; QEMU `*M F`.
+          This closes 4.4b: the code generator both is metal-instantiable (no `ClassFile`)
+          and compiles under joe-ng's own compiler — ready for 4.4c (`MetalSymbols`).
   - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
     (addresses + Utf8-offset compares), the other half of the seam.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the

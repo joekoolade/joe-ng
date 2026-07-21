@@ -104,7 +104,13 @@ public final class Baseline
             }
             fixups = bigger;
         }
-        fixups[fixupCount] = new Fixup(wordIndex, targetBc, kind, arg);
+        // Bind the new Fixup to a local before the array store: writing
+        // fixups[fixupCount] = new Fixup(a,b,c,d) directly keeps the array ref and
+        // index on the operand stack across the 4-arg constructor, peaking at depth 8
+        // — one past this compiler's 7 operand registers (OP_MAX). The local keeps it
+        // self-compilable.
+        Fixup f = new Fixup(wordIndex, targetBc, kind, arg);
+        fixups[fixupCount] = f;
         fixupCount += 1;
     }
 
@@ -532,6 +538,11 @@ public final class Baseline
         {
             lowerNewArray(code[pos + 1] & 0xFF, cb);
             return 2;
+        }
+        else if (op == 0xBD)
+        {
+            lowerAnewArray(cb);                              // operand (element class) unused
+            return 3;
         }
         else if (op == 0xBF)
         {
@@ -1031,6 +1042,18 @@ public final class Baseline
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
     }
 
+    /**
+     * anewarray: an array of references — the element is an 8-byte pointer, so it
+     * allocates exactly like a {@code long[]}. The constant-pool operand names the
+     * element class, but nothing needs it: element access ({@code aaload}/
+     * {@code aastore}) is untyped, and array TIBs (for typed GC) are set later.
+     */
+    private void lowerAnewArray(CodeBuffer cb)
+    {
+        loadConst(cb, ObjectModel.WORD);                        // 8-byte reference elements
+        emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+    }
+
     private void arrayLength(CodeBuffer cb)
     {
         int arr = popReg();
@@ -1273,9 +1296,9 @@ public final class Baseline
         while (pos < code.length)
         {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xBC || op == 0xB6 || op == 0xB9 || op == 0xBF || op == 0xC0 || op == 0xC1)
+            if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBF || op == 0xC0 || op == 0xC1)
             {
-                return true;    // new/newarray/invokevirtual/invokeinterface/athrow/checkcast/instanceof
+                return true;    // new/newarray/anewarray/invokevirtual/invokeinterface/athrow/checkcast/instanceof
             }
             if (op == 0xB8)                                      // invokestatic
             {
@@ -1310,13 +1333,13 @@ public final class Baseline
         {
             return 5;
         }
-        // 3-byte: sipush/ldc_w/ldc2_w/iinc/if*/goto/get-put static-field/invoke*/new/checkcast/instanceof
+        // 3-byte: sipush/ldc_w/ldc2_w/iinc/if*/goto/get-put static-field/invoke*/new/anewarray/checkcast/instanceof
         if (op == 0x11 || op == 0x13 || op == 0x14 || op == 0x84 || op == 0x99
             || op == 0x9A || op == 0x9B || op == 0x9C || op == 0x9D || op == 0x9E
             || op == 0x9F || op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3
             || op == 0xA4 || op == 0xA7 || op == 0xB2 || op == 0xB3 || op == 0xB4
             || op == 0xB5 || op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xBB
-            || op == 0xC0 || op == 0xC1)
+            || op == 0xBD || op == 0xC0 || op == 0xC1)
         {
             return 3;
         }

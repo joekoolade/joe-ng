@@ -53,6 +53,12 @@ public final class Fixtures
         return s[0] + s[1];
     }
 
+    /** anewarray: a reference array — 8-byte pointer elements, allocated like long[]. */
+    public static Object[] makeRefs(int n)
+    {
+        return new Object[n];
+    }
+
     /**
      * More locals than there are callee-saved registers (x19..x28). Slots 0..9 stay
      * in registers; the rest live in the frame, loaded and stored around each use.
