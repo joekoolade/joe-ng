@@ -57,8 +57,7 @@ final class MetalSymbols implements Symbols
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
-        // TODO(4.4e): a metal in-flight-exception slot (the writer's vm/VM.$exception).
-        emitAddr(cb, reg, 0L);
+        emitAddr(cb, reg, Loader.exceptionSlotAddr());   // the metal in-flight-exception word
     }
 
     /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */

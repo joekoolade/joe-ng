@@ -302,6 +302,7 @@ public final class VM
     static long greeterBytes, greeterLen; // raw Greeter.class blob (an interface Guest loads)
     static long alphaBytes, alphaLen;   // raw Alpha.class blob (implements Greeter at vtable slot 0)
     static long betaBytes, betaLen;     // raw Beta.class blob (implements Greeter at vtable slot 1)
+    static long myExcBytes, myExcLen;   // raw MyExc.class blob (a throwable Guest catches)
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
     // Addresses of the runtime helpers the shared baseline compiler calls, stashed by
     // the writer so the on-metal JIT (via MetalSymbols) can BL them. Indexed to match

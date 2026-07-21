@@ -32,7 +32,7 @@ public class Guest
         // Also nets to zero, exercising a JIT'd String literal (interned as a byte[] on
         // metal) read back through the Magic.bytes intrinsic + baload: '*' - 42 = 0.
         int viaString = Magic.bytes("*")[0] - 42;
-        return a.greet() + b.greet() + corrections + bias() + viaString;   // -> 42
+        return a.greet() + b.greet() + corrections + bias() + viaString + viaExc();   // -> 42
     }
 
     /**
@@ -44,5 +44,23 @@ public class Guest
     private static int bias()
     {
         return 0;
+    }
+
+    /**
+     * A JIT'd try/catch: throw a MyExc and catch it in the same method. This exercises
+     * the shared core's athrow lowering on metal — the exception slot, the method's
+     * exception table (extracted by the loader), and the typed catch via VM.instanceOf
+     * against MyExc's Type. Returns 0 (caught), so answer() stays 42 (M5.4.e).
+     */
+    private static int viaExc()
+    {
+        try
+        {
+            throw new MyExc();
+        }
+        catch (MyExc e)
+        {
+            return 0;
+        }
     }
 }

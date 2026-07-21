@@ -242,6 +242,7 @@ public final class Loader
         addBlob(VM.betaBytes, (int) VM.betaLen);
         addBlob(VM.alphaBytes, (int) VM.alphaLen);
         addBlob(VM.greeterBytes, (int) VM.greeterLen);
+        addBlob(VM.myExcBytes, (int) VM.myExcLen);
         loadAll();
         seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
         long code = findMethod(VM.guestBytes);
@@ -578,7 +579,17 @@ public final class Loader
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
     private static final MetalSymbols METAL_SYMBOLS = new MetalSymbols();
-    private static final int[] NO_EX = new int[0];   // empty exception table
+    private static long gExcSlot;   // one heap word holding the in-flight exception during athrow
+
+    /** Address of the metal in-flight-exception slot (the writer's vm/VM.$exception). */
+    static long exceptionSlotAddr()
+    {
+        if (gExcSlot == 0L)
+        {
+            gExcSlot = Heap.alloc(8);
+        }
+        return gExcSlot;
+    }
 
 
 
@@ -869,7 +880,25 @@ public final class Loader
     private static int[] compileMethod(int i, long base)
     {
         Baseline b = new Baseline(gbytes, gcp, gcpTag, METAL_SYMBOLS);
-        b.setExceptionTable(NO_EX, NO_EX, NO_EX, NO_EX, 0);
+        // The exception_table follows the bytecode: u2 count, then {start,end,handler,
+        // catch} u2s. catch=0 is a catch-all; else it's a Class cp index (as the writer's).
+        long ex = mCode[i] + mLen[i];
+        int n = u2(ex);
+        int[] es = new int[n];
+        int[] ee = new int[n];
+        int[] eh = new int[n];
+        int[] ec = new int[n];
+        int k = 0;
+        while (k < n)
+        {
+            long e = ex + 2 + k * 8;
+            es[k] = u2(e);
+            ee[k] = u2(e + 2);
+            eh[k] = u2(e + 4);
+            ec[k] = u2(e + 6);
+            k += 1;
+        }
+        b.setExceptionTable(es, ee, eh, ec, n);
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mLocals[i], base, false);
         gFrameSize = b.frameSize();
         return words;

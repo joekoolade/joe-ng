@@ -33,6 +33,8 @@ public final class BuildRuntimeImage
                    Files.readAllBytes(classesDir.resolve("vm/Alpha.class")));
         ib.addBlob("vm/VM.betaBytes", "vm/VM.betaLen",
                    Files.readAllBytes(classesDir.resolve("vm/Beta.class")));
+        ib.addBlob("vm/VM.myExcBytes", "vm/VM.myExcLen",
+                   Files.readAllBytes(classesDir.resolve("vm/MyExc.class")));
         // A real class from the JDK's java.base module (extracted from lib/modules).
         try (var in = Integer.class.getResourceAsStream("/java/lang/Math.class"))
         {
