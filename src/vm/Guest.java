@@ -21,6 +21,10 @@ public class Guest
     {
         Greeter a = new Alpha();     // greet() at Alpha's vtable slot 0
         Greeter b = new Beta();      // greet() at Beta's  vtable slot 1
-        return a.greet() + b.greet();   // one call site, two layouts -> 20 + 22 = 42
+        // 20 + 22 = 42, plus two JIT'd instanceof checks that must net zero: a Beta is
+        // a Beta (super-chain hit), an Alpha is not. This exercises the shared core's
+        // instanceof lowering (a VM.instanceOf call) on on-metal-JIT'd objects (M5.4.e).
+        int corrections = (b instanceof Beta ? 0 : 100) + (a instanceof Beta ? 100 : 0);
+        return a.greet() + b.greet() + corrections;   // one call site, two layouts -> 42
     }
 }

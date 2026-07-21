@@ -70,6 +70,8 @@ public final class VM
      * pointers, Types are laid out by the writer). The compiler synthesizes calls
      * to this for the {@code instanceof} bytecode.
      */
+    // Walks only the superclass chain, so this answers class instanceof; interface
+    // instanceof (is targetType in the object's itable directory?) is not handled yet.
     static int instanceOf(long ref, long targetType)
     {
         if (ref == 0L)
