@@ -57,7 +57,7 @@ public final class A64
     /** {@code WFE} — wait for event (used to park secondary cores). */
     public static int wfe()
     {
-        return hint(0b0000_010);    // 0xD503205F
+        return A64Enc.wfe();        // 0xD503205F
     }
     /** {@code WFI} — wait for interrupt. */
     public static int wfi()
@@ -122,7 +122,7 @@ public final class A64
     /** {@code BR Xn} — branch to address in register. */
     public static int br(int rn)
     {
-        return 0xD61F_0000 | (reg(rn) << 5);
+        return A64Enc.br(reg(rn));
     }
     /** {@code BLR Xn} — branch-with-link to address in register (virtual dispatch). */
     public static int blr(int rn)
@@ -132,7 +132,7 @@ public final class A64
     /** {@code RET Xn} — return; RET with no operand uses LR (x30). */
     public static int ret(int rn)
     {
-        return 0xD65F_0000 | (reg(rn) << 5);
+        return A64Enc.ret(reg(rn));
     }
     /** {@code RET} — return to LR (x30). */
     public static int ret()
@@ -231,7 +231,7 @@ public final class A64
     /** {@code ERET} — exception return (the EL2→EL1 drop). */
     public static int eret()
     {
-        return 0xD69F_03E0;
+        return A64Enc.eret();
     }
 
     // =======================================================================
@@ -262,7 +262,7 @@ public final class A64
     /** {@code ISB} — instruction synchronization barrier. */
     public static int isb()
     {
-        return BARRIER | (SY << 8)     | (0b110 << 5);    // 0xD5033FDF
+        return A64Enc.isb();    // 0xD5033FDF
     }
 
     // =======================================================================
@@ -389,7 +389,7 @@ public final class A64
         {
             throw new IllegalArgumentException("bad shift: " + shift);
         }
-        return 0x8B00_0000 | (reg(rm) << 16) | (shift << 10) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.addRegLsl(reg(rd), reg(rn), reg(rm), shift);
     }
     /** {@code SUB Xd, Xn, Xm}. */
     public static int subReg(int rd, int rn, int rm)
@@ -399,17 +399,17 @@ public final class A64
     /** {@code AND Xd, Xn, Xm}. */
     public static int andReg(int rd, int rn, int rm)
     {
-        return 0x8A00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.andReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code ORR Xd, Xn, Xm}. */
     public static int orrReg(int rd, int rn, int rm)
     {
-        return 0xAA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.orrReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code EOR Xd, Xn, Xm}. */
     public static int eorReg(int rd, int rn, int rm)
     {
-        return 0xCA00_0000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.eorReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code MUL Xd, Xn, Xm} — alias of MADD Xd, Xn, Xm, XZR. */
     public static int mulReg(int rd, int rn, int rm)
@@ -419,22 +419,22 @@ public final class A64
     /** {@code SDIV Xd, Xn, Xm} — signed divide (divide-by-zero yields 0, per the ARM ARM). */
     public static int sdivReg(int rd, int rn, int rm)
     {
-        return 0x9AC0_0C00 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.sdivReg(reg(rd), reg(rn), reg(rm));
     }
     /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
     public static int lslv(int rd, int rn, int rm)
     {
-        return 0x9AC0_2000 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.lslv(reg(rd), reg(rn), reg(rm));
     }
     /** {@code LSR Xd, Xn, Xm} — logical shift right by a register (LSRV). */
     public static int lsrv(int rd, int rn, int rm)
     {
-        return 0x9AC0_2400 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.lsrv(reg(rd), reg(rn), reg(rm));
     }
     /** {@code ASR Xd, Xn, Xm} — arithmetic shift right by a register (ASRV). */
     public static int asrv(int rd, int rn, int rm)
     {
-        return 0x9AC0_2800 | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.asrv(reg(rd), reg(rn), reg(rm));
     }
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm (sets flags). */
     public static int cmpReg(int rn, int rm)
@@ -444,28 +444,28 @@ public final class A64
     /** {@code SXTB Xd, Wn} — sign-extend byte (i2b). */
     public static int sxtb(int rd, int rn)
     {
-        return 0x9340_1C00 | (reg(rn) << 5) | reg(rd);
+        return A64Enc.sxtb(reg(rd), reg(rn));
     }
     /** {@code SXTH Xd, Wn} — sign-extend halfword (i2s). */
     public static int sxth(int rd, int rn)
     {
-        return 0x9340_3C00 | (reg(rn) << 5) | reg(rd);
+        return A64Enc.sxth(reg(rd), reg(rn));
     }
     /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
     public static int uxth(int rd, int rn)
     {
-        return 0x5300_3C00 | (reg(rn) << 5) | reg(rd);
+        return A64Enc.uxth(reg(rd), reg(rn));
     }
 
     /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
     public static int cset(int rd, int cond)
     {
-        return 0x9A80_0400 | (31 << 16) | ((cond ^ 1) << 12) | (31 << 5) | reg(rd);
+        return A64Enc.cset(reg(rd), cond);
     }
     /** {@code CSINV Xd, Xn, Xm, cond} — Xd = cond ? Xn : ~Xm. */
     public static int csinv(int rd, int rn, int rm, int cond)
     {
-        return 0xDA80_0000 | (reg(rm) << 16) | (cond << 12) | (reg(rn) << 5) | reg(rd);
+        return A64Enc.csinv(reg(rd), reg(rn), reg(rm), cond);
     }
     /** {@code CMP Xn, #imm12} — alias of SUBS XZR, Xn, #imm12. */
     public static int cmpImm(int rn, int imm12)
@@ -510,7 +510,7 @@ public final class A64
     /** {@code CBNZ Xt, #byteOffset} — branch if register is non-zero (64-bit). */
     public static int cbnz(int rt, int byteOffset)
     {
-        return 0xB500_0000 | (imm19(byteOffset) << 5) | reg(rt);
+        return A64Enc.cbnz(reg(rt), imm19(byteOffset));
     }
 
     /** {@code TBZ Xt, #bit, #byteOffset} — branch if bit clear. */
@@ -564,7 +564,7 @@ public final class A64
     /** Round up to a 16-byte boundary (AArch64 stack-pointer alignment). */
     public static int align16(int n)
     {
-        return (n + 15) & ~15;
+        return A64Enc.align16(n);
     }
 
     // ----- helpers ----------------------------------------------------------
@@ -580,29 +580,7 @@ public final class A64
     /** Convert a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
     public static int[] loadImm64(int rd, long value)
     {
-        int[] tmp = new int[4];
-        int n = 0;
-        for (int hw = 0; hw < 4; hw++)
-        {
-            int lane = (int) ((value >>> (hw * 16)) & 0xFFFF);
-            if (lane == 0 && n > 0)
-            {
-                continue;    // MOVZ already zeroed upper lanes
-            }
-            if (lane == 0 && hw != 3 && value != 0)
-            {
-                continue;
-            }
-            tmp[n] = n == 0 ? movz(rd, lane, hw) : movk(rd, lane, hw);   // first lane MOVZ, rest MOVK
-            n++;
-        }
-        if (n == 0)
-        {
-            tmp[n++] = movz(rd, 0, 0);    // value == 0
-        }
-        int[] out = new int[n];
-        System.arraycopy(tmp, 0, out, 0, n);
-        return out;
+        return A64Enc.loadImm64(reg(rd), value);
     }
 
     /** Little-endian byte serialization of an instruction-word stream (A64 = LE). */

@@ -499,8 +499,26 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
     searches an itable directory (`ObjectModel.TYPE_ITABLE_DIR_OFFSET`), so the metal's
     Type/vtable/itable layout must line up with `ObjectModel` before the core can drive
     invokeinterface on metal.
-  - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the
-    branch model (writer fixups vs. metal two-pass `pass1`) onto one.
+  - ◐ **4.4d — a metal-ready emit stack, code sink, and branch convergence.**
+    Measured the shared emit stack with M5Gap: 222/232 methods self-compile; the sole
+    blocker is `A64`'s 14 `throw new IllegalArgumentException(...)` — String concat
+    (invokedynamic) plus a JDK exception class. It can't be funnelled to a metal-safe
+    fault either: `throw` needs a `Throwable`, and every `java/lang` exception's
+    constructor chain is unresolvable on metal. So the shared/metal path must use the
+    validation-free `A64Enc`, and `A64` stays the writer's checking wrapper.
+    - ✅ **d.1 — complete `A64Enc`** with the friction-free encodings the core/metal use
+      (andReg/orrReg/eorReg/sdivReg/lslv/lsrv/asrv, addRegLsl, sxtb/sxth/uxth, cset/
+      csinv, br, ret(rn), cbnz, ldrw/ldrb/strb, dsb/isb/wfe/eret, align16, loadImm64).
+      `A64` now delegates to each, so `A64Test` transitively verifies them and the
+      writer image stays byte-identical (A64 84 checks green).
+    - ☐ **d.2 — route `Baseline`/`MetalSymbols` off `A64` onto `A64Enc`** (byte-identical
+      output → metal-compilable core). Friction to resolve: `A64Enc` branches take
+      *word* offsets while `A64` takes *bytes*; and `msr`/`mrs` use a `Sys` record
+      (synthesised `equals`/`hashCode` = invokedynamic) — needs int-param encoders +
+      per-register int constants instead.
+    - ☐ **d.3 — the metal code sink**: `Loader` emits through a `CodeBuffer` that flushes
+      to `cout`, replacing the bare `emit(word)`, and converge the branch model
+      (writer forward-fixups vs. the metal's two-pass `pass1`) onto the fixup model.
   - ☐ **4.4e — route `Loader.emitMethod` through the shared lowering, delete `emitOp`.**
 
 **The crux, and the real risk.** The two compilers do not merely differ in

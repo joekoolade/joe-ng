@@ -152,4 +152,163 @@ public final class A64Enc
     {
         return 0x5400_0000 | ((wordOffset & 0x7FFFF) << 5) | (cond & 0xF);
     }
+    /** {@code CBNZ Xt, #wordOffset} — branch if the register is non-zero. */
+    public static int cbnz(int rt, int wordOffset)
+    {
+        return 0xB500_0000 | ((wordOffset & 0x7FFFF) << 5) | rt;
+    }
+    /** {@code BR Xn} — branch to address in register. */
+    public static int br(int rn)
+    {
+        return 0xD61F_0000 | (rn << 5);
+    }
+    /** {@code RET Xn} — return via a register. */
+    public static int ret(int rn)
+    {
+        return 0xD65F_0000 | (rn << 5);
+    }
+
+    // ----- data-processing (shifted register), 64-bit ----------------------
+    /** {@code ADD Xd, Xn, Xm, LSL #shift} — array element addressing (base + index<<scale). */
+    public static int addRegLsl(int rd, int rn, int rm, int shift)
+    {
+        return 0x8B00_0000 | (rm << 16) | (shift << 10) | (rn << 5) | rd;
+    }
+    /** {@code AND Xd, Xn, Xm}. */
+    public static int andReg(int rd, int rn, int rm)
+    {
+        return 0x8A00_0000 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code ORR Xd, Xn, Xm}. */
+    public static int orrReg(int rd, int rn, int rm)
+    {
+        return 0xAA00_0000 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code EOR Xd, Xn, Xm}. */
+    public static int eorReg(int rd, int rn, int rm)
+    {
+        return 0xCA00_0000 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code SDIV Xd, Xn, Xm} — signed divide (÷0 yields 0, per the ARM ARM). */
+    public static int sdivReg(int rd, int rn, int rm)
+    {
+        return 0x9AC0_0C00 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
+    public static int lslv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2000 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code LSR Xd, Xn, Xm} — logical shift right by a register (LSRV). */
+    public static int lsrv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2400 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code ASR Xd, Xn, Xm} — arithmetic shift right by a register (ASRV). */
+    public static int asrv(int rd, int rn, int rm)
+    {
+        return 0x9AC0_2800 | (rm << 16) | (rn << 5) | rd;
+    }
+    /** {@code SXTB Xd, Wn} — sign-extend byte (i2b). */
+    public static int sxtb(int rd, int rn)
+    {
+        return 0x9340_1C00 | (rn << 5) | rd;
+    }
+    /** {@code SXTH Xd, Wn} — sign-extend halfword (i2s). */
+    public static int sxth(int rd, int rn)
+    {
+        return 0x9340_3C00 | (rn << 5) | rd;
+    }
+    /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
+    public static int uxth(int rd, int rn)
+    {
+        return 0x5300_3C00 | (rn << 5) | rd;
+    }
+    /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
+    public static int cset(int rd, int cond)
+    {
+        return 0x9A80_0400 | (31 << 16) | ((cond ^ 1) << 12) | (31 << 5) | rd;
+    }
+    /** {@code CSINV Xd, Xn, Xm, cond} — Xd = cond ? Xn : ~Xm. */
+    public static int csinv(int rd, int rn, int rm, int cond)
+    {
+        return 0xDA80_0000 | (rm << 16) | (cond << 12) | (rn << 5) | rd;
+    }
+
+    // ----- load/store (more sizes) -----------------------------------------
+    /** {@code LDR Wt, [Xn, #off]} — 32-bit, zero-extended. */
+    public static int ldrw(int rt, int rn, int off)
+    {
+        return ldst(2, 1, rt, rn, off);
+    }
+    /** {@code STRB Wt, [Xn, #off]} — store byte. */
+    public static int strb(int rt, int rn, int off)
+    {
+        return ldst(0, 0, rt, rn, off);
+    }
+    /** {@code LDRB Wt, [Xn, #off]} — load byte, zero-extended. */
+    public static int ldrb(int rt, int rn, int off)
+    {
+        return ldst(0, 1, rt, rn, off);
+    }
+
+    // ----- barriers / hints / misc -----------------------------------------
+    /** {@code DSB SY} — data synchronization barrier. */
+    public static int dsb()
+    {
+        return 0xD503_3F9F;
+    }
+    /** {@code ISB} — instruction synchronization barrier. */
+    public static int isb()
+    {
+        return 0xD503_3FDF;
+    }
+    /** {@code WFE} — wait for event. */
+    public static int wfe()
+    {
+        return 0xD503_205F;
+    }
+    /** {@code ERET} — exception return. */
+    public static int eret()
+    {
+        return 0xD69F_03E0;
+    }
+
+    /** Round up to a 16-byte boundary (AArch64 stack-pointer alignment). */
+    public static int align16(int n)
+    {
+        return (n + 15) & ~15;
+    }
+
+    /** Compose a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
+    public static int[] loadImm64(int rd, long value)
+    {
+        int[] tmp = new int[4];
+        int n = 0;
+        for (int hw = 0; hw < 4; hw++)
+        {
+            int lane = (int) ((value >>> (hw * 16)) & 0xFFFF);
+            if (lane == 0 && n > 0)
+            {
+                continue;
+            }
+            if (lane == 0 && hw != 3 && value != 0)
+            {
+                continue;
+            }
+            tmp[n] = n == 0 ? movz(rd, lane, hw) : movk(rd, lane, hw);
+            n++;
+        }
+        if (n == 0)
+        {
+            tmp[n] = movz(rd, 0, 0);
+            n++;
+        }
+        int[] out = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            out[i] = tmp[i];
+        }
+        return out;
+    }
 }
