@@ -533,16 +533,23 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       MOVZ+MOVK for every tib/type/static load (was variable-width `loadImm64`), so a
       compiled method's size is placement-independent — a prerequisite for the metal's
       **size → place → emit** phasing (`sizeMethod` places `mBuf[i]` before `emitMethod`).
-    - ☐ **the object-model reconciliation (the crux).** The metal builds each JIT'd
-      class's `Type` as `{superType@0, imap@8}` and dispatches interfaces by
-      `imap[globalSlot]`; the shared core uses `ObjectModel` — `Type` =
-      `{instanceSize@0, super@8, itableDir@16}`, an itable *directory* searched by the
-      interface's `Type`, and `instanceof`/`checkcast` as calls to `VM.instanceOf`/
-      `checkCast`. Because `VM.instanceOf` (an image method) already uses `ObjectModel`,
-      JIT'd objects must too — so `buildTib`/`buildType`/`buildImap` must be rebuilt to
-      the `ObjectModel` layout, and the metal's inline `emitInstanceof`/`emitCheckcast`
-      give way to the helper calls the core emits. `Guest.answer` (→ '*') exercises
-      `new` + `invokeinterface`, so this must be right or the demo breaks.
+    - ◐ **the object-model reconciliation (the crux).** JIT'd objects must match
+      `ObjectModel` so `VM.instanceOf` and the shared core read them like image objects.
+      - ✅ **step 1 — `Type` layout.** `buildTib` now builds a 24-byte
+        `{instanceSize@0, super@8, itableDir@16}` `Type`; `emitInstanceof`/
+        `emitCheckcast` walk `super` at `Type+8` and `emitInvokeVirtual` reads the imap
+        from `Type+16`. The flat imap still occupies the `itableDir` slot. QEMU `*M F`.
+      - ☐ **step 2 — the itable directory.** The metal has *no `Type` for interfaces*
+        (its imap uses a global name+descriptor-dedup'd index, so it needs no interface
+        identity); the `ObjectModel` scheme keys a `{interfaceType, itable}` directory
+        by the interface's `Type`. So step 2 must: give each loaded interface a `Type`
+        (a `clType` entry); per class, build one itable per implemented interface
+        (methods by their slot *within that interface*) plus a directory at `Type+16`;
+        make `ifSlotOf` return the interface-local slot; and either update the metal's
+        `emitInvokeVirtual(iface)` to the directory search or go straight to the core.
+      - ☐ **step 3 — instanceof/checkcast via helpers.** Once JIT'd `Type`s are
+        `ObjectModel`, the metal's inline walks can give way to the `VM.instanceOf`/
+        `checkCast` calls the core emits (the addresses are already stashed, 4.4c).
     - ☐ **wire `emitMethod`**: extract the method's bytecode to a `byte[]`, instantiate
       `Baseline(gbytes, gcp, gcpTag, new MetalSymbols())`, set its exception table,
       `compileBody(...)` into `mBuf[i]`, blit the words to `cout`, register the JIT
