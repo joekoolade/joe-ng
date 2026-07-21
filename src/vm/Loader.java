@@ -1335,8 +1335,13 @@ public final class Loader
     private static void buildTib()
     {
         int sr = classRegByName(gSuperNameOff);
-        gType = Heap.alloc(16);                          // Type = { superType, imap }
-        Magic.store64(gType, sr >= 0 ? clType[sr] : 0L);   // Type.superType (0 at Object)
+        // ObjectModel layout: Type = { instanceSize@0, superType@8, itableDir@16 } (24
+        // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
+        // same way they read image objects (M5.4.e). The itableDir slot currently holds
+        // the flat imap; step 2 replaces it with a proper itable directory.
+        gType = Heap.alloc(24);
+        Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
+        Magic.store64(gType + 8, sr >= 0 ? clType[sr] : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
         gTib = Heap.alloc((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type
         int s = 0;
@@ -1345,7 +1350,7 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
-        Magic.store64(gType + 8, buildImap());           // Type.imap (needs the vtable filled)
+        Magic.store64(gType + 16, buildImap());          // TYPE_ITABLE_DIR_OFFSET (holds imap for now)
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
@@ -1709,7 +1714,7 @@ public final class Loader
         if (iface)
         {
             emit(ldrx(16, 16, 0));                         // x16 = Type    (TIB[0])
-            emit(ldrx(16, 16, 8));                         // x16 = imap    (Type[1])
+            emit(ldrx(16, 16, 16));                        // x16 = imap    (Type+16, itableDir slot)
             emit(ldrx(16, 16, slot * 8));                  // x16 = imap[g] (code)
         }
         else
@@ -1952,7 +1957,7 @@ public final class Loader
         emit(A64Enc.cbz(16, 6));   // w5: cbz x16, end (w11)
         emit(A64Enc.cmpReg(16, 17));      // w6: cmp x16, x17
         emit(A64Enc.bcond(0, 3));        // w7: b.eq settrue (w10)
-        emit(ldrx(16, 16, 0));                          // w8: x16 = superType
+        emit(ldrx(16, 16, 8));                          // w8: x16 = superType (Type+8)
         emit(A64Enc.b(-4));         // w9: b loop (w5)
         emit(movz(r, 1));                               // w10: result = 1
         csp += 1;                                       // w11: end
@@ -1972,7 +1977,7 @@ public final class Loader
         emit(A64Enc.cbz(16, 5));   // w4: cbz x16, fail (w9)
         emit(A64Enc.cmpReg(16, 17));      // w5: cmp x16, x17
         emit(A64Enc.bcond(0, 4));        // w6: b.eq ok (w10)
-        emit(ldrx(16, 16, 0));                          // w7: x16 = superType
+        emit(ldrx(16, 16, 8));                          // w7: x16 = superType (Type+8)
         emit(A64Enc.b(-4));         // w8: b loop (w4)
         emit(A64Enc.b(0));                               // w9: b . (halt — cast failed)
     }                                                   // w10: ok (ref stays on the stack)
