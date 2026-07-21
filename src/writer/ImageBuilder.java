@@ -209,7 +209,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 continue;
             }
             itableDirWord.put(c, cur);
-            cur += impls.size() * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+            // +1 entry: a zeroed {interfaceType=0, itable=0} sentinel terminates the
+            // directory so a bounded scan (VM.instanceOf) knows where it ends.
+            cur += (impls.size() + 1) * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
             for (String i : impls)
             {
                 itableWord.put(c + "|" + i, cur);

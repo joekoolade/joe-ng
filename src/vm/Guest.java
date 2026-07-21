@@ -21,10 +21,12 @@ public class Guest
     {
         Greeter a = new Alpha();     // greet() at Alpha's vtable slot 0
         Greeter b = new Beta();      // greet() at Beta's  vtable slot 1
-        // 20 + 22 = 42, plus two JIT'd instanceof checks that must net zero: a Beta is
-        // a Beta (super-chain hit), an Alpha is not. This exercises the shared core's
+        // 20 + 22 = 42, plus JIT'd instanceof checks that must net zero. Class checks
+        // (super-chain): a Beta is a Beta, an Alpha is not. Interface checks (itable
+        // directory): both Alpha and Beta are Greeters. All exercise the shared core's
         // instanceof lowering (a VM.instanceOf call) on on-metal-JIT'd objects (M5.4.e).
-        int corrections = (b instanceof Beta ? 0 : 100) + (a instanceof Beta ? 100 : 0);
+        int corrections = (b instanceof Beta ? 0 : 100) + (a instanceof Beta ? 100 : 0)
+                        + (b instanceof Greeter ? 0 : 100) + (a instanceof Greeter ? 0 : 100);
         return a.greet() + b.greet() + corrections + bias();   // one call site, two layouts -> 42
     }
 

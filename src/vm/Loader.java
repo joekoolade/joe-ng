@@ -1279,7 +1279,7 @@ public final class Loader
         {
             return 0L;
         }
-        long dir = Heap.alloc(gImplIfCount * 16);        // {interfaceType@0, itable@8}
+        long dir = Heap.alloc((gImplIfCount + 1) * 16);  // {interfaceType@0, itable@8} + sentinel
         int k = 0;
         while (k < gImplIfCount)
         {
@@ -1288,6 +1288,8 @@ public final class Loader
             Magic.store64(dir + k * 16 + 8, imap);                      // itable (the shared imap)
             k += 1;
         }
+        Magic.store64(dir + k * 16 + 0, 0L);             // sentinel: interfaceType 0 ends the directory
+        Magic.store64(dir + k * 16 + 8, 0L);
         return dir;
     }
 

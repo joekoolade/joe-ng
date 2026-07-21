@@ -70,8 +70,12 @@ public final class VM
      * pointers, Types are laid out by the writer). The compiler synthesizes calls
      * to this for the {@code instanceof} bytecode.
      */
-    // Walks only the superclass chain, so this answers class instanceof; interface
-    // instanceof (is targetType in the object's itable directory?) is not handled yet.
+    // Walks the superclass chain; at each class, a match on the class's own Type or on
+    // any interface in its itable directory (terminated by a 0 interfaceType) counts. So
+    // this answers class instanceof and interface instanceof — including interfaces
+    // inherited from a superclass, since each class's directory is checked on the way
+    // up. Not yet: super-interfaces (a directory lists directly-declared interfaces, so
+    // `x instanceof Base` where x implements `Greeter extends Base` is missed).
     static int instanceOf(long ref, long targetType)
     {
         if (ref == 0L)
@@ -84,6 +88,21 @@ public final class VM
             if (type == targetType)
             {
                 return 1;
+            }
+            long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+            if (dir != 0L)
+            {
+                long entry = dir;
+                long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+                while (iface != 0L)                    // 0 interfaceType terminates the directory
+                {
+                    if (iface == targetType)
+                    {
+                        return 1;
+                    }
+                    entry += ObjectModel.ITABLE_ENTRY_SIZE;
+                    iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+                }
             }
             type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
         }
