@@ -167,7 +167,7 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L)
         {
-            long unused = Magic.call0(compile(code, gcodeLen, 0, gFoundDescOff, gFoundStatic));
+            long unused = Magic.call0(compile(code, gcodeLen, gFoundDescOff, gFoundStatic));
         }
     }
 
@@ -181,7 +181,7 @@ public final class Loader
         {
             return 0L;
         }
-        long buf = compile(code, gcodeLen, 2, gFoundDescOff, gFoundStatic);   // two int args
+        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);   // two int args
         return Magic.call2(buf, a, b);
     }
 
@@ -571,7 +571,6 @@ public final class Loader
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
     private static int[] mLocals;     // ... its max_locals
-    private static int[] mArgs;       // ... its incoming argument slots (including `this`)
     private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
     private static int[] mStatic;     // ... 1 if static
     private static int mCount;
@@ -591,10 +590,10 @@ public final class Loader
      * target address is known) — so no method's compile nests inside another's.
      * Scope: same-class static callees, no recursion/cycles beyond dedup.
      */
-    private static long compile(long code, int len, int args, int descOff, int isStatic)
+    private static long compile(long code, int len, int descOff, int isStatic)
     {
         allocMethodTables();
-        addMethod(code, len, gMaxLocals, args, descOff, isStatic);
+        addMethod(code, len, gMaxLocals, descOff, isStatic);
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -640,9 +639,7 @@ public final class Loader
             if (code != 0L)
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                addMethod(code, gcodeLen, gMaxLocals,
-                          argSlots(gcp[u2(p + 4)]) + (isStatic != 0 ? 0 : 1),
-                          gcp[u2(p + 4)], isStatic);
+                addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -801,7 +798,7 @@ public final class Loader
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
-    private static void addMethod(long code, int len, int maxLocals, int args, int descOff, int isStatic)
+    private static void addMethod(long code, int len, int maxLocals, int descOff, int isStatic)
     {
         int i = 0;
         while (i < mCount)
@@ -815,7 +812,6 @@ public final class Loader
         mCode[mCount] = code;
         mLen[mCount] = len;
         mLocals[mCount] = maxLocals;
-        mArgs[mCount] = args;
         mDescOff[mCount] = descOff;
         mStatic[mCount] = isStatic;
         mCount += 1;
@@ -828,7 +824,6 @@ public final class Loader
         mLen = new int[MAXM];
         mBuf = new long[MAXM];
         mLocals = new int[MAXM];
-        mArgs = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
         mCount = 0;
@@ -862,9 +857,7 @@ public final class Loader
                 long c = calleeCodeOf(idx);                 // sets gcodeLen / gMaxLocals
                 if (c != 0L)
                 {
-                    addMethod(c, gcodeLen, gMaxLocals,
-                              argSlots(mrefDescOff(idx)) + (op == 0xb7 ? 1 : 0),
-                              mrefDescOff(idx), op == 0xb8 ? 1 : 0);
+                    addMethod(c, gcodeLen, gMaxLocals, mrefDescOff(idx), op == 0xb8 ? 1 : 0);
                 }
             }
             pc += opLen(op);
@@ -1398,56 +1391,6 @@ public final class Loader
         return ClassReader.refDescOff(gbytes, gcp, idx);
     }
 
-    /** Argument slot count of a method descriptor at {@code descOff} (long/double = 2). */
-    private static int argSlots(int descOff)
-    {
-        long q = gbase + descOff + 2 + 1;               // skip u2 length and '('
-        int n = 0;
-        while (u1(q) != 0x29)                           // ')'
-        {
-            int c = u1(q);
-            if (c == 0x5b)                              // '[' — array prefix, not itself a slot
-            {
-                q += 1;
-            }
-            else if (c == 0x4c)                        // 'L...;' — object ref, one slot
-            {
-                while (u1(q) != 0x3b)
-                {
-                    q += 1;
-                }
-                q += 1;
-                n += 1;
-            }
-            else if (c == 0x4a || c == 0x44)           // 'J' long / 'D' double — two slots
-            {
-                q += 1;
-                n += 2;
-            }
-            else                                       // I B C S Z F — one slot
-            {
-                q += 1;
-                n += 1;
-            }
-        }
-        return n;
-    }
-
-    /** Return-slot count of a method descriptor at {@code descOff} (void = 0, else 1). */
-    private static int retSlots(int descOff)
-    {
-        long q = gbase + descOff + 2;
-        while (u1(q) != 0x29)                           // ')'
-        {
-            q += 1;
-        }
-        q += 1;
-        if (u1(q) == 0x56)                              // 'V'
-        {
-            return 0;
-        }
-        return 1;
-    }
 
     /** Compare two Utf8 entries in the current class by length + bytes. */
     private static boolean utf8Eq(int offA, int offB)

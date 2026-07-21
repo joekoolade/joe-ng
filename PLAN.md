@@ -523,9 +523,10 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       190/190, 0 blocked.** The compiled methods are unchanged (compiler tests check
       exact encodings) and QEMU still reaches `*M F`; the image differs only by
       `A64Enc`'s new static constants (it is already in the metal image via `Loader`).
-    - ☐ **d.3 — the metal code sink**: `Loader` emits through a `CodeBuffer` that flushes
-      to `cout`, replacing the bare `emit(word)`, and converge the branch model
-      (writer forward-fixups vs. the metal's two-pass `pass1`) onto the fixup model.
+    - ✅ **d.3 — the metal code sink** (subsumed by 4.4e). The metal no longer has its
+      own sink or branch model: `emitMethod` runs `Baseline`, which emits into its own
+      `CodeBuffer` and resolves branches with its forward-fixups; the metal just blits
+      the resulting words to `cout`. The bare `emit(word)` and two-pass `pass1` are gone.
   - ✅ **4.4e — route `Loader.emitMethod` through the shared `Baseline`, delete `emitOp`.**
     The payoff step — validated end-to-end by QEMU, not byte-identity. Investigation
     mapped exactly what it needs:
@@ -551,9 +552,12 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
         prints `Guest.answer`→'*'. The metal's metadata is now `ObjectModel`-conformant,
         and `interfaceType` resolves (interfaces have `clType`), so the core's
         `invokeinterface` will work on JIT'd objects.
-      - ☐ **step 3 — instanceof/checkcast via helpers.** Once JIT'd `Type`s are
-        `ObjectModel`, the metal's inline walks can give way to the `VM.instanceOf`/
-        `checkCast` calls the core emits (the addresses are already stashed, 4.4c).
+      - ✅ **step 3 — instanceof/checkcast via helpers** (subsumed by 4.4e). The metal's
+        inline `emitInstanceof`/`emitCheckcast` are deleted; a JIT'd `instanceof` now
+        lowers, through `Baseline`, to a `VM.instanceOf`/`checkCast` call — which reads
+        the JIT'd object's now-`ObjectModel` `Type` exactly as it reads image objects.
+        Not yet exercised on metal (no JIT'd guest uses `instanceof`); a guest test that
+        does would confirm it end-to-end — a natural next follow-up.
     - ✅ **wire `emitMethod`.** `emitMethod` now compiles each method with
       `compiler/Baseline` — the same code generator the writer uses. The work-set
       carries `descOff`/`isStatic` per method; `extractCode` copies a method's bytecode
