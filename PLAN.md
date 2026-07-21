@@ -463,16 +463,20 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
         `Bin` enum became `BIN_*` int constants, and `Math.min`/`Math.max` became
         conditionals. Image byte-identical. Measured with `tools/M5Gap`: the core
         `Baseline` now compiles **60 of its 70 methods** with joe-ng's own compiler.
-      - ☐ **stage C part 2 — the last self-host gaps** (from M5Gap on `Baseline`):
-        - **diagnostics** (`bad`/`unsupported`/`unsupportedOpcode`): `String` concat
-          and `String.format` lower to invokedynamic (0xBA), and they build JDK
-          `IllegalStateException`/`UnsupportedOperationException` — 7 methods. On metal
-          the error path has no strings or JDK exceptions; needs a message-free trap
-          (halt / a `Symbols`-provided fault) so the happy path stays identical.
-        - **anewarray (0xBD)** — 2 methods: `new Fixup[]` growth. The baseline compiler
+      - ◐ **stage C part 2 — the last self-host gaps** (measured with M5Gap on `Baseline`):
+        - ✅ **diagnostics** — `bad`/`unsupported`/`unsupportedOpcode` (String concat +
+          `String.format` → invokedynamic 0xBA; JDK exception classes) are gone. A
+          fatal compile error now goes through `Symbols.fail(reason, a, b)`, which never
+          returns: `WriterSymbols` throws the rich diagnostic (same messages, so M5Gap
+          still classifies by the `opcode 0xNN at bc=` prefix), the metal will halt.
+          Fixing this surfaced a masked `dup_x1` (0x5A) from `sp++`/`--sp` on a field in
+          `pushReg`/`popReg`; rewritten to `sp += 1` / `sp -= 1`. **`Baseline` now
+          compiles 63 of its 65 methods**; the only remaining blocker is:
+        - ☐ **anewarray (0xBD)** — 2 methods: `new Fixup[]` growth. The baseline compiler
           emits `newarray` (primitive) but not `anewarray` (reference arrays); adding
           it is a compiler feature, needed for the fixup array to allocate on metal.
-        These close the loop for 4.4c–e (a metal `Symbols` driving the core on metal).
+        After anewarray the core is fully self-compilable, closing the loop for 4.4c–e
+        (a metal `Symbols` driving the same core on the metal side).
   - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
     (addresses + Utf8-offset compares), the other half of the seam.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the

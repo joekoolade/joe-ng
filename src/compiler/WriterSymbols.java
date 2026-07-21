@@ -167,6 +167,31 @@ final class WriterSymbols implements Symbols
         return ClassFile.isRoot(r.owner()) && r.name().equals("<init>");
     }
 
+    // ----- fatal diagnostics: the writer-side rendering of the core's fail() seam -----
+    // The exception *types* matter: an unsupported opcode/atype/etc. is an
+    // UnsupportedOperationException (how gaps stay loud and how M5Gap classifies
+    // them, keyed on the "opcode 0xNN at bc=" prefix); an internal invariant break is
+    // an IllegalStateException.
+    public void fail(int reason, int a, int b)
+    {
+        switch (reason)
+        {
+        case FAIL_OPCODE -> throw new UnsupportedOperationException(
+            String.format("opcode 0x%02X at bc=%d not yet supported", a, b));
+        case FAIL_NEWARRAY_ATYPE -> throw new UnsupportedOperationException("bad newarray atype " + a);
+        case FAIL_INTRINSIC_ID -> throw new UnsupportedOperationException("unknown intrinsic id " + a);
+        case FAIL_LDC_CONST -> throw new UnsupportedOperationException("ldc of unsupported constant #" + a);
+        case FAIL_LOCAL_SLOT -> throw new IllegalStateException("local slot out of range: " + a);
+        case FAIL_STACK_NOT_EMPTY -> throw new IllegalStateException(
+            "operand stack not empty at " + (b == SITE_NEW ? "new" : "dropToEL1") + ": " + a);
+        case FAIL_STACK_DEPTH -> throw new IllegalStateException("inconsistent stack depth at bc: " + a);
+        case FAIL_BRANCH_TARGET -> throw new IllegalStateException("branch to non-instruction bc: " + a);
+        case FAIL_STACK_OVERFLOW -> throw new IllegalStateException("operand stack too deep");
+        case FAIL_STACK_UNDERFLOW -> throw new IllegalStateException("operand stack underflow");
+        default -> throw new IllegalStateException("compile failure " + reason + " (" + a + ", " + b + ")");
+        }
+    }
+
     // ----- classfile resolution -----
     private ClassFile resolve(String owner)
     {

@@ -60,6 +60,30 @@ public interface Symbols
     /** Load into {@code reg} the address of the synthetic in-flight-exception static slot. */
     void exceptionSlot(CodeBuffer cb, int reg);
 
+    // ----- fatal compiler diagnostics -----
+    // A compiler bug or an unsupported bytecode is unrecoverable; the core reports it
+    // through fail() rather than building a String message or a JDK exception, which
+    // would keep the core off metal (String concat lowers to invokedynamic; java/lang
+    // exceptions aren't loaded there). fail() never returns: the writer throws a rich
+    // diagnostic (see WriterSymbols), the metal halts. Args carry the offending value.
+    int FAIL_OPCODE = 0;            // a = opcode, b = bytecode pos
+    int FAIL_LOCAL_SLOT = 1;        // a = slot
+    int FAIL_STACK_NOT_EMPTY = 2;   // a = depth, b = site (0 new, 1 dropToEL1)
+    int FAIL_STACK_DEPTH = 3;       // a = bytecode index
+    int FAIL_NEWARRAY_ATYPE = 4;    // a = atype
+    int FAIL_INTRINSIC_ID = 5;      // a = intrinsic id
+    int FAIL_LDC_CONST = 6;         // a = cp index
+    int FAIL_BRANCH_TARGET = 7;     // a = target bytecode index
+    int FAIL_STACK_OVERFLOW = 8;    // operand stack too deep
+    int FAIL_STACK_UNDERFLOW = 9;   // operand stack underflow
+
+    // Sites for FAIL_STACK_NOT_EMPTY's b argument.
+    int SITE_NEW = 0;
+    int SITE_DROP_TO_EL1 = 1;
+
+    /** Report an unrecoverable compile failure. Never returns. */
+    void fail(int reason, int a, int b);
+
     // ----- symbol queries: values the lowering needs but resolves per world -----
     // These return a number rather than emitting; the writer resolves it from the
     // classfile at compile time, the metal from its loaded-class registries. Either

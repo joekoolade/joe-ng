@@ -126,36 +126,12 @@ public final class Baseline
         return A64.b(byteOffset);
     }
 
-    // Diagnostics build their text by concatenation (and String.format), which javac
-    // lowers to invokedynamic — a bootstrap-method runtime that does not exist on
-    // bare metal. Funnelling every message through these helpers quarantines that
-    // dependency in a handful of methods instead of scattering it across the
-    // compiler, so everything else can be compiled into the image. In the eventual
-    // core/wrapper split these stay on the writer side (PLAN.md §M5.1 stage 4).
-    // The exception *types* are preserved: an unsupported opcode must keep throwing
-    // UnsupportedOperationException, which is how gaps stay loud and how the M5Gap
-    // harness classifies them.
-    private static RuntimeException bad(String what, int value)
-    {
-        return new IllegalStateException(what + ": " + value);
-    }
-    private static RuntimeException bad(String what, String value)
-    {
-        return new IllegalStateException(what + ": " + value);
-    }
-    private static RuntimeException unsupported(String what, int value)
-    {
-        return new UnsupportedOperationException(what + " " + value);
-    }
-    private static RuntimeException unsupported(String what, String value)
-    {
-        return new UnsupportedOperationException(what + value);
-    }
-    private static RuntimeException unsupportedOpcode(int op, int pos)
-    {
-        return new UnsupportedOperationException(
-            String.format("opcode 0x%02X at bc=%d not yet supported", op, pos));
-    }
+    // A compile failure (unsupported bytecode or a broken invariant) is reported
+    // through the Symbols seam, not by building a String message or a JDK exception
+    // here: String concat lowers to invokedynamic and java/lang exceptions aren't
+    // loaded on metal, either of which would keep this core out of its own image.
+    // symbols.fail never returns — the writer throws a rich diagnostic, the metal
+    // halts — so call sites still need a dead return to satisfy definite assignment.
 
     private void emitEpilogue(CodeBuffer cb)
     {
@@ -575,7 +551,8 @@ public final class Baseline
 
         else
         {
-            throw unsupportedOpcode(op, pos);
+            symbols.fail(Symbols.FAIL_OPCODE, op, pos);
+            return 0;                                        // unreachable: fail never returns
         }
     }
 
@@ -596,24 +573,27 @@ public final class Baseline
     {
         if (sp >= OP_MAX)
         {
-            throw new IllegalStateException("operand stack too deep");
+            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);
         }
-        return OP_BASE + sp++;
+        int r = OP_BASE + sp;      // avoid post-increment on a field (javac -> dup_x1)
+        sp += 1;
+        return r;
     }
     private int popReg()
     {
         if (sp <= 0)
         {
-            throw new IllegalStateException("operand stack underflow");
+            symbols.fail(Symbols.FAIL_STACK_UNDERFLOW, sp, 0);
         }
-        return OP_BASE + --sp;
+        sp -= 1;
+        return OP_BASE + sp;
     }
     /** Register holding local {@code slot}. Only valid when {@link #inReg} says so. */
     private int localReg(int slot)
     {
         if (slot < 0 || slot >= LOC_MAX)
         {
-            throw bad("local slot out of range", slot);
+            symbols.fail(Symbols.FAIL_LOCAL_SLOT, slot, 0);
         }
         return LOC_BASE + slot;
     }
@@ -627,11 +607,11 @@ public final class Baseline
     {
         return overflowBase + (slot - LOC_MAX) * 8;
     }
-    private void expectEmpty(String where)
+    private void expectEmpty(int site)
     {
         if (sp != 0)
         {
-            throw bad("operand stack not empty at " + where, sp);
+            symbols.fail(Symbols.FAIL_STACK_NOT_EMPTY, sp, site);
         }
     }
 
@@ -768,7 +748,7 @@ public final class Baseline
     {
         if (isEntry)
         {
-            expectEmpty("new");                                   // frameless: nowhere to spill
+            expectEmpty(Symbols.SITE_NEW);                                   // frameless: nowhere to spill
         }
         int size = symbols.objectSize(classIndex);
         cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
@@ -820,7 +800,7 @@ public final class Baseline
         }
         else if (bcDepth[bc] != sp)
         {
-            throw bad("inconsistent stack depth at bc", bc);
+            symbols.fail(Symbols.FAIL_STACK_DEPTH, bc, 0);
         }
     }
 
@@ -1083,7 +1063,7 @@ public final class Baseline
     }
 
     /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */
-    private static int arrayElemSize(int atype)
+    private int arrayElemSize(int atype)
     {
         int size = atype == 4 || atype == 8 ? 1             // boolean, byte
                  : atype == 5 || atype == 9 ? 2             // char, short
@@ -1092,7 +1072,7 @@ public final class Baseline
                  : 0;
         if (size == 0)
         {
-            throw unsupported("bad newarray atype", atype);
+            symbols.fail(Symbols.FAIL_NEWARRAY_ATYPE, atype, 0);
         }
         return size;
     }
@@ -1259,13 +1239,13 @@ public final class Baseline
 
         else
         {
-            throw unsupported("unknown intrinsic id ", id);
+            symbols.fail(Symbols.FAIL_INTRINSIC_ID, id, 0);
         }
     }
 
     private void lowerDropToEL1(CodeBuffer cb)
     {
-        expectEmpty("dropToEL1");
+        expectEmpty(Symbols.SITE_DROP_TO_EL1);
         cb.emit(A64.mrs(0, A64.CurrentEL));
         int tbz = cb.emit(A64.tbz(0, 3, 0));
         set64(cb, 0, 0x8000_0000L);
@@ -1362,7 +1342,7 @@ public final class Baseline
         }
         else
         {
-            throw unsupported("ldc of unsupported constant #", cpIndex);
+            symbols.fail(Symbols.FAIL_LDC_CONST, cpIndex, 0);
         }
     }
 
@@ -1466,7 +1446,7 @@ public final class Baseline
             int target = bcToWord[f.targetBc];
             if (target < 0)
             {
-                throw bad("branch to non-instruction bc", f.targetBc);
+                symbols.fail(Symbols.FAIL_BRANCH_TARGET, f.targetBc, 0);
             }
             cb.set(f.wordIndex, encodeBranch(f, (target - f.wordIndex) * 4));
         }
