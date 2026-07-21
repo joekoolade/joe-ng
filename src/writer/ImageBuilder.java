@@ -13,8 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -86,13 +84,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // --- discovery + sizing: BFS over calls; collect instantiated classes.
         //     Instantiating a class pulls in all its virtual methods so their code
         //     is laid out and the vtable can point at it (even if not directly called).
-        Map<String, Integer> sizeWords = new LinkedHashMap<>();     // layout order, entry first
-        Set<String> tibClasses = new LinkedHashSet<>();
-        Set<String> strings = new LinkedHashSet<>();
-        Set<String> statics = new LinkedHashSet<>();
-        Set<String> typeRefClasses = new LinkedHashSet<>();          // instanceof/checkcast/interface targets
-        Set<String> usedInterfaces = new LinkedHashSet<>();          // invokeinterface targets (itable build)
-        Set<String> usedClasses = new LinkedHashSet<>();
+        StrIntTable sizeWords = new StrIntTable();                  // layout order, entry first
+        StrSet tibClasses = new StrSet();
+        StrSet strings = new StrSet();
+        StrSet statics = new StrSet();
+        StrSet typeRefClasses = new StrSet();          // instanceof/checkcast/interface targets
+        StrSet usedInterfaces = new StrSet();          // invokeinterface targets (itable build)
+        StrSet usedClasses = new StrSet();
         List<String> clinitOrder = new ArrayList<>();               // <clinit>s to run, first-use order
         int frameCount = 0;                                          // unwind-table entry counts
         int handlerCount = 0;
@@ -153,56 +151,63 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
 
         // --- lay out: [method code] [Types] [TIBs] [interned strings], 8-byte aligned ---
-        Map<String, Integer> wordOffset = new HashMap<>();
+        StrIntTable wordOffset = new StrIntTable();
         int cur = 0;
-        for (var e : sizeWords.entrySet())
+        for (int i = 0; i < sizeWords.size(); i++)
         {
-            wordOffset.put(e.getKey(), cur);
-            cur += e.getValue();
+            wordOffset.put(sizeWords.keyAt(i), cur);
+            cur += sizeWords.valAt(i);
         }
         cur += cur % 2;                                             // pad to 8 bytes before data
         // Types are needed by every instantiated class (TIB[0]), every type-check
         // target, and every superclass in those chains (the instanceof walk).
-        Set<String> typeClasses = new LinkedHashSet<>();
-        for (String c : tibClasses)
+        StrSet typeClasses = new StrSet();
+        for (int _s1 = 0; _s1 < tibClasses.size(); _s1++)
         {
+            String c = tibClasses.at(_s1);
             addTypeClass(c, typeClasses);
         }
-        for (String c : typeRefClasses)
+        for (int _s2 = 0; _s2 < typeRefClasses.size(); _s2++)
         {
+            String c = typeRefClasses.at(_s2);
             addTypeClass(c, typeClasses);
         }
-        Map<String, Integer> typeWord = new HashMap<>();
-        for (String cls : typeClasses)
+        StrIntTable typeWord = new StrIntTable();
+        for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
         {
+            String cls = typeClasses.at(_s3);
             typeWord.put(cls, cur);
             cur += TYPE_WORDS;
         }
-        Map<String, Integer> tibWord = new HashMap<>();
-        for (String cls : tibClasses)
+        StrIntTable tibWord = new StrIntTable();
+        for (int _s4 = 0; _s4 < tibClasses.size(); _s4++)
         {
+            String cls = tibClasses.at(_s4);
             tibWord.put(cls, cur);
             cur += ObjectModel.tibSize(vtableLength(cls)) / 4;
         }
-        Map<String, Integer> strWord = new HashMap<>();
-        for (String s : strings)
+        StrIntTable strWord = new StrIntTable();
+        for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
+            String s = strings.at(_s5);
             strWord.put(s, cur);
             cur += stringWords(s);
         }
-        Map<String, Integer> staticWord = new HashMap<>();          // one 8-byte slot per static field, zero-init
+        StrIntTable staticWord = new StrIntTable();          // one 8-byte slot per static field, zero-init
         int staticsRegionStart = cur;
-        for (String s : statics)
+        for (int _s6 = 0; _s6 < statics.size(); _s6++)
         {
+            String s = statics.at(_s6);
             staticWord.put(s, cur);
             cur += WORDS_PER_SLOT;
         }
         int staticsRegionEnd = cur;
         // itables: per instantiated class, a directory of {interfaceType, itable} plus the itables.
-        Map<String, Integer> itableDirWord = new HashMap<>();       // class -> directory
-        Map<String, Integer> itableWord = new HashMap<>();          // "class|iface" -> itable
-        for (String c : tibClasses)
+        StrIntTable itableDirWord = new StrIntTable();       // class -> directory
+        StrIntTable itableWord = new StrIntTable();          // "class|iface" -> itable
+        for (int _s7 = 0; _s7 < tibClasses.size(); _s7++)
         {
+            String c = tibClasses.at(_s7);
             List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
             if (impls.isEmpty())
             {
@@ -242,8 +247,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         List<GlobalType> types = new ArrayList<>();
         List<long[]> frameEntries = new ArrayList<>();       // {codeStart, codeEnd, frameSize}
         List<long[]> handlerEntries = new ArrayList<>();     // {machStart, machEnd, handler, catchType}
-        for (String k : sizeWords.keySet())
+        for (int si = 0; si < sizeWords.size(); si++)
         {
+            String k = sizeWords.keyAt(si);
             int base = wordOffset.get(k);
             CompiledMethod cm = k.equals(INIT_CLASSES) ? initBody
                                 : compile(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
@@ -272,8 +278,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
 
         // --- Types: { instanceSize, superType, itableDir } ---
-        for (String cls : typeClasses)
+        for (int _s8 = 0; _s8 < typeClasses.size(); _s8++)
         {
+            String cls = typeClasses.at(_s8);
             int tw = typeWord.get(cls);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
                       ObjectModel.scalarSize(resolve(cls).instanceFieldCount()));
@@ -285,8 +292,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
 
         // --- itable directories and itables (interface method dispatch) ---
-        for (String c : tibClasses)
+        for (int _s9 = 0; _s9 < tibClasses.size(); _s9++)
         {
+            String c = tibClasses.at(_s9);
             List<String> impls = implementedUsedInterfaces(c, usedInterfaces);
             if (impls.isEmpty())
             {
@@ -315,8 +323,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
 
         // --- TIBs: [Type ptr][vtable code addresses] ---
-        for (String cls : tibClasses)
+        for (int _s10 = 0; _s10 < tibClasses.size(); _s10++)
         {
+            String cls = tibClasses.at(_s10);
             int tw = tibWord.get(cls);
             writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
             var slots = ClassFile.vtable(cls, this::resolve);
@@ -369,8 +378,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
-        for (String s : strings)
+        for (int _s11 = 0; _s11 < strings.size(); _s11++)
         {
+            String s = strings.at(_s11);
             writeStringObject(image, strWord.get(s), s);
         }
 
@@ -381,8 +391,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         for (GlobalCall c : calls)
         {
-            Integer calleeBase = wordOffset.get(c.calleeKey());
-            if (calleeBase == null)
+            int calleeBase = wordOffset.get(c.calleeKey());
+            if (calleeBase < 0)
             {
                 throw new IllegalStateException("unresolved call to " + c.calleeKey());
             }
@@ -390,8 +400,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         for (GlobalTib t : tibs)
         {
-            Integer w = tibWord.get(t.className());
-            if (w == null)
+            int w = tibWord.get(t.className());
+            if (w < 0)
             {
                 throw new IllegalStateException("no TIB for " + t.className());
             }
@@ -413,7 +423,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Add {@code cls} and all its superclasses (up to Object) to {@code set}. */
-    private void addTypeClass(String cls, Set<String> set)
+    private void addTypeClass(String cls, StrSet set)
     {
         while (!ClassFile.isRoot(cls) && set.add(cls))
         {
@@ -427,12 +437,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
-    private List<String> implementedUsedInterfaces(String cls, Set<String> usedInterfaces)
+    private List<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
     {
         Set<String> all = ClassFile.allInterfaces(cls, this::resolve);
         List<String> out = new ArrayList<>();
-        for (String i : usedInterfaces)
+        for (int _s12 = 0; _s12 < usedInterfaces.size(); _s12++)
         {
+            String i = usedInterfaces.at(_s12);
             if (all.contains(i))
             {
                 out.add(i);
@@ -442,7 +453,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
-    private void use(String cls, Set<String> used, List<String> clinitOrder, List<String> worklist)
+    private void use(String cls, StrSet used, List<String> clinitOrder, List<String> worklist)
     {
         if (used.add(cls) && resolve(cls).hasClinit())
         {
@@ -521,21 +532,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Stash a compiled method's address into a VM static field, if both exist. */
-    private static void stashHelper(int[] image, Map<String, Integer> staticWord,
-                                    Map<String, Integer> wordOffset, String methodKey, String field)
+    private static void stashHelper(int[] image, StrIntTable staticWord,
+                                    StrIntTable wordOffset, String methodKey, String field)
     {
-        Integer w = wordOffset.get(methodKey);
-        if (w != null)
+        int w = wordOffset.get(methodKey);
+        if (w >= 0)
         {
             fillStatic(image, staticWord, field, addr(w));
         }
     }
 
     /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
-    private static void fillStatic(int[] image, Map<String, Integer> staticWord, String key, long value)
+    private static void fillStatic(int[] image, StrIntTable staticWord, String key, long value)
     {
-        Integer w = staticWord.get(key);
-        if (w != null)
+        int w = staticWord.get(key);
+        if (w >= 0)
         {
             writeLong(image, w, value);
         }
