@@ -29,32 +29,42 @@ final class MetalSymbols implements Symbols
     }
 
     // ----- address loads: the target is known, so load it directly into reg -----
+    // Always a fixed 2-word MOVZ+MOVK (addresses are <4 GiB on the Pi 4, as the
+    // loader already assumes). Fixed width keeps a compiled method's size
+    // placement-independent, so the metal can size/place/emit in phases.
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        cb.emitAll(A64Enc.loadImm64(reg, Loader.tibOfClass(classCp)));
+        emitAddr(cb, reg, Loader.tibOfClass(classCp));
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        cb.emitAll(A64Enc.loadImm64(reg, Loader.typeOfClass(classCp)));
+        emitAddr(cb, reg, Loader.typeOfClass(classCp));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        cb.emitAll(A64Enc.loadImm64(reg, Loader.ifaceTypeOfMethod(ifaceMethodCp)));
+        emitAddr(cb, reg, Loader.ifaceTypeOfMethod(ifaceMethodCp));
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        cb.emitAll(A64Enc.loadImm64(reg, Loader.staticAddr(fieldCp)));
+        emitAddr(cb, reg, Loader.staticAddr(fieldCp));
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
         // TODO(4.4e): interned string literals for on-metal-loaded classes. Guest
         // classes the metal JITs today carry none, so this path is never reached.
-        cb.emitAll(A64Enc.loadImm64(reg, 0L));
+        emitAddr(cb, reg, 0L);
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
         // TODO(4.4e): a metal in-flight-exception slot (the writer's vm/VM.$exception).
-        cb.emitAll(A64Enc.loadImm64(reg, 0L));
+        emitAddr(cb, reg, 0L);
+    }
+
+    /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
+    private static void emitAddr(CodeBuffer cb, int reg, long addr)
+    {
+        cb.emit(A64Enc.movz(reg, (int) addr, 0));
+        cb.emit(A64Enc.movk(reg, (int) (addr >> 16), 1));
     }
 
     // ----- symbol queries: resolve to a number from the loaded-class tables -----

@@ -526,7 +526,31 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
     - ☐ **d.3 — the metal code sink**: `Loader` emits through a `CodeBuffer` that flushes
       to `cout`, replacing the bare `emit(word)`, and converge the branch model
       (writer forward-fixups vs. the metal's two-pass `pass1`) onto the fixup model.
-  - ☐ **4.4e — route `Loader.emitMethod` through the shared lowering, delete `emitOp`.**
+  - ◐ **4.4e — route `Loader.emitMethod` through the shared `Baseline`, delete `emitOp`.**
+    The payoff step — validated end-to-end by QEMU, not byte-identity. Investigation
+    mapped exactly what it needs:
+    - ✅ **fixed-width metal address loads.** `MetalSymbols` now emits a fixed 2-word
+      MOVZ+MOVK for every tib/type/static load (was variable-width `loadImm64`), so a
+      compiled method's size is placement-independent — a prerequisite for the metal's
+      **size → place → emit** phasing (`sizeMethod` places `mBuf[i]` before `emitMethod`).
+    - ☐ **the object-model reconciliation (the crux).** The metal builds each JIT'd
+      class's `Type` as `{superType@0, imap@8}` and dispatches interfaces by
+      `imap[globalSlot]`; the shared core uses `ObjectModel` — `Type` =
+      `{instanceSize@0, super@8, itableDir@16}`, an itable *directory* searched by the
+      interface's `Type`, and `instanceof`/`checkcast` as calls to `VM.instanceOf`/
+      `checkCast`. Because `VM.instanceOf` (an image method) already uses `ObjectModel`,
+      JIT'd objects must too — so `buildTib`/`buildType`/`buildImap` must be rebuilt to
+      the `ObjectModel` layout, and the metal's inline `emitInstanceof`/`emitCheckcast`
+      give way to the helper calls the core emits. `Guest.answer` (→ '*') exercises
+      `new` + `invokeinterface`, so this must be right or the demo breaks.
+    - ☐ **wire `emitMethod`**: extract the method's bytecode to a `byte[]`, instantiate
+      `Baseline(gbytes, gcp, gcpTag, new MetalSymbols())`, set its exception table,
+      `compileBody(...)` into `mBuf[i]`, blit the words to `cout`, register the JIT
+      frame. Then delete `emitOp`, `pass1`, and the bespoke `emit*` lowerings — one
+      compiler at last.
+    - **Done when:** QEMU still prints `Guest.answer`→'*', `Math.max`→'M', and the boot
+      markers `*M F`, now with the metal JIT driven by the same `Baseline` the writer
+      uses — the self-hosting fixpoint on metal.
 
 **The crux, and the real risk.** The two compilers do not merely differ in
 dependencies, they differ in *calling convention*: the writer puts locals in
