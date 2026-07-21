@@ -438,7 +438,7 @@ public final class Loader
     }
 
     /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
-    private static long staticAddr(int idx)
+    static long staticAddr(int idx)
     {
         int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
         int s = 0;
@@ -1061,7 +1061,7 @@ public final class Loader
     }
 
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
-    private static long resolveCallBuf(int idx)
+    static long resolveCallBuf(int idx)
     {
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
@@ -1136,7 +1136,7 @@ public final class Loader
     }
 
     /** Global interface-method index for an InterfaceMethodref call site (0 if unknown). */
-    private static int ifSlotOf(int idx)
+    static int ifSlotOf(int idx)
     {
         int g = ifIndexOf(gbase, mrefNameOff(idx), mrefDescOff(idx));
         return g >= 0 ? g : 0;
@@ -1289,7 +1289,7 @@ public final class Loader
     }
 
     /** invokespecial is a real call (not an Object.&lt;init&gt; pop) if its class is loaded. */
-    private static boolean isRealSpecial(int idx)
+    static boolean isRealSpecial(int idx)
     {
         return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
     }
@@ -1364,7 +1364,7 @@ public final class Loader
      * cross-class {@code invokevirtual}) or an interface resolves via the global
      * vtable registry against the receiver class's layout.
      */
-    private static int vtableSlotOf(int idx)
+    static int vtableSlotOf(int idx)
     {
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
@@ -1726,7 +1726,7 @@ public final class Loader
     }
 
     /** Instance-field byte offset for the field named by {@code *ref} index. */
-    private static int fieldOffsetOf(int idx)
+    static int fieldOffsetOf(int idx)
     {
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
@@ -1904,10 +1904,34 @@ public final class Loader
     }
 
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
-    private static long typeOfClass(int classIdx)
+    static long typeOfClass(int classIdx)
     {
         int r = classRegOf(classIdx);
         return r >= 0 ? clType[r] : 0L;
+    }
+
+    // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----
+
+    /** TIB of the class at {@code Class} entry {@code classIdx} (its own if not yet registered). */
+    static long tibOfClass(int classIdx)
+    {
+        int r = classRegOf(classIdx);
+        return r >= 0 ? clTib[r] : gTib;
+    }
+
+    /** Scalar instance size (header + one 8-byte slot per field) of class {@code classIdx}. */
+    static int objectSizeOf(int classIdx)
+    {
+        int r = classRegOf(classIdx);
+        int fields = r >= 0 ? clFieldCount[r] : gifCount;
+        return 16 + fields * 8;
+    }
+
+    /** Type node of the interface owning InterfaceMethodref {@code idx}. */
+    static long ifaceTypeOfMethod(int idx)
+    {
+        int classIdx = u2(gbase + gcp[idx]);            // *ref.class_index -> Class entry
+        return typeOfClass(classIdx);
     }
 
     /**

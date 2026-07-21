@@ -484,8 +484,21 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
           and compiles via the overflow-locals path). Byte-identical image; QEMU `*M F`.
           This closes 4.4b: the code generator both is metal-instantiable (no `ClassFile`)
           and compiles under joe-ng's own compiler — ready for 4.4c (`MetalSymbols`).
-  - ☐ **4.4c — `MetalSymbols implements Symbols`** backed by `vm/Loader`'s registries
-    (addresses + Utf8-offset compares), the other half of the seam.
+  - ◐ **4.4c — `MetalSymbols implements Symbols`**, the other half of the seam.
+    `vm/MetalSymbols` resolves each cp index to a concrete address *now* (the metal
+    has already loaded its deps): calls → `Loader.resolveCallBuf`; helper calls →
+    the writer-stashed `VM.heapAlloc`/`allocArray`/`gcCollect`/`instanceOfAddr`/
+    `checkCastAddr`/`unwindAddr`; tib/type/interfaceType/staticField → `Loader.tibOfClass`/
+    `typeOfClass`/`ifaceTypeOfMethod`/`staticAddr` loaded via `loadImm64`; the int/bool
+    queries → `fieldOffsetOf`/`objectSizeOf`/`vtableSlotOf`/`ifSlotOf`/`isRealSpecial`;
+    `fail` halts. The needed `Loader` resolvers are now package-visible. **M5Gap: 20/20
+    methods self-compile.** Dead code until 4.4e wires it, so the image is byte-identical.
+    Deferred to 4.4d/e (stubbed with TODOs): interned-string and exception-slot
+    addresses on metal, magic-intrinsic recognition, and the object-model/dispatch
+    reconciliation — the metal indexes the imap by global slot while the shared core
+    searches an itable directory (`ObjectModel.TYPE_ITABLE_DIR_OFFSET`), so the metal's
+    Type/vtable/itable layout must line up with `ObjectModel` before the core can drive
+    invokeinterface on metal.
   - ☐ **4.4d — a metal code sink** (`CodeBuffer` flushing to `cout`) and converge the
     branch model (writer fixups vs. metal two-pass `pass1`) onto one.
   - ☐ **4.4e — route `Loader.emitMethod` through the shared lowering, delete `emitOp`.**
