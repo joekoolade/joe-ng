@@ -122,6 +122,6 @@ public final class CodeBuffer
     /** Raw little-endian bytes — this is the payload of {@code kernel8.img} (writer-side). */
     public byte[] toBytes()
     {
-        return A64.wordsToLittleEndian(toWords());
+        return A64Enc.wordsToLittleEndian(toWords());
     }
 }

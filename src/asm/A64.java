@@ -575,15 +575,6 @@ public final class A64
     /** Little-endian byte serialization of an instruction-word stream (A64 = LE). */
     public static byte[] wordsToLittleEndian(int[] words)
     {
-        byte[] b = new byte[words.length * 4];
-        for (int i = 0; i < words.length; i++)
-        {
-            int w = words[i];
-            b[i * 4]     = (byte) (w);
-            b[i * 4 + 1] = (byte) (w >>> 8);
-            b[i * 4 + 2] = (byte) (w >>> 16);
-            b[i * 4 + 3] = (byte) (w >>> 24);
-        }
-        return b;
+        return A64Enc.wordsToLittleEndian(words);
     }
 }

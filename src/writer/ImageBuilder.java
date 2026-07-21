@@ -551,7 +551,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private CompiledMethod compile(String key, long base, boolean isEntry) throws IOException
     {
         Resolved r = lookup(key);
-        return new BaselineCompiler(r.cf, this).compileMethod(r.method, base, isEntry);
+        try
+        {
+            return new BaselineCompiler(r.cf, this).compileMethod(r.method, base, isEntry);
+        }
+        catch (RuntimeException e)
+        {
+            throw new RuntimeException("compiling " + key + ": " + e.getMessage(), e);
+        }
     }
 
     private Resolved lookup(String key) throws IOException

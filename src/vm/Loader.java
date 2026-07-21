@@ -2,6 +2,7 @@ package vm;
 
 import asm.A64Enc;
 import classfile.ClassReader;
+import compiler.Baseline;
 import magic.Magic;
 
 /**
@@ -29,6 +30,9 @@ public final class Loader
     private static int gcpCount;
     private static int gcodeLen;    // length of the located method's bytecode
     private static int gMaxLocals;  // ... and its max_locals (frame sizing)
+    private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
+    private static int gFoundStatic;   // 1 if that method is static
+    private static int gFrameSize;     // frame size of the last method the core compiled
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
@@ -163,7 +167,7 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L)
         {
-            long unused = Magic.call0(compile(code, gcodeLen, 0));   // <clinit> is static ()V
+            long unused = Magic.call0(compile(code, gcodeLen, 0, gFoundDescOff, gFoundStatic));
         }
     }
 
@@ -177,7 +181,7 @@ public final class Loader
         {
             return 0L;
         }
-        long buf = compile(code, gcodeLen, 2);          // two int args
+        long buf = compile(code, gcodeLen, 2, gFoundDescOff, gFoundStatic);   // two int args
         return Magic.call2(buf, a, b);
     }
 
@@ -474,6 +478,7 @@ public final class Loader
         int m = 0;
         while (m < mcount)
         {
+            int access = u2(p);
             p += 2;                                     // access_flags
             int nameIdx = u2(p);
             int descIdx = u2(p + 2);
@@ -486,6 +491,8 @@ public final class Loader
                 long code = findCode(base, p, attrs);
                 if (code != 0L)
                 {
+                    gFoundDescOff = gcp[descIdx];       // for the shared core's prologue
+                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
                     return code;
                 }
             }
@@ -571,7 +578,13 @@ public final class Loader
     private static long[] mBuf;       // ... and the buffer assigned to it
     private static int[] mLocals;     // ... its max_locals
     private static int[] mArgs;       // ... its incoming argument slots (including `this`)
+    private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
+    private static int[] mStatic;     // ... 1 if static
     private static int mCount;
+
+    /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
+    private static final MetalSymbols METAL_SYMBOLS = new MetalSymbols();
+    private static final int[] NO_EX = new int[0];   // empty exception table
 
     // Frame layout of the method currently being sized or emitted. The JIT follows
     // the writer's calling convention (PLAN.md §M5.2): arguments arrive in x0..x7,
@@ -711,15 +724,10 @@ public final class Loader
      * target address is known) — so no method's compile nests inside another's.
      * Scope: same-class static callees, no recursion/cycles beyond dedup.
      */
-    private static long compile(long code, int len, int args)
+    private static long compile(long code, int len, int args, int descOff, int isStatic)
     {
-        mCode = new long[MAXM];
-        mLen = new int[MAXM];
-        mBuf = new long[MAXM];
-        mLocals = new int[MAXM];
-        mArgs = new int[MAXM];
-        mCount = 0;
-        addMethod(code, len, gMaxLocals, args);
+        allocMethodTables();
+        addMethod(code, len, gMaxLocals, args, descOff, isStatic);
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -753,12 +761,7 @@ public final class Loader
      */
     private static void compileClass(long bytes)
     {
-        mCode = new long[MAXM];
-        mLen = new int[MAXM];
-        mBuf = new long[MAXM];
-        mLocals = new int[MAXM];
-        mArgs = new int[MAXM];
-        mCount = 0;
+        allocMethodTables();
         long p = gMethodsStart;
         int mcount = u2(p);
         p += 2;
@@ -769,8 +772,10 @@ public final class Loader
             long code = findCode(bytes, p + 8, attrs);
             if (code != 0L)
             {
+                int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                 addMethod(code, gcodeLen, gMaxLocals,
-                          argSlots(gcp[u2(p + 4)]) + ((u2(p) & 0x0008) != 0 ? 0 : 1));
+                          argSlots(gcp[u2(p + 4)]) + (isStatic != 0 ? 0 : 1),
+                          gcp[u2(p + 4)], isStatic);
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -929,7 +934,7 @@ public final class Loader
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
-    private static void addMethod(long code, int len, int maxLocals, int args)
+    private static void addMethod(long code, int len, int maxLocals, int args, int descOff, int isStatic)
     {
         int i = 0;
         while (i < mCount)
@@ -944,7 +949,37 @@ public final class Loader
         mLen[mCount] = len;
         mLocals[mCount] = maxLocals;
         mArgs[mCount] = args;
+        mDescOff[mCount] = descOff;
+        mStatic[mCount] = isStatic;
         mCount += 1;
+    }
+
+    /** Allocate the per-batch method tables (discover/place/emit work set). */
+    private static void allocMethodTables()
+    {
+        mCode = new long[MAXM];
+        mLen = new int[MAXM];
+        mBuf = new long[MAXM];
+        mLocals = new int[MAXM];
+        mArgs = new int[MAXM];
+        mDescOff = new int[MAXM];
+        mStatic = new int[MAXM];
+        mCount = 0;
+    }
+
+    /** Copy method {@code i}'s bytecode out of the current class blob into a heap byte[]. */
+    private static byte[] extractCode(int i)
+    {
+        int off = (int) (mCode[i] - gbase);
+        int len = mLen[i];
+        byte[] c = new byte[len];
+        int k = 0;
+        while (k < len)
+        {
+            c[k] = gbytes[off + k];
+            k += 1;
+        }
+        return c;
     }
 
     /** Add every same-class static method {@code code} calls to the work set. */
@@ -956,60 +991,54 @@ public final class Loader
             int op = u1(code + pc);
             if (op == 0xb8 || op == 0xb7)                   // invokestatic / invokespecial
             {
-                long c = calleeCodeOf(u2(code + pc + 1));   // sets gcodeLen / gMaxLocals
+                int idx = u2(code + pc + 1);
+                long c = calleeCodeOf(idx);                 // sets gcodeLen / gMaxLocals
                 if (c != 0L)
                 {
                     addMethod(c, gcodeLen, gMaxLocals,
-                              argSlots(mrefDescOff(u2(code + pc + 1))) + (op == 0xb7 ? 1 : 0));
+                              argSlots(mrefDescOff(idx)) + (op == 0xb7 ? 1 : 0),
+                              mrefDescOff(idx), op == 0xb8 ? 1 : 0);
                 }
             }
             pc += opLen(op);
         }
     }
 
-    /** Size method {@code i} (pass1) and allocate its buffer. */
-    private static void sizeMethod(int i)
+    /** Compile method {@code i} with the shared core (returns its A64 at {@code base}). */
+    private static int[] compileMethod(int i, long base)
     {
-        long code = mCode[i];
-        int len = mLen[i];
-        setFrame(i);
-        cbc = new int[len + 1];
-        pass1(code, len);
-        mBuf[i] = Heap.alloc((cbc[len] + 4) * 4);       // calls are big; size to the code
+        Baseline b = new Baseline(gbytes, gcp, gcpTag, METAL_SYMBOLS);
+        b.setExceptionTable(NO_EX, NO_EX, NO_EX, NO_EX, 0);
+        int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mLocals[i], base, false);
+        gFrameSize = b.frameSize();
+        return words;
     }
 
-    /** Emit method {@code i}'s A64 into its assigned buffer (pass2). */
+    /**
+     * Size method {@code i} and allocate its buffer. The shared core emits fixed-width
+     * address loads, so a method's word count is placement-independent — compiling at a
+     * dummy base gives the exact size to reserve before the real emit pass.
+     */
+    private static void sizeMethod(int i)
+    {
+        mBuf[i] = Heap.alloc(compileMethod(i, 0L).length * 4);
+    }
+
+    /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
-        long code = mCode[i];
-        int len = mLen[i];
-        cbc = new int[len + 1];
-        cdepth = new int[len];
-        int j = 0;
-        while (j < len)
+        int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
+        long out = mBuf[i];
+        int k = 0;
+        while (k < words.length)
         {
-            cdepth[j] = -1;
-            j += 1;
+            Magic.store32(out, words[k]);
+            out += 4;
+            k += 1;
         }
-        setFrame(i);
-        pass1(code, len);                               // rebuild the branch-target map
-        cbuf = mBuf[i];
-        cout = mBuf[i];
-        csp = 0;
-        emitPrologue();                                 // frame, saved regs, args -> x19..
-        int pc = 0;
-        while (pc < len)
+        if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
         {
-            if (cdepth[pc] >= 0)
-            {
-                csp = cdepth[pc];    // merge point: adopt the branch-edge depth
-            }
-            emitOp(code, pc);
-            pc += opLen(u1(code + pc));
-        }
-        if (fFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
-        {
-            VM.addJitFrame(mBuf[i], cout, fFrameSize);
+            VM.addJitFrame(mBuf[i], out, gFrameSize);
         }
     }
 

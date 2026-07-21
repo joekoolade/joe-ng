@@ -325,6 +325,23 @@ public final class A64Enc
         return (n + 15) & ~15;
     }
 
+    /** Little-endian byte serialization of an instruction-word stream (A64 is LE). */
+    public static byte[] wordsToLittleEndian(int[] words)
+    {
+        byte[] b = new byte[words.length * 4];
+        int i = 0;
+        while (i < words.length)
+        {
+            int w = words[i];
+            b[i * 4] = (byte) w;
+            b[i * 4 + 1] = (byte) (w >>> 8);
+            b[i * 4 + 2] = (byte) (w >>> 16);
+            b[i * 4 + 3] = (byte) (w >>> 24);
+            i += 1;
+        }
+        return b;
+    }
+
     // ----- system-register moves (MRS/MSR) ---------------------------------
     // A system register is (op0,op1,CRn,CRm,op2); op0 is 2/3 and only its low bit
     // (o0) is encoded. sysReg packs the fixed field so msr/mrs just add L and Rt.
