@@ -406,7 +406,7 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
   `*M F`. Remaining: the metal's *cross-blob* comparisons stay address-based
   (registries hold `long` addresses, not `byte[]`) — unifying those is entangled
   with 4.4.
-- ◐ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
+- ✅ **4.4 — lift the lowering into the core** and route both `BaselineCompiler` and
   `vm/Loader` through it, then delete `Loader`'s `emitOp`. One compiler at last.
   The calling convention is already unified (M5.2), so what remains is that the
   lowering must stop resolving symbols with `String` keys / `ClassFile` objects
@@ -526,7 +526,7 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
     - ☐ **d.3 — the metal code sink**: `Loader` emits through a `CodeBuffer` that flushes
       to `cout`, replacing the bare `emit(word)`, and converge the branch model
       (writer forward-fixups vs. the metal's two-pass `pass1`) onto the fixup model.
-  - ◐ **4.4e — route `Loader.emitMethod` through the shared `Baseline`, delete `emitOp`.**
+  - ✅ **4.4e — route `Loader.emitMethod` through the shared `Baseline`, delete `emitOp`.**
     The payoff step — validated end-to-end by QEMU, not byte-identity. Investigation
     mapped exactly what it needs:
     - ✅ **fixed-width metal address loads.** `MetalSymbols` now emits a fixed 2-word
@@ -554,14 +554,20 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       - ☐ **step 3 — instanceof/checkcast via helpers.** Once JIT'd `Type`s are
         `ObjectModel`, the metal's inline walks can give way to the `VM.instanceOf`/
         `checkCast` calls the core emits (the addresses are already stashed, 4.4c).
-    - ☐ **wire `emitMethod`**: extract the method's bytecode to a `byte[]`, instantiate
-      `Baseline(gbytes, gcp, gcpTag, new MetalSymbols())`, set its exception table,
-      `compileBody(...)` into `mBuf[i]`, blit the words to `cout`, register the JIT
-      frame. Then delete `emitOp`, `pass1`, and the bespoke `emit*` lowerings — one
-      compiler at last.
-    - **Done when:** QEMU still prints `Guest.answer`→'*', `Math.max`→'M', and the boot
-      markers `*M F`, now with the metal JIT driven by the same `Baseline` the writer
-      uses — the self-hosting fixpoint on metal.
+    - ✅ **wire `emitMethod`.** `emitMethod` now compiles each method with
+      `compiler/Baseline` — the same code generator the writer uses. The work-set
+      carries `descOff`/`isStatic` per method; `extractCode` copies a method's bytecode
+      into a `byte[]`; `compileMethod(i, base)` runs `Baseline(gbytes, gcp, gcpTag,
+      MetalSymbols).compileBody(...)`. Fixed-width metal address loads make the word
+      count placement-independent, so `sizeMethod` compiles at base 0 to reserve
+      `mBuf[i]` and `emitMethod` re-compiles at the real base and blits to `cout`, then
+      registers the JIT frame from `Baseline.frameSize()`. `CodeBuffer.toBytes` was
+      decoupled from `A64` (→ `A64Enc.wordsToLittleEndian`) so the now-in-image
+      `CodeBuffer` doesn't drag the `A64.Sys` record's invokedynamic `toString` in. The
+      old `emitOp`/`pass1`/`emit*`/`setFrame` lowerings and their globals are deleted.
+    - **✅ DONE.** QEMU prints `Guest.answer`→'*' (`new` + `invokeinterface`),
+      `Math.max`→'M', and `*M F` — the on-metal JIT is driven by the same `Baseline`
+      the writer runs. **One compiler, both worlds: the self-hosting fixpoint on metal.**
 
 **The crux, and the real risk.** The two compilers do not merely differ in
 dependencies, they differ in *calling convention*: the writer puts locals in
