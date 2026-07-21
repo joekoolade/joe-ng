@@ -606,7 +606,62 @@ compiler that is correct in neither context.
 
 **Done when:** the shared core compiles *itself* and the output is identical to
 the seed JVM's compilation of it — a fixpoint, which is the honest proof of
-self-hosting.
+self-hosting. ✅ Reached — the metal JIT runs `Baseline`; `Guest`/`Math` compile
+on metal across `new`, virtual/interface/static dispatch, class+interface
+`instanceof`, string literals, magic intrinsics, and `throw`/`catch`.
+
+### M5.5 — the boot-image writer on metal (scoped, not started)
+
+The compiler and classfile parser now run on metal; what's left for full M5 is the
+**boot-image writer** — `writer/ImageBuilder` (575 lines): object/TIB/itable/string
+layout, cross-reference relocation, unwind-table generation, `kernel8.img` emission.
+Then joe-ng builds its own next image and the seed JVM is gone.
+
+**The gap, measured** (M5Gap over `writer/*`): **6 of 39 methods compile; 33 blocked.**
+Unlike the runtime (JDK-light by design), the writer is JDK-*heavy* — its whole job
+is name→address bookkeeping:
+- **collections** — `Map`/`Set`/`List` (`HashMap`, `LinkedHashMap`, `LinkedHashSet`,
+  `ArrayList`) drive every layout table (`wordOffset`, `typeWord`, `tibWord`,
+  `strWord`, `staticWord`, `itableDirWord`, …). 28 methods reference a JDK class.
+- **String keys** — everything is keyed by `String` (`"owner.name+desc"`), with
+  concat (invokedynamic, 4 methods) building keys and messages.
+- **file IO** — `java.nio` reads input `.class` files and writes the image.
+
+**Sub-problems, roughly in dependency order:**
+1. **Layout registries without collections.** Replace ImageBuilder's `Map<String,Integer>`
+   tables with primitive arrays keyed by **Utf8 offset** — exactly the pattern
+   `vm/Loader` already uses for its class/method/field registries. This is the bulk of
+   the work and subsumes the String-key problem (identity by Utf8 compare, not `String`).
+2. **Parse via `ClassReader`, not `ClassFile`.** ImageBuilder resolves classes through
+   the JDK-based `ClassFile`; on metal it must read `byte[]`+offsets through the shared
+   `ClassReader` — the same b.1–b.5 migration already done for `Baseline`, applied to the
+   writer's own parsing (owner/name/desc lookups, vtable/field/interface walks).
+3. **Diagnostics** — route the writer's error strings through a fault seam / drop them,
+   as the compiler's did (§b.4/C.2).
+4. **Input (blob source).** Where the classes-to-image come from on metal. Cheapest
+   first: the **embedded blobs** the loader already carries (a fixed self-rebuild set),
+   deferring a real filesystem. A general source needs an SD/FAT driver — M6+ territory.
+5. **Output (image sink).** Where the built `kernel8.img` goes. Cheapest first: build it
+   **in a heap buffer** and prove it byte-for-byte equals the seed-built image (a pure
+   in-memory fixpoint check, no persistence). Writing it to SD for a real reboot needs a
+   block driver — again M6+.
+
+**Pragmatic milestones (smallest verifiable first):**
+- **M5.5a — writer core off collections+ClassFile**, still run on the *seed JVM*,
+  producing a byte-identical image. Pure refactor, fully verifiable off-metal (the same
+  discipline that de-risked the compiler split).
+- **M5.5b — compile the ported writer with M5Gap → 39/39**, closing the metal gaps.
+- **M5.5c — run the writer on metal into a heap buffer** over the embedded blobs, and
+  assert the bytes equal the seed-built image: the self-build **fixpoint**, no
+  persistence, no new drivers.
+- **M5.5d (M6-gated) — persist + reboot**: an SD/FAT block driver to write the image and
+  a real self-hosted boot. This is where "drop the seed JVM" becomes literally true.
+
+**Honest assessment.** M5.5a–c is a large but bounded port — mechanically similar to the
+`Baseline` split (collections→registries, `ClassFile`→`ClassReader`, strings→Utf8), just
+over 575 lines of layout logic instead of lowering. M5.5d is a genuinely new subsystem
+(storage) and belongs with M6 widening. The compiler closure (M5.4) was the hard,
+novel part; M5.5a–c is more of the same well-understood surgery.
 
 ### M6+ — Widening
 GC (bump → real collector); GIC-400 interrupts + timer; SMP (wake cores 1–3);
