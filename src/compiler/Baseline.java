@@ -1,6 +1,6 @@
 package compiler;
 
-import asm.A64;
+import asm.A64Enc;
 import asm.CodeBuffer;
 import classfile.ClassReader;
 import objectmodel.ObjectModel;
@@ -114,22 +114,22 @@ public final class Baseline
         fixupCount += 1;
     }
 
-    /** Encode a pending branch now that the distance to its target is known. */
-    private static int encodeBranch(Fixup f, int byteOffset)
+    /** Encode a pending branch now that the distance to its target is known (in words). */
+    private static int encodeBranch(Fixup f, int wordOffset)
     {
         if (f.kind == FIX_CBZ)
         {
-            return A64.cbz(f.arg, byteOffset);
+            return A64Enc.cbz(f.arg, wordOffset);
         }
         if (f.kind == FIX_CBNZ)
         {
-            return A64.cbnz(f.arg, byteOffset);
+            return A64Enc.cbnz(f.arg, wordOffset);
         }
         if (f.kind == FIX_BCOND)
         {
-            return A64.bcond(f.arg, byteOffset);
+            return A64Enc.bcond(f.arg, wordOffset);
         }
-        return A64.b(byteOffset);
+        return A64Enc.b(wordOffset);
     }
 
     // A compile failure (unsupported bytecode or a broken invariant) is reported
@@ -143,22 +143,22 @@ public final class Baseline
     {
         if (isEntry)
         {
-            cb.emit(A64.ret());
+            cb.emit(A64Enc.ret());
             return;
         }
         if (saveLR)
         {
-            cb.emit(A64.ldrx(30, 31, 0));
+            cb.emit(A64Enc.ldrx(30, 31, 0));
         }
         for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
-            cb.emit(A64.ldrx(LOC_BASE + i, 31, localSaveBase + i * 8));
+            cb.emit(A64Enc.ldrx(LOC_BASE + i, 31, localSaveBase + i * 8));
         }
         if (frameSize > 0)
         {
-            cb.emit(A64.addImm(31, 31, frameSize));
+            cb.emit(A64Enc.addImm(31, 31, frameSize));
         }
-        cb.emit(A64.ret());
+        cb.emit(A64Enc.ret());
     }
 
     // ----- opcode dispatch -------------------------------------------------
@@ -175,7 +175,7 @@ public final class Baseline
         }  // return
         else if (op == 0xAC || op == 0xAD || op == 0xB0)
         {
-            cb.emit(A64.movReg(0, popReg()));
+            cb.emit(A64Enc.movReg(0, popReg()));
             emitEpilogue(cb);
             return 1;
         }  // ireturn/lreturn/areturn
@@ -358,7 +358,7 @@ public final class Baseline
         else if (op == 0x74 || op == 0x75)
         {
             int r = OP_BASE + sp - 1;
-            cb.emit(A64.subReg(r, A64.XZR, r));
+            cb.emit(A64Enc.subReg(r, A64Enc.XZR, r));
             return 1;
         }  // ineg/lneg
         else if (op == 0x78 || op == 0x79)
@@ -404,19 +404,19 @@ public final class Baseline
         else if (op == 0x91)
         {
             int r = OP_BASE + sp - 1;
-            cb.emit(A64.sxtb(r, r));
+            cb.emit(A64Enc.sxtb(r, r));
             return 1;
         }  // i2b
         else if (op == 0x92)
         {
             int r = OP_BASE + sp - 1;
-            cb.emit(A64.uxth(r, r));
+            cb.emit(A64Enc.uxth(r, r));
             return 1;
         }  // i2c
         else if (op == 0x93)
         {
             int r = OP_BASE + sp - 1;
-            cb.emit(A64.sxth(r, r));
+            cb.emit(A64Enc.sxth(r, r));
             return 1;
         }  // i2s
 
@@ -432,58 +432,58 @@ public final class Baseline
         }  // ifne / ifnonnull
         else if (op == 0x9B)
         {
-            branchCmpZero(cb, code, pos, A64.LT);
+            branchCmpZero(cb, code, pos, A64Enc.LT);
             return 3;
         }
         else if (op == 0x9C)
         {
-            branchCmpZero(cb, code, pos, A64.GE);
+            branchCmpZero(cb, code, pos, A64Enc.GE);
             return 3;
         }
         else if (op == 0x9D)
         {
-            branchCmpZero(cb, code, pos, A64.GT);
+            branchCmpZero(cb, code, pos, A64Enc.GT);
             return 3;
         }
         else if (op == 0x9E)
         {
-            branchCmpZero(cb, code, pos, A64.LE);
+            branchCmpZero(cb, code, pos, A64Enc.LE);
             return 3;
         }
         else if (op == 0x9F)
         {
-            branchCmp(cb, code, pos, A64.EQ);
+            branchCmp(cb, code, pos, A64Enc.EQ);
             return 3;
         }
         else if (op == 0xA0)
         {
-            branchCmp(cb, code, pos, A64.NE);
+            branchCmp(cb, code, pos, A64Enc.NE);
             return 3;
         }
         else if (op == 0xA1)
         {
-            branchCmp(cb, code, pos, A64.LT);
+            branchCmp(cb, code, pos, A64Enc.LT);
             return 3;
         }
         else if (op == 0xA2)
         {
-            branchCmp(cb, code, pos, A64.GE);
+            branchCmp(cb, code, pos, A64Enc.GE);
             return 3;
         }
         else if (op == 0xA3)
         {
-            branchCmp(cb, code, pos, A64.GT);
+            branchCmp(cb, code, pos, A64Enc.GT);
             return 3;
         }
         else if (op == 0xA4)
         {
-            branchCmp(cb, code, pos, A64.LE);
+            branchCmp(cb, code, pos, A64Enc.LE);
             return 3;
         }
         else if (op == 0xA7)
         {
             int target = pos + s2(code, pos + 1);
-            int w = cb.emit(A64.b(0));
+            int w = cb.emit(A64Enc.b(0));
             addFixup(w, target, FIX_B, 0);
             recordDepth(target);
             return 3;
@@ -628,19 +628,19 @@ public final class Baseline
 
     private void loadConst(CodeBuffer cb, long v)
     {
-        cb.emitAll(A64.loadImm64(pushReg(), v));
+        cb.emitAll(A64Enc.loadImm64(pushReg(), v));
     }
     private void load(CodeBuffer cb, int slot)
     {
         int r = pushReg();
-        cb.emit(inReg(slot) ? A64.movReg(r, localReg(slot))
-                            : A64.ldrx(r, 31, localMem(slot)));
+        cb.emit(inReg(slot) ? A64Enc.movReg(r, localReg(slot))
+                            : A64Enc.ldrx(r, 31, localMem(slot)));
     }
     private void store(CodeBuffer cb, int slot)
     {
         int r = popReg();
-        cb.emit(inReg(slot) ? A64.movReg(localReg(slot), r)
-                            : A64.strx(r, 31, localMem(slot)));
+        cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), r)
+                            : A64Enc.strx(r, 31, localMem(slot)));
     }
 
     private void iinc(CodeBuffer cb, int slot, int delta)
@@ -648,13 +648,13 @@ public final class Baseline
         if (inReg(slot))
         {
             int r = localReg(slot);
-            cb.emit(delta >= 0 ? A64.addImm(r, r, delta) : A64.subImm(r, r, -delta));
+            cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
             return;
         }
         int r = SCRATCH;                                   // read-modify-write in the frame
-        cb.emit(A64.ldrx(r, 31, localMem(slot)));
-        cb.emit(delta >= 0 ? A64.addImm(r, r, delta) : A64.subImm(r, r, -delta));
-        cb.emit(A64.strx(r, 31, localMem(slot)));
+        cb.emit(A64Enc.ldrx(r, 31, localMem(slot)));
+        cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
+        cb.emit(A64Enc.strx(r, 31, localMem(slot)));
     }
 
     private void binop(CodeBuffer cb, int kind)
@@ -662,22 +662,22 @@ public final class Baseline
         int b = popReg();
         int a = popReg();
         int r = pushReg();
-        cb.emit(kind == BIN_ADD ? A64.addReg(r, a, b)
-              : kind == BIN_SUB ? A64.subReg(r, a, b)
-              : kind == BIN_MUL ? A64.mulReg(r, a, b)
-              : kind == BIN_DIV ? A64.sdivReg(r, a, b)
-              : kind == BIN_AND ? A64.andReg(r, a, b)
-              : kind == BIN_OR ? A64.orrReg(r, a, b)
-              : kind == BIN_XOR ? A64.eorReg(r, a, b)
-              : kind == BIN_SHL ? A64.lslv(r, a, b)
-              : kind == BIN_ASR ? A64.asrv(r, a, b)
-              : A64.lsrv(r, a, b));                                // BIN_LSR
+        cb.emit(kind == BIN_ADD ? A64Enc.addReg(r, a, b)
+              : kind == BIN_SUB ? A64Enc.subReg(r, a, b)
+              : kind == BIN_MUL ? A64Enc.mulReg(r, a, b)
+              : kind == BIN_DIV ? A64Enc.sdivReg(r, a, b)
+              : kind == BIN_AND ? A64Enc.andReg(r, a, b)
+              : kind == BIN_OR ? A64Enc.orrReg(r, a, b)
+              : kind == BIN_XOR ? A64Enc.eorReg(r, a, b)
+              : kind == BIN_SHL ? A64Enc.lslv(r, a, b)
+              : kind == BIN_ASR ? A64Enc.asrv(r, a, b)
+              : A64Enc.lsrv(r, a, b));                                // BIN_LSR
     }
 
     private void dup(CodeBuffer cb)
     {
         int top = OP_BASE + sp - 1;
-        cb.emit(A64.movReg(pushReg(), top));
+        cb.emit(A64Enc.movReg(pushReg(), top));
     }
 
     /** lcmp: push -1/0/1 for a&lt;b / a==b / a&gt;b (usually consumed by a following if). */
@@ -686,9 +686,9 @@ public final class Baseline
         int b = popReg();
         int a = popReg();
         int r = pushReg();
-        cb.emit(A64.cmpReg(a, b));
-        cb.emit(A64.cset(r, A64.GT));            // a>b -> 1, else 0
-        cb.emit(A64.csinv(r, r, A64.XZR, A64.GE)); // a<b -> -1, else keep
+        cb.emit(A64Enc.cmpReg(a, b));
+        cb.emit(A64Enc.cset(r, A64Enc.GT));            // a>b -> 1, else 0
+        cb.emit(A64Enc.csinv(r, r, A64Enc.XZR, A64Enc.GE)); // a<b -> -1, else keep
     }
 
     // ----- static fields: absolute address in the image statics area --------
@@ -696,26 +696,26 @@ public final class Baseline
     {
         int r = pushReg();
         symbols.staticField(cb, r, cpIndex);
-        cb.emit(A64.ldrx(r, r, 0));
+        cb.emit(A64Enc.ldrx(r, r, 0));
     }
     private void putstatic(CodeBuffer cb, int cpIndex)
     {
         int v = popReg();
         symbols.staticField(cb, 16, cpIndex);
-        cb.emit(A64.strx(v, 16, 0));
+        cb.emit(A64Enc.strx(v, 16, 0));
     }
 
     /** Load the synthetic $exception static slot into {@code destReg}. */
     private void emitLoadException(CodeBuffer cb, int destReg)
     {
         symbols.exceptionSlot(cb, destReg);
-        cb.emit(A64.ldrx(destReg, destReg, 0));
+        cb.emit(A64Enc.ldrx(destReg, destReg, 0));
     }
     /** Store {@code valReg} into the synthetic $exception static slot (via x16). */
     private void emitStoreException(CodeBuffer cb, int valReg)
     {
         symbols.exceptionSlot(cb, 16);
-        cb.emit(A64.strx(valReg, 16, 0));
+        cb.emit(A64Enc.strx(valReg, 16, 0));
     }
 
     /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
@@ -732,7 +732,7 @@ public final class Baseline
         int off = symbols.fieldOffset(cpIndex);
         int obj = popReg();
         int r = pushReg();
-        cb.emit(A64.ldrx(r, obj, off));
+        cb.emit(A64Enc.ldrx(r, obj, off));
     }
 
     private void putfield(CodeBuffer cb, int cpIndex)
@@ -740,7 +740,7 @@ public final class Baseline
         int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
         int obj = popReg();
-        cb.emit(A64.strx(val, obj, off));
+        cb.emit(A64Enc.strx(val, obj, off));
     }
 
     // ----- allocation: new -> Heap.alloc(size), store TIB, push ref ---------
@@ -762,13 +762,13 @@ public final class Baseline
             expectEmpty(Symbols.SITE_NEW);                                   // frameless: nowhere to spill
         }
         int size = symbols.objectSize(classIndex);
-        cb.emitAll(A64.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
+        cb.emitAll(A64Enc.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
         spillLive(cb);                                            // Heap.alloc clobbers x9..
         symbols.callHelper(cb, Symbols.HEAP_ALLOC);               // x0 = object base
         reloadLive(cb);
         symbols.tib(cb, 1, classIndex);                           // x1 = &TIB
-        cb.emit(A64.strx(1, 0, ObjectModel.TIB_OFFSET));          // header.tib = &TIB
-        cb.emit(A64.movReg(pushReg(), 0));                        // push the reference
+        cb.emit(A64Enc.strx(1, 0, ObjectModel.TIB_OFFSET));          // header.tib = &TIB
+        cb.emit(A64Enc.movReg(pushReg(), 0));                        // push the reference
     }
 
     // ----- branches --------------------------------------------------------
@@ -776,7 +776,7 @@ public final class Baseline
     {
         int v = popReg();
         int target = pos + s2(code, pos + 1);
-        int w = cb.emit(A64.b(0));
+        int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v);
         recordDepth(target);
     }
@@ -784,9 +784,9 @@ public final class Baseline
     private void branchCmpZero(CodeBuffer cb, byte[] code, int pos, int cond)
     {
         int v = popReg();
-        cb.emit(A64.cmpImm(v, 0));
+        cb.emit(A64Enc.cmpImm(v, 0));
         int target = pos + s2(code, pos + 1);
-        int w = cb.emit(A64.b(0));
+        int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
     }
@@ -795,9 +795,9 @@ public final class Baseline
     {
         int b = popReg();
         int a = popReg();
-        cb.emit(A64.cmpReg(a, b));
+        cb.emit(A64Enc.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
-        int w = cb.emit(A64.b(0));
+        int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
     }
@@ -838,16 +838,16 @@ public final class Baseline
         }
         for (int k = 0; k < nargs; k++)
         {
-            cb.emit(A64.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
         }
         spillLive(cb);
-        cb.emit(A64.ldrx(16, 0, ObjectModel.TIB_OFFSET));       // x16 = receiver.tib
-        cb.emit(A64.ldrx(16, 16, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)))); // x16 = code
-        cb.emit(A64.blr(16));
+        cb.emit(A64Enc.ldrx(16, 0, ObjectModel.TIB_OFFSET));       // x16 = receiver.tib
+        cb.emit(A64Enc.ldrx(16, 16, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)))); // x16 = code
+        cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
         {
-            cb.emit(A64.movReg(pushReg(), 0));
+            cb.emit(A64Enc.movReg(pushReg(), 0));
         }
     }
 
@@ -868,29 +868,29 @@ public final class Baseline
         }
         for (int k = 0; k < nargs; k++)
         {
-            cb.emit(A64.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
         }
         spillLive(cb);
 
         symbols.interfaceType(cb, 16, cpIndex);                                     // x16 = &interfaceType
-        cb.emit(A64.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
-        cb.emit(A64.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
-        cb.emit(A64.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
+        cb.emit(A64Enc.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
+        cb.emit(A64Enc.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
+        cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
         int search = cb.wordCount();
-        cb.emit(A64.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
-        cb.emit(A64.cmpReg(9, 16));
-        int beq = cb.emit(A64.bcond(A64.EQ, 0));                                    // found?
-        cb.emit(A64.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
-        cb.emit(A64.b((search - cb.wordCount()) * 4));                              // loop
+        cb.emit(A64Enc.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
+        cb.emit(A64Enc.cmpReg(9, 16));
+        int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));                                    // found?
+        cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
+        cb.emit(A64Enc.b(search - cb.wordCount()));                                    // loop
         int found = cb.wordCount();
-        cb.set(beq, A64.bcond(A64.EQ, (found - beq) * 4));
-        cb.emit(A64.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
-        cb.emit(A64.ldrx(16, 17, slot * ObjectModel.WORD));                        // x16 = code addr
-        cb.emit(A64.blr(16));
+        cb.set(beq, A64Enc.bcond(A64Enc.EQ, found - beq));
+        cb.emit(A64Enc.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
+        cb.emit(A64Enc.ldrx(16, 17, slot * ObjectModel.WORD));                        // x16 = code addr
+        cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
         {
-            cb.emit(A64.movReg(pushReg(), 0));
+            cb.emit(A64Enc.movReg(pushReg(), 0));
         }
     }
 
@@ -931,9 +931,9 @@ public final class Baseline
             symbols.type(cb, t, exCatchType[i]);
             emitCall(cb, 2, true, false, SYM_HELPER, Symbols.INSTANCE_OF);  // (exc, catchType) -> int
             int cond = popReg();
-            int skip = cb.emit(A64.cbz(cond, 0));
+            int skip = cb.emit(A64Enc.cbz(cond, 0));
             emitCatch(cb, exHandlerPc[i]);                       // matched
-            cb.set(skip, A64.cbz(cond, (cb.wordCount() - skip) * 4));
+            cb.set(skip, A64Enc.cbz(cond, cb.wordCount() - skip));
         }
         // no local handler: unwind the stack — unwind(exc, thisPC, SP)
         int exc = pushReg();
@@ -941,7 +941,7 @@ public final class Baseline
         int pc = pushReg();
         cb.patchAddr(cb.reserveAddr(pc), pc, cb.pcAt(athrowStart)); // a PC inside this method
         int sp = pushReg();
-        cb.emit(A64.movFromSp(sp));
+        cb.emit(A64Enc.movFromSp(sp));
         emitCall(cb, 3, false, false, SYM_HELPER, Symbols.UNWIND);
         emitHalt(cb);                                            // unwind never returns
     }
@@ -950,7 +950,7 @@ public final class Baseline
     private void emitCatch(CodeBuffer cb, int handlerPc)
     {
         emitLoadException(cb, pushReg());
-        int w = cb.emit(A64.b(0));
+        int w = cb.emit(A64Enc.b(0));
         addFixup(w, handlerPc, FIX_B, 0);
         recordDepth(handlerPc);
         sp = 0;                                                  // fall-through (next check) resumes empty
@@ -958,28 +958,28 @@ public final class Baseline
 
     private void emitHalt(CodeBuffer cb)
     {
-        int h = cb.emit(A64.wfe());
-        cb.emit(A64.b((h - cb.wordCount()) * 4));                // spin
+        int h = cb.emit(A64Enc.wfe());
+        cb.emit(A64Enc.b(h - cb.wordCount()));                      // spin
     }
 
     /** Magic.gc(): spill x19..x28 (+LR) so live refs are scannable, call the collector, restore. */
     private void lowerGc(CodeBuffer cb)
     {
         int frame = 96;                                          // 10 locals (80) + LR (8), 16-aligned
-        cb.emit(A64.subImm(31, 31, frame));
-        cb.emit(A64.strx(30, 31, 80));                          // save LR (we make a call)
+        cb.emit(A64Enc.subImm(31, 31, frame));
+        cb.emit(A64Enc.strx(30, 31, 80));                          // save LR (we make a call)
         for (int i = 0; i < 10; i++)
         {
-            cb.emit(A64.strx(19 + i, 31, i * 8));    // spill x19..x28
+            cb.emit(A64Enc.strx(19 + i, 31, i * 8));    // spill x19..x28
         }
-        cb.emit(A64.movFromSp(0));                              // x0 = scanFrom (bottom of spilled regs)
+        cb.emit(A64Enc.movFromSp(0));                              // x0 = scanFrom (bottom of spilled regs)
         symbols.callHelper(cb, Symbols.GC_COLLECT);
         for (int i = 0; i < 10; i++)
         {
-            cb.emit(A64.ldrx(19 + i, 31, i * 8));    // restore
+            cb.emit(A64Enc.ldrx(19 + i, 31, i * 8));    // restore
         }
-        cb.emit(A64.ldrx(30, 31, 80));
-        cb.emit(A64.addImm(31, 31, frame));
+        cb.emit(A64Enc.ldrx(30, 31, 80));
+        cb.emit(A64Enc.addImm(31, 31, frame));
     }
 
     /** A real call: args to x0.. (receiver first if any), BL to a cp method, result from x0. */
@@ -1017,7 +1017,7 @@ public final class Baseline
         }
         for (int k = 0; k < nargs; k++)
         {
-            cb.emit(A64.movReg(nargs - 1 - k, src[k]));    // -> x(argIndex)
+            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // -> x(argIndex)
         }
         spillLive(cb);                                           // preserve operand values below the args
         if (symKind == SYM_CP)
@@ -1031,7 +1031,7 @@ public final class Baseline
         reloadLive(cb);
         if (returnsValue)
         {
-            cb.emit(A64.movReg(pushReg(), 0));
+            cb.emit(A64Enc.movReg(pushReg(), 0));
         }
     }
 
@@ -1058,18 +1058,18 @@ public final class Baseline
     {
         int arr = popReg();
         int r = pushReg();
-        cb.emit(A64.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
+        cb.emit(A64Enc.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
     }
 
     private void arrayLoad(CodeBuffer cb, int scale)
     {
         int index = popReg(), arr = popReg(), r = pushReg();     // r == arr's register
-        cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
-        cb.emit(A64.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
-        cb.emit(scale == 0 ? A64.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
-                : scale == 1 ? A64.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
-                : scale == 2 ? A64.ldrsw(r, arr, 0)              // int (sign-ext)
-                : A64.ldrx(r, arr, 0));                          // long / ref
+        cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
+        cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
+        cb.emit(scale == 0 ? A64Enc.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
+                : scale == 1 ? A64Enc.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
+                : scale == 2 ? A64Enc.ldrsw(r, arr, 0)              // int (sign-ext)
+                : A64Enc.ldrx(r, arr, 0));                          // long / ref
     }
 
     private void arrayStore(CodeBuffer cb, int scale)
@@ -1077,12 +1077,12 @@ public final class Baseline
         int val = popReg();
         int index = popReg();
         int arr = popReg();
-        cb.emit(A64.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
-        cb.emit(A64.addRegLsl(arr, arr, index, scale));
-        cb.emit(scale == 0 ? A64.strb(val, arr, 0)
-                : scale == 1 ? A64.strh(val, arr, 0)             // char/short
-                : scale == 2 ? A64.strw(val, arr, 0)
-                : A64.strx(val, arr, 0));
+        cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
+        cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));
+        cb.emit(scale == 0 ? A64Enc.strb(val, arr, 0)
+                : scale == 1 ? A64Enc.strh(val, arr, 0)             // char/short
+                : scale == 2 ? A64Enc.strw(val, arr, 0)
+                : A64Enc.strx(val, arr, 0));
     }
 
     /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */
@@ -1105,14 +1105,14 @@ public final class Baseline
     {
         for (int i = 0; i < sp; i++)
         {
-            cb.emit(A64.strx(OP_BASE + i, 31, spillBase + i * 8));
+            cb.emit(A64Enc.strx(OP_BASE + i, 31, spillBase + i * 8));
         }
     }
     private void reloadLive(CodeBuffer cb)
     {
         for (int i = 0; i < sp; i++)
         {
-            cb.emit(A64.ldrx(OP_BASE + i, 31, spillBase + i * 8));
+            cb.emit(A64Enc.ldrx(OP_BASE + i, 31, spillBase + i * 8));
         }
     }
 
@@ -1125,15 +1125,15 @@ public final class Baseline
     {
         if (id == Intrinsics.WFE)
         {
-            cb.emit(A64.wfe());
+            cb.emit(A64Enc.wfe());
         }
         else if (id == Intrinsics.ISB)
         {
-            cb.emit(A64.isb());
+            cb.emit(A64Enc.isb());
         }
         else if (id == Intrinsics.DSB)
         {
-            cb.emit(A64.dsb());
+            cb.emit(A64Enc.dsb());
         }
         else if (id == Intrinsics.GC)
         {
@@ -1142,8 +1142,8 @@ public final class Baseline
         else if (id == Intrinsics.CALL0)
         {
             int addr = popReg();
-            cb.emit(A64.blr(addr));
-            cb.emit(A64.movReg(pushReg(), 0));
+            cb.emit(A64Enc.blr(addr));
+            cb.emit(A64Enc.movReg(pushReg(), 0));
         }
         else if (id == Intrinsics.CALL2)
         // addr, a->x0, b->x1, blr, result x0
@@ -1151,15 +1151,15 @@ public final class Baseline
             int b = popReg();
             int a = popReg();
             int addr = popReg();
-            cb.emit(A64.movReg(16, addr));
-            cb.emit(A64.movReg(0, a));
-            cb.emit(A64.movReg(1, b));
-            cb.emit(A64.blr(16));
-            cb.emit(A64.movReg(pushReg(), 0));
+            cb.emit(A64Enc.movReg(16, addr));
+            cb.emit(A64Enc.movReg(0, a));
+            cb.emit(A64Enc.movReg(1, b));
+            cb.emit(A64Enc.blr(16));
+            cb.emit(A64Enc.movReg(pushReg(), 0));
         }
         else if (id == Intrinsics.ERET)
         {
-            cb.emit(A64.eret());
+            cb.emit(A64Enc.eret());
         }
         else if (id == Intrinsics.DROP_TO_EL1)
         {
@@ -1168,43 +1168,43 @@ public final class Baseline
 
         else if (id == Intrinsics.WRITE_HCR_EL2)
         {
-            cb.emit(A64.msr(A64.HCR_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.HCR_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_CPTR_EL2)
         {
-            cb.emit(A64.msr(A64.CPTR_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.CPTR_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_CNTHCTL_EL2)
         {
-            cb.emit(A64.msr(A64.CNTHCTL_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.CNTHCTL_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_CNTVOFF_EL2)
         {
-            cb.emit(A64.msr(A64.CNTVOFF_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.CNTVOFF_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_SCTLR_EL1)
         {
-            cb.emit(A64.msr(A64.SCTLR_EL1, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.SCTLR_EL1, popReg()));
         }
         else if (id == Intrinsics.WRITE_SPSR_EL2)
         {
-            cb.emit(A64.msr(A64.SPSR_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.SPSR_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_ELR_EL2)
         {
-            cb.emit(A64.msr(A64.ELR_EL2, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.ELR_EL2, popReg()));
         }
         else if (id == Intrinsics.WRITE_CPACR_EL1)
         {
-            cb.emit(A64.msr(A64.CPACR_EL1, popReg()));
+            cb.emit(A64Enc.msr(A64Enc.CPACR_EL1, popReg()));
         }
         else if (id == Intrinsics.WRITE_SP)
         {
-            cb.emit(A64.movToSp(popReg()));
+            cb.emit(A64Enc.movToSp(popReg()));
         }
         else if (id == Intrinsics.READ_SP)
         {
-            cb.emit(A64.movFromSp(pushReg()));
+            cb.emit(A64Enc.movFromSp(pushReg()));
         }
         else if (id == Intrinsics.RESUME)
         // exc->x9, SP=sp, br pc (no return)
@@ -1212,47 +1212,47 @@ public final class Baseline
             int exc = popReg();
             int spv = popReg();
             int pc = popReg();
-            cb.emit(A64.movReg(16, pc));                     // target -> scratch (x9 gets clobbered next)
-            cb.emit(A64.movReg(9, exc));                     // exception -> handler's stack slot
-            cb.emit(A64.movToSp(spv));
-            cb.emit(A64.br(16));
+            cb.emit(A64Enc.movReg(16, pc));                     // target -> scratch (x9 gets clobbered next)
+            cb.emit(A64Enc.movReg(9, exc));                     // exception -> handler's stack slot
+            cb.emit(A64Enc.movToSp(spv));
+            cb.emit(A64Enc.br(16));
         }
 
         else if (id == Intrinsics.STORE32)
         {
             int val = popReg();
             int addr = popReg();
-            cb.emit(A64.strw(val, addr, 0));
+            cb.emit(A64Enc.strw(val, addr, 0));
         }
         else if (id == Intrinsics.STORE8)
         {
             int val = popReg();
             int addr = popReg();
-            cb.emit(A64.strb(val, addr, 0));
+            cb.emit(A64Enc.strb(val, addr, 0));
         }
         else if (id == Intrinsics.STORE64)
         {
             int val = popReg();
             int addr = popReg();
-            cb.emit(A64.strx(val, addr, 0));
+            cb.emit(A64Enc.strx(val, addr, 0));
         }
         else if (id == Intrinsics.LOAD32)
         {
             int addr = popReg();
             int r = pushReg();
-            cb.emit(A64.ldrw(r, addr, 0));
+            cb.emit(A64Enc.ldrw(r, addr, 0));
         }
         else if (id == Intrinsics.LOAD8)
         {
             int addr = popReg();
             int r = pushReg();
-            cb.emit(A64.ldrb(r, addr, 0));
+            cb.emit(A64Enc.ldrb(r, addr, 0));
         }
         else if (id == Intrinsics.LOAD64)
         {
             int addr = popReg();
             int r = pushReg();
-            cb.emit(A64.ldrx(r, addr, 0));
+            cb.emit(A64Enc.ldrx(r, addr, 0));
         }
 
         else if (id == Intrinsics.BYTES)
@@ -1269,24 +1269,24 @@ public final class Baseline
     private void lowerDropToEL1(CodeBuffer cb)
     {
         expectEmpty(Symbols.SITE_DROP_TO_EL1);
-        cb.emit(A64.mrs(0, A64.CurrentEL));
-        int tbz = cb.emit(A64.tbz(0, 3, 0));
+        cb.emit(A64Enc.mrs(0, A64Enc.CurrentEL));
+        int tbz = cb.emit(A64Enc.tbz(0, 3, 0));
         set64(cb, 0, 0x8000_0000L);
-        cb.emit(A64.msr(A64.HCR_EL2, 0));
+        cb.emit(A64Enc.msr(A64Enc.HCR_EL2, 0));
         set64(cb, 0, 0x33FFL);
-        cb.emit(A64.msr(A64.CPTR_EL2, 0));
+        cb.emit(A64Enc.msr(A64Enc.CPTR_EL2, 0));
         set64(cb, 0, 0x3L);
-        cb.emit(A64.msr(A64.CNTHCTL_EL2, 0));
-        cb.emit(A64.msr(A64.CNTVOFF_EL2, A64.XZR));
+        cb.emit(A64Enc.msr(A64Enc.CNTHCTL_EL2, 0));
+        cb.emit(A64Enc.msr(A64Enc.CNTVOFF_EL2, A64Enc.XZR));
         set64(cb, 0, 0x30D0_0800L);
-        cb.emit(A64.msr(A64.SCTLR_EL1, 0));
+        cb.emit(A64Enc.msr(A64Enc.SCTLR_EL1, 0));
         set64(cb, 0, 0x3C5L);
-        cb.emit(A64.msr(A64.SPSR_EL2, 0));
+        cb.emit(A64Enc.msr(A64Enc.SPSR_EL2, 0));
         int elr = cb.reserveAddr(0);
-        cb.emit(A64.msr(A64.ELR_EL2, 0));
-        cb.emit(A64.eret());
+        cb.emit(A64Enc.msr(A64Enc.ELR_EL2, 0));
+        cb.emit(A64Enc.eret());
         int cont = cb.wordCount();
-        cb.set(tbz, A64.tbz(0, 3, (cont - tbz) * 4));
+        cb.set(tbz, A64Enc.tbz(0, 3, cont - tbz));
         cb.patchAddr(elr, 0, cb.pcAt(cont));
     }
 
@@ -1348,7 +1348,7 @@ public final class Baseline
 
     private static void set64(CodeBuffer cb, int rd, long v)
     {
-        cb.emitAll(A64.loadImm64(rd, v));
+        cb.emitAll(A64Enc.loadImm64(rd, v));
     }
 
     /** ldc/ldc_w: int constant, or a String literal interned as a byte[] object. */
@@ -1431,7 +1431,7 @@ public final class Baseline
         this.spillBase = overflowBase + overflowLocals * 8;
         int spillWords = (!isEntry && nonLeaf) ? OP_MAX : 0;
         int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords;
-        this.frameSize = isEntry ? 0 : A64.align16(savedWords * 8);
+        this.frameSize = isEntry ? 0 : A64Enc.align16(savedWords * 8);
         sp = 0;
 
         CodeBuffer cb = new CodeBuffer(base);
@@ -1471,7 +1471,7 @@ public final class Baseline
             {
                 symbols.fail(Symbols.FAIL_BRANCH_TARGET, f.targetBc, 0);
             }
-            cb.set(f.wordIndex, encodeBranch(f, (target - f.wordIndex) * 4));
+            cb.set(f.wordIndex, encodeBranch(f, target - f.wordIndex));
         }
         int codeWords = cb.wordCount();
         hStartW = new int[exCount];
@@ -1491,15 +1491,15 @@ public final class Baseline
     {
         if (frameSize > 0)
         {
-            cb.emit(A64.subImm(31, 31, frameSize));    // sub sp, sp, #frame
+            cb.emit(A64Enc.subImm(31, 31, frameSize));    // sub sp, sp, #frame
         }
         if (saveLR)
         {
-            cb.emit(A64.strx(30, 31, 0));    // str x30, [sp]
+            cb.emit(A64Enc.strx(30, 31, 0));    // str x30, [sp]
         }
         for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
-            cb.emit(A64.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
+            cb.emit(A64Enc.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
         }
         // instance methods receive `this` as x0 -> slot 0; each parameter is one
         // argument register (long/double included), stepping its local slots wide.
@@ -1507,15 +1507,15 @@ public final class Baseline
         int slot = 0;
         if (!isStatic)
         {
-            cb.emit(A64.movReg(localReg(0), 0));
+            cb.emit(A64Enc.movReg(localReg(0), 0));
             arg = 1;
             slot = 1;
         }
         int p = descOff + 2 + 1;                         // past u2 length and '('
         while (ClassReader.u1(classBytes, p) != ')')
         {
-            cb.emit(inReg(slot) ? A64.movReg(localReg(slot), arg)
-                                : A64.strx(arg, 31, localMem(slot)));
+            cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), arg)
+                                : A64Enc.strx(arg, 31, localMem(slot)));
             arg++;
             int q = p;
             while (ClassReader.u1(classBytes, q) == '[')  // array prefixes fold into the element

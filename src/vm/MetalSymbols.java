@@ -1,6 +1,6 @@
 package vm;
 
-import asm.A64;
+import asm.A64Enc;
 import asm.CodeBuffer;
 import compiler.Symbols;
 
@@ -31,30 +31,30 @@ final class MetalSymbols implements Symbols
     // ----- address loads: the target is known, so load it directly into reg -----
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        cb.emitAll(A64.loadImm64(reg, Loader.tibOfClass(classCp)));
+        cb.emitAll(A64Enc.loadImm64(reg, Loader.tibOfClass(classCp)));
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        cb.emitAll(A64.loadImm64(reg, Loader.typeOfClass(classCp)));
+        cb.emitAll(A64Enc.loadImm64(reg, Loader.typeOfClass(classCp)));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        cb.emitAll(A64.loadImm64(reg, Loader.ifaceTypeOfMethod(ifaceMethodCp)));
+        cb.emitAll(A64Enc.loadImm64(reg, Loader.ifaceTypeOfMethod(ifaceMethodCp)));
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        cb.emitAll(A64.loadImm64(reg, Loader.staticAddr(fieldCp)));
+        cb.emitAll(A64Enc.loadImm64(reg, Loader.staticAddr(fieldCp)));
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
         // TODO(4.4e): interned string literals for on-metal-loaded classes. Guest
         // classes the metal JITs today carry none, so this path is never reached.
-        cb.emitAll(A64.loadImm64(reg, 0L));
+        cb.emitAll(A64Enc.loadImm64(reg, 0L));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
         // TODO(4.4e): a metal in-flight-exception slot (the writer's vm/VM.$exception).
-        cb.emitAll(A64.loadImm64(reg, 0L));
+        cb.emitAll(A64Enc.loadImm64(reg, 0L));
     }
 
     // ----- symbol queries: resolve to a number from the loaded-class tables -----
@@ -107,8 +107,9 @@ final class MetalSymbols implements Symbols
     /** BL from the current position in {@code cb} to an absolute {@code target}. */
     private static void emitBl(CodeBuffer cb, long target)
     {
-        int off = (int) (target - (cb.base() + (long) cb.wordCount() * 4));
-        cb.emit(A64.bl(off));
+        long here = cb.base() + (long) cb.wordCount() * 4;
+        int words = (int) ((target - here) >> 2);       // A64Enc branches take word offsets
+        cb.emit(A64Enc.bl(words));
     }
 
     /** Writer-stashed address of the runtime helper with the given {@link Symbols} id. */

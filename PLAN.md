@@ -511,11 +511,18 @@ into verifiable increments (each keeps the image byte-identical or QEMU at `*M`)
       csinv, br, ret(rn), cbnz, ldrw/ldrb/strb, dsb/isb/wfe/eret, align16, loadImm64).
       `A64` now delegates to each, so `A64Test` transitively verifies them and the
       writer image stays byte-identical (A64 84 checks green).
-    - ☐ **d.2 — route `Baseline`/`MetalSymbols` off `A64` onto `A64Enc`** (byte-identical
-      output → metal-compilable core). Friction to resolve: `A64Enc` branches take
-      *word* offsets while `A64` takes *bytes*; and `msr`/`mrs` use a `Sys` record
-      (synthesised `equals`/`hashCode` = invokedynamic) — needs int-param encoders +
-      per-register int constants instead.
+    - ✅ **d.2 — routed `Baseline`/`MetalSymbols` off `A64` onto `A64Enc`.** Both now
+      name only the validation-free encoder. Frictions resolved: `A64Enc` gained
+      int-based `msr`/`mrs` + `sysReg` and packed per-register int constants (no `Sys`
+      record), the condition-code/`XZR` constants, and `movToSp`/`movFromSp`/`tbz`/
+      `tbnz`; the core's branch call sites were converted from byte to *word*
+      displacements (dropping the `*4`) to match `A64Enc`'s branch convention. `A64`
+      delegates its `msr`/`mrs`/`tbz` to the new `A64Enc` entries so `A64Test` still
+      covers them. **M5Gap over the whole shared emit stack — `Baseline`,
+      `MetalSymbols`, `CodeBuffer`, `A64Enc`, `ClassReader`, `ObjectModel`, … — is now
+      190/190, 0 blocked.** The compiled methods are unchanged (compiler tests check
+      exact encodings) and QEMU still reaches `*M F`; the image differs only by
+      `A64Enc`'s new static constants (it is already in the metal image via `Loader`).
     - ☐ **d.3 — the metal code sink**: `Loader` emits through a `CodeBuffer` that flushes
       to `cout`, replacing the bare `emit(word)`, and converge the branch model
       (writer forward-fixups vs. the metal's two-pass `pass1`) onto the fixup model.

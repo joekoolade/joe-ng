@@ -206,15 +206,8 @@ public final class A64
 
     private static int sysMove(boolean read, Sys s, int rt)
     {
-        // [31:22]=1101010100 and [20]=1 are fixed (op0 high bit; op0 is 2/3).
-        int w = 0xD510_0000;                 // fixed bits
-        w |= (read ? 1 : 0) << 21;           // L  (1=MRS read, 0=MSR write)
-        w |= (s.op0 & 1)    << 19;           // o0 (op0 low bit)
-        w |= (s.op1 & 7)    << 16;
-        w |= (s.crn & 0xF)  << 12;
-        w |= (s.crm & 0xF)  << 8;
-        w |= (s.op2 & 7)    << 5;
-        return w | reg(rt);
+        int packed = A64Enc.sysReg(s.op0(), s.op1(), s.crn(), s.crm(), s.op2());
+        return read ? A64Enc.mrs(reg(rt), packed) : A64Enc.msr(packed, reg(rt));
     }
 
     /** {@code MRS Xt, sysreg} — read a system register into a general register. */
@@ -530,11 +523,7 @@ public final class A64
         {
             throw new IllegalArgumentException("bad bit index: " + bit);
         }
-        int w = base | ((bit & 0x20) << 26)   // b5 -> [31]
-                | ((bit & 0x1F) << 19)    // b40 -> [23:19]
-                | (imm14(byteOffset) << 5)
-                | reg(rt);
-        return w;
+        return A64Enc.tbit(base, reg(rt), bit, imm14(byteOffset));
     }
 
     private static int imm19(int byteOffset)

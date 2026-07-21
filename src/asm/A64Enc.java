@@ -27,6 +27,25 @@ public final class A64Enc
 {
     private A64Enc() {}
 
+    // ----- register aliases + condition codes (ARM-defined) ----------------
+    /** Zero register / SP slot, encoding 31. */
+    public static final int XZR = 31;
+    public static final int EQ = 0;
+    public static final int NE = 1;
+    public static final int HS = 2;
+    public static final int LO = 3;
+    public static final int MI = 4;
+    public static final int PL = 5;
+    public static final int VS = 6;
+    public static final int VC = 7;
+    public static final int HI = 8;
+    public static final int LS = 9;
+    public static final int GE = 10;
+    public static final int LT = 11;
+    public static final int GT = 12;
+    public static final int LE = 13;
+    public static final int AL = 14;
+
     // ----- wide immediate moves --------------------------------------------
     /** {@code MOVZ Xd, #imm16, LSL #(hw*16)}. */
     public static int movz(int rd, int imm16, int hw)
@@ -54,6 +73,16 @@ public final class A64Enc
     public static int subImm(int rd, int rn, int imm12)
     {
         return 0xD100_0000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd;
+    }
+    /** {@code MOV SP, Xn} — via ADD SP, Xn, #0 (reg 31 = SP in add-immediate). */
+    public static int movToSp(int rn)
+    {
+        return addImm(31, rn, 0);
+    }
+    /** {@code MOV Xd, SP} — via ADD Xd, SP, #0. */
+    public static int movFromSp(int rd)
+    {
+        return addImm(rd, 31, 0);
     }
     /** {@code ADD Xd, Xn, Xm}. */
     public static int addReg(int rd, int rn, int rm)
@@ -156,6 +185,22 @@ public final class A64Enc
     public static int cbnz(int rt, int wordOffset)
     {
         return 0xB500_0000 | ((wordOffset & 0x7FFFF) << 5) | rt;
+    }
+    /** Test-and-branch encoding shared by TBZ/TBNZ; displacement in words (imm14). */
+    static int tbit(int base, int rt, int bit, int wordOffset)
+    {
+        return base | ((bit & 0x20) << 26) | ((bit & 0x1F) << 19)
+             | ((wordOffset & 0x3FFF) << 5) | rt;
+    }
+    /** {@code TBZ Xt, #bit, #wordOffset} — branch if the bit is clear. */
+    public static int tbz(int rt, int bit, int wordOffset)
+    {
+        return tbit(0x3600_0000, rt, bit, wordOffset);
+    }
+    /** {@code TBNZ Xt, #bit, #wordOffset} — branch if the bit is set. */
+    public static int tbnz(int rt, int bit, int wordOffset)
+    {
+        return tbit(0x3700_0000, rt, bit, wordOffset);
     }
     /** {@code BR Xn} — branch to address in register. */
     public static int br(int rn)
@@ -279,6 +324,38 @@ public final class A64Enc
     {
         return (n + 15) & ~15;
     }
+
+    // ----- system-register moves (MRS/MSR) ---------------------------------
+    // A system register is (op0,op1,CRn,CRm,op2); op0 is 2/3 and only its low bit
+    // (o0) is encoded. sysReg packs the fixed field so msr/mrs just add L and Rt.
+    // (A64 exposes these as a Sys record, whose synthesised equals/hashCode lower to
+    // invokedynamic — unavailable on metal — so the shared path uses these ints.)
+    public static int sysReg(int op0, int op1, int crn, int crm, int op2)
+    {
+        return ((op0 & 1) << 19) | ((op1 & 7) << 16) | ((crn & 0xF) << 12)
+             | ((crm & 0xF) << 8) | ((op2 & 7) << 5);
+    }
+    /** {@code MSR sysreg, Xt} — write a general register into a system register. */
+    public static int msr(int sysReg, int rt)
+    {
+        return 0xD510_0000 | sysReg | rt;
+    }
+    /** {@code MRS Xt, sysreg} — read a system register into a general register. */
+    public static int mrs(int rt, int sysReg)
+    {
+        return 0xD510_0000 | (1 << 21) | sysReg | rt;
+    }
+
+    // Boot-path system registers (PLAN.md §5.1), packed for msr/mrs.
+    public static final int CurrentEL   = sysReg(3, 0,  4, 2, 0);
+    public static final int HCR_EL2     = sysReg(3, 4,  1, 1, 0);
+    public static final int CPTR_EL2    = sysReg(3, 4,  1, 1, 2);
+    public static final int CNTHCTL_EL2 = sysReg(3, 4, 14, 1, 0);
+    public static final int CNTVOFF_EL2 = sysReg(3, 4, 14, 0, 3);
+    public static final int SCTLR_EL1   = sysReg(3, 0,  1, 0, 0);
+    public static final int CPACR_EL1   = sysReg(3, 0,  1, 0, 2);
+    public static final int SPSR_EL2    = sysReg(3, 4,  4, 0, 0);
+    public static final int ELR_EL2     = sysReg(3, 4,  4, 0, 1);
 
     /** Compose a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
     public static int[] loadImm64(int rd, long value)
