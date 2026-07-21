@@ -50,9 +50,10 @@ final class MetalSymbols implements Symbols
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
-        // TODO(4.4e): interned string literals for on-metal-loaded classes. Guest
-        // classes the metal JITs today carry none, so this path is never reached.
-        emitAddr(cb, reg, 0L);
+        // Intern the literal as a heap byte[] now and bake in its address. (The size
+        // pass compiles at base 0 too, so a spare byte[] leaks per string — harmless
+        // under the bump allocator; interning by content would dedup it.)
+        emitAddr(cb, reg, Loader.internString(stringCp));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
@@ -86,17 +87,20 @@ final class MetalSymbols implements Symbols
     }
     public boolean isIntrinsicCall(int methodCp)
     {
-        // TODO(4.4e): recognise magic/Magic by Utf8-offset compare. The classes the
-        // metal loads today make no magic calls, so no invokestatic is an intrinsic.
-        return false;
+        return Loader.isMagicOwner(methodCp);
     }
     public boolean intrinsicEmitsCall(int methodCp)
     {
-        return false;
+        return false;   // the memory/bytes intrinsics this JIT recognises emit no BL/BLR
     }
     public int intrinsicId(int methodCp)
     {
-        return 0;                                   // unreached while isIntrinsicCall is false
+        int id = Loader.magicId(methodCp);
+        if (id < 0)
+        {
+            fail(Symbols.FAIL_INTRINSIC_ID, methodCp, 0);   // an unrecognised magic op: halt
+        }
+        return id;
     }
     public boolean isSkippableInit(int methodCp)
     {

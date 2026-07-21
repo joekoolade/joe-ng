@@ -3,6 +3,7 @@ package vm;
 import asm.A64Enc;
 import classfile.ClassReader;
 import compiler.Baseline;
+import compiler.Intrinsics;
 import magic.Magic;
 
 /**
@@ -1466,6 +1467,60 @@ public final class Loader
     {
         int classIdx = u2(gbase + gcp[idx]);            // *ref.class_index -> Class entry
         return typeOfClass(classIdx);
+    }
+
+    // ----- the on-metal MetalSymbols stubs made real: strings + magic intrinsics -----
+
+    /**
+     * Intern the String literal at cp index {@code stringCp} as a heap {@code byte[]}
+     * (the writer's [null TIB][status][length][bytes] layout, i.e. an ordinary array)
+     * and return its address, so the shared core's {@code ldc} loads a real ref.
+     */
+    static long internString(int stringCp)
+    {
+        int off = ClassReader.stringUtf8Off(gbytes, gcp, stringCp);   // Utf8 body offset
+        int len = u2(gbase + off);
+        long arr = Heap.allocArray(len, 1);             // byte[]: TIB=0, length set
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(arr + 24 + i, u1(gbase + off + 2 + i));   // ARRAY_BASE_OFFSET = 24
+            i += 1;
+        }
+        return arr;
+    }
+
+    /** Whether the {@code *ref} at {@code idx} names owner {@code magic/Magic}. */
+    static boolean isMagicOwner(int idx)
+    {
+        long p = gbase + ClassReader.refClassNameOff(gbytes, gcp, idx);
+        if (u2(p) != 11)                                // "magic/Magic"
+        {
+            return false;
+        }
+        p += 2;
+        return u1(p) == 'm' && u1(p + 1) == 'a' && u1(p + 2) == 'g' && u1(p + 3) == 'i'
+            && u1(p + 4) == 'c' && u1(p + 5) == '/' && u1(p + 6) == 'M' && u1(p + 7) == 'a'
+            && u1(p + 8) == 'g' && u1(p + 9) == 'i' && u1(p + 10) == 'c';
+    }
+
+    /**
+     * {@link Intrinsics} id of the {@code magic/Magic} method at {@code idx}, or -1 if
+     * not one this JIT recognises. It handles the memory + string-bytes ops a JIT'd
+     * class might plausibly call; the boot-only register/barrier ops (msr, eret,
+     * write*…) are only ever writer-compiled, never JIT'd, so they are not recognised.
+     */
+    static int magicId(int idx)
+    {
+        int n = mrefNameOff(idx);
+        if (isName(gbase, n, 0x6279746573L, 5))    { return Intrinsics.BYTES; }    // "bytes"
+        if (isName(gbase, n, 0x6C6F616438L, 5))    { return Intrinsics.LOAD8; }    // "load8"
+        if (isName(gbase, n, 0x6C6F61643332L, 6))  { return Intrinsics.LOAD32; }   // "load32"
+        if (isName(gbase, n, 0x6C6F61643634L, 6))  { return Intrinsics.LOAD64; }   // "load64"
+        if (isName(gbase, n, 0x73746F726538L, 6))  { return Intrinsics.STORE8; }   // "store8"
+        if (isName(gbase, n, 0x73746F72653332L, 7)) { return Intrinsics.STORE32; } // "store32"
+        if (isName(gbase, n, 0x73746F72653634L, 7)) { return Intrinsics.STORE64; } // "store64"
+        return -1;
     }
 
 

@@ -1,5 +1,7 @@
 package vm;
 
+import magic.Magic;
+
 /**
  * A class joe-ng has never seen at build time. The writer embeds only its raw
  * {@code .class} bytes (never compiles it); at runtime the on-metal {@link Loader}
@@ -27,7 +29,10 @@ public class Guest
         // instanceof lowering (a VM.instanceOf call) on on-metal-JIT'd objects (M5.4.e).
         int corrections = (b instanceof Beta ? 0 : 100) + (a instanceof Beta ? 100 : 0)
                         + (b instanceof Greeter ? 0 : 100) + (a instanceof Greeter ? 0 : 100);
-        return a.greet() + b.greet() + corrections + bias();   // one call site, two layouts -> 42
+        // Also nets to zero, exercising a JIT'd String literal (interned as a byte[] on
+        // metal) read back through the Magic.bytes intrinsic + baload: '*' - 42 = 0.
+        int viaString = Magic.bytes("*")[0] - 42;
+        return a.greet() + b.greet() + corrections + bias() + viaString;   // -> 42
     }
 
     /**
