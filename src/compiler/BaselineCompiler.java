@@ -2,9 +2,7 @@ package compiler;
 
 import asm.CodeBuffer;
 import classfile.ClassFile;
-
-import java.util.ArrayList;
-import java.util.List;
+import util.Vec;
 
 /**
  * The writer-side driver over the shared {@link Baseline} core: it parses methods
@@ -22,9 +20,9 @@ public final class BaselineCompiler
     }
 
     /** A single compiled method: its words, relocation fixups, and unwind metadata. */
-    public record CompiledMethod(int[] words, List<CallSite> callSites, List<TibRef> tibRefs,
-                                 List<StrRef> strRefs, List<StaticRef> staticRefs, List<TypeRef> typeRefs,
-                                 List<TypeRef> interfaceRefs, int frameSize, List<HandlerRange> handlers) {}
+    public record CompiledMethod(int[] words, Vec<CallSite> callSites, Vec<TibRef> tibRefs,
+                                 Vec<StrRef> strRefs, Vec<StaticRef> staticRefs, Vec<TypeRef> typeRefs,
+                                 Vec<TypeRef> interfaceRefs, int frameSize, Vec<HandlerRange> handlers) {}
     /** A try/catch region as word indices, for the writer's machine-PC handler table. */
     public record HandlerRange(int startWord, int endWord, int handlerWord, String catchClass) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
@@ -80,7 +78,7 @@ public final class BaselineCompiler
         int[] words = core.compileBody(method.code, method.descOff, method.isStatic, method.maxLocals, base, isEntry);
 
         // Zip the core's machine-PC handler ranges with their catch classes.
-        List<HandlerRange> handlers = new ArrayList<>();
+        Vec<HandlerRange> handlers = new Vec<>();
         for (int i = 0; i < core.handlerCount(); i++)
         {
             String catchClass = ec[i] == 0 ? null : cf.classAt(ec[i]);
@@ -89,7 +87,7 @@ public final class BaselineCompiler
         }
         return new CompiledMethod(words, syms.callSites(), syms.tibRefs(), syms.strRefs(),
                                   syms.staticRefs(), syms.typeRefs(), syms.interfaceRefs(),
-                                  core.frameSize(), List.copyOf(handlers));
+                                  core.frameSize(), handlers);
     }
 
     /** Back-compat single-method compile with no real calls (spin/fixtures). */

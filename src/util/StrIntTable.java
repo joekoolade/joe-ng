@@ -1,4 +1,4 @@
-package writer;
+package util;
 
 /**
  * An insertion-ordered {@code String -> int} table backed by parallel arrays and a
@@ -8,21 +8,21 @@ package writer;
  * of methods/classes), so a linear scan is fine. Once the writer runs on metal the
  * {@code String} keys become Utf8 offsets (§M5.5b); the shape stays the same.
  */
-final class StrIntTable
+public final class StrIntTable
 {
     private String[] keys = new String[8];
     private int[] vals = new int[8];
     private int n;
 
-    int size()
+    public int size()
     {
         return n;
     }
-    String keyAt(int i)
+    public String keyAt(int i)
     {
         return keys[i];
     }
-    int valAt(int i)
+    public int valAt(int i)
     {
         return vals[i];
     }
@@ -39,19 +39,19 @@ final class StrIntTable
         return -1;
     }
 
-    boolean containsKey(String k)
+    public boolean containsKey(String k)
     {
         return indexOf(k) >= 0;
     }
 
     /** The value for {@code k}, or -1 if absent (word offsets are always &ge; 0). */
-    int get(String k)
+    public int get(String k)
     {
         int i = indexOf(k);
         return i >= 0 ? vals[i] : -1;
     }
 
-    void put(String k, int v)
+    public void put(String k, int v)
     {
         int i = indexOf(k);
         if (i >= 0)

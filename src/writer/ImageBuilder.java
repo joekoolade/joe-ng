@@ -6,14 +6,15 @@ import classfile.ClassFile;
 import compiler.BaselineCompiler;
 import compiler.BaselineCompiler.CompiledMethod;
 import objectmodel.ObjectModel;
+import util.StrIntTable;
+import util.StrSet;
+import util.Vec;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -105,35 +106,63 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
-            cm.callSites().forEach(cs -> worklist.add(cs.calleeKey()));
-            cm.strRefs().forEach(s -> strings.add(s.text()));
-            cm.typeRefs().forEach(t -> typeRefClasses.add(t.className()));
-            cm.interfaceRefs().forEach(t ->
+            var _r1 = cm.callSites();
+            for (int _ri1 = 0; _ri1 < _r1.size(); _ri1++)
             {
+                var cs = _r1.get(_ri1);
+                worklist.add(cs.calleeKey());
+            }
+            var _r2 = cm.strRefs();
+            for (int _ri2 = 0; _ri2 < _r2.size(); _ri2++)
+            {
+                var s = _r2.get(_ri2);
+                strings.add(s.text());
+            }
+            var _r3 = cm.typeRefs();
+            for (int _ri3 = 0; _ri3 < _r3.size(); _ri3++)
+            {
+                var t = _r3.get(_ri3);
+                typeRefClasses.add(t.className());
+            }
+            var _r5 = cm.interfaceRefs();
+            for (int _ri5 = 0; _ri5 < _r5.size(); _ri5++)
+            {
+                var t = _r5.get(_ri5);
                 typeRefClasses.add(t.className());
                 usedInterfaces.add(t.className());
-            });
-            cm.handlers().forEach(h ->
+            }
+            var _r6 = cm.handlers();
+            for (int _ri6 = 0; _ri6 < _r6.size(); _ri6++)
             {
+                var h = _r6.get(_ri6);
                 if (h.catchClass() != null)
                 {
                     typeRefClasses.add(h.catchClass());
                 }
-            });
+            }
             if (cm.frameSize() > 0)
             {
                 frameCount++;
             }
             handlerCount += cm.handlers().size();
-            cm.tibRefs().forEach(t -> use(t.className(), usedClasses, clinitOrder, worklist));
-            cm.staticRefs().forEach(s ->
+            var _r4 = cm.tibRefs();
+            for (int _ri4 = 0; _ri4 < _r4.size(); _ri4++)
             {
+                var t = _r4.get(_ri4);
+                use(t.className(), usedClasses, clinitOrder, worklist);
+            }
+            var _r7 = cm.staticRefs();
+            for (int _ri7 = 0; _ri7 < _r7.size(); _ri7++)
+            {
+                var s = _r7.get(_ri7);
                 statics.add(s.fieldKey());
                 use(ownerOf(s.fieldKey()), usedClasses, clinitOrder, worklist);
-            });
+            }
             use(ownerOf(k), usedClasses, clinitOrder, worklist);
-            for (var t : cm.tibRefs())
+            var _r8 = cm.tibRefs();
+            for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
             {
+                var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
                     for (ClassFile.VSlot s : ClassFile.vtable(t.className(), this::resolve))
@@ -260,18 +289,50 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 throw new IllegalStateException("size drift for " + k);
             }
             System.arraycopy(cm.words(), 0, image, base, cm.words().length);
-            cm.callSites().forEach(cs -> calls.add(new GlobalCall(base + cs.wordIndex(), cs.calleeKey())));
-            cm.tibRefs().forEach(t -> tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className())));
-            cm.strRefs().forEach(s -> strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text())));
-            cm.staticRefs().forEach(s -> stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey())));
-            cm.typeRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
-            cm.interfaceRefs().forEach(t -> types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className())));
+            var _r5 = cm.callSites();
+            for (int _ri5 = 0; _ri5 < _r5.size(); _ri5++)
+            {
+                var cs = _r5.get(_ri5);
+                calls.add(new GlobalCall(base + cs.wordIndex(), cs.calleeKey()));
+            }
+            var _r6 = cm.tibRefs();
+            for (int _ri6 = 0; _ri6 < _r6.size(); _ri6++)
+            {
+                var t = _r6.get(_ri6);
+                tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className()));
+            }
+            var _r7 = cm.strRefs();
+            for (int _ri7 = 0; _ri7 < _r7.size(); _ri7++)
+            {
+                var s = _r7.get(_ri7);
+                strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text()));
+            }
+            var _r8 = cm.staticRefs();
+            for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
+            {
+                var s = _r8.get(_ri8);
+                stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey()));
+            }
+            var _r9 = cm.typeRefs();
+            for (int _ri9 = 0; _ri9 < _r9.size(); _ri9++)
+            {
+                var t = _r9.get(_ri9);
+                types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className()));
+            }
+            var _r10 = cm.interfaceRefs();
+            for (int _ri10 = 0; _ri10 < _r10.size(); _ri10++)
+            {
+                var t = _r10.get(_ri10);
+                types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className()));
+            }
             if (cm.frameSize() > 0)
             {
                 frameEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.frameSize()});
             }
-            for (var hr : cm.handlers())
+            var _rh = cm.handlers();
+            for (int _rhi = 0; _rhi < _rh.size(); _rhi++)
             {
+                var hr = _rh.get(_rhi);
                 long ct = hr.catchClass() == null ? 0 : addr(typeWord.get(hr.catchClass()));
                 handlerEntries.add(new long[] {addr(base + hr.startWord()), addr(base + hr.endWord()),
                                                addr(base + hr.handlerWord()), ct
@@ -483,7 +544,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     {
         int frame = A64.align16(8);                                 // LR only
         Vec<Integer> w = new Vec<>();
-        List<BaselineCompiler.CallSite> calls = new ArrayList<>();   // CompiledMethod's contract
+        Vec<BaselineCompiler.CallSite> calls = new Vec<>();
         w.add(A64.subImm(31, 31, frame));
         w.add(A64.strx(30, 31, 0));
         for (int ci = 0; ci < clinits.size(); ci++)
@@ -499,8 +560,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             words[i] = w.get(i);
         }
-        return new CompiledMethod(words, calls, List.of(), List.of(), List.of(), List.of(), List.of(),
-                                  frame, List.of());
+        return new CompiledMethod(words, calls, new Vec<>(), new Vec<>(), new Vec<>(), new Vec<>(),
+                                  new Vec<>(), frame, new Vec<>());
     }
 
     /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */

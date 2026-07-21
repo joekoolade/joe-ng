@@ -1,4 +1,4 @@
-package writer;
+package util;
 
 /**
  * An insertion-ordered, de-duplicating set of {@code String}s backed by an array and a
@@ -7,21 +7,21 @@ package writer;
  * (it drives layout order), and {@link #add} reports whether the element was new, as the
  * JDK set does. Sizes are tiny, so the linear scan is fine.
  */
-final class StrSet
+public final class StrSet
 {
     private String[] items = new String[8];
     private int n;
 
-    int size()
+    public int size()
     {
         return n;
     }
-    String at(int i)
+    public String at(int i)
     {
         return items[i];
     }
 
-    boolean contains(String s)
+    public boolean contains(String s)
     {
         for (int i = 0; i < n; i++)
         {
@@ -34,7 +34,7 @@ final class StrSet
     }
 
     /** Add {@code s} if absent; returns true iff it was newly added. */
-    boolean add(String s)
+    public boolean add(String s)
     {
         if (contains(s))
         {

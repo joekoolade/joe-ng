@@ -1,4 +1,4 @@
-package writer;
+package util;
 
 /**
  * A minimal growable list backed by an {@code Object[]} — the writer's replacement for
@@ -6,25 +6,25 @@ package writer;
  * Only what the image builder needs: append, indexed access, size, and a front-remove for
  * the discovery queue. Generics erase to {@code Object[]} + casts, which compile on metal.
  */
-final class Vec<T>
+public final class Vec<T>
 {
     private Object[] items = new Object[8];
     private int n;
 
-    int size()
+    public int size()
     {
         return n;
     }
-    boolean isEmpty()
+    public boolean isEmpty()
     {
         return n == 0;
     }
     @SuppressWarnings("unchecked")
-    T get(int i)
+    public T get(int i)
     {
         return (T) items[i];
     }
-    void add(T x)
+    public void add(T x)
     {
         if (n == items.length)
         {
@@ -41,7 +41,7 @@ final class Vec<T>
 
     /** Remove and return the first element (the discovery queue's dequeue). */
     @SuppressWarnings("unchecked")
-    T removeFirst()
+    public T removeFirst()
     {
         T x = (T) items[0];
         for (int i = 1; i < n; i++)

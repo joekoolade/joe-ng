@@ -4,9 +4,7 @@ import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
 import objectmodel.ObjectModel;
-
-import java.util.ArrayList;
-import java.util.List;
+import util.Vec;
 
 import compiler.BaselineCompiler.CallSite;
 import compiler.BaselineCompiler.StaticRef;
@@ -40,12 +38,12 @@ final class WriterSymbols implements Symbols
     private final ClassFile cf;
     private final BaselineCompiler.ClassResolver resolver;
 
-    private final List<CallSite> callSites = new ArrayList<>();
-    private final List<TibRef> tibRefs = new ArrayList<>();
-    private final List<StrRef> strRefs = new ArrayList<>();
-    private final List<StaticRef> staticRefs = new ArrayList<>();
-    private final List<TypeRef> typeRefs = new ArrayList<>();
-    private final List<TypeRef> interfaceRefs = new ArrayList<>();   // interface Type address loads
+    private final Vec<CallSite> callSites = new Vec<>();
+    private final Vec<TibRef> tibRefs = new Vec<>();
+    private final Vec<StrRef> strRefs = new Vec<>();
+    private final Vec<StaticRef> staticRefs = new Vec<>();
+    private final Vec<TypeRef> typeRefs = new Vec<>();
+    private final Vec<TypeRef> interfaceRefs = new Vec<>();   // interface Type address loads
 
     WriterSymbols(ClassFile cf, BaselineCompiler.ClassResolver resolver)
     {
@@ -53,13 +51,14 @@ final class WriterSymbols implements Symbols
         this.resolver = resolver;
     }
 
-    // ----- the relocation records, read back by the driver after compilation -----
-    List<CallSite> callSites() { return List.copyOf(callSites); }
-    List<TibRef> tibRefs() { return List.copyOf(tibRefs); }
-    List<StrRef> strRefs() { return List.copyOf(strRefs); }
-    List<StaticRef> staticRefs() { return List.copyOf(staticRefs); }
-    List<TypeRef> typeRefs() { return List.copyOf(typeRefs); }
-    List<TypeRef> interfaceRefs() { return List.copyOf(interfaceRefs); }
+    // ----- the relocation records, read back by the driver after compilation (fresh
+    //       WriterSymbols per method, so no defensive copy needed) -----
+    Vec<CallSite> callSites() { return callSites; }
+    Vec<TibRef> tibRefs() { return tibRefs; }
+    Vec<StrRef> strRefs() { return strRefs; }
+    Vec<StaticRef> staticRefs() { return staticRefs; }
+    Vec<TypeRef> typeRefs() { return typeRefs; }
+    Vec<TypeRef> interfaceRefs() { return interfaceRefs; }
 
     // ----- Symbols: emit a placeholder, record the resolved key -----
     public void call(CodeBuffer cb, int methodCp)
