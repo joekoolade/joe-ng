@@ -282,7 +282,16 @@ public final class VM
     static long alphaBytes, alphaLen;   // raw Alpha.class blob (implements Greeter at vtable slot 0)
     static long betaBytes, betaLen;     // raw Beta.class blob (implements Greeter at vtable slot 1)
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
-    static long heapAlloc;              // address of Heap.alloc(I)J, so on-metal `new` can BL it
+    // Addresses of the runtime helpers the shared baseline compiler calls, stashed by
+    // the writer so the on-metal JIT (via MetalSymbols) can BL them. Indexed to match
+    // the ids in compiler/Symbols: heapAlloc=0, allocArray=1, gcCollect=2, instanceOf=3,
+    // checkCast=4, unwind=5.
+    static long heapAlloc;              // Heap.alloc(I)J, so on-metal `new` can BL it
+    static long allocArray;            // Heap.allocArray(II)J
+    static long gcCollect;             // VM.gcCollect(J)V
+    static long instanceOfAddr;        // VM.instanceOf(JJ)I
+    static long checkCastAddr;         // VM.checkCast(JJ)J
+    static long unwindAddr;            // VM.unwind(JJJ)V
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)

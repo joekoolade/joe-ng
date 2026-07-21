@@ -350,11 +350,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
-        Integer heapAllocWord = wordOffset.get("vm/Heap.alloc(I)J");   // on-metal `new` BLs here
-        if (heapAllocWord != null)
-        {
-            fillStatic(image, staticWord, "vm/VM.heapAlloc", addr(heapAllocWord));
-        }
+        // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
+        // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
+        stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
+        stashHelper(image, staticWord, wordOffset, "vm/Heap.allocArray(II)J", "vm/VM.allocArray");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.gcCollect(J)V",     "vm/VM.gcCollect");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.instanceOf(JJ)I",   "vm/VM.instanceOfAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.unwind(JJJ)V",      "vm/VM.unwindAddr");
         for (int b = 0; b < blobs.size(); b++)
         {
             Blob blob = blobs.get(b);
@@ -513,6 +516,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     {
         image[w]     = (int) (v & 0xFFFFFFFFL);
         image[w + 1] = (int) (v >>> 32);
+    }
+
+    /** Stash a compiled method's address into a VM static field, if both exist. */
+    private static void stashHelper(int[] image, Map<String, Integer> staticWord,
+                                    Map<String, Integer> wordOffset, String methodKey, String field)
+    {
+        Integer w = wordOffset.get(methodKey);
+        if (w != null)
+        {
+            fillStatic(image, staticWord, field, addr(w));
+        }
     }
 
     /** Fill a (writer-initialized) static field slot with {@code value}, if the field is used. */
