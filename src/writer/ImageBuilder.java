@@ -13,13 +13,6 @@ import util.StrIntTable;
 import util.StrSet;
 import util.Vec;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * Lays out a graph of methods across classes into one image and relocates the
  * references between them — the core M2 writer job (PLAN.md §4). From an entry
@@ -41,8 +34,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
 
-    private final Path classesDir;
-    private final Map<String, ClassFile> classes = new HashMap<>();
+    private final ClassRegistry registry;
     private final Vec<Blob> blobs = new Vec<>();
     /** Class-model queries behind a seam; the metal writer swaps in a registry-backed impl (§M5.5c). */
     private final ClassModel model = new SeedClassModel(this);
@@ -50,9 +42,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics. */
     private record Blob(String addrKey, String lenKey, byte[] bytes) {}
 
-    public ImageBuilder(Path classesDir)
+    public ImageBuilder(ClassRegistry registry)
     {
-        this.classesDir = classesDir;
+        this.registry = registry;
     }
 
     /** Embed {@code bytes} verbatim; the runtime finds them via the given statics (e.g. a raw .class). */
@@ -63,17 +55,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     @Override public ClassFile resolve(String owner)
     {
-        return classes.computeIfAbsent(owner, o ->
-        {
-            try
-            {
-                return ClassFile.parse(classesDir.resolve(o + ".class"));
-            }
-            catch (IOException e)
-            {
-                throw new UncheckedIOException(e);
-            }
-        });
+        return registry.resolve(owner);
     }
 
     private record Resolved(ClassFile cf, ClassFile.Method method) {}
@@ -84,7 +66,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private record GlobalType(int siteWord, int reg, String className) {}
 
     /** Build the whole image with {@code entryKey} (e.g. "vm/VM.boot()V") at 0x80000. */
-    public CodeBuffer build(String entryKey) throws IOException
+    public CodeBuffer build(String entryKey)
     {
         // --- discovery + sizing: BFS over calls; collect instantiated classes.
         //     Instantiating a class pulls in all its virtual methods so their code
@@ -631,7 +613,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
     }
 
-    private CompiledMethod compile(String key, long base, boolean isEntry) throws IOException
+    private CompiledMethod compile(String key, long base, boolean isEntry)
     {
         Resolved r = lookup(key);
         try
@@ -644,7 +626,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
     }
 
-    private Resolved lookup(String key) throws IOException
+    private Resolved lookup(String key)
     {
         int dot = key.lastIndexOf('.', key.indexOf('('));
         String owner = key.substring(0, dot);

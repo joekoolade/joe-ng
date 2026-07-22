@@ -730,6 +730,12 @@ is name→address bookkeeping:
      `build`/`use`/`ownerOf`/`resolve`/`lookup`.
      - ✅ **1a: seam extracted.** `ClassModel` interface + `SeedClassModel` (ClassFile
        impl); `ImageBuilder`'s 13 class-model queries route through it. Byte-identical.
+     - ✅ **1a.2: class source metal-shaped.** `ImageBuilder`'s file I/O + `Path` +
+       `HashMap<String,ClassFile>` → a name→bytes `ClassRegistry` (lazy parse cache, pure
+       lookup, no I/O); `build`/`compile`/`lookup` drop `throws IOException`. Seed-host file
+       walking moves to `BuildRuntimeImage`. This is step 2's I/O-removal, pulled forward as
+       an off-metal, byte-identical slice — so the off-metal-verifiable part of M5.5 now ends
+       here, not at 1a. Remaining registry work (fill from embedded blobs) is step 2.
      - ⬜ **1b: metal impl + byte-offset identity — couples to steps 2–4.** A
        `Loader`-registry `ClassModel` and the offset-keyed tables can only *run and be
        checked* once the writer executes on metal, so they land with the harness below,
@@ -737,10 +743,11 @@ is name→address bookkeeping:
        (The byte-identical, off-metal-verifiable part of M5.5 ends at 1a.)
   2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
      writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
-     `objectmodel/*`, `magic/*`) from `.class` files. A metal self-build must embed the
-     **full reachable class set** (~dozens) as blobs, behind a class-name→blob registry
-     that replaces the file I/O, the `classes` `HashMap` (`<init>`), and the
-     `RuntimeException` wrap (`compile`). Mechanical, but it materially grows the image.
+     `objectmodel/*`, `magic/*`) from `.class` files. The class-name→bytes registry
+     (`ClassRegistry`) that replaces the file I/O + `classes` `HashMap` already landed in
+     1a.2; what remains is to embed the **full reachable class set** (~dozens) as
+     name-indexed image blobs and fill the metal registry from them (instead of the
+     seed-host file walk). Mechanical, but it materially grows the image.
   3. **Heap-buffer sink (output).** `ImageBuilder`'s `int[] image` → a `Heap.alloc`'d
      buffer; the `kernel8.img` file write → nothing (stay in memory). No block driver.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
