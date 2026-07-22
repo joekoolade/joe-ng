@@ -36,13 +36,27 @@ final class SeedClassModel implements ClassModel
     {
         return resolver.resolve(cls).hasClinit();
     }
-    public Vec<ClassFile.VSlot> vtable(String cls)
+    public Vec<ClassModel.VSlot> vtable(String cls)
     {
-        return ClassFile.vtable(cls, resolver);
+        Vec<ClassFile.VSlot> slots = ClassFile.vtable(cls, resolver);
+        Vec<ClassModel.VSlot> out = new Vec<>();
+        for (int i = 0; i < slots.size(); i++)
+        {
+            ClassFile.VSlot s = slots.get(i);
+            out.add(new ClassModel.VSlot(s.owner(), s.name(), s.descriptor()));
+        }
+        return out;
     }
-    public Vec<ClassFile.Method> interfaceMethods(String cls)
+    public Vec<ClassModel.Method> interfaceMethods(String cls)
     {
-        return resolver.resolve(cls).interfaceMethods();
+        Vec<ClassFile.Method> ms = resolver.resolve(cls).interfaceMethods();
+        Vec<ClassModel.Method> out = new Vec<>();
+        for (int i = 0; i < ms.size(); i++)
+        {
+            ClassFile.Method m = ms.get(i);
+            out.add(new ClassModel.Method(m.name, m.descriptor));
+        }
+        return out;
     }
     public String findImpl(String cls, String name, String desc)
     {

@@ -736,11 +736,19 @@ is name→address bookkeeping:
        walking moves to `BuildRuntimeImage`. This is step 2's I/O-removal, pulled forward as
        an off-metal, byte-identical slice — so the off-metal-verifiable part of M5.5 now ends
        here, not at 1a. Remaining registry work (fill from embedded blobs) is step 2.
-     - ⬜ **1b: metal impl + byte-offset identity — couples to steps 2–4.** A
-       `Loader`-registry `ClassModel` and the offset-keyed tables can only *run and be
-       checked* once the writer executes on metal, so they land with the harness below,
-       verified end-to-end by the fixpoint — not as standalone byte-identical slices.
-       (The byte-identical, off-metal-verifiable part of M5.5 ends at 1a.)
+     - **1b: metal `ClassModel` — approach B (fresh over the step-2a table).** Decided
+       against the `Loader`-registry reuse: a `MetalClassModel` that reads class bytes from
+       the class table (by name) via the shared `classfile.ClassReader`, mirroring
+       `ClassFile`'s exact flattening, is self-contained, marker-verifiable query-by-query,
+       and — by porting the *same* algorithm — far likelier to reproduce the seed writer's
+       byte-identical output at the fixpoint than `Loader`'s differently-ordered registries.
+       - ✅ **1b.1: interface neutralized (byte-identical).** `ClassModel` returns
+         writer-owned `VSlot`/`Method` records instead of `classfile.ClassFile.VSlot`/`Method`,
+         so a metal impl (which has no `ClassFile`) can satisfy it. `SeedClassModel` copies
+         into them; `ImageBuilder` consumes them. Image SHA unchanged.
+       - ⬜ **1b.2: `MetalClassModel` impl, marker-verified per query**, then the byte-offset
+         identity / key migration for the layout tables + relocations — lands with steps 3/4,
+         verified end-to-end by the fixpoint.
   2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
      writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
      `objectmodel/*`, `magic/*`) from `.class` files. The class-name→bytes registry

@@ -1,6 +1,5 @@
 package writer;
 
-import classfile.ClassFile;
 import util.StrSet;
 import util.Vec;
 
@@ -8,17 +7,24 @@ import util.Vec;
  * The class-model queries {@link ImageBuilder}'s layout needs — flattened vtables,
  * interface methods, field counts, the superclass chain — abstracted from *how* a class
  * is represented. On the seed JVM that is {@link SeedClassModel} over the JDK
- * {@link ClassFile}; on metal it will be a {@code Loader}-registry impl over byte-offset
- * registries (the M5.5c class-model unification, PLAN.md §M5.5c step 1). Establishing
- * the seam now — with only the seed impl — is byte-identical and lets the metal impl
- * slot in unchanged when the writer itself runs on metal.
+ * {@code classfile.ClassFile}; on metal it will be a {@code MetalClassModel} over the
+ * embedded class table + shared {@code ClassReader} (the M5.5c class-model unification,
+ * PLAN.md §M5.5c step 1b). Establishing the seam keeps {@link ImageBuilder} independent
+ * of either representation.
  *
- * <p>Return types still name {@code ClassFile.VSlot}/{@code Method} (owner/name/desc
- * tuples) and {@code String}; the representation-independent form comes with the metal
- * impl, when identities become byte offsets.
+ * <p>Return types are writer-owned tuples ({@link VSlot}/{@link Method}) and plain
+ * {@code String}s — no {@code ClassFile} type escapes here, so a metal impl (which has no
+ * {@code ClassFile}) can satisfy the interface. The representation-independent identity
+ * (byte offsets, the key migration) comes with the metal impl and steps 3/4.
  */
 interface ClassModel
 {
+    /** One flattened-vtable slot: the class providing the impl, plus name/descriptor. */
+    record VSlot(String owner, String name, String descriptor) {}
+
+    /** One interface method: name + descriptor (the itable-slot identity). */
+    record Method(String name, String descriptor) {}
+
     /** A class we don't compile (JDK {@code java/*}) — a chain root, like Object. */
     boolean isRoot(String cls);
 
@@ -32,10 +38,10 @@ interface ClassModel
     boolean hasClinit(String cls);
 
     /** The flattened vtable of {@code cls} (superclass slots first, overrides in place). */
-    Vec<ClassFile.VSlot> vtable(String cls);
+    Vec<VSlot> vtable(String cls);
 
     /** {@code cls}'s interface methods, in declaration order = itable slots. */
-    Vec<ClassFile.Method> interfaceMethods(String cls);
+    Vec<Method> interfaceMethods(String cls);
 
     /** The class providing {@code cls}'s implementation of {@code name+desc} (walk supers). */
     String findImpl(String cls, String name, String desc);

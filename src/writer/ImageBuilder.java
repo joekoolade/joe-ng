@@ -153,10 +153,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
-                    Vec<ClassFile.VSlot> vt = model.vtable(t.className());
+                    Vec<ClassModel.VSlot> vt = model.vtable(t.className());
                     for (int _vi = 0; _vi < vt.size(); _vi++)
                     {
-                        ClassFile.VSlot s = vt.get(_vi);
+                        ClassModel.VSlot s = vt.get(_vi);
                         worklist.add(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
                     }
                 }
@@ -385,9 +385,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var ims = model.interfaceMethods(i);
                 for (int s = 0; s < ims.size(); s++)
                 {
-                    ClassFile.Method m = ims.get(s);
-                    String impl = model.findImpl(c, m.name, m.descriptor);
-                    int mbase = wordOffset.get(BaselineCompiler.key(impl, m.name, m.descriptor));
+                    ClassModel.Method m = ims.get(s);
+                    String impl = model.findImpl(c, m.name(), m.descriptor());
+                    int mbase = wordOffset.get(BaselineCompiler.key(impl, m.name(), m.descriptor()));
                     writeLong(image, iw + s * WORDS_PER_SLOT, addr(mbase));
                 }
             }
@@ -402,7 +402,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             var slots = model.vtable(cls);
             for (int slot = 0; slot < slots.size(); slot++)
             {
-                ClassFile.VSlot s = slots.get(slot);
+                ClassModel.VSlot s = slots.get(slot);
                 int mbase = wordOffset.get(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
                 writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
             }
