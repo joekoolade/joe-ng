@@ -44,6 +44,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private final Path classesDir;
     private final Map<String, ClassFile> classes = new HashMap<>();
     private final Vec<Blob> blobs = new Vec<>();
+    /** Class-model queries behind a seam; the metal writer swaps in a registry-backed impl (§M5.5c). */
+    private final ClassModel model = new SeedClassModel(this);
 
     /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics. */
     private record Blob(String addrKey, String lenKey, byte[] bytes) {}
@@ -167,7 +169,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
-                    Vec<ClassFile.VSlot> vt = ClassFile.vtable(t.className(), this);
+                    Vec<ClassFile.VSlot> vt = model.vtable(t.className());
                     for (int _vi = 0; _vi < vt.size(); _vi++)
                     {
                         ClassFile.VSlot s = vt.get(_vi);
@@ -255,7 +257,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 String i = impls.get(_v1);
                 itableWord.put(c + "|" + i, cur);
-                cur += resolve(i).interfaceMethods().size() * WORDS_PER_SLOT;
+                cur += model.interfaceMethods(i).size() * WORDS_PER_SLOT;
             }
         }
         // unwind tables: frame entries {start,end,frameSize} (6 words), handler
@@ -350,9 +352,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String cls = typeClasses.at(_s8);
             int tw = typeWord.get(cls);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
-                      ObjectModel.scalarSize(resolve(cls).instanceFieldCount()));
-            String sup = resolve(cls).superClassName();
-            long superAddr = ClassFile.isRoot(sup) ? 0 : addr(typeWord.get(sup));
+                      ObjectModel.scalarSize(model.instanceFieldCount(cls)));
+            String sup = model.superClassName(cls);
+            long superAddr = model.isRoot(sup) ? 0 : addr(typeWord.get(sup));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
             long dir = itableDirWord.containsKey(cls) ? addr(itableDirWord.get(cls)) : 0;
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
@@ -379,11 +381,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 String i = impls.get(_v2);
                 int iw = itableWord.get(c + "|" + i);
-                var ims = resolve(i).interfaceMethods();
+                var ims = model.interfaceMethods(i);
                 for (int s = 0; s < ims.size(); s++)
                 {
                     ClassFile.Method m = ims.get(s);
-                    String impl = ClassFile.findImpl(c, m.name, m.descriptor, this);
+                    String impl = model.findImpl(c, m.name, m.descriptor);
                     int mbase = wordOffset.get(BaselineCompiler.key(impl, m.name, m.descriptor));
                     writeLong(image, iw + s * WORDS_PER_SLOT, addr(mbase));
                 }
@@ -396,7 +398,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String cls = tibClasses.at(_s10);
             int tw = tibWord.get(cls);
             writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
-            var slots = ClassFile.vtable(cls, this);
+            var slots = model.vtable(cls);
             for (int slot = 0; slot < slots.size(); slot++)
             {
                 ClassFile.VSlot s = slots.get(slot);
@@ -498,21 +500,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Add {@code cls} and all its superclasses (up to Object) to {@code set}. */
     private void addTypeClass(String cls, StrSet set)
     {
-        while (!ClassFile.isRoot(cls) && set.add(cls))
+        while (!model.isRoot(cls) && set.add(cls))
         {
-            cls = resolve(cls).superClassName();
+            cls = model.superClassName(cls);
         }
     }
 
     private int vtableLength(String cls)
     {
-        return ClassFile.vtable(cls, this).size();
+        return model.vtable(cls).size();
     }
 
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
     private Vec<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
     {
-        StrSet all = ClassFile.allInterfaces(cls, this);
+        StrSet all = model.allInterfaces(cls);
         Vec<String> out = new Vec<>();
         for (int _s12 = 0; _s12 < usedInterfaces.size(); _s12++)
         {
@@ -528,7 +530,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
     private void use(String cls, StrSet used, Vec<String> clinitOrder, Vec<String> worklist)
     {
-        if (used.add(cls) && resolve(cls).hasClinit())
+        if (used.add(cls) && model.hasClinit(cls))
         {
             String ck = cls + ".<clinit>()V";
             clinitOrder.add(ck);
