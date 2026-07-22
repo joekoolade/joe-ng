@@ -790,10 +790,20 @@ is name→address bookkeeping:
        drives `Baseline` over `Uart.write` exactly as `Loader` drives the JIT and asserts the
        result: one recorded call, a placeholder `bl` at its site, callee resolved as `putc`,
        clean compile. Verified in QEMU.
-     - ⬜ **3b: heap-buffer sink + layout driver.** BFS discovery over the recorded call sites,
-       size/place each method, compile-at-base, patch the sites; `int[] image` →
-       `Heap.alloc`'d buffer; no file write. Couples to the key migration (1b.3) so recorded
-       offset-keyed relocations resolve to method bases across the closure.
+     - **3b: heap-buffer sink + layout driver.**
+       - ✅ **3b.1: build + execute a call closure.** `VM.selfBuildClosureAndRun` discovers the
+         `{Uart.putc, Uart.putRaw}` closure by BFS over `MetalWriterSymbols`' recorded calls,
+         places each method contiguously, compiles at its base, allocs a `Heap` buffer, patches
+         every `bl` to its callee's base (matching callees to placed methods by Utf8-content
+         key), `dsb`/`isb`, and *executes* the built `putc` — which prints `~` over the UART. An
+         `L` marker follows (all calls resolved). `MetalWriterSymbols` gained real `Magic`
+         intrinsic resolution (the 7 memory ops) so `putRaw` compiles. QEMU shows `~L`: the
+         metal writer built working code and it ran. (Compiler limits hit en route: 7 operand
+         slots → static context + low-arity helpers; no `pop2` → assign the void call's return.)
+       - ⬜ **3b.2: scale to the full closure.** BFS across classes + all reloc kinds
+         (tib/type/static/string/interface), the data regions (Types/TIBs/itables/strings/
+         statics/unwind/blobs/class table) and the `initClasses` body — `int[] image` sink at
+         `0x80000`-relative bases. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

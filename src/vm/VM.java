@@ -477,6 +477,265 @@ public final class VM
         // MetalSymbols, emits placeholders and *records* relocation sites for later layout.
         Uart.putc(relocatingCompileReady() ? 0x42 : 0x78); // 'B' relocating compile OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b: the metal layout engine. Discover a call closure, place each method
+        // in a Heap buffer, compile at its base, and patch the BL sites to their callees'
+        // bases -- then *execute* the built code. The built putc prints '~' before the 'L'.
+        boolean built = selfBuildClosureAndRun();          // prints '~' from metal-built code
+        Uart.putc(built ? 0x4C : 0x78);                    // 'L' layout engine OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    // ----- M5.5c step 3b: metal layout engine (build + execute a call closure) -----
+    // The class context + method table are static (like Loader's registries) so the helpers
+    // stay low-arity — the baseline compiler allows only 7 operand-stack slots (OP_MAX).
+
+    private static byte[] cB;       // current class bytes
+    private static int[] cOff;      // ... its constant-pool offset table
+    private static int[] cTag;      // ... and tags
+    private static int cAfterCp;    // offset just past the constant pool
+
+    private static byte[][] clName; // placed methods: name / descriptor identity bytes
+    private static byte[][] clDesc;
+    private static int[] clSize;    // ... A64 word count
+    private static int[] clWordOff; // ... assigned word offset in the buffer
+    private static int[][] clWords; // ... compiled words
+    private static MetalWriterSymbols[] clSym;  // ... recorded relocations
+    private static int clCount;
+
+    private static int fDescOff;    // descriptor Utf8 offset of the last findMethodBody hit
+    private static boolean fStatic; // ... and whether it is static (frame/ABI)
+
+    /**
+     * Build the call closure of {@code Uart.putc} into a {@link Heap} buffer — discover,
+     * place, compile-at-base, patch the BL sites — then run it: the metal writer's layout
+     * engine producing working code. The built {@code putc} prints {@code '~'}. Returns
+     * whether every recorded call resolved to a placed method.
+     */
+    private static boolean selfBuildClosureAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("board/bcm2711/Uart"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("putc");
+        clDesc[0] = Magic.bytes("(I)V");
+        clCount = 1;
+
+        // discover + compile (base 0; pure-call word counts are placement-independent).
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            discoverCallees(sym);
+            i += 1;
+        }
+
+        // place contiguously and allocate the buffer.
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long buf = Heap.alloc(cur * 4);
+
+        // patch each recorded call to its callee's base, then write the words to the buffer.
+        boolean ok = patchAndWrite(buf);
+        Magic.dsb();                                       // publish the buffer (caches off), as Loader does
+        Magic.isb();
+
+        long entry = buf + clWordOff[0] * 4L;
+        long unused = Magic.call2(entry, 0x7EL, 0L);       // run the built putc('~'); ignore the void return
+        return ok;
+    }
+
+    /** Enqueue any callee of {@code sym} not already in the method table. */
+    private static void discoverCallees(MetalWriterSymbols sym)
+    {
+        int c = 0;
+        while (c < sym.callCount())
+        {
+            int nameOff = sym.callNameOff(c);
+            int descOff = sym.callDescOff(c);
+            if (findPlaced(nameOff, descOff) < 0)
+            {
+                clName[clCount] = utf8Copy(nameOff);
+                clDesc[clCount] = utf8Copy(descOff);
+                clCount += 1;
+            }
+            c += 1;
+        }
+    }
+
+    /** Patch every method's call sites to their callees' bases and write the words to {@code buf}. */
+    private static boolean patchAndWrite(long buf)
+    {
+        boolean ok = true;
+        int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int[] words = clWords[m];
+            int baseOff = clWordOff[m];
+            int c = 0;
+            while (c < sym.callCount())
+            {
+                int j = findPlaced(sym.callNameOff(c), sym.callDescOff(c));
+                if (j < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    int site = sym.callSiteWord(c);
+                    words[site] = A64Enc.bl(clWordOff[j] - (baseOff + site));   // relative BL
+                }
+                c += 1;
+            }
+            int w = 0;
+            while (w < words.length)
+            {
+                long addr = buf + (baseOff + w) * 4L;
+                Magic.store32(addr, words[w]);
+                w += 1;
+            }
+            m += 1;
+        }
+        return ok;
+    }
+
+    /** The Code-attribute body offset of {@code name+desc} in {@link #cB}; sets {@link #fDescOff}/{@link #fStatic}. */
+    private static int findMethodBody(byte[] name, byte[] desc)
+    {
+        byte[] codeAttr = Magic.bytes("Code");
+        int p = ClassReader.methodsStart(cB, cAfterCp);
+        int n = ClassReader.u2(cB, p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            boolean isStatic = (ClassReader.u2(cB, p) & 0x0008) != 0;
+            int nameOff = cOff[ClassReader.u2(cB, p + 2)];
+            int descOff = cOff[ClassReader.u2(cB, p + 4)];
+            int attrs = p + 6;
+            if (utf8Eq(cB, nameOff, name) && utf8Eq(cB, descOff, desc))
+            {
+                fDescOff = descOff;
+                fStatic = isStatic;
+                return findCodeBody(attrs, codeAttr);
+            }
+            p = ClassReader.skipAttributes(cB, attrs);
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** The Code-attribute body offset among the attribute table at {@code attrs}, or -1. */
+    private static int findCodeBody(int attrs, byte[] codeAttr)
+    {
+        int ac = ClassReader.u2(cB, attrs);
+        int q = attrs + 2;
+        int a = 0;
+        while (a < ac)
+        {
+            int anOff = cOff[ClassReader.u2(cB, q)];
+            int alen = ClassReader.u4(cB, q + 2);
+            int bodyOff = q + 6;
+            if (utf8Eq(cB, anOff, codeAttr))
+            {
+                return bodyOff;
+            }
+            q = bodyOff + alen;
+            a += 1;
+        }
+        return -1;
+    }
+
+    /** Compile the method whose Code-attribute body is at {@code body} into A64 words at {@code base}. */
+    private static int[] compileInto(int body, MetalWriterSymbols sym, long base)
+    {
+        int maxLocals = ClassReader.u2(cB, body + 2);      // after max_stack(2)
+        int codeLen = ClassReader.u4(cB, body + 4);
+        int codeStart = body + 8;
+        byte[] code = new byte[codeLen];
+        int k = 0;
+        while (k < codeLen)
+        {
+            code[k] = (byte) ClassReader.u1(cB, codeStart + k);
+            k += 1;
+        }
+        Baseline bl = new Baseline(cB, cOff, cTag, sym);
+        setExceptions(bl, codeStart + codeLen);            // exception_table follows the bytecode
+        return bl.compileBody(code, fDescOff, fStatic, maxLocals, base, false);
+    }
+
+    /** Read the exception_table at {@code ex} and install it on {@code bl}. */
+    private static void setExceptions(Baseline bl, int ex)
+    {
+        int en = ClassReader.u2(cB, ex);
+        int[] es = new int[en];
+        int[] ee = new int[en];
+        int[] eh = new int[en];
+        int[] ec = new int[en];
+        int j = 0;
+        while (j < en)
+        {
+            int e = ex + 2 + j * 8;
+            es[j] = ClassReader.u2(cB, e);
+            ee[j] = ClassReader.u2(cB, e + 2);
+            eh[j] = ClassReader.u2(cB, e + 4);
+            ec[j] = ClassReader.u2(cB, e + 6);
+            j += 1;
+        }
+        bl.setExceptionTable(es, ee, eh, ec, en);
+    }
+
+    /** Index of the placed method whose (name,desc) equal the Utf8 at {@code nameOff/descOff} in {@link #cB}, or -1. */
+    private static int findPlaced(int nameOff, int descOff)
+    {
+        int j = 0;
+        while (j < clCount)
+        {
+            if (utf8Eq(cB, nameOff, clName[j]) && utf8Eq(cB, descOff, clDesc[j]))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Copy the Utf8 entry at {@code cB[off]} onto a fresh heap byte array. */
+    private static byte[] utf8Copy(int off)
+    {
+        int len = ClassReader.u2(cB, off);
+        byte[] out = new byte[len];
+        int j = 0;
+        while (j < len)
+        {
+            out[j] = (byte) ClassReader.u1(cB, off + 2 + j);
+            j += 1;
+        }
+        return out;
     }
 
     /**

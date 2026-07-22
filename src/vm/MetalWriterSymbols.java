@@ -3,6 +3,7 @@ package vm;
 import asm.A64Enc;
 import asm.CodeBuffer;
 import classfile.ClassReader;
+import compiler.Intrinsics;
 import compiler.Symbols;
 import magic.Magic;
 
@@ -124,10 +125,39 @@ final class MetalWriterSymbols implements Symbols
     }
     public boolean intrinsicEmitsCall(int methodCp)
     {
-        return false;
+        return false;   // the memory intrinsics this writer resolves emit no BL/BLR
     }
     public int intrinsicId(int methodCp)
     {
+        int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);   // the seven memory intrinsics
+        if (utf8Is(n, Magic.bytes("bytes")))
+        {
+            return Intrinsics.BYTES;
+        }
+        if (utf8Is(n, Magic.bytes("load8")))
+        {
+            return Intrinsics.LOAD8;
+        }
+        if (utf8Is(n, Magic.bytes("load32")))
+        {
+            return Intrinsics.LOAD32;
+        }
+        if (utf8Is(n, Magic.bytes("load64")))
+        {
+            return Intrinsics.LOAD64;
+        }
+        if (utf8Is(n, Magic.bytes("store8")))
+        {
+            return Intrinsics.STORE8;
+        }
+        if (utf8Is(n, Magic.bytes("store32")))
+        {
+            return Intrinsics.STORE32;
+        }
+        if (utf8Is(n, Magic.bytes("store64")))
+        {
+            return Intrinsics.STORE64;
+        }
         return 0;
     }
     public boolean isSkippableInit(int methodCp)
@@ -148,6 +178,14 @@ final class MetalWriterSymbols implements Symbols
     int callSiteWord(int i)
     {
         return callSite[i];
+    }
+    int callNameOff(int i)
+    {
+        return callNameOff[i];
+    }
+    int callDescOff(int i)
+    {
+        return callDescOff[i];
     }
     boolean callNameIs(int i, byte[] want)
     {
