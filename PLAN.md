@@ -704,6 +704,46 @@ is name→address bookkeeping:
 - **M5.5c — run the writer on metal into a heap buffer** over the embedded blobs, and
   assert the bytes equal the seed-built image: the self-build **fixpoint**, no
   persistence, no new drivers.
+
+  **Scoped (grounded in the M5.5b findings).** The pivotal fact: the metal `vm/Loader`
+  (1622 lines) *already is* a metal class-loader — it parses `.class` blobs through the
+  shared `ClassReader`, flattens vtables (superclass-first + overrides), builds the
+  interface/itable registry, computes field layout + object size, constructs each
+  class's `Type`/`TIB`, interns strings, and resolves every reference — all over
+  **byte-offset registries** (`rgClassOff/rgNameOff/rgDescOff`, `clNameOff`, …). What it
+  does *not* do is emit a **relocatable AOT image**: fixed offsets from `0x80000`,
+  recorded-then-patched relocations, the `kernel8.img` word layout. Loader JITs into
+  *live heap* with runtime addresses (`MetalSymbols` resolves immediately, records
+  nothing). So M5.5c is not "run `ImageBuilder` verbatim on metal" — it is porting
+  `ImageBuilder`'s ~650 lines of AOT layout onto the class-model Loader already exposes.
+  This is the **M5.4 compiler-unification pattern applied to the class model**: one metal
+  class-model serving both the runtime linker (Loader) and the image writer.
+
+  Sub-steps, smallest-verifiable-first:
+  1. **Unify the class-model (discovery rewrite) — subsumes the M5.5b key migration.**
+     `ImageBuilder`'s `ClassFile`-bound discovery (`build`/`use`/`ownerOf` + the seed
+     `resolve`/`lookup`; `ClassFile.vtable`/`allInterfaces`/field layout) → Loader's
+     byte-offset registry queries, which already compute all of it on metal. As identity
+     becomes a byte offset, the layout tables + relocation records go off `String`/`byte[]`
+     content onto offsets — the key migration, done *here* where the `ClassFile` String
+     boundaries disappear rather than as standalone churn. Closes
+     `build`/`use`/`ownerOf`/`resolve`/`lookup`.
+  2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
+     writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
+     `objectmodel/*`, `magic/*`) from `.class` files. A metal self-build must embed the
+     **full reachable class set** (~dozens) as blobs, behind a class-name→blob registry
+     that replaces the file I/O, the `classes` `HashMap` (`<init>`), and the
+     `RuntimeException` wrap (`compile`). Mechanical, but it materially grows the image.
+  3. **Heap-buffer sink (output).** `ImageBuilder`'s `int[] image` → a `Heap.alloc`'d
+     buffer; the `kernel8.img` file write → nothing (stay in memory). No block driver.
+  4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
+     heap, and assert it word-equals the running kernel image at `0x80000` (the very image
+     the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it
+     is running. A single loud QEMU marker (e.g. `FIX`) on success.
+
+  **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
+  compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
+  it, verifiable in-image by the fixpoint compare. No new subsystems (storage is M5.5d).
 - **M5.5d (M6-gated) — persist + reboot**: an SD/FAT block driver to write the image and
   a real self-hosted boot. This is where "drop the seed JVM" becomes literally true.
 
