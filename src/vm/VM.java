@@ -460,6 +460,45 @@ public final class VM
         // against known classes (Dog's super, Cell's field count, Config's <clinit>).
         Uart.putc(classModelReady() ? 0x4B : 0x78);        // 'K' class model OK / 'x' broken
         Uart.putc(0x0A);
+
+        // The class model's superclass-chain walks: vtable flattening (super-first +
+        // override-in-place), interface methods, allInterfaces, findImpl — the multi-class
+        // recursion the writer's TIB/itable layout needs. Verified on metal against known
+        // hierarchy facts (Dog overrides Animal.sound in the same slot; Robot implements
+        // Speaker; Cell's two virtuals).
+        Uart.putc(chainWalksReady() ? 0x56 : 0x78);        // 'V' chain walks OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    /** The metal class model's superclass-chain walks agree with the known hierarchy. */
+    private static boolean chainWalksReady()
+    {
+        byte[] dog = Magic.bytes("vm/Dog");
+        byte[] animal = Magic.bytes("vm/Animal");
+        byte[] cell = Magic.bytes("vm/Cell");
+        byte[] robot = Magic.bytes("vm/Robot");
+        byte[] speaker = Magic.bytes("vm/Speaker");
+        byte[] sound = Magic.bytes("sound");
+        byte[] speak = Magic.bytes("speak");
+        byte[] get = Magic.bytes("get");
+        byte[] inc = Magic.bytes("inc");
+        byte[] retI = Magic.bytes("()I");
+        byte[] retV = Magic.bytes("()V");
+        return MetalClassModel.vtableSize(dog) == 1                          // Dog overrides, no new slot
+               && MetalClassModel.vtableSize(animal) == 1
+               && MetalClassModel.vtableSize(cell) == 2                      // get, inc
+               && MetalClassModel.vtableSlot(dog, sound, retI) == 0
+               && MetalClassModel.vtableSlot(animal, sound, retI) == 0       // override shares the slot
+               && MetalClassModel.vtableOwnerIs(dog, 0, dog)                 // owner becomes Dog
+               && MetalClassModel.vtableOwnerIs(animal, 0, animal)
+               && MetalClassModel.vtableSlot(cell, get, retI) >= 0
+               && MetalClassModel.vtableSlot(cell, inc, retV) >= 0
+               && MetalClassModel.interfaceMethodCount(speaker) == 1
+               && MetalClassModel.interfaceMethodSlot(speaker, speak, retI) == 0
+               && MetalClassModel.implementsInterface(robot, speaker)
+               && !MetalClassModel.implementsInterface(dog, speaker)
+               && MetalClassModel.findImplIs(robot, speak, retI, robot)
+               && MetalClassModel.findImplIs(dog, sound, retI, dog);
     }
 
     /** The metal class model's leaf queries agree with the known shapes of embedded classes. */

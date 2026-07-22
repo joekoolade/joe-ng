@@ -752,9 +752,13 @@ is name→address bookkeeping:
            single-class, no chain walk. A metal `K` marker checks them against known shapes
            (Dog→Animal super, Cell's 1 field, Config's `<clinit>`, Object is root); verified in
            QEMU, independent of the full writer.
-         - ⬜ **chain walks.** `vtable` (flatten super-first + override-in-place),
-           `interfaceMethods`, `allInterfaces`, `findImpl` — mirror `ClassFile`'s recursion over
-           supers, marker-verified the same way.
+         - ✅ **chain walks.** `vtable` (flatten super-first + override-in-place, via `byte[][]`
+           scratch — metal supports reference arrays), `interfaceMethod{Count,Slot}`,
+           `implementsInterface` (allInterfaces), `findImplIs` (walks supers, Code-attr check) —
+           mirror `ClassFile`'s recursion. A metal `V` marker checks 15 hierarchy facts (Dog
+           overrides `Animal.sound` in slot 0 with owner Dog; Robot implements Speaker, Dog
+           doesn't; Cell's two virtuals; Speaker's one itable slot). Verified in QEMU. The full
+           `ClassModel` query set now runs on metal, independent of the writer.
        - ⬜ **1b.3: byte-offset identity / key migration** for `ImageBuilder`'s layout tables +
          relocations — lands with steps 3/4, verified end-to-end by the fixpoint.
   2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
