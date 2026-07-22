@@ -746,9 +746,17 @@ is name→address bookkeeping:
          writer-owned `VSlot`/`Method` records instead of `classfile.ClassFile.VSlot`/`Method`,
          so a metal impl (which has no `ClassFile`) can satisfy it. `SeedClassModel` copies
          into them; `ImageBuilder` consumes them. Image SHA unchanged.
-       - ⬜ **1b.2: `MetalClassModel` impl, marker-verified per query**, then the byte-offset
-         identity / key migration for the layout tables + relocations — lands with steps 3/4,
-         verified end-to-end by the fixpoint.
+       - **1b.2: `MetalClassModel` impl, marker-verified per query.** New `vm/MetalClassModel`
+         loads a class from the table by name (`bytesOf`) and answers queries via `ClassReader`.
+         - ✅ **leaf queries.** `isRoot`, `superIs`, `instanceFieldCount`, `hasClinit` —
+           single-class, no chain walk. A metal `K` marker checks them against known shapes
+           (Dog→Animal super, Cell's 1 field, Config's `<clinit>`, Object is root); verified in
+           QEMU, independent of the full writer.
+         - ⬜ **chain walks.** `vtable` (flatten super-first + override-in-place),
+           `interfaceMethods`, `allInterfaces`, `findImpl` — mirror `ClassFile`'s recursion over
+           supers, marker-verified the same way.
+       - ⬜ **1b.3: byte-offset identity / key migration** for `ImageBuilder`'s layout tables +
+         relocations — lands with steps 3/4, verified end-to-end by the fixpoint.
   2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
      writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
      `objectmodel/*`, `magic/*`) from `.class` files. The class-name→bytes registry

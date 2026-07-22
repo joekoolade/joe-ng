@@ -454,6 +454,23 @@ public final class VM
         // classfile magic — the self-build reads its sources from the image alone.
         Uart.putc(classTableReady() ? 0x43 : 0x78);        // 'C' class table OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 1b: the metal class model answers the writer's class-graph queries
+        // over that table via the shared ClassReader. Prove its leaf queries on metal
+        // against known classes (Dog's super, Cell's field count, Config's <clinit>).
+        Uart.putc(classModelReady() ? 0x4B : 0x78);        // 'K' class model OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    /** The metal class model's leaf queries agree with the known shapes of embedded classes. */
+    private static boolean classModelReady()
+    {
+        return MetalClassModel.superIs(Magic.bytes("vm/Dog"), Magic.bytes("vm/Animal"))
+               && MetalClassModel.instanceFieldCount(Magic.bytes("vm/Cell")) == 1
+               && MetalClassModel.hasClinit(Magic.bytes("vm/Config"))
+               && !MetalClassModel.hasClinit(Magic.bytes("vm/Cell"))
+               && !MetalClassModel.isRoot(Magic.bytes("vm/Dog"))
+               && MetalClassModel.isRoot(Magic.bytes("java/lang/Object"));
     }
 
     /**
