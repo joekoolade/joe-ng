@@ -108,25 +108,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
-            var _r1 = cm.callSites();
+            var _r1 = cm.relocs().callSites();
             for (int _ri1 = 0; _ri1 < _r1.size(); _ri1++)
             {
                 var cs = _r1.get(_ri1);
                 worklist.add(cs.calleeKey());
             }
-            var _r2 = cm.strRefs();
+            var _r2 = cm.relocs().strRefs();
             for (int _ri2 = 0; _ri2 < _r2.size(); _ri2++)
             {
                 var s = _r2.get(_ri2);
                 strings.add(s.text());
             }
-            var _r3 = cm.typeRefs();
+            var _r3 = cm.relocs().typeRefs();
             for (int _ri3 = 0; _ri3 < _r3.size(); _ri3++)
             {
                 var t = _r3.get(_ri3);
                 typeRefClasses.add(t.className());
             }
-            var _r5 = cm.interfaceRefs();
+            var _r5 = cm.relocs().interfaceRefs();
             for (int _ri5 = 0; _ri5 < _r5.size(); _ri5++)
             {
                 var t = _r5.get(_ri5);
@@ -147,13 +147,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 frameCount++;
             }
             handlerCount += cm.handlers().size();
-            var _r4 = cm.tibRefs();
+            var _r4 = cm.relocs().tibRefs();
             for (int _ri4 = 0; _ri4 < _r4.size(); _ri4++)
             {
                 var t = _r4.get(_ri4);
                 use(t.className(), usedClasses, clinitOrder, worklist);
             }
-            var _r7 = cm.staticRefs();
+            var _r7 = cm.relocs().staticRefs();
             for (int _ri7 = 0; _ri7 < _r7.size(); _ri7++)
             {
                 var s = _r7.get(_ri7);
@@ -161,7 +161,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 use(ownerOf(s.fieldKey()), usedClasses, clinitOrder, worklist);
             }
             use(ownerOf(k), usedClasses, clinitOrder, worklist);
-            var _r8 = cm.tibRefs();
+            var _r8 = cm.relocs().tibRefs();
             for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
             {
                 var t = _r8.get(_ri8);
@@ -293,37 +293,37 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 throw new IllegalStateException("size drift for " + k);
             }
             System.arraycopy(cm.words(), 0, image, base, cm.words().length);
-            var _r5 = cm.callSites();
+            var _r5 = cm.relocs().callSites();
             for (int _ri5 = 0; _ri5 < _r5.size(); _ri5++)
             {
                 var cs = _r5.get(_ri5);
                 calls.add(new GlobalCall(base + cs.wordIndex(), cs.calleeKey()));
             }
-            var _r6 = cm.tibRefs();
+            var _r6 = cm.relocs().tibRefs();
             for (int _ri6 = 0; _ri6 < _r6.size(); _ri6++)
             {
                 var t = _r6.get(_ri6);
                 tibs.add(new GlobalTib(base + t.wordIndex(), t.reg(), t.className()));
             }
-            var _r7 = cm.strRefs();
+            var _r7 = cm.relocs().strRefs();
             for (int _ri7 = 0; _ri7 < _r7.size(); _ri7++)
             {
                 var s = _r7.get(_ri7);
                 strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text()));
             }
-            var _r8 = cm.staticRefs();
+            var _r8 = cm.relocs().staticRefs();
             for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
             {
                 var s = _r8.get(_ri8);
                 stats.add(new GlobalStatic(base + s.wordIndex(), s.reg(), s.fieldKey()));
             }
-            var _r9 = cm.typeRefs();
+            var _r9 = cm.relocs().typeRefs();
             for (int _ri9 = 0; _ri9 < _r9.size(); _ri9++)
             {
                 var t = _r9.get(_ri9);
                 types.add(new GlobalType(base + t.wordIndex(), t.reg(), t.className()));
             }
-            var _r10 = cm.interfaceRefs();
+            var _r10 = cm.relocs().interfaceRefs();
             for (int _ri10 = 0; _ri10 < _r10.size(); _ri10++)
             {
                 var t = _r10.get(_ri10);
@@ -548,20 +548,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     {
         int frame = A64.align16(8);                                 // LR only
         IntVec w = new IntVec();
-        Vec<BaselineCompiler.CallSite> calls = new Vec<>();
+        BaselineCompiler.Relocations relocs = new BaselineCompiler.Relocations();
         w.add(A64.subImm(31, 31, frame));
         w.add(A64.strx(30, 31, 0));
         for (int ci = 0; ci < clinits.size(); ci++)
         {
-            calls.add(new BaselineCompiler.CallSite(w.size(), clinits.get(ci)));
+            relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), clinits.get(ci)));
             w.add(A64.bl(0));
         }
         w.add(A64.ldrx(30, 31, 0));
         w.add(A64.addImm(31, 31, frame));
         w.add(A64.ret());
         int[] words = w.toArray();
-        return new CompiledMethod(words, calls, new Vec<>(), new Vec<>(), new Vec<>(), new Vec<>(),
-                                  new Vec<>(), frame, new Vec<>());
+        Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
+        return new CompiledMethod(words, relocs, frame, handlers);
     }
 
     /** Image words a byte[] object for {@code b} occupies: header(16)+length(8)+bytes, 8-aligned. */

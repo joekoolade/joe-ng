@@ -4,7 +4,6 @@ import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
 import objectmodel.ObjectModel;
-import util.Vec;
 
 import compiler.BaselineCompiler.CallSite;
 import compiler.BaselineCompiler.StaticRef;
@@ -38,12 +37,9 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     private final ClassFile cf;
     private final BaselineCompiler.ClassResolver resolver;
 
-    private final Vec<CallSite> callSites = new Vec<>();
-    private final Vec<TibRef> tibRefs = new Vec<>();
-    private final Vec<StrRef> strRefs = new Vec<>();
-    private final Vec<StaticRef> staticRefs = new Vec<>();
-    private final Vec<TypeRef> typeRefs = new Vec<>();
-    private final Vec<TypeRef> interfaceRefs = new Vec<>();   // interface Type address loads
+    // The six relocation lists, bundled (a fresh WriterSymbols per method, so no
+    // defensive copy needed). The driver reads them back through relocations().
+    private final BaselineCompiler.Relocations relocs = new BaselineCompiler.Relocations();
 
     WriterSymbols(ClassFile cf, BaselineCompiler.ClassResolver resolver)
     {
@@ -51,40 +47,33 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         this.resolver = resolver;
     }
 
-    // ----- the relocation records, read back by the driver after compilation (fresh
-    //       WriterSymbols per method, so no defensive copy needed) -----
-    Vec<CallSite> callSites() { return callSites; }
-    Vec<TibRef> tibRefs() { return tibRefs; }
-    Vec<StrRef> strRefs() { return strRefs; }
-    Vec<StaticRef> staticRefs() { return staticRefs; }
-    Vec<TypeRef> typeRefs() { return typeRefs; }
-    Vec<TypeRef> interfaceRefs() { return interfaceRefs; }
+    BaselineCompiler.Relocations relocations() { return relocs; }
 
     // ----- Symbols: emit a placeholder, record the resolved key -----
     public void call(CodeBuffer cb, int methodCp)
     {
         ClassFile.MemberRef r = cf.memberRef(methodCp);
-        callSites.add(new CallSite(cb.emit(A64.bl(0)), BaselineCompiler.key(r.owner(), r.name(), r.descriptor())));
+        relocs.callSites().add(new CallSite(cb.emit(A64.bl(0)), BaselineCompiler.key(r.owner(), r.name(), r.descriptor())));
     }
     public void callHelper(CodeBuffer cb, int helper)
     {
-        callSites.add(new CallSite(cb.emit(A64.bl(0)), HELPER_KEY[helper]));
+        relocs.callSites().add(new CallSite(cb.emit(A64.bl(0)), HELPER_KEY[helper]));
     }
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        tibRefs.add(new TibRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
+        relocs.tibRefs().add(new TibRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        typeRefs.add(new TypeRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
+        relocs.typeRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        interfaceRefs.add(new TypeRef(cb.reserveAddr(reg), reg, cf.memberRef(ifaceMethodCp).owner()));
+        relocs.interfaceRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cf.memberRef(ifaceMethodCp).owner()));
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        staticRefs.add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));
+        relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
@@ -92,11 +81,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // (the writer's identities are byte content, not String — §M5.5b). Decoding here
         // is fine: WriterSymbols is the seed-side Symbols; only the record is metal-bound.
         byte[] text = cf.stringAt(stringCp).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-        strRefs.add(new StrRef(cb.reserveAddr(reg), reg, text));
+        relocs.strRefs().add(new StrRef(cb.reserveAddr(reg), reg, text));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
-        staticRefs.add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
+        relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, EXCEPTION_KEY));
     }
 
     // ----- Symbols: numeric / boolean queries resolved against the classfiles -----

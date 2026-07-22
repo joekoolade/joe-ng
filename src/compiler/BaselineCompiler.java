@@ -18,10 +18,37 @@ public final class BaselineCompiler
     {
     }
 
+    /**
+     * The six per-method relocation lists, bundled so {@link CompiledMethod} stays a
+     * small-arity constructor (Baseline's operand stack is 7 registers, so a 9-arg
+     * {@code new} overflows — §M5.5b). A mutable no-arg holder rather than a record: the
+     * lists start empty and are filled in place, so building one costs no operand slots.
+     */
+    public static final class Relocations
+    {
+        private final Vec<CallSite> callSites = new Vec<>();
+        private final Vec<TibRef> tibRefs = new Vec<>();
+        private final Vec<StrRef> strRefs = new Vec<>();
+        private final Vec<StaticRef> staticRefs = new Vec<>();
+        private final Vec<TypeRef> typeRefs = new Vec<>();
+        private final Vec<TypeRef> interfaceRefs = new Vec<>();   // interface Type address loads
+
+        public Vec<CallSite> callSites() { return callSites; }
+        public Vec<TibRef> tibRefs() { return tibRefs; }
+        public Vec<StrRef> strRefs() { return strRefs; }
+        public Vec<StaticRef> staticRefs() { return staticRefs; }
+        public Vec<TypeRef> typeRefs() { return typeRefs; }
+        public Vec<TypeRef> interfaceRefs() { return interfaceRefs; }
+
+        public boolean isEmpty()
+        {
+            return callSites.isEmpty() && tibRefs.isEmpty() && strRefs.isEmpty()
+                   && staticRefs.isEmpty() && typeRefs.isEmpty() && interfaceRefs.isEmpty();
+        }
+    }
+
     /** A single compiled method: its words, relocation fixups, and unwind metadata. */
-    public record CompiledMethod(int[] words, Vec<CallSite> callSites, Vec<TibRef> tibRefs,
-                                 Vec<StrRef> strRefs, Vec<StaticRef> staticRefs, Vec<TypeRef> typeRefs,
-                                 Vec<TypeRef> interfaceRefs, int frameSize, Vec<HandlerRange> handlers) {}
+    public record CompiledMethod(int[] words, Relocations relocs, int frameSize, Vec<HandlerRange> handlers) {}
     /** A try/catch region as word indices, for the writer's machine-PC handler table. */
     public record HandlerRange(int startWord, int endWord, int handlerWord, String catchClass) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
@@ -84,17 +111,14 @@ public final class BaselineCompiler
             handlers.add(new HandlerRange(core.handlerStartWord(i), core.handlerEndWord(i),
                                           core.handlerWord(i), catchClass));
         }
-        return new CompiledMethod(words, syms.callSites(), syms.tibRefs(), syms.strRefs(),
-                                  syms.staticRefs(), syms.typeRefs(), syms.interfaceRefs(),
-                                  core.frameSize(), handlers);
+        return new CompiledMethod(words, syms.relocations(), core.frameSize(), handlers);
     }
 
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
     public void compile(ClassFile.Method method, CodeBuffer cb)
     {
         CompiledMethod cm = compileMethod(method, cb.base(), false);
-        if (!cm.callSites.isEmpty() || !cm.tibRefs.isEmpty() || !cm.strRefs.isEmpty()
-                || !cm.staticRefs.isEmpty() || !cm.typeRefs.isEmpty() || !cm.interfaceRefs.isEmpty())
+        if (!cm.relocs().isEmpty())
         {
             throw new IllegalStateException("compile(Method,CodeBuffer) is for self-contained methods; use ImageBuilder");
         }
