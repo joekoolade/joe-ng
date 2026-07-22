@@ -88,7 +88,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
-        strRefs.add(new StrRef(cb.reserveAddr(reg), reg, cf.stringAt(stringCp)));
+        // The literal is laid out as a US-ASCII byte[]; carry its raw bytes as the key
+        // (the writer's identities are byte content, not String — §M5.5b). Decoding here
+        // is fine: WriterSymbols is the seed-side Symbols; only the record is metal-bound.
+        byte[] text = cf.stringAt(stringCp).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        strRefs.add(new StrRef(cb.reserveAddr(reg), reg, text));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {

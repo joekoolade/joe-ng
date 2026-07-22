@@ -28,8 +28,8 @@ public final class BaselineCompiler
     public record CallSite(int wordIndex, String calleeKey) {}
     /** A reserved TIB-pointer address load ({@code new}) awaiting the class's TIB address. */
     public record TibRef(int wordIndex, int reg, String className) {}
-    /** A reserved address load for an interned string literal ({@code ldc}). */
-    public record StrRef(int wordIndex, int reg, String text) {}
+    /** A reserved address load for an interned string literal ({@code ldc}); text is its raw bytes. */
+    public record StrRef(int wordIndex, int reg, byte[] text) {}
     /** A reserved address load for a static field ({@code getstatic}/{@code putstatic}). */
     public record StaticRef(int wordIndex, int reg, String fieldKey) {}
     /** A reserved address load for a class's Type ({@code instanceof}/{@code checkcast}). */

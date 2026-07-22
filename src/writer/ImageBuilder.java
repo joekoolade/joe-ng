@@ -6,6 +6,8 @@ import classfile.ClassFile;
 import compiler.BaselineCompiler;
 import compiler.BaselineCompiler.CompiledMethod;
 import objectmodel.ObjectModel;
+import util.ByteKeyIntTable;
+import util.ByteKeySet;
 import util.IntVec;
 import util.StrIntTable;
 import util.StrSet;
@@ -75,7 +77,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private record Resolved(ClassFile cf, ClassFile.Method method) {}
     private record GlobalCall(int siteWord, String calleeKey) {}
     private record GlobalTib(int siteWord, int reg, String className) {}
-    private record GlobalStr(int siteWord, int reg, String text) {}
+    private record GlobalStr(int siteWord, int reg, byte[] text) {}
     private record GlobalStatic(int siteWord, int reg, String fieldKey) {}
     private record GlobalType(int siteWord, int reg, String className) {}
 
@@ -87,7 +89,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         //     is laid out and the vtable can point at it (even if not directly called).
         StrIntTable sizeWords = new StrIntTable();                  // layout order, entry first
         StrSet tibClasses = new StrSet();
-        StrSet strings = new StrSet();
+        ByteKeySet strings = new ByteKeySet();
         StrSet statics = new StrSet();
         StrSet typeRefClasses = new StrSet();          // instanceof/checkcast/interface targets
         StrSet usedInterfaces = new StrSet();          // invokeinterface targets (itable build)
@@ -218,10 +220,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             tibWord.put(cls, cur);
             cur += ObjectModel.tibSize(vtableLength(cls)) / 4;
         }
-        StrIntTable strWord = new StrIntTable();
+        ByteKeyIntTable strWord = new ByteKeyIntTable();
         for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
-            String s = strings.at(_s5);
+            byte[] s = strings.at(_s5);
             strWord.put(s, cur);
             cur += stringWords(s);
         }
@@ -446,7 +448,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (int _s11 = 0; _s11 < strings.size(); _s11++)
         {
-            String s = strings.at(_s11);
+            byte[] s = strings.at(_s11);
             writeStringObject(image, strWord.get(s), s);
         }
 
@@ -562,17 +564,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                                   new Vec<>(), frame, new Vec<>());
     }
 
-    /** Image words a byte[] object for {@code s} occupies: header(16)+length(8)+bytes, 8-aligned. */
-    private static int stringWords(String s)
+    /** Image words a byte[] object for {@code b} occupies: header(16)+length(8)+bytes, 8-aligned. */
+    private static int stringWords(byte[] b)
     {
-        int n = s.getBytes(StandardCharsets.US_ASCII).length;
+        int n = b.length;
         return (ObjectModel.ARRAY_BASE_OFFSET + ((n + 7) & ~7)) / 4;
     }
 
-    /** Write a byte[] object holding {@code s}'s ASCII bytes at image word {@code w}. */
-    private static void writeStringObject(int[] image, int w, String s)
+    /** Write a byte[] object holding literal bytes {@code b} at image word {@code w}. */
+    private static void writeStringObject(int[] image, int w, byte[] b)
     {
-        byte[] b = s.getBytes(StandardCharsets.US_ASCII);
         writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);                // null TIB (as arrays)
         writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
         writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, b.length);
