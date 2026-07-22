@@ -778,8 +778,22 @@ is name→address bookkeeping:
        a seed-only `ClassFile`; a metal `ClassRegistry`/`Loader` reading the table lands
        with the class-model unification. Also fold the 6 runtime-load blobs + `Math` into
        the table so the metal writer draws its *entire* input from one place.
-  3. **Heap-buffer sink (output).** `ImageBuilder`'s `int[] image` → a `Heap.alloc`'d
-     buffer; the `kernel8.img` file write → nothing (stay in memory). No block driver.
+  3. **Metal layout engine (discover → size → place → compile → patch → heap buffer).** The
+     seed `ImageBuilder.compile` can't be reused on metal (it drives `BaselineCompiler` over a
+     seed-only `ClassFile`), so the writer is a native port driving the shared `Baseline` core
+     directly, over the class table + `MetalClassModel`.
+     - ✅ **3a: relocating compile — `MetalWriterSymbols`.** The metal twin of
+       `compiler.WriterSymbols`: where `MetalSymbols` (the JIT) resolves references to live
+       addresses and records nothing, this emits fixed-width placeholders (`bl(0)` /
+       `reserveAddr`) and *records* the relocation sites, resolving cp refs from its own
+       `(classBytes, cpOff)` via `ClassReader` (not Loader's globals). A metal `B` marker
+       drives `Baseline` over `Uart.write` exactly as `Loader` drives the JIT and asserts the
+       result: one recorded call, a placeholder `bl` at its site, callee resolved as `putc`,
+       clean compile. Verified in QEMU.
+     - ⬜ **3b: heap-buffer sink + layout driver.** BFS discovery over the recorded call sites,
+       size/place each method, compile-at-base, patch the sites; `int[] image` →
+       `Heap.alloc`'d buffer; no file write. Couples to the key migration (1b.3) so recorded
+       offset-keyed relocations resolve to method bases across the closure.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

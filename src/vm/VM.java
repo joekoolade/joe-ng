@@ -1,6 +1,9 @@
 package vm;
 
+import asm.A64Enc;
 import board.bcm2711.Uart;
+import classfile.ClassReader;
+import compiler.Baseline;
 import magic.Magic;
 import objectmodel.ObjectModel;
 
@@ -468,6 +471,121 @@ public final class VM
         // Speaker; Cell's two virtuals).
         Uart.putc(chainWalksReady() ? 0x56 : 0x78);        // 'V' chain walks OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3: the metal writer's relocating compile. Drive the shared Baseline
+        // core over a real method with MetalWriterSymbols — which, unlike the JIT's
+        // MetalSymbols, emits placeholders and *records* relocation sites for later layout.
+        Uart.putc(relocatingCompileReady() ? 0x42 : 0x78); // 'B' relocating compile OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    /**
+     * Drive the shared {@link Baseline} core over {@code Uart.write([B)V} with a relocating
+     * {@link MetalWriterSymbols}, exactly as {@code Loader} drives the JIT, and check it
+     * produced a placeholder {@code bl} plus a recorded call to {@code putc} — the metal
+     * writer's compile-into-a-buffer capability, before layout wires the sites up.
+     */
+    private static boolean relocatingCompileReady()
+    {
+        byte[] b = MetalClassModel.bytesOf(Magic.bytes("board/bcm2711/Uart"));
+        int[] off = new int[ClassReader.cpCount(b)];
+        int[] tag = new int[off.length];
+        int afterCp = ClassReader.constantPool(b, off, tag);
+        byte[] wname = Magic.bytes("write");
+        byte[] wdesc = Magic.bytes("([B)V");
+        byte[] code = Magic.bytes("Code");
+        int p = ClassReader.methodsStart(b, afterCp);
+        int n = ClassReader.u2(b, p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            boolean isStatic = (ClassReader.u2(b, p) & 0x0008) != 0;
+            int nameOff = off[ClassReader.u2(b, p + 2)];
+            int descOff = off[ClassReader.u2(b, p + 4)];
+            int attrs = p + 6;
+            if (utf8Eq(b, nameOff, wname) && utf8Eq(b, descOff, wdesc))
+            {
+                int ac = ClassReader.u2(b, attrs);
+                int q = attrs + 2;
+                int a = 0;
+                while (a < ac)
+                {
+                    int anOff = off[ClassReader.u2(b, q)];
+                    int alen = ClassReader.u4(b, q + 2);
+                    int body = q + 6;
+                    if (utf8Eq(b, anOff, code))
+                    {
+                        return compileWriteAndCheck(b, off, tag, body, descOff, isStatic);
+                    }
+                    q = body + alen;
+                    a += 1;
+                }
+            }
+            p = ClassReader.skipAttributes(b, attrs);
+            i += 1;
+        }
+        return false;
+    }
+
+    /** Compile the method whose Code-attribute body starts at {@code body}, then assert the reloc. */
+    private static boolean compileWriteAndCheck(byte[] b, int[] off, int[] tag, int body,
+                                                int descOff, boolean isStatic)
+    {
+        int maxLocals = ClassReader.u2(b, body + 2);       // after max_stack(2)
+        int codeLen = ClassReader.u4(b, body + 4);
+        int codeStart = body + 8;
+        byte[] code = new byte[codeLen];
+        int k = 0;
+        while (k < codeLen)
+        {
+            code[k] = (byte) ClassReader.u1(b, codeStart + k);
+            k += 1;
+        }
+        int ex = codeStart + codeLen;                      // exception_table follows the bytecode
+        int en = ClassReader.u2(b, ex);
+        int[] es = new int[en];
+        int[] ee = new int[en];
+        int[] eh = new int[en];
+        int[] ec = new int[en];
+        int j = 0;
+        while (j < en)
+        {
+            int e = ex + 2 + j * 8;
+            es[j] = ClassReader.u2(b, e);
+            ee[j] = ClassReader.u2(b, e + 2);
+            eh[j] = ClassReader.u2(b, e + 4);
+            ec[j] = ClassReader.u2(b, e + 6);
+            j += 1;
+        }
+        MetalWriterSymbols sym = new MetalWriterSymbols(b, off);
+        Baseline bl = new Baseline(b, off, tag, sym);
+        bl.setExceptionTable(es, ee, eh, ec, en);
+        int[] words = bl.compileBody(code, descOff, isStatic, maxLocals, 0x80000L, false);
+        return !sym.failed()
+               && sym.callCount() == 1                     // the loop's single putc call
+               && words[sym.callSiteWord(0)] == A64Enc.bl(0)  // placeholder in place, site in range
+               && sym.callNameIs(0, Magic.bytes("putc"));   // callee identity resolved from the cp
+    }
+
+    /** Whether the Utf8 entry at {@code b[off]} equals the plain bytes {@code want}. */
+    private static boolean utf8Eq(byte[] b, int off, byte[] want)
+    {
+        int len = ClassReader.u2(b, off);
+        if (len != want.length)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < len)
+        {
+            if (ClassReader.u1(b, off + 2 + j) != (want[j] & 0xFF))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
     }
 
     /** The metal class model's superclass-chain walks agree with the known hierarchy. */
