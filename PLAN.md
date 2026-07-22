@@ -689,17 +689,18 @@ is name→address bookkeeping:
     `fillStatic`). The String boundaries *vanish* once discovery moves to `Loader`'s
     byte-offset registries — so the key migration belongs **with the M5.5c discovery
     rewrite**, done together. (Explored and reverted to keep the tree byte-identical.)
-  - Remaining, now correctly sequenced:
-    1. **Operand-stack depth (compiler).** `generateInitClasses`'s 9-arg
-       `new CompiledMethod` trips Baseline's 7-register operand cap (`OP_MAX`). Fix is
-       either operand-stack spilling (invasive — every opcode handler indexes operands by
-       register) or reducing the `CompiledMethod` constructor arity (bundle the 6
-       relocation Vecs). Independent of the key work.
-    2. **Key migration + discovery rewrite → folded into M5.5c** (below): re-key layout
-       tables + relocation records on `byte[]`/registry identity *as* `ClassFile`
-       discovery is replaced by `Loader`-registry discovery.
-    3. **Seed-driver methods** (`<init>` `HashMap`, `resolve`+`lambda` parse, `compile`
-       `RuntimeException`) — file-load role, **M5.5c** replaces with blob access.
+  - ✅ **Operand-stack depth (compiler).** `generateInitClasses`'s 9-arg
+    `new CompiledMethod` tripped Baseline's 7-register operand cap. Bundled the six
+    relocation Vecs into a mutable no-arg `BaselineCompiler.Relocations` holder →
+    CompiledMethod is a 4-arg constructor. Closed it. Byte-identical, and a cleaner
+    contract. (Chosen over invasive operand-stack spilling.)
+  - **M5.5b is effectively complete at 12/20** — every *platform-independent* gap is
+    closed. The residual 8 are all M5.5c-bound and close there by construction:
+    *seed file-driver* (`<init>` `HashMap`, `resolve`/`lambda` path concat, `compile`
+    `RuntimeException`, `lookup` `ClassFile.parse`) becomes blob access; and the
+    *ClassFile-discovery* trio (`build`/`use`/`ownerOf`) becomes `Loader`-registry
+    discovery, at which point the layout tables + relocation records go byte-offset —
+    the **key migration**, done as part of that rewrite rather than as standalone churn.
 - **M5.5c — run the writer on metal into a heap buffer** over the embedded blobs, and
   assert the bytes equal the seed-built image: the self-build **fixpoint**, no
   persistence, no new drivers.
