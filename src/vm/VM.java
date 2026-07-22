@@ -304,6 +304,9 @@ public final class VM
     static long betaBytes, betaLen;     // raw Beta.class blob (implements Greeter at vtable slot 1)
     static long myExcBytes, myExcLen;   // raw MyExc.class blob (a throwable Guest catches)
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
+    // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
+    static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
+    static long classCount;             // number of directory entries
     // Addresses of the runtime helpers the shared baseline compiler calls, stashed by
     // the writer so the on-metal JIT (via MetalSymbols) can BL them. Indexed to match
     // the ids in compiler/Symbols: heapAlloc=0, allocArray=1, gcCollect=2, instanceOf=3,
@@ -444,6 +447,76 @@ public final class VM
         // and check frameSizeAt finds it in range and rejects a PC just past it.
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
+
+        // M5.5c step 2: the writer embedded the compile-reachable class set as a
+        // name-indexed table. Prove the metal writer's input path: look each class up
+        // by its own stored name and confirm it resolves back to itself with intact
+        // classfile magic — the self-build reads its sources from the image alone.
+        Uart.putc(classTableReady() ? 0x43 : 0x78);        // 'C' class table OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    /**
+     * Every class in the embedded table looks up by its own name to its own bytes, and
+     * those bytes start with the classfile magic {@code 0xCAFEBABE}. Proves the metal
+     * self-build can resolve its input classes by name from the image (M5.5c step 2).
+     */
+    private static boolean classTableReady()
+    {
+        if (classCount == 0L)
+        {
+            return false;                                  // no table embedded
+        }
+        long i = 0L;
+        while (i < classCount)
+        {
+            long e = classDir + i * 32L;                   // 4 longs per directory entry
+            long nameAddr = Magic.load64(e);
+            long nameLen = Magic.load64(e + 8L);
+            long bytesAddr = Magic.load64(e + 16L);
+            if (findClass(nameAddr, nameLen) != bytesAddr)
+            {
+                return false;                              // name did not resolve to its own bytes
+            }
+            if (Magic.load8(bytesAddr) != 0xCA || Magic.load8(bytesAddr + 1L) != 0xFE
+                    || Magic.load8(bytesAddr + 2L) != 0xBA || Magic.load8(bytesAddr + 3L) != 0xBE)
+            {
+                return false;                              // corrupt class bytes
+            }
+            i = i + 1L;
+        }
+        return true;
+    }
+
+    /** Scan the class table for the name at [nameAddr,nameLen); return its class bytes address, or 0. */
+    private static long findClass(long nameAddr, long nameLen)
+    {
+        long i = 0L;
+        while (i < classCount)
+        {
+            long e = classDir + i * 32L;
+            if (Magic.load64(e + 8L) == nameLen && bytesEqual(Magic.load64(e), nameAddr, nameLen))
+            {
+                return Magic.load64(e + 16L);
+            }
+            i = i + 1L;
+        }
+        return 0L;
+    }
+
+    /** Whether {@code len} bytes at {@code a} equal those at {@code b}. */
+    private static boolean bytesEqual(long a, long b, long len)
+    {
+        long i = 0L;
+        while (i < len)
+        {
+            if (Magic.load8(a + i) != Magic.load8(b + i))
+            {
+                return false;
+            }
+            i = i + 1L;
+        }
+        return true;
     }
 
     /** True if frameSizeAt resolves a real JIT'd frame but not a PC outside it. */

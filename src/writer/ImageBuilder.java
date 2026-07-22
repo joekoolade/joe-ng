@@ -31,6 +31,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     private static final int WORDS_PER_SLOT = ObjectModel.WORD / 4;   // 8-byte slot = 2 image ints
     private static final int TYPE_WORDS = ObjectModel.TYPE_SIZE / 4;  // Type = { instanceSize, superType }
+    /** A class-table directory entry: {nameAddr, nameLen, bytesAddr, bytesLen} = 4 longs. */
+    private static final int CLASS_ENTRY_WORDS = 4 * WORDS_PER_SLOT;
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
 
@@ -255,6 +257,23 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             blobWord[b] = cur;
             cur += ((blobs.get(b).bytes().length + 7) & ~7) / 4;
         }
+        // class table: the compile-reachable classes, name-indexed so the metal writer
+        // can resolve a class by name from the image alone (PLAN.md §M5.5c step 2). Laid
+        // out as a directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries followed
+        // by each class's name bytes and raw .class bytes.
+        Vec<String> classNames = registry.reached();
+        int classCount = classNames.size();                         // snapshot: discovery is done
+        int classDirWord = cur;
+        cur += classCount * CLASS_ENTRY_WORDS;
+        int[] classNameWord = new int[classCount];
+        int[] classBytesWord = new int[classCount];
+        for (int i = 0; i < classCount; i++)
+        {
+            classNameWord[i] = cur;
+            cur += align8Words(classNames.get(i).length());
+            classBytesWord[i] = cur;
+            cur += align8Words(registry.rawBytes(classNames.get(i)).length);
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -428,6 +447,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             fillStatic(image, staticWord, blob.addrKey(), addr(blobWord[b]));
             fillStatic(image, staticWord, blob.lenKey(),  blob.bytes().length);
         }
+        // class table: name bytes + class bytes, then the directory pointing at them.
+        for (int i = 0; i < classCount; i++)
+        {
+            byte[] name = asciiBytes(classNames.get(i));
+            byte[] bytes = registry.rawBytes(classNames.get(i));
+            writeBytes(image, classNameWord[i], name);
+            writeBytes(image, classBytesWord[i], bytes);
+            int e = classDirWord + i * CLASS_ENTRY_WORDS;
+            writeLong(image, e,     addr(classNameWord[i]));
+            writeLong(image, e + 2, name.length);
+            writeLong(image, e + 4, addr(classBytesWord[i]));
+            writeLong(image, e + 6, bytes.length);
+        }
+        fillStatic(image, staticWord, "vm/VM.classDir",   addr(classDirWord));
+        fillStatic(image, staticWord, "vm/VM.classCount", classCount);
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (int _s11 = 0; _s11 < strings.size(); _s11++)
@@ -568,6 +602,23 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             int shift = (i % 4) * 8;
             image[word] |= (b[i] & 0xFF) << shift;
         }
+    }
+
+    /** Image words an 8-byte-aligned run of {@code len} bytes occupies. */
+    private static int align8Words(int len)
+    {
+        return ((len + 7) & ~7) / 4;
+    }
+
+    /** A class name's bytes (internal names are ASCII — no charset needed on metal). */
+    private static byte[] asciiBytes(String s)
+    {
+        byte[] b = new byte[s.length()];
+        for (int i = 0; i < s.length(); i++)
+        {
+            b[i] = (byte) s.charAt(i);
+        }
+        return b;
     }
 
     /** Absolute address of image word index {@code w}. */

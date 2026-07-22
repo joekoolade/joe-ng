@@ -745,9 +745,19 @@ is name→address bookkeeping:
      writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
      `objectmodel/*`, `magic/*`) from `.class` files. The class-name→bytes registry
      (`ClassRegistry`) that replaces the file I/O + `classes` `HashMap` already landed in
-     1a.2; what remains is to embed the **full reachable class set** (~dozens) as
-     name-indexed image blobs and fill the metal registry from them (instead of the
-     seed-host file walk). Mechanical, but it materially grows the image.
+     1a.2.
+     - ✅ **2a: class table embedded + metal lookup verified.** The writer now emits the
+       **compile-reachable class set** (22 classes, ~65 KB — image 118 KB → 187 KB) as a
+       name-indexed table: a directory of `{nameAddr, nameLen, bytesAddr, bytesLen}`
+       entries plus the name/`.class` bytes, exposed via `vm/VM.classDir`/`classCount`.
+       `ClassRegistry.reached()` supplies the set (classes it parsed during discovery). A
+       metal `VM.classTableReady()` looks every class up **by its own stored name**,
+       asserts it resolves back to its own bytes with intact `0xCAFEBABE` magic, and
+       lights a `C` QEMU marker — the self-build's input path, proven on metal.
+     - ⬜ **2b: metal consumption — couples to 1b/3.** `ImageBuilder.resolve` still returns
+       a seed-only `ClassFile`; a metal `ClassRegistry`/`Loader` reading the table lands
+       with the class-model unification. Also fold the 6 runtime-load blobs + `Math` into
+       the table so the metal writer draws its *entire* input from one place.
   3. **Heap-buffer sink (output).** `ImageBuilder`'s `int[] image` → a `Heap.alloc`'d
      buffer; the `kernel8.img` file write → nothing (stay in memory). No block driver.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in

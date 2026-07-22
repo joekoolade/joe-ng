@@ -23,6 +23,7 @@ final class ClassRegistry
     private final StrIntTable index = new StrIntTable();   // internal name -> slot
     private final Vec<byte[]> raw = new Vec<>();           // raw .class bytes per slot
     private final Vec<ClassFile> parsed = new Vec<>();     // parse cache (null until first resolve)
+    private final Vec<String> reached = new Vec<>();       // names in first-resolve order (compile set)
 
     /** Register {@code bytes} as the class {@code name} (internal form, e.g. "vm/VM"). */
     void add(String name, byte[] bytes)
@@ -60,8 +61,19 @@ final class ClassRegistry
                 throw new RuntimeException("bad classfile for " + name, e);
             }
             parsed.set(slot, cf);
+            reached.add(name);               // parsed = the writer reached it = compile set member
         }
         return cf;
+    }
+
+    /**
+     * The classes the writer has parsed so far, in first-resolve order — the
+     * compile-reachable set the metal self-build must embed and look up by name
+     * (PLAN.md §M5.5c step 2). Live: query it once discovery is complete.
+     */
+    Vec<String> reached()
+    {
+        return reached;
     }
 
     private int slotOf(String name)
