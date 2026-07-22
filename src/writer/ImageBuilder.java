@@ -16,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Lays out a graph of methods across classes into one image and relocates the
@@ -165,8 +164,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
-                    for (ClassFile.VSlot s : ClassFile.vtable(t.className(), this::resolve))
+                    Vec<ClassFile.VSlot> vt = ClassFile.vtable(t.className(), this::resolve);
+                    for (int _vi = 0; _vi < vt.size(); _vi++)
                     {
+                        ClassFile.VSlot s = vt.get(_vi);
                         worklist.add(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
                     }
                 }
@@ -508,7 +509,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
     private Vec<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
     {
-        Set<String> all = ClassFile.allInterfaces(cls, this::resolve);
+        StrSet all = ClassFile.allInterfaces(cls, this::resolve);
         Vec<String> out = new Vec<>();
         for (int _s12 = 0; _s12 < usedInterfaces.size(); _s12++)
         {

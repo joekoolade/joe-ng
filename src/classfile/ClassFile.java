@@ -3,7 +3,9 @@ package classfile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
+
+import util.StrSet;
+import util.Vec;
 
 /**
  * The writer-side classfile model (JVMS §4): the constant pool, fields, methods
@@ -166,9 +168,9 @@ public final class ClassFile
     }
 
     /** This class's own virtual methods (non-static, non-constructor), in declaration order. */
-    public java.util.List<Method> virtualMethods()
+    public Vec<Method> virtualMethods()
     {
-        java.util.List<Method> vs = new java.util.ArrayList<>();
+        Vec<Method> vs = new Vec<>();
         for (Method m : methods)
         {
             if (!m.isStatic && !m.name.equals("<init>"))
@@ -187,14 +189,23 @@ public final class ClassFile
      * shares its parent's slot indices), with overrides replacing the inherited
      * slot in place and new methods appended. {@code resolve} loads each class.
      */
-    public static java.util.List<VSlot> vtable(String cls, java.util.function.Function<String, ClassFile> resolve)
+    public static Vec<VSlot> vtable(String cls, java.util.function.Function<String, ClassFile> resolve)
     {
         ClassFile cf = resolve.apply(cls);
         String sup = cf.superClass;
-        java.util.List<VSlot> slots = isRoot(sup)
-                                      ? new java.util.ArrayList<>() : new java.util.ArrayList<>(vtable(sup, resolve));
-        for (Method m : cf.virtualMethods())
+        Vec<VSlot> slots = new Vec<>();
+        if (!isRoot(sup))
         {
+            Vec<VSlot> parent = vtable(sup, resolve);
+            for (int i = 0; i < parent.size(); i++)
+            {
+                slots.add(parent.get(i));
+            }
+        }
+        Vec<Method> own = cf.virtualMethods();
+        for (int mi = 0; mi < own.size(); mi++)
+        {
+            Method m = own.get(mi);
             VSlot s = new VSlot(cls, m.name, m.descriptor);
             int idx = -1;
             for (int i = 0; i < slots.size(); i++)
@@ -221,7 +232,7 @@ public final class ClassFile
     public static int vtableSlot(String cls, String name, String descriptor,
                                  java.util.function.Function<String, ClassFile> resolve)
     {
-        java.util.List<VSlot> slots = vtable(cls, resolve);
+        Vec<VSlot> slots = vtable(cls, resolve);
         for (int i = 0; i < slots.size(); i++)
         {
             if (slots.get(i).name().equals(name) && slots.get(i).descriptor().equals(descriptor))
@@ -234,9 +245,9 @@ public final class ClassFile
 
     // ----- interfaces ------------------------------------------------------
     /** An interface's methods (its abstract members), in declaration order = itable slots. */
-    public java.util.List<Method> interfaceMethods()
+    public Vec<Method> interfaceMethods()
     {
-        java.util.List<Method> ms = new java.util.ArrayList<>();
+        Vec<Method> ms = new Vec<>();
         for (Method m : methods)
         {
             if (!m.isStatic && !m.name.equals("<init>") && !m.name.equals("<clinit>"))
@@ -250,7 +261,7 @@ public final class ClassFile
     /** itable slot of interface method {@code name+descriptor}. */
     public int interfaceSlot(String name, String descriptor)
     {
-        java.util.List<Method> ms = interfaceMethods();
+        Vec<Method> ms = interfaceMethods();
         for (int i = 0; i < ms.size(); i++)
         {
             if (ms.get(i).name.equals(name) && ms.get(i).descriptor.equals(descriptor))
@@ -262,9 +273,9 @@ public final class ClassFile
     }
 
     /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet). */
-    public static java.util.Set<String> allInterfaces(String cls, java.util.function.Function<String, ClassFile> resolve)
+    public static StrSet allInterfaces(String cls, java.util.function.Function<String, ClassFile> resolve)
     {
-        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        StrSet out = new StrSet();
         for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
         {
             for (String i : resolve.apply(c).interfaces)
@@ -526,7 +537,11 @@ public final class ClassFile
                     maxStack = ClassReader.u2(b, body);
                     maxLocals = ClassReader.u2(b, body + 2);
                     int codeLen = ClassReader.u4(b, body + 4);
-                    code = Arrays.copyOfRange(b, body + 8, body + 8 + codeLen);
+                    code = new byte[codeLen];
+                    for (int ci = 0; ci < codeLen; ci++)
+                    {
+                        code[ci] = b[body + 8 + ci];
+                    }
                     exceptions = readExceptions(b, body + 8 + codeLen);
                 }
                 p = body + ClassReader.u4(b, p + 2);            // next attribute

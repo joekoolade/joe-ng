@@ -39,6 +39,12 @@ public final class Vec<T>
         n += 1;
     }
 
+    /** Replace the element at {@code i} in place (vtable override into an inherited slot). */
+    public void set(int i, T x)
+    {
+        items[i] = x;
+    }
+
     /** Remove and return the first element (the discovery queue's dequeue). */
     @SuppressWarnings("unchecked")
     public T removeFirst()
