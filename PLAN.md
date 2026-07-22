@@ -728,6 +728,13 @@ is name→address bookkeeping:
      content onto offsets — the key migration, done *here* where the `ClassFile` String
      boundaries disappear rather than as standalone churn. Closes
      `build`/`use`/`ownerOf`/`resolve`/`lookup`.
+     - ✅ **1a: seam extracted.** `ClassModel` interface + `SeedClassModel` (ClassFile
+       impl); `ImageBuilder`'s 13 class-model queries route through it. Byte-identical.
+     - ⬜ **1b: metal impl + byte-offset identity — couples to steps 2–4.** A
+       `Loader`-registry `ClassModel` and the offset-keyed tables can only *run and be
+       checked* once the writer executes on metal, so they land with the harness below,
+       verified end-to-end by the fixpoint — not as standalone byte-identical slices.
+       (The byte-identical, off-metal-verifiable part of M5.5 ends at 1a.)
   2. **Blob source (input).** Today only the *guest* classes are embedded as blobs; the
      writer reads the rest (`vm/*`, `compiler/*`, `asm/*`, `classfile/*`, `util/*`,
      `objectmodel/*`, `magic/*`) from `.class` files. A metal self-build must embed the
