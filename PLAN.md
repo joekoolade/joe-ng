@@ -666,26 +666,38 @@ is name→address bookkeeping:
     file-IO (`classesDir`/`parse`/`StandardCharsets`) — both the *seed driver* role that
     M5.5c replaces with blob access, so shape depends on the metal-driver design.
 - **M5.5b — compile the ported writer with M5Gap → 39/39**, closing the metal gaps.
-  **In progress** (gap over `writer/ImageBuilder`: 8/20 → 9/20). Closed the gaps that
-  were missing *compiler capability* rather than writer refactors:
+  **In progress** (gap over `writer/ImageBuilder`: 8/20 → 11/20). Closed the gaps that
+  were missing *compiler capability* or were self-contained refactors:
   - ✅ `dup2` (0x5C) + `irem` (0x70, via new `A64Enc.msub`) in `Baseline` — the
     `arr[i] op= x` / byte-packing idioms. Closed `writeBytes`. (Compiler is in-image, so
     this changes `kernel8.img`; QEMU-verified, not byte-identity.)
   - ✅ `util.IntVec` (primitive growable int[]) — `generateInitClasses` off `Vec<Integer>`
-    boxing. Byte-identical.
-  - The remaining blockers have crystallized into three distinct, substantial efforts:
-    1. **Utf8-key re-architecture (the linchpin).** The compiler/writer *relocation
-       contract* carries `String`s (`CallSite.calleeKey`, `StrRef.text`,
-       `Tib/Type/StaticRef` names, `BaselineCompiler.key`), and `ImageBuilder`'s layout
-       tables are `String`-keyed. Re-key on **Utf8-offset triples** with cross-`byte[]`
-       byte-equality — exactly `vm/Loader`'s `rgClassOff/rgNameOff/rgDescOff` scheme.
-       Subsumes the String-literal methods (`stringWords`/`writeStringObject` become
-       byte[]-based) and the concat blockers (`use`/`ownerOf`). Reshapes the working
-       self-hosted seam, so it touches `WriterSymbols`/`MetalSymbols`/`Loader` too.
-    2. **Operand-stack depth.** `generateInitClasses`'s 9-arg `new CompiledMethod` trips
-       Baseline's 7-register operand cap (`OP_MAX`). Fix is either operand-stack spilling
-       (invasive — every opcode handler indexes operands by register) or reducing the
-       `CompiledMethod` constructor arity (bundle the 6 relocation Vecs).
+    boxing. Byte-identical. (Now trips the operand-depth gap below.)
+  - ✅ **String-literal path → `byte[]` content keys.** New `util.Bytes` (content
+    eq/concat/join), `util.ByteKeySet`, `util.ByteKeyIntTable`. `StrRef.text` and the
+    `strings`/`strWord` tables now key on bytes; `stringWords`/`writeStringObject` drop
+    the `getBytes` re-encode. Closed both. Byte-identical.
+  - **Key finding — the method/class/static key migration is fused with M5.5c, not
+    separable here.** `MetalSymbols` records *no* relocations, so the String-keyed
+    contract (`CallSite`/`Tib`/`Static`/`TypeRef`, `BaselineCompiler.key`) is
+    seed-only — good — but `ImageBuilder`'s discovery (`build`/`use`/`addTypeClass`/
+    `vtableLength`/`implementedUsedInterfaces`, 16 sites) is bound to `ClassFile`'s
+    **String API** (`vtable(String)`, `allInterfaces(String)`, `resolve(String)`;
+    `ClassFile` internally keys `superClass`/`interfaces` as String). Re-keying those on
+    `byte[]` standalone only adds throwaway byte[]↔String conversions in methods that are
+    M5Gap-blocked on `ClassFile` regardless, and closes just ~2 leaf methods (`ownerOf`,
+    `fillStatic`). The String boundaries *vanish* once discovery moves to `Loader`'s
+    byte-offset registries — so the key migration belongs **with the M5.5c discovery
+    rewrite**, done together. (Explored and reverted to keep the tree byte-identical.)
+  - Remaining, now correctly sequenced:
+    1. **Operand-stack depth (compiler).** `generateInitClasses`'s 9-arg
+       `new CompiledMethod` trips Baseline's 7-register operand cap (`OP_MAX`). Fix is
+       either operand-stack spilling (invasive — every opcode handler indexes operands by
+       register) or reducing the `CompiledMethod` constructor arity (bundle the 6
+       relocation Vecs). Independent of the key work.
+    2. **Key migration + discovery rewrite → folded into M5.5c** (below): re-key layout
+       tables + relocation records on `byte[]`/registry identity *as* `ClassFile`
+       discovery is replaced by `Loader`-registry discovery.
     3. **Seed-driver methods** (`<init>` `HashMap`, `resolve`+`lambda` parse, `compile`
        `RuntimeException`) — file-load role, **M5.5c** replaces with blob access.
 - **M5.5c — run the writer on metal into a heap buffer** over the embedded blobs, and
