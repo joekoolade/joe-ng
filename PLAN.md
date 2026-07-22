@@ -649,7 +649,22 @@ is name→address bookkeeping:
 **Pragmatic milestones (smallest verifiable first):**
 - **M5.5a — writer core off collections+ClassFile**, still run on the *seed JVM*,
   producing a byte-identical image. Pure refactor, fully verifiable off-metal (the same
-  discipline that de-risked the compiler split).
+  discipline that de-risked the compiler split). **In progress:**
+  - ✅ `util` package (`Vec`/`StrIntTable`/`StrSet`) — shared JDK-free containers.
+  - ✅ `ImageBuilder`'s own maps/sets/lists → `util` (8 maps→`StrIntTable`, 7 sets→`StrSet`,
+    lists→`Vec`); `forEach` lambdas → indexed loops (kills the layout-loop invokedynamic).
+  - ✅ Compiler relocation contract off collections: `CompiledMethod`'s six `List<*Ref>` +
+    `List<HandlerRange>` → `Vec`; `WriterSymbols` builds/returns `Vec`.
+  - ✅ `ClassFile` class-model queries (`virtualMethods`/`vtable`/`interfaceMethods`/
+    `interfaceSlot`/`allInterfaces`) off `java.util` → `Vec`/`StrSet`; `Arrays.copyOfRange`
+    → manual copy; the `Function<String,ClassFile>` resolver → a nested `ClassFile.Resolver`
+    interface (callers pass the resolver *object*, not `this::resolve` — no invokedynamic).
+    **`compiler/*` is now fully JDK-free; `ClassFile`'s only JDK left is the seed-only
+    `parse(Path)` file load + the byte[]-ctor bad-magic `IOException` (the metal
+    exception/fail model, deferred to c).**
+  - ⬜ Remaining: `ImageBuilder`'s `classes` parse-cache (`Map<String,ClassFile>`) + its
+    file-IO (`classesDir`/`parse`/`StandardCharsets`) — both the *seed driver* role that
+    M5.5c replaces with blob access, so shape depends on the metal-driver design.
 - **M5.5b — compile the ported writer with M5Gap → 39/39**, closing the metal gaps.
 - **M5.5c — run the writer on metal into a heap buffer** over the embedded blobs, and
   assert the bytes equal the seed-built image: the self-build **fixpoint**, no
