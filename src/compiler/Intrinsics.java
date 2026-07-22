@@ -41,4 +41,6 @@ public final class Intrinsics
     public static final int LOAD8 = 23;
     public static final int LOAD64 = 24;
     public static final int BYTES = 25;
+    public static final int DC_CVAU = 26;   // clean D-cache line to PoU (JIT publish)
+    public static final int IC_IALLU = 27;  // invalidate all I-cache to PoU (JIT publish)
 }

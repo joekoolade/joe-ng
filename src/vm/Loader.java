@@ -625,8 +625,7 @@ public final class Loader
             emitMethod(i);
             i += 1;
         }
-        Magic.dsb();                                    // publish all buffers (caches are off)
-        Magic.isb();
+        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the JIT buffers
         return mBuf[0];
     }
 
@@ -669,8 +668,7 @@ public final class Loader
             emitMethod(i);
             i += 1;
         }
-        Magic.dsb();
-        Magic.isb();
+        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the JIT buffers
     }
 
     /**

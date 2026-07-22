@@ -1176,6 +1176,14 @@ public final class Baseline
         {
             cb.emit(A64Enc.dsb());
         }
+        else if (id == Intrinsics.DC_CVAU)
+        {
+            cb.emit(A64Enc.dcCvau(popReg()));      // clean the D-cache line at the address arg
+        }
+        else if (id == Intrinsics.IC_IALLU)
+        {
+            cb.emit(A64Enc.icIallu());
+        }
         else if (id == Intrinsics.GC)
         {
             lowerGc(cb);

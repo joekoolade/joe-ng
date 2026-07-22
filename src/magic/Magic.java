@@ -36,6 +36,18 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** {@code DC CVAU, addr} — clean the data-cache line at {@code addr} to the point of unification. */
+    public static void dcCVAU(long addr)
+    {
+        throw intrinsic();
+    }
+
+    /** {@code IC IALLU} — invalidate the whole instruction cache to the point of unification. */
+    public static void icIALLU()
+    {
+        throw intrinsic();
+    }
+
     /** Call freshly-written machine code at {@code addr} (no args); return x0.
      *  Used by the runtime class loader to run a method it just JIT-compiled. */
     public static long call0(long addr)

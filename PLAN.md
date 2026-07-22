@@ -884,6 +884,13 @@ what the boot path needs, in roughly the order it needs them.
 - `writeCPACR_EL1(fpen)` → enable FP/SIMD at EL1 (or you trap on Java floats)
 - `dsb()` / `isb()` → `DSB SY` / `ISB` around every system-register change
 - `tlbiVMALLE1()`, `icIALLU()`, `dc(...)` → TLB / I-cache / D-cache maintenance
+  - `Magic.icIALLU()` (`IC IALLU`) + `Magic.dcCVAU(addr)` (`DC CVAU`) implemented (M5.5c);
+    `Heap.publishCode(start,end)` uses them for JIT publish. **Why:** the Pi 4 boots with the
+    caches enabled (boot never disables them), so a bare `dsb;isb` left stale I-cache lines
+    over freshly-JIT'd heap code and the real board hung at the first `Magic.call0`
+    (`Loader.loadGuest`, just after the `R` marker) while QEMU — which models no I-cache — ran
+    on. Every JIT publish site (`Loader`, the metal-writer drivers) now cleans D→PoU then
+    invalidates the I-cache before executing. **Verify on real hardware** (QEMU can't exercise it).
 - `writeSCTLR_EL1(enable)` → set `M` (MMU), `C`/`I` (caches) bits, then `isb()`
 
 **E. Exceptions + interrupts (EL1)**

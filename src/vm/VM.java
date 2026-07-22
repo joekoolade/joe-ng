@@ -566,8 +566,7 @@ public final class VM
 
         // patch each recorded call to its callee's base, then write the words to the buffer.
         boolean ok = patchAndWrite(buf);
-        Magic.dsb();                                       // publish the buffer (caches off), as Loader does
-        Magic.isb();
+        Heap.publishCode(buf, buf + cur * 4L);             // I-cache maintenance before executing built code
 
         long entry = buf + clWordOff[0] * 4L;
         long unused = Magic.call2(entry, 0x7EL, 0L);       // run the built putc('~'); ignore the void return
@@ -816,8 +815,7 @@ public final class VM
         }
 
         boolean ok = patchStaticsAndWrite(codeBuf);
-        Magic.dsb();
-        Magic.isb();
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);     // I-cache maintenance before executing built code
 
         // execute: three bumps then a read.
         long bumpEntry = codeBuf + clWordOff[0] * 4L;

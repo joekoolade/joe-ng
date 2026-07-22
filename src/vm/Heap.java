@@ -32,6 +32,28 @@ public final class Heap
         freeHead = 0L;
     }
 
+    /**
+     * Make freshly-written code in {@code [start,end)} visible to instruction fetch:
+     * clean each data-cache line to the point of unification, then invalidate the whole
+     * instruction cache. Required before executing JIT'd code on real hardware — the Pi 4
+     * boots with the caches enabled, so a bare {@code dsb;isb} leaves stale I-cache lines
+     * over the just-written buffer and the CPU fetches garbage. QEMU models no I-cache, so
+     * this is a no-op-shaped sequence there. (PLAN.md §D; M5.5c JIT publish.)
+     */
+    public static void publishCode(long start, long end)
+    {
+        long a = start & ~63L;                 // Cortex-A72 cache line = 64 bytes
+        while (a < end)
+        {
+            Magic.dcCVAU(a);                   // clean the D-cache line to PoU
+            a += 64L;
+        }
+        Magic.dsb();                           // the cleans reach unified memory
+        Magic.icIALLU();                       // drop stale I-cache lines
+        Magic.dsb();                           // the invalidate completes
+        Magic.isb();                           // refetch past this point
+    }
+
     /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump. */
     public static long alloc(int size)
     {

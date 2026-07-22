@@ -318,6 +318,16 @@ public final class A64Enc
     {
         return 0xD503_205F;
     }
+    /** {@code DC CVAU, Xt} — clean data cache line by VA to the point of unification. */
+    public static int dcCvau(int rt)
+    {
+        return 0xD50B_7B20 | (rt & 0x1F);
+    }
+    /** {@code IC IALLU} — invalidate all instruction cache to the point of unification. */
+    public static int icIallu()
+    {
+        return 0xD508_751F;
+    }
     /** {@code ERET} — exception return. */
     public static int eret()
     {
