@@ -23,7 +23,7 @@ import compiler.BaselineCompiler.TypeRef;
  * different {@code Symbols} that emits resolved addresses from its loaded-class
  * registries; the shared lowering above the seam is identical either way (§M5.4.4).
  */
-final class WriterSymbols implements Symbols
+final class WriterSymbols implements Symbols, ClassFile.Resolver
 {
     /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
     private static final String EXCEPTION_KEY = "vm/VM.$exception";
@@ -109,7 +109,7 @@ final class WriterSymbols implements Symbols
     public int vtableSlot(int methodCp)
     {
         ClassFile.MemberRef ref = cf.memberRef(methodCp);
-        return ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(), this::resolve);
+        return ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(), this);
     }
     public int interfaceSlot(int ifaceMethodCp)
     {
@@ -191,8 +191,8 @@ final class WriterSymbols implements Symbols
         }
     }
 
-    // ----- classfile resolution -----
-    private ClassFile resolve(String owner)
+    // ----- classfile resolution (also the ClassFile.Resolver seam for vtableSlot) -----
+    public ClassFile resolve(String owner)
     {
         if (owner.equals(cf.thisClassName()))
         {

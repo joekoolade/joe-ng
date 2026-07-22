@@ -185,13 +185,24 @@ public final class ClassFile
     public record VSlot(String owner, String name, String descriptor) {}
 
     /**
+     * Loads a class by internal name — the cross-class hook the flattening walks
+     * need. A plain interface (not {@code java.util.function.Function}) so callers
+     * pass a resolver object rather than a method-ref lambda: no invokedynamic, so
+     * this code compiles into the image (PLAN.md §M5.5a).
+     */
+    public interface Resolver
+    {
+        ClassFile resolve(String owner);
+    }
+
+    /**
      * The flattened vtable for {@code cls}: superclass slots first (so a subclass
      * shares its parent's slot indices), with overrides replacing the inherited
      * slot in place and new methods appended. {@code resolve} loads each class.
      */
-    public static Vec<VSlot> vtable(String cls, java.util.function.Function<String, ClassFile> resolve)
+    public static Vec<VSlot> vtable(String cls, Resolver resolve)
     {
-        ClassFile cf = resolve.apply(cls);
+        ClassFile cf = resolve.resolve(cls);
         String sup = cf.superClass;
         Vec<VSlot> slots = new Vec<>();
         if (!isRoot(sup))
@@ -230,7 +241,7 @@ public final class ClassFile
 
     /** Vtable slot index of {@code name+descriptor} in {@code cls}'s flattened vtable. */
     public static int vtableSlot(String cls, String name, String descriptor,
-                                 java.util.function.Function<String, ClassFile> resolve)
+                                 Resolver resolve)
     {
         Vec<VSlot> slots = vtable(cls, resolve);
         for (int i = 0; i < slots.size(); i++)
@@ -273,12 +284,12 @@ public final class ClassFile
     }
 
     /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet). */
-    public static StrSet allInterfaces(String cls, java.util.function.Function<String, ClassFile> resolve)
+    public static StrSet allInterfaces(String cls, Resolver resolve)
     {
         StrSet out = new StrSet();
-        for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
+        for (String c = cls; !isRoot(c); c = resolve.resolve(c).superClass)
         {
-            for (String i : resolve.apply(c).interfaces)
+            for (String i : resolve.resolve(c).interfaces)
             {
                 out.add(i);
             }
@@ -287,11 +298,11 @@ public final class ClassFile
     }
 
     /** The class providing {@code cls}'s implementation of {@code name+descriptor} (walk supers). */
-    public static String findImpl(String cls, String name, String descriptor, java.util.function.Function<String, ClassFile> resolve)
+    public static String findImpl(String cls, String name, String descriptor, Resolver resolve)
     {
-        for (String c = cls; !isRoot(c); c = resolve.apply(c).superClass)
+        for (String c = cls; !isRoot(c); c = resolve.resolve(c).superClass)
         {
-            for (Method m : resolve.apply(c).methods)
+            for (Method m : resolve.resolve(c).methods)
             {
                 if (!m.isStatic && m.code != null && m.name.equals(name) && m.descriptor.equals(descriptor))
                 {

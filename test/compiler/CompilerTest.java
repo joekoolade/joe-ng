@@ -250,7 +250,7 @@ public final class CompilerTest
         T.eqWords("Counter.get (getstatic)", getStaticWant, getStatic);
 
         // ---- class hierarchy: flattened vtable (override in place, shared slot) ----
-        java.util.function.Function<String, ClassFile> res = c ->
+        ClassFile.Resolver res = c ->
         {
             try
             {
@@ -269,7 +269,7 @@ public final class CompilerTest
 
         // ---- interfaces: implements set, itable slot, resolved implementation ----
         T.eq("Robot implements Speaker", 1, ClassFile.allInterfaces("vm/Robot", res).contains("vm/Speaker") ? 1 : 0);
-        T.eq("Speaker.speak itable slot", 0, res.apply("vm/Speaker").interfaceSlot("speak", "()I"));
+        T.eq("Speaker.speak itable slot", 0, res.resolve("vm/Speaker").interfaceSlot("speak", "()I"));
         T.eq("Phone.speak impl is Phone", 1, ClassFile.findImpl("vm/Phone", "speak", "()I", res).equals("vm/Phone") ? 1 : 0);
 
         // ---- exceptions: the try/catch table is parsed with its catch type ----

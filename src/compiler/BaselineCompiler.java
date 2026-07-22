@@ -14,9 +14,8 @@ import util.Vec;
 public final class BaselineCompiler
 {
     /** Resolves an owner class name (e.g. "vm/Cell") to its parsed classfile. */
-    public interface ClassResolver
+    public interface ClassResolver extends ClassFile.Resolver
     {
-        ClassFile resolve(String owner);
     }
 
     /** A single compiled method: its words, relocation fixups, and unwind metadata. */

@@ -164,7 +164,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
-                    Vec<ClassFile.VSlot> vt = ClassFile.vtable(t.className(), this::resolve);
+                    Vec<ClassFile.VSlot> vt = ClassFile.vtable(t.className(), this);
                     for (int _vi = 0; _vi < vt.size(); _vi++)
                     {
                         ClassFile.VSlot s = vt.get(_vi);
@@ -380,7 +380,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 for (int s = 0; s < ims.size(); s++)
                 {
                     ClassFile.Method m = ims.get(s);
-                    String impl = ClassFile.findImpl(c, m.name, m.descriptor, this::resolve);
+                    String impl = ClassFile.findImpl(c, m.name, m.descriptor, this);
                     int mbase = wordOffset.get(BaselineCompiler.key(impl, m.name, m.descriptor));
                     writeLong(image, iw + s * WORDS_PER_SLOT, addr(mbase));
                 }
@@ -393,7 +393,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String cls = tibClasses.at(_s10);
             int tw = tibWord.get(cls);
             writeLong(image, tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(typeWord.get(cls)));
-            var slots = ClassFile.vtable(cls, this::resolve);
+            var slots = ClassFile.vtable(cls, this);
             for (int slot = 0; slot < slots.size(); slot++)
             {
                 ClassFile.VSlot s = slots.get(slot);
@@ -503,13 +503,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     private int vtableLength(String cls)
     {
-        return ClassFile.vtable(cls, this::resolve).size();
+        return ClassFile.vtable(cls, this).size();
     }
 
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */
     private Vec<String> implementedUsedInterfaces(String cls, StrSet usedInterfaces)
     {
-        StrSet all = ClassFile.allInterfaces(cls, this::resolve);
+        StrSet all = ClassFile.allInterfaces(cls, this);
         Vec<String> out = new Vec<>();
         for (int _s12 = 0; _s12 < usedInterfaces.size(); _s12++)
         {
