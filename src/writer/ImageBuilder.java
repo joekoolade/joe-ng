@@ -6,6 +6,7 @@ import classfile.ClassFile;
 import compiler.BaselineCompiler;
 import compiler.BaselineCompiler.CompiledMethod;
 import objectmodel.ObjectModel;
+import util.IntVec;
 import util.StrIntTable;
 import util.StrSet;
 import util.Vec;
@@ -544,7 +545,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private CompiledMethod generateInitClasses(Vec<String> clinits)
     {
         int frame = A64.align16(8);                                 // LR only
-        Vec<Integer> w = new Vec<>();
+        IntVec w = new IntVec();
         Vec<BaselineCompiler.CallSite> calls = new Vec<>();
         w.add(A64.subImm(31, 31, frame));
         w.add(A64.strx(30, 31, 0));
@@ -556,11 +557,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         w.add(A64.ldrx(30, 31, 0));
         w.add(A64.addImm(31, 31, frame));
         w.add(A64.ret());
-        int[] words = new int[w.size()];
-        for (int i = 0; i < words.length; i++)
-        {
-            words[i] = w.get(i);
-        }
+        int[] words = w.toArray();
         return new CompiledMethod(words, calls, new Vec<>(), new Vec<>(), new Vec<>(), new Vec<>(),
                                   new Vec<>(), frame, new Vec<>());
     }
