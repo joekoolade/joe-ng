@@ -800,10 +800,17 @@ is name→address bookkeeping:
          intrinsic resolution (the 7 memory ops) so `putRaw` compiles. QEMU shows `~L`: the
          metal writer built working code and it ran. (Compiler limits hit en route: 7 operand
          slots → static context + low-arity helpers; no `pop2` → assign the void call's return.)
-       - ⬜ **3b.2: scale to the full closure.** BFS across classes + all reloc kinds
-         (tib/type/static/string/interface), the data regions (Types/TIBs/itables/strings/
-         statics/unwind/blobs/class table) and the `initClasses` body — `int[] image` sink at
-         `0x80000`-relative bases. Couples to the key migration (1b.3).
+       - **3b.2: scale to the full closure — one reloc kind / region at a time.**
+         - ✅ **static fields.** `MetalWriterSymbols.staticField` now records the ref identity
+           (owner+field Utf8 offsets); a `VM.selfBuildStaticsAndRun` driver builds
+           `Counter.{bump,get}`, lays out a zeroed statics slot, patches each getstatic/putstatic
+           address load to it (`movz`/`movk`, as `CodeBuffer.patchAddr`), then runs `bump()`×3 +
+           `get()` → 3. A metal `S` marker verifies it in QEMU. First non-call reloc kind + first
+           data region on metal.
+         - ⬜ **remaining kinds/regions.** `tib`/`type`/`string`/`interfaceType`/`exceptionSlot`
+           + Types/TIBs/itables/strings (pull in object allocation + the class model at layout);
+           cross-class discovery; `initClasses`; unwind tables; blobs; class table — `int[] image`
+           sink at `0x80000`-relative bases. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

@@ -484,6 +484,12 @@ public final class VM
         boolean built = selfBuildClosureAndRun();          // prints '~' from metal-built code
         Uart.putc(built ? 0x4C : 0x78);                    // 'L' layout engine OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: the first non-call relocation kind. Build Counter.bump/get, lay out
+        // a statics slot, patch their getstatic/putstatic address loads to it, then run
+        // bump() x3 and get() -- which must return 3.
+        Uart.putc(selfBuildStaticsAndRun() ? 0x53 : 0x78); // 'S' static-field reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b: metal layout engine (build + execute a call closure) -----
@@ -736,6 +742,200 @@ public final class VM
             j += 1;
         }
         return out;
+    }
+
+    // ----- M5.5c step 3b.2: static-field relocations + a statics region -----
+
+    private static byte[][] stClass; // distinct statics: owner class-name / field-name identity
+    private static byte[][] stName;
+    private static long[] stAddr;    // ... its assigned 8-byte slot address
+    private static int stCount;
+
+    /**
+     * Build {@code Counter.bump}/{@code get} into a Heap buffer, lay out a slot for the
+     * shared static {@code count}, patch their getstatic/putstatic address loads to it, then
+     * run {@code bump()} three times and {@code get()} — which must return 3.
+     */
+    private static boolean selfBuildStaticsAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Counter"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("bump");
+        clDesc[0] = Magic.bytes("()V");
+        clName[1] = Magic.bytes("get");
+        clDesc[1] = Magic.bytes("()I");
+        clCount = 2;
+
+        // compile each at base 0 (no calls to discover here).
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        // place methods contiguously.
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        // collect distinct statics and give each a zeroed 8-byte slot.
+        collectStatics();
+        long staticsBuf = Heap.alloc(stCount * 8);
+        int s = 0;
+        while (s < stCount)
+        {
+            long slot = staticsBuf + s * 8L;
+            Magic.store64(slot, 0L);                        // Heap.alloc doesn't zero; count starts 0
+            stAddr[s] = slot;
+            s += 1;
+        }
+
+        boolean ok = patchStaticsAndWrite(codeBuf);
+        Magic.dsb();
+        Magic.isb();
+
+        // execute: three bumps then a read.
+        long bumpEntry = codeBuf + clWordOff[0] * 4L;
+        long getEntry = codeBuf + clWordOff[1] * 4L;
+        long u = Magic.call0(bumpEntry);
+        u = Magic.call0(bumpEntry);
+        u = Magic.call0(bumpEntry);
+        int got = (int) Magic.call0(getEntry);
+        return ok && got == 3;
+    }
+
+    /** Gather the distinct statics referenced across all placed methods (by class+field content). */
+    private static void collectStatics()
+    {
+        stClass = new byte[16][];
+        stName = new byte[16][];
+        stAddr = new long[16];
+        stCount = 0;
+        int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int c = 0;
+            while (c < sym.staticCount())
+            {
+                int classOff = sym.staticClassOff(c);
+                int nameOff = sym.staticNameOff(c);
+                if (findStatic(classOff, nameOff) < 0)
+                {
+                    stClass[stCount] = utf8Copy(classOff);
+                    stName[stCount] = utf8Copy(nameOff);
+                    stCount += 1;
+                }
+                c += 1;
+            }
+            m += 1;
+        }
+    }
+
+    /** Index of the static whose (class,field) equal the Utf8 at {@code classOff/nameOff} in {@code cB}, or -1. */
+    private static int findStatic(int classOff, int nameOff)
+    {
+        int j = 0;
+        while (j < stCount)
+        {
+            if (utf8Eq(cB, classOff, stClass[j]) && utf8Eq(cB, nameOff, stName[j]))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Patch every method's calls + static address loads, then write the words to {@code buf}. */
+    private static boolean patchStaticsAndWrite(long buf)
+    {
+        boolean ok = true;
+        int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int[] words = clWords[m];
+            int baseOff = clWordOff[m];
+            int c = 0;
+            while (c < sym.callCount())
+            {
+                int j = findPlaced(sym.callNameOff(c), sym.callDescOff(c));
+                if (j < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    int site = sym.callSiteWord(c);
+                    words[site] = A64Enc.bl(clWordOff[j] - (baseOff + site));
+                }
+                c += 1;
+            }
+            int t = 0;
+            while (t < sym.staticCount())
+            {
+                int classOff = sym.staticClassOff(t);
+                int nameOff = sym.staticNameOff(t);
+                int k = findStatic(classOff, nameOff);
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.staticSiteWord(t), sym.staticReg(t), stAddr[k]);
+                }
+                t += 1;
+            }
+            writeWords(buf, baseOff, words);
+            m += 1;
+        }
+        return ok;
+    }
+
+    /** Fill a 2-word address-load placeholder at {@code site} with MOVZ/MOVK of {@code addr} (as CodeBuffer.patchAddr). */
+    private static void patchAddrWords(int[] words, int site, int reg, long addr)
+    {
+        words[site] = A64Enc.movz(reg, (int) (addr & 0xFFFFL), 0);
+        words[site + 1] = A64Enc.movk(reg, (int) ((addr >>> 16) & 0xFFFFL), 1);
+    }
+
+    /** Store a method's words into {@code buf} at word offset {@code baseOff}. */
+    private static void writeWords(long buf, int baseOff, int[] words)
+    {
+        int w = 0;
+        while (w < words.length)
+        {
+            long addr = buf + (baseOff + w) * 4L;
+            Magic.store32(addr, words[w]);
+            w += 1;
+        }
     }
 
     /**

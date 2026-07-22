@@ -44,6 +44,12 @@ final class MetalWriterSymbols implements Symbols
     private final int[] addrReg = new int[MAX];
     private int addrN;
 
+    private final int[] staticSite = new int[MAX];  // getstatic/putstatic address-load site
+    private final int[] staticReg = new int[MAX];   // ... its destination register
+    private final int[] staticClassOff = new int[MAX];  // owner class-name Utf8 offset (in classBytes)
+    private final int[] staticNameOff = new int[MAX];   // field-name Utf8 offset
+    private int staticN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -82,7 +88,11 @@ final class MetalWriterSymbols implements Symbols
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        reserve(cb, reg);
+        staticSite[staticN] = cb.reserveAddr(reg);
+        staticReg[staticN] = reg;
+        staticClassOff[staticN] = ClassReader.refClassNameOff(classBytes, cpOff, fieldCp);
+        staticNameOff[staticN] = ClassReader.refNameOff(classBytes, cpOff, fieldCp);
+        staticN += 1;
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
@@ -186,6 +196,26 @@ final class MetalWriterSymbols implements Symbols
     int callDescOff(int i)
     {
         return callDescOff[i];
+    }
+    int staticCount()
+    {
+        return staticN;
+    }
+    int staticSiteWord(int i)
+    {
+        return staticSite[i];
+    }
+    int staticReg(int i)
+    {
+        return staticReg[i];
+    }
+    int staticClassOff(int i)
+    {
+        return staticClassOff[i];
+    }
+    int staticNameOff(int i)
+    {
+        return staticNameOff[i];
     }
     boolean callNameIs(int i, byte[] want)
     {
