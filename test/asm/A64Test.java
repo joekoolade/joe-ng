@@ -107,6 +107,7 @@ public final class A64Test
         T.eqWord("ORR x0,x1,x2", 0xAA020020, A64.orrReg(0, 1, 2));
         T.eqWord("EOR x0,x1,x2", 0xCA020020, A64.eorReg(0, 1, 2));
         T.eqWord("MUL x0,x1,x2", 0x9B027C20, A64.mulReg(0, 1, 2));
+        T.eqWord("MSUB x0,x1,x2,x3", 0x9B028C20, A64.msub(0, 1, 2, 3));
         T.eqWord("LSL x0,x1,x2", 0x9AC22020, A64.lslv(0, 1, 2));
         T.eqWord("LSR x0,x1,x2", 0x9AC22420, A64.lsrv(0, 1, 2));
         T.eqWord("ASR x0,x1,x2", 0x9AC22820, A64.asrv(0, 1, 2));

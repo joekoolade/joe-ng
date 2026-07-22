@@ -414,6 +414,11 @@ public final class A64
     {
         return A64Enc.sdivReg(reg(rd), reg(rn), reg(rm));
     }
+    /** {@code MSUB Xd, Xn, Xm, Xa} — {@code Xd = Xa - Xn*Xm} (SDIV+MSUB synthesizes irem). */
+    public static int msub(int rd, int rn, int rm, int ra)
+    {
+        return A64Enc.msub(reg(rd), reg(rn), reg(rm), reg(ra));
+    }
     /** {@code LSL Xd, Xn, Xm} — logical shift left by a register (LSLV). */
     public static int lslv(int rd, int rn, int rm)
     {

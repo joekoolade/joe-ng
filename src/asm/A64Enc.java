@@ -99,6 +99,11 @@ public final class A64Enc
     {
         return 0x9B00_7C00 | (rm << 16) | (rn << 5) | rd;
     }
+    /** {@code MSUB Xd, Xn, Xm, Xa} — {@code Xd = Xa - Xn*Xm} (used to synthesize irem). */
+    public static int msub(int rd, int rn, int rm, int ra)
+    {
+        return 0x9B00_8000 | (rm << 16) | (ra << 10) | (rn << 5) | rd;
+    }
 
     // ----- compare (flag-setting subtract into XZR) -------------------------
     /** {@code CMP Xn, Xm} — alias of SUBS XZR, Xn, Xm. */

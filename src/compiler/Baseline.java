@@ -272,6 +272,11 @@ public final class Baseline
             dup(cb);
             return 1;
         }  // dup
+        else if (op == 0x5C)
+        {
+            dup2(cb);
+            return 1;
+        }  // dup2 (category-1 form: duplicate the top two slots)
         else if (op == 0x84)
         {
             iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]);
@@ -355,6 +360,11 @@ public final class Baseline
             binop(cb, BIN_DIV);
             return 1;
         }
+        else if (op == 0x70 || op == 0x71)
+        {
+            irem(cb);
+            return 1;
+        }  // irem/lrem
         else if (op == 0x74 || op == 0x75)
         {
             int r = OP_BASE + sp - 1;
@@ -657,6 +667,22 @@ public final class Baseline
         cb.emit(A64Enc.strx(r, 31, localMem(slot)));
     }
 
+    /**
+     * irem: {@code r = a - (a/b)*b}. AArch64 has no remainder op, so it's an SDIV
+     * plus MSUB. {@code r} aliases {@code a}'s register (pop, pop, push), so stash the
+     * original {@code a} in SCRATCH first — SDIV would otherwise clobber it before MSUB
+     * reads it back.
+     */
+    private void irem(CodeBuffer cb)
+    {
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();                          // same register as a
+        cb.emit(A64Enc.movReg(SCRATCH, a));         // SCRATCH = a (original dividend)
+        cb.emit(A64Enc.sdivReg(r, SCRATCH, b));     // r = a / b
+        cb.emit(A64Enc.msub(r, r, b, SCRATCH));     // r = a - (a/b)*b
+    }
+
     private void binop(CodeBuffer cb, int kind)
     {
         int b = popReg();
@@ -678,6 +704,21 @@ public final class Baseline
     {
         int top = OP_BASE + sp - 1;
         cb.emit(A64Enc.movReg(pushReg(), top));
+    }
+
+    /**
+     * dup2, category-1 form: {@code ..., v2, v1 -> ..., v2, v1, v2, v1}. Every value
+     * on joe-ng's stack occupies one register (longs included), so this duplicates the
+     * top two slots — exactly what {@code arr[i] op= x} emits (dup the array ref+index
+     * before the load). The category-2 form (dup2 of a single long/double) is not used
+     * by the code we compile and is not handled.
+     */
+    private void dup2(CodeBuffer cb)
+    {
+        int lo = OP_BASE + sp - 2;    // v2 (deeper of the two)
+        int hi = OP_BASE + sp - 1;    // v1 (top)
+        cb.emit(A64Enc.movReg(pushReg(), lo));
+        cb.emit(A64Enc.movReg(pushReg(), hi));
     }
 
     /** lcmp: push -1/0/1 for a&lt;b / a==b / a&gt;b (usually consumed by a following if). */

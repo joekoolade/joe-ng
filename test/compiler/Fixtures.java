@@ -29,6 +29,18 @@ public final class Fixtures
         return x + 1;
     }
 
+    /** Integer remainder (irem = SDIV + MSUB). */
+    public static int rem(int a, int b)
+    {
+        return a % b;
+    }
+
+    /** Array compound-assign: {@code a[i] |= 1} emits dup2 (dup the ref+index). */
+    public static void orInto(int[] a, int i)
+    {
+        a[i] |= 1;
+    }
+
     /** Array element load (baload: base + index<<0). */
     public static int arrElem0(byte[] a)
     {

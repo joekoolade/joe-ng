@@ -221,6 +221,30 @@ public final class CompilerTest
         lenWant.add(A64.ret());
         T.eqWords("arrLen(int[])", toArray(lenWant), compile(fx, "arrLen", "([I)I"));
 
+        // ---- irem: SDIV + MSUB, with the original dividend stashed in SCRATCH (x16) ----
+        List<Integer> remWant = new ArrayList<>();
+        remWant.add(A64.subImm(31, 31, 16));
+        remWant.add(A64.strx(19, 31, 0));
+        remWant.add(A64.strx(20, 31, 8));
+        remWant.add(A64.movReg(19, 0));                  // a -> slot0
+        remWant.add(A64.movReg(20, 1));                  // b -> slot1
+        remWant.add(A64.movReg(9, 19));                  // iload_0 (a)
+        remWant.add(A64.movReg(10, 20));                 // iload_1 (b)
+        remWant.add(A64.movReg(16, 9));                  // SCRATCH = a
+        remWant.add(A64.sdivReg(9, 16, 10));             // r = a / b
+        remWant.add(A64.msub(9, 9, 10, 16));             // r = a - (a/b)*b
+        remWant.add(A64.movReg(0, 9));                   // ireturn
+        remWant.add(A64.ldrx(19, 31, 0));
+        remWant.add(A64.ldrx(20, 31, 8));
+        remWant.add(A64.addImm(31, 31, 16));
+        remWant.add(A64.ret());
+        T.eqWords("rem(int,int)", toArray(remWant), compile(fx, "rem", "(II)I"));
+
+        // ---- dup2: a[i] |= 1 duplicates the ref (x9) + index (x10) into x11,x12 ----
+        int[] orInto = compile(fx, "orInto", "([II)V");
+        T.eq("orInto dup2 duplicates ref",   1, contains(orInto, A64.movReg(11, 9)) ? 1 : 0);
+        T.eq("orInto dup2 duplicates index", 1, contains(orInto, A64.movReg(12, 10)) ? 1 : 0);
+
         // ---- ternary: value survives the branch merge (same register both paths) ----
         List<Integer> ternWant = new ArrayList<>();
         ternWant.add(A64.subImm(31, 31, 16));
@@ -314,5 +338,18 @@ public final class CompilerTest
         {
             l.add(w);
         }
+    }
+
+    /** Whether {@code words} contains {@code w} anywhere. */
+    private static boolean contains(int[] words, int w)
+    {
+        for (int x : words)
+        {
+            if (x == w)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
