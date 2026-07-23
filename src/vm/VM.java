@@ -561,6 +561,212 @@ public final class VM
         // bump() x3 and get() -- which must return 3.
         Uart.putc(selfBuildStaticsAndRun() ? 0x53 : 0x78); // 'S' static-field reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: object allocation. Build Cell.make = `new Cell(v).value`, lay out
+        // Cell's Type + TIB (via MetalClassModel), patch the `new`'s TIB load and the
+        // Heap.alloc helper call, then run make(0x37) -> 0x37.
+        Uart.putc(selfBuildNewAndRun() ? 0x4F : 0x78);     // 'O' object/new reloc OK / 'x' broken
+        Uart.putc(0x0A);
+    }
+
+    // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
+
+    private static byte[][] nbClass;   // distinct `new`-referenced classes
+    private static long[] nbTibAddr;   // ... its laid-out TIB address
+    private static int nbCount;
+
+    /**
+     * Build {@code Cell.make} (= {@code new Cell(v).value}) into a Heap buffer, lay out
+     * Cell's Type + TIB via {@link MetalClassModel}, patch the `new`'s TIB address load and
+     * the {@code Heap.alloc} helper call, then run {@code make(0x37)} — which must return 0x37.
+     */
+    private static boolean selfBuildNewAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Cell"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("make");
+        clDesc[0] = Magic.bytes("(I)I");
+        clName[1] = Magic.bytes("<init>");
+        clDesc[1] = Magic.bytes("(I)V");
+        clCount = 2;
+
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        layoutTibs();
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        long makeEntry = codeBuf + clWordOff[0] * 4L;
+        long r = Magic.call2(makeEntry, 0x37L, 0L);        // make(0x37)
+        return ok && (int) r == 0x37;
+    }
+
+    /** Lay out a Type + TIB for each class the closure {@code new}s, recording its TIB address. */
+    private static void layoutTibs()
+    {
+        nbClass = new byte[16][];
+        nbTibAddr = new long[16];
+        nbCount = 0;
+        int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int t = 0;
+            while (t < sym.tibCount())
+            {
+                int classOff = sym.tibClassOff(t);
+                if (findTibClass(classOff) < 0)
+                {
+                    byte[] name = utf8Copy(classOff);
+                    nbClass[nbCount] = name;
+                    nbTibAddr[nbCount] = buildTypeAndTib(name);
+                    nbCount += 1;
+                }
+                t += 1;
+            }
+            m += 1;
+        }
+    }
+
+    /** Allocate and fill {@code name}'s Type (instanceSize/super/itableDir) + a TIB pointing at it. */
+    private static long buildTypeAndTib(byte[] name)
+    {
+        long type = Heap.alloc(ObjectModel.TYPE_SIZE);
+        Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
+                      ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
+        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);  // no interfaces
+        long tib = Heap.alloc(ObjectModel.tibSize(0));                 // minimal TIB: just the Type slot
+        Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
+        return tib;
+    }
+
+    /** Index of the laid-out class whose name equals the Utf8 at {@code classOff} in {@code cB}, or -1. */
+    private static int findTibClass(int classOff)
+    {
+        int j = 0;
+        while (j < nbCount)
+        {
+            if (utf8Eq(cB, classOff, nbClass[j]))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Patch each method's calls, runtime-helper calls, and `new` TIB loads, then write it out. */
+    private static boolean patchNewAndWrite(long buf)
+    {
+        boolean ok = true;
+        int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int[] words = clWords[m];
+            int baseOff = clWordOff[m];
+            int c = 0;
+            while (c < sym.callCount())
+            {
+                int j = findPlaced(sym.callNameOff(c), sym.callDescOff(c));
+                if (j < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    int site = sym.callSiteWord(c);
+                    words[site] = A64Enc.bl(clWordOff[j] - (baseOff + site));
+                }
+                c += 1;
+            }
+            int h = 0;
+            while (h < sym.helperCount())
+            {
+                int site = sym.helperSiteWord(h);
+                long siteAbs = buf + (baseOff + site) * 4L;
+                long rel = (helperAddr(sym.helperId(h)) - siteAbs) / 4L;   // BL to the image helper
+                words[site] = A64Enc.bl((int) rel);
+                h += 1;
+            }
+            int t = 0;
+            while (t < sym.tibCount())
+            {
+                int k = findTibClass(sym.tibClassOff(t));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.tibSiteWord(t), sym.tibReg(t), nbTibAddr[k]);
+                }
+                t += 1;
+            }
+            writeWords(buf, baseOff, words);
+            m += 1;
+        }
+        return ok;
+    }
+
+    /** Absolute image address of the runtime helper with the given {@code compiler.Symbols} id. */
+    private static long helperAddr(int id)
+    {
+        if (id == 0)
+        {
+            return heapAlloc;          // HEAP_ALLOC
+        }
+        if (id == 1)
+        {
+            return allocArray;         // HEAP_ALLOC_ARRAY
+        }
+        if (id == 2)
+        {
+            return gcCollect;          // GC_COLLECT
+        }
+        if (id == 3)
+        {
+            return instanceOfAddr;     // INSTANCE_OF
+        }
+        if (id == 4)
+        {
+            return checkCastAddr;      // CHECK_CAST
+        }
+        return unwindAddr;             // UNWIND
     }
 
     // ----- M5.5c step 3b: metal layout engine (build + execute a call closure) -----

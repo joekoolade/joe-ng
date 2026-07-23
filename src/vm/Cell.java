@@ -16,6 +16,13 @@ public final class Cell
         value = v;
     }
 
+    /** Allocate a Cell and read its field back — a self-contained {@code new} + getfield,
+     *  the metal image-writer's object-allocation test target (M5.5c step 3b.2). */
+    public static int make(int v)
+    {
+        return new Cell(v).value;
+    }
+
     public int get()
     {
         return value;

@@ -2,6 +2,7 @@ package vm;
 
 import classfile.ClassReader;
 import magic.Magic;
+import objectmodel.ObjectModel;
 
 /**
  * The metal writer's class model (PLAN.md §M5.5c step 1b, approach B): answers the image
@@ -76,6 +77,63 @@ final class MetalClassModel
             i += 1;
         }
         return count;
+    }
+
+    /** Byte offset of instance field {@code fieldName} in {@code clsName} (inherited fields first). */
+    static int instanceFieldOffset(byte[] clsName, byte[] fieldName)
+    {
+        return ObjectModel.fieldOffset(superFieldCount(clsName) + ownFieldIndex(clsName, fieldName));
+    }
+
+    /** Number of instance fields declared in {@code clsName}'s superclasses. */
+    private static int superFieldCount(byte[] clsName)
+    {
+        int n = 0;
+        byte[] c = superName(clsName);
+        while (c != null && !isRoot(c))
+        {
+            n += instanceFieldCount(c);
+            c = superName(c);
+        }
+        return n;
+    }
+
+    /** Position of {@code fieldName} among {@code clsName}'s own non-static fields, or -1. */
+    private static int ownFieldIndex(byte[] clsName, byte[] fieldName)
+    {
+        byte[] b = bytesOf(clsName);
+        int[] off = constPool(b);
+        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int p = ClassReader.fieldsStart(b, afterCp);
+        int n = ClassReader.u2(b, p);
+        p += 2;
+        int idx = 0;
+        int i = 0;
+        while (i < n)
+        {
+            int access = ClassReader.u2(b, p);
+            int nameOff = off[ClassReader.u2(b, p + 2)];
+            if ((access & ACC_STATIC) == 0)
+            {
+                if (utf8Is(b, nameOff, fieldName))
+                {
+                    return idx;
+                }
+                idx += 1;
+            }
+            p = ClassReader.skipAttributes(b, p + 6);
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** {@code clsName}'s superclass name bytes, or null if it has none (a root). */
+    private static byte[] superName(byte[] clsName)
+    {
+        byte[] b = bytesOf(clsName);
+        int[] off = constPool(b);
+        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        return superNameOf(b, off, afterCp);
     }
 
     /** Whether {@code name} declares a static initializer {@code <clinit>()V} (needs eager init). */

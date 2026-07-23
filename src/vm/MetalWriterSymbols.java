@@ -6,6 +6,7 @@ import classfile.ClassReader;
 import compiler.Intrinsics;
 import compiler.Symbols;
 import magic.Magic;
+import objectmodel.ObjectModel;
 
 /**
  * The metal writer's {@link Symbols} seam (PLAN.md §M5.5c step 3) — the on-metal twin of
@@ -50,6 +51,11 @@ final class MetalWriterSymbols implements Symbols
     private final int[] staticNameOff = new int[MAX];   // field-name Utf8 offset
     private int staticN;
 
+    private final int[] tibSite = new int[MAX];     // `new`: TIB address-load site
+    private final int[] tibReg = new int[MAX];      // ... its destination register
+    private final int[] tibClassOff = new int[MAX]; // ... the class-name Utf8 offset
+    private int tibN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -76,7 +82,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public void tib(CodeBuffer cb, int reg, int classCp)
     {
-        reserve(cb, reg);
+        tibSite[tibN] = cb.reserveAddr(reg);
+        tibReg[tibN] = reg;
+        tibClassOff[tibN] = ClassReader.classNameOff(classBytes, cpOff, classCp);
+        tibN += 1;
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
@@ -115,11 +124,14 @@ final class MetalWriterSymbols implements Symbols
 
     public int fieldOffset(int fieldCp)
     {
-        return 0;
+        byte[] owner = utf8Copy(ClassReader.refClassNameOff(classBytes, cpOff, fieldCp));
+        byte[] field = utf8Copy(ClassReader.refNameOff(classBytes, cpOff, fieldCp));
+        return MetalClassModel.instanceFieldOffset(owner, field);
     }
     public int objectSize(int classCp)
     {
-        return 0;
+        byte[] cls = utf8Copy(ClassReader.classNameOff(classBytes, cpOff, classCp));
+        return ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(cls));
     }
     public int vtableSlot(int methodCp)
     {
@@ -172,7 +184,9 @@ final class MetalWriterSymbols implements Symbols
     }
     public boolean isSkippableInit(int methodCp)
     {
-        return false;
+        // The super()/root-class <init> (e.g. Object.<init>) emits no call; a real
+        // same-image ctor (Cell.<init>) is a normal call to place.
+        return MetalClassModel.isRoot(utf8Copy(ClassReader.refClassNameOff(classBytes, cpOff, methodCp)));
     }
     public void fail(int reason, int a, int b)
     {
@@ -217,6 +231,34 @@ final class MetalWriterSymbols implements Symbols
     {
         return staticNameOff[i];
     }
+    int tibCount()
+    {
+        return tibN;
+    }
+    int tibSiteWord(int i)
+    {
+        return tibSite[i];
+    }
+    int tibReg(int i)
+    {
+        return tibReg[i];
+    }
+    int tibClassOff(int i)
+    {
+        return tibClassOff[i];
+    }
+    int helperCount()
+    {
+        return helperN;
+    }
+    int helperSiteWord(int i)
+    {
+        return helperSite[i];
+    }
+    int helperId(int i)
+    {
+        return helperId[i];
+    }
     boolean callNameIs(int i, byte[] want)
     {
         return utf8Is(callNameOff[i], want);
@@ -224,6 +266,20 @@ final class MetalWriterSymbols implements Symbols
     boolean failed()
     {
         return failed;
+    }
+
+    /** Copy the Utf8 entry at {@code classBytes[off]} onto a fresh heap byte array. */
+    private byte[] utf8Copy(int off)
+    {
+        int len = ClassReader.u2(classBytes, off);
+        byte[] out = new byte[len];
+        int j = 0;
+        while (j < len)
+        {
+            out[j] = (byte) ClassReader.u1(classBytes, off + 2 + j);
+            j += 1;
+        }
+        return out;
     }
 
     /** Whether the Utf8 entry at {@code classBytes[off]} equals the plain bytes {@code want}. */

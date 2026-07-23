@@ -807,10 +807,18 @@ is name→address bookkeeping:
            address load to it (`movz`/`movk`, as `CodeBuffer.patchAddr`), then runs `bump()`×3 +
            `get()` → 3. A metal `S` marker verifies it in QEMU. First non-call reloc kind + first
            data region on metal.
-         - ⬜ **remaining kinds/regions.** `tib`/`type`/`string`/`interfaceType`/`exceptionSlot`
-           + Types/TIBs/itables/strings (pull in object allocation + the class model at layout);
-           cross-class discovery; `initClasses`; unwind tables; blobs; class table — `int[] image`
-           sink at `0x80000`-relative bases. Couples to the key migration (1b.3).
+         - ✅ **object allocation (`new` → `tib` + Type/TIB + helper calls).** Where
+           `MetalClassModel` first drives the *layout*: `MetalWriterSymbols` now implements
+           `objectSize`/`fieldOffset`/`isSkippableInit` via `MetalClassModel` (field layout added:
+           `instanceFieldOffset`) and records `tib` sites. `VM.selfBuildNewAndRun` builds
+           `Cell.make` (=`new Cell(v).value`) + `Cell.<init>`, lays out Cell's `Type`
+           (instanceSize from `instanceFieldCount`) + a minimal `TIB`, patches the `new`'s TIB
+           address load, the `Heap.alloc` **helper** BL (to the writer-stashed `VM.heapAlloc`),
+           and the `<init>` call, then runs `make(0x37)`→`0x37`. Metal `O` marker (verified QEMU).
+         - ⬜ **remaining kinds/regions.** `type` (instanceof/checkcast), `string`,
+           `interfaceType`/`interfaceSlot` + itables, `exceptionSlot`; full vtable in the TIB
+           (invokevirtual); cross-class discovery; `initClasses`; unwind tables; blobs; class
+           table — `int[] image` sink at `0x80000`-relative bases. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it
