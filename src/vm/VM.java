@@ -612,6 +612,11 @@ public final class VM
         // reloc kind, five classes) and runs it -> 42. '!' on success.
         Uart.putc(selfBuildAnswerAndRun() ? 0x21 : 0x78);  // '!' full-closure capstone OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 4 (essence): recompile VM.instanceOf on metal and assert it is byte-identical
+        // to the image's own copy at instanceOfAddr -- the self-build fixpoint, one method wide.
+        Uart.putc(selfFixpointInstanceOf() ? 0x3D : 0x78); // '=' metal bytes == image bytes / 'x' differ
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1358,6 +1363,48 @@ public final class VM
     private static boolean selfBuildAnswerAndRun()
     {
         return buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("capstone"), Magic.bytes("()I")) == 262;
+    }
+
+    /**
+     * The self-build fixpoint in miniature (step 4 essence): recompile a method the seed writer
+     * put in the running image — {@code VM.instanceOf}, stashed at {@code instanceOfAddr} and
+     * relocation-free — on metal, and assert it is <em>byte-identical</em> to the image's own
+     * copy. Byte-equal ⇒ joe-ng's metal writer reproduces the exact machine code it is running.
+     */
+    private static boolean selfFixpointInstanceOf()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/VM"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        int body = findMethodBody(Magic.bytes("instanceOf"), Magic.bytes("(JJ)I"));
+        if (body < 0)
+        {
+            return false;
+        }
+        MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+        int[] words = compileInto(body, sym, instanceOfAddr);   // compile at its real image base
+
+        // It must be relocation-free (else its bytes depend on layout we're not reproducing here).
+        if (sym.callCount() != 0 || sym.helperCount() != 0 || sym.staticCount() != 0
+                || sym.tibCount() != 0 || sym.typeCount() != 0 || sym.strCount() != 0
+                || sym.ifCount() != 0 || sym.excCount() != 0)
+        {
+            return false;
+        }
+        // Byte-compare against the running image's own copy at instanceOfAddr. Mask to 32 bits:
+        // int[] loads sign-extend but Magic.load32 zero-extends, so compare the low words only.
+        int w = 0;
+        while (w < words.length)
+        {
+            if ((words[w] & 0xFFFFFFFFL) != (Magic.load32(instanceOfAddr + w * 4L) & 0xFFFFFFFFL))
+            {
+                return false;
+            }
+            w += 1;
+        }
+        return true;
     }
 
     /**

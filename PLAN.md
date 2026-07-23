@@ -889,6 +889,14 @@ is name→address bookkeeping:
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it
      is running. A single loud QEMU marker (e.g. `FIX`) on success.
+     - ✅ **essence proven — per-method byte-identity (`=`).** `VM.selfFixpointInstanceOf`
+       recompiles `VM.instanceOf` (stashed at `instanceOfAddr`, 137 words, relocation-free) on
+       metal and asserts it is **byte-identical** to the running image's own copy — the metal
+       writer reproduces the exact machine code it is executing. (Caught a sign-extension trap:
+       `int[]` loads sign-extend while `Magic.load32` zero-extends, so the compare masks to 32
+       bits.) The whole-image compare needs relocation-bearing methods to resolve to the *image's*
+       region addresses (byte-identity depends on reproducing the seed writer's layout order) —
+       the remaining breadth (3b.4) + the `0x80000`-relative sink.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
