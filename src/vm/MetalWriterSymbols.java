@@ -71,6 +71,10 @@ final class MetalWriterSymbols implements Symbols
     private final int[] ifClassOff = new int[MAX];  // ... the interface's class-name Utf8 offset
     private int ifN;
 
+    private final int[] excSite = new int[MAX];     // athrow/catch: in-flight-exception slot address-load site
+    private final int[] excReg = new int[MAX];
+    private int excN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -133,7 +137,9 @@ final class MetalWriterSymbols implements Symbols
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
-        reserve(cb, reg);
+        excSite[excN] = cb.reserveAddr(reg);
+        excReg[excN] = reg;
+        excN += 1;
     }
 
     /** Reserve a 2-word address-load placeholder (MOVZ+MOVK width), record its site. */
@@ -324,6 +330,18 @@ final class MetalWriterSymbols implements Symbols
     int ifClassOff(int i)
     {
         return ifClassOff[i];
+    }
+    int excCount()
+    {
+        return excN;
+    }
+    int excSiteWord(int i)
+    {
+        return excSite[i];
+    }
+    int excReg(int i)
+    {
+        return excReg[i];
     }
     int helperCount()
     {

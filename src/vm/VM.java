@@ -587,6 +587,11 @@ public final class VM
         // out Speaker's interface Type + Robot's itable directory, and dispatch speak() -> 'R'.
         Uart.putc(selfBuildInterfaceAndRun() ? 0x69 : 0x78);  // 'i' interface dispatch reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: throw/catch (exceptionSlot). Build MyExc.probe (= try { throw new
+        // MyExc(); } catch (MyExc e) { return 1; }) and run it -> 1 (same-method, inline catch).
+        Uart.putc(selfBuildExceptionAndRun() ? 0x65 : 0x78);  // 'e' exception reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -599,6 +604,8 @@ public final class VM
     private static byte[][] ifIface;   // distinct interfaces referenced by invokeinterface
     private static long[] ifTypeAddr;  // ... its (interface) Type address
     private static int ifCount;
+
+    private static long excSlot;       // the closure's in-flight-exception word (athrow/catch)
 
     /**
      * Build {@code Cell.make} (= {@code new Cell(v).value}) into a Heap buffer, lay out
@@ -1007,6 +1014,12 @@ public final class VM
                 }
                 f += 1;
             }
+            int x = 0;
+            while (x < sym.excCount())
+            {
+                patchAddrWords(words, sym.excSiteWord(x), sym.excReg(x), excSlot);  // the shared exc slot
+                x += 1;
+            }
             writeWords(buf, baseOff, words);
             m += 1;
         }
@@ -1190,6 +1203,66 @@ public final class VM
 
         long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // probe()
         return ok && (int) r == 0x52;                       // 'R'
+    }
+
+    /**
+     * Build {@code MyExc.probe} (= {@code try { throw new MyExc(); } catch (MyExc e) { return 1; }})
+     * into a Heap buffer, lay out MyExc's Type/TIB and an exception slot, patch the `new`, the
+     * catch-type load, the exception-slot loads, and the instanceOf helper, then run it → 1. The
+     * throw/catch is same-method, so it resolves inline (no cross-method unwind).
+     */
+    private static boolean selfBuildExceptionAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/MyExc"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("probe");
+        clDesc[0] = Magic.bytes("()I");
+        clName[1] = Magic.bytes("<init>");
+        clDesc[1] = Magic.bytes("()V");
+        clCount = 2;
+
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        excSlot = Heap.alloc(8);                            // the closure's in-flight-exception word
+        layoutClassRegions(codeBuf);
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // probe()
+        return ok && (int) r == 1;
     }
 
     /** Absolute image address of the runtime helper with the given {@code compiler.Symbols} id. */

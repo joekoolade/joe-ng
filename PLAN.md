@@ -843,9 +843,18 @@ is name→address bookkeeping:
            + `findPlacedBytes`), setting `Type.itableDir`. `VM.selfBuildInterfaceAndRun` builds
            `Robot.probe` (=`Speaker s = new Robot(); s.speak()`) and dispatches through the itable
            → `'R'`. Metal `i`.
-         - ⬜ **remaining kinds/regions.** `exceptionSlot` (throw/catch); cross-class discovery;
-           `initClasses`; unwind tables; blobs; class table — `int[] image` sink at
-           `0x80000`-relative bases. Couples to the key migration (1b.3).
+         - ✅ **`exceptionSlot` (throw/catch) — the last reloc kind.** `MetalWriterSymbols` records
+           `exceptionSlot` sites; the driver allocates the closure's in-flight-exception word and
+           `patchNewAndWrite` patches the store/load sites to it. `VM.selfBuildExceptionAndRun`
+           builds `MyExc.probe` (=`try { throw new MyExc(); } catch (MyExc e) { return 1; }`) — a
+           same-method try/catch, so `athrow` resolves it inline (no cross-method unwind) via the
+           exception slot + catch-type `type` load + `VM.instanceOf` — and runs it → `1`. Metal `e`.
+         - **Every relocation kind is now covered on metal** (calls, static, `new`, `type`,
+           `string`, invokevirtual, invokeinterface, exception). Marker line: `…S O T g D i e`.
+         - ⬜ **capstone + breadth.** Cross-class discovery (a closure spanning many classes, e.g.
+           `Guest.answer` → 42, exercising all kinds at once); `initClasses`; unwind tables (cross-
+           method); blobs; class table — `int[] image` sink at `0x80000`-relative bases toward the
+           fixpoint. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

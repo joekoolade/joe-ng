@@ -8,4 +8,16 @@ package vm;
  */
 public final class MyExc extends RuntimeException
 {
+    /** Same-method throw/catch — the metal writer's exceptionSlot (athrow/inline-catch) target. */
+    public static int probe()
+    {
+        try
+        {
+            throw new MyExc();
+        }
+        catch (MyExc e)
+        {
+            return 1;
+        }
+    }
 }
