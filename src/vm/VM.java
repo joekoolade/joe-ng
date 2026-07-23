@@ -690,6 +690,13 @@ public final class VM
         // where the running image stashed it, proving the metal writer reconstructs the whole image map.
         Uart.putc(fixpointDataLayout() ? 0x48 : 0x78);     // 'H' data-region layout reproduced / 'x' off
         Uart.putc(0x0A);
+
+        // M5.5c step 4: whole code-region content fixpoint. Compile every one of the 485 boot-closure
+        // methods at its image base with all relocations resolved to image addresses, and assert each
+        // is byte-identical to the running image -- the metal writer reproduces the exact machine code
+        // it is executing, across the whole code region.
+        Uart.putc(fixpointCode() ? 0x24 : 0x78);           // '$' code content byte-identical / 'x' differ
+        Uart.putc(0x0A);
     }
 
     /** Whether every stashed data-region boundary + unwind count matches the metal writer's layout. */
@@ -1739,6 +1746,8 @@ public final class VM
     // computed 0x80000-relative WORD offsets of each region boundary (see layoutDataRegions)
     private static int dTypesStart, dTibStart, dStrStart, dStaticsStart, dStaticsEnd;
     private static int dItStart, dFrameStart, dHandlerStart, dBlobStart, dClassDirStart;
+    private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
+    private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
 
     private static int imFind(byte[] cls, byte[] name, byte[] desc)
     {
@@ -2169,17 +2178,21 @@ public final class VM
         cur += typeClassesN * (ObjectModel.TYPE_SIZE / 4);
 
         dTibStart = cur;                                     // TIBs: one per instantiated class
+        dTibOff = new int[tibSeenN];
         t = 0;
         while (t < tibSeenN)
         {
+            dTibOff[t] = cur;
             cur += ObjectModel.tibSize(MetalClassModel.vtableSize(tibSeenCls[t])) / 4;
             t += 1;
         }
 
         dStrStart = cur;                                     // interned string byte[] literals
+        dStrOff = new int[drStrN];
         int s = 0;
         while (s < drStrN)
         {
+            dStrOff[s] = cur;
             cur += (ObjectModel.ARRAY_BASE_OFFSET + ((drStr[s].length + 7) & ~7)) / 4;
             s += 1;
         }
@@ -2239,6 +2252,207 @@ public final class VM
     private static long dAddr(int word)
     {
         return 0x8_0000L + word * 4L;
+    }
+
+    // ----- image-address resolvers for each relocation kind (over the reproduced layout) -----
+
+    private static int findByteArr(byte[][] arr, int n, byte[] want)
+    {
+        int i = 0;
+        while (i < n)
+        {
+            if (bytesEqual(arr[i], want))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** Image Type address of {@code cls} (a class or interface — both live in the Types region). */
+    private static long typeImgAddr(byte[] cls)
+    {
+        int i = findByteArr(typeClasses, typeClassesN, cls);
+        return i < 0 ? 0L : dAddr(dTypesStart + i * (ObjectModel.TYPE_SIZE / 4));
+    }
+
+    private static long tibImgAddr(byte[] cls)
+    {
+        int j = findByteArr(tibSeenCls, tibSeenN, cls);
+        return j < 0 ? 0L : dAddr(dTibOff[j]);
+    }
+
+    private static long strImgAddr(byte[] s)
+    {
+        int k = findByteArr(drStr, drStrN, s);
+        return k < 0 ? 0L : dAddr(dStrOff[k]);
+    }
+
+    private static long statImgAddr(byte[] cls, byte[] nm)
+    {
+        int i = 0;
+        while (i < drStatN)
+        {
+            if (bytesEqual(drStatCls[i], cls) && bytesEqual(drStatName[i], nm))
+            {
+                return dAddr(dStaticsStart + i * (ObjectModel.WORD / 4));
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Image address of the runtime helper with id {@code id} (matches imEnqueueHelper's method keys). */
+    private static long helperImgAddr(int id)
+    {
+        if (id == 0)
+        {
+            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J"));
+        }
+        if (id == 1)
+        {
+            return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J"));
+        }
+        if (id == 2)
+        {
+            return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V"));
+        }
+        if (id == 3)
+        {
+            return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I"));
+        }
+        if (id == 4)
+        {
+            return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J"));
+        }
+        return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V"));
+    }
+
+    /** Patch every relocation site in {@code sym}'s just-compiled {@code words} to its image address. */
+    private static void patchImageRelocs(MetalWriterSymbols sym, int[] words, long base)
+    {
+        int c = 0;
+        while (c < sym.callCount())
+        {
+            int site = sym.callSiteWord(c);
+            long target = imAddrOf(utf8Copy(sym.callClassOff(c)), utf8Copy(sym.callNameOff(c)), utf8Copy(sym.callDescOff(c)));
+            words[site] = A64Enc.bl((int) ((target - (base + site * 4L)) / 4L));
+            c += 1;
+        }
+        int h = 0;
+        while (h < sym.helperCount())
+        {
+            int site = sym.helperSiteWord(h);
+            long target = helperImgAddr(sym.helperId(h));
+            words[site] = A64Enc.bl((int) ((target - (base + site * 4L)) / 4L));
+            h += 1;
+        }
+        int b = 0;
+        while (b < sym.tibCount())
+        {
+            patchAddrWords(words, sym.tibSiteWord(b), sym.tibReg(b), tibImgAddr(utf8Copy(sym.tibClassOff(b))));
+            b += 1;
+        }
+        int y = 0;
+        while (y < sym.typeCount())
+        {
+            patchAddrWords(words, sym.typeSiteWord(y), sym.typeReg(y), typeImgAddr(utf8Copy(sym.typeClassOff(y))));
+            y += 1;
+        }
+        int f = 0;
+        while (f < sym.ifCount())
+        {
+            patchAddrWords(words, sym.ifSiteWord(f), sym.ifReg(f), typeImgAddr(utf8Copy(sym.ifClassOff(f))));
+            f += 1;
+        }
+        int st = 0;
+        while (st < sym.staticCount())
+        {
+            patchAddrWords(words, sym.staticSiteWord(st), sym.staticReg(st),
+                           statImgAddr(utf8Copy(sym.staticClassOff(st)), utf8Copy(sym.staticNameOff(st))));
+            st += 1;
+        }
+        int sg = 0;
+        while (sg < sym.strCount())
+        {
+            patchAddrWords(words, sym.strSiteWord(sg), sym.strReg(sg), strImgAddr(utf8Copy(sym.strUtf8Off(sg))));
+            sg += 1;
+        }
+        int x = 0;
+        while (x < sym.excCount())
+        {
+            patchAddrWords(words, sym.excSiteWord(x), sym.excReg(x),
+                           statImgAddr(Magic.bytes("vm/VM"), Magic.bytes("$exception")));
+            x += 1;
+        }
+        int pc = 0;
+        while (pc < sym.pcCount())
+        {
+            patchAddrWords(words, sym.pcSiteWord(pc), sym.pcReg(pc), base + sym.pcTarget(pc) * 4L);
+            pc += 1;
+        }
+    }
+
+    /** The generated initClasses method's words at image {@code base}: BL each {@code <clinit>} (in
+     *  discovery order) to its image address, framed exactly as {@link #runGeneratedInitClasses}. */
+    private static int[] genInitClassesWords(long base)
+    {
+        byte[] clinit = Magic.bytes("<clinit>");
+        int frame = A64Enc.align16(8);
+        int[] words = new int[2 + clinitCount + 3];
+        words[0] = A64Enc.subImm(31, 31, frame);
+        words[1] = A64Enc.strx(30, 31, 0);
+        int wi = 2;
+        int j = 0;
+        while (j < imN)
+        {
+            if (bytesEqual(imName[j], clinit))
+            {
+                long target = imAddrOf(imClsName[j], clinit, Magic.bytes("()V"));
+                words[wi] = A64Enc.bl((int) ((target - (base + wi * 4L)) / 4L));
+                wi += 1;
+            }
+            j += 1;
+        }
+        words[wi] = A64Enc.ldrx(30, 31, 0);
+        words[wi + 1] = A64Enc.addImm(31, 31, frame);
+        words[wi + 2] = A64Enc.ret();
+        return words;
+    }
+
+    /** Whole code-region content fixpoint: compile every method at its image base with all relocations
+     *  resolved to image addresses, and word-compare against the running image. */
+    private static boolean fixpointCode()
+    {
+        discoverImage();
+        layoutDataRegions();
+        byte[] initName = Magic.bytes("initClasses");
+        byte[] vmName = Magic.bytes("vm/VM");
+        int idx = 0;
+        while (idx < imN)
+        {
+            long base = imAddrOf(imClsName[idx], imName[idx], imDesc[idx]);
+            int[] words;
+            if (bytesEqual(imName[idx], initName) && bytesEqual(imClsName[idx], vmName))
+            {
+                words = genInitClassesWords(base);
+            }
+            else
+            {
+                setClassContext(imCls[idx]);
+                int body = findMethodBody(imName[idx], imDesc[idx]);
+                MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+                words = compileInto(body, sym, base, idx == 0);
+                patchImageRelocs(sym, words, base);
+            }
+            if (!fixpointEquals(words, base))
+            {
+                return false;
+            }
+            idx += 1;
+        }
+        return true;
     }
 
     /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated

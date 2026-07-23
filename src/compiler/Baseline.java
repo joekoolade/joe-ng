@@ -283,7 +283,7 @@ public final class Baseline
         }  // dup2 (category-1 form: duplicate the top two slots)
         else if (op == 0x84)
         {
-            iinc(cb, code[pos + 1] & 0xFF, (byte) code[pos + 2]);
+            iinc(cb, code[pos + 1] & 0xFF, (byte) (code[pos + 2] & 0xFF));   // mask+cast: explicit sxtb (see bipush)
             return 3;
         }
 

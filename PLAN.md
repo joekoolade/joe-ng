@@ -965,10 +965,21 @@ is name→address bookkeeping:
        `exceptionSlot` sites re-merge by emission order (that one missing slot was the whole statics
        region's 8-byte drift). The entire `0x80000`-relative image map — code and data — is now
        reconstructed on metal.
-     - ⬜ **whole image.** Remaining: compile every method at its base and each data region's contents
-       with all relocations resolved to these (now-known) image addresses, then word-compare the whole
-       image → `FIX`. Layout (code + data) is done; the mechanism (compile-at-base, relocate, compare)
-       is proven per-method.
+     - ✅ **code-region content byte-identical (`$`).** `VM.fixpointCode` compiles all 485 boot-closure
+       methods at their image bases and resolves every relocation kind to image addresses over the
+       reproduced layout — calls/helpers to method offsets, `tib`/`type`/`interfaceType` to the Types/
+       TIBs regions, `static`/`exceptionSlot` to statics slots, `string` to the interned-byte[] region,
+       `codePc` to the self-PC — then word-compares each against the running image. All 485 match
+       (`initClasses` is regenerated with image-address `BL`s and compared too). Exposed one more
+       signed-byte codegen bug: `iinc`'s delta `(byte) code[pos+2]` relied on the JVM's sign-extending
+       `baload` (this compiler's zero-extends), so a negative increment (`shift -= 4`) compiled as
+       `ADD #252` instead of `SUB #4` when the metal-resident compiler recompiled `printHex`; masked +
+       cast to force an explicit `sxtb`, matching the `bipush` fix. The metal writer now reproduces the
+       exact machine code it is executing, across the whole code region.
+     - ⬜ **data-region content + `FIX`.** Remaining: materialise each data region's *contents* (Type
+       records, TIB vtables, string byte[]s, zeroed statics, itables, frame/handler entries, blob bytes,
+       class-table directory) at the reproduced addresses and word-compare, then the whole image → `FIX`.
+       Every address is now known; the code side is byte-identical.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
