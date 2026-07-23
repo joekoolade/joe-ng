@@ -75,6 +75,7 @@ public final class Heap
                     Magic.store64(prev, next);
                 }
                 lastFromFreeList = 1;
+                zeroPayload(f, aligned);                    // Java requires 0/default fields+elements
                 return f;                                   // status already holds the block size
             }
             prev = f;
@@ -84,7 +85,25 @@ public final class Heap
         Magic.store64(PTR_CELL, p + aligned);
         Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
         lastFromFreeList = 0;
+        zeroPayload(p, aligned);
         return p;
+    }
+
+    /**
+     * Zero an allocation's payload (past the {TIB, status} header), so freshly-allocated
+     * objects and arrays honour Java's default initialization. Real hardware RAM comes up
+     * with garbage; without this, uninitialized-but-assumed-zero fields (e.g. a compiler's
+     * counter) hold junk and code that ran on QEMU (whose RAM starts zeroed) hangs on metal.
+     */
+    private static void zeroPayload(long base, int aligned)
+    {
+        long z = base + ObjectModel.HEADER_SIZE;
+        long end = base + aligned;
+        while (z < end)
+        {
+            Magic.store64(z, 0L);
+            z += 8L;
+        }
     }
 
     /** Allocate an array of {@code length} elements of {@code elemSize} bytes. */

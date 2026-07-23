@@ -885,12 +885,19 @@ what the boot path needs, in roughly the order it needs them.
 - `dsb()` / `isb()` → `DSB SY` / `ISB` around every system-register change
 - `tlbiVMALLE1()`, `icIALLU()`, `dc(...)` → TLB / I-cache / D-cache maintenance
   - `Magic.icIALLU()` (`IC IALLU`) + `Magic.dcCVAU(addr)` (`DC CVAU`) implemented (M5.5c);
-    `Heap.publishCode(start,end)` uses them for JIT publish. **Why:** the Pi 4 boots with the
-    caches enabled (boot never disables them), so a bare `dsb;isb` left stale I-cache lines
-    over freshly-JIT'd heap code and the real board hung at the first `Magic.call0`
-    (`Loader.loadGuest`, just after the `R` marker) while QEMU — which models no I-cache — ran
-    on. Every JIT publish site (`Loader`, the metal-writer drivers) now cleans D→PoU then
-    invalidates the I-cache before executing. **Verify on real hardware** (QEMU can't exercise it).
+    `Heap.publishCode(start,end)` uses them for JIT publish — correct hygiene if the caches are
+    on, kept as such. (This was *first* suspected as the cause of the real-Pi hang after `R`, but
+    it was not — see next.)
+  - **Actual real-Pi hang after `R` — uninitialized heap memory (fixed M5.5c).** `Heap.alloc`
+    returned memory without zeroing it, so freshly-`new`'d objects/arrays held whatever was in
+    RAM. QEMU boots with zeroed RAM (so assumed-zero fields read 0 and it worked); the real Pi's
+    RAM is garbage, so an uninitialized-but-assumed-zero field — the JIT compiler's
+    `Baseline.fixupCount` — started as junk and the branch-fixup loop spun forever while
+    compiling `Guest.answer()`. Fix: `Heap.alloc` now zeroes each allocation's payload (past the
+    `{TIB,status}` header), honoring Java's default-init. **Confirmed in QEMU** by poisoning the
+    heap with garbage before use: reproduces the hang without the fix, runs clean with it.
+    Localized on hardware via UART phase-markers (`loadAll`→class→`compileClass`→method→
+    fixup-loop); those markers were then removed.
 - `writeSCTLR_EL1(enable)` → set `M` (MMU), `C`/`I` (caches) bits, then `isb()`
 
 **E. Exceptions + interrupts (EL1)**
