@@ -240,6 +240,10 @@ final class MetalClassModel
     {
         return vDesc[slot];
     }
+    static byte[] vtableSlotOwner(int slot)
+    {
+        return vOwner[slot];
+    }
 
     /** Slot index of {@code mName+mDesc} in {@code name}'s flattened vtable, or -1. */
     static int vtableSlot(byte[] name, byte[] mName, byte[] mDesc)

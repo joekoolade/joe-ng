@@ -860,9 +860,16 @@ is name→address bookkeeping:
            from the caller's bytes. `VM.selfBuildCrossAndRun` builds `Cell.readCounter`
            (=`Counter.bump(); return Counter.get()`) across Cell+Counter, resolves the cross-class
            calls + the shared `Counter.count` static, and runs it → `1`. Metal `X`.
-         - ⬜ **new/virtual/interface across classes.** BFS also pulling in `new`-ed classes'
-           vtable methods + interface itable impls (the impl may live in another class) → then
-           `Guest.answer` → 42, all kinds at once.
+         - ✅ **new + virtual across classes.** The single-class drivers fold into a reusable
+           `buildClosure(entry)`: BFS discovers callees *and* each `new`-ed class's vtable methods
+           (`MetalClassModel.vtableSlotOwner` added); `layoutClassRegionsG`/`addClassRegionG` lay
+           out cross-class Types/TIBs (vtable slots filled by `findMethodG` across classes);
+           `patchCrossAndWrite` patches the TIB loads. `Animal.dogSound` (=`new Dog().sound()`,
+           Dog in another class) dispatches through its TIB → `'W'`. Metal `y`. (`Cell.readCounter`
+           now also goes through `buildClosure`.)
+         - ⬜ **interface across classes + the rest.** Extend `buildClosure` with `type`/`string`/
+           interface (itables)/`exceptionSlot` layout+patch, discovering itable impls across
+           classes → then `Guest.answer` → 42, all kinds at once.
        - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
          blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in

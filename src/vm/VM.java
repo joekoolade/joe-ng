@@ -597,6 +597,11 @@ public final class VM
         // in another class, sharing the Counter.count static) by BFS, and run it -> 1.
         Uart.putc(selfBuildCrossAndRun() ? 0x58 : 0x78);   // 'X' cross-class discovery OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.3: cross-class new + virtual. Build Animal.dogSound (= new Dog().sound(),
+        // Dog in another class, dispatched through its TIB vtable) and run it -> 'W'.
+        Uart.putc(selfBuildDynAndRun() ? 0x79 : 0x78);     // 'y' cross-class new/virtual OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1315,33 +1320,44 @@ public final class VM
     private static MetalWriterSymbols[] gmSym;
     private static int gmCount;
 
-    /**
-     * Discover and build the call closure of {@code Cell.readCounter} across classes: it calls
-     * {@code Counter.bump}/{@code get} (another class), which touch the cross-class static
-     * {@code Counter.count}. BFS over recorded calls, load each callee's class, place all,
-     * resolve the cross-class calls + static, then run {@code readCounter()} → 1.
-     */
+    /** Cross-class calls + statics: {@code Cell.readCounter} → {@code Counter.bump/get} → 1. */
     private static boolean selfBuildCrossAndRun()
     {
-        lcName = new byte[16][];
-        lcBytes = new byte[16][];
-        lcOff = new int[16][];
-        lcTag = new int[16][];
-        lcAfterCp = new int[16];
+        return buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("readCounter"), Magic.bytes("()I")) == 1;
+    }
+
+    /** Cross-class new + virtual: {@code Animal.dogSound} = {@code new Dog().sound()} → 'W'. */
+    private static boolean selfBuildDynAndRun()
+    {
+        return buildClosure(Magic.bytes("vm/Animal"), Magic.bytes("dogSound"), Magic.bytes("()I")) == 0x57;
+    }
+
+    /**
+     * Discover, build, and run a method's closure across classes: BFS over recorded calls and
+     * (for {@code new}) the instantiated classes' vtable methods; lay each class's Type/TIB out;
+     * resolve every cross-class call, static, helper, and TIB load; then execute the entry and
+     * return its result (a negative sentinel on a build failure).
+     */
+    private static long buildClosure(byte[] entryCls, byte[] entryName, byte[] entryDesc)
+    {
+        lcName = new byte[32][];
+        lcBytes = new byte[32][];
+        lcOff = new int[32][];
+        lcTag = new int[32][];
+        lcAfterCp = new int[32];
         lcCount = 0;
-        gmClsName = new byte[32][];
-        gmClsIdx = new int[32];
-        gmName = new byte[32][];
-        gmDesc = new byte[32][];
-        gmSize = new int[32];
-        gmWordOff = new int[32];
-        gmWords = new int[32][];
-        gmSym = new MetalWriterSymbols[32];
+        gmClsName = new byte[64][];
+        gmClsIdx = new int[64];
+        gmName = new byte[64][];
+        gmDesc = new byte[64][];
+        gmSize = new int[64];
+        gmWordOff = new int[64];
+        gmWords = new int[64][];
+        gmSym = new MetalWriterSymbols[64];
         gmCount = 0;
 
-        enqueueMethod(Magic.bytes("vm/Cell"), Magic.bytes("readCounter"), Magic.bytes("()I"));
+        enqueueMethod(entryCls, entryName, entryDesc);
 
-        // BFS: compile each method over its own class context, discovering its callees.
         int i = 0;
         while (i < gmCount)
         {
@@ -1349,20 +1365,14 @@ public final class VM
             int body = findMethodBody(gmName[i], gmDesc[i]);
             if (body < 0)
             {
-                return false;
+                return -1L;
             }
             MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
             int[] words = compileInto(body, sym, 0L);
             gmSym[i] = sym;
             gmWords[i] = words;
             gmSize[i] = words.length;
-            int c = 0;
-            while (c < sym.callCount())
-            {
-                enqueueMethod(utf8Copy(sym.callClassOff(c)), utf8Copy(sym.callNameOff(c)),
-                              utf8Copy(sym.callDescOff(c)));
-                c += 1;
-            }
+            discoverFrom(sym);
             i += 1;
         }
 
@@ -1382,17 +1392,116 @@ public final class VM
         while (s < stCount)
         {
             long slot = staticsBuf + s * 8L;
-            Magic.store64(slot, 0L);                        // zero-init; count starts 0
+            Magic.store64(slot, 0L);
             stAddr[s] = slot;
             s += 1;
         }
 
+        layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
 
-        int entry = findMethodG(Magic.bytes("vm/Cell"), Magic.bytes("readCounter"), Magic.bytes("()I"));
-        long r = Magic.call0(codeBuf + gmWordOff[entry] * 4L);   // readCounter()
-        return ok && (int) r == 1;                          // bump() once -> get() == 1
+        int entry = findMethodG(entryCls, entryName, entryDesc);
+        long r = Magic.call0(codeBuf + gmWordOff[entry] * 4L);
+        return ok ? r : -2L;
+    }
+
+    /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated
+     *  class's vtable methods (so its TIB can be filled). Runs with {@code cB} = the method's class. */
+    private static void discoverFrom(MetalWriterSymbols sym)
+    {
+        int c = 0;
+        while (c < sym.callCount())
+        {
+            enqueueMethod(utf8Copy(sym.callClassOff(c)), utf8Copy(sym.callNameOff(c)),
+                          utf8Copy(sym.callDescOff(c)));
+            c += 1;
+        }
+        int t = 0;
+        while (t < sym.tibCount())
+        {
+            byte[] tc = utf8Copy(sym.tibClassOff(t));
+            int vs = MetalClassModel.vtableSize(tc);           // builds the vtable scratch for tc
+            int slot = 0;
+            while (slot < vs)
+            {
+                byte[] owner = MetalClassModel.vtableSlotOwner(slot);
+                if (!MetalClassModel.isRoot(owner))
+                {
+                    enqueueMethod(owner, MetalClassModel.vtableSlotName(slot), MetalClassModel.vtableSlotDesc(slot));
+                }
+                slot += 1;
+            }
+            t += 1;
+        }
+    }
+
+    /** Lay out a Type + TIB for every {@code new}-ed class in the closure (cross-class). */
+    private static void layoutClassRegionsG(long codeBuf)
+    {
+        nbClass = new byte[32][];
+        nbTypeAddr = new long[32];
+        nbTibAddr = new long[32];
+        nbCount = 0;
+        int m = 0;
+        while (m < gmCount)
+        {
+            setClassContext(gmClsIdx[m]);
+            MetalWriterSymbols sym = gmSym[m];
+            int t = 0;
+            while (t < sym.tibCount())
+            {
+                addClassRegionG(utf8Copy(sym.tibClassOff(t)), codeBuf);
+                t += 1;
+            }
+            m += 1;
+        }
+    }
+
+    /** Build {@code name}'s Type + TIB (vtable filled from placed methods across classes) once. */
+    private static void addClassRegionG(byte[] name, long codeBuf)
+    {
+        if (findTibClassBytes(name) >= 0)
+        {
+            return;
+        }
+        long type = Heap.alloc(ObjectModel.TYPE_SIZE);
+        Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
+                      ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
+        int vs = MetalClassModel.vtableSize(name);
+        long tib = Heap.alloc(ObjectModel.tibSize(vs));
+        Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
+        int slot = 0;
+        while (slot < vs)
+        {
+            int j = findMethodG(MetalClassModel.vtableSlotOwner(slot), MetalClassModel.vtableSlotName(slot),
+                                MetalClassModel.vtableSlotDesc(slot));
+            if (j >= 0)
+            {
+                Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)),
+                              codeBuf + gmWordOff[j] * 4L);
+            }
+            slot += 1;
+        }
+        nbClass[nbCount] = name;
+        nbTypeAddr[nbCount] = type;
+        nbTibAddr[nbCount] = tib;
+        nbCount += 1;
+    }
+
+    /** Index of the laid-out class whose name equals {@code name}, or -1. */
+    private static int findTibClassBytes(byte[] name)
+    {
+        int j = 0;
+        while (j < nbCount)
+        {
+            if (bytesEqual(nbClass[j], name))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
     }
 
     /** Point the {@code cB/cOff/cTag/cAfterCp} cursor at the cached class {@code ci}. */
@@ -1534,6 +1643,20 @@ public final class VM
                     patchAddrWords(words, sym.staticSiteWord(t), sym.staticReg(t), stAddr[k]);
                 }
                 t += 1;
+            }
+            int b = 0;
+            while (b < sym.tibCount())
+            {
+                int k = findTibClassBytes(utf8Copy(sym.tibClassOff(b)));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.tibSiteWord(b), sym.tibReg(b), nbTibAddr[k]);
+                }
+                b += 1;
             }
             writeWords(buf, baseOff, words);
             m += 1;
