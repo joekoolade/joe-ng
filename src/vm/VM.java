@@ -683,6 +683,28 @@ public final class VM
         // 0x80000-relative placement of the code region it booted from.
         Uart.putc(fixpointCodeLayout() ? 0x5A : 0x78);     // 'Z' code-region layout reproduced / 'x' off
         Uart.putc(0x0A);
+
+        // M5.5c step 4: whole-image data-region layout fixpoint. Reproduce the seed ImageBuilder's
+        // layout of every region after the code -- Types, TIBs, interned strings, statics, itables,
+        // unwind frame/handler tables, blobs, class table -- and assert each boundary + count lands
+        // where the running image stashed it, proving the metal writer reconstructs the whole image map.
+        Uart.putc(fixpointDataLayout() ? 0x48 : 0x78);     // 'H' data-region layout reproduced / 'x' off
+        Uart.putc(0x0A);
+    }
+
+    /** Whether every stashed data-region boundary + unwind count matches the metal writer's layout. */
+    private static boolean fixpointDataLayout()
+    {
+        discoverImage();
+        layoutDataRegions();
+        return dAddr(dStaticsStart) == staticsStart
+            && dAddr(dStaticsEnd) == staticsEnd
+            && dAddr(dFrameStart) == frameTable
+            && dAddr(dHandlerStart) == handlerTable
+            && dAddr(dBlobStart) == guestBytes
+            && dAddr(dClassDirStart) == classDir
+            && drFrameCount == frameCount
+            && drHandlerCount == handlerCount;
     }
 
     /** Whether every stashed method-address anchor lands at the metal writer's derived offset. */
@@ -1700,6 +1722,23 @@ public final class VM
     private static byte[][] tibSeenCls;  // classes whose vtable has been expanded (tibClasses dedup)
     private static int tibSeenN;
     private static int clinitCount;      // discovered <clinit>s (the initClasses method's BL count)
+    // data-region sets, collected during discovery in the seed's order (for the region layout)
+    private static byte[][] drStr;       // interned string literals (content-deduped)
+    private static int drStrN;
+    private static byte[][] drTypeRef;   // instanceof/checkcast/interface/catch Type classes
+    private static int drTypeRefN;
+    private static byte[][] drUsedIf;    // invokeinterface target interfaces
+    private static int drUsedIfN;
+    private static byte[][] drStatCls;   // distinct static fields: owner class
+    private static byte[][] drStatName;  // ... and field name
+    private static int drStatN;
+    private static int drFrameCount;     // methods with a frame (unwind frame-table entries)
+    private static int drHandlerCount;   // total try/catch handlers (unwind handler-table entries)
+    private static byte[][] typeClasses; // Types region: instantiated + type-ref classes + their supers
+    private static int typeClassesN;
+    // computed 0x80000-relative WORD offsets of each region boundary (see layoutDataRegions)
+    private static int dTypesStart, dTibStart, dStrStart, dStaticsStart, dStaticsEnd;
+    private static int dItStart, dFrameStart, dHandlerStart, dBlobStart, dClassDirStart;
 
     private static int imFind(byte[] cls, byte[] name, byte[] desc)
     {
@@ -1813,6 +1852,17 @@ public final class VM
         tibSeenCls = new byte[32][];
         tibSeenN = 0;
         clinitCount = 0;
+        drStr = new byte[256][];
+        drStrN = 0;
+        drTypeRef = new byte[64][];
+        drTypeRefN = 0;
+        drUsedIf = new byte[32][];
+        drUsedIfN = 0;
+        drStatCls = new byte[256][];
+        drStatName = new byte[256][];
+        drStatN = 0;
+        drFrameCount = 0;
+        drHandlerCount = 0;
 
         imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("boot"), Magic.bytes("()V"));
         int i = 0;
@@ -1833,6 +1883,7 @@ public final class VM
         imDesc[imN] = Magic.bytes("()V");
         imSize[imN] = 2 + clinitCount + 3;
         imN += 1;
+        drFrameCount += 1;                                   // initClasses has a frame (LR save) too
     }
 
     /** Enqueue the runtime-helper method the writer synthesised a {@code BL} to (matches WriterSymbols.HELPER_KEY). */
@@ -1899,21 +1950,86 @@ public final class VM
                 hi += 1;
             }
         }
+        // 2: data-region sets, in the seed's per-method order (strings, type refs, interface refs,
+        //    handler catch classes, unwind counts) -- these feed the Types/strings/itable/unwind layout.
+        int sr = 0;
+        while (sr < sym.strCount())
+        {
+            drAddStr(utf8Copy(sym.strUtf8Off(sr)));
+            sr += 1;
+        }
+        int ty = 0;
+        while (ty < sym.typeCount())
+        {
+            drAddTypeRef(utf8Copy(sym.typeClassOff(ty)));
+            ty += 1;
+        }
+        int inf = 0;
+        while (inf < sym.ifCount())
+        {
+            byte[] ic = utf8Copy(sym.ifClassOff(inf));
+            drAddTypeRef(ic);
+            drAddUsedIf(ic);
+            inf += 1;
+        }
+        int hc = 0;
+        while (hc < fHN)                                      // catch classes are type-checked (VM.instanceOf)
+        {
+            if (fHCatch[hc] != 0)
+            {
+                drAddTypeRef(utf8Copy(ClassReader.classNameOff(cB, cOff, fHCatch[hc])));
+            }
+            hc += 1;
+        }
+        if (fFrameSize > 0)
+        {
+            drFrameCount += 1;
+        }
+        drHandlerCount += fHN;
+
         int t = 0;
-        while (t < sym.tibCount())                           // 2: each new'd class's <clinit>
+        while (t < sym.tibCount())                           // 3: each new'd class's <clinit>
         {
             useClinit(utf8Copy(sym.tibClassOff(t)));
             t += 1;
         }
-        int s = 0;
-        while (s < sym.staticCount())                        // 3: each used static's owner <clinit>
+        // 4: statics region -- real static fields (getstatic/putstatic) and the shared $exception
+        //    slot (athrow/catch), merged by emission order as the seed's single staticRefs list is,
+        //    plus each field owner's <clinit>.
+        int si = 0;
+        int xi = 0;
+        int ns = sym.staticCount();
+        int nx = sym.excCount();
+        while (si < ns || xi < nx)
         {
-            useClinit(utf8Copy(sym.staticClassOff(s)));
-            s += 1;
+            boolean takeStatic;
+            if (si >= ns)
+            {
+                takeStatic = false;
+            }
+            else if (xi >= nx)
+            {
+                takeStatic = true;
+            }
+            else
+            {
+                takeStatic = sym.staticSiteWord(si) < sym.excSiteWord(xi);
+            }
+            if (takeStatic)
+            {
+                drAddStat(utf8Copy(sym.staticClassOff(si)), utf8Copy(sym.staticNameOff(si)));
+                useClinit(utf8Copy(sym.staticClassOff(si)));
+                si += 1;
+            }
+            else
+            {
+                drAddStat(Magic.bytes("vm/VM"), Magic.bytes("$exception"));
+                xi += 1;
+            }
         }
-        useClinit(ownerCls);                                 // 4: the method's own class <clinit>
+        useClinit(ownerCls);                                 // 5: the method's own class <clinit>
         t = 0;
-        while (t < sym.tibCount())                           // 5: a newly instantiated class's vtable methods
+        while (t < sym.tibCount())                           // 6: a newly instantiated class's vtable methods
         {
             byte[] tc = utf8Copy(sym.tibClassOff(t));
             if (tibSeenAdd(tc))
@@ -1929,6 +2045,200 @@ public final class VM
             }
             t += 1;
         }
+    }
+
+    private static void drAddStr(byte[] s)
+    {
+        int i = 0;
+        while (i < drStrN)
+        {
+            if (bytesEqual(drStr[i], s))
+            {
+                return;
+            }
+            i += 1;
+        }
+        drStr[drStrN] = s;
+        drStrN += 1;
+    }
+
+    private static void drAddTypeRef(byte[] c)
+    {
+        int i = 0;
+        while (i < drTypeRefN)
+        {
+            if (bytesEqual(drTypeRef[i], c))
+            {
+                return;
+            }
+            i += 1;
+        }
+        drTypeRef[drTypeRefN] = c;
+        drTypeRefN += 1;
+    }
+
+    private static void drAddUsedIf(byte[] c)
+    {
+        int i = 0;
+        while (i < drUsedIfN)
+        {
+            if (bytesEqual(drUsedIf[i], c))
+            {
+                return;
+            }
+            i += 1;
+        }
+        drUsedIf[drUsedIfN] = c;
+        drUsedIfN += 1;
+    }
+
+    private static void drAddStat(byte[] cls, byte[] nm)
+    {
+        int i = 0;
+        while (i < drStatN)
+        {
+            if (bytesEqual(drStatCls[i], cls) && bytesEqual(drStatName[i], nm))
+            {
+                return;
+            }
+            i += 1;
+        }
+        drStatCls[drStatN] = cls;
+        drStatName[drStatN] = nm;
+        drStatN += 1;
+    }
+
+    /** The seed's addTypeClass: add {@code cls} and each non-root superclass up the chain (dedup). */
+    private static void addTypeClass(byte[] cls)
+    {
+        while (cls != null && !MetalClassModel.isRoot(cls) && typeClassAdd(cls))
+        {
+            cls = MetalClassModel.superName(cls);
+        }
+    }
+
+    private static boolean typeClassAdd(byte[] cls)
+    {
+        int i = 0;
+        while (i < typeClassesN)
+        {
+            if (bytesEqual(typeClasses[i], cls))
+            {
+                return false;
+            }
+            i += 1;
+        }
+        typeClasses[typeClassesN] = cls;
+        typeClassesN += 1;
+        return true;
+    }
+
+    /**
+     * Reproduce the seed ImageBuilder's data-region layout after the code region, computing each
+     * region's 0x80000-relative WORD offset: [Types][TIBs][strings][statics][itables][frame table]
+     * [handler table][blobs][class table]. Requires {@link #discoverImage} to have run (it fills the
+     * sets this consumes). Validated against the stashed region anchors.
+     */
+    private static void layoutDataRegions()
+    {
+        int cur = 0;
+        int i = 0;
+        while (i < imN)                                      // code region (all methods + initClasses)
+        {
+            cur += imSize[i];
+            i += 1;
+        }
+        cur += cur % 2;                                      // pad to 8 bytes before the data regions
+
+        // Types: instantiated classes + type-ref classes, each with its whole superclass chain.
+        typeClasses = new byte[128][];
+        typeClassesN = 0;
+        int t = 0;
+        while (t < tibSeenN)
+        {
+            addTypeClass(tibSeenCls[t]);
+            t += 1;
+        }
+        t = 0;
+        while (t < drTypeRefN)
+        {
+            addTypeClass(drTypeRef[t]);
+            t += 1;
+        }
+        dTypesStart = cur;
+        cur += typeClassesN * (ObjectModel.TYPE_SIZE / 4);
+
+        dTibStart = cur;                                     // TIBs: one per instantiated class
+        t = 0;
+        while (t < tibSeenN)
+        {
+            cur += ObjectModel.tibSize(MetalClassModel.vtableSize(tibSeenCls[t])) / 4;
+            t += 1;
+        }
+
+        dStrStart = cur;                                     // interned string byte[] literals
+        int s = 0;
+        while (s < drStrN)
+        {
+            cur += (ObjectModel.ARRAY_BASE_OFFSET + ((drStr[s].length + 7) & ~7)) / 4;
+            s += 1;
+        }
+
+        dStaticsStart = cur;                                 // one 8-byte slot per distinct static field
+        cur += drStatN * (ObjectModel.WORD / 4);
+        dStaticsEnd = cur;
+
+        dItStart = cur;                                      // itable directories + itables per class
+        t = 0;
+        while (t < tibSeenN)
+        {
+            int impls = 0;
+            int u = 0;
+            while (u < drUsedIfN)
+            {
+                if (MetalClassModel.implementsInterface(tibSeenCls[t], drUsedIf[u]))
+                {
+                    impls += 1;
+                }
+                u += 1;
+            }
+            if (impls > 0)
+            {
+                cur += (impls + 1) * (ObjectModel.ITABLE_ENTRY_SIZE / 4);   // +1 zeroed sentinel
+                u = 0;
+                while (u < drUsedIfN)
+                {
+                    if (MetalClassModel.implementsInterface(tibSeenCls[t], drUsedIf[u]))
+                    {
+                        cur += MetalClassModel.interfaceMethodCount(drUsedIf[u]) * (ObjectModel.WORD / 4);
+                    }
+                    u += 1;
+                }
+            }
+            t += 1;
+        }
+
+        dFrameStart = cur;                                   // unwind: frame entries (6 words each)
+        cur += drFrameCount * 6;
+        dHandlerStart = cur;                                 // unwind: handler entries (8 words each)
+        cur += drHandlerCount * 8;
+
+        dBlobStart = cur;                                    // embedded raw .class blobs, 8-byte aligned
+        cur += align8W((int) guestLen) + align8W((int) greeterLen) + align8W((int) alphaLen)
+             + align8W((int) betaLen) + align8W((int) myExcLen) + align8W((int) mathLen);
+
+        dClassDirStart = cur;                                // class table directory (names + bytes follow)
+    }
+
+    /** Image words an 8-byte-aligned run of {@code len} bytes occupies (companion to the seed's align8Words). */
+    private static int align8W(int len)
+    {
+        return ((len + 7) & ~7) / 4;
+    }
+
+    private static long dAddr(int word)
+    {
+        return 0x8_0000L + word * 4L;
     }
 
     /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated

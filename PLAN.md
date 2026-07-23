@@ -953,10 +953,22 @@ is name→address bookkeeping:
        instruction encodings (`0xD65F03C0`) materialised in 2 words not 4; `i2l` now emits `sxtw`. Also
        fixed `MetalClassModel.MAX_SLOTS` (32 → 128; `MetalWriterSymbols`/`Baseline` have >32 virtual
        methods, and metal has no array-bounds checks, so the vtable scratch silently corrupted).
-     - ⬜ **whole image.** Remaining: compile every method at its (now-known) `0x80000`-relative base,
-       resolve all relocations to image addresses, and lay out + byte-compare the data regions (Types,
-       TIBs, strings, statics, itables, unwind tables, blobs, class table) → `FIX`. The code region's
-       order/size/placement is done; the mechanism (compile-at-base, relocate, compare) is proven.
+     - ✅ **data-region layout reproduced (`H`).** `VM.layoutDataRegions` reproduces the seed's layout
+       of every region after the code — Types (instantiated + type-ref classes and their whole super
+       chains, via `addTypeClass`), TIBs, interned strings, statics, itables, unwind frame/handler
+       tables, blobs, and the class table — from the sets `discoverImage` now collects in the seed's
+       per-method order (strings, type/interface refs, catch classes, statics, unwind counts). Every
+       stashed boundary + count lands exactly: `staticsStart`/`staticsEnd`/`frameTable`/`handlerTable`/
+       `guestBytes` (first blob)/`classDir`, and `frameCount` (487)/`handlerCount` (2). Needed the same
+       call/helper-style merge for statics: the seed's `exceptionSlot` adds a `vm/VM.$exception` slot to
+       the *same* `staticRefs` list, which the metal writer records separately — so `staticField` and
+       `exceptionSlot` sites re-merge by emission order (that one missing slot was the whole statics
+       region's 8-byte drift). The entire `0x80000`-relative image map — code and data — is now
+       reconstructed on metal.
+     - ⬜ **whole image.** Remaining: compile every method at its base and each data region's contents
+       with all relocations resolved to these (now-known) image addresses, then word-compare the whole
+       image → `FIX`. Layout (code + data) is done; the mechanism (compile-at-base, relocate, compare)
+       is proven per-method.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
