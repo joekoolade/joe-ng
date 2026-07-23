@@ -23,6 +23,12 @@ public final class Cell
         return new Cell(v).value;
     }
 
+    /** {@code new Cell(0) instanceof Cell} — the metal writer's {@code type}/instanceof target. */
+    public static int selfCheck()
+    {
+        return new Cell(0) instanceof Cell ? 1 : 0;
+    }
+
     public int get()
     {
         return value;

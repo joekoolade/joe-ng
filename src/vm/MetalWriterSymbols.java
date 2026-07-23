@@ -56,6 +56,11 @@ final class MetalWriterSymbols implements Symbols
     private final int[] tibClassOff = new int[MAX]; // ... the class-name Utf8 offset
     private int tibN;
 
+    private final int[] typeSite = new int[MAX];    // instanceof/checkcast: Type address-load site
+    private final int[] typeReg = new int[MAX];
+    private final int[] typeClassOff = new int[MAX];
+    private int typeN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -89,7 +94,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        reserve(cb, reg);
+        typeSite[typeN] = cb.reserveAddr(reg);
+        typeReg[typeN] = reg;
+        typeClassOff[typeN] = ClassReader.classNameOff(classBytes, cpOff, classCp);
+        typeN += 1;
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
@@ -246,6 +254,22 @@ final class MetalWriterSymbols implements Symbols
     int tibClassOff(int i)
     {
         return tibClassOff[i];
+    }
+    int typeCount()
+    {
+        return typeN;
+    }
+    int typeSiteWord(int i)
+    {
+        return typeSite[i];
+    }
+    int typeReg(int i)
+    {
+        return typeReg[i];
+    }
+    int typeClassOff(int i)
+    {
+        return typeClassOff[i];
     }
     int helperCount()
     {

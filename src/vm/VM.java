@@ -567,12 +567,18 @@ public final class VM
         // Heap.alloc helper call, then run make(0x37) -> 0x37.
         Uart.putc(selfBuildNewAndRun() ? 0x4F : 0x78);     // 'O' object/new reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: instanceof. Build Cell.selfCheck (= new Cell(0) instanceof Cell),
+        // patch the `type` Type-address load and the VM.instanceOf helper, then run it -> 1.
+        Uart.putc(selfBuildInstanceofAndRun() ? 0x54 : 0x78);  // 'T' type/instanceof reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
 
-    private static byte[][] nbClass;   // distinct `new`-referenced classes
-    private static long[] nbTibAddr;   // ... its laid-out TIB address
+    private static byte[][] nbClass;   // distinct classes needing a laid-out Type/TIB (new or type-tested)
+    private static long[] nbTibAddr;   // ... its TIB address
+    private static long[] nbTypeAddr;  // ... its Type address
     private static int nbCount;
 
     /**
@@ -625,7 +631,7 @@ public final class VM
         }
         long codeBuf = Heap.alloc(cur * 4);
 
-        layoutTibs();
+        layoutClassRegions();
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
 
@@ -634,11 +640,70 @@ public final class VM
         return ok && (int) r == 0x37;
     }
 
-    /** Lay out a Type + TIB for each class the closure {@code new}s, recording its TIB address. */
-    private static void layoutTibs()
+    /**
+     * Build {@code Cell.selfCheck} (= {@code new Cell(0) instanceof Cell ? 1 : 0}) into a Heap
+     * buffer, patch the `new`, the `instanceof` Type load, and the {@code VM.instanceOf} helper
+     * call, then run it — which must return 1 (a Cell is a Cell).
+     */
+    private static boolean selfBuildInstanceofAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Cell"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("selfCheck");
+        clDesc[0] = Magic.bytes("()I");
+        clName[1] = Magic.bytes("<init>");
+        clDesc[1] = Magic.bytes("(I)V");
+        clCount = 2;
+
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        layoutClassRegions();
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // selfCheck()
+        return ok && (int) r == 1;
+    }
+
+    /** Lay out a Type + TIB for each class the closure {@code new}s or type-tests. */
+    private static void layoutClassRegions()
     {
         nbClass = new byte[16][];
         nbTibAddr = new long[16];
+        nbTypeAddr = new long[16];
         nbCount = 0;
         int m = 0;
         while (m < clCount)
@@ -647,23 +712,27 @@ public final class VM
             int t = 0;
             while (t < sym.tibCount())
             {
-                int classOff = sym.tibClassOff(t);
-                if (findTibClass(classOff) < 0)
-                {
-                    byte[] name = utf8Copy(classOff);
-                    nbClass[nbCount] = name;
-                    nbTibAddr[nbCount] = buildTypeAndTib(name);
-                    nbCount += 1;
-                }
+                addClassRegion(sym.tibClassOff(t));
                 t += 1;
+            }
+            int y = 0;
+            while (y < sym.typeCount())
+            {
+                addClassRegion(sym.typeClassOff(y));
+                y += 1;
             }
             m += 1;
         }
     }
 
-    /** Allocate and fill {@code name}'s Type (instanceSize/super/itableDir) + a TIB pointing at it. */
-    private static long buildTypeAndTib(byte[] name)
+    /** Build {@code classOff}'s Type + TIB once, if not already laid out. */
+    private static void addClassRegion(int classOff)
     {
+        if (findTibClass(classOff) >= 0)
+        {
+            return;
+        }
+        byte[] name = utf8Copy(classOff);
         long type = Heap.alloc(ObjectModel.TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
@@ -671,7 +740,10 @@ public final class VM
         Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);  // no interfaces
         long tib = Heap.alloc(ObjectModel.tibSize(0));                 // minimal TIB: just the Type slot
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
-        return tib;
+        nbClass[nbCount] = name;
+        nbTypeAddr[nbCount] = type;
+        nbTibAddr[nbCount] = tib;
+        nbCount += 1;
     }
 
     /** Index of the laid-out class whose name equals the Utf8 at {@code classOff} in {@code cB}, or -1. */
@@ -736,6 +808,20 @@ public final class VM
                     patchAddrWords(words, sym.tibSiteWord(t), sym.tibReg(t), nbTibAddr[k]);
                 }
                 t += 1;
+            }
+            int y = 0;
+            while (y < sym.typeCount())
+            {
+                int k = findTibClass(sym.typeClassOff(y));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.typeSiteWord(y), sym.typeReg(y), nbTypeAddr[k]);
+                }
+                y += 1;
             }
             writeWords(buf, baseOff, words);
             m += 1;
