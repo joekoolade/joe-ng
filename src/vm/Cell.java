@@ -37,6 +37,13 @@ public final class Cell
         return Magic.bytes("Z")[0];
     }
 
+    /** Calls into another class (Counter) — the metal writer's cross-class discovery target. */
+    public static int readCounter()
+    {
+        Counter.bump();
+        return Counter.get();
+    }
+
     /** {@code new Cell(v); c.get()} — the metal writer's invokevirtual (vtable-dispatch) target. */
     public static int viaVirtual(int v)
     {

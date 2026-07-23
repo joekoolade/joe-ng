@@ -592,6 +592,11 @@ public final class VM
         // MyExc(); } catch (MyExc e) { return 1; }) and run it -> 1 (same-method, inline catch).
         Uart.putc(selfBuildExceptionAndRun() ? 0x65 : 0x78);  // 'e' exception reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: cross-class discovery. Build Cell.readCounter (calls Counter.bump/get
+        // in another class, sharing the Counter.count static) by BFS, and run it -> 1.
+        Uart.putc(selfBuildCrossAndRun() ? 0x58 : 0x78);   // 'X' cross-class discovery OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1289,6 +1294,251 @@ public final class VM
             return checkCastAddr;      // CHECK_CAST
         }
         return unwindAddr;             // UNWIND
+    }
+
+    // ----- M5.5c step 3b.2: cross-class discovery (BFS over calls; per-method class context) -----
+
+    private static byte[][] lcName;    // loaded-class cache: name / bytes / cp offsets / tags / afterCp
+    private static byte[][] lcBytes;
+    private static int[][] lcOff;
+    private static int[][] lcTag;
+    private static int[] lcAfterCp;
+    private static int lcCount;
+
+    private static byte[][] gmClsName; // discovered methods: owning class name (for matching)
+    private static int[] gmClsIdx;     // ... its class-cache index (for context)
+    private static byte[][] gmName;
+    private static byte[][] gmDesc;
+    private static int[] gmSize;
+    private static int[] gmWordOff;
+    private static int[][] gmWords;
+    private static MetalWriterSymbols[] gmSym;
+    private static int gmCount;
+
+    /**
+     * Discover and build the call closure of {@code Cell.readCounter} across classes: it calls
+     * {@code Counter.bump}/{@code get} (another class), which touch the cross-class static
+     * {@code Counter.count}. BFS over recorded calls, load each callee's class, place all,
+     * resolve the cross-class calls + static, then run {@code readCounter()} → 1.
+     */
+    private static boolean selfBuildCrossAndRun()
+    {
+        lcName = new byte[16][];
+        lcBytes = new byte[16][];
+        lcOff = new int[16][];
+        lcTag = new int[16][];
+        lcAfterCp = new int[16];
+        lcCount = 0;
+        gmClsName = new byte[32][];
+        gmClsIdx = new int[32];
+        gmName = new byte[32][];
+        gmDesc = new byte[32][];
+        gmSize = new int[32];
+        gmWordOff = new int[32];
+        gmWords = new int[32][];
+        gmSym = new MetalWriterSymbols[32];
+        gmCount = 0;
+
+        enqueueMethod(Magic.bytes("vm/Cell"), Magic.bytes("readCounter"), Magic.bytes("()I"));
+
+        // BFS: compile each method over its own class context, discovering its callees.
+        int i = 0;
+        while (i < gmCount)
+        {
+            setClassContext(gmClsIdx[i]);
+            int body = findMethodBody(gmName[i], gmDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            gmSym[i] = sym;
+            gmWords[i] = words;
+            gmSize[i] = words.length;
+            int c = 0;
+            while (c < sym.callCount())
+            {
+                enqueueMethod(utf8Copy(sym.callClassOff(c)), utf8Copy(sym.callNameOff(c)),
+                              utf8Copy(sym.callDescOff(c)));
+                c += 1;
+            }
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < gmCount)
+        {
+            gmWordOff[p] = cur;
+            cur += gmSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        collectStaticsG();
+        long staticsBuf = Heap.alloc(stCount * 8);
+        int s = 0;
+        while (s < stCount)
+        {
+            long slot = staticsBuf + s * 8L;
+            Magic.store64(slot, 0L);                        // zero-init; count starts 0
+            stAddr[s] = slot;
+            s += 1;
+        }
+
+        boolean ok = patchCrossAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        int entry = findMethodG(Magic.bytes("vm/Cell"), Magic.bytes("readCounter"), Magic.bytes("()I"));
+        long r = Magic.call0(codeBuf + gmWordOff[entry] * 4L);   // readCounter()
+        return ok && (int) r == 1;                          // bump() once -> get() == 1
+    }
+
+    /** Point the {@code cB/cOff/cTag/cAfterCp} cursor at the cached class {@code ci}. */
+    private static void setClassContext(int ci)
+    {
+        cB = lcBytes[ci];
+        cOff = lcOff[ci];
+        cTag = lcTag[ci];
+        cAfterCp = lcAfterCp[ci];
+    }
+
+    /** Load + parse a class once, caching it; returns its cache index. */
+    private static int loadClass(byte[] name)
+    {
+        int i = 0;
+        while (i < lcCount)
+        {
+            if (bytesEqual(lcName[i], name))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        byte[] b = MetalClassModel.bytesOf(name);
+        int[] off = new int[ClassReader.cpCount(b)];
+        int[] tag = new int[off.length];
+        lcAfterCp[lcCount] = ClassReader.constantPool(b, off, tag);
+        lcName[lcCount] = name;
+        lcBytes[lcCount] = b;
+        lcOff[lcCount] = off;
+        lcTag[lcCount] = tag;
+        return lcCount++;
+    }
+
+    /** Enqueue a method (class,name,desc) for the closure if not already present. */
+    private static void enqueueMethod(byte[] clsName, byte[] name, byte[] desc)
+    {
+        if (findMethodG(clsName, name, desc) >= 0)
+        {
+            return;
+        }
+        gmClsName[gmCount] = clsName;
+        gmClsIdx[gmCount] = loadClass(clsName);
+        gmName[gmCount] = name;
+        gmDesc[gmCount] = desc;
+        gmCount += 1;
+    }
+
+    /** Index of the discovered method matching (class,name,desc), or -1. */
+    private static int findMethodG(byte[] clsName, byte[] name, byte[] desc)
+    {
+        int j = 0;
+        while (j < gmCount)
+        {
+            if (bytesEqual(gmClsName[j], clsName) && bytesEqual(gmName[j], name) && bytesEqual(gmDesc[j], desc))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Gather the distinct statics referenced across all discovered methods (by class+field content). */
+    private static void collectStaticsG()
+    {
+        stClass = new byte[16][];
+        stName = new byte[16][];
+        stAddr = new long[16];
+        stCount = 0;
+        int m = 0;
+        while (m < gmCount)
+        {
+            setClassContext(gmClsIdx[m]);
+            MetalWriterSymbols sym = gmSym[m];
+            int c = 0;
+            while (c < sym.staticCount())
+            {
+                int classOff = sym.staticClassOff(c);
+                int nameOff = sym.staticNameOff(c);
+                if (findStatic(classOff, nameOff) < 0)
+                {
+                    stClass[stCount] = utf8Copy(classOff);
+                    stName[stCount] = utf8Copy(nameOff);
+                    stCount += 1;
+                }
+                c += 1;
+            }
+            m += 1;
+        }
+    }
+
+    /** Patch every discovered method's cross-class calls, statics, and helpers, then write it out. */
+    private static boolean patchCrossAndWrite(long buf)
+    {
+        boolean ok = true;
+        int m = 0;
+        while (m < gmCount)
+        {
+            setClassContext(gmClsIdx[m]);                  // reloc identities are offsets into this class
+            MetalWriterSymbols sym = gmSym[m];
+            int[] words = gmWords[m];
+            int baseOff = gmWordOff[m];
+            int c = 0;
+            while (c < sym.callCount())
+            {
+                int j = findMethodG(utf8Copy(sym.callClassOff(c)), utf8Copy(sym.callNameOff(c)),
+                                    utf8Copy(sym.callDescOff(c)));
+                if (j < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    int site = sym.callSiteWord(c);
+                    words[site] = A64Enc.bl(gmWordOff[j] - (baseOff + site));   // cross-class BL (same buffer)
+                }
+                c += 1;
+            }
+            int h = 0;
+            while (h < sym.helperCount())
+            {
+                int site = sym.helperSiteWord(h);
+                long siteAbs = buf + (baseOff + site) * 4L;
+                long rel = (helperAddr(sym.helperId(h)) - siteAbs) / 4L;
+                words[site] = A64Enc.bl((int) rel);
+                h += 1;
+            }
+            int t = 0;
+            while (t < sym.staticCount())
+            {
+                int k = findStatic(sym.staticClassOff(t), sym.staticNameOff(t));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.staticSiteWord(t), sym.staticReg(t), stAddr[k]);
+                }
+                t += 1;
+            }
+            writeWords(buf, baseOff, words);
+            m += 1;
+        }
+        return ok;
     }
 
     // ----- M5.5c step 3b: metal layout engine (build + execute a call closure) -----

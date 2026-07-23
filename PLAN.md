@@ -851,10 +851,20 @@ is name→address bookkeeping:
            exception slot + catch-type `type` load + `VM.instanceOf` — and runs it → `1`. Metal `e`.
          - **Every relocation kind is now covered on metal** (calls, static, `new`, `type`,
            `string`, invokevirtual, invokeinterface, exception). Marker line: `…S O T g D i e`.
-         - ⬜ **capstone + breadth.** Cross-class discovery (a closure spanning many classes, e.g.
-           `Guest.answer` → 42, exercising all kinds at once); `initClasses`; unwind tables (cross-
-           method); blobs; class table — `int[] image` sink at `0x80000`-relative bases toward the
-           fixpoint. Couples to the key migration (1b.3).
+       - **3b.3: cross-class discovery (BFS).** The single-class drivers generalize to multi-class
+         closures — the discovery the seed `ImageBuilder.build` does.
+         - ✅ **calls + statics.** A class cache (`loadClass`, parse-once) + a class-aware method
+           table (`enqueueMethod`/`findMethodG` keyed by class+name+desc); the compile loop sets a
+           per-method `cB/cOff/cTag/cAfterCp` cursor (sequential, so `findMethodBody`/`compileInto`
+           are unchanged) and BFS-discovers callees by resolving each `call`'s (class,name,desc)
+           from the caller's bytes. `VM.selfBuildCrossAndRun` builds `Cell.readCounter`
+           (=`Counter.bump(); return Counter.get()`) across Cell+Counter, resolves the cross-class
+           calls + the shared `Counter.count` static, and runs it → `1`. Metal `X`.
+         - ⬜ **new/virtual/interface across classes.** BFS also pulling in `new`-ed classes'
+           vtable methods + interface itable impls (the impl may live in another class) → then
+           `Guest.answer` → 42, all kinds at once.
+       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
+         blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

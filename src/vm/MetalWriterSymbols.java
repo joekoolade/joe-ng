@@ -239,6 +239,10 @@ final class MetalWriterSymbols implements Symbols
     {
         return callSite[i];
     }
+    int callClassOff(int i)
+    {
+        return callClassOff[i];
+    }
     int callNameOff(int i)
     {
         return callNameOff[i];
