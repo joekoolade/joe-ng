@@ -907,8 +907,16 @@ is name→address bookkeeping:
            `superType@8` lives), so a Type reused from prior heap inherited a stale non-zero super —
            sending `instanceOf`'s super-chain walk into garbage on the first *interface* `instanceof`.
            Now set to the laid-out super's Type (0 for roots).
-       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); embedded blobs beyond the class
-         table; `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
+         - ✅ **generated `initClasses`.** The eager-init used a Java-side call loop; the metal writer
+           now *emits* a synthetic `initClasses` method — save `LR`, `BL` each discovered `<clinit>`
+           in discovery order, restore, `ret` — as real A64 (`runGeneratedInitClasses`), reproducing
+           the seed writer's `generateInitClasses` shape rather than driving the calls from Java, then
+           calls it once before the entry. Proven by the `@` marker (`Cell.readConfig` → `0x37`, i.e.
+           `Config.<clinit>` ran through the generated method). A closure with no `<clinit>` emits
+           nothing. (The seed places this as a named `vm/VM.initClasses()V`; the metal analog is a
+           per-closure buffer — folding it into the named whole-image layout is the fixpoint's job.)
+       - ⬜ **breadth.** Embedded blobs beyond the class table; `int[] image` sink at `0x80000`-relative
+         bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

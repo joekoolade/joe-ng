@@ -1603,20 +1603,65 @@ public final class VM
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
         registerFramesAndHandlers(codeBuf);                 // so cross-method throw/catch can unwind
 
-        byte[] clinit = Magic.bytes("<clinit>");
-        int ci = 0;
-        while (ci < gmCount)                                // eager static init before the entry runs
-        {
-            if (bytesEqual(gmName[ci], clinit))
-            {
-                long u = Magic.call0(codeBuf + gmWordOff[ci] * 4L);
-            }
-            ci += 1;
-        }
+        runGeneratedInitClasses(codeBuf);                   // eager static init before the entry runs
 
         int entry = findMethodG(entryCls, entryName, entryDesc);
         long r = Magic.call0(codeBuf + gmWordOff[entry] * 4L);
         return ok ? r : -2L;
+    }
+
+    /**
+     * Generate the closure's {@code initClasses} method on metal — a synthetic frame that saves
+     * {@code LR}, {@code BL}s each discovered {@code <clinit>} in discovery order, restores, and
+     * returns — then call it once. This reproduces the seed writer's synthetic eager-init method
+     * ({@code ImageBuilder.generateInitClasses}) as real A64 the metal writer emits itself, rather
+     * than a Java-side call loop, so the on-metal build matches the seed's shape (toward the
+     * self-build fixpoint). A closure with no {@code <clinit>} generates nothing.
+     */
+    private static void runGeneratedInitClasses(long codeBuf)
+    {
+        byte[] clinit = Magic.bytes("<clinit>");
+        int n = 0;
+        int ci = 0;
+        while (ci < gmCount)
+        {
+            if (bytesEqual(gmName[ci], clinit))
+            {
+                n += 1;
+            }
+            ci += 1;
+        }
+        if (n == 0)
+        {
+            return;
+        }
+        int total = 2 + n + 3;                              // prologue(2) + n BLs + epilogue(3)
+        long initBuf = Heap.alloc(total * 4);
+        int frame = A64Enc.align16(8);                      // LR only
+        int w = 0;
+        Magic.store32(initBuf + w * 4L, A64Enc.subImm(31, 31, frame));
+        w += 1;
+        Magic.store32(initBuf + w * 4L, A64Enc.strx(30, 31, 0));
+        w += 1;
+        ci = 0;
+        while (ci < gmCount)
+        {
+            if (bytesEqual(gmName[ci], clinit))
+            {
+                long here = initBuf + w * 4L;
+                Magic.store32(here, A64Enc.bl((int) ((codeBuf + gmWordOff[ci] * 4L - here) >> 2)));
+                w += 1;
+            }
+            ci += 1;
+        }
+        Magic.store32(initBuf + w * 4L, A64Enc.ldrx(30, 31, 0));
+        w += 1;
+        Magic.store32(initBuf + w * 4L, A64Enc.addImm(31, 31, frame));
+        w += 1;
+        Magic.store32(initBuf + w * 4L, A64Enc.ret());
+        w += 1;
+        Heap.publishCode(initBuf, initBuf + total * 4L);
+        long unused = Magic.call0(initBuf);                 // bound to a local (no pop2 in Baseline)
     }
 
     /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated
