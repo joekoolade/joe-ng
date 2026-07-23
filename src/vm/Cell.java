@@ -1,5 +1,7 @@
 package vm;
 
+import magic.Magic;
+
 /**
  * A minimal heap object exercising the object model end to end: a constructor
  * ({@code putfield}), a directly-accessed field ({@code getfield}/{@code putfield}),
@@ -27,6 +29,12 @@ public final class Cell
     public static int selfCheck()
     {
         return new Cell(0) instanceof Cell ? 1 : 0;
+    }
+
+    /** {@code Magic.bytes("Z")[0]} — the metal writer's ldc-string / interned-byte[] target. */
+    public static int tag()
+    {
+        return Magic.bytes("Z")[0];
     }
 
     public int get()

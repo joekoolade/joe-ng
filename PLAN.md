@@ -821,7 +821,12 @@ is name→address bookkeeping:
            address. `VM.selfBuildInstanceofAndRun` builds `Cell.selfCheck` (=`new Cell(0)
            instanceof Cell`), patches the `new`, the `type` Type-load, and the `VM.instanceOf`
            helper, then runs it → `1` (the object's `TIB→Type` matches the target). Metal `T`.
-         - ⬜ **remaining kinds/regions.** `string`; `interfaceType`/`interfaceSlot` + itables;
+         - ✅ **`string` (ldc literal).** `MetalWriterSymbols.string` records the literal's Utf8
+           offset; `patchNewAndWrite` interns it as a heap `byte[]` (`internLiteral`, mirroring
+           `Loader.internString`) and patches the `ldc`-string address load to it.
+           `VM.selfBuildStringAndRun` builds `Cell.tag` (=`Magic.bytes("Z")[0]`) and runs it →
+           `'Z'` (`baload` off the interned array). Metal `g`.
+         - ⬜ **remaining kinds/regions.** `interfaceType`/`interfaceSlot` + itables;
            `exceptionSlot`; full vtable in the TIB (invokevirtual); cross-class discovery;
            `initClasses`; unwind tables; blobs; class table — `int[] image` sink at
            `0x80000`-relative bases. Couples to the key migration (1b.3).

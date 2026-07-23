@@ -61,6 +61,11 @@ final class MetalWriterSymbols implements Symbols
     private final int[] typeClassOff = new int[MAX];
     private int typeN;
 
+    private final int[] strSite = new int[MAX];     // ldc-string: interned byte[] address-load site
+    private final int[] strReg = new int[MAX];
+    private final int[] strUtf8Off = new int[MAX];  // ... the literal's Utf8 body offset (in classBytes)
+    private int strN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -113,7 +118,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
-        reserve(cb, reg);
+        strSite[strN] = cb.reserveAddr(reg);
+        strReg[strN] = reg;
+        strUtf8Off[strN] = ClassReader.stringUtf8Off(classBytes, cpOff, stringCp);
+        strN += 1;
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {
@@ -270,6 +278,22 @@ final class MetalWriterSymbols implements Symbols
     int typeClassOff(int i)
     {
         return typeClassOff[i];
+    }
+    int strCount()
+    {
+        return strN;
+    }
+    int strSiteWord(int i)
+    {
+        return strSite[i];
+    }
+    int strReg(int i)
+    {
+        return strReg[i];
+    }
+    int strUtf8Off(int i)
+    {
+        return strUtf8Off[i];
     }
     int helperCount()
     {

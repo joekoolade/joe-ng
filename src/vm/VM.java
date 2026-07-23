@@ -572,6 +572,11 @@ public final class VM
         // patch the `type` Type-address load and the VM.instanceOf helper, then run it -> 1.
         Uart.putc(selfBuildInstanceofAndRun() ? 0x54 : 0x78);  // 'T' type/instanceof reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: string literal. Build Cell.tag (= Magic.bytes("Z")[0]), intern "Z"
+        // as a byte[] and patch the ldc-string load to it, then run tag() -> 'Z'.
+        Uart.putc(selfBuildStringAndRun() ? 0x67 : 0x78);  // 'g' string reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -823,10 +828,73 @@ public final class VM
                 }
                 y += 1;
             }
+            int s = 0;
+            while (s < sym.strCount())
+            {
+                long arr = internLiteral(sym.strUtf8Off(s));   // lay the literal out as a byte[]
+                patchAddrWords(words, sym.strSiteWord(s), sym.strReg(s), arr);
+                s += 1;
+            }
             writeWords(buf, baseOff, words);
             m += 1;
         }
         return ok;
+    }
+
+    /** Intern the Utf8 literal at {@code cB[utf8Off]} as a heap {@code byte[]} (as {@code Loader.internString}). */
+    private static long internLiteral(int utf8Off)
+    {
+        int len = ClassReader.u2(cB, utf8Off);
+        long arr = Heap.allocArray(len, 1);
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(arr + ObjectModel.ARRAY_BASE_OFFSET + i, ClassReader.u1(cB, utf8Off + 2 + i));
+            i += 1;
+        }
+        return arr;
+    }
+
+    /**
+     * Build {@code Cell.tag} (= {@code Magic.bytes("Z")[0]}) into a Heap buffer, intern the "Z"
+     * literal as a byte[] and patch the ldc-string address load to it, then run it → {@code 'Z'}.
+     */
+    private static boolean selfBuildStringAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Cell"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("tag");
+        clDesc[0] = Magic.bytes("()I");
+        clCount = 1;
+
+        int body = findMethodBody(clName[0], clDesc[0]);
+        if (body < 0)
+        {
+            return false;
+        }
+        MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+        int[] words = compileInto(body, sym, 0L);
+        clSym[0] = sym;
+        clWords[0] = words;
+        clSize[0] = words.length;
+        clWordOff[0] = 0;
+
+        long codeBuf = Heap.alloc(words.length * 4);
+        layoutClassRegions();
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + words.length * 4L);
+
+        long r = Magic.call0(codeBuf);                     // tag()
+        return ok && (int) r == 0x5A;                      // 'Z'
     }
 
     /** Absolute image address of the runtime helper with the given {@code compiler.Symbols} id. */
