@@ -12,10 +12,12 @@ import objectmodel.ObjectModel;
  * the runtime {@link Loader} use. It mirrors {@code ClassFile}'s algorithms exactly so the
  * on-metal self-build reproduces the seed writer's image byte-for-byte at the fixpoint.
  *
- * <p>Stateless: each query re-loads and re-parses the class it needs. A one-shot self-build
- * does not care about the cost, and holding no global state keeps the queries composable
- * with the superclass-chain walks (vtable/interfaces/findImpl, still to come). This slice
- * covers the single-class leaf queries; the walks land next.
+ * <p>Cached: each embedded class is copied off the {@link VM#classDir} table and its constant
+ * pool parsed once, then memoised (the table is immutable for the image's life). Whole-image
+ * queries hammer a handful of classes thousands of times — {@code bytesOf} used to re-copy the
+ * entire {@code .class} and every query re-parsed the pool, which dominated the self-build's
+ * runtime; the cache turns that back into one parse per class. The parsed vtable is memoised
+ * on top. Results are identical to the stateless form (the bytes and parse are the same).
  */
 final class MetalClassModel
 {
@@ -23,8 +25,41 @@ final class MetalClassModel
 
     private static final int ACC_STATIC = 0x0008;
 
-    /** Class {@code name}'s bytes copied onto the heap, or {@code null} if not embedded (a root). */
-    static byte[] bytesOf(byte[] name)
+    // ----- per-class cache: bytes + parsed constant pool, keyed by name (classDir is immutable) -----
+    private static final int CACHE_MAX = 128;
+    private static final byte[][] cName = new byte[CACHE_MAX][];   // class name bytes
+    private static final byte[][] cBytes = new byte[CACHE_MAX][];  // its .class bytes (copied once)
+    private static final int[][] cOff = new int[CACHE_MAX][];      // its parsed constant-pool offset table
+    private static final int[] cAfterCp = new int[CACHE_MAX];      // byte offset just past the constant pool
+    private static int cCount;
+
+    /** Cache slot for {@code name} — loading + parsing it once, or {@code -1} if not embedded (a root). */
+    private static int classSlot(byte[] name)
+    {
+        int i = 0;
+        while (i < cCount)
+        {
+            if (bytesEq(cName[i], name))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        byte[] b = loadBytes(name);
+        if (b == null)
+        {
+            return -1;
+        }
+        int[] off = new int[ClassReader.cpCount(b)];
+        cAfterCp[cCount] = ClassReader.constantPool(b, off, new int[off.length]);
+        cName[cCount] = name;
+        cBytes[cCount] = b;
+        cOff[cCount] = off;
+        return cCount++;
+    }
+
+    /** Class {@code name}'s bytes copied off the {@link VM#classDir} table, or {@code null} (a root). */
+    private static byte[] loadBytes(byte[] name)
     {
         long i = 0L;
         while (i < VM.classCount)
@@ -39,6 +74,13 @@ final class MetalClassModel
         return null;
     }
 
+    /** Class {@code name}'s bytes (cached), or {@code null} if not embedded (a root). */
+    static byte[] bytesOf(byte[] name)
+    {
+        int s = classSlot(name);
+        return s < 0 ? null : cBytes[s];
+    }
+
     /** A class name is a root (uncompiled) when it names a JDK class — {@code java/...}. */
     static boolean isRoot(byte[] name)
     {
@@ -49,19 +91,19 @@ final class MetalClassModel
     /** Whether {@code name}'s direct superclass is {@code wantSuper} (false for a root's super). */
     static boolean superIs(byte[] name, byte[] wantSuper)
     {
-        byte[] b = bytesOf(name);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
-        int superOff = ClassReader.superClassNameOff(b, off, afterCp);
+        int s = classSlot(name);
+        byte[] b = cBytes[s];
+        int[] off = cOff[s];
+        int superOff = ClassReader.superClassNameOff(b, off, cAfterCp[s]);
         return superOff != 0 && utf8Is(b, superOff, wantSuper);
     }
 
     /** Count of {@code name}'s own non-static (instance) fields — the object's field slots. */
     static int instanceFieldCount(byte[] name)
     {
-        byte[] b = bytesOf(name);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int s = classSlot(name);
+        byte[] b = cBytes[s];
+        int afterCp = cAfterCp[s];
         int p = ClassReader.fieldsStart(b, afterCp);
         int n = ClassReader.u2(b, p);
         p += 2;
@@ -101,10 +143,10 @@ final class MetalClassModel
     /** Position of {@code fieldName} among {@code clsName}'s own non-static fields, or -1. */
     private static int ownFieldIndex(byte[] clsName, byte[] fieldName)
     {
-        byte[] b = bytesOf(clsName);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
-        int p = ClassReader.fieldsStart(b, afterCp);
+        int s = classSlot(clsName);
+        byte[] b = cBytes[s];
+        int[] off = cOff[s];
+        int p = ClassReader.fieldsStart(b, cAfterCp[s]);
         int n = ClassReader.u2(b, p);
         p += 2;
         int idx = 0;
@@ -130,18 +172,17 @@ final class MetalClassModel
     /** {@code clsName}'s superclass name bytes, or null if it has none (a root). */
     static byte[] superName(byte[] clsName)
     {
-        byte[] b = bytesOf(clsName);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
-        return superNameOf(b, off, afterCp);
+        int s = classSlot(clsName);
+        return superNameOf(cBytes[s], cOff[s], cAfterCp[s]);
     }
 
     /** Whether {@code name} declares a static initializer {@code <clinit>()V} (needs eager init). */
     static boolean hasClinit(byte[] name)
     {
-        byte[] b = bytesOf(name);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int s = classSlot(name);
+        byte[] b = cBytes[s];
+        int[] off = cOff[s];
+        int afterCp = cAfterCp[s];
         byte[] clinit = Magic.bytes("<clinit>");
         byte[] voidDesc = Magic.bytes("()V");
         int p = ClassReader.methodsStart(b, afterCp);
@@ -159,12 +200,6 @@ final class MetalClassModel
             i += 1;
         }
         return false;
-    }
-
-    /** A fresh constant-pool offset table sized for {@code b} (companion to {@code ClassReader.constantPool}). */
-    private static int[] constPool(byte[] b)
-    {
-        return new int[ClassReader.cpCount(b)];
     }
 
     /** Whether the Utf8 entry at {@code b[off]} equals the plain bytes {@code want}. */
@@ -218,10 +253,15 @@ final class MetalClassModel
     // ----- superclass-chain walks (mirror classfile.ClassFile's recursion) ------------
 
     private static final int MAX_SLOTS = 128;   // > the largest flattened vtable (Baseline ~60 incl. private)
-    private static byte[][] vName;    // flattened-vtable slot: method name bytes
+    private static byte[][] vName;    // flattened-vtable slot: method name bytes (points at the memo below)
     private static byte[][] vDesc;    // ... descriptor bytes
     private static byte[][] vOwner;   // ... owning class name bytes (most-derived declarer)
     private static int vCount;
+    private static final byte[][][] mvName = new byte[CACHE_MAX][][];   // memoised flattened vtable per class slot
+    private static final byte[][][] mvDesc = new byte[CACHE_MAX][][];
+    private static final byte[][][] mvOwner = new byte[CACHE_MAX][][];
+    private static final int[] mvCount = new int[CACHE_MAX];
+    private static final boolean[] mvBuilt = new boolean[CACHE_MAX];
 
     /** Number of slots in {@code name}'s flattened vtable. */
     static int vtableSize(byte[] name)
@@ -259,21 +299,36 @@ final class MetalClassModel
         return slot >= 0 && slot < vCount && bytesEq(vOwner[slot], wantOwner);
     }
 
-    /** Build {@code name}'s flattened vtable into the scratch arrays; superclass slots first. */
+    /** Point the vtable scratch at {@code name}'s flattened vtable, building + memoising it once. */
     private static void buildVtable(byte[] name)
     {
+        int s = classSlot(name);
+        if (mvBuilt[s])
+        {
+            vName = mvName[s];             // reuse the memoised arrays (immutable class bytes)
+            vDesc = mvDesc[s];
+            vOwner = mvOwner[s];
+            vCount = mvCount[s];
+            return;
+        }
         vName = new byte[MAX_SLOTS][];
         vDesc = new byte[MAX_SLOTS][];
         vOwner = new byte[MAX_SLOTS][];
         vCount = 0;
         fillVtable(name);
+        mvName[s] = vName;
+        mvDesc[s] = vDesc;
+        mvOwner[s] = vOwner;
+        mvCount[s] = vCount;
+        mvBuilt[s] = true;
     }
 
     private static void fillVtable(byte[] name)
     {
-        byte[] b = bytesOf(name);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int s = classSlot(name);
+        byte[] b = cBytes[s];
+        int[] off = cOff[s];
+        int afterCp = cAfterCp[s];
         byte[] sup = superNameOf(b, off, afterCp);
         if (sup != null && !isRoot(sup))
         {
@@ -339,9 +394,10 @@ final class MetalClassModel
     }
     private static byte[] interfaceMethodAt(byte[] iface, int slot, boolean wantName)
     {
-        byte[] b = bytesOf(iface);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int cs = classSlot(iface);
+        byte[] b = cBytes[cs];
+        int[] off = cOff[cs];
+        int afterCp = cAfterCp[cs];
         byte[] init = Magic.bytes("<init>");
         byte[] clinit = Magic.bytes("<clinit>");
         int p = ClassReader.methodsStart(b, afterCp);
@@ -374,9 +430,10 @@ final class MetalClassModel
      */
     static int interfaceMethodSlot(byte[] iface, byte[] mName, byte[] mDesc)
     {
-        byte[] b = bytesOf(iface);
-        int[] off = constPool(b);
-        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        int s = classSlot(iface);
+        byte[] b = cBytes[s];
+        int[] off = cOff[s];
+        int afterCp = cAfterCp[s];
         byte[] init = Magic.bytes("<init>");
         byte[] clinit = Magic.bytes("<clinit>");
         int p = ClassReader.methodsStart(b, afterCp);
@@ -409,9 +466,10 @@ final class MetalClassModel
         byte[] c = cls;
         while (c != null && !isRoot(c))
         {
-            byte[] b = bytesOf(c);
-            int[] off = constPool(b);
-            int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+            int s = classSlot(c);
+            byte[] b = cBytes[s];
+            int[] off = cOff[s];
+            int afterCp = cAfterCp[s];
             int ifaceCount = ClassReader.u2(b, afterCp + 6);   // interfaces_count
             int base = afterCp + 8;
             int k = 0;
@@ -435,9 +493,10 @@ final class MetalClassModel
         byte[] c = cls;
         while (c != null && !isRoot(c))
         {
-            byte[] b = bytesOf(c);
-            int[] off = constPool(b);
-            int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+            int s = classSlot(c);
+            byte[] b = cBytes[s];
+            int[] off = cOff[s];
+            int afterCp = cAfterCp[s];
             byte[] code = Magic.bytes("Code");
             int p = ClassReader.methodsStart(b, afterCp);
             int n = ClassReader.u2(b, p);
