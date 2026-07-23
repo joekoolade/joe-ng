@@ -622,6 +622,12 @@ public final class VM
         // instanceOf is patched to the image's own address; the result must byte-match the image.
         Uart.putc(selfFixpointCheckCast() ? 0x2B : 0x78);  // '+' relocated metal bytes == image / 'x' differ
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.4: eager static init. Build Cell.readConfig (reads Config.mark), discover
+        // + run Config.<clinit> first, so it reads 0x37 (not the zeroed default).
+        Uart.putc(buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("readConfig"), Magic.bytes("()I")) == 0x37
+                  ? 0x40 : 0x78);                          // '@' eager <clinit> init OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1521,6 +1527,17 @@ public final class VM
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
 
+        byte[] clinit = Magic.bytes("<clinit>");
+        int ci = 0;
+        while (ci < gmCount)                                // eager static init before the entry runs
+        {
+            if (bytesEqual(gmName[ci], clinit))
+            {
+                long u = Magic.call0(codeBuf + gmWordOff[ci] * 4L);
+            }
+            ci += 1;
+        }
+
         int entry = findMethodG(entryCls, entryName, entryDesc);
         long r = Magic.call0(codeBuf + gmWordOff[entry] * 4L);
         return ok ? r : -2L;
@@ -1552,7 +1569,23 @@ public final class VM
                 }
                 slot += 1;
             }
+            enqueueClinit(tc);
             t += 1;
+        }
+        int su = 0;
+        while (su < sym.staticCount())                          // a used class's <clinit> (eager init)
+        {
+            enqueueClinit(utf8Copy(sym.staticClassOff(su)));
+            su += 1;
+        }
+    }
+
+    /** Enqueue {@code cls}'s {@code <clinit>} if it has one (closed-world eager static init). */
+    private static void enqueueClinit(byte[] cls)
+    {
+        if (MetalClassModel.hasClinit(cls))
+        {
+            enqueueMethod(cls, Magic.bytes("<clinit>"), Magic.bytes("()V"));
         }
     }
 

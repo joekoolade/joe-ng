@@ -51,6 +51,12 @@ public final class Cell
         return s.speak();
     }
 
+    /** Reads {@code Config.mark} (0x37 only if Config's {@code <clinit>} ran) — the writer's eager-init target. */
+    public static int readConfig()
+    {
+        return Config.mark;
+    }
+
     /**
      * The metal writer's capstone: one closure exercising every relocation kind across many
      * classes — new + invokeinterface (Robot/Speaker), new + invokevirtual (Dog/Animal),

@@ -880,9 +880,14 @@ is name→address bookkeeping:
            262. Metal `!`. (`Guest.answer` would be ideal but Guest/Alpha/Beta/Greeter are
            runtime-load blobs, not in the compile-reachable class table — folding those in is a
            step-3b.4 input concern.) **The metal layout engine is functionally complete.**
-       - ⬜ **3b.4: remaining breadth** — fold the runtime-load blobs (Guest/Math) into the writer's
-         input; `initClasses` (generated `<clinit>` run); cross-method unwind tables; embedded
-         blobs; the class table itself.
+       - **3b.4: remaining breadth.**
+         - ✅ **eager `<clinit>` init (`@`).** `discoverFrom`/`enqueueClinit` pull in a used class's
+           `<clinit>` (via `MetalClassModel.hasClinit`, keyed off static/tib refs), and `buildClosure`
+           runs every discovered `<clinit>` before the entry (closed-world eager init).
+           `Cell.readConfig` (reads `Config.mark`) returns `0x37` — proving `Config.<clinit>` ran, vs
+           the zeroed default.
+         - ⬜ **rest.** Fold the runtime-load blobs (Guest/Math) into the writer's input; cross-method
+           unwind tables; embedded blobs; the class table itself.
        - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
          blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
