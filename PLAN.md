@@ -897,7 +897,11 @@ what the boot path needs, in roughly the order it needs them.
     `{TIB,status}` header), honoring Java's default-init. **Confirmed in QEMU** by poisoning the
     heap with garbage before use: reproduces the hang without the fix, runs clean with it.
     Localized on hardware via UART phase-markers (`loadAll`→class→`compileClass`→method→
-    fixup-loop); those markers were then removed.
+    fixup-loop); those markers were then removed. **Confirmed on a real Pi 4:** the board now
+    prints the full sequence through `S` — the M4 loader (`*M`) and every M5.5c marker
+    (`C K V B ~L S`, incl. the metal-writer-built `~` executing) run on real silicon, not just
+    QEMU. (`CurrentEL` read `0x1` on both QEMU and the Pi — unexplained, but moot now that
+    nothing faults; revisit if EL2 vectoring is ever needed.)
 - `writeSCTLR_EL1(enable)` → set `M` (MMU), `C`/`I` (caches) bits, then `isb()`
 
 **E. Exceptions + interrupts (EL1)**
