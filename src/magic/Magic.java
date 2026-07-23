@@ -89,6 +89,27 @@ public final class Magic
     {
         throw intrinsic();
     }
+
+    /** {@code MSR VBAR_EL1, v} — install the EL1 exception vector table base (2 KiB-aligned). */
+    public static void writeVBAR_EL1(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code MRS ESR_EL1} — the syndrome of the current exception (EC in bits 31:26). */
+    public static long readESR_EL1()
+    {
+        throw intrinsic();
+    }
+    /** {@code MRS ELR_EL1} — the PC the exception was taken from. */
+    public static long readELR_EL1()
+    {
+        throw intrinsic();
+    }
+    /** {@code MRS FAR_EL1} — the faulting virtual address (for aborts). */
+    public static long readFAR_EL1()
+    {
+        throw intrinsic();
+    }
     public static void writeHCR_EL2(long v)
     {
         throw intrinsic();

@@ -43,4 +43,9 @@ public final class Intrinsics
     public static final int BYTES = 25;
     public static final int DC_CVAU = 26;   // clean D-cache line to PoU (JIT publish)
     public static final int IC_IALLU = 27;  // invalidate all I-cache to PoU (JIT publish)
+    public static final int WRITE_VBAR_EL1 = 28;  // install EL1 exception vectors
+    public static final int READ_ESR_EL1 = 29;    // exception syndrome / PC / fault address
+    public static final int READ_ELR_EL1 = 30;
+    public static final int READ_FAR_EL1 = 31;
+    public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
 }

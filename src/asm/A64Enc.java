@@ -388,6 +388,10 @@ public final class A64Enc
     public static final int CPACR_EL1   = sysReg(3, 0,  1, 0, 2);
     public static final int SPSR_EL2    = sysReg(3, 4,  4, 0, 0);
     public static final int ELR_EL2     = sysReg(3, 4,  4, 0, 1);
+    public static final int VBAR_EL1    = sysReg(3, 0, 12, 0, 0);   // exception vector base
+    public static final int ESR_EL1     = sysReg(3, 0,  5, 2, 0);   // exception syndrome
+    public static final int ELR_EL1     = sysReg(3, 0,  4, 0, 1);   // faulting PC
+    public static final int FAR_EL1     = sysReg(3, 0,  6, 0, 0);   // faulting address
 
     /** Compose a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
     public static int[] loadImm64(int rd, long value)

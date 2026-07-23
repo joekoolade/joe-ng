@@ -48,12 +48,82 @@ public final class VM
 
         Heap.init();
         Uart.init();
+        installFaultVectors();             // turn a CPU fault into a printed report, not a silent hang
         initClasses();                     // run static initializers (writer-generated body)
         run();
 
         while (true)
         {
             Magic.wfe();
+        }
+    }
+
+    /**
+     * Install a minimal EL1 exception vector table so a CPU fault prints a report instead
+     * of hanging silently (the failure mode when the boot path faults with no vectors set).
+     * Each of the 16 architectural entries branches to {@link #reportFault}; a 2 KiB-aligned
+     * Heap buffer holds the table, published for instruction fetch before {@code VBAR_EL1}
+     * points at it. Diagnostic aid — harmless when nothing faults.
+     */
+    static void installFaultVectors()
+    {
+        // Never taken (reportFaultAddr is the writer-stashed address, always nonzero); the
+        // dead call makes reportFault reachable so the writer compiles it and fills the static.
+        if (reportFaultAddr == 0L)
+        {
+            reportFault();
+        }
+        long raw = Heap.alloc(0x1000);
+        long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
+        int i = 0;
+        while (i < 16)
+        {
+            long entry = table + i * 0x80L;                // 16 entries, 0x80 bytes apart
+            long rel = (reportFaultAddr - entry) / 4L;      // B takes a word offset
+            Magic.store32(entry, A64Enc.b((int) rel));
+            i += 1;
+        }
+        Heap.publishCode(table, table + 0x800L);
+        Magic.writeVBAR_EL1(table);
+        Magic.isb();                                       // the new vector base takes effect
+    }
+
+    /**
+     * EL1 exception handler (reached by a branch from every vector entry): print the syndrome,
+     * faulting PC and fault address, then park. Does not return — this is a last-resort report.
+     */
+    static void reportFault()
+    {
+        long esr = Magic.readESR_EL1();
+        long elr = Magic.readELR_EL1();
+        long far = Magic.readFAR_EL1();
+        long el = Magic.readCurrentEL();
+        Uart.write(Magic.bytes("\nFAULT el="));
+        printHex(el);
+        Uart.write(Magic.bytes(" esr="));
+        printHex(esr);
+        Uart.write(Magic.bytes(" elr="));
+        printHex(elr);
+        Uart.write(Magic.bytes(" far="));
+        printHex(far);
+        Uart.putc(0x0A);
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
+    /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */
+    static void printHex(long v)
+    {
+        Uart.putc(0x30);                                   // '0'
+        Uart.putc(0x78);                                   // 'x'
+        int shift = 60;
+        while (shift >= 0)
+        {
+            int nib = (int) ((v >> shift) & 0xFL);
+            Uart.putc(nib < 10 ? 0x30 + nib : 0x41 + nib - 10);   // 0-9, A-F
+            shift -= 4;
         }
     }
 
@@ -320,6 +390,7 @@ public final class VM
     static long instanceOfAddr;        // VM.instanceOf(JJ)I
     static long checkCastAddr;         // VM.checkCast(JJ)J
     static long unwindAddr;            // VM.unwind(JJJ)V
+    static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)

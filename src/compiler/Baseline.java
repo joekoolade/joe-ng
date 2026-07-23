@@ -1184,6 +1184,26 @@ public final class Baseline
         {
             cb.emit(A64Enc.icIallu());
         }
+        else if (id == Intrinsics.READ_CURRENT_EL)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.CurrentEL));
+        }
+        else if (id == Intrinsics.WRITE_VBAR_EL1)
+        {
+            cb.emit(A64Enc.msr(A64Enc.VBAR_EL1, popReg()));
+        }
+        else if (id == Intrinsics.READ_ESR_EL1)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.ESR_EL1));
+        }
+        else if (id == Intrinsics.READ_ELR_EL1)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.ELR_EL1));
+        }
+        else if (id == Intrinsics.READ_FAR_EL1)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.FAR_EL1));
+        }
         else if (id == Intrinsics.GC)
         {
             lowerGc(cb);

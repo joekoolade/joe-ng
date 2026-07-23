@@ -897,6 +897,14 @@ what the boot path needs, in roughly the order it needs them.
 - `writeVBAR_EL1(&vectors)` → your Java-emitted 2 KB-aligned vector table
 - `daifClr(mask)` / `daifSet(mask)` → unmask/mask IRQ/FIQ/SError
 - in handlers: `readESR_EL1()`, `readFAR_EL1()`, `readELR_EL1()`, `readSPSR_EL1()`
+  - **Implemented as a fault diagnostic (M5.5c):** `Magic.writeVBAR_EL1` + `readESR_EL1`/
+    `readELR_EL1`/`readFAR_EL1`/`readCurrentEL` (the last was dead — declared, never lowered).
+    `VM.installFaultVectors` builds a 2 KiB-aligned Heap vector table (16 entries → `B reportFault`),
+    publishes it, `MSR VBAR_EL1`, `isb`; `VM.reportFault` prints `el/esr/elr/far` then parks. Turns a
+    silent boot fault into a printed report. **Handler proven** by branching to a vector entry
+    directly (prints the report). **Open:** in QEMU raspi4b an injected `SVC` did *not* route to
+    `VBAR_EL1` and `CurrentEL` read `0x1` (spec-impossible) — a QEMU/EL quirk (we may be running at
+    EL2, where EL1 vectors don't fire); the `el=` field in the report resolves this on real hardware.
 
 **F. Generic timer (when you add preemption)**
 - `readCNTFRQ()` → `CNTFRQ_EL0`; `writeCNTP_TVAL(...)`, `writeCNTP_CTL(...)`
