@@ -1,6 +1,7 @@
 package vm;
 
 import asm.A64Enc;
+import board.bcm2711.Emmc;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
@@ -482,6 +483,7 @@ public final class VM
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
         Uart.write(Magic.bytes("MHz\n"));
 
+
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
         Uart.putc(c.get());                // virtual dispatch: read the field back
@@ -712,6 +714,23 @@ public final class VM
         // match the running image and its statics segment is reset to the as-written values.
         Uart.write(fixpointMaterialize() ? Magic.bytes("IMG") : Magic.bytes("x"));
         Uart.putc(0x0A);
+
+        // M5.5d slice 2: EMMC single-sector read. Bring up the SD controller + card (auto-detecting
+        // EMMC2 on real hardware vs EMMC under QEMU), read block 0, and check the boot-sector signature
+        // 0xAA55 at byte 510 -- present on any partitioned/FAT card, so it works on the test SD and a
+        // real card alike. Proves the driver can read the medium it will persist the image to.
+        Uart.write(sdReadOk() ? Magic.bytes("SD") : Magic.bytes("x"));
+        Uart.putc(0x0A);
+    }
+
+    /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
+    private static boolean sdReadOk()
+    {
+        long sd = Heap.alloc(512);
+        return Emmc.init() == 0
+            && Emmc.readBlock(0L, sd)
+            && Magic.load8(sd + 510L) == 0x55
+            && Magic.load8(sd + 511L) == 0xAA;
     }
 
     /** Whether every immutable data region is byte-identical to the running image (mutable statics excluded). */

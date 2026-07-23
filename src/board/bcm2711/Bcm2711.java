@@ -81,4 +81,5 @@ public final class Bcm2711
      * (166e6/(8*180) = 115,278 baud, +0.07%).
      */
     public static final int  BAUD_115200 = 179;
+    // The EMMC/SDHCI register block lives in board.bcm2711.Emmc (it auto-detects the controller base).
 }

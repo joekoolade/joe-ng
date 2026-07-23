@@ -1003,8 +1003,17 @@ is name→address bookkeeping:
     immutable regions match the live image and the statics are clean (`Config.mark` is 0 in
     `image'` but `0x37` in the live copy where its `<clinit>` ran). This buffer is exactly the
     `kernel8.img` the seed would emit, ready to write to storage.
-  - ⬜ **slice 2 — EMMC/SD block driver.** The bcm2711 EMMC2 (SDHCI) controller: init, read
-    sector, write sector. Testable under QEMU `raspi4b` with an SD image.
+  - ✅ **slice 2 — EMMC/SD single-sector read (`SD`).** `board.bcm2711.Emmc` brings up the SDHCI
+    controller and card (software reset, ~400 kHz identification clock, bus power, then the
+    CMD0/CMD8/ACMD41/CMD2/CMD3/CMD7/CMD16 handshake) and reads a 512-byte block by polled PIO
+    (`CMD17`, read the DATA FIFO). It **auto-detects the controller base** — the Pi 4 wires the SD
+    slot to EMMC2 (`0xFE340000`), but QEMU's `raspi4b` puts the card on the legacy EMMC
+    (`0xFE300000`); it picks whichever reports a card present (STATUS bit16). Verified by reading
+    block 0 and checking the boot-sector signature `0xAA55` at byte 510 (present on the test SD and
+    any real MBR/FAT card). Test: `qemu-system-aarch64 -M raspi4b -kernel kernel8.img -sd <img>`.
+    (Two QEMU-vs-hardware gotchas found: the card sits on the *legacy* EMMC under QEMU, and a generic
+    SDHCI gates command response on `CONTROL0` bus power, which the Pi firmware normally owns.)
+  - ⬜ **slice 2b — EMMC single-sector write.** `CMD24` + push the DATA FIFO. Round-trip verify.
   - ⬜ **slice 3 — FAT32 write.** Mount the boot partition, find `kernel8.img`, overwrite its
     clusters with `image'`.
   - ⬜ **slice 4 — reboot.** Watchdog/PSCI reset so the firmware reloads the metal-written
