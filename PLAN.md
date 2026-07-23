@@ -976,10 +976,19 @@ is name→address bookkeeping:
        `ADD #252` instead of `SUB #4` when the metal-resident compiler recompiled `printHex`; masked +
        cast to force an explicit `sxtb`, matching the `bipush` fix. The metal writer now reproduces the
        exact machine code it is executing, across the whole code region.
-     - ⬜ **data-region content + `FIX`.** Remaining: materialise each data region's *contents* (Type
-       records, TIB vtables, string byte[]s, zeroed statics, itables, frame/handler entries, blob bytes,
-       class-table directory) at the reproduced addresses and word-compare, then the whole image → `FIX`.
-       Every address is now known; the code side is byte-identical.
+     - ✅ **whole-image fixpoint reached (`FIX`).** `VM.firstDataMismatch` materialises every immutable
+       data region at its reproduced address and word-compares it to the running image: Type records
+       `{instanceSize, superType, itableDir}`, TIB vtables, itable directories + itables (interface
+       method → impl address, via the flattened vtable), interned string `byte[]` objects, unwind frame
+       `{start,end,frameSize}` and handler `{start,end,handler,catchType}` entries, the embedded blobs,
+       and the class-table directory. All byte-identical. Combined with the code content (`$`) and layout
+       (`Z`/`H`), **joe-ng reconstructs on bare metal the exact image it is running** — the self-build
+       fixpoint. The one region excluded is the **statics data segment**: it is the program's mutable
+       memory (the running image has written `Config.mark`, incremented counters, updated `freeHead`,
+       …), so its live bytes are not comparable against a static image; its layout and immutable
+       writer-stashed values (`staticsStart`/`frameTable`/`classDir`/helper addresses/…) are validated
+       by `H`. This is the expected boundary for any self-hosting system — you cannot byte-compare a
+       running program's data segment against its on-disk form.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over

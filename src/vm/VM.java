@@ -697,6 +697,23 @@ public final class VM
         // it is executing, across the whole code region.
         Uart.putc(fixpointCode() ? 0x24 : 0x78);           // '$' code content byte-identical / 'x' differ
         Uart.putc(0x0A);
+
+        // M5.5c step 4 CAPSTONE -- the whole-image self-build fixpoint. Every immutable region is now
+        // byte-identical to the running image: all 485 methods' code ('$' above), and every data region
+        // after it -- Type records, TIB vtables, itables, interned string byte[]s, unwind frame/handler
+        // tables, blobs, and the class table. (The mutable statics data segment is excluded: runtime has
+        // written it -- Config.<clinit>, counters, freeHead; its layout + writer-stashed values are
+        // covered by 'H'.) joe-ng has reconstructed, on bare metal, the exact image it is running.
+        Uart.write(fixpointDataContent() ? Magic.bytes("FIX") : Magic.bytes("x"));
+        Uart.putc(0x0A);
+    }
+
+    /** Whether every immutable data region is byte-identical to the running image (mutable statics excluded). */
+    private static boolean fixpointDataContent()
+    {
+        discoverImage();
+        layoutDataRegions();
+        return firstDataMismatch() < 0;
     }
 
     /** Whether every stashed data-region boundary + unwind count matches the metal writer's layout. */
@@ -1748,6 +1765,15 @@ public final class VM
     private static int dItStart, dFrameStart, dHandlerStart, dBlobStart, dClassDirStart;
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
+    private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
+    private static int[] dBlobOff;       // the 6 embedded blobs' word offsets (Guest/Greeter/Alpha/Beta/MyExc/Math)
+    // per-method frame + handler info (parallel to im*), for the unwind-table content
+    private static int[] imFrameSize;
+    private static int[] imHNa;
+    private static int[][] imHStartA;
+    private static int[][] imHEndA;
+    private static int[][] imHandlerA;
+    private static byte[][][] imHCatchCls;   // per handler: catch class name bytes, or null (finally)
 
     private static int imFind(byte[] cls, byte[] name, byte[] desc)
     {
@@ -1844,31 +1870,37 @@ public final class VM
     /** Discover + size the whole {@code boot} closure in the seed's exact order (no relocation, no run). */
     private static void discoverImage()
     {
-        lcName = new byte[128][];
-        lcBytes = new byte[128][];
-        lcOff = new int[128][];
-        lcTag = new int[128][];
-        lcAfterCp = new int[128];
+        lcName = new byte[256][];
+        lcBytes = new byte[256][];
+        lcOff = new int[256][];
+        lcTag = new int[256][];
+        lcAfterCp = new int[256];
         lcCount = 0;
-        imClsName = new byte[512][];
-        imCls = new int[512];
-        imName = new byte[512][];
-        imDesc = new byte[512][];
-        imSize = new int[512];
+        imClsName = new byte[2048][];
+        imCls = new int[2048];
+        imName = new byte[2048][];
+        imDesc = new byte[2048][];
+        imSize = new int[2048];
+        imFrameSize = new int[2048];
+        imHNa = new int[2048];
+        imHStartA = new int[2048][];
+        imHEndA = new int[2048][];
+        imHandlerA = new int[2048][];
+        imHCatchCls = new byte[2048][][];
         imN = 0;
-        usedCls = new byte[128][];
+        usedCls = new byte[512][];
         usedN = 0;
-        tibSeenCls = new byte[32][];
+        tibSeenCls = new byte[128][];
         tibSeenN = 0;
         clinitCount = 0;
-        drStr = new byte[256][];
+        drStr = new byte[2048][];
         drStrN = 0;
-        drTypeRef = new byte[64][];
+        drTypeRef = new byte[256][];
         drTypeRefN = 0;
-        drUsedIf = new byte[32][];
+        drUsedIf = new byte[128][];
         drUsedIfN = 0;
-        drStatCls = new byte[256][];
-        drStatName = new byte[256][];
+        drStatCls = new byte[1024][];
+        drStatName = new byte[1024][];
         drStatN = 0;
         drFrameCount = 0;
         drHandlerCount = 0;
@@ -1882,6 +1914,21 @@ public final class VM
             boolean isEntry = i == 0;                        // boot is the frameless entry (as the seed)
             MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
             imSize[i] = compileInto(body, sym, 0L, isEntry).length;
+            imFrameSize[i] = fFrameSize;                      // capture frame + handler info for the unwind tables
+            imHNa[i] = fHN;
+            imHStartA[i] = new int[fHN];
+            imHEndA[i] = new int[fHN];
+            imHandlerA[i] = new int[fHN];
+            imHCatchCls[i] = new byte[fHN][];
+            int hh = 0;
+            while (hh < fHN)
+            {
+                imHStartA[i][hh] = fHStart[hh];
+                imHEndA[i][hh] = fHEnd[hh];
+                imHandlerA[i][hh] = fHandler[hh];
+                imHCatchCls[i][hh] = fHCatch[hh] == 0 ? null : utf8Copy(ClassReader.classNameOff(cB, cOff, fHCatch[hh]));
+                hh += 1;
+            }
             discoverImageFrom(sym, imClsName[i]);
             i += 1;
         }
@@ -1891,6 +1938,12 @@ public final class VM
         imName[imN] = Magic.bytes("initClasses");
         imDesc[imN] = Magic.bytes("()V");
         imSize[imN] = 2 + clinitCount + 3;
+        imFrameSize[imN] = A64Enc.align16(8);               // initClasses frame (LR save), no handlers
+        imHNa[imN] = 0;
+        imHStartA[imN] = new int[0];
+        imHEndA[imN] = new int[0];
+        imHandlerA[imN] = new int[0];
+        imHCatchCls[imN] = new byte[0][];
         imN += 1;
         drFrameCount += 1;                                   // initClasses has a frame (LR save) too
     }
@@ -2160,7 +2213,7 @@ public final class VM
         cur += cur % 2;                                      // pad to 8 bytes before the data regions
 
         // Types: instantiated classes + type-ref classes, each with its whole superclass chain.
-        typeClasses = new byte[128][];
+        typeClasses = new byte[256][];
         typeClassesN = 0;
         int t = 0;
         while (t < tibSeenN)
@@ -2202,6 +2255,7 @@ public final class VM
         dStaticsEnd = cur;
 
         dItStart = cur;                                      // itable directories + itables per class
+        dItDirOff = new int[tibSeenN];
         t = 0;
         while (t < tibSeenN)
         {
@@ -2217,6 +2271,7 @@ public final class VM
             }
             if (impls > 0)
             {
+                dItDirOff[t] = cur;
                 cur += (impls + 1) * (ObjectModel.ITABLE_ENTRY_SIZE / 4);   // +1 zeroed sentinel
                 u = 0;
                 while (u < drUsedIfN)
@@ -2228,6 +2283,10 @@ public final class VM
                     u += 1;
                 }
             }
+            else
+            {
+                dItDirOff[t] = -1;
+            }
             t += 1;
         }
 
@@ -2237,8 +2296,14 @@ public final class VM
         cur += drHandlerCount * 8;
 
         dBlobStart = cur;                                    // embedded raw .class blobs, 8-byte aligned
-        cur += align8W((int) guestLen) + align8W((int) greeterLen) + align8W((int) alphaLen)
-             + align8W((int) betaLen) + align8W((int) myExcLen) + align8W((int) mathLen);
+        dBlobOff = new int[6];
+        int bb = 0;
+        while (bb < 6)
+        {
+            dBlobOff[bb] = cur;
+            cur += align8W(MetalClassModel.bytesOf(blobClass(bb)).length);
+            bb += 1;
+        }
 
         dClassDirStart = cur;                                // class table directory (names + bytes follow)
     }
@@ -2453,6 +2518,352 @@ public final class VM
             idx += 1;
         }
         return true;
+    }
+
+    // ----- data-region content materialise + compare (Types/itables/TIBs/strings/statics/unwind/blobs/classtable) -----
+
+    /** Compare a 32-bit {@code val} against the image word at 0x80000-relative {@code word}; the word on
+     *  mismatch, else -1. */
+    private static int chkW(int word, long val)
+    {
+        if ((val & 0xFFFFFFFFL) != (Magic.load32(dAddr(word)) & 0xFFFFFFFFL))
+        {
+            return word;
+        }
+        return -1;
+    }
+
+    /** Compare a 64-bit {@code val} (two words) against the image; first mismatching word, or -1. */
+    private static int chkLong(int word, long val)
+    {
+        int r = chkW(word, val);
+        if (r >= 0)
+        {
+            return r;
+        }
+        return chkW(word + 1, val >>> 32);
+    }
+
+    /** Compare {@code b} packed (little-endian, 8-byte-aligned) against the image at {@code word}; -1 if equal. */
+    private static int chkBytes(int word, byte[] b)
+    {
+        int total = ((b.length + 7) & ~7) / 4;
+        int p = 0;
+        while (p < total)
+        {
+            long packed = 0L;
+            int q = 0;
+            while (q < 4)
+            {
+                int bi = p * 4 + q;
+                if (bi < b.length)
+                {
+                    packed |= ((long) (b[bi] & 0xFF)) << (q * 8);
+                }
+                q += 1;
+            }
+            int r = chkW(word + p, packed);
+            if (r >= 0)
+            {
+                return r;
+            }
+            p += 1;
+        }
+        return -1;
+    }
+
+    private static byte[] blobClass(int b)
+    {
+        if (b == 0) { return Magic.bytes("vm/Guest"); }
+        if (b == 1) { return Magic.bytes("vm/Greeter"); }
+        if (b == 2) { return Magic.bytes("vm/Alpha"); }
+        if (b == 3) { return Magic.bytes("vm/Beta"); }
+        if (b == 4) { return Magic.bytes("vm/MyExc"); }
+        return Magic.bytes("java/lang/Math");
+    }
+
+    /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
+    private static long staticValue(byte[] cls, byte[] nm)
+    {
+        if (!bytesEqual(cls, Magic.bytes("vm/VM")))
+        {
+            return 0L;
+        }
+        if (bytesEqual(nm, Magic.bytes("frameTable"))) { return dAddr(dFrameStart); }
+        if (bytesEqual(nm, Magic.bytes("frameCount"))) { return drFrameCount; }
+        if (bytesEqual(nm, Magic.bytes("handlerTable"))) { return dAddr(dHandlerStart); }
+        if (bytesEqual(nm, Magic.bytes("handlerCount"))) { return drHandlerCount; }
+        if (bytesEqual(nm, Magic.bytes("staticsStart"))) { return dAddr(dStaticsStart); }
+        if (bytesEqual(nm, Magic.bytes("staticsEnd"))) { return dAddr(dStaticsEnd); }
+        if (bytesEqual(nm, Magic.bytes("classDir"))) { return dAddr(dClassDirStart); }
+        if (bytesEqual(nm, Magic.bytes("classCount"))) { return classCount; }
+        if (bytesEqual(nm, Magic.bytes("heapAlloc"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J")); }
+        if (bytesEqual(nm, Magic.bytes("allocArray"))) { return imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J")); }
+        if (bytesEqual(nm, Magic.bytes("gcCollect"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("instanceOfAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")); }
+        if (bytesEqual(nm, Magic.bytes("checkCastAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")); }
+        if (bytesEqual(nm, Magic.bytes("unwindAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")); }
+        if (bytesEqual(nm, Magic.bytes("reportFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")); }
+        long blobV = blobStatic(nm);
+        return blobV;
+    }
+
+    /** Blob address/length statics ({@code guestBytes}/{@code guestLen}/...), or 0 if {@code nm} is none. */
+    private static long blobStatic(byte[] nm)
+    {
+        int b = 0;
+        while (b < 6)
+        {
+            byte[] c = blobClass(b);
+            if (bytesEqual(nm, blobAddrName(b)))
+            {
+                return dAddr(dBlobOff[b]);
+            }
+            if (bytesEqual(nm, blobLenName(b)))
+            {
+                return MetalClassModel.bytesOf(c).length;
+            }
+            b += 1;
+        }
+        return 0L;
+    }
+
+    private static byte[] blobAddrName(int b)
+    {
+        if (b == 0) { return Magic.bytes("guestBytes"); }
+        if (b == 1) { return Magic.bytes("greeterBytes"); }
+        if (b == 2) { return Magic.bytes("alphaBytes"); }
+        if (b == 3) { return Magic.bytes("betaBytes"); }
+        if (b == 4) { return Magic.bytes("myExcBytes"); }
+        return Magic.bytes("mathBytes");
+    }
+
+    private static byte[] blobLenName(int b)
+    {
+        if (b == 0) { return Magic.bytes("guestLen"); }
+        if (b == 1) { return Magic.bytes("greeterLen"); }
+        if (b == 2) { return Magic.bytes("alphaLen"); }
+        if (b == 3) { return Magic.bytes("betaLen"); }
+        if (b == 4) { return Magic.bytes("myExcLen"); }
+        return Magic.bytes("mathLen");
+    }
+
+    /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */
+    private static int firstDataMismatch()
+    {
+        int wordSlot = ObjectModel.WORD / 4;
+        // ----- Types: { instanceSize, superType, itableDir } -----
+        int i = 0;
+        while (i < typeClassesN)
+        {
+            byte[] cls = typeClasses[i];
+            int tw = dTypesStart + i * (ObjectModel.TYPE_SIZE / 4);
+            int r = chkLong(tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
+                            ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(cls)));
+            if (r >= 0) { return r; }
+            byte[] sup = MetalClassModel.superName(cls);
+            long superAddr = sup == null || MetalClassModel.isRoot(sup) ? 0L : typeImgAddr(sup);
+            r = chkLong(tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
+            if (r >= 0) { return r; }
+            int j = findByteArr(tibSeenCls, tibSeenN, cls);
+            long dir = j >= 0 && dItDirOff[j] >= 0 ? dAddr(dItDirOff[j]) : 0L;
+            r = chkLong(tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
+            if (r >= 0) { return r; }
+            i += 1;
+        }
+        // ----- itable directories + itables -----
+        int t = 0;
+        while (t < tibSeenN)
+        {
+            if (dItDirOff[t] >= 0)
+            {
+                int r = chkItable(t);
+                if (r >= 0) { return r; }
+            }
+            t += 1;
+        }
+        // ----- TIBs: [Type][vtable code addresses] -----
+        int jt = 0;
+        while (jt < tibSeenN)
+        {
+            byte[] cls = tibSeenCls[jt];
+            int tw = dTibOff[jt];
+            int r = chkLong(tw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, typeImgAddr(cls));
+            if (r >= 0) { return r; }
+            int vs = MetalClassModel.vtableSize(cls);
+            int slot = 0;
+            while (slot < vs)
+            {
+                long a = imAddrOf(MetalClassModel.vtableSlotOwner(slot), MetalClassModel.vtableSlotName(slot),
+                                  MetalClassModel.vtableSlotDesc(slot));
+                r = chkLong(tw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, a);
+                if (r >= 0) { return r; }
+                slot += 1;
+            }
+            jt += 1;
+        }
+        // ----- interned string byte[] objects: [null TIB][status][length][bytes] -----
+        int k = 0;
+        while (k < drStrN)
+        {
+            byte[] sb = drStr[k];
+            int sw = dStrOff[k];
+            int r = chkLong(sw + ObjectModel.TIB_OFFSET / 4, 0L);
+            if (r >= 0) { return r; }
+            r = chkLong(sw + ObjectModel.STATUS_OFFSET / 4, 0L);
+            if (r >= 0) { return r; }
+            r = chkLong(sw + ObjectModel.ARRAY_LENGTH_OFFSET / 4, sb.length);
+            if (r >= 0) { return r; }
+            r = chkBytes(sw + ObjectModel.ARRAY_BASE_OFFSET / 4, sb);
+            if (r >= 0) { return r; }
+            k += 1;
+        }
+        // NOTE: the statics region is the program's mutable data segment -- the running image has
+        // mutated it (Config.<clinit> wrote mark, counters incremented, freeHead updated, ...), so its
+        // byte content is not comparable against a live system. Its layout and the immutable writer-
+        // stashed values (staticsStart/frameTable/classDir/helper addrs/...) are validated by the 'H'
+        // marker; staticValue() records how they were written for completeness.
+        // ----- unwind frame table: { codeStart, codeEnd, frameSize } in method order -----
+        int fw = dFrameStart;
+        int m = 0;
+        while (m < imN)
+        {
+            if (imFrameSize[m] > 0)
+            {
+                long base = imAddrOf(imClsName[m], imName[m], imDesc[m]);
+                int r = chkLong(fw, base);
+                if (r >= 0) { return r; }
+                r = chkLong(fw + 2, base + imSize[m] * 4L);
+                if (r >= 0) { return r; }
+                r = chkLong(fw + 4, imFrameSize[m]);
+                if (r >= 0) { return r; }
+                fw += 6;
+            }
+            m += 1;
+        }
+        // ----- unwind handler table: { start, end, handler, catchType } -----
+        int hw = dHandlerStart;
+        m = 0;
+        while (m < imN)
+        {
+            long base = imAddrOf(imClsName[m], imName[m], imDesc[m]);
+            int h = 0;
+            while (h < imHNa[m])
+            {
+                int r = chkLong(hw, base + imHStartA[m][h] * 4L);
+                if (r >= 0) { return r; }
+                r = chkLong(hw + 2, base + imHEndA[m][h] * 4L);
+                if (r >= 0) { return r; }
+                r = chkLong(hw + 4, base + imHandlerA[m][h] * 4L);
+                if (r >= 0) { return r; }
+                byte[] cc = imHCatchCls[m][h];
+                r = chkLong(hw + 6, cc == null ? 0L : typeImgAddr(cc));
+                if (r >= 0) { return r; }
+                hw += 8;
+                h += 1;
+            }
+            m += 1;
+        }
+        // ----- blobs: raw .class bytes -----
+        int b = 0;
+        while (b < 6)
+        {
+            int r = chkBytes(dBlobOff[b], MetalClassModel.bytesOf(blobClass(b)));
+            if (r >= 0) { return r; }
+            b += 1;
+        }
+        // ----- class table: directory {nameAddr,nameLen,bytesAddr,bytesLen} + name/class bytes -----
+        int cc2 = (int) classCount;
+        int cur = dClassDirStart + cc2 * (4 * wordSlot);
+        int ci = 0;
+        while (ci < cc2)
+        {
+            long e = classDir + ci * 32L;                    // read the embedded directory entry
+            int nameLen = (int) Magic.load64(e + 8L);
+            int bytesLen = (int) Magic.load64(e + 24L);
+            int nameW = cur;
+            cur += align8W(nameLen);
+            int bytesW = cur;
+            cur += align8W(bytesLen);
+            int de = dClassDirStart + ci * (4 * wordSlot);
+            int r = chkLong(de, dAddr(nameW));
+            if (r >= 0) { return r; }
+            r = chkLong(de + 2, nameLen);
+            if (r >= 0) { return r; }
+            r = chkLong(de + 4, dAddr(bytesW));
+            if (r >= 0) { return r; }
+            r = chkLong(de + 6, bytesLen);
+            if (r >= 0) { return r; }
+            ci += 1;
+        }
+        return -1;
+    }
+
+    /** Compare {@code tibSeenCls[t]}'s itable directory + itables against the image; first bad word or -1. */
+    private static int chkItable(int t)
+    {
+        byte[] c = tibSeenCls[t];
+        // ordered implemented interfaces (usedInterfaces order)
+        int impls = 0;
+        int u = 0;
+        while (u < drUsedIfN)
+        {
+            if (MetalClassModel.implementsInterface(c, drUsedIf[u]))
+            {
+                impls += 1;
+            }
+            u += 1;
+        }
+        int dir = dItDirOff[t];
+        int itbase = dir + (impls + 1) * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+        // directory entries { interfaceType, itable } + zeroed sentinel
+        int e = 0;
+        int off = itbase;
+        u = 0;
+        while (u < drUsedIfN)
+        {
+            if (MetalClassModel.implementsInterface(c, drUsedIf[u]))
+            {
+                int entry = dir + e * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+                int r = chkLong(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET / 4, typeImgAddr(drUsedIf[u]));
+                if (r >= 0) { return r; }
+                r = chkLong(entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET / 4, dAddr(off));
+                if (r >= 0) { return r; }
+                off += MetalClassModel.interfaceMethodCount(drUsedIf[u]) * (ObjectModel.WORD / 4);
+                e += 1;
+            }
+            u += 1;
+        }
+        int sent = dir + impls * (ObjectModel.ITABLE_ENTRY_SIZE / 4);
+        int r = chkLong(sent + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET / 4, 0L);
+        if (r >= 0) { return r; }
+        r = chkLong(sent + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET / 4, 0L);
+        if (r >= 0) { return r; }
+        // itables: each interface method -> the class's impl address
+        off = itbase;
+        u = 0;
+        while (u < drUsedIfN)
+        {
+            if (MetalClassModel.implementsInterface(c, drUsedIf[u]))
+            {
+                byte[] iface = drUsedIf[u];
+                int n = MetalClassModel.interfaceMethodCount(iface);
+                int s = 0;
+                while (s < n)
+                {
+                    byte[] mName = MetalClassModel.interfaceMethodNameAt(iface, s);
+                    byte[] mDesc = MetalClassModel.interfaceMethodDescAt(iface, s);
+                    int vslot = MetalClassModel.vtableSlot(c, mName, mDesc);
+                    long a = imAddrOf(MetalClassModel.vtableSlotOwner(vslot), mName, mDesc);
+                    r = chkLong(off + s * (ObjectModel.WORD / 4), a);
+                    if (r >= 0) { return r; }
+                    s += 1;
+                }
+                off += n * (ObjectModel.WORD / 4);
+            }
+            u += 1;
+        }
+        return -1;
     }
 
     /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated
