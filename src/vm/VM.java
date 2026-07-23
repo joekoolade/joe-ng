@@ -617,6 +617,11 @@ public final class VM
         // to the image's own copy at instanceOfAddr -- the self-build fixpoint, one method wide.
         Uart.putc(selfFixpointInstanceOf() ? 0x3D : 0x78); // '=' metal bytes == image bytes / 'x' differ
         Uart.putc(0x0A);
+
+        // M5.5c step 4: the fixpoint on a relocation-bearing method -- checkCast's call to
+        // instanceOf is patched to the image's own address; the result must byte-match the image.
+        Uart.putc(selfFixpointCheckCast() ? 0x2B : 0x78);  // '+' relocated metal bytes == image / 'x' differ
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1393,12 +1398,51 @@ public final class VM
         {
             return false;
         }
-        // Byte-compare against the running image's own copy at instanceOfAddr. Mask to 32 bits:
-        // int[] loads sign-extend but Magic.load32 zero-extends, so compare the low words only.
-        int w = 0;
-        while (w < words.length)
+        return fixpointEquals(words, instanceOfAddr);
+    }
+
+    /**
+     * The fixpoint extended to a <em>relocation-bearing</em> method: {@code VM.checkCast} (stashed
+     * at {@code checkCastAddr}) has exactly one reloc — a call to {@code VM.instanceOf} (stashed at
+     * {@code instanceOfAddr}). Recompile it on metal, patch that call to the image's own instanceOf
+     * address, and assert byte-equality with the image — the metal writer relocates as the seed did.
+     */
+    private static boolean selfFixpointCheckCast()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/VM"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        int body = findMethodBody(Magic.bytes("checkCast"), Magic.bytes("(JJ)J"));
+        if (body < 0)
         {
-            if ((words[w] & 0xFFFFFFFFL) != (Magic.load32(instanceOfAddr + w * 4L) & 0xFFFFFFFFL))
+            return false;
+        }
+        MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+        int[] words = compileInto(body, sym, checkCastAddr);    // compile at its real image base
+
+        // Exactly one relocation: a call to instanceOf; nothing else.
+        if (sym.callCount() != 1 || !sym.callNameIs(0, Magic.bytes("instanceOf"))
+                || sym.helperCount() != 0 || sym.staticCount() != 0 || sym.tibCount() != 0
+                || sym.typeCount() != 0 || sym.strCount() != 0 || sym.ifCount() != 0 || sym.excCount() != 0)
+        {
+            return false;
+        }
+        int site = sym.callSiteWord(0);
+        long siteAbs = checkCastAddr + site * 4L;
+        words[site] = A64Enc.bl((int) ((instanceOfAddr - siteAbs) / 4L));   // BL to the image's instanceOf
+
+        return fixpointEquals(words, checkCastAddr);
+    }
+
+    /** Whether {@code words} are byte-identical to the running image starting at {@code imgAddr}. */
+    private static boolean fixpointEquals(int[] words, long imgAddr)
+    {
+        int w = 0;
+        while (w < words.length)                            // mask to 32 bits: int[] sign-extends, load32 zero-extends
+        {
+            if ((words[w] & 0xFFFFFFFFL) != (Magic.load32(imgAddr + w * 4L) & 0xFFFFFFFFL))
             {
                 return false;
             }

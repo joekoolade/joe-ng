@@ -894,9 +894,16 @@ is name→address bookkeeping:
        metal and asserts it is **byte-identical** to the running image's own copy — the metal
        writer reproduces the exact machine code it is executing. (Caught a sign-extension trap:
        `int[]` loads sign-extend while `Magic.load32` zero-extends, so the compare masks to 32
-       bits.) The whole-image compare needs relocation-bearing methods to resolve to the *image's*
-       region addresses (byte-identity depends on reproducing the seed writer's layout order) —
-       the remaining breadth (3b.4) + the `0x80000`-relative sink.
+       bits.)
+     - ✅ **relocated byte-identity (`+`).** `VM.selfFixpointCheckCast` recompiles `VM.checkCast`
+       (stashed at `checkCastAddr`) — one reloc, a call to `VM.instanceOf` — patches that BL to the
+       image's own `instanceOfAddr`, and is byte-identical to the image. The metal writer
+       *relocates* exactly as the seed did. Both proofs share `fixpointEquals`.
+     - ⬜ **whole image.** Reproduce the seed `ImageBuilder`'s exact discovery + region-layout order
+       so every method/region lands at the same `0x80000`-relative address, patch all relocations to
+       those addresses, and word-compare the whole image → `FIX`. Needs the remaining breadth (3b.4:
+       runtime blobs into input, `initClasses`, unwind tables, blobs, class table) + layout-order
+       alignment. The mechanism (compile-at-base, relocate, compare) is now proven both ways.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
