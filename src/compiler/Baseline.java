@@ -980,7 +980,7 @@ public final class Baseline
         int exc = pushReg();
         emitLoadException(cb, exc);
         int pc = pushReg();
-        cb.patchAddr(cb.reserveAddr(pc), pc, cb.pcAt(athrowStart)); // a PC inside this method
+        symbols.codePc(cb, pc, athrowStart);                    // a PC inside this method (relocated by the writer)
         int sp = pushReg();
         cb.emit(A64Enc.movFromSp(sp));
         emitCall(cb, 3, false, false, SYM_HELPER, Symbols.UNWIND);

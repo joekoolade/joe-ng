@@ -20,4 +20,25 @@ public final class MyExc extends RuntimeException
             return 1;
         }
     }
+
+    /** Bare throw — no local handler, so the exception must unwind to the caller's catch. */
+    public static int throwIt()
+    {
+        throw new MyExc();
+    }
+
+    /** Cross-method throw/catch: calls {@link #throwIt} (which throws), catching here — the
+     *  metal writer's cross-method unwind target (a throw in one built method resumes in another). */
+    public static int catchIt()
+    {
+        try
+        {
+            throwIt();
+            return 0;
+        }
+        catch (MyExc e)
+        {
+            return 1;
+        }
+    }
 }

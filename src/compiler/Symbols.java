@@ -60,6 +60,18 @@ public interface Symbols
     /** Load into {@code reg} the address of the synthetic in-flight-exception static slot. */
     void exceptionSlot(CodeBuffer cb, int reg);
 
+    /**
+     * Load into {@code reg} the absolute PC of the instruction at word index
+     * {@code targetWord} within this same method — a self reference (the athrow site
+     * a stack unwind reports). The image and the on-metal JIT both compile at the
+     * final base, so the default resolves it immediately; the metal writer compiles
+     * at base 0 and relocates, so it overrides this to record the site.
+     */
+    default void codePc(CodeBuffer cb, int reg, int targetWord)
+    {
+        cb.patchAddr(cb.reserveAddr(reg), reg, cb.pcAt(targetWord));
+    }
+
     // ----- fatal compiler diagnostics -----
     // A compiler bug or an unsupported bytecode is unrecoverable; the core reports it
     // through fail() rather than building a String message or a JDK exception, which

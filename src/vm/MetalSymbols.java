@@ -59,6 +59,10 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.exceptionSlotAddr());   // the metal in-flight-exception word
     }
+    public void codePc(CodeBuffer cb, int reg, int targetWord)
+    {
+        emitAddr(cb, reg, cb.pcAt(targetWord));          // JIT compiles at the final base -> resolve now
+    }
 
     /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
     private static void emitAddr(CodeBuffer cb, int reg, long addr)

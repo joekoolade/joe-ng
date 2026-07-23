@@ -226,6 +226,30 @@ public final class VM
     }
     static final int JIT_FRAME_MAX = 256;
 
+    // A jit handler table paralleling the image handlerTable, so a metal-built/JIT'd method's
+    // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
+    // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
+    static long jitHandlerTable, jitHandlerCount;
+    static final int JIT_HANDLER_MAX = 256;
+
+    /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
+    static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
+    {
+        if (jitHandlerTable == 0L)
+        {
+            jitHandlerTable = Heap.alloc(JIT_HANDLER_MAX * 32);
+        }
+        if (jitHandlerCount < JIT_HANDLER_MAX)
+        {
+            long e = jitHandlerTable + jitHandlerCount * 32L;
+            Magic.store64(e, machStart);
+            Magic.store64(e + 8L, machEnd);
+            Magic.store64(e + 16L, handler);
+            Magic.store64(e + 24L, catchType);
+            jitHandlerCount = jitHandlerCount + 1L;
+        }
+    }
+
     /**
      * Unwind the stack looking for a handler for {@code exc}, starting at machine
      * PC {@code pc} with stack pointer {@code sp}. At each frame: if a try/catch
@@ -258,10 +282,20 @@ public final class VM
 
     private static long findHandler(long pc, long exc)
     {
-        long i = 0L;
-        while (i < handlerCount)
+        long h = findHandlerIn(handlerTable, handlerCount, pc, exc);   // image methods
+        if (h != 0L)
         {
-            long e = handlerTable + i * 32L;
+            return h;
+        }
+        return findHandlerIn(jitHandlerTable, jitHandlerCount, pc, exc);   // metal-built / JIT'd methods
+    }
+
+    private static long findHandlerIn(long table, long count, long pc, long exc)
+    {
+        long i = 0L;
+        while (i < count)
+        {
+            long e = table + i * 32L;
             if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
             {
                 long catchType = Magic.load64(e + 24L);
@@ -627,6 +661,13 @@ public final class VM
         // + run Config.<clinit> first, so it reads 0x37 (not the zeroed default).
         Uart.putc(buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("readConfig"), Magic.bytes("()I")) == 0x37
                   ? 0x40 : 0x78);                          // '@' eager <clinit> init OK / 'x' broken
+        Uart.putc(0x0A);
+
+        // M5.5c cross-method unwind. Build MyExc.catchIt (calls throwIt, which throws with no local
+        // handler); the throw must unwind out of throwIt into catchIt's catch via the jit frame +
+        // handler tables registered for the metal-built closure -> 1.
+        Uart.putc(buildClosure(Magic.bytes("vm/MyExc"), Magic.bytes("catchIt"), Magic.bytes("()I")) == 1
+                  ? 0x75 : 0x78);                          // 'u' cross-method unwind OK / 'x' broken
         Uart.putc(0x0A);
     }
 
@@ -1344,6 +1385,12 @@ public final class VM
     private static int[] gmWordOff;
     private static int[][] gmWords;
     private static MetalWriterSymbols[] gmSym;
+    private static int[] gmFrameSize;  // per method: frame size + machine handler ranges (cross-method unwind)
+    private static int[] gmHN;
+    private static int[][] gmHStart;
+    private static int[][] gmHEnd;
+    private static int[][] gmHandler;
+    private static int[][] gmHCatch;   // catch-type Class cp index per handler
     private static int gmCount;
 
     /** Cross-class calls + statics: {@code Cell.readCounter} → {@code Counter.bump/get} → 1. */
@@ -1479,6 +1526,12 @@ public final class VM
         gmWordOff = new int[64];
         gmWords = new int[64][];
         gmSym = new MetalWriterSymbols[64];
+        gmFrameSize = new int[64];
+        gmHN = new int[64];
+        gmHStart = new int[64][];
+        gmHEnd = new int[64][];
+        gmHandler = new int[64][];
+        gmHCatch = new int[64][];
         gmCount = 0;
 
         enqueueMethod(entryCls, entryName, entryDesc);
@@ -1497,6 +1550,21 @@ public final class VM
             gmSym[i] = sym;
             gmWords[i] = words;
             gmSize[i] = words.length;
+            gmFrameSize[i] = fFrameSize;                    // capture frame + handlers for unwind
+            gmHN[i] = fHN;
+            gmHStart[i] = new int[fHN];
+            gmHEnd[i] = new int[fHN];
+            gmHandler[i] = new int[fHN];
+            gmHCatch[i] = new int[fHN];
+            int h = 0;
+            while (h < fHN)
+            {
+                gmHStart[i][h] = fHStart[h];
+                gmHEnd[i][h] = fHEnd[h];
+                gmHandler[i][h] = fHandler[h];
+                gmHCatch[i][h] = fHCatch[h];
+                h += 1;
+            }
             discoverFrom(sym);
             i += 1;
         }
@@ -1526,6 +1594,7 @@ public final class VM
         layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+        registerFramesAndHandlers(codeBuf);                 // so cross-method throw/catch can unwind
 
         byte[] clinit = Magic.bytes("<clinit>");
         int ci = 0;
@@ -1587,6 +1656,53 @@ public final class VM
         {
             enqueueMethod(cls, Magic.bytes("<clinit>"), Magic.bytes("()V"));
         }
+    }
+
+    /** Register every placed method's frame + try/catch ranges into the jit unwind tables, so a
+     *  throw in one metal-built method can unwind into another's catch (cross-method unwind). */
+    private static void registerFramesAndHandlers(long codeBuf)
+    {
+        int m = 0;
+        while (m < gmCount)
+        {
+            long base = codeBuf + gmWordOff[m] * 4L;
+            long end = base + gmSize[m] * 4L;
+            addJitFrame(base, end, gmFrameSize[m]);
+            setClassContext(gmClsIdx[m]);                  // resolve catch-type cp in this method's class
+            int h = 0;
+            while (h < gmHN[m])
+            {
+                long ms = base + gmHStart[m][h] * 4L;
+                long me = base + gmHEnd[m][h] * 4L;
+                long hh = base + gmHandler[m][h] * 4L;
+                long ct = typeAddrOfClassCp(gmHCatch[m][h]);
+                addJitHandler(ms, me, hh, ct);
+                h += 1;
+            }
+            m += 1;
+        }
+    }
+
+    /** Type address for the catch-type Class cp entry {@code cp} in the current class context
+     *  ({@code 0} = catch-all/finally, or an unresolved type — matches any exception). */
+    private static long typeAddrOfClassCp(int cp)
+    {
+        if (cp == 0)
+        {
+            return 0L;
+        }
+        byte[] name = utf8Copy(ClassReader.classNameOff(cB, cOff, cp));
+        int k = findTibClassBytes(name);
+        if (k >= 0)
+        {
+            return nbTypeAddr[k];
+        }
+        int ki = findInterfaceBytes(name);
+        if (ki >= 0)
+        {
+            return ifTypeAddr[ki];
+        }
+        return 0L;
     }
 
     /** Lay out interface Types, then class Types/TIBs (+ itable directories), across the closure. */
@@ -1968,6 +2084,13 @@ public final class VM
                 patchAddrWords(words, sym.excSiteWord(xc), sym.excReg(xc), excSlot);
                 xc += 1;
             }
+            int pcx = 0;
+            while (pcx < sym.pcCount())                        // athrow self-PC: relocate to its final address
+            {
+                long selfPc = buf + (baseOff + sym.pcTarget(pcx)) * 4L;
+                patchAddrWords(words, sym.pcSiteWord(pcx), sym.pcReg(pcx), selfPc);
+                pcx += 1;
+            }
             writeWords(buf, baseOff, words);
             m += 1;
         }
@@ -2172,8 +2295,27 @@ public final class VM
         }
         Baseline bl = new Baseline(cB, cOff, cTag, sym);
         setExceptions(bl, codeStart + codeLen);            // exception_table follows the bytecode
-        return bl.compileBody(code, fDescOff, fStatic, maxLocals, base, false);
+        int[] words = bl.compileBody(code, fDescOff, fStatic, maxLocals, base, false);
+        // Capture the frame size + machine handler ranges for cross-method unwind registration.
+        fFrameSize = bl.frameSize();
+        fHN = bl.handlerCount();
+        int h = 0;
+        while (h < fHN)
+        {
+            fHStart[h] = bl.handlerStartWord(h);
+            fHEnd[h] = bl.handlerEndWord(h);
+            fHandler[h] = bl.handlerWord(h);               // fHCatch[h] set by setExceptions
+            h += 1;
+        }
+        return words;
     }
+
+    private static int fFrameSize;                         // last-compiled method's frame + handlers
+    private static int fHN;
+    private static final int[] fHStart = new int[16];
+    private static final int[] fHEnd = new int[16];
+    private static final int[] fHandler = new int[16];
+    private static final int[] fHCatch = new int[16];      // catch-type Class cp index per handler
 
     /** Read the exception_table at {@code ex} and install it on {@code bl}. */
     private static void setExceptions(Baseline bl, int ex)
@@ -2191,6 +2333,7 @@ public final class VM
             ee[j] = ClassReader.u2(cB, e + 2);
             eh[j] = ClassReader.u2(cB, e + 4);
             ec[j] = ClassReader.u2(cB, e + 6);
+            fHCatch[j] = ec[j];
             j += 1;
         }
         bl.setExceptionTable(es, ee, eh, ec, en);

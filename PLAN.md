@@ -886,10 +886,19 @@ is name→address bookkeeping:
            runs every discovered `<clinit>` before the entry (closed-world eager init).
            `Cell.readConfig` (reads `Config.mark`) returns `0x37` — proving `Config.<clinit>` ran, vs
            the zeroed default.
-         - ⬜ **rest.** Fold the runtime-load blobs (Guest/Math) into the writer's input; cross-method
-           unwind tables; embedded blobs; the class table itself.
-       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
-         blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
+         - ✅ **cross-method unwind (`u`).** `buildClosure` now registers every metal-built method's
+           frame + try/catch machine-ranges into the jit unwind tables (`registerFramesAndHandlers`
+           → `addJitFrame`/`addJitHandler`), so a throw in one built method unwinds into another's
+           catch. Needed a self-PC relocation: `athrow`'s "PC inside this method" (fed to `VM.unwind`)
+           was baked at base 0 by the compile-once-then-relocate writer, so `frameSizeAt` couldn't
+           locate the throwing frame. Added a `Symbols.codePc` seam (default = resolve now, as the
+           image/JIT compile at the final base; `MetalWriterSymbols` overrides it to record a site the
+           writer patches to the final address). `MyExc.catchIt` (calls `throwIt`, which throws with no
+           local handler) returns `1`. Catch-type resolved via `typeAddrOfClassCp` (Class cp → Type addr).
+         - ⬜ **rest.** Fold the runtime-load blobs (Guest/Math) into the writer's input;
+           embedded blobs; the class table itself.
+       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); blobs; class table —
+         `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

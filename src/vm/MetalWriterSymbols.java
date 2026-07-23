@@ -75,6 +75,11 @@ final class MetalWriterSymbols implements Symbols
     private final int[] excReg = new int[MAX];
     private int excN;
 
+    private final int[] pcSite = new int[MAX];      // athrow-unwind: self-PC address-load site
+    private final int[] pcReg = new int[MAX];
+    private final int[] pcTarget = new int[MAX];    // ... the word index within this method it names
+    private int pcN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -140,6 +145,13 @@ final class MetalWriterSymbols implements Symbols
         excSite[excN] = cb.reserveAddr(reg);
         excReg[excN] = reg;
         excN += 1;
+    }
+    public void codePc(CodeBuffer cb, int reg, int targetWord)
+    {
+        pcSite[pcN] = cb.reserveAddr(reg);
+        pcReg[pcN] = reg;
+        pcTarget[pcN] = targetWord;
+        pcN += 1;
     }
 
     /** Reserve a 2-word address-load placeholder (MOVZ+MOVK width), record its site. */
@@ -346,6 +358,22 @@ final class MetalWriterSymbols implements Symbols
     int excReg(int i)
     {
         return excReg[i];
+    }
+    int pcCount()
+    {
+        return pcN;
+    }
+    int pcSiteWord(int i)
+    {
+        return pcSite[i];
+    }
+    int pcReg(int i)
+    {
+        return pcReg[i];
+    }
+    int pcTarget(int i)
+    {
+        return pcTarget[i];
     }
     int helperCount()
     {
