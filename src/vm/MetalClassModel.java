@@ -230,6 +230,17 @@ final class MetalClassModel
         return vCount;
     }
 
+    /** The method name / descriptor at flattened-vtable {@code slot} — valid right after
+     *  {@link #vtableSize} for the same class (reads the shared build scratch). */
+    static byte[] vtableSlotName(int slot)
+    {
+        return vName[slot];
+    }
+    static byte[] vtableSlotDesc(int slot)
+    {
+        return vDesc[slot];
+    }
+
     /** Slot index of {@code mName+mDesc} in {@code name}'s flattened vtable, or -1. */
     static int vtableSlot(byte[] name, byte[] mName, byte[] mDesc)
     {

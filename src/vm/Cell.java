@@ -37,6 +37,13 @@ public final class Cell
         return Magic.bytes("Z")[0];
     }
 
+    /** {@code new Cell(v); c.get()} — the metal writer's invokevirtual (vtable-dispatch) target. */
+    public static int viaVirtual(int v)
+    {
+        Cell c = new Cell(v);
+        return c.get();
+    }
+
     public int get()
     {
         return value;

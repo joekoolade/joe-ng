@@ -151,7 +151,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public int vtableSlot(int methodCp)
     {
-        return 0;
+        byte[] recv = utf8Copy(ClassReader.refClassNameOff(classBytes, cpOff, methodCp));
+        byte[] name = utf8Copy(ClassReader.refNameOff(classBytes, cpOff, methodCp));
+        byte[] desc = utf8Copy(ClassReader.refDescOff(classBytes, cpOff, methodCp));
+        return MetalClassModel.vtableSlot(recv, name, desc);
     }
     public int interfaceSlot(int ifaceMethodCp)
     {

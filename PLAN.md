@@ -826,10 +826,16 @@ is name→address bookkeeping:
            `Loader.internString`) and patches the `ldc`-string address load to it.
            `VM.selfBuildStringAndRun` builds `Cell.tag` (=`Magic.bytes("Z")[0]`) and runs it →
            `'Z'` (`baload` off the interned array). Metal `g`.
+         - ✅ **invokevirtual (`vtableSlot` + full TIB vtable).** Completes the object model:
+           `MetalWriterSymbols.vtableSlot` → `MetalClassModel.vtableSlot`; `MetalClassModel`
+           exposes the flattened vtable slots (`vtableSlotName/Desc`); `addClassRegion` now sizes
+           the TIB to the vtable and fills each slot with the *placed* method's address (ordered
+           by the class model). `VM.selfBuildVirtualAndRun` builds `Cell.viaVirtual`
+           (=`new Cell(v); c.get()`) + `get`/`inc`, and dispatches `get()` through the TIB →
+           `0x37`. Metal `D`.
          - ⬜ **remaining kinds/regions.** `interfaceType`/`interfaceSlot` + itables;
-           `exceptionSlot`; full vtable in the TIB (invokevirtual); cross-class discovery;
-           `initClasses`; unwind tables; blobs; class table — `int[] image` sink at
-           `0x80000`-relative bases. Couples to the key migration (1b.3).
+           `exceptionSlot`; cross-class discovery; `initClasses`; unwind tables; blobs; class
+           table — `int[] image` sink at `0x80000`-relative bases. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

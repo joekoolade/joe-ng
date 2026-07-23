@@ -577,6 +577,11 @@ public final class VM
         // as a byte[] and patch the ldc-string load to it, then run tag() -> 'Z'.
         Uart.putc(selfBuildStringAndRun() ? 0x67 : 0x78);  // 'g' string reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: invokevirtual. Build Cell.viaVirtual (= new Cell(v); c.get()) plus
+        // Cell's vtable methods, fill the TIB vtable, and dispatch get() through it -> 0x37.
+        Uart.putc(selfBuildVirtualAndRun() ? 0x44 : 0x78); // 'D' virtual dispatch reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -636,7 +641,7 @@ public final class VM
         }
         long codeBuf = Heap.alloc(cur * 4);
 
-        layoutClassRegions();
+        layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
 
@@ -695,7 +700,7 @@ public final class VM
         }
         long codeBuf = Heap.alloc(cur * 4);
 
-        layoutClassRegions();
+        layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
 
@@ -704,7 +709,7 @@ public final class VM
     }
 
     /** Lay out a Type + TIB for each class the closure {@code new}s or type-tests. */
-    private static void layoutClassRegions()
+    private static void layoutClassRegions(long codeBuf)
     {
         nbClass = new byte[16][];
         nbTibAddr = new long[16];
@@ -717,21 +722,21 @@ public final class VM
             int t = 0;
             while (t < sym.tibCount())
             {
-                addClassRegion(sym.tibClassOff(t));
+                addClassRegion(sym.tibClassOff(t), codeBuf);
                 t += 1;
             }
             int y = 0;
             while (y < sym.typeCount())
             {
-                addClassRegion(sym.typeClassOff(y));
+                addClassRegion(sym.typeClassOff(y), codeBuf);
                 y += 1;
             }
             m += 1;
         }
     }
 
-    /** Build {@code classOff}'s Type + TIB once, if not already laid out. */
-    private static void addClassRegion(int classOff)
+    /** Build {@code classOff}'s Type + TIB (vtable filled from placed methods) once, if new. */
+    private static void addClassRegion(int classOff, long codeBuf)
     {
         if (findTibClass(classOff) >= 0)
         {
@@ -743,12 +748,58 @@ public final class VM
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
         Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);  // no interfaces
-        long tib = Heap.alloc(ObjectModel.tibSize(0));                 // minimal TIB: just the Type slot
+        int vsize = MetalClassModel.vtableSize(name);                  // builds the vtable scratch
+        long tib = Heap.alloc(ObjectModel.tibSize(vsize));
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
+        int slot = 0;
+        while (slot < vsize)                                           // fill each placed vtable method's address
+        {
+            int j = findPlacedBytes(MetalClassModel.vtableSlotName(slot), MetalClassModel.vtableSlotDesc(slot));
+            if (j >= 0)
+            {
+                Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)),
+                              codeBuf + clWordOff[j] * 4L);
+            }
+            slot += 1;
+        }
         nbClass[nbCount] = name;
         nbTypeAddr[nbCount] = type;
         nbTibAddr[nbCount] = tib;
         nbCount += 1;
+    }
+
+    /** Index of the placed method whose (name,desc) equal the byte arrays given, or -1. */
+    private static int findPlacedBytes(byte[] name, byte[] desc)
+    {
+        int j = 0;
+        while (j < clCount)
+        {
+            if (bytesEqual(clName[j], name) && bytesEqual(clDesc[j], desc))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Whether two heap byte arrays are equal in length and content. */
+    private static boolean bytesEqual(byte[] a, byte[] b)
+    {
+        if (a.length != b.length)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < a.length)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
     }
 
     /** Index of the laid-out class whose name equals the Utf8 at {@code classOff} in {@code cB}, or -1. */
@@ -889,12 +940,74 @@ public final class VM
         clWordOff[0] = 0;
 
         long codeBuf = Heap.alloc(words.length * 4);
-        layoutClassRegions();
+        layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + words.length * 4L);
 
         long r = Magic.call0(codeBuf);                     // tag()
         return ok && (int) r == 0x5A;                      // 'Z'
+    }
+
+    /**
+     * Build {@code Cell.viaVirtual} (= {@code new Cell(v); c.get()}) plus Cell's vtable methods
+     * ({@code get}, {@code inc}) into a Heap buffer, fill Cell's TIB vtable with their addresses,
+     * then run {@code viaVirtual(0x37)} — which dispatches {@code get()} through the TIB → 0x37.
+     */
+    private static boolean selfBuildVirtualAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Cell"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("viaVirtual");
+        clDesc[0] = Magic.bytes("(I)I");
+        clName[1] = Magic.bytes("<init>");
+        clDesc[1] = Magic.bytes("(I)V");
+        clName[2] = Magic.bytes("get");         // Cell's vtable methods, placed so the TIB can
+        clDesc[2] = Magic.bytes("()I");         // point its vtable slots at them
+        clName[3] = Magic.bytes("inc");
+        clDesc[3] = Magic.bytes("()V");
+        clCount = 4;
+
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        layoutClassRegions(codeBuf);
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        long r = Magic.call2(codeBuf + clWordOff[0] * 4L, 0x37L, 0L);  // viaVirtual(0x37)
+        return ok && (int) r == 0x37;
     }
 
     /** Absolute image address of the runtime helper with the given {@code compiler.Symbols} id. */
