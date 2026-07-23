@@ -895,10 +895,20 @@ is name→address bookkeeping:
            image/JIT compile at the final base; `MetalWriterSymbols` overrides it to record a site the
            writer patches to the final address). `MyExc.catchIt` (calls `throwIt`, which throws with no
            local handler) returns `1`. Catch-type resolved via `typeAddrOfClassCp` (Class cp → Type addr).
-         - ⬜ **rest.** Fold the runtime-load blobs (Guest/Math) into the writer's input;
-           embedded blobs; the class table itself.
-       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); blobs; class table —
-         `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
+         - ✅ **runtime-load blobs folded into the writer's input (`G`).** The class table was only
+           the compile-reachable set; the runtime-load blobs (Guest/Greeter/Alpha/Beta/MyExc/Math)
+           were embedded raw but absent from it, so the metal writer's `MetalClassModel` could not
+           resolve them. `ImageBuilder.addBlob` now carries the class name and folds each blob's class
+           into the class table (`classDir`). The metal writer builds `Guest.answer`'s whole closure —
+           nine methods across five formerly JIT-only classes, every reloc kind, double-implementor
+           itable dispatch (Alpha slot 0 / Beta slot 1), class + interface `instanceof`, a JIT'd string,
+           and a try/catch — and runs it → `42`. Caught a latent bug: `addClassRegionG` never wrote
+           `TYPE_SUPER_OFFSET`, and `Heap.alloc`'s `zeroPayload` skips the header region (where
+           `superType@8` lives), so a Type reused from prior heap inherited a stale non-zero super —
+           sending `instanceOf`'s super-chain walk into garbage on the first *interface* `instanceof`.
+           Now set to the laid-out super's Type (0 for roots).
+       - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); embedded blobs beyond the class
+         table; `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

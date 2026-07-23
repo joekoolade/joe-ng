@@ -38,12 +38,12 @@ public final class BuildRuntimeImage
 
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
-        ib.addBlob("vm/VM.guestBytes",   "vm/VM.guestLen",   registry.rawBytes("vm/Guest"));
-        ib.addBlob("vm/VM.greeterBytes", "vm/VM.greeterLen", registry.rawBytes("vm/Greeter"));
-        ib.addBlob("vm/VM.alphaBytes",   "vm/VM.alphaLen",   registry.rawBytes("vm/Alpha"));
-        ib.addBlob("vm/VM.betaBytes",    "vm/VM.betaLen",    registry.rawBytes("vm/Beta"));
-        ib.addBlob("vm/VM.myExcBytes",   "vm/VM.myExcLen",   registry.rawBytes("vm/MyExc"));
-        ib.addBlob("vm/VM.mathBytes",    "vm/VM.mathLen",    registry.rawBytes("java/lang/Math"));
+        ib.addBlob("vm/VM.guestBytes",   "vm/VM.guestLen",   "vm/Guest",       registry.rawBytes("vm/Guest"));
+        ib.addBlob("vm/VM.greeterBytes", "vm/VM.greeterLen", "vm/Greeter",     registry.rawBytes("vm/Greeter"));
+        ib.addBlob("vm/VM.alphaBytes",   "vm/VM.alphaLen",   "vm/Alpha",       registry.rawBytes("vm/Alpha"));
+        ib.addBlob("vm/VM.betaBytes",    "vm/VM.betaLen",    "vm/Beta",        registry.rawBytes("vm/Beta"));
+        ib.addBlob("vm/VM.myExcBytes",   "vm/VM.myExcLen",   "vm/MyExc",       registry.rawBytes("vm/MyExc"));
+        ib.addBlob("vm/VM.mathBytes",    "vm/VM.mathLen",    "java/lang/Math", registry.rawBytes("java/lang/Math"));
         return ib.build(ENTRY);
     }
 

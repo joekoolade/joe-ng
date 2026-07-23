@@ -41,18 +41,22 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Class-model queries behind a seam; the metal writer swaps in a registry-backed impl (§M5.5c). */
     private final ClassModel model = new SeedClassModel(this);
 
-    /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics. */
-    private record Blob(String addrKey, String lenKey, byte[] bytes) {}
+    /** Raw bytes embedded verbatim; the writer fills {@code addrKey}/{@code lenKey} statics.
+     *  {@code className} is the class those bytes are (also folded into the class table so the
+     *  metal writer can build from it), or {@code null} for a non-class blob. */
+    private record Blob(String addrKey, String lenKey, String className, byte[] bytes) {}
 
     public ImageBuilder(ClassRegistry registry)
     {
         this.registry = registry;
     }
 
-    /** Embed {@code bytes} verbatim; the runtime finds them via the given statics (e.g. a raw .class). */
-    public void addBlob(String addrKey, String lenKey, byte[] bytes)
+    /** Embed {@code bytes} verbatim; the runtime finds them via the given statics (e.g. a raw
+     *  .class). {@code className} folds the blob into the class table (metal-writer input); pass
+     *  {@code null} for bytes that are not a class. */
+    public void addBlob(String addrKey, String lenKey, String className, byte[] bytes)
     {
-        blobs.add(new Blob(addrKey, lenKey, bytes));
+        blobs.add(new Blob(addrKey, lenKey, className, bytes));
     }
 
     @Override public ClassFile resolve(String owner)
@@ -261,8 +265,24 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // can resolve a class by name from the image alone (PLAN.md §M5.5c step 2). Laid
         // out as a directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries followed
         // by each class's name bytes and raw .class bytes.
-        Vec<String> classNames = registry.reached();
-        int classCount = classNames.size();                         // snapshot: discovery is done
+        // The class table is the compile-reachable set plus the runtime-load blobs' classes,
+        // folded in so the metal writer can build closures spanning them (e.g. Guest.answer),
+        // not just JIT them at runtime (PLAN.md §M5.5c step 3b.4).
+        Vec<String> classNames = new Vec<>();
+        Vec<String> reached = registry.reached();                   // snapshot: discovery is done
+        for (int i = 0; i < reached.size(); i++)
+        {
+            classNames.add(reached.get(i));
+        }
+        for (int b = 0; b < blobs.size(); b++)
+        {
+            String cn = blobs.get(b).className();
+            if (cn != null && !contains(classNames, cn))
+            {
+                classNames.add(cn);
+            }
+        }
+        int classCount = classNames.size();
         int classDirWord = cur;
         cur += classCount * CLASS_ENTRY_WORDS;
         int[] classNameWord = new int[classCount];
@@ -609,6 +629,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static int align8Words(int len)
     {
         return ((len + 7) & ~7) / 4;
+    }
+
+    /** Whether {@code names} already holds {@code name} (small lists — linear is fine). */
+    private static boolean contains(Vec<String> names, String name)
+    {
+        for (int i = 0; i < names.size(); i++)
+        {
+            if (names.get(i).equals(name))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A class name's bytes (internal names are ASCII — no charset needed on metal). */

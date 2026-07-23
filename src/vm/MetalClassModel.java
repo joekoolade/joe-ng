@@ -128,7 +128,7 @@ final class MetalClassModel
     }
 
     /** {@code clsName}'s superclass name bytes, or null if it has none (a root). */
-    private static byte[] superName(byte[] clsName)
+    static byte[] superName(byte[] clsName)
     {
         byte[] b = bytesOf(clsName);
         int[] off = constPool(b);

@@ -669,6 +669,13 @@ public final class VM
         Uart.putc(buildClosure(Magic.bytes("vm/MyExc"), Magic.bytes("catchIt"), Magic.bytes("()I")) == 1
                   ? 0x75 : 0x78);                          // 'u' cross-method unwind OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.4: runtime-load blobs folded into the writer's input. Guest (+ Greeter/Alpha/
+        // Beta/MyExc) are now in the class table, so the metal writer builds Guest.answer's whole
+        // closure -- every reloc kind across five formerly JIT-only classes -- and runs it -> 42.
+        Uart.putc(buildClosure(Magic.bytes("vm/Guest"), Magic.bytes("answer"), Magic.bytes("()I")) == 42
+                  ? 0x47 : 0x78);                          // 'G' metal-built Guest.answer OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1786,6 +1793,12 @@ public final class VM
         long type = Heap.alloc(ObjectModel.TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
+        // superType: 0 for a root super (chain ends), else the laid-out super's Type. Heap.alloc
+        // does not zero the header region (where superType@8 lives), so this MUST be written — a
+        // stale non-zero value sends instanceOf's super-chain walk off into garbage.
+        byte[] sup = MetalClassModel.superName(name);
+        int si = sup == null || MetalClassModel.isRoot(sup) ? -1 : findTibClassBytes(sup);
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, si >= 0 ? nbTypeAddr[si] : 0L);
         int vs = MetalClassModel.vtableSize(name);
         long tib = Heap.alloc(ObjectModel.tibSize(vs));
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
