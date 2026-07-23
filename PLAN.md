@@ -931,11 +931,32 @@ is name→address bookkeeping:
        (stashed at `checkCastAddr`) — one reloc, a call to `VM.instanceOf` — patches that BL to the
        image's own `instanceOfAddr`, and is byte-identical to the image. The metal writer
        *relocates* exactly as the seed did. Both proofs share `fixpointEquals`.
-     - ⬜ **whole image.** Reproduce the seed `ImageBuilder`'s exact discovery + region-layout order
-       so every method/region lands at the same `0x80000`-relative address, patch all relocations to
-       those addresses, and word-compare the whole image → `FIX`. Needs the remaining breadth (3b.4:
-       runtime blobs into input, `initClasses`, unwind tables, blobs, class table) + layout-order
-       alignment. The mechanism (compile-at-base, relocate, compare) is now proven both ways.
+     - ✅ **code-region layout reproduced (`Z`).** `VM.discoverImage` reproduces the seed
+       `ImageBuilder`'s method discovery from `vm/VM.boot` — the same FIFO worklist (dedup-at-enqueue
+       == the seed's dedup-at-dequeue), callees and synthesised helper calls **merged by emission
+       order** (the seed unifies both in one `callSites` list; the metal writer splits them, so they
+       re-merge by ascending word index), eager `<clinit>`s via `use()`, and each newly instantiated
+       class's flattened vtable — then sizes every method with the shared `Baseline` and appends the
+       generated `initClasses` last. Result: **485/485 methods identical in name, order, and size**
+       to the seed, and all seven stashed method-address anchors (`reportFault`/`gcCollect`/`alloc`/
+       `allocArray`/`instanceOf`/`checkCast`/`unwind`) land at their exact image addresses — the metal
+       writer reconstructs the code region's `0x80000`-relative placement it booted from. `fixpointCodeLayout`
+       checks the anchors on metal; the full 485/485 match is host-verified by diffing the ordered
+       (size,key) lists. Exposed and fixed three latent codegen gaps the self-build forced into
+       agreement: (a) `MetalWriterSymbols` recognised only 7 of the 33 `magic/Magic` intrinsics and
+       never flagged `gc`/`call0`/`call2` as call-emitting → wrong sizes for `boot`/`run`; now mirrors
+       `WriterSymbols` exactly. (b) `Baseline`'s `baload` zero-extends (ASCII) while the JVM sign-extends,
+       and javac omits the redundant `i2b` after a `(byte)` cast — so the metal-resident compiler read a
+       negative `bipush` operand (`& -8`) as `248`; the `bipush` handler now masks-then-casts to force an
+       explicit `sxtb`. (c) `i2l` was a no-op assuming ints stay sign-extended in their 64-bit register,
+       but int shift/or (e.g. `ClassReader.intValue`) leaves the high half zero — so large negative
+       instruction encodings (`0xD65F03C0`) materialised in 2 words not 4; `i2l` now emits `sxtw`. Also
+       fixed `MetalClassModel.MAX_SLOTS` (32 → 128; `MetalWriterSymbols`/`Baseline` have >32 virtual
+       methods, and metal has no array-bounds checks, so the vtable scratch silently corrupted).
+     - ⬜ **whole image.** Remaining: compile every method at its (now-known) `0x80000`-relative base,
+       resolve all relocations to image addresses, and lay out + byte-compare the data regions (Types,
+       TIBs, strings, statics, itables, unwind tables, blobs, class table) → `FIX`. The code region's
+       order/size/placement is done; the mechanism (compile-at-base, relocate, compare) is proven.
 
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over

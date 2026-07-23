@@ -676,6 +676,26 @@ public final class VM
         Uart.putc(buildClosure(Magic.bytes("vm/Guest"), Magic.bytes("answer"), Magic.bytes("()I")) == 42
                   ? 0x47 : 0x78);                          // 'G' metal-built Guest.answer OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 4: whole-image code-region layout fixpoint. Reproduce the seed ImageBuilder's
+        // method discovery + layout order from vm/VM.boot, then assert every anchored method lands at
+        // its own address in the running image -- proving the metal writer reconstructs the exact
+        // 0x80000-relative placement of the code region it booted from.
+        Uart.putc(fixpointCodeLayout() ? 0x5A : 0x78);     // 'Z' code-region layout reproduced / 'x' off
+        Uart.putc(0x0A);
+    }
+
+    /** Whether every stashed method-address anchor lands at the metal writer's derived offset. */
+    private static boolean fixpointCodeLayout()
+    {
+        discoverImage();
+        return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")) == reportFaultAddr
+            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V")) == gcCollect
+            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J")) == heapAlloc
+            && imAddrOf(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J")) == allocArray
+            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I")) == instanceOfAddr
+            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")) == checkCastAddr
+            && imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")) == unwindAddr;
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1664,6 +1684,253 @@ public final class VM
         long unused = Magic.call0(initBuf);                 // bound to a local (no pop2 in Baseline)
     }
 
+    // ----- M5.5c step 4: whole-image code-region fixpoint (discovery + sizing order) -----
+    // Reproduce the seed ImageBuilder's method discovery + layout order from vm/VM.boot, so each
+    // method lands at the same 0x80000-relative word offset it occupies in the running image.
+    // Validated against the seven stashed method-address anchors: if every derived offset matches
+    // the image's own address, the code-region ordering has been reproduced byte-for-byte.
+    private static byte[][] imClsName;   // per discovered method: class name / cache idx / name / desc
+    private static int[] imCls;
+    private static byte[][] imName;
+    private static byte[][] imDesc;
+    private static int[] imSize;         // ... its compiled word count (placement-independent)
+    private static int imN;
+    private static byte[][] usedCls;     // classes whose <clinit> has been scheduled (eager-init dedup)
+    private static int usedN;
+    private static byte[][] tibSeenCls;  // classes whose vtable has been expanded (tibClasses dedup)
+    private static int tibSeenN;
+    private static int clinitCount;      // discovered <clinit>s (the initClasses method's BL count)
+
+    private static int imFind(byte[] cls, byte[] name, byte[] desc)
+    {
+        int j = 0;
+        while (j < imN)
+        {
+            if (bytesEqual(imClsName[j], cls) && bytesEqual(imName[j], name) && bytesEqual(imDesc[j], desc))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** Enqueue a method in discovery order; dedup-at-enqueue == the seed's FIFO dedup-at-dequeue. */
+    private static void imEnqueue(byte[] cls, byte[] name, byte[] desc)
+    {
+        if (bytesEqual(cls, Magic.bytes("vm/VM")) && bytesEqual(name, Magic.bytes("initClasses")))
+        {
+            return;    // initClasses is generated, not discovered — the seed places it last (see discoverImage)
+        }
+        if (imFind(cls, name, desc) >= 0)
+        {
+            return;
+        }
+        imClsName[imN] = cls;
+        imCls[imN] = loadClass(cls);
+        imName[imN] = name;
+        imDesc[imN] = desc;
+        imN += 1;
+    }
+
+    private static boolean usedAdd(byte[] cls)
+    {
+        int j = 0;
+        while (j < usedN)
+        {
+            if (bytesEqual(usedCls[j], cls))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        usedCls[usedN] = cls;
+        usedN += 1;
+        return true;
+    }
+
+    /** The seed's use(): on a class's first use, schedule its {@code <clinit>} (eager init). */
+    private static void useClinit(byte[] cls)
+    {
+        if (usedAdd(cls) && MetalClassModel.hasClinit(cls))
+        {
+            clinitCount += 1;
+            imEnqueue(cls, Magic.bytes("<clinit>"), Magic.bytes("()V"));
+        }
+    }
+
+    private static boolean tibSeenAdd(byte[] cls)
+    {
+        int j = 0;
+        while (j < tibSeenN)
+        {
+            if (bytesEqual(tibSeenCls[j], cls))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        tibSeenCls[tibSeenN] = cls;
+        tibSeenN += 1;
+        return true;
+    }
+
+    /** 0x80000-relative address of discovered method (cls,name,desc), or 0 if not discovered. */
+    private static long imAddrOf(byte[] cls, byte[] name, byte[] desc)
+    {
+        int j = imFind(cls, name, desc);
+        if (j < 0)
+        {
+            return 0L;
+        }
+        long off = 0L;
+        int i = 0;
+        while (i < j)
+        {
+            off += imSize[i];
+            i += 1;
+        }
+        return 0x8_0000L + off * 4L;                         // CodeBuffer.LOAD_ADDRESS (the image base)
+    }
+
+    /** Discover + size the whole {@code boot} closure in the seed's exact order (no relocation, no run). */
+    private static void discoverImage()
+    {
+        lcName = new byte[128][];
+        lcBytes = new byte[128][];
+        lcOff = new int[128][];
+        lcTag = new int[128][];
+        lcAfterCp = new int[128];
+        lcCount = 0;
+        imClsName = new byte[512][];
+        imCls = new int[512];
+        imName = new byte[512][];
+        imDesc = new byte[512][];
+        imSize = new int[512];
+        imN = 0;
+        usedCls = new byte[128][];
+        usedN = 0;
+        tibSeenCls = new byte[32][];
+        tibSeenN = 0;
+        clinitCount = 0;
+
+        imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("boot"), Magic.bytes("()V"));
+        int i = 0;
+        while (i < imN)
+        {
+            setClassContext(imCls[i]);
+            int body = findMethodBody(imName[i], imDesc[i]);
+            boolean isEntry = i == 0;                        // boot is the frameless entry (as the seed)
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            imSize[i] = compileInto(body, sym, 0L, isEntry).length;
+            discoverImageFrom(sym, imClsName[i]);
+            i += 1;
+        }
+        // initClasses is placed last, its body generated: SUB/STR + one BL per discovered <clinit> + LDR/ADD/RET.
+        imClsName[imN] = Magic.bytes("vm/VM");
+        imCls[imN] = loadClass(Magic.bytes("vm/VM"));
+        imName[imN] = Magic.bytes("initClasses");
+        imDesc[imN] = Magic.bytes("()V");
+        imSize[imN] = 2 + clinitCount + 3;
+        imN += 1;
+    }
+
+    /** Enqueue the runtime-helper method the writer synthesised a {@code BL} to (matches WriterSymbols.HELPER_KEY). */
+    private static void imEnqueueHelper(int id)
+    {
+        if (id == 0)
+        {
+            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("alloc"), Magic.bytes("(I)J"));
+        }
+        else if (id == 1)
+        {
+            imEnqueue(Magic.bytes("vm/Heap"), Magic.bytes("allocArray"), Magic.bytes("(II)J"));
+        }
+        else if (id == 2)
+        {
+            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("gcCollect"), Magic.bytes("(J)V"));
+        }
+        else if (id == 3)
+        {
+            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("instanceOf"), Magic.bytes("(JJ)I"));
+        }
+        else if (id == 4)
+        {
+            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J"));
+        }
+        else
+        {
+            imEnqueue(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V"));
+        }
+    }
+
+    /** Append method's callees, eager {@code <clinit>}s, and new classes' vtable methods, in the seed's order. */
+    private static void discoverImageFrom(MetalWriterSymbols sym, byte[] ownerCls)
+    {
+        // 1: callees + synthesised helper calls, merged by emission order (the seed unifies both in
+        //    one callSites list; the metal writer splits them, so re-merge by ascending word index).
+        int ci = 0;
+        int hi = 0;
+        int nc = sym.callCount();
+        int nh = sym.helperCount();
+        while (ci < nc || hi < nh)
+        {
+            boolean takeCall;
+            if (ci >= nc)
+            {
+                takeCall = false;
+            }
+            else if (hi >= nh)
+            {
+                takeCall = true;
+            }
+            else
+            {
+                takeCall = sym.callSiteWord(ci) < sym.helperSiteWord(hi);
+            }
+            if (takeCall)
+            {
+                imEnqueue(utf8Copy(sym.callClassOff(ci)), utf8Copy(sym.callNameOff(ci)), utf8Copy(sym.callDescOff(ci)));
+                ci += 1;
+            }
+            else
+            {
+                imEnqueueHelper(sym.helperId(hi));
+                hi += 1;
+            }
+        }
+        int t = 0;
+        while (t < sym.tibCount())                           // 2: each new'd class's <clinit>
+        {
+            useClinit(utf8Copy(sym.tibClassOff(t)));
+            t += 1;
+        }
+        int s = 0;
+        while (s < sym.staticCount())                        // 3: each used static's owner <clinit>
+        {
+            useClinit(utf8Copy(sym.staticClassOff(s)));
+            s += 1;
+        }
+        useClinit(ownerCls);                                 // 4: the method's own class <clinit>
+        t = 0;
+        while (t < sym.tibCount())                           // 5: a newly instantiated class's vtable methods
+        {
+            byte[] tc = utf8Copy(sym.tibClassOff(t));
+            if (tibSeenAdd(tc))
+            {
+                int vs = MetalClassModel.vtableSize(tc);
+                int sl = 0;
+                while (sl < vs)
+                {
+                    imEnqueue(MetalClassModel.vtableSlotOwner(sl), MetalClassModel.vtableSlotName(sl),
+                              MetalClassModel.vtableSlotDesc(sl));
+                    sl += 1;
+                }
+            }
+            t += 1;
+        }
+    }
+
     /** Enqueue a compiled method's callees (calls) and, for each {@code new}, the instantiated
      *  class's vtable methods (so its TIB can be filled). Runs with {@code cB} = the method's class. */
     private static void discoverFrom(MetalWriterSymbols sym)
@@ -2341,6 +2608,11 @@ public final class VM
     /** Compile the method whose Code-attribute body is at {@code body} into A64 words at {@code base}. */
     private static int[] compileInto(int body, MetalWriterSymbols sym, long base)
     {
+        return compileInto(body, sym, base, false);
+    }
+
+    private static int[] compileInto(int body, MetalWriterSymbols sym, long base, boolean isEntry)
+    {
         int maxLocals = ClassReader.u2(cB, body + 2);      // after max_stack(2)
         int codeLen = ClassReader.u4(cB, body + 4);
         int codeStart = body + 8;
@@ -2353,7 +2625,7 @@ public final class VM
         }
         Baseline bl = new Baseline(cB, cOff, cTag, sym);
         setExceptions(bl, codeStart + codeLen);            // exception_table follows the bytecode
-        int[] words = bl.compileBody(code, fDescOff, fStatic, maxLocals, base, false);
+        int[] words = bl.compileBody(code, fDescOff, fStatic, maxLocals, base, isEntry);
         // Capture the frame size + machine handler ranges for cross-method unwind registration.
         fFrameSize = bl.frameSize();
         fHN = bl.handlerCount();

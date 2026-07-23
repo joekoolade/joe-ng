@@ -269,6 +269,11 @@ public final class A64Enc
     {
         return 0x9340_3C00 | (rn << 5) | rd;
     }
+    /** {@code SXTW Xd, Wn} — sign-extend word 32→64 (i2l). */
+    public static int sxtw(int rd, int rn)
+    {
+        return 0x9340_7C00 | (rn << 5) | rd;
+    }
     /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
     public static int uxth(int rd, int rn)
     {

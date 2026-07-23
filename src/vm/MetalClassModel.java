@@ -217,7 +217,7 @@ final class MetalClassModel
 
     // ----- superclass-chain walks (mirror classfile.ClassFile's recursion) ------------
 
-    private static final int MAX_SLOTS = 32;
+    private static final int MAX_SLOTS = 128;   // > the largest flattened vtable (Baseline ~60 incl. private)
     private static byte[][] vName;    // flattened-vtable slot: method name bytes
     private static byte[][] vDesc;    // ... descriptor bytes
     private static byte[][] vOwner;   // ... owning class name bytes (most-derived declarer)

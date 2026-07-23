@@ -195,39 +195,49 @@ final class MetalWriterSymbols implements Symbols
     }
     public boolean intrinsicEmitsCall(int methodCp)
     {
-        return false;   // the memory intrinsics this writer resolves emit no BL/BLR
+        int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);   // gc/call0/call2 emit a BL/BLR
+        return utf8Is(n, Magic.bytes("gc")) || utf8Is(n, Magic.bytes("call0")) || utf8Is(n, Magic.bytes("call2"));
     }
     public int intrinsicId(int methodCp)
     {
-        int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);   // the seven memory intrinsics
-        if (utf8Is(n, Magic.bytes("bytes")))
-        {
-            return Intrinsics.BYTES;
-        }
-        if (utf8Is(n, Magic.bytes("load8")))
-        {
-            return Intrinsics.LOAD8;
-        }
-        if (utf8Is(n, Magic.bytes("load32")))
-        {
-            return Intrinsics.LOAD32;
-        }
-        if (utf8Is(n, Magic.bytes("load64")))
-        {
-            return Intrinsics.LOAD64;
-        }
-        if (utf8Is(n, Magic.bytes("store8")))
-        {
-            return Intrinsics.STORE8;
-        }
-        if (utf8Is(n, Magic.bytes("store32")))
-        {
-            return Intrinsics.STORE32;
-        }
-        if (utf8Is(n, Magic.bytes("store64")))
-        {
-            return Intrinsics.STORE64;
-        }
+        // The full magic/Magic intrinsic set, mapped exactly as compiler.WriterSymbols does, so the
+        // metal writer sizes and lowers every method (boot/run/Heap.alloc/...) byte-for-byte like the
+        // seed. Names are unique, so a name match suffices (no descriptor disambiguation needed).
+        int n = ClassReader.refNameOff(classBytes, cpOff, methodCp);
+        if (utf8Is(n, Magic.bytes("wfe"))) { return Intrinsics.WFE; }
+        if (utf8Is(n, Magic.bytes("isb"))) { return Intrinsics.ISB; }
+        if (utf8Is(n, Magic.bytes("dsb"))) { return Intrinsics.DSB; }
+        if (utf8Is(n, Magic.bytes("gc"))) { return Intrinsics.GC; }
+        if (utf8Is(n, Magic.bytes("call0"))) { return Intrinsics.CALL0; }
+        if (utf8Is(n, Magic.bytes("call2"))) { return Intrinsics.CALL2; }
+        if (utf8Is(n, Magic.bytes("eret"))) { return Intrinsics.ERET; }
+        if (utf8Is(n, Magic.bytes("dropToEL1"))) { return Intrinsics.DROP_TO_EL1; }
+        if (utf8Is(n, Magic.bytes("writeHCR_EL2"))) { return Intrinsics.WRITE_HCR_EL2; }
+        if (utf8Is(n, Magic.bytes("writeCPTR_EL2"))) { return Intrinsics.WRITE_CPTR_EL2; }
+        if (utf8Is(n, Magic.bytes("writeCNTHCTL_EL2"))) { return Intrinsics.WRITE_CNTHCTL_EL2; }
+        if (utf8Is(n, Magic.bytes("writeCNTVOFF_EL2"))) { return Intrinsics.WRITE_CNTVOFF_EL2; }
+        if (utf8Is(n, Magic.bytes("writeSCTLR_EL1"))) { return Intrinsics.WRITE_SCTLR_EL1; }
+        if (utf8Is(n, Magic.bytes("writeSPSR_EL2"))) { return Intrinsics.WRITE_SPSR_EL2; }
+        if (utf8Is(n, Magic.bytes("writeELR_EL2"))) { return Intrinsics.WRITE_ELR_EL2; }
+        if (utf8Is(n, Magic.bytes("writeCPACR_EL1"))) { return Intrinsics.WRITE_CPACR_EL1; }
+        if (utf8Is(n, Magic.bytes("writeSP"))) { return Intrinsics.WRITE_SP; }
+        if (utf8Is(n, Magic.bytes("readSP"))) { return Intrinsics.READ_SP; }
+        if (utf8Is(n, Magic.bytes("resume"))) { return Intrinsics.RESUME; }
+        if (utf8Is(n, Magic.bytes("store32"))) { return Intrinsics.STORE32; }
+        if (utf8Is(n, Magic.bytes("store8"))) { return Intrinsics.STORE8; }
+        if (utf8Is(n, Magic.bytes("store64"))) { return Intrinsics.STORE64; }
+        if (utf8Is(n, Magic.bytes("load32"))) { return Intrinsics.LOAD32; }
+        if (utf8Is(n, Magic.bytes("load8"))) { return Intrinsics.LOAD8; }
+        if (utf8Is(n, Magic.bytes("load64"))) { return Intrinsics.LOAD64; }
+        if (utf8Is(n, Magic.bytes("bytes"))) { return Intrinsics.BYTES; }
+        if (utf8Is(n, Magic.bytes("dcCVAU"))) { return Intrinsics.DC_CVAU; }
+        if (utf8Is(n, Magic.bytes("icIALLU"))) { return Intrinsics.IC_IALLU; }
+        if (utf8Is(n, Magic.bytes("writeVBAR_EL1"))) { return Intrinsics.WRITE_VBAR_EL1; }
+        if (utf8Is(n, Magic.bytes("readESR_EL1"))) { return Intrinsics.READ_ESR_EL1; }
+        if (utf8Is(n, Magic.bytes("readELR_EL1"))) { return Intrinsics.READ_ELR_EL1; }
+        if (utf8Is(n, Magic.bytes("readFAR_EL1"))) { return Intrinsics.READ_FAR_EL1; }
+        if (utf8Is(n, Magic.bytes("readCurrentEL"))) { return Intrinsics.READ_CURRENT_EL; }
+        fail(Symbols.FAIL_INTRINSIC_ID, methodCp, 0);   // an unrecognised magic op: halt (seed throws)
         return 0;
     }
     public boolean isSkippableInit(int methodCp)

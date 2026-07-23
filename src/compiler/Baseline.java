@@ -197,7 +197,11 @@ public final class Baseline
         }
         else if (op == 0x10)
         {
-            loadConst(cb, (byte) code[pos + 1]);
+            // Mask then cast so the sign-extension is an explicit i2b (sxtb), not a reliance on the
+            // JVM's sign-extending baload: this compiler's own baload zero-extends (ASCII bytes), so a
+            // bare `(byte) code[..]` — which javac lowers to baload+i2l, no i2b — would read a negative
+            // bipush operand as unsigned when *this* compiler compiles itself (the self-build fixpoint).
+            loadConst(cb, (byte) (code[pos + 1] & 0xFF));
             return 2;
         }
         else if (op == 0x11)
@@ -407,10 +411,16 @@ public final class Baseline
             return 1;
         }  // lcmp -> -1/0/1
 
-        else if (op == 0x85 || op == 0x88)
+        else if (op == 0x85)
+        {
+            int r = OP_BASE + sp - 1;
+            cb.emit(A64Enc.sxtw(r, r));     // i2l: sign-extend 32->64 (int ops don't keep the high half signed)
+            return 1;
+        }  // i2l
+        else if (op == 0x88)
         {
             return 1;
-        }  // i2l/l2i: no-op (values fit 64-bit)
+        }  // l2i: no-op (low 32 bits already hold the int)
         else if (op == 0x91)
         {
             int r = OP_BASE + sp - 1;
