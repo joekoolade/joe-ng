@@ -993,8 +993,22 @@ is name→address bookkeeping:
   **Assessment.** Large but well-understood — the novel/hard part (a metal class-model +
   compiler) already exists in Loader; M5.5c is layout + unification + blob plumbing over
   it, verifiable in-image by the fixpoint compare. No new subsystems (storage is M5.5d).
-- **M5.5d (M6-gated) — persist + reboot**: an SD/FAT block driver to write the image and
-  a real self-hosted boot. This is where "drop the seed JVM" becomes literally true.
+- **M5.5d — persist + reboot**: an SD/FAT block driver to write the image and a real
+  self-hosted boot. This is where "drop the seed JVM" becomes literally true.
+  - ✅ **slice 1 — materialise `image'` (`IMG`).** `VM.materializeImage` builds the clean
+    reproduced image into a heap buffer: the immutable regions (code + Types/TIBs/itables/
+    strings/unwind/blobs/class table), proven byte-identical by `FIX`, are copied from the
+    running image; the mutable statics segment is reset to its *as-written* values (zero
+    except the writer-stashed addresses/counts). `fixpointMaterialize` verifies it — the
+    immutable regions match the live image and the statics are clean (`Config.mark` is 0 in
+    `image'` but `0x37` in the live copy where its `<clinit>` ran). This buffer is exactly the
+    `kernel8.img` the seed would emit, ready to write to storage.
+  - ⬜ **slice 2 — EMMC/SD block driver.** The bcm2711 EMMC2 (SDHCI) controller: init, read
+    sector, write sector. Testable under QEMU `raspi4b` with an SD image.
+  - ⬜ **slice 3 — FAT32 write.** Mount the boot partition, find `kernel8.img`, overwrite its
+    clusters with `image'`.
+  - ⬜ **slice 4 — reboot.** Watchdog/PSCI reset so the firmware reloads the metal-written
+    `kernel8.img`; on the next boot it reproduces itself again → true self-hosting.
 
 **Honest assessment.** M5.5a–c is a large but bounded port — mechanically similar to the
 `Baseline` split (collections→registries, `ClassFile`→`ClassReader`, strings→Utf8), just

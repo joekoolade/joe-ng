@@ -706,6 +706,12 @@ public final class VM
         // covered by 'H'.) joe-ng has reconstructed, on bare metal, the exact image it is running.
         Uart.write(fixpointDataContent() ? Magic.bytes("FIX") : Magic.bytes("x"));
         Uart.putc(0x0A);
+
+        // M5.5d slice 1: materialise the clean reproduced image (image') into a heap buffer -- the exact
+        // kernel8.img the seed would emit -- ready to persist to storage. Verifies its immutable regions
+        // match the running image and its statics segment is reset to the as-written values.
+        Uart.write(fixpointMaterialize() ? Magic.bytes("IMG") : Magic.bytes("x"));
+        Uart.putc(0x0A);
     }
 
     /** Whether every immutable data region is byte-identical to the running image (mutable statics excluded). */
@@ -714,6 +720,87 @@ public final class VM
         discoverImage();
         layoutDataRegions();
         return firstDataMismatch() < 0;
+    }
+
+    // ----- M5.5d slice 1: materialise the clean reproduced image (image') into a heap buffer -----
+
+    /** Total word length of the image, through the end of the class-table bytes. */
+    private static int imageEndWord()
+    {
+        int cc = (int) classCount;
+        int cur = dClassDirStart + cc * (4 * (ObjectModel.WORD / 4));
+        int i = 0;
+        while (i < cc)
+        {
+            long e = classDir + i * 32L;
+            cur += align8W((int) Magic.load64(e + 8L)) + align8W((int) Magic.load64(e + 24L));
+            i += 1;
+        }
+        return cur;
+    }
+
+    /**
+     * Build the clean reproduced image {@code image'} into a fresh heap buffer: the immutable regions
+     * (code, Types, TIBs, itables, strings, unwind tables, blobs, class table) are byte-identical to the
+     * running image and copied from it (proven by the FIX fixpoint); the mutable statics data segment is
+     * (re)written to its *as-written* values -- zero except the writer-stashed addresses/counts -- rather
+     * than the runtime-mutated values the live copy now holds. The result is exactly what the seed would
+     * have emitted as {@code kernel8.img}, ready to persist to storage (M5.5d). Requires discovery + layout.
+     */
+    private static long materializeImage()
+    {
+        int endW = imageEndWord();
+        long buf = Heap.alloc(endW * 4);
+        int w = 0;
+        while (w < endW)                                     // copy the whole running image (byte-identical)
+        {
+            Magic.store32(buf + w * 4L, Magic.load32(dAddr(w)));
+            w += 1;
+        }
+        int si = 0;
+        while (si < drStatN)                                 // overwrite each static slot with its clean value
+        {
+            long val = staticValue(drStatCls[si], drStatName[si]);
+            long slot = buf + (dStaticsStart + si * (ObjectModel.WORD / 4)) * 4L;
+            Magic.store32(slot, (int) val);
+            Magic.store32(slot + 4L, (int) (val >>> 32));
+            si += 1;
+        }
+        return buf;
+    }
+
+    /** Whether {@code buf}'s words [lo,hi) equal the running image's. */
+    private static boolean regionMatches(long buf, int lo, int hi)
+    {
+        int w = lo;
+        while (w < hi)
+        {
+            if ((Magic.load32(buf + w * 4L) & 0xFFFFFFFFL) != (Magic.load32(dAddr(w)) & 0xFFFFFFFFL))
+            {
+                return false;
+            }
+            w += 1;
+        }
+        return true;
+    }
+
+    /**
+     * M5.5d slice 1: build image' and verify it is a clean reproduction -- its immutable regions match
+     * the running image byte-for-byte, and its statics data segment is *reset* to the as-written values
+     * (proven by Config.mark: 0 in image', 0x37 in the live image where its {@code <clinit>} ran).
+     */
+    private static boolean fixpointMaterialize()
+    {
+        discoverImage();
+        layoutDataRegions();
+        long buf = materializeImage();
+        if (!regionMatches(buf, 0, dStaticsStart) || !regionMatches(buf, dStaticsEnd, imageEndWord()))
+        {
+            return false;                                    // immutable regions must be byte-identical
+        }
+        int markW = (int) ((statImgAddr(Magic.bytes("vm/Config"), Magic.bytes("mark")) - 0x8_0000L) / 4L);
+        return Magic.load32(buf + markW * 4L) == 0          // image' has the clean (zero) static
+            && Magic.load32(dAddr(markW)) == 0x37;          // the live image has the runtime-set value
     }
 
     /** Whether every stashed data-region boundary + unwind count matches the metal writer's layout. */
