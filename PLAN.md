@@ -867,9 +867,13 @@ is name→address bookkeeping:
            `patchCrossAndWrite` patches the TIB loads. `Animal.dogSound` (=`new Dog().sound()`,
            Dog in another class) dispatches through its TIB → `'W'`. Metal `y`. (`Cell.readCounter`
            now also goes through `buildClosure`.)
-         - ⬜ **interface across classes + the rest.** Extend `buildClosure` with `type`/`string`/
-           interface (itables)/`exceptionSlot` layout+patch, discovering itable impls across
-           classes → then `Guest.answer` → 42, all kinds at once.
+         - ✅ **interface (+ type/string/exception) across classes.** `buildClosure`'s layout runs
+           two passes (interface Types, then class Types/TIBs + itable dirs — `buildItableDirG`/
+           `buildItableG` resolve each impl via the class's vtable + `findMethodG`), and
+           `patchCrossAndWrite` patches `type` (class or interface Type), `string`, `interfaceType`,
+           and `exceptionSlot`. `Cell.viaSpeaker` (=`new Robot(); s.speak()`, Robot+Speaker in other
+           classes) dispatches through the itable → `'R'`. Metal `J`. All kinds now cross-class.
+         - ⬜ **capstone: `Guest.answer` → 42** — one closure exercising every kind at once.
        - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
          blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in

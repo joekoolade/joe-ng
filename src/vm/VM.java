@@ -602,6 +602,11 @@ public final class VM
         // Dog in another class, dispatched through its TIB vtable) and run it -> 'W'.
         Uart.putc(selfBuildDynAndRun() ? 0x79 : 0x78);     // 'y' cross-class new/virtual OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.3: cross-class interface. Build Cell.viaSpeaker (= new Robot(); s.speak(),
+        // Robot + Speaker in other classes) and dispatch through the itable -> 'R'.
+        Uart.putc(selfBuildCrossIfaceAndRun() ? 0x4A : 0x78);  // 'J' cross-class interface OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1332,6 +1337,12 @@ public final class VM
         return buildClosure(Magic.bytes("vm/Animal"), Magic.bytes("dogSound"), Magic.bytes("()I")) == 0x57;
     }
 
+    /** Cross-class interface: {@code Cell.viaSpeaker} = {@code new Robot(); s.speak()} → 'R'. */
+    private static boolean selfBuildCrossIfaceAndRun()
+    {
+        return buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("viaSpeaker"), Magic.bytes("()I")) == 0x52;
+    }
+
     /**
      * Discover, build, and run a method's closure across classes: BFS over recorded calls and
      * (for {@code new}) the instantiated classes' vtable methods; lay each class's Type/TIB out;
@@ -1397,6 +1408,7 @@ public final class VM
             s += 1;
         }
 
+        excSlot = Heap.alloc(8);                            // the closure's in-flight-exception word
         layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
@@ -1436,15 +1448,31 @@ public final class VM
         }
     }
 
-    /** Lay out a Type + TIB for every {@code new}-ed class in the closure (cross-class). */
+    /** Lay out interface Types, then class Types/TIBs (+ itable directories), across the closure. */
     private static void layoutClassRegionsG(long codeBuf)
     {
         nbClass = new byte[32][];
         nbTypeAddr = new long[32];
         nbTibAddr = new long[32];
         nbCount = 0;
+        ifIface = new byte[32][];
+        ifTypeAddr = new long[32];
+        ifCount = 0;
         int m = 0;
-        while (m < gmCount)
+        while (m < gmCount)                                // pass 1: interface Types
+        {
+            setClassContext(gmClsIdx[m]);
+            MetalWriterSymbols sym = gmSym[m];
+            int k = 0;
+            while (k < sym.ifCount())
+            {
+                addInterfaceTypeG(utf8Copy(sym.ifClassOff(k)));
+                k += 1;
+            }
+            m += 1;
+        }
+        m = 0;
+        while (m < gmCount)                                // pass 2: class Types/TIBs + itable dirs
         {
             setClassContext(gmClsIdx[m]);
             MetalWriterSymbols sym = gmSym[m];
@@ -1454,16 +1482,49 @@ public final class VM
                 addClassRegionG(utf8Copy(sym.tibClassOff(t)), codeBuf);
                 t += 1;
             }
+            int y = 0;
+            while (y < sym.typeCount())
+            {
+                addClassRegionG(utf8Copy(sym.typeClassOff(y)), codeBuf);
+                y += 1;
+            }
             m += 1;
         }
+    }
+
+    /** Build an interface's Type ({@code {0,0,0}}) once, if new. */
+    private static void addInterfaceTypeG(byte[] name)
+    {
+        if (findInterfaceBytes(name) >= 0)
+        {
+            return;
+        }
+        ifIface[ifCount] = name;
+        ifTypeAddr[ifCount] = Heap.alloc(ObjectModel.TYPE_SIZE);   // zeroed
+        ifCount += 1;
+    }
+
+    /** Index of the laid-out interface with name {@code name}, or -1. */
+    private static int findInterfaceBytes(byte[] name)
+    {
+        int j = 0;
+        while (j < ifCount)
+        {
+            if (bytesEqual(ifIface[j], name))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
     }
 
     /** Build {@code name}'s Type + TIB (vtable filled from placed methods across classes) once. */
     private static void addClassRegionG(byte[] name, long codeBuf)
     {
-        if (findTibClassBytes(name) >= 0)
+        if (findTibClassBytes(name) >= 0 || findInterfaceBytes(name) >= 0)
         {
-            return;
+            return;   // already laid out (or an interface, whose Type is built in pass 1)
         }
         long type = Heap.alloc(ObjectModel.TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
@@ -1483,10 +1544,69 @@ public final class VM
             }
             slot += 1;
         }
+        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, buildItableDirG(name, codeBuf));
         nbClass[nbCount] = name;
         nbTypeAddr[nbCount] = type;
         nbTibAddr[nbCount] = tib;
         nbCount += 1;
+    }
+
+    /** Build {@code clsName}'s itable directory over the referenced interfaces it implements (0 if none). */
+    private static long buildItableDirG(byte[] clsName, long codeBuf)
+    {
+        int impls = 0;
+        int k = 0;
+        while (k < ifCount)
+        {
+            if (MetalClassModel.implementsInterface(clsName, ifIface[k]))
+            {
+                impls += 1;
+            }
+            k += 1;
+        }
+        if (impls == 0)
+        {
+            return 0L;
+        }
+        long dir = Heap.alloc((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        int e = 0;
+        k = 0;
+        while (k < ifCount)
+        {
+            if (MetalClassModel.implementsInterface(clsName, ifIface[k]))
+            {
+                long entry = dir + e * ObjectModel.ITABLE_ENTRY_SIZE;
+                Magic.store64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET, ifTypeAddr[k]);
+                Magic.store64(entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET, buildItableG(clsName, ifIface[k], codeBuf));
+                e += 1;
+            }
+            k += 1;
+        }
+        return dir;
+    }
+
+    /** Build {@code clsName}'s itable for {@code iface}: each interface method's slot → its impl (via the vtable). */
+    private static long buildItableG(byte[] clsName, byte[] iface, long codeBuf)
+    {
+        int n = MetalClassModel.interfaceMethodCount(iface);
+        long itab = Heap.alloc(n * ObjectModel.WORD);
+        int slot = 0;
+        while (slot < n)
+        {
+            byte[] mName = MetalClassModel.interfaceMethodNameAt(iface, slot);
+            byte[] mDesc = MetalClassModel.interfaceMethodDescAt(iface, slot);
+            int vslot = MetalClassModel.vtableSlot(clsName, mName, mDesc);   // the class's impl lives in its vtable
+            if (vslot >= 0)
+            {
+                int j = findMethodG(MetalClassModel.vtableSlotOwner(vslot), mName, mDesc);
+                if (j >= 0)
+                {
+                    Magic.store64(itab + slot * ObjectModel.WORD, codeBuf + gmWordOff[j] * 4L);
+                }
+            }
+            slot += 1;
+        }
+        return itab;
     }
 
     /** Index of the laid-out class whose name equals {@code name}, or -1. */
@@ -1657,6 +1777,55 @@ public final class VM
                     patchAddrWords(words, sym.tibSiteWord(b), sym.tibReg(b), nbTibAddr[k]);
                 }
                 b += 1;
+            }
+            int y = 0;
+            while (y < sym.typeCount())                     // instanceof/checkcast: class Type or interface Type
+            {
+                byte[] tn = utf8Copy(sym.typeClassOff(y));
+                int k = findTibClassBytes(tn);
+                if (k >= 0)
+                {
+                    patchAddrWords(words, sym.typeSiteWord(y), sym.typeReg(y), nbTypeAddr[k]);
+                }
+                else
+                {
+                    int ki = findInterfaceBytes(tn);
+                    if (ki < 0)
+                    {
+                        ok = false;
+                    }
+                    else
+                    {
+                        patchAddrWords(words, sym.typeSiteWord(y), sym.typeReg(y), ifTypeAddr[ki]);
+                    }
+                }
+                y += 1;
+            }
+            int st = 0;
+            while (st < sym.strCount())
+            {
+                patchAddrWords(words, sym.strSiteWord(st), sym.strReg(st), internLiteral(sym.strUtf8Off(st)));
+                st += 1;
+            }
+            int f = 0;
+            while (f < sym.ifCount())
+            {
+                int k = findInterfaceBytes(utf8Copy(sym.ifClassOff(f)));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.ifSiteWord(f), sym.ifReg(f), ifTypeAddr[k]);
+                }
+                f += 1;
+            }
+            int xc = 0;
+            while (xc < sym.excCount())
+            {
+                patchAddrWords(words, sym.excSiteWord(xc), sym.excReg(xc), excSlot);
+                xc += 1;
             }
             writeWords(buf, baseOff, words);
             m += 1;

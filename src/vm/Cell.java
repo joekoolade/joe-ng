@@ -44,6 +44,13 @@ public final class Cell
         return Counter.get();
     }
 
+    /** {@code new Robot(); s.speak()} across classes — the metal writer's cross-class interface target. */
+    public static int viaSpeaker()
+    {
+        Speaker s = new Robot();
+        return s.speak();
+    }
+
     /** {@code new Cell(v); c.get()} — the metal writer's invokevirtual (vtable-dispatch) target. */
     public static int viaVirtual(int v)
     {
