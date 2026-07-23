@@ -833,9 +833,19 @@ is name→address bookkeeping:
            by the class model). `VM.selfBuildVirtualAndRun` builds `Cell.viaVirtual`
            (=`new Cell(v); c.get()`) + `get`/`inc`, and dispatches `get()` through the TIB →
            `0x37`. Metal `D`.
-         - ⬜ **remaining kinds/regions.** `interfaceType`/`interfaceSlot` + itables;
-           `exceptionSlot`; cross-class discovery; `initClasses`; unwind tables; blobs; class
-           table — `int[] image` sink at `0x80000`-relative bases. Couples to the key migration (1b.3).
+         - ✅ **invokeinterface (`interfaceType`/`interfaceSlot` + itables).** The biggest data
+           region. `MetalWriterSymbols` records `interfaceType` sites + resolves `interfaceSlot`
+           via `MetalClassModel.interfaceMethodSlot`; `MetalClassModel` exposes interface-method
+           iteration (`interfaceMethodNameAt/DescAt`). `layoutClassRegions` now runs two passes —
+           interface Types first, then class Types/TIBs — and `addClassRegion` builds each
+           implementor's itable **directory** ({interfaceType, itable}* + a zeroed sentinel) and
+           **itables** (each interface method → the placed impl address, via `implementsInterface`
+           + `findPlacedBytes`), setting `Type.itableDir`. `VM.selfBuildInterfaceAndRun` builds
+           `Robot.probe` (=`Speaker s = new Robot(); s.speak()`) and dispatches through the itable
+           → `'R'`. Metal `i`.
+         - ⬜ **remaining kinds/regions.** `exceptionSlot` (throw/catch); cross-class discovery;
+           `initClasses`; unwind tables; blobs; class table — `int[] image` sink at
+           `0x80000`-relative bases. Couples to the key migration (1b.3).
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in
      heap, and assert it word-equals the running kernel image at `0x80000` (the very image
      the metal booted from). Byte-equal ⇒ **fixpoint**: joe-ng compiled the exact image it

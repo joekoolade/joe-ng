@@ -66,6 +66,11 @@ final class MetalWriterSymbols implements Symbols
     private final int[] strUtf8Off = new int[MAX];  // ... the literal's Utf8 body offset (in classBytes)
     private int strN;
 
+    private final int[] ifSite = new int[MAX];      // invokeinterface: interface-Type address-load site
+    private final int[] ifReg = new int[MAX];
+    private final int[] ifClassOff = new int[MAX];  // ... the interface's class-name Utf8 offset
+    private int ifN;
+
     private boolean failed;
 
     MetalWriterSymbols(byte[] classBytes, int[] cpOff)
@@ -106,7 +111,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
-        reserve(cb, reg);
+        ifSite[ifN] = cb.reserveAddr(reg);
+        ifReg[ifN] = reg;
+        ifClassOff[ifN] = ClassReader.refClassNameOff(classBytes, cpOff, ifaceMethodCp);
+        ifN += 1;
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
@@ -158,7 +166,10 @@ final class MetalWriterSymbols implements Symbols
     }
     public int interfaceSlot(int ifaceMethodCp)
     {
-        return 0;
+        byte[] iface = utf8Copy(ClassReader.refClassNameOff(classBytes, cpOff, ifaceMethodCp));
+        byte[] name = utf8Copy(ClassReader.refNameOff(classBytes, cpOff, ifaceMethodCp));
+        byte[] desc = utf8Copy(ClassReader.refDescOff(classBytes, cpOff, ifaceMethodCp));
+        return MetalClassModel.interfaceMethodSlot(iface, name, desc);
     }
     public boolean isIntrinsicCall(int methodCp)
     {
@@ -297,6 +308,22 @@ final class MetalWriterSymbols implements Symbols
     int strUtf8Off(int i)
     {
         return strUtf8Off[i];
+    }
+    int ifCount()
+    {
+        return ifN;
+    }
+    int ifSiteWord(int i)
+    {
+        return ifSite[i];
+    }
+    int ifReg(int i)
+    {
+        return ifReg[i];
+    }
+    int ifClassOff(int i)
+    {
+        return ifClassOff[i];
     }
     int helperCount()
     {

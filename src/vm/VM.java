@@ -582,6 +582,11 @@ public final class VM
         // Cell's vtable methods, fill the TIB vtable, and dispatch get() through it -> 0x37.
         Uart.putc(selfBuildVirtualAndRun() ? 0x44 : 0x78); // 'D' virtual dispatch reloc OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.2: invokeinterface. Build Robot.probe (= new Robot(); s.speak()), lay
+        // out Speaker's interface Type + Robot's itable directory, and dispatch speak() -> 'R'.
+        Uart.putc(selfBuildInterfaceAndRun() ? 0x69 : 0x78);  // 'i' interface dispatch reloc OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -590,6 +595,10 @@ public final class VM
     private static long[] nbTibAddr;   // ... its TIB address
     private static long[] nbTypeAddr;  // ... its Type address
     private static int nbCount;
+
+    private static byte[][] ifIface;   // distinct interfaces referenced by invokeinterface
+    private static long[] ifTypeAddr;  // ... its (interface) Type address
+    private static int ifCount;
 
     /**
      * Build {@code Cell.make} (= {@code new Cell(v).value}) into a Heap buffer, lay out
@@ -708,14 +717,31 @@ public final class VM
         return ok && (int) r == 1;
     }
 
-    /** Lay out a Type + TIB for each class the closure {@code new}s or type-tests. */
+    /** Lay out the Types/TIBs (and interface Types + itables) the closure needs. */
     private static void layoutClassRegions(long codeBuf)
     {
         nbClass = new byte[16][];
         nbTibAddr = new long[16];
         nbTypeAddr = new long[16];
         nbCount = 0;
+        ifIface = new byte[16][];
+        ifTypeAddr = new long[16];
+        ifCount = 0;
+        // pass 1: interface Types (needed as directory keys + interfaceType targets)
         int m = 0;
+        while (m < clCount)
+        {
+            MetalWriterSymbols sym = clSym[m];
+            int k = 0;
+            while (k < sym.ifCount())
+            {
+                addInterfaceType(sym.ifClassOff(k));
+                k += 1;
+            }
+            m += 1;
+        }
+        // pass 2: class Types + TIBs (+ itable directory for implementors)
+        m = 0;
         while (m < clCount)
         {
             MetalWriterSymbols sym = clSym[m];
@@ -735,6 +761,33 @@ public final class VM
         }
     }
 
+    /** Build an interface's Type ({@code {0,0,0}} — not instantiated) once, if new. */
+    private static void addInterfaceType(int classOff)
+    {
+        if (findInterface(classOff) >= 0)
+        {
+            return;
+        }
+        ifIface[ifCount] = utf8Copy(classOff);
+        ifTypeAddr[ifCount] = Heap.alloc(ObjectModel.TYPE_SIZE);   // zeroed: instanceSize/super/itableDir = 0
+        ifCount += 1;
+    }
+
+    /** Index of the interface whose name equals the Utf8 at {@code classOff} in {@code cB}, or -1. */
+    private static int findInterface(int classOff)
+    {
+        int j = 0;
+        while (j < ifCount)
+        {
+            if (utf8Eq(cB, classOff, ifIface[j]))
+            {
+                return j;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
     /** Build {@code classOff}'s Type + TIB (vtable filled from placed methods) once, if new. */
     private static void addClassRegion(int classOff, long codeBuf)
     {
@@ -747,7 +800,6 @@ public final class VM
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
-        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);  // no interfaces
         int vsize = MetalClassModel.vtableSize(name);                  // builds the vtable scratch
         long tib = Heap.alloc(ObjectModel.tibSize(vsize));
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
@@ -762,10 +814,65 @@ public final class VM
             }
             slot += 1;
         }
+        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, buildItableDir(name, codeBuf));
         nbClass[nbCount] = name;
         nbTypeAddr[nbCount] = type;
         nbTibAddr[nbCount] = tib;
         nbCount += 1;
+    }
+
+    /** Build {@code clsName}'s itable directory over the referenced interfaces it implements (0 if none). */
+    private static long buildItableDir(byte[] clsName, long codeBuf)
+    {
+        int impls = 0;
+        int k = 0;
+        while (k < ifCount)
+        {
+            if (MetalClassModel.implementsInterface(clsName, ifIface[k]))
+            {
+                impls += 1;
+            }
+            k += 1;
+        }
+        if (impls == 0)
+        {
+            return 0L;
+        }
+        long dir = Heap.alloc((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        int e = 0;
+        k = 0;
+        while (k < ifCount)
+        {
+            if (MetalClassModel.implementsInterface(clsName, ifIface[k]))
+            {
+                long entry = dir + e * ObjectModel.ITABLE_ENTRY_SIZE;
+                Magic.store64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET, ifTypeAddr[k]);
+                Magic.store64(entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET, buildItable(ifIface[k], codeBuf));
+                e += 1;
+            }
+            k += 1;
+        }
+        return dir;
+    }
+
+    /** Build a class's itable for {@code iface}: each interface method's slot → the placed impl address. */
+    private static long buildItable(byte[] iface, long codeBuf)
+    {
+        int n = MetalClassModel.interfaceMethodCount(iface);
+        long itab = Heap.alloc(n * ObjectModel.WORD);
+        int slot = 0;
+        while (slot < n)
+        {
+            byte[] mName = MetalClassModel.interfaceMethodNameAt(iface, slot);
+            byte[] mDesc = MetalClassModel.interfaceMethodDescAt(iface, slot);
+            int j = findPlacedBytes(mName, mDesc);
+            if (j >= 0)
+            {
+                Magic.store64(itab + slot * ObjectModel.WORD, codeBuf + clWordOff[j] * 4L);
+            }
+            slot += 1;
+        }
+        return itab;
     }
 
     /** Index of the placed method whose (name,desc) equal the byte arrays given, or -1. */
@@ -885,6 +992,20 @@ public final class VM
                 long arr = internLiteral(sym.strUtf8Off(s));   // lay the literal out as a byte[]
                 patchAddrWords(words, sym.strSiteWord(s), sym.strReg(s), arr);
                 s += 1;
+            }
+            int f = 0;
+            while (f < sym.ifCount())
+            {
+                int k = findInterface(sym.ifClassOff(f));
+                if (k < 0)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    patchAddrWords(words, sym.ifSiteWord(f), sym.ifReg(f), ifTypeAddr[k]);
+                }
+                f += 1;
             }
             writeWords(buf, baseOff, words);
             m += 1;
@@ -1008,6 +1129,67 @@ public final class VM
 
         long r = Magic.call2(codeBuf + clWordOff[0] * 4L, 0x37L, 0L);  // viaVirtual(0x37)
         return ok && (int) r == 0x37;
+    }
+
+    /**
+     * Build {@code Robot.probe} (= {@code Speaker s = new Robot(); s.speak()}) plus Robot's
+     * {@code <init>}/{@code speak} into a Heap buffer, lay out Speaker's interface Type and
+     * Robot's Type/TIB + itable directory, patch the interfaceType load, then run {@code probe()}
+     * — which dispatches {@code speak()} through Robot's itable → {@code 'R'}.
+     */
+    private static boolean selfBuildInterfaceAndRun()
+    {
+        cB = MetalClassModel.bytesOf(Magic.bytes("vm/Robot"));
+        cOff = new int[ClassReader.cpCount(cB)];
+        cTag = new int[cOff.length];
+        cAfterCp = ClassReader.constantPool(cB, cOff, cTag);
+
+        clName = new byte[8][];
+        clDesc = new byte[8][];
+        clSize = new int[8];
+        clWordOff = new int[8];
+        clWords = new int[8][];
+        clSym = new MetalWriterSymbols[8];
+        clName[0] = Magic.bytes("probe");
+        clDesc[0] = Magic.bytes("()I");
+        clName[1] = Magic.bytes("<init>");
+        clDesc[1] = Magic.bytes("()V");
+        clName[2] = Magic.bytes("speak");   // the itable's impl for Speaker.speak
+        clDesc[2] = Magic.bytes("()I");
+        clCount = 3;
+
+        int i = 0;
+        while (i < clCount)
+        {
+            int body = findMethodBody(clName[i], clDesc[i]);
+            if (body < 0)
+            {
+                return false;
+            }
+            MetalWriterSymbols sym = new MetalWriterSymbols(cB, cOff);
+            int[] words = compileInto(body, sym, 0L);
+            clSym[i] = sym;
+            clWords[i] = words;
+            clSize[i] = words.length;
+            i += 1;
+        }
+
+        int cur = 0;
+        int p = 0;
+        while (p < clCount)
+        {
+            clWordOff[p] = cur;
+            cur += clSize[p];
+            p += 1;
+        }
+        long codeBuf = Heap.alloc(cur * 4);
+
+        layoutClassRegions(codeBuf);
+        boolean ok = patchNewAndWrite(codeBuf);
+        Heap.publishCode(codeBuf, codeBuf + cur * 4L);
+
+        long r = Magic.call0(codeBuf + clWordOff[0] * 4L);  // probe()
+        return ok && (int) r == 0x52;                       // 'R'
     }
 
     /** Absolute image address of the runtime helper with the given {@code compiler.Symbols} id. */

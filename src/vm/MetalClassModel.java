@@ -324,6 +324,46 @@ final class MetalClassModel
         return interfaceMethodSlot(iface, null, null);   // no match -> returns the total count
     }
 
+    /** The interface method name / descriptor at {@code slot} (declaration order), for itable build. */
+    static byte[] interfaceMethodNameAt(byte[] iface, int slot)
+    {
+        return interfaceMethodAt(iface, slot, true);
+    }
+    static byte[] interfaceMethodDescAt(byte[] iface, int slot)
+    {
+        return interfaceMethodAt(iface, slot, false);
+    }
+    private static byte[] interfaceMethodAt(byte[] iface, int slot, boolean wantName)
+    {
+        byte[] b = bytesOf(iface);
+        int[] off = constPool(b);
+        int afterCp = ClassReader.constantPool(b, off, new int[off.length]);
+        byte[] init = Magic.bytes("<init>");
+        byte[] clinit = Magic.bytes("<clinit>");
+        int p = ClassReader.methodsStart(b, afterCp);
+        int n = ClassReader.u2(b, p);
+        p += 2;
+        int s = 0;
+        int i = 0;
+        while (i < n)
+        {
+            int access = ClassReader.u2(b, p);
+            int nameOff = off[ClassReader.u2(b, p + 2)];
+            int descOff = off[ClassReader.u2(b, p + 4)];
+            if ((access & ACC_STATIC) == 0 && !utf8Is(b, nameOff, init) && !utf8Is(b, nameOff, clinit))
+            {
+                if (s == slot)
+                {
+                    return utf8Bytes(b, wantName ? nameOff : descOff);
+                }
+                s += 1;
+            }
+            p = ClassReader.skipAttributes(b, p + 6);
+            i += 1;
+        }
+        return null;
+    }
+
     /**
      * Slot index of interface method {@code mName+mDesc} in {@code iface} (declaration order),
      * or, when {@code mName} is {@code null}, the interface's method count.
