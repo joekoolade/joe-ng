@@ -873,7 +873,16 @@ is name→address bookkeeping:
            `patchCrossAndWrite` patches `type` (class or interface Type), `string`, `interfaceType`,
            and `exceptionSlot`. `Cell.viaSpeaker` (=`new Robot(); s.speak()`, Robot+Speaker in other
            classes) dispatches through the itable → `'R'`. Metal `J`. All kinds now cross-class.
-         - ⬜ **capstone: `Guest.answer` → 42** — one closure exercising every kind at once.
+         - ✅ **capstone: `Cell.capstone` → 262.** One closure spanning Cell, Robot, Speaker, Dog,
+           Animal, MyExc, Counter (7 classes, ~13 methods) exercising *every* kind at once — new,
+           invokevirtual, invokeinterface, instanceof, ldc-string, cross-class call, throw/catch,
+           cross-class static — built by BFS, all regions laid out, all relocations patched, run →
+           262. Metal `!`. (`Guest.answer` would be ideal but Guest/Alpha/Beta/Greeter are
+           runtime-load blobs, not in the compile-reachable class table — folding those in is a
+           step-3b.4 input concern.) **The metal layout engine is functionally complete.**
+       - ⬜ **3b.4: remaining breadth** — fold the runtime-load blobs (Guest/Math) into the writer's
+         input; `initClasses` (generated `<clinit>` run); cross-method unwind tables; embedded
+         blobs; the class table itself.
        - ⬜ **breadth.** `initClasses` (generated `<clinit>` run); cross-method unwind tables;
          blobs; class table — `int[] image` sink at `0x80000`-relative bases. Couples to 1b.3.
   4. **Fixpoint compare.** Run the metal writer from the same entry, produce `image′` in

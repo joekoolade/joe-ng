@@ -607,6 +607,11 @@ public final class VM
         // Robot + Speaker in other classes) and dispatch through the itable -> 'R'.
         Uart.putc(selfBuildCrossIfaceAndRun() ? 0x4A : 0x78);  // 'J' cross-class interface OK / 'x' broken
         Uart.putc(0x0A);
+
+        // M5.5c step 3b.3 capstone: the metal writer builds Guest.answer's whole closure (every
+        // reloc kind, five classes) and runs it -> 42. '!' on success.
+        Uart.putc(selfBuildAnswerAndRun() ? 0x21 : 0x78);  // '!' full-closure capstone OK / 'x' broken
+        Uart.putc(0x0A);
     }
 
     // ----- M5.5c step 3b.2: object allocation (new -> tib + Type/TIB region) -----
@@ -1341,6 +1346,18 @@ public final class VM
     private static boolean selfBuildCrossIfaceAndRun()
     {
         return buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("viaSpeaker"), Magic.bytes("()I")) == 0x52;
+    }
+
+    /**
+     * The capstone: build {@code Cell.capstone}'s whole closure — spanning Cell, Robot, Speaker,
+     * Dog, Animal, MyExc and Counter, exercising every relocation kind at once (new,
+     * invokevirtual, invokeinterface, instanceof, ldc-string, cross-class call, throw/catch,
+     * cross-class static) — and run it → 262. (Guest.answer would be ideal but Guest/Alpha/Beta/
+     * Greeter are runtime-load blobs, not in the compile-reachable class table the writer reads.)
+     */
+    private static boolean selfBuildAnswerAndRun()
+    {
+        return buildClosure(Magic.bytes("vm/Cell"), Magic.bytes("capstone"), Magic.bytes("()I")) == 262;
     }
 
     /**

@@ -51,6 +51,25 @@ public final class Cell
         return s.speak();
     }
 
+    /**
+     * The metal writer's capstone: one closure exercising every relocation kind across many
+     * classes — new + invokeinterface (Robot/Speaker), new + invokevirtual (Dog/Animal),
+     * instanceof (Cell), ldc-string, a cross-class call into throw/catch (MyExc.probe), and a
+     * cross-class static (Counter.count). Sums to 82+87+1+90+1+1 = 262.
+     */
+    public static int capstone()
+    {
+        Speaker s = new Robot();
+        int a = s.speak();                             // 0x52 — new + invokeinterface
+        int b = new Dog().sound();                     // 0x57 — new + invokevirtual
+        int c = new Cell(0) instanceof Cell ? 1 : 0;   // 1    — new + instanceof
+        int d = Magic.bytes("Z")[0];                   // 0x5A — ldc-string
+        int e = MyExc.probe();                         // 1    — cross-class call -> throw/catch
+        Counter.bump();                                // cross-class static
+        int f = Counter.get();                         // 1
+        return a + b + c + d + e + f;                  // 262
+    }
+
     /** {@code new Cell(v); c.get()} — the metal writer's invokevirtual (vtable-dispatch) target. */
     public static int viaVirtual(int v)
     {
