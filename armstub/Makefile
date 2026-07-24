@@ -18,7 +18,21 @@ armstub8-joe.elf: armstub8-joe.o armstub.ld
 armstub8-joe.bin: armstub8-joe.elf
 	$(OBJCOPY) -O binary $< $@
 
+# Diagnostic: same stub but hangs immediately at _start. If it loads, the board
+# stays dark; if the banner prints, the firmware ignored armstub=.
+loop: armstub8-loop.bin
+
+armstub8-loop.o: armstub8-joe.S
+	$(CLANG) -target $(TARGET) -DLOOPTEST -c $< -o $@
+
+armstub8-loop.elf: armstub8-loop.o armstub.ld
+	$(LD) -T armstub.ld -o $@ $<
+
+armstub8-loop.bin: armstub8-loop.elf
+	$(OBJCOPY) -O binary $< $@
+
 clean:
-	rm -f armstub8-joe.o armstub8-joe.elf armstub8-joe.bin
+	rm -f armstub8-joe.o armstub8-joe.elf armstub8-joe.bin \
+	      armstub8-loop.o armstub8-loop.elf armstub8-loop.bin
 
 .PHONY: all clean

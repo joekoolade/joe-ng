@@ -77,6 +77,15 @@
 
 .globl _start
 _start:
+#ifdef LOOPTEST
+	/*
+	 * Diagnostic build (-DLOOPTEST): hang here immediately, before touching any
+	 * hardware. If this stub is actually loaded the core spins forever at 0x0 and
+	 * the board stays dark (no banner, no kernel). If the banner still prints, the
+	 * firmware ignored armstub= and ran its built-in stub instead.
+	 */
+	b	.
+#endif
 	/*
 	 * LOCAL_CONTROL:
 	 * Bit 9 clear: Increment by 1 (vs. 2).
