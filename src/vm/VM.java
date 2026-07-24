@@ -721,6 +721,11 @@ public final class VM
         // real card alike. Proves the driver can read the medium it will persist the image to.
         Uart.write(sdReadOk() ? Magic.bytes("SD") : Magic.bytes("x"));
         Uart.putc(0x0A);
+
+        // M5.5d slice 2b: EMMC single-sector write. Write a known pattern to a scratch block, read it
+        // back, and verify the round-trip -- proving the driver can mutate the card it will persist to.
+        Uart.write(sdWriteOk() ? Magic.bytes("WR") : Magic.bytes("x"));
+        Uart.putc(0x0A);
     }
 
     /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
@@ -731,6 +736,33 @@ public final class VM
             && Emmc.readBlock(0L, sd)
             && Magic.load8(sd + 510L) == 0x55
             && Magic.load8(sd + 511L) == 0xAA;
+    }
+
+    /** Whether a written scratch block reads back byte-identical (single-sector write round-trip). */
+    private static boolean sdWriteOk()
+    {
+        long w = Heap.alloc(512);
+        long r = Heap.alloc(512);
+        int i = 0;
+        while (i < 128)                                    // fill with a recognizable pattern
+        {
+            Magic.store32(w + i * 4L, 0x5EED1234 + i);
+            i += 1;
+        }
+        if (Emmc.init() != 0 || !Emmc.writeBlock(4096L, w) || !Emmc.readBlock(4096L, r))
+        {
+            return false;                                  // block 4096 = a scratch sector well past the boot area
+        }
+        i = 0;
+        while (i < 128)
+        {
+            if (Magic.load32(r + i * 4L) != 0x5EED1234 + i)
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
     }
 
     /** Whether every immutable data region is byte-identical to the running image (mutable statics excluded). */

@@ -55,6 +55,7 @@ public final class Emmc
     // INTERRUPT (present-state / status) bits we poll.
     private static final int INT_CMD_DONE  = 1;        // command complete
     private static final int INT_DATA_DONE = 1 << 1;   // transfer complete
+    private static final int INT_WRITE_RDY = 1 << 4;   // write FIFO ready for data
     private static final int INT_READ_RDY  = 1 << 5;   // read FIFO has data
     private static final int INT_ERR       = 1 << 15;  // any error (bits 16+ folded up)
 
@@ -187,6 +188,40 @@ public final class Emmc
             i += 1;
         }
         Magic.store32(base + INTERRUPT, INT_READ_RDY | INT_DATA_DONE);   // ack
+        return true;
+    }
+
+    /**
+     * Write the 512-byte block at {@code lba} from the heap buffer at {@code src}
+     * (128 words). Returns true on success. {@link #init} must have run.
+     */
+    public static boolean writeBlock(long lba, long src)
+    {
+        if (!waitClear(base + STATUS, SR_DAT_INHIBIT))
+        {
+            return false;
+        }
+        Magic.store32(base + BLKSIZECNT, (1 << 16) | 512);         // one block of 512 bytes
+        long arg = sdhc ? lba : lba * 512L;
+        if (!command(24 << 24 | RSP_48 | CRC_CHK | IX_CHK | IS_DATA, arg))   // CMD24 (DAT_DIR=write)
+        {
+            return false;
+        }
+        if (!waitSet(base + INTERRUPT, INT_WRITE_RDY))             // FIFO ready to accept data
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < 128)                                            // 128 words = 512 bytes, PIO
+        {
+            Magic.store32(base + DATA, Magic.load32(src + i * 4L));
+            i += 1;
+        }
+        if (!waitSet(base + INTERRUPT, INT_DATA_DONE))             // transfer complete (card programmed)
+        {
+            return false;
+        }
+        Magic.store32(base + INTERRUPT, INT_WRITE_RDY | INT_DATA_DONE);   // ack
         return true;
     }
 

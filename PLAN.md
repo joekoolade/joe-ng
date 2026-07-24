@@ -1013,7 +1013,11 @@ is name→address bookkeeping:
     any real MBR/FAT card). Test: `qemu-system-aarch64 -M raspi4b -kernel kernel8.img -sd <img>`.
     (Two QEMU-vs-hardware gotchas found: the card sits on the *legacy* EMMC under QEMU, and a generic
     SDHCI gates command response on `CONTROL0` bus power, which the Pi firmware normally owns.)
-  - ⬜ **slice 2b — EMMC single-sector write.** `CMD24` + push the DATA FIFO. Round-trip verify.
+  - ✅ **slice 2b — EMMC single-sector write (`WR`).** `Emmc.writeBlock` issues `CMD24` and pushes
+    128 words into the DATA FIFO, waiting on `WRITE_RDY` then `DATA_DONE`. Verified by a round-trip —
+    write a pattern to a scratch block, read it back byte-identical — and by inspecting the SD image
+    on disk: block 4096 holds the written `0x5EED1234+i` sequence. The driver can now both read and
+    write the medium it will persist the image to.
   - ⬜ **slice 3 — FAT32 write.** Mount the boot partition, find `kernel8.img`, overwrite its
     clusters with `image'`.
   - ⬜ **slice 4 — reboot.** Watchdog/PSCI reset so the firmware reloads the metal-written
