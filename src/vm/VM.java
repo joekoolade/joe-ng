@@ -575,18 +575,42 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // M6 interrupts: the EL1 generic timer + GIC-400 IRQ path is built (Gic, an IRQ context-save
-        // stub, the handler, timer arming), but activating it under QEMU's raspi4b breaks later boot
-        // and the tick never fires -- the distributor shows INTID 30 pending, yet its CPU interface
-        // never signals it to the core (a QEMU-model GIC/timer-forwarding gap). So it stays gated off
-        // pending real hardware; the dead call keeps setupTimerIrq + irqHandler in the image. See PLAN.md M6.
-        Uart.write(Magic.bytes("timer "));
+        // M6 interrupts -- HARDWARE DEBUG. Bring up the GIC + EL1 physical timer and take real IRQs.
+        // Prints a full register dump so one boot shows exactly where delivery stalls (on real Pi 4 the
+        // firmware armstub has set up the secure GIC, so group-1 delivery should work here). Re-masks
+        // IRQs after so the rest of boot (unwind test, fixpoint) is undisturbed.
+        Uart.write(Magic.bytes("=== IRQ debug ===\n"));
+        Uart.write(Magic.bytes("gicd_iidr="));               // 0x0002043B = ARM GIC-400 r0p... (confirms the GIC)
+        printHex(Magic.load32(0xFF84_1008L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" freq="));
         printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz (IRQ path built, gated)\n"));
-        if (irqHandlerAddr == 0L)                           // never taken (stashed nonzero): keeps it reachable
+        Uart.write(Magic.bytes("MHz\n"));
+        setupTimerIrq();
+        long tstart = Magic.readCNTPCT_EL0();
+        long tend = tstart + Magic.readCNTFRQ_EL0() / 10L;   // ~100 ms window
+        while (Magic.readCNTPCT_EL0() < tend)
         {
-            setupTimerIrq();
+            // busy-wait; if delivery works, timer IRQs increment `ticks`
         }
+        Magic.writeCNTP_CTL_EL0(0);
+        Magic.disableIrq();
+        Uart.write(Magic.bytes("ticks="));
+        printDec((int) ticks);
+        Uart.write(Magic.bytes(" seen="));
+        printHex(irqSeen);
+        Uart.write(Magic.bytes(" ispend="));
+        printHex(Magic.load32(0xFF84_1200L) & 0xFFFFFFFFL);  // GICD_ISPENDR0 (bit30 = timer)
+        Uart.write(Magic.bytes(" igrp="));
+        printHex(Magic.load32(0xFF84_1080L) & 0xFFFFFFFFL);  // GICD_IGROUPR0
+        Uart.write(Magic.bytes(" gicd_ctlr="));
+        printHex(Magic.load32(0xFF84_1000L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" gicc_ctlr="));
+        printHex(Magic.load32(0xFF84_2000L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" ahppir="));
+        printHex(Magic.load32(0xFF84_2028L) & 0xFFFFFFFFL);  // group-1 highest pending (30 = ready)
+        Uart.write(Magic.bytes(" daif="));
+        printHex(Magic.readDaif() & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes("\n=== end IRQ debug ===\n"));
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'

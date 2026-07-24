@@ -23,30 +23,36 @@ public final class Gic
     private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID
     private static final long GICD_IPRIORITYR = GICD + 0x400;   // 1 byte/INTID
 
-    private static final long GICC_CTLR = GICC + 0x000;
-    private static final long GICC_PMR  = GICC + 0x004;        // priority mask
-    private static final long GICC_IAR  = GICC + 0x00C;        // interrupt acknowledge
-    private static final long GICC_EOIR = GICC + 0x010;        // end of interrupt
+    private static final long GICC_CTLR  = GICC + 0x000;
+    private static final long GICC_PMR    = GICC + 0x004;       // priority mask
+    private static final long GICC_AIAR   = GICC + 0x020;       // aliased (group-1) interrupt acknowledge
+    private static final long GICC_AEOIR  = GICC + 0x024;       // aliased (group-1) end of interrupt
 
-    /** Bring up the distributor + CPU interface and enable {@code intid}. */
+    /**
+     * Bring up the distributor + CPU interface and enable {@code intid} as a non-secure group-1
+     * interrupt. We run non-secure at EL1; on real hardware the firmware armstub has already enabled
+     * the secure side, so a group-1 interrupt reaches the non-secure CPU interface and signals as IRQ.
+     */
     public static void init(int intid)
     {
+        int gr = (int) Magic.load32(GICD_IGROUPR + (intid / 32) * 4);
+        Magic.store32(GICD_IGROUPR + (intid / 32) * 4, gr | (1 << (intid % 32)));   // group 1 (non-secure)
         Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);   // priority 0 (highest) for this word
         Magic.store32(GICD_ISENABLER + (intid / 32) * 4, 1 << (intid % 32));
-        Magic.store32(GICD_CTLR, 3);                            // enable both groups
+        Magic.store32(GICD_CTLR, 1);                            // NS view: bit0 = EnableGrp1
         Magic.store32(GICC_PMR, 0xFF);                         // unmask every priority level
-        Magic.store32(GICC_CTLR, 3);                            // enable both groups (bit3 FIQEn stays 0)
+        Magic.store32(GICC_CTLR, 1);                           // NS view: bit0 = EnableGrp1
     }
 
-    /** Acknowledge the pending interrupt; returns its INTID (0x3FF = spurious). */
+    /** Acknowledge the pending group-1 interrupt; returns its INTID (0x3FF = spurious). */
     public static int acknowledge()
     {
-        return Magic.load32(GICC_IAR) & 0x3FF;
+        return Magic.load32(GICC_AIAR) & 0x3FF;
     }
 
-    /** Signal end-of-interrupt for {@code intid}. */
+    /** Signal end-of-interrupt for the group-1 {@code intid}. */
     public static void end(int intid)
     {
-        Magic.store32(GICC_EOIR, intid);
+        Magic.store32(GICC_AEOIR, intid);
     }
 }
