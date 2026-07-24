@@ -80,4 +80,8 @@ public final class Gic
     public static long rawGroup0() { return Magic.load32(GICD_IGROUPR) & 0xFFFFFFFFL; }
     public static long rawCtlrC()  { return Magic.load32(GICC_CTLR) & 0xFFFFFFFFL; }
     public static long rawPmr()    { return Magic.load32(GICC_PMR) & 0xFFFFFFFFL; }
+    /** Read GICC_IAR directly (acknowledges): INTID the NS CPU interface offers; 0x3FF/1023 = spurious. */
+    public static long rawIar()    { return Magic.load32(GICC_IAR) & 0xFFFFFFFFL; }
+    public static long rawRpr()    { return Magic.load32(GICC + 0x014) & 0xFFFFFFFFL; }   // running priority
+    public static long rawHppir()  { return Magic.load32(GICC + 0x018) & 0xFFFFFFFFL; }   // highest pending (no ack)
 }

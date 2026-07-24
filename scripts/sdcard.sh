@@ -16,7 +16,7 @@ echo "== building kernel8.img =="
 make -C "$ROOT" image >/dev/null
 
 mkdir -p "$OUT"
-cp "$ROOT/kernel8.img" "$ROOT/config.txt" "$ROOT/armstub/armstub8-joe.bin" "$OUT/"
+cp "$ROOT/kernel8.img" "$ROOT/config.txt" $ROOT/armstub/*.bin "$OUT/"
 
 echo "== fetching Pi 4 GPU firmware (start4.elf, fixup4.dat) =="
 for f in start4.elf fixup4.dat; do
@@ -34,6 +34,6 @@ ls -l "$OUT"
 echo
 echo "Copy these to the FAT32 boot partition of an SD card, insert into the Pi 4,"
 echo "connect a USB-TTL serial adapter (see scripts/flash.md), and power on."
-cp sdcard/kernel8.img sdcard/config.txt sdcard/armstub8-joe.bin /Volumes/bootfs
+cp sdcard/* /Volumes/bootfs
 ls -tl /Volumes/bootfs
 diskutil eject /dev/disk4s1

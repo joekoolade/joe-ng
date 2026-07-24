@@ -624,8 +624,27 @@ public final class VM
         boolean grp = Gic.groupSet(Gic.PPI_CNTPNS);          // did the group-1 bit stick? (armstub set up GIC)
         boolean en  = Gic.enableSet(Gic.PPI_CNTPNS);         // forwarding enabled at the distributor?
         boolean pend = Gic.pendingSet(Gic.PPI_CNTPNS);       // pending at the distributor right now?
+        // Split "distributor won't forward" from "core won't take the IRQ": the timer is still pending
+        // (no vector ran, so it was never acked). HPPIR shows the highest-priority interrupt the NS CPU
+        // interface is offering WITHOUT acking; IAR is the acking read. 0x1E=30 => it reached the CPU
+        // interface (so the gap is core-side: vector/DAIF/EL). 0x3FF=1023 => the distributor isn't
+        // forwarding it (group/priority/enable). RPR = current running priority.
+        long hppir = Gic.rawHppir();
+        long rpr = Gic.rawRpr();
+        long iar = Gic.rawIar();
+        if ((iar & 0x3FFL) != 0x3FFL)
+        {
+            Gic.end((int) (iar & 0x3FFL));                   // EOI if we actually acked something
+        }
         Magic.writeCNTP_CTL_EL0(0);
         Magic.disableIrq();
+        Uart.write(Magic.bytes("gic hppir="));
+        printHex(hppir);
+        Uart.write(Magic.bytes(" rpr="));
+        printHex(rpr);
+        Uart.write(Magic.bytes(" iar="));
+        printHex(iar);
+        Uart.putc(0x0A);
         Uart.write(Magic.bytes("ticks="));
         printDec((int) ticks);
         Uart.write(Magic.bytes(" seen="));
