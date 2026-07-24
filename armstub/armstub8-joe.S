@@ -86,6 +86,19 @@ _start:
 	 */
 	b	.
 #endif
+#ifdef EL3TEST
+	/*
+	 * Diagnostic build (-DEL3TEST): hang ONLY if we entered at EL3 (secure). The
+	 * group-1 IGROUPR write in setup_gic only takes effect from EL3/secure; if the
+	 * firmware hands the stub off at non-secure EL2 instead, that write is RAZ/WI
+	 * and PPI 30 stays group-0 (matching igrp0=0). CurrentEL[3:2] = current EL, so
+	 * EL3 reads as 0xc. Board dark => EL3 (good); banner prints => NOT EL3 (the bug).
+	 */
+	mrs	x0, CurrentEL
+	and	x0, x0, #0xc
+	cmp	x0, #0xc
+	b.eq	.
+#endif
 	/*
 	 * LOCAL_CONTROL:
 	 * Bit 9 clear: Increment by 1 (vs. 2).
