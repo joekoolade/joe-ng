@@ -221,6 +221,10 @@ kernel_entry32:
 #ifdef GIC
 
 setup_gic:				// Called from secure mode - set ALL interrupts (incl. PPIs) to group 1 and enable.
+#ifdef GICPROBE
+	ldr	x8, =GIC_DISTB
+	ldr	w8, [x8, #GICD_IGROUPR]	// w8 = pristine IGROUPR0 as seen at EL3 (before we write it)
+#endif
 	ldr	x2, =GIC_DISTB
 	mov	w0, #3			// Enable group 0 and 1 IRQs from distributor (every core; shared reg)
 	str	w0, [x2, #GICD_CTRLR]
@@ -236,6 +240,23 @@ setup_gic:				// Called from secure mode - set ALL interrupts (incl. PPIs) to gr
 	subs	x0, x0, #4
 	str	w1, [x2, x0]
 	b.ne	3b
+#ifdef GICPROBE
+	/*
+	 * Read IGROUPR0 back HERE, at EL3, right after writing it, and stash the truth
+	 * into scratch RAM (0x00700000: above the image, below the mailbox @8MiB) for
+	 * the kernel to print. This bypasses the non-secure IGROUPR read (which may be
+	 * RAZ). x2 still = GICD_IGROUPR base, so [x2] is IGROUPR0.
+	 */
+	ldr	w3, [x2]		// post-write IGROUPR0 @EL3 (expect 0xffffffff if the secure write sticks)
+	ldr	x4, =0x00700000
+	movz	w6, #0xe1e1
+	movk	w6, #0xe1e1, lsl #16	// marker 0xe1e1e1e1 => this probe actually ran
+	str	w6, [x4]
+	str	w8, [x4, #4]		// pristine IGROUPR0 @EL3 (what the firmware/earlier code left)
+	str	w3, [x4, #8]		// post-write IGROUPR0 @EL3
+	mrs	x5, CurrentEL
+	str	w5, [x4, #12]		// CurrentEL at probe time (0xc = EL3)
+#endif
 	ret
 
 #endif

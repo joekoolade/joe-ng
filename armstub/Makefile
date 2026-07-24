@@ -44,9 +44,23 @@ armstub8-el3.elf: armstub8-el3.o armstub.ld
 armstub8-el3.bin: armstub8-el3.elf
 	$(OBJCOPY) -O binary $< $@
 
+# Diagnostic: real GIC setup + read IGROUPR0 back at EL3 and stash it (with a
+# marker and CurrentEL) to scratch RAM 0x700000 for the kernel to print.
+probe: armstub8-probe.bin
+
+armstub8-probe.o: armstub8-joe.S
+	$(CLANG) -target $(TARGET) -DGICPROBE -c $< -o $@
+
+armstub8-probe.elf: armstub8-probe.o armstub.ld
+	$(LD) -T armstub.ld -o $@ $<
+
+armstub8-probe.bin: armstub8-probe.elf
+	$(OBJCOPY) -O binary $< $@
+
 clean:
 	rm -f armstub8-joe.o armstub8-joe.elf armstub8-joe.bin \
 	      armstub8-loop.o armstub8-loop.elf armstub8-loop.bin \
-	      armstub8-el3.o armstub8-el3.elf armstub8-el3.bin
+	      armstub8-el3.o armstub8-el3.elf armstub8-el3.bin \
+	      armstub8-probe.o armstub8-probe.elf armstub8-probe.bin
 
 .PHONY: all clean

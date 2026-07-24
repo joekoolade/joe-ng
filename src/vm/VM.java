@@ -600,6 +600,19 @@ public final class VM
         Uart.write(Magic.bytes(" pmr="));
         printHex(Gic.rawPmr());
         Uart.putc(0x0A);
+        // armstub GICPROBE scratch @0x700000 (only the -DGICPROBE stub writes here). mark=0xe1e1e1e1
+        // proves that stub ran; postwrite@el3 is IGROUPR0 read back AT EL3 right after the group-1
+        // write (0xffffffff = the secure write sticks, so the kernel's non-secure igrp0=0 is just a
+        // RAZ read). el=0xc confirms EL3. Garbage/non-marker => a different stub is installed.
+        Uart.write(Magic.bytes("armstub probe: mark="));
+        printHex(Magic.load32(0x0070_0000L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" pristine@el3="));
+        printHex(Magic.load32(0x0070_0004L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" postwrite@el3="));
+        printHex(Magic.load32(0x0070_0008L) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" el="));
+        printHex(Magic.load32(0x0070_000CL) & 0xFFFFFFFFL);
+        Uart.putc(0x0A);
         setupTimerIrq();
         long tstart = Magic.readCNTPCT_EL0();
         long tend = tstart + Magic.readCNTFRQ_EL0() / 10L;   // ~100 ms window
