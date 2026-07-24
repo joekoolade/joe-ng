@@ -26,7 +26,7 @@ final class MetalClassModel
     private static final int ACC_STATIC = 0x0008;
 
     // ----- per-class cache: bytes + parsed constant pool, keyed by name (classDir is immutable) -----
-    private static final int CACHE_MAX = 128;
+    private static final int CACHE_MAX = 512;
     private static final byte[][] cName = new byte[CACHE_MAX][];   // class name bytes
     private static final byte[][] cBytes = new byte[CACHE_MAX][];  // its .class bytes (copied once)
     private static final int[][] cOff = new int[CACHE_MAX][];      // its parsed constant-pool offset table

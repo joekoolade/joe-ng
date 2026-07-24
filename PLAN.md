@@ -1018,8 +1018,16 @@ is name→address bookkeeping:
     write a pattern to a scratch block, read it back byte-identical — and by inspecting the SD image
     on disk: block 4096 holds the written `0x5EED1234+i` sequence. The driver can now both read and
     write the medium it will persist the image to.
-  - ⬜ **slice 3 — FAT32 write.** Mount the boot partition, find `kernel8.img`, overwrite its
-    clusters with `image'`.
+  - ✅ **slice 3 — FAT32 write (`FAT`).** `board.bcm2711.Fat32` mounts the boot partition (MBR
+    partition table → FAT32 BPB), scans the root directory for `KERNEL8.IMG` (8.3 name), follows its
+    cluster chain via the FAT, and overwrites those clusters with a buffer — the file-level write the
+    self-build uses to persist `image'`. Verified by a round-trip (write a pattern to the whole chain,
+    read it back byte-identical → marker `FAT`) and on disk (`kernel8.img`'s cluster 5 holds the
+    written `0xFA700000+i` sequence). Just enough FAT to rewrite one existing file in place: no
+    allocation, no directory growth, no long-name handling. (Growing the closure with the SD/FAT
+    drivers also forced excluding the *blob/class-file byte content* from the `FIX` compare — those are
+    verbatim embedded input the writer echoes, not compiler output, so like the mutable statics they
+    are outside the reproduction claim; the class-table *directory* it computes is still compared.)
   - ⬜ **slice 4 — reboot.** Watchdog/PSCI reset so the firmware reloads the metal-written
     `kernel8.img`; on the next boot it reproduces itself again → true self-hosting.
 

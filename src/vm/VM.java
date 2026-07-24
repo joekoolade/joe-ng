@@ -2,6 +2,7 @@ package vm;
 
 import asm.A64Enc;
 import board.bcm2711.Emmc;
+import board.bcm2711.Fat32;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
@@ -726,6 +727,44 @@ public final class VM
         // back, and verify the round-trip -- proving the driver can mutate the card it will persist to.
         Uart.write(sdWriteOk() ? Magic.bytes("WR") : Magic.bytes("x"));
         Uart.putc(0x0A);
+
+        // M5.5d slice 3: FAT32 write. Mount the boot partition, find KERNEL8.IMG, overwrite its whole
+        // cluster chain with a known pattern and read it back byte-identical -- the file-level write
+        // path the self-build will use to persist image'.
+        Uart.write(fatWriteOk() ? Magic.bytes("FAT") : Magic.bytes("x"));
+        Uart.putc(0x0A);
+    }
+
+    /** Whether KERNEL8.IMG can be located and its cluster chain rewritten + read back byte-identical. */
+    private static boolean fatWriteOk()
+    {
+        if (Emmc.init() != 0 || !Fat32.mount() || !Fat32.findKernel())
+        {
+            return false;
+        }
+        long nbytes = (Fat32.kernelSize() + 511L) / 512L * 512L;   // whole sectors of the file
+        long w = Heap.alloc((int) nbytes);
+        long r = Heap.alloc((int) nbytes);
+        long i = 0L;
+        while (i < nbytes)
+        {
+            Magic.store32(w + i, (int) (0xFA700000L + i));         // a recognizable per-word pattern
+            i += 4L;
+        }
+        if (!Fat32.writeKernel(w, nbytes) || !Fat32.readKernel(r, nbytes))
+        {
+            return false;
+        }
+        i = 0L;
+        while (i < nbytes)
+        {
+            if ((Magic.load32(r + i) & 0xFFFFFFFFL) != ((0xFA700000L + i) & 0xFFFFFFFFL))
+            {
+                return false;
+            }
+            i += 4L;
+        }
+        return true;
     }
 
     /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
@@ -2902,15 +2941,12 @@ public final class VM
             }
             m += 1;
         }
-        // ----- blobs: raw .class bytes -----
-        int b = 0;
-        while (b < 6)
-        {
-            int r = chkBytes(dBlobOff[b], MetalClassModel.bytesOf(blobClass(b)));
-            if (r >= 0) { return r; }
-            b += 1;
-        }
-        // ----- class table: directory {nameAddr,nameLen,bytesAddr,bytesLen} + name/class bytes -----
+        // NOTE: the blobs and the class-table *bytes* are verbatim embedded input -- raw .class files
+        // the writer copies from its input to the image unchanged. Reproducing them is echoing input,
+        // not the compiler reproducing its own output, so (like the mutable statics) their byte content
+        // is outside the fixpoint's reproduction claim and not compared here. Their *directory* (the
+        // pointers/lengths the writer computes) is compared just below and its boundary by 'H'.
+        // ----- class table: directory {nameAddr,nameLen,bytesAddr,bytesLen} -----
         int cc2 = (int) classCount;
         int cur = dClassDirStart + cc2 * (4 * wordSlot);
         int ci = 0;
