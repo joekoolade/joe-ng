@@ -237,6 +237,11 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("readELR_EL1"))) { return Intrinsics.READ_ELR_EL1; }
         if (utf8Is(n, Magic.bytes("readFAR_EL1"))) { return Intrinsics.READ_FAR_EL1; }
         if (utf8Is(n, Magic.bytes("readCurrentEL"))) { return Intrinsics.READ_CURRENT_EL; }
+        if (utf8Is(n, Magic.bytes("readCNTFRQ_EL0"))) { return Intrinsics.READ_CNTFRQ_EL0; }
+        if (utf8Is(n, Magic.bytes("readCNTPCT_EL0"))) { return Intrinsics.READ_CNTPCT_EL0; }
+        if (utf8Is(n, Magic.bytes("writeCNTP_TVAL_EL0"))) { return Intrinsics.WRITE_CNTP_TVAL_EL0; }
+        if (utf8Is(n, Magic.bytes("writeCNTP_CTL_EL0"))) { return Intrinsics.WRITE_CNTP_CTL_EL0; }
+        if (utf8Is(n, Magic.bytes("enableIrq"))) { return Intrinsics.ENABLE_IRQ; }
         fail(Symbols.FAIL_INTRINSIC_ID, methodCp, 0);   // an unrecognised magic op: halt (seed throws)
         return 0;
     }

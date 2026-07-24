@@ -110,6 +110,31 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code MRS CNTFRQ_EL0} — the generic-timer tick frequency in Hz. */
+    public static long readCNTFRQ_EL0()
+    {
+        throw intrinsic();
+    }
+    /** {@code MRS CNTPCT_EL0} — the free-running physical counter. */
+    public static long readCNTPCT_EL0()
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR CNTP_TVAL_EL0, v} — arm the EL1 physical timer to fire in {@code v} ticks. */
+    public static void writeCNTP_TVAL_EL0(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR CNTP_CTL_EL0, v} — control the EL1 physical timer (bit0 enable, bit1 imask). */
+    public static void writeCNTP_CTL_EL0(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR DAIFClr, #2} — unmask IRQs at the current EL. */
+    public static void enableIrq()
+    {
+        throw intrinsic();
+    }
     public static void writeHCR_EL2(long v)
     {
         throw intrinsic();

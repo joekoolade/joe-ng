@@ -397,6 +397,21 @@ public final class A64Enc
     public static final int ESR_EL1     = sysReg(3, 0,  5, 2, 0);   // exception syndrome
     public static final int ELR_EL1     = sysReg(3, 0,  4, 0, 1);   // faulting PC
     public static final int FAR_EL1     = sysReg(3, 0,  6, 0, 0);   // faulting address
+    public static final int CNTFRQ_EL0    = sysReg(3, 3, 14, 0, 0); // generic-timer frequency (Hz)
+    public static final int CNTPCT_EL0    = sysReg(3, 3, 14, 0, 1); // physical count (free-running)
+    public static final int CNTP_CTL_EL0  = sysReg(3, 3, 14, 2, 1); // EL1 physical timer control (enable/imask/istatus)
+    public static final int CNTP_TVAL_EL0 = sysReg(3, 3, 14, 2, 0); // ... its countdown timer value
+
+    /** {@code MSR DAIFClr, #imm} — unmask the given DAIF bits (imm bit1 = IRQ). */
+    public static int msrDaifClr(int imm4)
+    {
+        return 0xD500_401F | (3 << 16) | ((imm4 & 0xF) << 8) | (7 << 5);
+    }
+    /** {@code MSR DAIFSet, #imm} — mask the given DAIF bits (imm bit1 = IRQ). */
+    public static int msrDaifSet(int imm4)
+    {
+        return 0xD500_401F | (3 << 16) | ((imm4 & 0xF) << 8) | (6 << 5);
+    }
 
     /** Compose a 64-bit immediate into up to four MOVZ/MOVK words in x{@code rd}. */
     public static int[] loadImm64(int rd, long value)

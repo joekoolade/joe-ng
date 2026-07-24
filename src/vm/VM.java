@@ -497,6 +497,16 @@ public final class VM
             Uart.putc(0x0A);
         }
 
+        // M6: ARM generic timer. Read its frequency (firmware-set) and confirm the free-running
+        // physical counter advances -- the timer the interrupt subsystem will drive.
+        Uart.write(Magic.bytes("timer "));
+        printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
+        Uart.write(Magic.bytes("MHz advancing:"));
+        long tc0 = Magic.readCNTPCT_EL0();
+        long tc1 = Magic.readCNTPCT_EL0();
+        Uart.putc(tc1 > tc0 ? 0x59 : 0x4E);                // 'Y' counter moved / 'N' stuck
+        Uart.putc(0x0A);
+
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
         Uart.putc(c.get());                // virtual dispatch: read the field back
