@@ -84,9 +84,10 @@ public final class Bcm2711
     // The EMMC/SDHCI register block lives in board.bcm2711.Emmc (it auto-detects the controller base).
 
     // ----- ARM local (per-core) interrupt router --------------------------
-    // The BCM2711 per-core block routes the ARM generic timers straight to a core's IRQ/FIQ,
-    // bypassing the GIC — the path a non-secure bare-metal kernel can actually use (the timer PPIs
-    // are secure/group-0 in the GIC and unreachable from non-secure EL1).
+    // Reference only — NOT the active path. The BCM2711 per-core block can route the ARM generic
+    // timers straight to a core's IRQ/FIQ, but ONLY when the legacy interrupt controller is selected.
+    // With the GIC selected (the default), the timer wires to the GIC as PPI 30 and this router is
+    // bypassed (IRQ_SOURCE reads 0). We take the timer through the GIC — see board.bcm2711.Gic.
     public static final long ARM_LOCAL_BASE      = 0xFF80_0000L;
     public static final long CORE0_TIMER_IRQCNTL = ARM_LOCAL_BASE + 0x40;  // route: bit1 = CNTPNS -> IRQ
     public static final long CORE0_IRQ_SOURCE    = ARM_LOCAL_BASE + 0x60;  // pending: bit1 = CNTPNS

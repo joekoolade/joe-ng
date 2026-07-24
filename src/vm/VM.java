@@ -89,7 +89,7 @@ public final class VM
             i += 1;
         }
         Heap.publishCode(table, table + 0x800L);
-        vbarBase = table;                                  // kept so setupTimerIrq can install the IRQ entry
+        vbarBase = table;                                  // kept so startTimerTick can install the IRQ entry
         Magic.writeVBAR_EL1(table);
         Magic.isb();                                       // the new vector base takes effect
     }
@@ -103,9 +103,7 @@ public final class VM
      */
     static void irqHandler()
     {
-        irqSeen = irqSeen + 1L;                            // proves the vector -> stub -> handler path ran
         int id = Gic.acknowledge();                        // GICC_IAR: which INTID the CPU interface is signalling
-        irqLastId = id;
         if (id == Gic.PPI_CNTPNS)                          // non-secure EL1 physical timer PPI (INTID 30)
         {
             ticks = ticks + 1L;
@@ -118,7 +116,7 @@ public final class VM
      * Route IRQs through a context-saving stub to {@link #irqHandler}, bring up the GIC, arm the EL1
      * physical timer for a ~1 ms periodic tick, and unmask IRQs. {@link #installFaultVectors} first.
      */
-    static void setupTimerIrq()
+    static void startTimerTick()
     {
         if (irqHandlerAddr == 0L)                          // dead call: make irqHandler compiled + stashed
         {
@@ -169,6 +167,13 @@ public final class VM
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
         Magic.enableIrq();                                 // unmask IRQs at EL1
+    }
+
+    /** Stop the periodic tick: disable the timer and re-mask IRQs (leaves the GIC/vectors installed). */
+    static void stopTimerTick()
+    {
+        Magic.writeCNTP_CTL_EL0(0);                        // disable the timer
+        Magic.disableIrq();                                // mask IRQ + FIQ at EL1
     }
 
     /**
@@ -510,8 +515,6 @@ public final class VM
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
-    static long irqSeen;               // any IRQ vectored into irqHandler at all (diagnostic)
-    static long irqLastId = -1L;       // last INTID handed back by GICC_IAR (diagnostic; -1 = never)
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
@@ -581,89 +584,21 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // M6 interrupts -- HARDWARE DEBUG. Bring up the GIC + EL1 physical timer and take real IRQs.
-        // Prints a full register dump so one boot shows exactly where delivery stalls (on real Pi 4 the
-        // firmware armstub has set up the secure GIC, so group-1 delivery should work here). Re-masks
-        // IRQs after so the rest of boot (unwind test, fixpoint) is undisturbed.
-        Uart.write(Magic.bytes("=== IRQ debug ===\n"));
-        Uart.write(Magic.bytes("freq="));
-        printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz currentel="));
-        printHex(Magic.readCurrentEL());                     // bits[3:2] = EL: 0x4 = EL1, 0x8 = EL2
-        Uart.putc(0x0A);
-        // Pristine GIC state as the firmware armstub left it, BEFORE we touch it. igrp0=0xFFFFFFFF
-        // proves the GIC armstub ran and PPI 30 is group 1; 0x0 means it did not (or enable_gic off).
-        Uart.write(Magic.bytes("pristine gicd_ctlr="));
-        printHex(Gic.rawCtlrD());
-        Uart.write(Magic.bytes(" igrp0="));
-        printHex(Gic.rawGroup0());
-        Uart.write(Magic.bytes(" gicc_ctlr="));
-        printHex(Gic.rawCtlrC());
-        Uart.write(Magic.bytes(" pmr="));
-        printHex(Gic.rawPmr());
-        Uart.putc(0x0A);
-        // armstub GICPROBE scratch @0x700000 (only the -DGICPROBE stub writes here). mark=0xe1e1e1e1
-        // proves that stub ran; postwrite@el3 is IGROUPR0 read back AT EL3 right after the group-1
-        // write (0xffffffff = the secure write sticks, so the kernel's non-secure igrp0=0 is just a
-        // RAZ read). el=0xc confirms EL3. Garbage/non-marker => a different stub is installed.
-        Uart.write(Magic.bytes("armstub probe: mark="));
-        printHex(Magic.load32(0x0070_0000L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" pristine@el3="));
-        printHex(Magic.load32(0x0070_0004L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" postwrite@el3="));
-        printHex(Magic.load32(0x0070_0008L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" el="));
-        printHex(Magic.load32(0x0070_000CL) & 0xFFFFFFFFL);
-        Uart.putc(0x0A);
-        setupTimerIrq();
-        long tstart = Magic.readCNTPCT_EL0();
-        long tend = tstart + Magic.readCNTFRQ_EL0() / 10L;   // ~100 ms window
-        while (Magic.readCNTPCT_EL0() < tend)
+        // M6: periodic timer tick via the GIC-400. The non-secure EL1 physical timer (CNTP, PPI 30)
+        // is routed through the GIC and taken as an IRQ at EL1. Delivery needs the custom armstub
+        // (armstub/armstub8-joe.bin) to place PPI 30 in group 1 -- see armstub/README.md. Arm a ~1 kHz
+        // tick, let it run for a short window as a live proof, then re-mask so the self-build fixpoint
+        // below (which self-modifies code and storage) runs undisturbed.
+        startTimerTick();
+        long t0 = Magic.readCNTPCT_EL0();
+        while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 10L)
         {
-            // busy-wait; if delivery works, timer IRQs increment `ticks`
+            // ~100 ms window; each timer IRQ is serviced by irqHandler and increments `ticks`
         }
-        long cntpCtl = Magic.readCNTP_CTL_EL0();             // bit0 enable, bit1 imask, bit2 istatus (fired)
-        boolean grp = Gic.groupSet(Gic.PPI_CNTPNS);          // did the group-1 bit stick? (armstub set up GIC)
-        boolean en  = Gic.enableSet(Gic.PPI_CNTPNS);         // forwarding enabled at the distributor?
-        boolean pend = Gic.pendingSet(Gic.PPI_CNTPNS);       // pending at the distributor right now?
-        // Split "distributor won't forward" from "core won't take the IRQ": the timer is still pending
-        // (no vector ran, so it was never acked). HPPIR shows the highest-priority interrupt the NS CPU
-        // interface is offering WITHOUT acking; IAR is the acking read. 0x1E=30 => it reached the CPU
-        // interface (so the gap is core-side: vector/DAIF/EL). 0x3FF=1023 => the distributor isn't
-        // forwarding it (group/priority/enable). RPR = current running priority.
-        long hppir = Gic.rawHppir();
-        long rpr = Gic.rawRpr();
-        long iar = Gic.rawIar();
-        if ((iar & 0x3FFL) != 0x3FFL)
-        {
-            Gic.end((int) (iar & 0x3FFL));                   // EOI if we actually acked something
-        }
-        Magic.writeCNTP_CTL_EL0(0);
-        Magic.disableIrq();
-        Uart.write(Magic.bytes("gic hppir="));
-        printHex(hppir);
-        Uart.write(Magic.bytes(" rpr="));
-        printHex(rpr);
-        Uart.write(Magic.bytes(" iar="));
-        printHex(iar);
-        Uart.putc(0x0A);
-        Uart.write(Magic.bytes("ticks="));
+        stopTimerTick();
+        Uart.write(Magic.bytes("timer: "));
         printDec((int) ticks);
-        Uart.write(Magic.bytes(" seen="));
-        printHex(irqSeen);
-        Uart.write(Magic.bytes(" lastid="));
-        printHex(irqLastId & 0xFFFFL);                        // INTID from GICC_IAR (0x1E=30 timer; 0x3FF spurious; 0xFFFF never)
-        Uart.write(Magic.bytes(" cntp_ctl="));
-        printHex(cntpCtl & 0xFFFFFFFFL);                     // 0x5 = enabled + fired (bit2 ISTATUS)
-        Uart.write(Magic.bytes(" ppi30[grp="));
-        Uart.putc(grp ? (byte) 0x31 : (byte) 0x30);          // '1' iff group-1 (armstub opened the secure GIC)
-        Uart.write(Magic.bytes(" en="));
-        Uart.putc(en ? (byte) 0x31 : (byte) 0x30);
-        Uart.write(Magic.bytes(" pend="));
-        Uart.putc(pend ? (byte) 0x31 : (byte) 0x30);
-        Uart.write(Magic.bytes("] daif="));
-        printHex(Magic.readDaif() & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes("\n=== end IRQ debug ===\n"));
+        Uart.write(Magic.bytes(" ticks in 100ms (CNTP -> GIC PPI 30 -> EL1 IRQ)\n"));
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'

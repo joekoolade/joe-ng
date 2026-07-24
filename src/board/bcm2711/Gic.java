@@ -24,7 +24,6 @@ public final class Gic
     private static final long GICD_CTLR       = GICD + 0x000;
     private static final long GICD_IGROUPR    = GICD + 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
     private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID
-    private static final long GICD_ISPENDR    = GICD + 0x200;   // 1 bit/INTID (set = pending)
     private static final long GICD_IPRIORITYR = GICD + 0x400;   // 1 byte/INTID
 
     private static final long GICC_CTLR = GICC + 0x000;
@@ -40,8 +39,8 @@ public final class Gic
 
     /**
      * Enable {@code intid} as a non-secure group-1 interrupt and bring up the CPU interface. Setting
-     * the group bit only sticks if the firmware armstub already opened the secure side ({@code
-     * enable_gic=1}); {@link #groupSet} reads it back so a boot can confirm.
+     * the group bit only sticks if the firmware armstub already opened the secure side and placed the
+     * PPIs in group 1 (our custom armstub does this — see armstub/README.md); otherwise it is RAZ/WI.
      */
     public static void init(int intid)
     {
@@ -66,22 +65,4 @@ public final class Gic
         Magic.store32(GICC_EOIR, intid);
     }
 
-    // ----- diagnostics ------------------------------------------------------
-    /** True if {@code intid} is currently group 1 — i.e. the armstub set up the GIC for non-secure. */
-    public static boolean groupSet(int intid) { return (Magic.load32(word(GICD_IGROUPR, intid)) & bit(intid)) != 0; }
-    /** True if {@code intid}'s forwarding is enabled at the distributor. */
-    public static boolean enableSet(int intid) { return (Magic.load32(word(GICD_ISENABLER, intid)) & bit(intid)) != 0; }
-    /** True if {@code intid} is pending at the distributor (level asserted, not yet acknowledged). */
-    public static boolean pendingSet(int intid) { return (Magic.load32(word(GICD_ISPENDR, intid)) & bit(intid)) != 0; }
-
-    // Raw register words — read the armstub's pristine setup before we init anything. IGROUPR0 =
-    // 0xFFFFFFFF means the GIC armstub ran and put every SGI/PPI (incl. PPI 30) into group 1.
-    public static long rawCtlrD()  { return Magic.load32(GICD_CTLR) & 0xFFFFFFFFL; }
-    public static long rawGroup0() { return Magic.load32(GICD_IGROUPR) & 0xFFFFFFFFL; }
-    public static long rawCtlrC()  { return Magic.load32(GICC_CTLR) & 0xFFFFFFFFL; }
-    public static long rawPmr()    { return Magic.load32(GICC_PMR) & 0xFFFFFFFFL; }
-    /** Read GICC_IAR directly (acknowledges): INTID the NS CPU interface offers; 0x3FF/1023 = spurious. */
-    public static long rawIar()    { return Magic.load32(GICC_IAR) & 0xFFFFFFFFL; }
-    public static long rawRpr()    { return Magic.load32(GICC + 0x014) & 0xFFFFFFFFL; }   // running priority
-    public static long rawHppir()  { return Magic.load32(GICC + 0x018) & 0xFFFFFFFFL; }   // highest pending (no ack)
 }

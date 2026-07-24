@@ -35,6 +35,19 @@ armstub=armstub8-joe.bin
 ```
 
 `kernel8.img` is unchanged — the VM already targets PPI 30 through the GIC
-(`board.bcm2711.Gic`, `vm.VM.setupTimerIrq`). After boot, the `=== IRQ debug ===`
-block should now show `pristine ... igrp0=0xffffffff`, `ppi30[grp=1 ...]`, and a
-non-zero `ticks` / `lastid=0x1e`.
+(`board.bcm2711.Gic`, `vm.VM.startTimerTick`). After boot, the console prints e.g.
+`timer: 99 ticks in 100ms (CNTP -> GIC PPI 30 -> EL1 IRQ)`, proving the periodic
+tick is delivered and serviced at EL1.
+
+## Diagnostic builds (not needed in normal use)
+
+The same source builds three diagnostic stubs, each hanging at a checkpoint so a
+dark board answers one question (see the `#ifdef`s and the git history for the
+bring-up story):
+
+```
+make loop    # armstub8-loop.bin  — hang at _start: is our stub loaded at all?
+make el3     # armstub8-el3.bin   — hang iff at EL3: did we enter secure?
+make probe   # armstub8-probe.bin — full setup + read IGROUPR0 back at EL3 into
+             #                       scratch 0x700000 (needs the matching kernel dump)
+```
