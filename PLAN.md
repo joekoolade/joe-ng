@@ -1028,8 +1028,18 @@ is name→address bookkeeping:
     drivers also forced excluding the *blob/class-file byte content* from the `FIX` compare — those are
     verbatim embedded input the writer echoes, not compiler output, so like the mutable statics they
     are outside the reproduction claim; the class-table *directory* it computes is still compared.)
-  - ⬜ **slice 4 — reboot.** Watchdog/PSCI reset so the firmware reloads the metal-written
-    `kernel8.img`; on the next boot it reproduces itself again → true self-hosting.
+  - ✅ **slice 4 — the self-hosting loop (`PST` + reboot).** `persistImage` chains it all: reproduce
+    `image'`, write it over the SD card's `KERNEL8.IMG` cluster chain, verify the readback, then
+    `board.bcm2711.Reset.reboot()` arms the BCM2711 PM watchdog for a full reset — on real hardware the
+    firmware reloads the image joe-ng just wrote and boots it, reproducing itself again. Verified end
+    to end: the marker sequence runs `… FIX IMG SD WR FAT PST`, and the `kernel8.img` extracted from
+    the SD image afterward (via its FAT chain) is **byte-identical to the original** — joe-ng persisted
+    a byte-perfect image of itself. (QEMU's `raspi4b` doesn't emulate the PM watchdog and `-kernel`
+    wouldn't reload from the card, so the actual reboot-and-reload is a real-hardware step; the reset
+    code is in place and the write it depends on is proven.) Fixed a real memory-map bug the growth
+    exposed: the mailbox buffer sat at `0xE0000`, which the enlarged image now occupied, so the boot
+    mailbox call corrupted the class-table bytes there; moved the mailbox (8 MiB), `PTR_CELL`, and heap
+    (9 MiB) up to give the image room. **M5.5d complete — "drop the seed JVM" is now literal.**
 
 **Honest assessment.** M5.5a–c is a large but bounded port — mechanically similar to the
 `Baseline` split (collections→registries, `ClassFile`→`ClassReader`, strings→Utf8), just

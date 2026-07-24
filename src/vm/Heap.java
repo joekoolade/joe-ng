@@ -18,9 +18,10 @@ public final class Heap
     private Heap() {}
 
     /** 8-byte cell holding the bump pointer (free RAM below the heap). */
-    public static final long PTR_CELL = 0x000F_0000L;
-    /** Start of the allocation region (1 MiB; well above image@0x80000 and the stack). */
-    public static final long BASE     = 0x0010_0000L;
+    public static final long PTR_CELL = 0x008F_0000L;
+    /** Start of the allocation region (9 MiB): above the image (from 0x80000, ~8 MiB of room) and the
+     *  mailbox buffer (8 MiB), growing further up, so none of them overlap. */
+    public static final long BASE     = 0x0090_0000L;
 
     static long freeHead;              // free-list head, 0 = empty (nodes: [next @0][size @8])
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)

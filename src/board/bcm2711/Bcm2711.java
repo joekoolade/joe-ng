@@ -29,7 +29,7 @@ public final class Bcm2711
     public static final int  MBOX_EMPTY  = 0x4000_0000;   // status: nothing to read
     public static final int  MBOX_CH_PROP = 8;            // ARM -> VC property channel
     /** 16-byte-aligned scratch for the property buffer: above the image, below the heap. */
-    public static final long MBOX_BUFFER = 0x000E_0000L;
+    public static final long MBOX_BUFFER = 0x0080_0000L;   // 8 MiB — clear of the image (which grows from 0x80000)
     /** VC bus alias of ARM physical RAM (uncached view the firmware expects). */
     public static final long MBOX_BUS_ALIAS = 0xC000_0000L;
     /**

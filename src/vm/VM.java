@@ -3,6 +3,7 @@ package vm;
 import asm.A64Enc;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
+import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
@@ -733,6 +734,50 @@ public final class VM
         // path the self-build will use to persist image'.
         Uart.write(fatWriteOk() ? Magic.bytes("FAT") : Magic.bytes("x"));
         Uart.putc(0x0A);
+
+        // M5.5d slice 4 -- THE SELF-HOSTING LOOP. Reproduce image', write it over the SD card's
+        // KERNEL8.IMG, verify the readback, then reset the SoC: the firmware reloads the image joe-ng
+        // just wrote and boots it, and it reproduces itself again. "Drop the seed JVM" made literal.
+        if (persistImage())
+        {
+            Uart.write(Magic.bytes("PST rebooting into the self-written image\n"));
+            Reset.reboot();                                  // never returns
+        }
+        Uart.write(Magic.bytes("x\n"));                      // no SD card / size mismatch: skip the reboot
+    }
+
+    /**
+     * Materialise image' and write it over the SD card's KERNEL8.IMG (the file the firmware boots),
+     * verifying the readback. Returns true only if the medium now holds the reproduced image. Skips
+     * (false) when there is no card or the on-card file differs in size from the reproduction (so a
+     * plain dev boot with no matching SD does not reboot).
+     */
+    private static boolean persistImage()
+    {
+        discoverImage();
+        layoutDataRegions();
+        long len = imageEndWord() * 4L;
+        if (Emmc.init() != 0 || !Fat32.mount() || !Fat32.findKernel() || Fat32.kernelSize() != len)
+        {
+            return false;
+        }
+        long buf = materializeImage();
+        long wlen = (len + 511L) / 512L * 512L;              // whole sectors
+        long chk = Heap.alloc((int) wlen);
+        if (!Fat32.writeKernel(buf, wlen) || !Fat32.readKernel(chk, wlen))
+        {
+            return false;
+        }
+        long i = 0L;
+        while (i < len)                                      // the written file must read back identical
+        {
+            if ((Magic.load32(chk + i) & 0xFFFFFFFFL) != (Magic.load32(buf + i) & 0xFFFFFFFFL))
+            {
+                return false;
+            }
+            i += 4L;
+        }
+        return true;
     }
 
     /** Whether KERNEL8.IMG can be located and its cluster chain rewritten + read back byte-identical. */
@@ -840,7 +885,7 @@ public final class VM
     private static long materializeImage()
     {
         int endW = imageEndWord();
-        long buf = Heap.alloc(endW * 4);
+        long buf = Heap.alloc((endW * 4 + 511) & ~511);      // padded to a whole sector (zeroed tail)
         int w = 0;
         while (w < endW)                                     // copy the whole running image (byte-identical)
         {
@@ -2941,11 +2986,14 @@ public final class VM
             }
             m += 1;
         }
-        // NOTE: the blobs and the class-table *bytes* are verbatim embedded input -- raw .class files
-        // the writer copies from its input to the image unchanged. Reproducing them is echoing input,
-        // not the compiler reproducing its own output, so (like the mutable statics) their byte content
-        // is outside the fixpoint's reproduction claim and not compared here. Their *directory* (the
-        // pointers/lengths the writer computes) is compared just below and its boundary by 'H'.
+        // ----- blobs: raw .class bytes -----
+        int b = 0;
+        while (b < 6)
+        {
+            int r = chkBytes(dBlobOff[b], MetalClassModel.bytesOf(blobClass(b)));
+            if (r >= 0) { return r; }
+            b += 1;
+        }
         // ----- class table: directory {nameAddr,nameLen,bytesAddr,bytesLen} -----
         int cc2 = (int) classCount;
         int cur = dClassDirStart + cc2 * (4 * wordSlot);
