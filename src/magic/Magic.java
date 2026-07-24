@@ -135,6 +135,16 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code MRS DAIF} -- the current interrupt-mask state (bit7 = I). */
+    public static long readDaif()
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR DAIFSet, #3} -- mask IRQ and FIQ. */
+    public static void disableIrq()
+    {
+        throw intrinsic();
+    }
     public static void writeHCR_EL2(long v)
     {
         throw intrinsic();

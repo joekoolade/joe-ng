@@ -461,6 +461,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.unwind(JJJ)V",      "vm/VM.unwindAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.reportFault()V",    "vm/VM.reportFaultAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.irqHandler()V",     "vm/VM.irqHandlerAddr");
         for (int b = 0; b < blobs.size(); b++)
         {
             Blob blob = blobs.get(b);

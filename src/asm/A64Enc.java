@@ -401,6 +401,7 @@ public final class A64Enc
     public static final int CNTPCT_EL0    = sysReg(3, 3, 14, 0, 1); // physical count (free-running)
     public static final int CNTP_CTL_EL0  = sysReg(3, 3, 14, 2, 1); // EL1 physical timer control (enable/imask/istatus)
     public static final int CNTP_TVAL_EL0 = sysReg(3, 3, 14, 2, 0); // ... its countdown timer value
+    public static final int DAIF          = sysReg(3, 3,  4, 2, 1); // interrupt mask state (bit7 = I)
 
     /** {@code MSR DAIFClr, #imm} — unmask the given DAIF bits (imm bit1 = IRQ). */
     public static int msrDaifClr(int imm4)

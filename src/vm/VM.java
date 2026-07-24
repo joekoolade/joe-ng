@@ -3,6 +3,7 @@ package vm;
 import asm.A64Enc;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
+import board.bcm2711.Gic;
 import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
@@ -87,8 +88,82 @@ public final class VM
             i += 1;
         }
         Heap.publishCode(table, table + 0x800L);
+        vbarBase = table;                                  // kept so setupTimerIrq can install the IRQ entry
         Magic.writeVBAR_EL1(table);
         Magic.isb();                                       // the new vector base takes effect
+    }
+
+    static long vbarBase;              // base of the installed EL1 vector table
+    static long timerReload;           // CNTP_TVAL reload for a periodic tick
+
+    /**
+     * EL1 IRQ handler — reached (context saved) from the IRQ vector for a taken interrupt. Acknowledge
+     * it at the GIC; if it is the physical-timer PPI, count the tick and re-arm the timer; end it.
+     */
+    static void irqHandler()
+    {
+        irqSeen = irqSeen + 1L;                            // proves the vector -> stub -> handler path ran
+        int id = Gic.acknowledge();
+        if (id == 30)                                      // EL1 physical-timer PPI
+        {
+            ticks = ticks + 1L;
+            Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm for the next tick
+        }
+        Gic.end(id);
+    }
+
+    /**
+     * Route IRQs through a context-saving stub to {@link #irqHandler}, bring up the GIC, arm the EL1
+     * physical timer for a ~1 ms periodic tick, and unmask IRQs. {@link #installFaultVectors} first.
+     */
+    static void setupTimerIrq()
+    {
+        if (irqHandlerAddr == 0L)                          // dead call: make irqHandler compiled + stashed
+        {
+            irqHandler();
+        }
+        // A stub: save x0..x30, BL the Java handler, restore, ERET back to the interrupted code.
+        long raw = Heap.alloc(0x400);
+        long stub = (raw + 0xFL) & ~0xFL;                  // 16-byte aligned code
+        int w = 0;
+        Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, 256));
+        w += 1;
+        int r = 0;
+        while (r <= 30)
+        {
+            Magic.store32(stub + w * 4L, A64Enc.strx(r, 31, r * 8));
+            w += 1;
+            r += 1;
+        }
+        long blAddr = stub + w * 4L;
+        Magic.store32(blAddr, A64Enc.bl((int) ((irqHandlerAddr - blAddr) / 4L)));
+        w += 1;
+        r = 0;
+        while (r <= 30)
+        {
+            Magic.store32(stub + w * 4L, A64Enc.ldrx(r, 31, r * 8));
+            w += 1;
+            r += 1;
+        }
+        Magic.store32(stub + w * 4L, A64Enc.addImm(31, 31, 256));
+        w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.eret());
+        w += 1;
+        Heap.publishCode(stub, stub + w * 4L);
+        // Route both the IRQ (entry 5, +0x280) and FIQ (entry 6, +0x300) vectors of "Current EL with
+        // SPx" to the stub -- QEMU's single-security-state GICv2 may signal group-0 as FIQ.
+        long e5 = vbarBase + 5L * 0x80L;
+        Magic.store32(e5, A64Enc.b((int) ((stub - e5) / 4L)));
+        long e6 = vbarBase + 6L * 0x80L;
+        Magic.store32(e6, A64Enc.b((int) ((stub - e6) / 4L)));
+        Heap.publishCode(e5, e6 + 4L);
+        Magic.isb();
+
+        Gic.init(30);                                      // enable the EL1 physical-timer PPI
+        timerReload = Magic.readCNTFRQ_EL0() / 1000L;      // ~1 ms
+        Magic.writeCNTP_TVAL_EL0(timerReload);
+        Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
+        Magic.enableIrq();                                 // unmask IRQs at EL1
     }
 
     /**
@@ -428,6 +503,9 @@ public final class VM
     static long checkCastAddr;         // VM.checkCast(JJ)J
     static long unwindAddr;            // VM.unwind(JJJ)V
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
+    static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
+    static long ticks;                 // periodic timer interrupts serviced so far
+    static long irqSeen;               // any IRQ vectored into irqHandler at all (diagnostic)
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
@@ -497,15 +575,18 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // M6: ARM generic timer. Read its frequency (firmware-set) and confirm the free-running
-        // physical counter advances -- the timer the interrupt subsystem will drive.
+        // M6 interrupts: the EL1 generic timer + GIC-400 IRQ path is built (Gic, an IRQ context-save
+        // stub, the handler, timer arming), but activating it under QEMU's raspi4b breaks later boot
+        // and the tick never fires -- the distributor shows INTID 30 pending, yet its CPU interface
+        // never signals it to the core (a QEMU-model GIC/timer-forwarding gap). So it stays gated off
+        // pending real hardware; the dead call keeps setupTimerIrq + irqHandler in the image. See PLAN.md M6.
         Uart.write(Magic.bytes("timer "));
         printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz advancing:"));
-        long tc0 = Magic.readCNTPCT_EL0();
-        long tc1 = Magic.readCNTPCT_EL0();
-        Uart.putc(tc1 > tc0 ? 0x59 : 0x4E);                // 'Y' counter moved / 'N' stuck
-        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("MHz (IRQ path built, gated)\n"));
+        if (irqHandlerAddr == 0L)                           // never taken (stashed nonzero): keeps it reachable
+        {
+            setupTimerIrq();
+        }
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
@@ -2877,6 +2958,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("checkCastAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")); }
         if (bytesEqual(nm, Magic.bytes("unwindAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")); }
         if (bytesEqual(nm, Magic.bytes("reportFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("irqHandlerAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("irqHandler"), Magic.bytes("()V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }

@@ -135,6 +135,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "writeCNTP_TVAL_EL0(J)V" -> Intrinsics.WRITE_CNTP_TVAL_EL0;
         case "writeCNTP_CTL_EL0(J)V" -> Intrinsics.WRITE_CNTP_CTL_EL0;
         case "enableIrq()V" -> Intrinsics.ENABLE_IRQ;
+        case "readDaif()J" -> Intrinsics.READ_DAIF;
+        case "disableIrq()V" -> Intrinsics.DISABLE_IRQ;
         case "writeVBAR_EL1(J)V" -> Intrinsics.WRITE_VBAR_EL1;
         case "readESR_EL1()J" -> Intrinsics.READ_ESR_EL1;
         case "readELR_EL1()J" -> Intrinsics.READ_ELR_EL1;

@@ -1232,7 +1232,15 @@ public final class Baseline
         }
         else if (id == Intrinsics.ENABLE_IRQ)
         {
-            cb.emit(A64Enc.msrDaifClr(2));                  // unmask IRQ (DAIF.I)
+            cb.emit(A64Enc.msrDaifClr(3));                  // unmask IRQ + FIQ (DAIF.I and .F)
+        }
+        else if (id == Intrinsics.READ_DAIF)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.DAIF));
+        }
+        else if (id == Intrinsics.DISABLE_IRQ)
+        {
+            cb.emit(A64Enc.msrDaifSet(3));
         }
         else if (id == Intrinsics.GC)
         {

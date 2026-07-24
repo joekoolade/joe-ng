@@ -1057,6 +1057,23 @@ novel part; M5.5a–c is more of the same well-understood surgery.
 GC (bump → real collector); GIC-400 interrupts + timer; SMP (wake cores 1–3);
 exceptions; class-library subset; framebuffer via VideoCore mailbox.
 
+- **M6 interrupts — infrastructure built, activation gated (QEMU delivery gap).** The whole EL1
+  physical-timer + GIC-400 IRQ path exists and is fixpoint-compatible (the metal writer recompiles
+  all of it byte-identically — `FIX` still passes): eight new `magic/Magic` sysreg intrinsics
+  (`readCNTFRQ_EL0`/`readCNTPCT_EL0`/`writeCNTP_TVAL_EL0`/`writeCNTP_CTL_EL0`/`enableIrq`/`disableIrq`/
+  `readDaif`, plus the `msrDaifClr/Set` and `CNTx_EL0`/`DAIF` encoders); `board.bcm2711.Gic` (GIC-400
+  distributor + CPU interface init, enable, ack/EOI); a runtime-generated IRQ vector stub (save
+  x0–x30 → `BL irqHandler` → restore → `ERET`) installed at the EL1h IRQ/FIQ vector entries;
+  `VM.irqHandler` (ack, count a tick, re-arm) with its address writer-stashed like `reportFault`; and
+  `setupTimerIrq` (arm a ~1 ms tick, unmask). **Blocked under QEMU raspi4b:** the timer asserts INTID
+  30 at the distributor (`ISPENDR` bit30) but its CPU interface never signals the core (`AHPPIR`
+  empty), so no IRQ is taken — verified group 0 and group 1, priority 0, `PMR=0xFF`, `CTLR` both ways,
+  DAIF I+F unmasked, EL1 confirmed, vectors at entries 5+6. Activating the path also perturbs the
+  cross-method-unwind test (a taken IRQ vs `Magic.resume`'s stack fixup). So `setupTimerIrq` is kept
+  reachable (a dead call, for discovery/stashing) but not run — the timer *read* works
+  (`timer 62MHz`). Next: confirm on real Pi 4 hardware (where the firmware wires the GIC), or dig into
+  QEMU's exact bcm2711 timer→GIC wiring / the ARM_LOCAL controller path.
+
 ---
 
 ## 5. Design decisions to lock day one
