@@ -35,5 +35,5 @@ echo
 echo "Copy these to the FAT32 boot partition of an SD card, insert into the Pi 4,"
 echo "connect a USB-TTL serial adapter (see scripts/flash.md), and power on."
 cp sdcard/* /Volumes/bootfs
-ls -tl /Volumes/bootfs
+ls -tl /Volumes/bootfs | head -n 10
 diskutil eject /dev/disk4s1

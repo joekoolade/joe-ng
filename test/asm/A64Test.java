@@ -66,7 +66,7 @@ public final class A64Test
 
         // ---- system register moves (MRS/MSR) -------------------------------
         T.eqWord("MRS x0,MPIDR_EL1", 0xD53800A0, A64.mrs(0, A64.MPIDR_EL1));
-        T.eqWord("MRS x0,CurrentEL", 0xD5384200, A64.mrs(0, A64.CurrentEL));
+        T.eqWord("MRS x0,CurrentEL", 0xD5384240, A64.mrs(0, A64.CurrentEL));   // S3_0_C4_C2_2 (op2=2)
         T.eqWord("MSR HCR_EL2,x0",   0xD51C1100, A64.msr(A64.HCR_EL2, 0));
         T.eqWord("MSR SCTLR_EL1,x0", 0xD5181000, A64.msr(A64.SCTLR_EL1, 0));
         T.eqWord("MSR CPACR_EL1,x0", 0xD5181040, A64.msr(A64.CPACR_EL1, 0));

@@ -192,7 +192,7 @@ public final class A64
     public record Sys(int op0, int op1, int crn, int crm, int op2) {}
 
     // Boot-path system registers (PLAN.md §5.1). S<op0>_<op1>_C<n>_C<m>_<op2>.
-    public static final Sys CurrentEL   = new Sys(3, 0,  4, 2, 0);
+    public static final Sys CurrentEL   = new Sys(3, 0,  4, 2, 2);   // S3_0_C4_C2_2 (op2=2; op2=0 is SPSel)
     public static final Sys MPIDR_EL1   = new Sys(3, 0,  0, 0, 5);
     public static final Sys HCR_EL2     = new Sys(3, 4,  1, 1, 0);
     public static final Sys CPTR_EL2    = new Sys(3, 4,  1, 1, 2);

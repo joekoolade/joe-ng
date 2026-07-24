@@ -588,7 +588,9 @@ public final class VM
         Uart.write(Magic.bytes("=== IRQ debug ===\n"));
         Uart.write(Magic.bytes("freq="));
         printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz\n"));
+        Uart.write(Magic.bytes("MHz currentel="));
+        printHex(Magic.readCurrentEL());                     // bits[3:2] = EL: 0x4 = EL1, 0x8 = EL2
+        Uart.putc(0x0A);
         // Pristine GIC state as the firmware armstub left it, BEFORE we touch it. igrp0=0xFFFFFFFF
         // proves the GIC armstub ran and PPI 30 is group 1; 0x0 means it did not (or enable_gic off).
         Uart.write(Magic.bytes("pristine gicd_ctlr="));

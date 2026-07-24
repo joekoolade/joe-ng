@@ -384,7 +384,7 @@ public final class A64Enc
     }
 
     // Boot-path system registers (PLAN.md §5.1), packed for msr/mrs.
-    public static final int CurrentEL   = sysReg(3, 0,  4, 2, 0);
+    public static final int CurrentEL   = sysReg(3, 0,  4, 2, 2);   // S3_0_C4_C2_2 (op2=2; op2=0 is SPSel)
     public static final int HCR_EL2     = sysReg(3, 4,  1, 1, 0);
     public static final int CPTR_EL2    = sysReg(3, 4,  1, 1, 2);
     public static final int CNTHCTL_EL2 = sysReg(3, 4, 14, 1, 0);
