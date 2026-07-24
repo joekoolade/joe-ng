@@ -1,9 +1,9 @@
 package vm;
 
 import asm.A64Enc;
+import board.bcm2711.Bcm2711;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
-import board.bcm2711.Gic;
 import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
@@ -103,13 +103,12 @@ public final class VM
     static void irqHandler()
     {
         irqSeen = irqSeen + 1L;                            // proves the vector -> stub -> handler path ran
-        int id = Gic.acknowledge();
-        if (id == 30)                                      // EL1 physical-timer PPI
+        int src = Magic.load32(Bcm2711.CORE0_IRQ_SOURCE);
+        if ((src & Bcm2711.CNTPNS_IRQ) != 0)               // non-secure EL1 physical timer
         {
             ticks = ticks + 1L;
-            Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm for the next tick
+            Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm (deasserts the level line until it counts down)
         }
-        Gic.end(id);
     }
 
     /**
@@ -159,7 +158,9 @@ public final class VM
         Heap.publishCode(e5, e6 + 4L);
         Magic.isb();
 
-        Gic.init(30);                                      // enable the EL1 physical-timer PPI
+        // Route the non-secure physical timer straight to this core's IRQ via the ARM-local block
+        // (no GIC: the timer PPI is secure there and unreachable from non-secure EL1).
+        Magic.store32(Bcm2711.CORE0_TIMER_IRQCNTL, Bcm2711.CNTPNS_IRQ);
         timerReload = Magic.readCNTFRQ_EL0() / 1000L;      // ~1 ms
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
@@ -580,11 +581,11 @@ public final class VM
         // firmware armstub has set up the secure GIC, so group-1 delivery should work here). Re-masks
         // IRQs after so the rest of boot (unwind test, fixpoint) is undisturbed.
         Uart.write(Magic.bytes("=== IRQ debug ===\n"));
-        Uart.write(Magic.bytes("gicd_iidr="));               // 0x0002043B = ARM GIC-400 r0p... (confirms the GIC)
-        printHex(Magic.load32(0xFF84_1008L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" freq="));
+        Uart.write(Magic.bytes("freq="));
         printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz\n"));
+        Uart.write(Magic.bytes("MHz irqcntl="));
+        printHex(Magic.load32(Bcm2711.CORE0_TIMER_IRQCNTL) & 0xFFFFFFFFL);   // pre-setup routing
+        Uart.putc(0x0A);
         setupTimerIrq();
         long tstart = Magic.readCNTPCT_EL0();
         long tend = tstart + Magic.readCNTFRQ_EL0() / 10L;   // ~100 ms window
@@ -598,16 +599,10 @@ public final class VM
         printDec((int) ticks);
         Uart.write(Magic.bytes(" seen="));
         printHex(irqSeen);
-        Uart.write(Magic.bytes(" ispend="));
-        printHex(Magic.load32(0xFF84_1200L) & 0xFFFFFFFFL);  // GICD_ISPENDR0 (bit30 = timer)
-        Uart.write(Magic.bytes(" igrp="));
-        printHex(Magic.load32(0xFF84_1080L) & 0xFFFFFFFFL);  // GICD_IGROUPR0
-        Uart.write(Magic.bytes(" gicd_ctlr="));
-        printHex(Magic.load32(0xFF84_1000L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" gicc_ctlr="));
-        printHex(Magic.load32(0xFF84_2000L) & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" ahppir="));
-        printHex(Magic.load32(0xFF84_2028L) & 0xFFFFFFFFL);  // group-1 highest pending (30 = ready)
+        Uart.write(Magic.bytes(" irqcntl="));
+        printHex(Magic.load32(Bcm2711.CORE0_TIMER_IRQCNTL) & 0xFFFFFFFFL);   // routing (should read 0x2)
+        Uart.write(Magic.bytes(" src="));
+        printHex(Magic.load32(Bcm2711.CORE0_IRQ_SOURCE) & 0xFFFFFFFFL);      // pending source (bit1 = CNTPNS)
         Uart.write(Magic.bytes(" daif="));
         printHex(Magic.readDaif() & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("\n=== end IRQ debug ===\n"));

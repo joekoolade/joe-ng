@@ -82,4 +82,13 @@ public final class Bcm2711
      */
     public static final int  BAUD_115200 = 179;
     // The EMMC/SDHCI register block lives in board.bcm2711.Emmc (it auto-detects the controller base).
+
+    // ----- ARM local (per-core) interrupt router --------------------------
+    // The BCM2711 per-core block routes the ARM generic timers straight to a core's IRQ/FIQ,
+    // bypassing the GIC — the path a non-secure bare-metal kernel can actually use (the timer PPIs
+    // are secure/group-0 in the GIC and unreachable from non-secure EL1).
+    public static final long ARM_LOCAL_BASE      = 0xFF80_0000L;
+    public static final long CORE0_TIMER_IRQCNTL = ARM_LOCAL_BASE + 0x40;  // route: bit1 = CNTPNS -> IRQ
+    public static final long CORE0_IRQ_SOURCE    = ARM_LOCAL_BASE + 0x60;  // pending: bit1 = CNTPNS
+    public static final int  CNTPNS_IRQ = 1 << 1;   // non-secure EL1 physical timer (CNTP_EL0)
 }
