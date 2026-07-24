@@ -145,6 +145,11 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code MRS CNTP_CTL_EL0} -- physical-timer control (bit0 enable, bit1 imask, bit2 istatus). */
+    public static long readCNTP_CTL_EL0()
+    {
+        throw intrinsic();
+    }
     public static void writeHCR_EL2(long v)
     {
         throw intrinsic();

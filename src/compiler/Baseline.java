@@ -1242,6 +1242,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.msrDaifSet(3));
         }
+        else if (id == Intrinsics.READ_CNTP_CTL_EL0)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.CNTP_CTL_EL0));
+        }
         else if (id == Intrinsics.GC)
         {
             lowerGc(cb);

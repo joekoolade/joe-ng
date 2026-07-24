@@ -593,16 +593,20 @@ public final class VM
         {
             // busy-wait; if delivery works, timer IRQs increment `ticks`
         }
+        long cntpCtl = Magic.readCNTP_CTL_EL0();             // bit0 enable, bit1 imask, bit2 istatus (fired)
+        long src2 = Magic.load32(Bcm2711.CORE0_IRQ_SOURCE) & 0xFFFFFFFFL;
         Magic.writeCNTP_CTL_EL0(0);
         Magic.disableIrq();
         Uart.write(Magic.bytes("ticks="));
         printDec((int) ticks);
         Uart.write(Magic.bytes(" seen="));
         printHex(irqSeen);
+        Uart.write(Magic.bytes(" cntp_ctl="));
+        printHex(cntpCtl & 0xFFFFFFFFL);
         Uart.write(Magic.bytes(" irqcntl="));
         printHex(Magic.load32(Bcm2711.CORE0_TIMER_IRQCNTL) & 0xFFFFFFFFL);   // routing (should read 0x2)
         Uart.write(Magic.bytes(" src="));
-        printHex(Magic.load32(Bcm2711.CORE0_IRQ_SOURCE) & 0xFFFFFFFFL);      // pending source (bit1 = CNTPNS)
+        printHex(src2);                                      // pending source (bit1 = CNTPNS)
         Uart.write(Magic.bytes(" daif="));
         printHex(Magic.readDaif() & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("\n=== end IRQ debug ===\n"));
