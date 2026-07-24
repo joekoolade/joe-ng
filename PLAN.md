@@ -1071,8 +1071,26 @@ exceptions; class-library subset; framebuffer via VideoCore mailbox.
   DAIF I+F unmasked, EL1 confirmed, vectors at entries 5+6. Activating the path also perturbs the
   cross-method-unwind test (a taken IRQ vs `Magic.resume`'s stack fixup). So `setupTimerIrq` is kept
   reachable (a dead call, for discovery/stashing) but not run — the timer *read* works
-  (`timer 62MHz`). Next: confirm on real Pi 4 hardware (where the firmware wires the GIC), or dig into
-  QEMU's exact bcm2711 timer→GIC wiring / the ARM_LOCAL controller path.
+  (`timer 62MHz`).
+
+  **Datasheet resolution (BCM2711 peripherals ch.6, `RP-008248-DS`).** Figure 7 + §6.5.1 settle
+  both real-HW failures:
+  - The GIC-400 is the *default* controller; when selected, each core's PNS timer IRQ wires
+    **straight to the GIC as PPI INTID 30** — the ARM-local `TIMER_CNTRL`/`IRQ_SOURCE` router is
+    *bypassed*. That is why the ARM-local attempt read `src=0`: in this config the router never sees
+    the timer. The GIC path and the ARM-local path are mutually exclusive, chosen by `enable_gic`.
+  - GIC base (Low-Peripheral) = `0xFF840000` → GICD `0xFF841000`, GICC `0xFF842000` (all confirmed).
+  - The earlier GIC `igrp=0` was the group bit not sticking: for non-secure EL1 to own PPI 30 the
+    firmware's **secure armstub must set up the GIC**, which only happens with `enable_gic=1` in
+    `config.txt` (which the test board lacked). Without it the group-1 write is RAZ/WI.
+  - Fixed a real driver bug: `Gic` acknowledged via the *secure-aliased* `AIAR`/`AEOIR` (0x20/0x24);
+    non-secure must use plain `GICC_IAR`/`GICC_EOIR` (0x0C/0x10). Now corrected.
+
+  VM switched to the GIC path (`Gic.init(30)`; `irqHandler` acks `GICC_IAR`, ticks on INTID 30,
+  `GICC_EOIR`). Debug dump now prints `ppi30[grp/en/pend]` + `lastid`. Under QEMU: `grp=1 en=1
+  pend=1 cntp_ctl=0x5` (timer fires, reaches the distributor, is group-1+enabled) but the CPU
+  interface still doesn't forward (`lastid=0xFFFF`) — a QEMU GICv2 modeling gap, not our setup.
+  Next: real Pi 4 with `enable_gic=1` — `grp=1` will confirm the armstub ran and delivery should tick.
 
 ---
 

@@ -4,6 +4,7 @@ import asm.A64Enc;
 import board.bcm2711.Bcm2711;
 import board.bcm2711.Emmc;
 import board.bcm2711.Fat32;
+import board.bcm2711.Gic;
 import board.bcm2711.Reset;
 import board.bcm2711.Uart;
 import classfile.ClassReader;
@@ -103,12 +104,14 @@ public final class VM
     static void irqHandler()
     {
         irqSeen = irqSeen + 1L;                            // proves the vector -> stub -> handler path ran
-        int src = Magic.load32(Bcm2711.CORE0_IRQ_SOURCE);
-        if ((src & Bcm2711.CNTPNS_IRQ) != 0)               // non-secure EL1 physical timer
+        int id = Gic.acknowledge();                        // GICC_IAR: which INTID the CPU interface is signalling
+        irqLastId = id;
+        if (id == Gic.PPI_CNTPNS)                          // non-secure EL1 physical timer PPI (INTID 30)
         {
             ticks = ticks + 1L;
             Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm (deasserts the level line until it counts down)
         }
+        Gic.end(id);                                       // GICC_EOIR: drop priority so the next one can fire
     }
 
     /**
@@ -158,9 +161,10 @@ public final class VM
         Heap.publishCode(e5, e6 + 4L);
         Magic.isb();
 
-        // Route the non-secure physical timer straight to this core's IRQ via the ARM-local block
-        // (no GIC: the timer PPI is secure there and unreachable from non-secure EL1).
-        Magic.store32(Bcm2711.CORE0_TIMER_IRQCNTL, Bcm2711.CNTPNS_IRQ);
+        // Bring up the GIC and enable the non-secure physical-timer PPI (INTID 30). With the GIC
+        // selected (enable_gic=1), the timer wires straight to it as PPI 30; the ARM-local router is
+        // bypassed. The firmware armstub must have placed the PPIs in group 1 for this to deliver.
+        Gic.init(Gic.PPI_CNTPNS);
         timerReload = Magic.readCNTFRQ_EL0() / 1000L;      // ~1 ms
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);                        // enable the timer (imask=0)
@@ -507,6 +511,7 @@ public final class VM
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
     static long irqSeen;               // any IRQ vectored into irqHandler at all (diagnostic)
+    static long irqLastId = -1L;       // last INTID handed back by GICC_IAR (diagnostic; -1 = never)
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
@@ -594,20 +599,26 @@ public final class VM
             // busy-wait; if delivery works, timer IRQs increment `ticks`
         }
         long cntpCtl = Magic.readCNTP_CTL_EL0();             // bit0 enable, bit1 imask, bit2 istatus (fired)
-        long src2 = Magic.load32(Bcm2711.CORE0_IRQ_SOURCE) & 0xFFFFFFFFL;
+        boolean grp = Gic.groupSet(Gic.PPI_CNTPNS);          // did the group-1 bit stick? (armstub set up GIC)
+        boolean en  = Gic.enableSet(Gic.PPI_CNTPNS);         // forwarding enabled at the distributor?
+        boolean pend = Gic.pendingSet(Gic.PPI_CNTPNS);       // pending at the distributor right now?
         Magic.writeCNTP_CTL_EL0(0);
         Magic.disableIrq();
         Uart.write(Magic.bytes("ticks="));
         printDec((int) ticks);
         Uart.write(Magic.bytes(" seen="));
         printHex(irqSeen);
+        Uart.write(Magic.bytes(" lastid="));
+        printHex(irqLastId & 0xFFFFL);                        // INTID from GICC_IAR (0x1E=30 timer; 0x3FF spurious; 0xFFFF never)
         Uart.write(Magic.bytes(" cntp_ctl="));
-        printHex(cntpCtl & 0xFFFFFFFFL);
-        Uart.write(Magic.bytes(" irqcntl="));
-        printHex(Magic.load32(Bcm2711.CORE0_TIMER_IRQCNTL) & 0xFFFFFFFFL);   // routing (should read 0x2)
-        Uart.write(Magic.bytes(" src="));
-        printHex(src2);                                      // pending source (bit1 = CNTPNS)
-        Uart.write(Magic.bytes(" daif="));
+        printHex(cntpCtl & 0xFFFFFFFFL);                     // 0x5 = enabled + fired (bit2 ISTATUS)
+        Uart.write(Magic.bytes(" ppi30[grp="));
+        Uart.putc(grp ? (byte) 0x31 : (byte) 0x30);          // '1' iff group-1 (armstub opened the secure GIC)
+        Uart.write(Magic.bytes(" en="));
+        Uart.putc(en ? (byte) 0x31 : (byte) 0x30);
+        Uart.write(Magic.bytes(" pend="));
+        Uart.putc(pend ? (byte) 0x31 : (byte) 0x30);
+        Uart.write(Magic.bytes("] daif="));
         printHex(Magic.readDaif() & 0xFFFFFFFFL);
         Uart.write(Magic.bytes("\n=== end IRQ debug ===\n"));
 
