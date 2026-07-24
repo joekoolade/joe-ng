@@ -1040,6 +1040,12 @@ is name→address bookkeeping:
     exposed: the mailbox buffer sat at `0xE0000`, which the enlarged image now occupied, so the boot
     mailbox call corrupted the class-table bytes there; moved the mailbox (8 MiB), `PTR_CELL`, and heap
     (9 MiB) up to give the image room. **M5.5d complete — "drop the seed JVM" is now literal.**
+  - ✅ **generation-counter demo.** A scratch SD sector (sector 1, in the MBR gap before the
+    partition) holds a `gen!`-tagged counter that survives reboots. Each boot reads + prints its
+    `generation N`, reproduces + persists itself, bumps the counter to `N+1`, and reboots — so on real
+    hardware the number climbs automatically, visible proof the metal-written image is what booted.
+    Demoed in QEMU by re-running on the same SD (each run = one boot): `generation 0 → 1 → 2 → 3`, and
+    the SD's `kernel8.img` stays byte-identical to the original after every self-write.
 
 **Honest assessment.** M5.5a–c is a large but bounded port — mechanically similar to the
 `Baseline` split (collections→registries, `ClassFile`→`ClassReader`, strings→Utf8), just

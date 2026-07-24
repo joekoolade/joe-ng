@@ -485,6 +485,17 @@ public final class VM
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
         Uart.write(Magic.bytes("MHz\n"));
 
+        // Self-hosting generation counter (M5.5d demo): a scratch SD sector survives across reboots,
+        // so each time joe-ng reproduces + persists itself and reboots into the image it wrote, this
+        // climbs -- visible proof the metal-written image is what booted, not the seed's.
+        int gen = -1;
+        if (Emmc.init() == 0)
+        {
+            gen = readGeneration();
+            Uart.write(Magic.bytes("generation "));
+            printDec(gen);
+            Uart.putc(0x0A);
+        }
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
@@ -740,10 +751,40 @@ public final class VM
         // just wrote and boots it, and it reproduces itself again. "Drop the seed JVM" made literal.
         if (persistImage())
         {
-            Uart.write(Magic.bytes("PST rebooting into the self-written image\n"));
+            writeGeneration(gen + 1);                        // survives the reboot in a scratch SD sector
+            Uart.write(Magic.bytes("PST -> generation "));
+            printDec(gen + 1);
+            Uart.write(Magic.bytes(", rebooting into the self-written image\n"));
             Reset.reboot();                                  // never returns
         }
         Uart.write(Magic.bytes("x\n"));                      // no SD card / size mismatch: skip the reboot
+    }
+
+    private static final long GEN_SECTOR = 1L;               // scratch sector in the MBR gap (before the partition)
+    private static final int GEN_MAGIC = 0x216E_6567;        // "gen!" little-endian, tags an initialised counter
+
+    /** The self-hosting generation from the scratch sector (0 if uninitialised, -1 if no card). */
+    private static int readGeneration()
+    {
+        long buf = Heap.alloc(512);
+        if (!Emmc.readBlock(GEN_SECTOR, buf))
+        {
+            return -1;
+        }
+        if (Magic.load32(buf) != GEN_MAGIC)
+        {
+            return 0;                                        // never written: this is generation 0
+        }
+        return Magic.load32(buf + 4L);
+    }
+
+    /** Persist {@code gen} into the scratch sector (magic + count). */
+    private static boolean writeGeneration(int gen)
+    {
+        long buf = Heap.alloc(512);                          // Heap.alloc zeroes the rest of the sector
+        Magic.store32(buf, GEN_MAGIC);
+        Magic.store32(buf + 4L, gen);
+        return Emmc.writeBlock(GEN_SECTOR, buf);
     }
 
     /**
