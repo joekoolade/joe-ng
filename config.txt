@@ -17,6 +17,7 @@ kernel_address=0x80000
 # measured core clock over the mailbox at boot and derives the divisor from it.
 enable_uart=1
 core_freq=200
+enable_gic=1
 
 # No device tree — joe-ng talks to the hardware directly, no OS.
 device_tree=

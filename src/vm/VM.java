@@ -588,8 +588,17 @@ public final class VM
         Uart.write(Magic.bytes("=== IRQ debug ===\n"));
         Uart.write(Magic.bytes("freq="));
         printDec((int) (Magic.readCNTFRQ_EL0() / 1000000L));
-        Uart.write(Magic.bytes("MHz irqcntl="));
-        printHex(Magic.load32(Bcm2711.CORE0_TIMER_IRQCNTL) & 0xFFFFFFFFL);   // pre-setup routing
+        Uart.write(Magic.bytes("MHz\n"));
+        // Pristine GIC state as the firmware armstub left it, BEFORE we touch it. igrp0=0xFFFFFFFF
+        // proves the GIC armstub ran and PPI 30 is group 1; 0x0 means it did not (or enable_gic off).
+        Uart.write(Magic.bytes("pristine gicd_ctlr="));
+        printHex(Gic.rawCtlrD());
+        Uart.write(Magic.bytes(" igrp0="));
+        printHex(Gic.rawGroup0());
+        Uart.write(Magic.bytes(" gicc_ctlr="));
+        printHex(Gic.rawCtlrC());
+        Uart.write(Magic.bytes(" pmr="));
+        printHex(Gic.rawPmr());
         Uart.putc(0x0A);
         setupTimerIrq();
         long tstart = Magic.readCNTPCT_EL0();

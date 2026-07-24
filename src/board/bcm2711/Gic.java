@@ -73,4 +73,11 @@ public final class Gic
     public static boolean enableSet(int intid) { return (Magic.load32(word(GICD_ISENABLER, intid)) & bit(intid)) != 0; }
     /** True if {@code intid} is pending at the distributor (level asserted, not yet acknowledged). */
     public static boolean pendingSet(int intid) { return (Magic.load32(word(GICD_ISPENDR, intid)) & bit(intid)) != 0; }
+
+    // Raw register words — read the armstub's pristine setup before we init anything. IGROUPR0 =
+    // 0xFFFFFFFF means the GIC armstub ran and put every SGI/PPI (incl. PPI 30) into group 1.
+    public static long rawCtlrD()  { return Magic.load32(GICD_CTLR) & 0xFFFFFFFFL; }
+    public static long rawGroup0() { return Magic.load32(GICD_IGROUPR) & 0xFFFFFFFFL; }
+    public static long rawCtlrC()  { return Magic.load32(GICC_CTLR) & 0xFFFFFFFFL; }
+    public static long rawPmr()    { return Magic.load32(GICC_PMR) & 0xFFFFFFFFL; }
 }
