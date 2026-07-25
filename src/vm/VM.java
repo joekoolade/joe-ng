@@ -187,29 +187,64 @@ public final class VM
     // word then parks -- proving all four cores run our code. (Per-core stacks + scheduling come next.)
     static final long CORE_FLAGS = 0x0070_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8
     static final long SEC_STUB   = 0x0071_0000L;          // secondary boot stub (fixed scratch, not GC'd)
+    static final int  SEC_STACK_HI = 0x0200;              // per-core stack base 0x0200_0000 + core*1MiB
+
+    /**
+     * Secondary-core entry (runs on cores 1..3 at EL2, on a per-core stack set by the boot stub). Record
+     * that this core is up, then run a bounded work loop printing the core id -- genuine parallel Java on
+     * all four cores. Single-byte writes buffer in the mini-UART FIFO, so the ids interleave without a
+     * lock (a proper spinlock for multi-byte critical sections is the next step). Then park.
+     */
+    static void secondaryMain(int core)
+    {
+        Magic.store64(CORE_FLAGS + core * 8L, core);       // report in (the primary counts these)
+        Magic.dsb();
+        while (Magic.load64(CORE_FLAGS) == 0L)             // wait for the primary's GO (slot 0)
+        {
+        }
+        int i = 0;
+        while (i < 48)
+        {
+            Uart.putc((byte) (0x30 + core));               // '1'/'2'/'3'
+            long e = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 100L;   // ~10 ms
+            while (Magic.readCNTPCT_EL0() < e)
+            {
+            }
+            i = i + 1;
+        }
+        while (true)                                       // done: park
+        {
+            Magic.wfe();
+        }
+    }
 
     static void bringUpSecondaries()
     {
-        Magic.store64(CORE_FLAGS + 8L, 0L);               // clear the report flags for cores 1..3
+        if (secondaryMainAddr == 0L) { secondaryMain(0); } // dead call: compile + stash secondaryMain
+        Magic.store64(CORE_FLAGS + 0L, 0L);                // GO = 0 (released after we report cores up)
+        Magic.store64(CORE_FLAGS + 8L, 0L);                // clear the report flags for cores 1..3
         Magic.store64(CORE_FLAGS + 16L, 0L);
         Magic.store64(CORE_FLAGS + 24L, 0L);
 
-        // Build the stub: x0 = MPIDR & 3 (core id); store it to CORE_FLAGS + core*8; DSB; park in WFE.
+        // Stub: x0 = MPIDR & 3 (core id) -> set a per-core SP (0x0200_0000 + core*1MiB), then
+        // BL secondaryMain(core). It never returns; a WFE park follows as a backstop.
         long s = SEC_STUB;
         int w = 0;
         Magic.store32(s + w * 4L, A64Enc.mrs(0, A64Enc.MPIDR_EL1));   w += 1;
         Magic.store32(s + w * 4L, A64Enc.movz(9, 3, 0));             w += 1;   // x9 = 3
         Magic.store32(s + w * 4L, A64Enc.andReg(0, 0, 9));          w += 1;   // x0 = core id
-        Magic.store32(s + w * 4L, A64Enc.movz(2, 0x0070, 1));       w += 1;   // x2 = 0x0070_0000
-        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 3));         w += 1;   // x1 = core*8
-        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));        w += 1;   // x2 = CORE_FLAGS + core*8
-        Magic.store32(s + w * 4L, A64Enc.strx(0, 2, 0));         w += 1;   // [x2] = core id
-        Magic.store32(s + w * 4L, A64Enc.dsb());                w += 1;
-        Magic.store32(s + w * 4L, A64Enc.wfe());               w += 1;   // park
-        Magic.store32(s + w * 4L, A64Enc.b(-1));              w += 1;   // b back to the WFE
+        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 20));        w += 1;   // x1 = core * 1MiB
+        Magic.store32(s + w * 4L, A64Enc.movz(2, SEC_STACK_HI, 1)); w += 1;   // x2 = 0x0200_0000
+        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));        w += 1;   // x2 = SP for this core
+        Magic.store32(s + w * 4L, A64Enc.movToSp(2));            w += 1;   // mov sp, x2
+        long blAddr = s + w * 4L;
+        Magic.store32(blAddr, A64Enc.bl((int) ((secondaryMainAddr - blAddr) / 4L)));   // secondaryMain(core)
+        w += 1;
+        Magic.store32(s + w * 4L, A64Enc.wfe());               w += 1;   // backstop park
+        Magic.store32(s + w * 4L, A64Enc.b(-1));              w += 1;
         Heap.publishCode(s, s + w * 4L);
 
-        Magic.dsb();                                       // stub + flags visible before we release cores
+        Magic.dsb();                                       // stub visible before we release cores
         Magic.store64(0x00E0L, s);                         // spin_cpu1 -> stub
         Magic.store64(0x00E8L, s);                         // spin_cpu2 -> stub
         Magic.store64(0x00F0L, s);                         // spin_cpu3 -> stub
@@ -923,6 +958,7 @@ public final class VM
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
     static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)
     static long taskRAddr;             // VM.taskR()V — UART reader task entry (writer-stashed)
+    static long secondaryMainAddr;     // VM.secondaryMain(I)V — secondary-core entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
@@ -993,8 +1029,25 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // SMP: release cores 1-3 from the armstub spin table and have each report in.
+        // SMP: release cores 1-3 from the armstub spin table; each reports in and then waits for GO.
         bringUpSecondaries();
+        // All four cores now run Java concurrently: 1/2/3 on the secondaries, 0 here on the primary,
+        // each printing its id every ~10 ms. The interleaving is genuine parallelism across the A72s
+        // (single-byte writes buffer in the UART FIFO, so no lock is needed for this).
+        Uart.write(Magic.bytes("smp 4 cores concurrent: "));
+        Magic.store64(CORE_FLAGS + 0L, 1L);                // GO
+        Magic.dsb();
+        int sc = 0;
+        while (sc < 48)
+        {
+            Uart.putc((byte) 0x30);                        // '0' from the primary
+            long e = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 100L;
+            while (Magic.readCNTPCT_EL0() < e)
+            {
+            }
+            sc = sc + 1;
+        }
+        Uart.putc(0x0A);
 
         // M7: scheduling on the GIC-400 tick, exercising every task state. taskA prints 'A' then
         // yield()s (cooperative SVC switch -- shows in QEMU too); taskB (producer) prints 'B', posts
@@ -3415,6 +3468,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("taskBAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskB"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskCAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskC"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskRAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskR"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("secondaryMainAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("secondaryMain"), Magic.bytes("(I)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
