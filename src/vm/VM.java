@@ -295,7 +295,7 @@ public final class VM
     {
         while (true)
         {
-            Magic.spinLock(LOCK_ADDR);
+            Magic.spinLock(LOCK_ADDR);                     // short critical section: just grab a job number
             int n = smpJob;
             if (n >= SMP_NJOBS)
             {
@@ -303,12 +303,11 @@ public final class VM
                 return;
             }
             smpJob = n + 1;
-            Uart.putc((byte) 0x63);                        // 'c'
-            Uart.putc((byte) (0x30 + core));               // core id
-            Uart.putc((byte) 0x3A);                        // ':'
-            printDec(n);                                   // job number
-            Uart.putc((byte) 0x20);                        // ' '
-            Magic.spinUnlock(LOCK_ADDR);
+            Magic.spinUnlock(LOCK_ADDR);                   // release BEFORE the slow UART write, so the lock's
+                                                           // cache line is free and other cores get a turn
+            long cnt = CORE_FLAGS + 0x40L + core * 8L;     // this core's own job count (no contention)
+            Magic.store64(cnt, Magic.load64(cnt) + 1L);
+            Uart.putc((byte) (0x30 + core));               // core id: interleaves like the concurrent demo
         }
     }
 
@@ -321,6 +320,10 @@ public final class VM
         Magic.store64(CORE_FLAGS + 8L, 0L);                // clear the report flags for cores 1..3
         Magic.store64(CORE_FLAGS + 16L, 0L);
         Magic.store64(CORE_FLAGS + 24L, 0L);
+        Magic.store64(CORE_FLAGS + 0x40L, 0L);             // clear per-core job counts (0x40 + core*8)
+        Magic.store64(CORE_FLAGS + 0x48L, 0L);
+        Magic.store64(CORE_FLAGS + 0x50L, 0L);
+        Magic.store64(CORE_FLAGS + 0x58L, 0L);
 
         // Stub (runs on each secondary at EL2): x0 = MPIDR & 3 (core id, becomes secondaryMain's arg),
         // set the per-core EL1 stack + a sane EL1 SCTLR, then drop EL2 -> EL1 (mirroring EmitBoot) and
@@ -1149,9 +1152,10 @@ public final class VM
         bringUpSecondaries();
         // Per-core scheduling: all four cores pull jobs from a shared run queue, coordinated by a real
         // hardware spinlock (LDAXR/STLXR, working now that the MMU maps RAM cacheable/coherent). Each
-        // "cN:J" is one core taking one job; the lock guarantees no job is taken twice and serialises the
-        // output. The primary joins in as core 0. Genuine work sharing across the four A72s.
-        Uart.write(Magic.bytes("smp jobs (cCORE:JOB) across 4 cores:\n"));
+        // each digit is one core taking one job under the hardware spinlock (LDAXR/STLXR, working now
+        // that RAM is cacheable/coherent). The lock guarantees no job is taken twice; the per-core tally
+        // printed after shows the 24 jobs were shared across the four A72s.
+        Uart.write(Magic.bytes("smp jobs (digit = core that ran it): "));
         Magic.store64(CORE_FLAGS + 0L, 1L);                // GO
         Magic.dsb();
         smpWork(0);                                        // the primary is core 0
@@ -1159,6 +1163,17 @@ public final class VM
         long q = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 20L;
         while (Magic.readCNTPCT_EL0() < q)
         {
+        }
+        Uart.write(Magic.bytes("\njobs/core: "));
+        int jc = 0;
+        while (jc < 4)
+        {
+            Uart.putc((byte) 0x63);                        // 'c'
+            Uart.putc((byte) (0x30 + jc));
+            Uart.putc((byte) 0x3D);                        // '='
+            printDec((int) Magic.load64(CORE_FLAGS + 0x40L + jc * 8L));
+            Uart.putc((byte) 0x20);
+            jc = jc + 1;
         }
         Uart.putc(0x0A);
 
