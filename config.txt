@@ -18,7 +18,7 @@ kernel_address=0x80000
 enable_uart=1
 core_freq=200
 enable_gic=1
-armstub=armstub8-probe.bin
+armstub=armstub8-joe.bin
 
 # No device tree — joe-ng talks to the hardware directly, no OS.
 device_tree=

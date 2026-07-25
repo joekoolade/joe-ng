@@ -831,6 +831,12 @@ public final class VM
         Uart.write(fixpointMaterialize() ? Magic.bytes("IMG") : Magic.bytes("x"));
         Uart.putc(0x0A);
 
+        // DIAGNOSTIC: the helper-address statics are NOT checked by 'H' (which only validates region
+        // boundaries + counts). staticValue() is what image'/next-gen gets; the live image holds what
+        // the seed writer wrote. Any mismatch is a static that comes out wrong in the written image
+        // (a stale/garbage pointer next gen would fault on). Prints nothing if they all agree.
+        checkHelperStatics();
+
         // M5.5d slice 2: EMMC single-sector read. Bring up the SD controller + card (auto-detecting
         // EMMC2 on real hardware vs EMMC under QEMU), read block 0, and check the boot-sector signature
         // 0xAA55 at byte 510 -- present on any partitioned/FAT card, so it works on the test SD and a
@@ -2946,6 +2952,44 @@ public final class VM
         if (b == 3) { return Magic.bytes("vm/Beta"); }
         if (b == 4) { return Magic.bytes("vm/MyExc"); }
         return Magic.bytes("java/lang/Math");
+    }
+
+    /**
+     * DIAGNOSTIC: compare each stashed static's image'-value (staticValue, what the next generation
+     * inherits) against the live image's value (what the seed writer wrote). A mismatch on a pointer
+     * static means the metal writer materialises it wrong -- the next generation boots with a bad
+     * pointer. Prints one line per divergence; silent if all agree.
+     */
+    private static void checkHelperStatics()
+    {
+        discoverImage();
+        layoutDataRegions();
+        checkHelper(Magic.bytes("frameTable"));
+        checkHelper(Magic.bytes("handlerTable"));
+        checkHelper(Magic.bytes("classDir"));
+        checkHelper(Magic.bytes("heapAlloc"));
+        checkHelper(Magic.bytes("allocArray"));
+        checkHelper(Magic.bytes("gcCollect"));
+        checkHelper(Magic.bytes("instanceOfAddr"));
+        checkHelper(Magic.bytes("checkCastAddr"));
+        checkHelper(Magic.bytes("unwindAddr"));
+        checkHelper(Magic.bytes("reportFaultAddr"));
+        checkHelper(Magic.bytes("irqHandlerAddr"));
+    }
+
+    private static void checkHelper(byte[] nm)
+    {
+        long imgd = staticValue(Magic.bytes("vm/VM"), nm);              // value the written image gets
+        long live = Magic.load64(statImgAddr(Magic.bytes("vm/VM"), nm)); // value in the running (seed) image
+        if (imgd != live)
+        {
+            Uart.write(nm);
+            Uart.write(Magic.bytes(" img'="));
+            printHex(imgd);
+            Uart.write(Magic.bytes(" live="));
+            printHex(live);
+            Uart.putc(0x0A);
+        }
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
