@@ -57,4 +57,5 @@ public final class Intrinsics
     public static final int DISABLE_IRQ = 39;       // MSR DAIFSet, #3 (mask IRQ+FIQ)
     public static final int READ_CNTP_CTL_EL0 = 40;  // physical-timer control (bit2 = ISTATUS fired)
     public static final int SVC = 41;                // SVC #0 — supervisor call (cooperative yield)
+    public static final int SEV = 42;                // SEV — send event (wake secondary cores)
 }

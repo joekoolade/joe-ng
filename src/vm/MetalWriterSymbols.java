@@ -207,6 +207,7 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("wfe"))) { return Intrinsics.WFE; }
         if (utf8Is(n, Magic.bytes("isb"))) { return Intrinsics.ISB; }
         if (utf8Is(n, Magic.bytes("svc"))) { return Intrinsics.SVC; }
+        if (utf8Is(n, Magic.bytes("sev"))) { return Intrinsics.SEV; }
         if (utf8Is(n, Magic.bytes("dsb"))) { return Intrinsics.DSB; }
         if (utf8Is(n, Magic.bytes("gc"))) { return Intrinsics.GC; }
         if (utf8Is(n, Magic.bytes("call0"))) { return Intrinsics.CALL0; }

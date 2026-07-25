@@ -179,6 +179,57 @@ public final class VM
         Magic.disableIrq();                                // mask IRQ + FIQ at EL1
     }
 
+    // ===== SMP: wake the secondary cores out of the armstub spin table ======================
+    // The custom armstub leaves cores 1-3 in a WFE spin loop, each reading a per-core release slot in
+    // its own spin table (spin_cpu1/2/3 at physical 0xE0/0xE8/0xF0). Writing a jump address there and
+    // sending an event (SEV) releases that core: it branches to the address we wrote. We build a tiny
+    // secondary boot stub, point all three slots at it, and each woken core records itself in a flag
+    // word then parks -- proving all four cores run our code. (Per-core stacks + scheduling come next.)
+    static final long CORE_FLAGS = 0x0070_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8
+    static final long SEC_STUB   = 0x0071_0000L;          // secondary boot stub (fixed scratch, not GC'd)
+
+    static void bringUpSecondaries()
+    {
+        Magic.store64(CORE_FLAGS + 8L, 0L);               // clear the report flags for cores 1..3
+        Magic.store64(CORE_FLAGS + 16L, 0L);
+        Magic.store64(CORE_FLAGS + 24L, 0L);
+
+        // Build the stub: x0 = MPIDR & 3 (core id); store it to CORE_FLAGS + core*8; DSB; park in WFE.
+        long s = SEC_STUB;
+        int w = 0;
+        Magic.store32(s + w * 4L, A64Enc.mrs(0, A64Enc.MPIDR_EL1));   w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movz(9, 3, 0));             w += 1;   // x9 = 3
+        Magic.store32(s + w * 4L, A64Enc.andReg(0, 0, 9));          w += 1;   // x0 = core id
+        Magic.store32(s + w * 4L, A64Enc.movz(2, 0x0070, 1));       w += 1;   // x2 = 0x0070_0000
+        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 3));         w += 1;   // x1 = core*8
+        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));        w += 1;   // x2 = CORE_FLAGS + core*8
+        Magic.store32(s + w * 4L, A64Enc.strx(0, 2, 0));         w += 1;   // [x2] = core id
+        Magic.store32(s + w * 4L, A64Enc.dsb());                w += 1;
+        Magic.store32(s + w * 4L, A64Enc.wfe());               w += 1;   // park
+        Magic.store32(s + w * 4L, A64Enc.b(-1));              w += 1;   // b back to the WFE
+        Heap.publishCode(s, s + w * 4L);
+
+        Magic.dsb();                                       // stub + flags visible before we release cores
+        Magic.store64(0x00E0L, s);                         // spin_cpu1 -> stub
+        Magic.store64(0x00E8L, s);                         // spin_cpu2 -> stub
+        Magic.store64(0x00F0L, s);                         // spin_cpu3 -> stub
+        Magic.dsb();
+        Magic.sev();                                       // wake the WFE-parked cores
+
+        int up = 0;                                        // wait (<=0.5 s) for them to report in
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 2L;
+        while (up < 3 && Magic.readCNTPCT_EL0() < deadline)
+        {
+            up = 0;
+            if (Magic.load64(CORE_FLAGS + 8L) != 0L)  { up = up + 1; }
+            if (Magic.load64(CORE_FLAGS + 16L) != 0L) { up = up + 1; }
+            if (Magic.load64(CORE_FLAGS + 24L) != 0L) { up = up + 1; }
+        }
+        Uart.write(Magic.bytes("SMP: "));
+        printDec(up + 1);                                  // + the primary
+        Uart.write(Magic.bytes(" of 4 cores up\n"));
+    }
+
     // ===== M7: preemptive scheduling on the timer tick =====================================
     // A task table (parallel arrays) with per-task state. Task 0 is the boot flow; spawn() adds more,
     // each on its own heap stack. The periodic timer IRQ vectors to a context-switch stub that saves
@@ -941,6 +992,9 @@ public final class VM
             printDec(gen);
             Uart.putc(0x0A);
         }
+
+        // SMP: release cores 1-3 from the armstub spin table and have each report in.
+        bringUpSecondaries();
 
         // M7: scheduling on the GIC-400 tick, exercising every task state. taskA prints 'A' then
         // yield()s (cooperative SVC switch -- shows in QEMU too); taskB (producer) prints 'B', posts

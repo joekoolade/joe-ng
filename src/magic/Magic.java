@@ -35,6 +35,11 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code SEV} — send event; wakes other cores parked in WFE (used to release secondaries). */
+    public static void sev()
+    {
+        throw intrinsic();
+    }
     /** Data synchronization barrier (full system) — publish stores before a fetch. */
     public static void dsb()
     {

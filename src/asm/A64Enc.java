@@ -84,6 +84,13 @@ public final class A64Enc
     {
         return 0xD340_0000 | ((shift & 0x3F) << 16) | (0x3F << 10) | (rn << 5) | rd;
     }
+    /** {@code LSL Xd, Xn, #shift} — logical shift left (UBFM Xd, Xn, #(-shift%64), #(63-shift)). */
+    public static int lslImm(int rd, int rn, int shift)
+    {
+        int immr = (64 - (shift & 0x3F)) & 0x3F;
+        int imms = 63 - (shift & 0x3F);
+        return 0xD340_0000 | (immr << 16) | (imms << 10) | (rn << 5) | rd;
+    }
     /** {@code MOV Xd, SP} — via ADD Xd, SP, #0. */
     public static int movFromSp(int rd)
     {
@@ -333,6 +340,11 @@ public final class A64Enc
     {
         return 0xD400_0001;
     }
+    /** {@code SEV} — send event (wakes other cores from WFE; used to release secondaries). */
+    public static int sev()
+    {
+        return 0xD503_209F;
+    }
     /** {@code DC CVAU, Xt} — clean data cache line by VA to the point of unification. */
     public static int dcCvau(int rt)
     {
@@ -395,6 +407,7 @@ public final class A64Enc
 
     // Boot-path system registers (PLAN.md §5.1), packed for msr/mrs.
     public static final int CurrentEL   = sysReg(3, 0,  4, 2, 2);   // S3_0_C4_C2_2 (op2=2; op2=0 is SPSel)
+    public static final int MPIDR_EL1   = sysReg(3, 0,  0, 0, 5);   // affinity: low bits = core id
     public static final int HCR_EL2     = sysReg(3, 4,  1, 1, 0);
     public static final int CPTR_EL2    = sysReg(3, 4,  1, 1, 2);
     public static final int CNTHCTL_EL2 = sysReg(3, 4, 14, 1, 0);
