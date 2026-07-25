@@ -124,7 +124,10 @@ public final class VM
         }
         // A stub: save x0..x30, BL the Java handler, restore, ERET back to the interrupted code.
         long raw = Heap.alloc(0x400);
-        long stub = (raw + 0xFL) & ~0xFL;                  // 16-byte aligned code
+        // 16-byte-aligned code, but PAST the {TIB, status} header: aligning raw itself would land on
+        // raw+8 (the size header) when raw is only 8-aligned, and the stub's first instruction would
+        // clobber it -- leaving a heap block the GC sweep reads as a bogus size and walks off of.
+        long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;
         int w = 0;
         Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, 256));
         w += 1;
@@ -445,13 +448,14 @@ public final class VM
         {
             changed = false;
             long o = Heap.BASE;
-            while (o < Magic.load64(Heap.PTR_CELL))
+            long top = Magic.load64(Heap.PTR_CELL);
+            while (o < top)
             {
                 long st = Magic.load64(o + 8L);
                 long size = st & -8L;
-                if (size == 0L)
+                if (size == 0L || o + size > top || o + size <= o)
                 {
-                    o = Magic.load64(Heap.PTR_CELL);    // corrupt: stop
+                    o = top;    // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
                 }
                 else
                 {
@@ -466,13 +470,14 @@ public final class VM
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
         long o = Heap.BASE;
-        while (o < Magic.load64(Heap.PTR_CELL))
+        long stop = Magic.load64(Heap.PTR_CELL);
+        while (o < stop)
         {
             long st = Magic.load64(o + 8L);
             long size = st & -8L;
-            if (size == 0L)
+            if (size == 0L || o + size > stop || o + size <= o)
             {
-                o = Magic.load64(Heap.PTR_CELL);
+                o = stop;                              // corrupt / out-of-bounds: stop
             }
             else
             {
@@ -830,12 +835,6 @@ public final class VM
         // match the running image and its statics segment is reset to the as-written values.
         Uart.write(fixpointMaterialize() ? Magic.bytes("IMG") : Magic.bytes("x"));
         Uart.putc(0x0A);
-
-        // DIAGNOSTIC: the helper-address statics are NOT checked by 'H' (which only validates region
-        // boundaries + counts). staticValue() is what image'/next-gen gets; the live image holds what
-        // the seed writer wrote. Any mismatch is a static that comes out wrong in the written image
-        // (a stale/garbage pointer next gen would fault on). Prints nothing if they all agree.
-        checkHelperStatics();
 
         // M5.5d slice 2: EMMC single-sector read. Bring up the SD controller + card (auto-detecting
         // EMMC2 on real hardware vs EMMC under QEMU), read block 0, and check the boot-sector signature
@@ -2952,44 +2951,6 @@ public final class VM
         if (b == 3) { return Magic.bytes("vm/Beta"); }
         if (b == 4) { return Magic.bytes("vm/MyExc"); }
         return Magic.bytes("java/lang/Math");
-    }
-
-    /**
-     * DIAGNOSTIC: compare each stashed static's image'-value (staticValue, what the next generation
-     * inherits) against the live image's value (what the seed writer wrote). A mismatch on a pointer
-     * static means the metal writer materialises it wrong -- the next generation boots with a bad
-     * pointer. Prints one line per divergence; silent if all agree.
-     */
-    private static void checkHelperStatics()
-    {
-        discoverImage();
-        layoutDataRegions();
-        checkHelper(Magic.bytes("frameTable"));
-        checkHelper(Magic.bytes("handlerTable"));
-        checkHelper(Magic.bytes("classDir"));
-        checkHelper(Magic.bytes("heapAlloc"));
-        checkHelper(Magic.bytes("allocArray"));
-        checkHelper(Magic.bytes("gcCollect"));
-        checkHelper(Magic.bytes("instanceOfAddr"));
-        checkHelper(Magic.bytes("checkCastAddr"));
-        checkHelper(Magic.bytes("unwindAddr"));
-        checkHelper(Magic.bytes("reportFaultAddr"));
-        checkHelper(Magic.bytes("irqHandlerAddr"));
-    }
-
-    private static void checkHelper(byte[] nm)
-    {
-        long imgd = staticValue(Magic.bytes("vm/VM"), nm);              // value the written image gets
-        long live = Magic.load64(statImgAddr(Magic.bytes("vm/VM"), nm)); // value in the running (seed) image
-        if (imgd != live)
-        {
-            Uart.write(nm);
-            Uart.write(Magic.bytes(" img'="));
-            printHex(imgd);
-            Uart.write(Magic.bytes(" live="));
-            printHex(live);
-            Uart.putc(0x0A);
-        }
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
