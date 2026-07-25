@@ -189,15 +189,19 @@ public final class VM
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
     static final int  MAX_TASKS = 8;
+    static final int  NUM_SEM = 4;
     static final int  TASK_EMPTY = 0;
     static final int  TASK_READY = 1;
-    static final int  TASK_SLEEPING = 2;
+    static final int  TASK_SLEEPING = 2;    // waiting on a CNTPCT deadline (sleep)
+    static final int  TASK_BLOCKED = 3;     // waiting on a semaphore (an event another task/ISR posts)
 
     // The task table (parallel arrays, index = task id). Task 0 is the boot flow; spawn() adds more.
     static long[] taskSp;                   // saved context frame (SP) — the task's whole context
     static long[] taskStackBase;            // its heap stack's object base (a GC root keeps the stack alive)
-    static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_EMPTY
+    static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_BLOCKED / TASK_EMPTY
     static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
+    static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on
+    static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
     static int    curTask;                  // the task currently running
 
@@ -280,6 +284,48 @@ public final class VM
         }
     }
 
+    /**
+     * Wait on counting semaphore {@code s}: consume a token if one is available, else block this task
+     * (TASK_BLOCKED) until another task or an ISR {@link #semPost}s it, then re-check. IRQs are masked
+     * across the test-and-block so a post can't slip in between (lost-wakeup race); yield/SVC still works
+     * with IRQs masked, and each task resumes with its own PSTATE, so masking here is safe.
+     */
+    static void semWait(int s)
+    {
+        Magic.disableIrq();
+        while (semCount[s] <= 0)
+        {
+            taskState[curTask] = TASK_BLOCKED;
+            taskWaitOn[curTask] = s;
+            Magic.enableIrq();
+            taskYield();                                   // blocked: the scheduler skips us until posted
+            Magic.disableIrq();
+        }
+        semCount[s] = semCount[s] - 1;
+        Magic.enableIrq();
+    }
+
+    /** Post (signal) semaphore {@code s}: add a token and wake one task blocked on it, if any. */
+    static void semPost(int s)
+    {
+        Magic.disableIrq();
+        semCount[s] = semCount[s] + 1;
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskState[i] == TASK_BLOCKED && taskWaitOn[i] == s)
+            {
+                taskState[i] = TASK_READY;                 // woken; it re-checks the count when it runs
+                i = taskCount;                             // wake just one waiter
+            }
+            else
+            {
+                i = i + 1;
+            }
+        }
+        Magic.enableIrq();
+    }
+
     /** Demo task 1: print 'A', then voluntarily yield() the CPU (cooperative — works without the timer). */
     static void taskA()
     {
@@ -290,13 +336,24 @@ public final class VM
         }
     }
 
-    /** Demo task 2: print 'B', then sleep ~40 ms (blocked/timed — shows the SLEEPING state). */
+    /** Demo task 2 (producer): print 'B', post semaphore 0 to wake the consumer, then sleep ~40 ms. */
     static void taskB()
     {
         while (true)
         {
             Uart.putc(0x42);
+            semPost(0);
             sleep(40L);
+        }
+    }
+
+    /** Demo task 3 (consumer): block on semaphore 0 until the producer posts, then print 'C'. */
+    static void taskC()
+    {
+        while (true)
+        {
+            semWait(0);
+            Uart.putc(0x43);
         }
     }
 
@@ -392,9 +449,10 @@ public final class VM
     static void startScheduler()
     {
         if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }    // dead calls: make schedule/yieldPick/
-        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // taskA/taskB compiled + address-stashed
+        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // taskA/taskB/taskC compiled + stashed
         if (taskAAddr == 0L) { taskA(); }
         if (taskBAddr == 0L) { taskB(); }
+        if (taskCAddr == 0L) { taskC(); }
 
         long irqStub = buildSwitchStub(scheduleAddr, false);
         long svcStub = buildSwitchStub(yieldPickAddr, true);
@@ -412,11 +470,14 @@ public final class VM
         taskStackBase = new long[MAX_TASKS];
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
+        taskWaitOn = new int[MAX_TASKS];
+        semCount = new int[NUM_SEM];
         taskState[0] = TASK_READY;                          // task 0 = the boot flow (SP saved on tick 1)
         taskCount = 1;
         curTask = 0;
-        spawn(taskAAddr);                                  // task 1
-        spawn(taskBAddr);                                  // task 2
+        spawn(taskAAddr);                                  // task 1 (yield)
+        spawn(taskBAddr);                                  // task 2 (producer: posts sem 0)
+        spawn(taskCAddr);                                  // task 3 (consumer: blocks on sem 0)
 
         Gic.init(Gic.PPI_CNTPNS);
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
@@ -769,6 +830,7 @@ public final class VM
     static long yieldPickAddr;         // VM.yieldPick(J)J — the SVC/yield-path switcher (writer-stashed)
     static long taskAAddr;             // VM.taskA()V — demo task entry (writer-stashed)
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
+    static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
@@ -839,13 +901,13 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // M7: scheduling on the GIC-400 tick. taskA prints 'A' then yield()s (a cooperative SVC-driven
-        // switch -- works even without timer delivery, so it shows in QEMU too); taskB prints 'B' then
-        // sleep(40ms) (the SLEEPING state); the boot flow is task 0, printing '.' and yield()ing each
-        // pass. The ~10 ms timer ALSO preempts on real HW (armstub8-joe.bin puts PPI 30 in group 1).
-        // So '.'/'A' interleave fast via yield, 'B' appears at its own ~40 ms sleep cadence. Bounded,
+        // M7: scheduling on the GIC-400 tick, exercising every task state. taskA prints 'A' then
+        // yield()s (cooperative SVC switch -- shows in QEMU too); taskB (producer) prints 'B', posts
+        // semaphore 0, then sleep(40ms) (SLEEPING); taskC (consumer) blocks on semaphore 0 (BLOCKED)
+        // and prints 'C' only when B posts it -- so every 'B' is followed by a 'C'. The boot flow is
+        // task 0, printing '.' and yield()ing. The ~10 ms timer also preempts on real HW. Bounded,
         // then re-mask so the self-build fixpoint below runs undisturbed.
-        Uart.write(Magic.bytes("sched (.=main A=yield B=sleep): "));
+        Uart.write(Magic.bytes("sched (.=main A=yield B=post->C blocked): "));
         startScheduler();
         long t0 = Magic.readCNTPCT_EL0();
         while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 4L)   // ~250 ms
@@ -3234,6 +3296,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("yieldPickAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("yieldPick"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("taskAAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskA"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskBAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskB"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("taskCAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskC"), Magic.bytes("()V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
