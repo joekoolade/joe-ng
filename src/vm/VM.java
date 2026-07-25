@@ -205,13 +205,6 @@ public final class VM
     static int    taskCount;                // number of live task slots
     static int    curTask;                  // the task currently running
 
-    static final int UART_SEM = 1;          // posted by the mini-UART RX ISR, waited on by the reader task
-    static final int RXBUF_N  = 64;         // power of two (mask-wrap)
-    static byte[] rxBuf;                     // mini-UART RX ring buffer (ISR writes head, reader reads tail)
-    static int    rxHead, rxTail;
-    static byte[] txBuf;                     // mini-UART TX ring buffer (producer writes head, ISR drains tail)
-    static int    txHead, txTail;
-    static int    txIrqCount;                // TX interrupts serviced (proof output went through the ISR)
 
     /**
      * The heart of the switcher, shared by the timer path ({@link #schedule}) and the yield path
@@ -263,31 +256,11 @@ public final class VM
             Gic.end(id);
             return pickNext(curSp);
         }
-        if (id == Bcm2711.AUX_SPI)                         // mini-UART: RX and/or TX (shared AUX interrupt)
+        if (id == Bcm2711.AUX_SPI)                         // mini-UART (shared RX/TX) -> the Console device
         {
-            boolean gotRx = false;                         // RX: drain received bytes into the ring buffer
-            while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_RX_READY)) != 0)
+            if (Console.onIrq())                           // drains RX+TX; true if RX bytes arrived
             {
-                rxBuf[rxHead] = (byte) Magic.load32(Bcm2711.AUX_MU_IO_REG);
-                rxHead = (rxHead + 1) & (RXBUF_N - 1);
-                gotRx = true;
-            }
-            if (gotRx)
-            {
-                semPostRaw(UART_SEM);                      // wake the reader (ISR-safe post)
-            }
-            if (txTail != txHead)                          // TX: push queued bytes while the FIFO has room
-            {
-                txIrqCount = txIrqCount + 1;
-                while (txTail != txHead && (Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_TX_EMPTY)) != 0)
-                {
-                    Magic.store32(Bcm2711.AUX_MU_IO_REG, txBuf[txTail] & 0xFF);
-                    txTail = (txTail + 1) & (RXBUF_N - 1);
-                }
-                if (txTail == txHead)                      // queue drained: stop the TX interrupt re-firing
-                {
-                    Magic.store32(Bcm2711.AUX_MU_IER_REG, Bcm2711.IER_RX_ENABLE);
-                }
+                semPostRaw(Console.RX_SEM);                // wake a blocked reader (ISR-safe post)
             }
             Gic.end(id);
             return pickNext(curSp);
@@ -405,55 +378,21 @@ public final class VM
     }
 
     /**
-     * Demo task 4 (device reader): block on UART_SEM until the mini-UART RX ISR posts it, then drain
-     * every received byte from the ring buffer and echo it. This is a real driver-style wait: the task
-     * consumes no CPU while idle -- it is woken by the hardware interrupt, not by polling.
+     * Demo task 4 (interactive shell over the {@link Console} device): read a line (blocking on the RX
+     * interrupt, echoing as you type), then write it back with a prefix. All I/O goes through Console --
+     * this task never touches the UART, blocks while idle, and its writes leave via the TX interrupt.
      */
     static void taskR()
     {
+        byte[] line = new byte[64];
         while (true)
         {
-            semWait(UART_SEM);
-            while (rxTail != rxHead)
-            {
-                byte b = rxBuf[rxTail];
-                rxTail = (rxTail + 1) & (RXBUF_N - 1);
-                Uart.putc(b);                              // echo the keystroke
-            }
+            Console.write(Magic.bytes("> "));
+            int n = Console.readLine(line, 64);
+            Console.write(Magic.bytes("you said: "));
+            Console.write(line, 0, n);
+            Console.putc((byte) 0x0A);
         }
-    }
-
-    /** Enable mini-UART receive interrupts and route them through the GIC (SPI 125) to {@link #schedule}. */
-    static void uartRxOn()
-    {
-        rxBuf = new byte[RXBUF_N];
-        rxHead = 0;
-        rxTail = 0;
-        txBuf = new byte[RXBUF_N];
-        txHead = 0;
-        txTail = 0;
-        txIrqCount = 0;
-        Gic.initSpi(Bcm2711.AUX_SPI);
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, Bcm2711.IER_RX_ENABLE);   // interrupt when RX data arrives
-    }
-
-    /**
-     * Queue {@code msg} for interrupt-driven transmission: append it to the TX ring buffer and enable the
-     * TX interrupt. The bytes leave via the ISR ({@link #schedule}) as the FIFO drains -- the caller does
-     * NOT busy-wait on the transmit FIFO. Assumes the message fits the free ring space (demo-sized).
-     */
-    static void uartQueue(byte[] msg)
-    {
-        int i = 0;
-        while (i < msg.length)
-        {
-            Magic.disableIrq();
-            txBuf[txHead] = msg[i];
-            txHead = (txHead + 1) & (RXBUF_N - 1);
-            Magic.enableIrq();
-            i = i + 1;
-        }
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, Bcm2711.IER_RX_ENABLE | Bcm2711.IER_TX_ENABLE);
     }
 
     /** ~5 ms pause (counter-based, survives preemption) so the main task prints at a visible rate. */
@@ -1023,40 +962,27 @@ public final class VM
         printDec((int) ticks);
         Uart.write(Magic.bytes(" preemptions\n"));
 
-        // M7 capstone: block on a real device interrupt. Park the phase-1 tasks, enable the mini-UART
-        // RX interrupt (routed through the GIC as SPI 125), and let the reader task -- which is BLOCKED
-        // on UART_SEM, consuming no CPU -- echo whatever is typed, woken by the RX ISR posting the
-        // semaphore. Needs armstub8-joe.bin (group-1 SPIs) to deliver, so keystrokes echo on real HW;
-        // QEMU won't deliver the SPI, so it just idles for the window.
+        // M7 capstone: an interrupt-driven Console device. Park the phase-1 tasks and hand the mini-UART
+        // to Console (RX/TX ring buffers + GIC SPI 125). taskR is now a shell: it blocks in
+        // Console.readLine (woken by the RX ISR, echoing as you type) and writes the line back via
+        // Console.write (queued, drained by the TX ISR) -- never touching the UART itself. Needs
+        // armstub8-joe.bin (group-1 SPIs) to deliver, so it's interactive on real HW; QEMU idles the window.
         taskState[1] = TASK_BLOCKED; taskWaitOn[1] = 3;    // park taskA/taskB/taskC on a dead semaphore
         taskState[2] = TASK_BLOCKED; taskWaitOn[2] = 3;
         taskState[3] = TASK_BLOCKED; taskWaitOn[3] = 3;
-        uartRxOn();
+        Console.init();
         Magic.writeCNTP_CTL_EL0(1);            // re-arm the tick and re-unmask IRQs (phase 1 stopped both)
         Magic.enableIrq();
-        Uart.write(Magic.bytes("type keys -> echoed by a blocked reader task (2s): "));
+        Uart.write(Magic.bytes("console shell (type lines, 4s):\n"));
         long u0 = Magic.readCNTPCT_EL0();
-        while (Magic.readCNTPCT_EL0() < u0 + Magic.readCNTFRQ_EL0() * 2L)   // ~2 s input window
+        while (Magic.readCNTPCT_EL0() < u0 + Magic.readCNTFRQ_EL0() * 4L)   // ~4 s interactive window
         {
-            schedPause();                      // idle; a UART IRQ during this preempts to the reader
+            schedPause();                      // idle; the shell task runs when the RX ISR wakes it
             taskYield();
         }
-
-        // TX side: queue a whole line for interrupt-driven transmission. uartQueue() returns immediately
-        // (no busy-wait on the FIFO); the bytes leave via the TX ISR as the FIFO drains, while main just
-        // yields. On real HW the line appears and txIrqCount > 0; in QEMU (SPI not delivered) it won't.
-        Uart.write(Magic.bytes("\ntxirq: "));
-        uartQueue(Magic.bytes("[this line was transmitted by the TX interrupt handler]\n"));
-        long txWait = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0();      // <=1 s safety bound
-        while (txTail != txHead && Magic.readCNTPCT_EL0() < txWait)
-        {
-            taskYield();                       // the ISR drains the queue in the background
-        }
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);   // disable UART interrupts
+        Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);   // detach the UART interrupt
         stopTimerTick();
-        Uart.write(Magic.bytes("txirq: sent via "));
-        printDec(txIrqCount);
-        Uart.write(Magic.bytes(" interrupts\n"));
+        Uart.putc(0x0A);
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
