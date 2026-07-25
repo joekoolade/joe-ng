@@ -40,6 +40,36 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code MSR MAIR_EL1} — set the memory-attribute indirection register. */
+    public static void writeMAIR_EL1(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR TCR_EL1} — set the translation-control register. */
+    public static void writeTCR_EL1(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code MSR TTBR0_EL1} — set the translation-table base register. */
+    public static void writeTTBR0_EL1(long v)
+    {
+        throw intrinsic();
+    }
+    /** {@code TLBI VMALLE1} — invalidate all EL1 stage-1 TLB entries. */
+    public static void tlbiAll()
+    {
+        throw intrinsic();
+    }
+    /** Acquire the spinlock at {@code addr} (a shared 32-bit word); spins until held. */
+    public static void spinLock(long addr)
+    {
+        throw intrinsic();
+    }
+    /** Release the spinlock at {@code addr}. */
+    public static void spinUnlock(long addr)
+    {
+        throw intrinsic();
+    }
     /** Data synchronization barrier (full system) — publish stores before a fetch. */
     public static void dsb()
     {

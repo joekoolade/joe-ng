@@ -58,4 +58,10 @@ public final class Intrinsics
     public static final int READ_CNTP_CTL_EL0 = 40;  // physical-timer control (bit2 = ISTATUS fired)
     public static final int SVC = 41;                // SVC #0 — supervisor call (cooperative yield)
     public static final int SEV = 42;                // SEV — send event (wake secondary cores)
+    public static final int WRITE_MAIR_EL1 = 43;     // MSR MAIR_EL1  (memory attributes)
+    public static final int WRITE_TCR_EL1 = 44;      // MSR TCR_EL1   (translation control)
+    public static final int WRITE_TTBR0_EL1 = 45;    // MSR TTBR0_EL1 (page table base)
+    public static final int TLBI_ALL = 46;           // TLBI VMALLE1  (flush EL1 TLB)
+    public static final int SPIN_LOCK = 47;          // LDAXR/STLXR test-and-set acquire
+    public static final int SPIN_UNLOCK = 48;        // STLR release
 }

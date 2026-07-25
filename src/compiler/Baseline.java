@@ -1190,6 +1190,35 @@ public final class Baseline
         {
             cb.emit(A64Enc.sev());
         }
+        else if (id == Intrinsics.WRITE_MAIR_EL1)
+        {
+            cb.emit(A64Enc.msr(A64Enc.MAIR_EL1, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_TCR_EL1)
+        {
+            cb.emit(A64Enc.msr(A64Enc.TCR_EL1, popReg()));
+        }
+        else if (id == Intrinsics.WRITE_TTBR0_EL1)
+        {
+            cb.emit(A64Enc.msr(A64Enc.TTBR0_EL1, popReg()));
+        }
+        else if (id == Intrinsics.TLBI_ALL)
+        {
+            cb.emit(A64Enc.tlbiVmalle1());
+        }
+        else if (id == Intrinsics.SPIN_LOCK)
+        {
+            int a = popReg();                               // address of the lock word
+            cb.emit(A64Enc.movz(16, 1, 0));                 // x16 = 1 (value to store on acquire)
+            cb.emit(A64Enc.ldaxrw(17, a));                  // retry: w17 = *lock  (acquire)
+            cb.emit(A64Enc.cbnz(17, -1));                   // held -> spin
+            cb.emit(A64Enc.stlxrw(17, 16, a));              // try to store 1; w17 = status
+            cb.emit(A64Enc.cbnz(17, -3));                   // store failed -> retry (back to ldaxr)
+        }
+        else if (id == Intrinsics.SPIN_UNLOCK)
+        {
+            cb.emit(A64Enc.stlrw(31, popReg()));            // STLR wzr, [lock]  (release)
+        }
         else if (id == Intrinsics.DSB)
         {
             cb.emit(A64Enc.dsb());

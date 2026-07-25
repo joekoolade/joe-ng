@@ -188,15 +188,70 @@ public final class VM
     static final long CORE_FLAGS = 0x0070_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8
     static final long SEC_STUB   = 0x0071_0000L;          // secondary boot stub (fixed scratch, not GC'd)
     static final int  SEC_STACK_HI = 0x0200;              // per-core stack base 0x0200_0000 + core*1MiB
+    static final long PT_BASE    = 0x0072_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
+    static final long LOCK_ADDR  = 0x0073_0000L;          // shared HW-spinlock word (cacheable RAM)
 
     /**
-     * Secondary-core entry (runs on cores 1..3 at EL2, on a per-core stack set by the boot stub). Record
-     * that this core is up, then run a bounded work loop printing the core id -- genuine parallel Java on
-     * all four cores. Single-byte writes buffer in the mini-UART FIFO, so the ids interleave without a
-     * lock (a proper spinlock for multi-byte critical sections is the next step). Then park.
+     * Build a 4 KiB-granule identity map (VA=PA) of the low 4 GiB into the page tables at {@link #PT_BASE}:
+     * one L1 table of 4 entries, each pointing to an L2 table of 512 * 2 MiB block descriptors. RAM (below
+     * 0xFC00_0000) is Normal Inner-Shareable Write-Back cacheable (attr idx 0); the peripheral window
+     * (>= 0xFC00_0000: UART/mailbox regs, ARM-local, GIC) is Device-nGnRnE (attr idx 1). Built once by the
+     * primary before any core enables its MMU.
+     */
+    static void buildPageTables()
+    {
+        int i = 0;
+        while (i < 4)
+        {
+            long l2 = PT_BASE + (i + 1) * 0x1000L;
+            Magic.store64(PT_BASE + i * 8L, l2 | 3L);      // L1 table descriptor -> L2 table
+            int j = 0;
+            while (j < 512)
+            {
+                long a = ((long) i << 30) + ((long) j << 21);   // i*1GiB + j*2MiB (block base, 2MiB aligned)
+                long desc;
+                if (a >= 0xFC00_0000L)
+                {
+                    desc = a | 0x405L;                     // block | AF | AttrIdx=1 (Device)
+                }
+                else
+                {
+                    desc = a | 0x701L;                     // block | AF | SH=inner | AttrIdx=0 (Normal WB)
+                }
+                Magic.store64(l2 + j * 8L, desc);
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        Magic.dsb();                                       // tables visible to every core's table walk
+    }
+
+    /**
+     * Enable the identity-mapped MMU + caches on the current core (each core calls this): set the memory
+     * attributes and translation control, point TTBR0 at the shared tables, flush the TLB, then turn on
+     * SCTLR.M/C/I. After this, RAM is cacheable and coherent so HW atomics (LDXR/STXR) work.
+     */
+    static void enableMmuThisCore()
+    {
+        Magic.writeMAIR_EL1(0xFFL);                        // idx0 = Normal WB RW-alloc (0xFF); idx1 = Device (0x00)
+        Magic.writeTCR_EL1(0x2_0080_3520L);               // T0SZ=32, 4KiB, IRGN/ORGN=WB, SH0=inner, EPD1, IPS=40-bit
+        Magic.writeTTBR0_EL1(PT_BASE);
+        Magic.dsb();
+        Magic.tlbiAll();
+        Magic.dsb();
+        Magic.isb();
+        Magic.writeSCTLR_EL1(0x30D0_1805L);               // EmitBoot base 0x30D00800 | M(1) | C(4) | I(0x1000)
+        Magic.isb();
+    }
+
+    /**
+     * Secondary-core entry (reached by the boot stub at EL1, on a per-core stack, with its MMU still off).
+     * Enable the identity-mapped MMU first -- so this core is cache-coherent with the others before it
+     * touches any shared memory -- then report in, wait for GO, and join the shared work queue. Then park.
      */
     static void secondaryMain(int core)
     {
+        enableMmuThisCore();                               // caches on: coherent with the primary + the lock
         Magic.store64(CORE_FLAGS + core * 8L, core);       // report in (the primary counts these)
         Magic.dsb();
         while (Magic.load64(CORE_FLAGS) == 0L)             // wait for the primary's GO (slot 0)
@@ -209,69 +264,29 @@ public final class VM
         }
     }
 
-    // ----- SMP mutual exclusion: a Lamport bakery lock -----------------------------------------
-    // The MMU is off, so RAM is Device memory and the exclusive monitor (LDXR/STXR) is unreliable --
-    // so we use a lock built from plain (single-copy-atomic) loads/stores + DSB barriers, which are
-    // well defined on Device memory. Device accesses bypass the caches, so all cores see each other's
-    // writes; the barriers give the ordering the algorithm needs.
-    static int[] bkChoosing;                               // [4] per-core "picking a number" flags
-    static int[] bkNumber;                                 // [4] per-core ticket numbers (0 = not waiting)
-
-    static void bakeryLock(int me)
-    {
-        bkChoosing[me] = 1;
-        Magic.dsb();
-        int max = 0;                                       // ticket = 1 + max of all outstanding tickets
-        int j = 0;
-        while (j < 4)
-        {
-            if (bkNumber[j] > max) { max = bkNumber[j]; }
-            j = j + 1;
-        }
-        bkNumber[me] = max + 1;
-        Magic.dsb();
-        bkChoosing[me] = 0;
-        Magic.dsb();
-        j = 0;
-        while (j < 4)                                      // wait until we have the lowest (ticket, core)
-        {
-            while (bkChoosing[j] != 0)                     // don't compare against a core mid-pick
-            {
-            }
-            while (bkNumber[j] != 0
-                   && (bkNumber[j] < bkNumber[me]
-                       || (bkNumber[j] == bkNumber[me] && j < me)))
-            {
-            }
-            j = j + 1;
-        }
-    }
-
-    static void bakeryUnlock(int me)
-    {
-        Magic.dsb();
-        bkNumber[me] = 0;                                  // leave the queue
-        Magic.dsb();
-    }
+    // ----- SMP mutual exclusion: a hardware spinlock -----------------------------------------------
+    // Now that the MMU maps RAM as Normal Inner-Shareable cacheable, the exclusive monitor works, so a
+    // real LDAXR/STLXR test-and-set spinlock (Magic.spinLock/spinUnlock over the word at LOCK_ADDR)
+    // gives mutual exclusion across all four cores. That the demo below distributes 24 jobs with no
+    // duplicates is the proof the atomics -- and therefore the cache-coherent MMU map -- are working.
 
     static int smpJob;                                     // shared job counter (the "run queue")
     static final int SMP_NJOBS = 24;
 
     /**
-     * The SMP work loop each core runs: take the next job from the shared counter under the bakery lock
-     * (so no two cores get the same one), and print which core ran which job. The whole "grab + print"
-     * is inside the critical section, so the output lines are clean -- proof the lock serialises all four
-     * cores -- and the jobs are distributed across them: real work sharing on a shared run queue.
+     * The SMP work loop each core runs: take the next job from the shared counter under the spinlock (so
+     * no two cores get the same one), and print which core ran which job. The whole "grab + print" is the
+     * critical section, so the output lines are clean and the jobs are distributed across the cores.
      */
     static void smpWork(int core)
     {
         while (true)
         {
-            bakeryLock(core);
+            Magic.spinLock(LOCK_ADDR);
             int n = smpJob;
             if (n >= SMP_NJOBS)
             {
-                bakeryUnlock(core);
+                Magic.spinUnlock(LOCK_ADDR);
                 return;
             }
             smpJob = n + 1;
@@ -280,37 +295,49 @@ public final class VM
             Uart.putc((byte) 0x3A);                        // ':'
             printDec(n);                                   // job number
             Uart.putc((byte) 0x20);                        // ' '
-            bakeryUnlock(core);
+            Magic.spinUnlock(LOCK_ADDR);
         }
     }
 
     static void bringUpSecondaries()
     {
         if (secondaryMainAddr == 0L) { secondaryMain(0); } // dead call: compile + stash secondaryMain
-        bkChoosing = new int[4];                           // bakery-lock state (shared by all cores)
-        bkNumber = new int[4];
+        Magic.store32(LOCK_ADDR, 0);                       // HW spinlock word = free (cacheable RAM, MMU on)
         smpJob = 0;
         Magic.store64(CORE_FLAGS + 0L, 0L);                // GO = 0 (released after we report cores up)
         Magic.store64(CORE_FLAGS + 8L, 0L);                // clear the report flags for cores 1..3
         Magic.store64(CORE_FLAGS + 16L, 0L);
         Magic.store64(CORE_FLAGS + 24L, 0L);
 
-        // Stub: x0 = MPIDR & 3 (core id) -> set a per-core SP (0x0200_0000 + core*1MiB), then
-        // BL secondaryMain(core). It never returns; a WFE park follows as a backstop.
+        // Stub (runs on each secondary at EL2): x0 = MPIDR & 3 (core id, becomes secondaryMain's arg),
+        // set the per-core EL1 stack + a sane EL1 SCTLR, then drop EL2 -> EL1 (mirroring EmitBoot) and
+        // ERET straight into secondaryMain(core). x0 survives the ERET.
         long s = SEC_STUB;
+        int lo = (int) (secondaryMainAddr & 0xFFFFL);
+        int mid = (int) ((secondaryMainAddr >>> 16) & 0xFFFFL);
+        int hi = (int) ((secondaryMainAddr >>> 32) & 0xFFFFL);
         int w = 0;
-        Magic.store32(s + w * 4L, A64Enc.mrs(0, A64Enc.MPIDR_EL1));   w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movz(9, 3, 0));             w += 1;   // x9 = 3
-        Magic.store32(s + w * 4L, A64Enc.andReg(0, 0, 9));          w += 1;   // x0 = core id
-        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 20));        w += 1;   // x1 = core * 1MiB
-        Magic.store32(s + w * 4L, A64Enc.movz(2, SEC_STACK_HI, 1)); w += 1;   // x2 = 0x0200_0000
-        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));        w += 1;   // x2 = SP for this core
-        Magic.store32(s + w * 4L, A64Enc.movToSp(2));            w += 1;   // mov sp, x2
-        long blAddr = s + w * 4L;
-        Magic.store32(blAddr, A64Enc.bl((int) ((secondaryMainAddr - blAddr) / 4L)));   // secondaryMain(core)
-        w += 1;
-        Magic.store32(s + w * 4L, A64Enc.wfe());               w += 1;   // backstop park
-        Magic.store32(s + w * 4L, A64Enc.b(-1));              w += 1;
+        Magic.store32(s + w * 4L, A64Enc.mrs(0, A64Enc.MPIDR_EL1));      w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movz(9, 3, 0));                w += 1;   // x9 = 3
+        Magic.store32(s + w * 4L, A64Enc.andReg(0, 0, 9));             w += 1;   // x0 = core id
+        Magic.store32(s + w * 4L, A64Enc.lslImm(1, 0, 20));           w += 1;   // x1 = core * 1MiB
+        Magic.store32(s + w * 4L, A64Enc.movz(2, SEC_STACK_HI, 1));    w += 1;   // x2 = 0x0200_0000
+        Magic.store32(s + w * 4L, A64Enc.addReg(2, 2, 1));           w += 1;   // x2 = per-core stack top
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SP_EL1, 2));      w += 1;   // SP_EL1 = stack top
+        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x0800, 0));         w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movk(3, 0x30D0, 1));         w += 1;   // x3 = 0x30D0_0800
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SCTLR_EL1, 3));   w += 1;   // EL1 SCTLR (MMU off, RES1)
+        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x8000, 1));         w += 1;
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.HCR_EL2, 3));     w += 1;   // HCR_EL2.RW = 1
+        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x33FF, 0));         w += 1;
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.CPTR_EL2, 3));    w += 1;   // don't trap FP to EL2
+        Magic.store32(s + w * 4L, A64Enc.movz(3, 0x03C5, 0));         w += 1;
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.SPSR_EL2, 3));    w += 1;   // target = EL1h, DAIF masked
+        Magic.store32(s + w * 4L, A64Enc.movz(3, lo, 0));             w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movk(3, mid, 1));            w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movk(3, hi, 2));            w += 1;   // x3 = &secondaryMain
+        Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
+        Magic.store32(s + w * 4L, A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
         Heap.publishCode(s, s + w * 4L);
 
         Magic.dsb();                                       // stub visible before we release cores
@@ -1086,6 +1113,13 @@ public final class VM
         printDec(Uart.coreHz / 1000000);                  // MHz (0 = mailbox gave no answer)
         Uart.write(Magic.bytes("MHz\n"));
 
+        // Enable the identity-mapped MMU now -- after the mailbox (the one DMA path) has run with the MMU
+        // off, and before anything that needs cacheable/coherent RAM (SMP + the HW spinlock). RAM becomes
+        // Normal cacheable, MMIO stays Device; every secondary core enables it too (see secondaryMain).
+        buildPageTables();
+        enableMmuThisCore();
+        Uart.write(Magic.bytes("mmu on\n"));
+
         // Self-hosting generation counter (M5.5d demo): a scratch SD sector survives across reboots,
         // so each time joe-ng reproduces + persists itself and reboots into the image it wrote, this
         // climbs -- visible proof the metal-written image is what booted, not the seed's.
@@ -1100,10 +1134,10 @@ public final class VM
 
         // SMP: release cores 1-3 from the armstub spin table; each reports in and then waits for GO.
         bringUpSecondaries();
-        // Per-core scheduling: all four cores pull jobs from a shared run queue, coordinated by the
-        // bakery lock. Each "cN:J" is one core taking one job; the lock guarantees no job is taken
-        // twice and serialises the output. The primary joins in as core 0. Genuine work sharing across
-        // the four A72s with software mutual exclusion (no HW atomics, since the MMU is off).
+        // Per-core scheduling: all four cores pull jobs from a shared run queue, coordinated by a real
+        // hardware spinlock (LDAXR/STLXR, working now that the MMU maps RAM cacheable/coherent). Each
+        // "cN:J" is one core taking one job; the lock guarantees no job is taken twice and serialises the
+        // output. The primary joins in as core 0. Genuine work sharing across the four A72s.
         Uart.write(Magic.bytes("smp jobs (cCORE:JOB) across 4 cores:\n"));
         Magic.store64(CORE_FLAGS + 0L, 1L);                // GO
         Magic.dsb();

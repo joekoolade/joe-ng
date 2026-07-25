@@ -219,6 +219,12 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("writeCNTHCTL_EL2"))) { return Intrinsics.WRITE_CNTHCTL_EL2; }
         if (utf8Is(n, Magic.bytes("writeCNTVOFF_EL2"))) { return Intrinsics.WRITE_CNTVOFF_EL2; }
         if (utf8Is(n, Magic.bytes("writeSCTLR_EL1"))) { return Intrinsics.WRITE_SCTLR_EL1; }
+        if (utf8Is(n, Magic.bytes("writeMAIR_EL1"))) { return Intrinsics.WRITE_MAIR_EL1; }
+        if (utf8Is(n, Magic.bytes("writeTCR_EL1"))) { return Intrinsics.WRITE_TCR_EL1; }
+        if (utf8Is(n, Magic.bytes("writeTTBR0_EL1"))) { return Intrinsics.WRITE_TTBR0_EL1; }
+        if (utf8Is(n, Magic.bytes("tlbiAll"))) { return Intrinsics.TLBI_ALL; }
+        if (utf8Is(n, Magic.bytes("spinLock"))) { return Intrinsics.SPIN_LOCK; }
+        if (utf8Is(n, Magic.bytes("spinUnlock"))) { return Intrinsics.SPIN_UNLOCK; }
         if (utf8Is(n, Magic.bytes("writeSPSR_EL2"))) { return Intrinsics.WRITE_SPSR_EL2; }
         if (utf8Is(n, Magic.bytes("writeELR_EL2"))) { return Intrinsics.WRITE_ELR_EL2; }
         if (utf8Is(n, Magic.bytes("writeCPACR_EL1"))) { return Intrinsics.WRITE_CPACR_EL1; }

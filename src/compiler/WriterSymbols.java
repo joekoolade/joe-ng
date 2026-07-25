@@ -128,6 +128,12 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "isb()V" -> Intrinsics.ISB;
         case "svc()V" -> Intrinsics.SVC;
         case "sev()V" -> Intrinsics.SEV;
+        case "writeMAIR_EL1(J)V" -> Intrinsics.WRITE_MAIR_EL1;
+        case "writeTCR_EL1(J)V" -> Intrinsics.WRITE_TCR_EL1;
+        case "writeTTBR0_EL1(J)V" -> Intrinsics.WRITE_TTBR0_EL1;
+        case "tlbiAll()V" -> Intrinsics.TLBI_ALL;
+        case "spinLock(J)V" -> Intrinsics.SPIN_LOCK;
+        case "spinUnlock(J)V" -> Intrinsics.SPIN_UNLOCK;
         case "dsb()V" -> Intrinsics.DSB;
         case "dcCVAU(J)V" -> Intrinsics.DC_CVAU;
         case "icIALLU()V" -> Intrinsics.IC_IALLU;

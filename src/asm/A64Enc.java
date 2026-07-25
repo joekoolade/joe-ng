@@ -345,6 +345,26 @@ public final class A64Enc
     {
         return 0xD503_209F;
     }
+    /** {@code TLBI VMALLE1} — invalidate all EL1 stage-1 TLB entries (after installing page tables). */
+    public static int tlbiVmalle1()
+    {
+        return 0xD508_871F;
+    }
+    /** {@code LDAXR Wt, [Xn]} — load-acquire exclusive (32-bit); starts a spinlock acquire. */
+    public static int ldaxrw(int rt, int rn)
+    {
+        return 0x885F_FC00 | (rn << 5) | rt;
+    }
+    /** {@code STLXR Ws, Wt, [Xn]} — store-release exclusive (32-bit); Ws = 0 on success. */
+    public static int stlxrw(int rs, int rt, int rn)
+    {
+        return 0x8800_FC00 | (rs << 16) | (rn << 5) | rt;
+    }
+    /** {@code STLR Wt, [Xn]} — store-release (32-bit); releases a spinlock. */
+    public static int stlrw(int rt, int rn)
+    {
+        return 0x889F_FC00 | (rn << 5) | rt;
+    }
     /** {@code DC CVAU, Xt} — clean data cache line by VA to the point of unification. */
     public static int dcCvau(int rt)
     {
@@ -414,6 +434,10 @@ public final class A64Enc
     public static final int CNTVOFF_EL2 = sysReg(3, 4, 14, 0, 3);
     public static final int SCTLR_EL1   = sysReg(3, 0,  1, 0, 0);
     public static final int CPACR_EL1   = sysReg(3, 0,  1, 0, 2);
+    public static final int MAIR_EL1    = sysReg(3, 0, 10, 2, 0);   // memory attribute indirection
+    public static final int TCR_EL1     = sysReg(3, 0,  2, 0, 2);   // translation control
+    public static final int TTBR0_EL1   = sysReg(3, 0,  2, 0, 0);   // translation table base
+    public static final int SP_EL1      = sysReg(3, 4,  4, 1, 0);   // EL1 stack pointer (set from EL2)
     public static final int SPSR_EL2    = sysReg(3, 4,  4, 0, 0);
     public static final int ELR_EL2     = sysReg(3, 4,  4, 0, 1);
     public static final int VBAR_EL1    = sysReg(3, 0, 12, 0, 0);   // exception vector base
