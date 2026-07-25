@@ -30,6 +30,11 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code SVC #0} — supervisor call; traps to the EL1 sync vector (used to yield the CPU). */
+    public static void svc()
+    {
+        throw intrinsic();
+    }
     /** Data synchronization barrier (full system) — publish stores before a fetch. */
     public static void dsb()
     {

@@ -1182,6 +1182,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.isb());
         }
+        else if (id == Intrinsics.SVC)
+        {
+            cb.emit(A64Enc.svc0());
+        }
         else if (id == Intrinsics.DSB)
         {
             cb.emit(A64Enc.dsb());

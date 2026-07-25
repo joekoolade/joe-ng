@@ -79,6 +79,11 @@ public final class A64Enc
     {
         return addImm(31, rn, 0);
     }
+    /** {@code LSR Xd, Xn, #shift} — logical shift right (UBFM Xd, Xn, #shift, #63). */
+    public static int lsrImm(int rd, int rn, int shift)
+    {
+        return 0xD340_0000 | ((shift & 0x3F) << 16) | (0x3F << 10) | (rn << 5) | rd;
+    }
     /** {@code MOV Xd, SP} — via ADD Xd, SP, #0. */
     public static int movFromSp(int rd)
     {
@@ -322,6 +327,11 @@ public final class A64Enc
     public static int wfe()
     {
         return 0xD503_205F;
+    }
+    /** {@code SVC #0} — supervisor call: trap to the EL1 synchronous vector (used for yield). */
+    public static int svc0()
+    {
+        return 0xD400_0001;
     }
     /** {@code DC CVAU, Xt} — clean data cache line by VA to the point of unification. */
     public static int dcCvau(int rt)

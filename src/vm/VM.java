@@ -202,23 +202,14 @@ public final class VM
     static int    curTask;                  // the task currently running
 
     /**
-     * The context switcher, called by the stub with the interrupted task's saved-frame pointer in
-     * {@code curSp}. Services the timer tick, wakes any sleeper whose deadline has passed, then
-     * round-robins to the next READY task and returns its saved frame pointer (which the stub loads as
-     * SP before restoring). Runs with IRQs masked (IRQ context). Task 0 never sleeps, so one is always ready.
+     * The heart of the switcher, shared by the timer path ({@link #schedule}) and the yield path
+     * ({@link #yieldPick}): save the interrupted task's frame pointer, wake any sleeper whose deadline
+     * has passed, then round-robin to the next READY task and return its saved frame (the stub loads it
+     * as SP before restoring). Task 0 never sleeps, so one task is always ready. Runs with IRQs masked.
      */
-    static long schedule(long curSp)
+    static long pickNext(long curSp)
     {
-        int id = Gic.acknowledge();                        // GICC_IAR
-        if (id != Gic.PPI_CNTPNS)                          // not our timer: EOI if real, don't switch
-        {
-            if (id != 0x3FF) { Gic.end(id); }
-            return curSp;
-        }
-        ticks = ticks + 1L;
-        Magic.writeCNTP_TVAL_EL0(timerReload);             // re-arm the next tick
-        Gic.end(id);                                       // GICC_EOIR
-        taskSp[curTask] = curSp;                            // save the interrupted task
+        taskSp[curTask] = curSp;                            // save the interrupted/yielding task
         long now = Magic.readCNTPCT_EL0();
         int i = 0;
         while (i < taskCount)                              // wake expired sleepers
@@ -245,35 +236,67 @@ public final class VM
         return curSp;                                      // nothing else ready: resume the current task
     }
 
-    /** Yield the CPU until at least {@code ms} from now: mark this task sleeping and park until woken. */
+    /** Timer-IRQ path: service the tick, then pick the next task. Called by the IRQ context-switch stub. */
+    static long schedule(long curSp)
+    {
+        int id = Gic.acknowledge();                        // GICC_IAR
+        if (id != Gic.PPI_CNTPNS)                          // not our timer: EOI if real, don't switch
+        {
+            if (id != 0x3FF) { Gic.end(id); }
+            return curSp;
+        }
+        ticks = ticks + 1L;
+        Magic.writeCNTP_TVAL_EL0(timerReload);             // re-arm the next tick
+        Gic.end(id);                                       // GICC_EOIR
+        return pickNext(curSp);
+    }
+
+    /** SVC (yield) path: no timer to service, just pick the next task. Called by the SVC handler stub. */
+    static long yieldPick(long curSp)
+    {
+        return pickNext(curSp);
+    }
+
+    /** Voluntarily give up the CPU now: trap to the SVC handler, which switches to the next READY task. */
+    static void taskYield()
+    {
+        Magic.svc();
+    }
+
+    /**
+     * Sleep at least {@code ms}: mark this task SLEEPING with a wake deadline, then yield repeatedly.
+     * The scheduler skips a SLEEPING task and only flips it back to READY once its deadline passes, so
+     * this parks the task without busy-waiting (the yield saves our context; we aren't rescheduled until
+     * woken). Uses yield (not WFE) so it works whether or not the timer is delivering.
+     */
     static void sleep(long ms)
     {
         int me = curTask;
         taskWake[me] = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
-        taskState[me] = TASK_SLEEPING;                     // the next tick will switch away and skip us
+        taskState[me] = TASK_SLEEPING;
         while (taskState[me] == TASK_SLEEPING)
         {
-            Magic.wfe();                                   // halt until an interrupt; the scheduler wakes us
+            taskYield();
         }
     }
 
-    /** Demo task 1: print 'A', then sleep ~30 ms — so it yields instead of hogging its slices. */
+    /** Demo task 1: print 'A', then voluntarily yield() the CPU (cooperative — works without the timer). */
     static void taskA()
     {
         while (true)
         {
             Uart.putc(0x41);
-            sleep(30L);
+            taskYield();
         }
     }
 
-    /** Demo task 2: print 'B', then sleep ~55 ms. */
+    /** Demo task 2: print 'B', then sleep ~40 ms (blocked/timed — shows the SLEEPING state). */
     static void taskB()
     {
         while (true)
         {
             Uart.putc(0x42);
-            sleep(55L);
+            sleep(40L);
         }
     }
 
@@ -309,56 +332,80 @@ public final class VM
     }
 
     /**
-     * Install the context-switch stub at the IRQ/FIQ vectors, create taskA/taskB with their own stacks,
-     * bring up the GIC + timer, and unmask IRQs. On the first tick the running boot flow becomes task 0.
+     * Build a runtime context-switch stub on the heap: save the interrupted context (x0..x30, ELR_EL1,
+     * SPSR_EL1) to the current stack, {@code BL pickAddr} to choose the next task, then restore that
+     * task's context and {@code ERET} into it. When {@code svcCheck}, it first reads ESR_EL1 and, unless
+     * this is an SVC (EC=0x15), branches to {@link #reportFault} -- so the shared EL1 synchronous vector
+     * still reports real faults. Returns the stub's entry address.
      */
-    static void startScheduler()
+    static long buildSwitchStub(long pickAddr, boolean svcCheck)
     {
-        if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }   // dead calls: make schedule/taskA/taskB
-        if (taskAAddr == 0L) { taskA(); }                          // compiled + address-stashed by the writer
-        if (taskBAddr == 0L) { taskB(); }                          // (never taken at runtime: the addrs are set)
-
         long raw = Heap.alloc(0x400);
         long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // code past the object header
         int w = 0;
-        Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, (int) SCHED_FRAME));   // sub sp, #272
-        w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, (int) SCHED_FRAME)); w += 1;   // sub sp, #272
         int r = 0;
         while (r <= 30)                                    // save x0..x30
         {
-            Magic.store32(stub + w * 4L, A64Enc.strx(r, 31, r * 8));
-            w += 1;
+            Magic.store32(stub + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
             r += 1;
         }
         Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.ELR_EL1));   w += 1;
         Magic.store32(stub + w * 4L, A64Enc.strx(9, 31, 248));         w += 1;   // save ELR_EL1
         Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.SPSR_EL1));  w += 1;
         Magic.store32(stub + w * 4L, A64Enc.strx(9, 31, 256));         w += 1;   // save SPSR_EL1
-        Magic.store32(stub + w * 4L, A64Enc.addImm(0, 31, 0));         w += 1;   // mov x0, sp (curSp)
-        long blAddr = stub + w * 4L;
-        Magic.store32(blAddr, A64Enc.bl((int) ((scheduleAddr - blAddr) / 4L)));  // x0 = schedule(x0)
-        w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.movToSp(0));              w += 1;    // mov sp, x0 (next task)
-        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 248));        w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.ELR_EL1, 9));  w += 1;    // restore ELR_EL1
-        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 256));        w += 1;
-        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.SPSR_EL1, 9)); w += 1;    // restore SPSR_EL1
-        r = 0;
-        while (r <= 30)                                    // restore x0..x30 (x9 last-restored here)
+        if (svcCheck)
         {
-            Magic.store32(stub + w * 4L, A64Enc.ldrx(r, 31, r * 8));
-            w += 1;
+            Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.ESR_EL1)); w += 1;
+            Magic.store32(stub + w * 4L, A64Enc.lsrImm(9, 9, 26));       w += 1; // x9 = ESR.EC
+            Magic.store32(stub + w * 4L, A64Enc.cmpImm(9, 0x15));        w += 1; // SVC from AArch64?
+            Magic.store32(stub + w * 4L, A64Enc.bcond(0, 2));           w += 1;  // b.eq +2: SVC -> switch body
+            long faultAt = stub + w * 4L;                                        // else fall through:
+            Magic.store32(faultAt, A64Enc.b((int) ((reportFaultAddr - faultAt) / 4L))); w += 1;   // b reportFault
+        }
+        Magic.store32(stub + w * 4L, A64Enc.movFromSp(0));            w += 1;    // mov x0, sp (curSp)
+        long blAddr = stub + w * 4L;
+        Magic.store32(blAddr, A64Enc.bl((int) ((pickAddr - blAddr) / 4L)));      // x0 = pick(x0)
+        w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.movToSp(0));             w += 1;    // mov sp, x0 (next task)
+        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 248));       w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.ELR_EL1, 9)); w += 1;    // restore ELR_EL1
+        Magic.store32(stub + w * 4L, A64Enc.ldrx(9, 31, 256));       w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.msr(A64Enc.SPSR_EL1, 9)); w += 1;   // restore SPSR_EL1
+        r = 0;
+        while (r <= 30)                                    // restore x0..x30 (x9 last)
+        {
+            Magic.store32(stub + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
             r += 1;
         }
         Magic.store32(stub + w * 4L, A64Enc.addImm(31, 31, (int) SCHED_FRAME)); w += 1;   // add sp, #272
-        Magic.store32(stub + w * 4L, A64Enc.eret());                 w += 1;
+        Magic.store32(stub + w * 4L, A64Enc.eret());                w += 1;
         Heap.publishCode(stub, stub + w * 4L);
+        return stub;
+    }
 
+    /**
+     * Install the timer context-switch stub at the IRQ/FIQ vectors and the SVC (yield) stub at the EL1
+     * synchronous vector, create taskA/taskB with their own stacks, bring up the GIC + timer, and unmask
+     * IRQs. On the first tick (or first yield) the running boot flow becomes task 0.
+     */
+    static void startScheduler()
+    {
+        if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }    // dead calls: make schedule/yieldPick/
+        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // taskA/taskB compiled + address-stashed
+        if (taskAAddr == 0L) { taskA(); }
+        if (taskBAddr == 0L) { taskB(); }
+
+        long irqStub = buildSwitchStub(scheduleAddr, false);
+        long svcStub = buildSwitchStub(yieldPickAddr, true);
+
+        long e4 = vbarBase + 4L * 0x80L;                   // synchronous (Current EL, SPx) -> SVC/yield
+        Magic.store32(e4, A64Enc.b((int) ((svcStub - e4) / 4L)));
         long e5 = vbarBase + 5L * 0x80L;                   // IRQ (Current EL, SPx)
-        Magic.store32(e5, A64Enc.b((int) ((stub - e5) / 4L)));
+        Magic.store32(e5, A64Enc.b((int) ((irqStub - e5) / 4L)));
         long e6 = vbarBase + 6L * 0x80L;                   // FIQ
-        Magic.store32(e6, A64Enc.b((int) ((stub - e6) / 4L)));
-        Heap.publishCode(e5, e6 + 4L);
+        Magic.store32(e6, A64Enc.b((int) ((irqStub - e6) / 4L)));
+        Heap.publishCode(e4, e6 + 4L);
         Magic.isb();
 
         taskSp = new long[MAX_TASKS];
@@ -718,7 +765,8 @@ public final class VM
     static long unwindAddr;            // VM.unwind(JJJ)V
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
-    static long scheduleAddr;          // VM.schedule(J)J — the context switcher (writer-stashed)
+    static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
+    static long yieldPickAddr;         // VM.yieldPick(J)J — the SVC/yield-path switcher (writer-stashed)
     static long taskAAddr;             // VM.taskA()V — demo task entry (writer-stashed)
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
@@ -791,19 +839,20 @@ public final class VM
             Uart.putc(0x0A);
         }
 
-        // M7: preemptive round-robin scheduling on the GIC-400 timer tick. Register taskA/taskB (each
-        // spins printing its own character); the boot flow becomes task 0. Every ~10 ms the timer IRQ
-        // preempts the running task, saves its full context, and switches to the next -- so this main
-        // loop's '.'s interleave with the tasks' 'A'/'B'. Delivery needs the custom armstub
-        // (armstub/armstub8-joe.bin, PPI 30 -> group 1); in QEMU the timer isn't delivered so only the
-        // dots print. Bounded, then re-mask so the self-build fixpoint below runs undisturbed.
-        Uart.write(Magic.bytes("sched (.=main A/B=tasks): "));
+        // M7: scheduling on the GIC-400 tick. taskA prints 'A' then yield()s (a cooperative SVC-driven
+        // switch -- works even without timer delivery, so it shows in QEMU too); taskB prints 'B' then
+        // sleep(40ms) (the SLEEPING state); the boot flow is task 0, printing '.' and yield()ing each
+        // pass. The ~10 ms timer ALSO preempts on real HW (armstub8-joe.bin puts PPI 30 in group 1).
+        // So '.'/'A' interleave fast via yield, 'B' appears at its own ~40 ms sleep cadence. Bounded,
+        // then re-mask so the self-build fixpoint below runs undisturbed.
+        Uart.write(Magic.bytes("sched (.=main A=yield B=sleep): "));
         startScheduler();
         long t0 = Magic.readCNTPCT_EL0();
         while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 4L)   // ~250 ms
         {
             Uart.putc(0x2E);                   // '.' from the boot flow (task 0)
             schedPause();
+            taskYield();                           // cooperatively hand the CPU to the next ready task
         }
         stopTimerTick();                       // disable timer + mask IRQs (freezes the other tasks)
         Uart.write(Magic.bytes("\nsched: "));
@@ -3182,6 +3231,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("reportFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("irqHandlerAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("irqHandler"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("scheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("schedule"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("yieldPickAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("yieldPick"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("taskAAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskA"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskBAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskB"), Magic.bytes("()V")); }
         long blobV = blobStatic(nm);
