@@ -70,6 +70,8 @@ public final class Bcm2711
     public static final int  LSR_RX_READY = 0;
     /** AUX_MU_IER bit0: raise an interrupt when the receive FIFO has data. */
     public static final int  IER_RX_ENABLE = 0x01;
+    /** AUX_MU_IER bit1: raise an interrupt when the transmit FIFO can accept a byte. */
+    public static final int  IER_TX_ENABLE = 0x02;
     /**
      * The mini-UART's interrupt is the AUX interrupt = VideoCore peripheral IRQ 29 (peripherals
      * Table 102), which the GIC-400 exposes as SPI ID 96+29 = 125 (Figure 7). A group-1 SPI, so
