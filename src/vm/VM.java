@@ -179,22 +179,33 @@ public final class VM
         Magic.disableIrq();                                // mask IRQ + FIQ at EL1
     }
 
-    // ===== M7: preemptive round-robin scheduling on the timer tick =========================
-    // Three tasks share the core, switched by the periodic timer IRQ: task 0 is whatever code was
-    // running when the scheduler started (the boot flow itself), tasks 1 and 2 are taskA/taskB below.
-    // The IRQ vectors to a context-switch stub that saves the full interrupted context (x0..x30,
-    // ELR_EL1, SPSR_EL1) onto the current task's stack, calls schedule() to pick the next task, then
-    // restores THAT task's context and ERETs into it. Each task's saved stack pointer is its whole
-    // context, so a switch is just a stack swap.
+    // ===== M7: preemptive scheduling on the timer tick =====================================
+    // A task table (parallel arrays) with per-task state. Task 0 is the boot flow; spawn() adds more,
+    // each on its own heap stack. The periodic timer IRQ vectors to a context-switch stub that saves
+    // the full interrupted context (x0..x30, ELR_EL1, SPSR_EL1) onto the current task's stack, calls
+    // schedule() -- which wakes due sleepers and picks the next READY task round-robin -- then restores
+    // THAT task's context and ERETs into it. A task's saved SP is its whole context, so a switch is a
+    // stack swap. sleep(ms) marks a task SLEEPING so the scheduler skips it until its deadline.
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
-    static long taskSp0, taskSp1, taskSp2;  // per-task saved context frame (SP); task 0 = boot flow
-    static int  curTask;                    // 0, 1, or 2 — the task currently running
+    static final int  MAX_TASKS = 8;
+    static final int  TASK_EMPTY = 0;
+    static final int  TASK_READY = 1;
+    static final int  TASK_SLEEPING = 2;
+
+    // The task table (parallel arrays, index = task id). Task 0 is the boot flow; spawn() adds more.
+    static long[] taskSp;                   // saved context frame (SP) — the task's whole context
+    static long[] taskStackBase;            // its heap stack's object base (a GC root keeps the stack alive)
+    static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_EMPTY
+    static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
+    static int    taskCount;                // number of live task slots
+    static int    curTask;                  // the task currently running
 
     /**
      * The context switcher, called by the stub with the interrupted task's saved-frame pointer in
-     * {@code curSp}. Services the timer tick, then round-robins to the next task and returns its saved
-     * frame pointer (which the stub loads as SP before restoring). Runs with IRQs masked (IRQ context).
+     * {@code curSp}. Services the timer tick, wakes any sleeper whose deadline has passed, then
+     * round-robins to the next READY task and returns its saved frame pointer (which the stub loads as
+     * SP before restoring). Runs with IRQs masked (IRQ context). Task 0 never sleeps, so one is always ready.
      */
     static long schedule(long curSp)
     {
@@ -207,32 +218,66 @@ public final class VM
         ticks = ticks + 1L;
         Magic.writeCNTP_TVAL_EL0(timerReload);             // re-arm the next tick
         Gic.end(id);                                       // GICC_EOIR
-        if (curTask == 0) { taskSp0 = curSp; curTask = 1; return taskSp1; }
-        if (curTask == 1) { taskSp1 = curSp; curTask = 2; return taskSp2; }
-        taskSp2 = curSp; curTask = 0; return taskSp0;
+        taskSp[curTask] = curSp;                            // save the interrupted task
+        long now = Magic.readCNTPCT_EL0();
+        int i = 0;
+        while (i < taskCount)                              // wake expired sleepers
+        {
+            if (taskState[i] == TASK_SLEEPING && now >= taskWake[i])
+            {
+                taskState[i] = TASK_READY;
+            }
+            i = i + 1;
+        }
+        int n = curTask;
+        int k = 0;
+        while (k < taskCount)                              // pick the next READY task, round-robin
+        {
+            n = n + 1;
+            if (n >= taskCount) { n = 0; }
+            if (taskState[n] == TASK_READY)
+            {
+                curTask = n;
+                return taskSp[n];
+            }
+            k = k + 1;
+        }
+        return curSp;                                      // nothing else ready: resume the current task
     }
 
-    /** Demo task 1: print 'A' forever, pausing between characters so the round-robin is visible. */
+    /** Yield the CPU until at least {@code ms} from now: mark this task sleeping and park until woken. */
+    static void sleep(long ms)
+    {
+        int me = curTask;
+        taskWake[me] = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
+        taskState[me] = TASK_SLEEPING;                     // the next tick will switch away and skip us
+        while (taskState[me] == TASK_SLEEPING)
+        {
+            Magic.wfe();                                   // halt until an interrupt; the scheduler wakes us
+        }
+    }
+
+    /** Demo task 1: print 'A', then sleep ~30 ms — so it yields instead of hogging its slices. */
     static void taskA()
     {
         while (true)
         {
             Uart.putc(0x41);
-            schedPause();
+            sleep(30L);
         }
     }
 
-    /** Demo task 2: print 'B' forever. */
+    /** Demo task 2: print 'B', then sleep ~55 ms. */
     static void taskB()
     {
         while (true)
         {
             Uart.putc(0x42);
-            schedPause();
+            sleep(55L);
         }
     }
 
-    /** ~5 ms pause (counter-based, survives preemption) so each slice prints roughly one character. */
+    /** ~5 ms pause (counter-based, survives preemption) so the main task prints at a visible rate. */
     static void schedPause()
     {
         long end = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 200L;
@@ -241,12 +286,14 @@ public final class VM
         }
     }
 
-    /** Build a task's stack with an initial saved-context frame so the first switch ERETs into {@code entry}. */
-    static long makeTask(long entry)
+    /** Create a READY task running {@code entry} on a fresh 32 KiB stack; returns its task id. */
+    static int spawn(long entry)
     {
-        long stk = Heap.alloc(0x8000);                     // 32 KiB stack
+        int id = taskCount;
+        long stk = Heap.alloc(0x8000);
+        taskStackBase[id] = stk;                           // object base: keeps the stack GC-reachable
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned top; stack grows down
-        long frame = top - SCHED_FRAME;                    // the saved-context frame
+        long frame = top - SCHED_FRAME;                    // synthetic initial context frame
         int r = 0;
         while (r <= 30)
         {
@@ -255,7 +302,10 @@ public final class VM
         }
         Magic.store64(frame + 248L, entry);                // ELR_EL1 = task entry PC
         Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
-        return frame;
+        taskSp[id] = frame;
+        taskState[id] = TASK_READY;
+        taskCount = id + 1;
+        return id;
     }
 
     /**
@@ -311,9 +361,15 @@ public final class VM
         Heap.publishCode(e5, e6 + 4L);
         Magic.isb();
 
-        curTask = 0;                                       // the boot flow is task 0 (its SP saved on tick 1)
-        taskSp1 = makeTask(taskAAddr);
-        taskSp2 = makeTask(taskBAddr);
+        taskSp = new long[MAX_TASKS];
+        taskStackBase = new long[MAX_TASKS];
+        taskState = new int[MAX_TASKS];
+        taskWake = new long[MAX_TASKS];
+        taskState[0] = TASK_READY;                          // task 0 = the boot flow (SP saved on tick 1)
+        taskCount = 1;
+        curTask = 0;
+        spawn(taskAAddr);                                  // task 1
+        spawn(taskBAddr);                                  // task 2
 
         Gic.init(Gic.PPI_CNTPNS);
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
