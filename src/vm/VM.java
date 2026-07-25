@@ -190,6 +190,89 @@ public final class VM
     static final int  SEC_STACK_HI = 0x0200;              // per-core stack base 0x0200_0000 + core*1MiB
     static final long PT_BASE    = 0x0072_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
     static final long LOCK_ADDR  = 0x0073_0000L;          // shared HW-spinlock word (cacheable RAM)
+    static final long PC_STUB    = 0x0074_1000L;          // secondaries' per-core timer IRQ stub
+    static final long PC_VBAR    = 0x0074_2000L;          // ... and their shared vector table (2 KiB aligned)
+
+    static long[] pcTicks;                                // per-core timer-tick count (proof each core's timer fires)
+    static long   pcReload;                               // CNTP_TVAL reload (~10 ms)
+    static long   pcTickAddr;                             // VM.pcTick(I)V -- the per-core IRQ handler (writer-stashed)
+    static int    pcGo2;                                  // release the secondaries into the per-core timer demo
+    static int    pcStop;                                 // ... and stop it
+
+    /** Per-core timer IRQ handler (runs on the secondary the tick fired on; {@code core} passed by the stub). */
+    static void pcTick(int core)
+    {
+        int id = Gic.acknowledge();
+        if (id == Gic.PPI_CNTPNS)
+        {
+            pcTicks[core] = pcTicks[core] + 1L;
+            Magic.writeCNTP_TVAL_EL0(pcReload);           // re-arm this core's timer
+        }
+        Gic.end(id);
+    }
+
+    /**
+     * A secondary core's own preemptive-timer loop: bring up ITS (banked) GIC PPI 30 + CPU interface,
+     * point VBAR at the shared per-core vector table, arm ITS CNTP timer, and spin -- its own timer IRQ
+     * preempts it every ~10 ms into {@link #pcTick}, which tallies this core's ticks. Stops on pcStop.
+     */
+    static void pcCoreMain(int core)
+    {
+        Gic.init(Gic.PPI_CNTPNS);                          // per-core banked PPI 30 + this core's GICC/PMR
+        Magic.writeVBAR_EL1(PC_VBAR);
+        Magic.isb();
+        Magic.writeCNTP_TVAL_EL0(pcReload);
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();
+        while (pcStop == 0)                                // preempted by our own timer each ~10 ms
+        {
+        }
+        Magic.writeCNTP_CTL_EL0(0);
+        Magic.disableIrq();
+    }
+
+    /** Build the secondaries' per-core timer IRQ stub + vector table (primary, once). */
+    static void pcSetup()
+    {
+        if (pcTickAddr == 0L) { pcTick(0); }               // dead call: compile + stash pcTick
+        pcTicks = new long[4];
+        pcReload = Magic.readCNTFRQ_EL0() / 100L;          // ~10 ms
+
+        long s = PC_STUB;                                  // stub: save x0..x30, x0 = MPIDR&3, BL pcTick, restore, ERET
+        int w = 0;
+        Magic.store32(s + w * 4L, A64Enc.subImm(31, 31, 256)); w += 1;
+        int r = 0;
+        while (r <= 30)
+        {
+            Magic.store32(s + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(s + w * 4L, A64Enc.mrs(9, A64Enc.MPIDR_EL1)); w += 1;
+        Magic.store32(s + w * 4L, A64Enc.movz(10, 3, 0));          w += 1;
+        Magic.store32(s + w * 4L, A64Enc.andReg(9, 9, 10));       w += 1;   // x9 = core id
+        Magic.store32(s + w * 4L, A64Enc.movReg(0, 9));          w += 1;   // x0 = core (arg)
+        long blAddr = s + w * 4L;
+        Magic.store32(blAddr, A64Enc.bl((int) ((pcTickAddr - blAddr) / 4L))); w += 1;
+        r = 0;
+        while (r <= 30)
+        {
+            Magic.store32(s + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(s + w * 4L, A64Enc.addImm(31, 31, 256)); w += 1;
+        Magic.store32(s + w * 4L, A64Enc.eret());            w += 1;
+        Heap.publishCode(s, s + w * 4L);
+
+        int i = 0;                                          // vector table: entry 5 (IRQ) -> stub, else -> reportFault
+        while (i < 16)
+        {
+            long entry = PC_VBAR + i * 0x80L;
+            long target = (i == 5) ? PC_STUB : reportFaultAddr;
+            Magic.store32(entry, A64Enc.b((int) ((target - entry) / 4L)));
+            i += 1;
+        }
+        Heap.publishCode(PC_VBAR, PC_VBAR + 0x800L);
+    }
 
     /**
      * Build a 4 KiB-granule identity map (VA=PA) of the low 4 GiB into the page tables at {@link #PT_BASE}:
@@ -271,6 +354,10 @@ public final class VM
         {
         }
         smpWork(core);                                     // pull jobs from the shared queue under the lock
+        while (pcGo2 == 0)                                 // wait for the per-core-timer demo to start
+        {
+        }
+        pcCoreMain(core);                                  // this core runs its own preemptive timer
         while (true)                                       // done: park
         {
             Magic.wfe();
@@ -1174,6 +1261,37 @@ public final class VM
             printDec((int) Magic.load64(CORE_FLAGS + 0x40L + jc * 8L));
             Uart.putc((byte) 0x20);
             jc = jc + 1;
+        }
+        Uart.putc(0x0A);
+
+        // Per-core preemptive timers: each secondary brings up its OWN (banked) GIC PPI 30 + CNTP timer
+        // and gets preempted by it every ~10 ms into pcTick, which tallies that core's ticks. Runs ~0.5s;
+        // a non-zero tick count for every core proves each has its own timer interrupt (the foundation of
+        // per-core scheduling). Needs armstub8-joe.bin (group-1 PPIs); QEMU won't deliver, so ticks stay 0.
+        pcSetup();
+        Uart.write(Magic.bytes("per-core timers (cores 1-3, ~0.5s)...\n"));
+        pcGo2 = 1;                                          // release the secondaries into pcCoreMain
+        Magic.dsb();
+        long pw = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 2L;
+        while (Magic.readCNTPCT_EL0() < pw)
+        {
+        }
+        pcStop = 1;                                         // stop them
+        Magic.dsb();
+        long pw2 = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 20L;
+        while (Magic.readCNTPCT_EL0() < pw2)
+        {
+        }
+        Uart.write(Magic.bytes("ticks/core: "));
+        int pi = 1;
+        while (pi < 4)
+        {
+            Uart.putc((byte) 0x63);
+            Uart.putc((byte) (0x30 + pi));
+            Uart.putc((byte) 0x3D);
+            printDec((int) pcTicks[pi]);
+            Uart.putc((byte) 0x20);
+            pi = pi + 1;
         }
         Uart.putc(0x0A);
 
@@ -3597,6 +3715,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("taskCAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskC"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskRAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskR"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("secondaryMainAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("secondaryMain"), Magic.bytes("(I)V")); }
+        if (bytesEqual(nm, Magic.bytes("pcTickAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTick"), Magic.bytes("(I)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
