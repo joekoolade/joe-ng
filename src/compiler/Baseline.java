@@ -1239,6 +1239,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.mrs(pushReg(), A64Enc.CurrentEL));
         }
+        else if (id == Intrinsics.READ_MPIDR)
+        {
+            cb.emit(A64Enc.mrs(pushReg(), A64Enc.MPIDR_EL1));
+        }
         else if (id == Intrinsics.WRITE_VBAR_EL1)
         {
             cb.emit(A64Enc.msr(A64Enc.VBAR_EL1, popReg()));

@@ -190,18 +190,26 @@ public final class VM
     static final int  SEC_STACK_HI = 0x0200;              // per-core stack base 0x0200_0000 + core*1MiB
     static final long PT_BASE    = 0x0072_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
     static final long LOCK_ADDR  = 0x0073_0000L;          // shared HW-spinlock word (cacheable RAM)
-    static final long PC_STUB    = 0x0074_1000L;          // secondaries' per-core timer IRQ stub
-    static final long PC_VBAR    = 0x0074_2000L;          // ... and their shared vector table (2 KiB aligned)
+    static final long PC_VBAR    = 0x0074_2000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
 
     static long[] pcTicks;                                // per-core timer-tick count (proof each core's timer fires)
+    static long[] pcTaskSp;                               // saved SP of each core's two tasks: index = core*2 + slot
+    static int[]  pcCur;                                  // which slot (0/1) each core is currently running
     static long   pcReload;                               // CNTP_TVAL reload (~10 ms)
-    static long   pcTickAddr;                             // VM.pcTick(I)V -- the per-core IRQ handler (writer-stashed)
-    static int    pcGo2;                                  // release the secondaries into the per-core timer demo
+    static long   pcScheduleAddr;                         // VM.pcSchedule(J)J -- the per-core switcher (writer-stashed)
+    static long   pcTask1Addr;                            // VM.pcTask1(I)V -- each core's second task (writer-stashed)
+    static int    pcGo2;                                  // release the secondaries into the per-core scheduling demo
     static int    pcStop;                                 // ... and stop it
 
-    /** Per-core timer IRQ handler (runs on the secondary the tick fired on; {@code core} passed by the stub). */
-    static void pcTick(int core)
+    /**
+     * A secondary core's per-core preemptive context switch, run in the shared switch stub on whichever
+     * core the timer fired on. {@code curSp} is the interrupted task's saved-context frame; we read MPIDR
+     * to find the core (each touches only ITS own slots -- no lock needed), ack + re-arm ITS timer, then
+     * round-robin between that core's two tasks. Returns the next task's frame for the stub to ERET into.
+     */
+    static long pcSchedule(long curSp)
     {
+        int core = (int) (Magic.readMPIDR() & 3L);
         int id = Gic.acknowledge();
         if (id == Gic.PPI_CNTPNS)
         {
@@ -209,69 +217,101 @@ public final class VM
             Magic.writeCNTP_TVAL_EL0(pcReload);           // re-arm this core's timer
         }
         Gic.end(id);
+        if (pcStop != 0)
+        {
+            Magic.writeCNTP_CTL_EL0(0);                    // demo over: stop the timer, resume current so it can exit
+            return curSp;
+        }
+        int slot = pcCur[core];
+        pcTaskSp[core * 2 + slot] = curSp;                 // save the task we interrupted
+        slot = 1 - slot;                                   // round-robin to this core's other task
+        pcCur[core] = slot;
+        return pcTaskSp[core * 2 + slot];
+    }
+
+    /** Each core's second task: print its char ('A'+id) at a visible rate; parks when the demo stops. */
+    static void pcTask1(int id)
+    {
+        while (pcStop == 0)
+        {
+            Uart.putc((byte) (0x41 + id));                 // preempted back to task 0 by the timer
+            schedPause();
+        }
+        while (true)
+        {
+            Magic.wfe();                                   // a later tick switches to task 0, which exits
+        }
     }
 
     /**
-     * A secondary core's own preemptive-timer loop: bring up ITS (banked) GIC PPI 30 + CPU interface,
-     * point VBAR at the shared per-core vector table, arm ITS CNTP timer, and spin -- its own timer IRQ
-     * preempts it every ~10 ms into {@link #pcTick}, which tallies this core's ticks. Stops on pcStop.
+     * A secondary core's first task: bring up ITS (banked) GIC PPI 30 + CPU interface, point VBAR at the
+     * shared switch stub's vector table, arm ITS CNTP timer, and run as task 0 (printing 'A'+core*2). Its
+     * own timer IRQ preempts it every ~10 ms into {@link #pcSchedule}, round-robining with task 1
+     * ({@link #pcTask1}, char 'A'+core*2+1) -- so this core alternates between two tasks under its own timer.
      */
     static void pcCoreMain(int core)
     {
         Gic.init(Gic.PPI_CNTPNS);                          // per-core banked PPI 30 + this core's GICC/PMR
         Magic.writeVBAR_EL1(PC_VBAR);
         Magic.isb();
+        pcCur[core] = 0;                                   // this running flow is the core's task 0
         Magic.writeCNTP_TVAL_EL0(pcReload);
         Magic.writeCNTP_CTL_EL0(1);
         Magic.enableIrq();
-        while (pcStop == 0)                                // preempted by our own timer each ~10 ms
+        while (pcStop == 0)                                // task 0: our own timer preempts us into task 1
         {
+            Uart.putc((byte) (0x41 + core * 2));
+            schedPause();
         }
         Magic.writeCNTP_CTL_EL0(0);
         Magic.disableIrq();
     }
 
-    /** Build the secondaries' per-core timer IRQ stub + vector table (primary, once). */
-    static void pcSetup()
+    /** Build a task-1 initial context frame on a fresh stack, entering {@link #pcTask1}(id). Primary-only. */
+    static long pcMakeTask(int id)
     {
-        if (pcTickAddr == 0L) { pcTick(0); }               // dead call: compile + stash pcTick
-        pcTicks = new long[4];
-        pcReload = Magic.readCNTFRQ_EL0() / 100L;          // ~10 ms
-
-        long s = PC_STUB;                                  // stub: save x0..x30, x0 = MPIDR&3, BL pcTick, restore, ERET
-        int w = 0;
-        Magic.store32(s + w * 4L, A64Enc.subImm(31, 31, 256)); w += 1;
+        long stk = Heap.alloc(0x8000);
+        long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned; grows down
+        long frame = top - SCHED_FRAME;
         int r = 0;
         while (r <= 30)
         {
-            Magic.store32(s + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            Magic.store64(frame + r * 8L, 0L);
             r += 1;
         }
-        Magic.store32(s + w * 4L, A64Enc.mrs(9, A64Enc.MPIDR_EL1)); w += 1;
-        Magic.store32(s + w * 4L, A64Enc.movz(10, 3, 0));          w += 1;
-        Magic.store32(s + w * 4L, A64Enc.andReg(9, 9, 10));       w += 1;   // x9 = core id
-        Magic.store32(s + w * 4L, A64Enc.movReg(0, 9));          w += 1;   // x0 = core (arg)
-        long blAddr = s + w * 4L;
-        Magic.store32(blAddr, A64Enc.bl((int) ((pcTickAddr - blAddr) / 4L))); w += 1;
-        r = 0;
-        while (r <= 30)
-        {
-            Magic.store32(s + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
-            r += 1;
-        }
-        Magic.store32(s + w * 4L, A64Enc.addImm(31, 31, 256)); w += 1;
-        Magic.store32(s + w * 4L, A64Enc.eret());            w += 1;
-        Heap.publishCode(s, s + w * 4L);
+        Magic.store64(frame + 0L, (long) id);              // x0 = id (this task's char index)
+        Magic.store64(frame + 248L, pcTask1Addr);          // ELR_EL1 = pcTask1 entry
+        Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h, IRQs on
+        return frame;
+    }
 
-        int i = 0;                                          // vector table: entry 5 (IRQ) -> stub, else -> reportFault
+    /** Build the secondaries' shared per-core context-switch stub + vector + task-1 frames (primary, once). */
+    static void pcSetup()
+    {
+        if (pcScheduleAddr == 0L) { pcScheduleAddr = pcSchedule(0L); }  // dead calls: compile + stash
+        if (pcTask1Addr == 0L) { pcTask1(0); }
+        pcTicks = new long[4];
+        pcTaskSp = new long[8];
+        pcCur = new int[4];
+        pcReload = Magic.readCNTFRQ_EL0() / 100L;          // ~10 ms
+
+        long stub = buildSwitchStub(pcScheduleAddr, false);   // shared context-switch stub (reused from M7)
+        int i = 0;                                          // vector table: entry 5 (IRQ) -> switch stub, else -> fault
         while (i < 16)
         {
             long entry = PC_VBAR + i * 0x80L;
-            long target = (i == 5) ? PC_STUB : reportFaultAddr;
+            long target = (i == 5) ? stub : reportFaultAddr;
             Magic.store32(entry, A64Enc.b((int) ((target - entry) / 4L)));
             i += 1;
         }
         Heap.publishCode(PC_VBAR, PC_VBAR + 0x800L);
+
+        int core = 1;                                       // pre-build each secondary's task-1 frame (no alloc race)
+        while (core <= 3)
+        {
+            pcTaskSp[core * 2 + 1] = pcMakeTask(core * 2 + 1);
+            core += 1;
+        }
     }
 
     /**
@@ -1264,12 +1304,14 @@ public final class VM
         }
         Uart.putc(0x0A);
 
-        // Per-core preemptive timers: each secondary brings up its OWN (banked) GIC PPI 30 + CNTP timer
-        // and gets preempted by it every ~10 ms into pcTick, which tallies that core's ticks. Runs ~0.5s;
-        // a non-zero tick count for every core proves each has its own timer interrupt (the foundation of
-        // per-core scheduling). Needs armstub8-joe.bin (group-1 PPIs); QEMU won't deliver, so ticks stay 0.
+        // Per-core preemptive scheduling: each secondary brings up its OWN (banked) GIC PPI 30 + CNTP timer,
+        // then round-robins TWO tasks under its own timer -- core c alternates task 0 (char 'A'+2c) and task 1
+        // ('A'+2c+1) in pcSchedule (a real context switch, reusing the M7 switch stub). So cores 1-3 print
+        // C/D, E/F, G/H interleaved -- every char appearing proves each core preempts between its own tasks.
+        // Runs ~0.5 s; ticks/core then confirms each core's timer fired. Needs armstub8-joe.bin (group-1
+        // PPIs); QEMU won't deliver to secondaries, so each core runs only task 0 (C/E/G) and ticks stay 0.
         pcSetup();
-        Uart.write(Magic.bytes("per-core timers (cores 1-3, ~0.5s)...\n"));
+        Uart.write(Magic.bytes("per-core tasks (cores 1-3, 2 tasks each, ~0.5s): "));
         pcGo2 = 1;                                          // release the secondaries into pcCoreMain
         Magic.dsb();
         long pw = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 2L;
@@ -1282,6 +1324,7 @@ public final class VM
         while (Magic.readCNTPCT_EL0() < pw2)
         {
         }
+        Uart.putc(0x0A);
         Uart.write(Magic.bytes("ticks/core: "));
         int pi = 1;
         while (pi < 4)
@@ -3715,7 +3758,8 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("taskCAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskC"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskRAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskR"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("secondaryMainAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("secondaryMain"), Magic.bytes("(I)V")); }
-        if (bytesEqual(nm, Magic.bytes("pcTickAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTick"), Magic.bytes("(I)V")); }
+        if (bytesEqual(nm, Magic.bytes("pcScheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcSchedule"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("pcTask1Addr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTask1"), Magic.bytes("(I)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }

@@ -47,6 +47,7 @@ public final class Intrinsics
     public static final int READ_ESR_EL1 = 29;    // exception syndrome / PC / fault address
     public static final int READ_ELR_EL1 = 30;
     public static final int READ_FAR_EL1 = 31;
+    public static final int READ_MPIDR = 50;        // this core's affinity register (low 2 bits = core id)
     public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
     public static final int READ_CNTFRQ_EL0 = 33;   // generic-timer frequency
     public static final int READ_CNTPCT_EL0 = 34;   // generic-timer physical count

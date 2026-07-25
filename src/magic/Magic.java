@@ -137,6 +137,12 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** {@code MRS MPIDR_EL1} — this core's affinity; low 2 bits are the core id on BCM2711. */
+    public static long readMPIDR()
+    {
+        throw intrinsic();
+    }
+
     /** {@code MSR VBAR_EL1, v} — install the EL1 exception vector table base (2 KiB-aligned). */
     public static void writeVBAR_EL1(long v)
     {
