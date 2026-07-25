@@ -205,6 +205,11 @@ public final class VM
     static int    taskCount;                // number of live task slots
     static int    curTask;                  // the task currently running
 
+    static final int UART_SEM = 1;          // posted by the mini-UART RX ISR, waited on by the reader task
+    static final int RXBUF_N  = 64;         // power of two (mask-wrap)
+    static byte[] rxBuf;                     // mini-UART RX ring buffer (ISR writes head, reader reads tail)
+    static int    rxHead, rxTail;
+
     /**
      * The heart of the switcher, shared by the timer path ({@link #schedule}) and the yield path
      * ({@link #yieldPick}): save the interrupted task's frame pointer, wake any sleeper whose deadline
@@ -240,19 +245,34 @@ public final class VM
         return curSp;                                      // nothing else ready: resume the current task
     }
 
-    /** Timer-IRQ path: service the tick, then pick the next task. Called by the IRQ context-switch stub. */
+    /**
+     * IRQ path (called by the IRQ context-switch stub): acknowledge the interrupt and act on it, then
+     * pick the next task. Handles the periodic timer (PPI 30) and the mini-UART RX (SPI 125): the UART
+     * ISR drains received bytes into the ring buffer and posts UART_SEM to wake the blocked reader.
+     */
     static long schedule(long curSp)
     {
         int id = Gic.acknowledge();                        // GICC_IAR
-        if (id != Gic.PPI_CNTPNS)                          // not our timer: EOI if real, don't switch
+        if (id == Gic.PPI_CNTPNS)                          // periodic timer
         {
-            if (id != 0x3FF) { Gic.end(id); }
-            return curSp;
+            ticks = ticks + 1L;
+            Magic.writeCNTP_TVAL_EL0(timerReload);         // re-arm the next tick
+            Gic.end(id);
+            return pickNext(curSp);
         }
-        ticks = ticks + 1L;
-        Magic.writeCNTP_TVAL_EL0(timerReload);             // re-arm the next tick
-        Gic.end(id);                                       // GICC_EOIR
-        return pickNext(curSp);
+        if (id == Bcm2711.AUX_SPI)                         // mini-UART: RX data arrived
+        {
+            while ((Magic.load32(Bcm2711.AUX_MU_LSR_REG) & (1 << Bcm2711.LSR_RX_READY)) != 0)
+            {
+                rxBuf[rxHead] = (byte) Magic.load32(Bcm2711.AUX_MU_IO_REG);
+                rxHead = (rxHead + 1) & (RXBUF_N - 1);
+            }
+            semPostRaw(UART_SEM);                          // wake the reader (ISR-safe post)
+            Gic.end(id);
+            return pickNext(curSp);
+        }
+        if (id != 0x3FF) { Gic.end(id); }                 // other/real INTID: EOI, don't switch
+        return curSp;
     }
 
     /** SVC (yield) path: no timer to service, just pick the next task. Called by the SVC handler stub. */
@@ -305,10 +325,9 @@ public final class VM
         Magic.enableIrq();
     }
 
-    /** Post (signal) semaphore {@code s}: add a token and wake one task blocked on it, if any. */
-    static void semPost(int s)
+    /** The core of {@link #semPost}, without touching IRQ masking — safe to call from an ISR. */
+    static void semPostRaw(int s)
     {
-        Magic.disableIrq();
         semCount[s] = semCount[s] + 1;
         int i = 0;
         while (i < taskCount)
@@ -323,6 +342,13 @@ public final class VM
                 i = i + 1;
             }
         }
+    }
+
+    /** Post (signal) semaphore {@code s} from task context: add a token and wake one waiter. */
+    static void semPost(int s)
+    {
+        Magic.disableIrq();
+        semPostRaw(s);
         Magic.enableIrq();
     }
 
@@ -355,6 +381,35 @@ public final class VM
             semWait(0);
             Uart.putc(0x43);
         }
+    }
+
+    /**
+     * Demo task 4 (device reader): block on UART_SEM until the mini-UART RX ISR posts it, then drain
+     * every received byte from the ring buffer and echo it. This is a real driver-style wait: the task
+     * consumes no CPU while idle -- it is woken by the hardware interrupt, not by polling.
+     */
+    static void taskR()
+    {
+        while (true)
+        {
+            semWait(UART_SEM);
+            while (rxTail != rxHead)
+            {
+                byte b = rxBuf[rxTail];
+                rxTail = (rxTail + 1) & (RXBUF_N - 1);
+                Uart.putc(b);                              // echo the keystroke
+            }
+        }
+    }
+
+    /** Enable mini-UART receive interrupts and route them through the GIC (SPI 125) to {@link #schedule}. */
+    static void uartRxOn()
+    {
+        rxBuf = new byte[RXBUF_N];
+        rxHead = 0;
+        rxTail = 0;
+        Gic.initSpi(Bcm2711.AUX_SPI);
+        Magic.store32(Bcm2711.AUX_MU_IER_REG, Bcm2711.IER_RX_ENABLE);   // interrupt when RX data arrives
     }
 
     /** ~5 ms pause (counter-based, survives preemption) so the main task prints at a visible rate. */
@@ -453,6 +508,7 @@ public final class VM
         if (taskAAddr == 0L) { taskA(); }
         if (taskBAddr == 0L) { taskB(); }
         if (taskCAddr == 0L) { taskC(); }
+        if (taskRAddr == 0L) { taskR(); }
 
         long irqStub = buildSwitchStub(scheduleAddr, false);
         long svcStub = buildSwitchStub(yieldPickAddr, true);
@@ -478,6 +534,7 @@ public final class VM
         spawn(taskAAddr);                                  // task 1 (yield)
         spawn(taskBAddr);                                  // task 2 (producer: posts sem 0)
         spawn(taskCAddr);                                  // task 3 (consumer: blocks on sem 0)
+        spawn(taskRAddr);                                  // task 4 (UART reader: blocks on UART_SEM)
 
         Gic.init(Gic.PPI_CNTPNS);
         timerReload = Magic.readCNTFRQ_EL0() / 100L;       // ~10 ms scheduling quantum
@@ -831,6 +888,7 @@ public final class VM
     static long taskAAddr;             // VM.taskA()V — demo task entry (writer-stashed)
     static long taskBAddr;             // VM.taskB()V — demo task entry (writer-stashed)
     static long taskCAddr;             // VM.taskC()V — demo task entry (writer-stashed)
+    static long taskRAddr;             // VM.taskR()V — UART reader task entry (writer-stashed)
     static long ticks;                 // periodic timer interrupts serviced so far
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
@@ -920,6 +978,28 @@ public final class VM
         Uart.write(Magic.bytes("\nsched: "));
         printDec((int) ticks);
         Uart.write(Magic.bytes(" preemptions\n"));
+
+        // M7 capstone: block on a real device interrupt. Park the phase-1 tasks, enable the mini-UART
+        // RX interrupt (routed through the GIC as SPI 125), and let the reader task -- which is BLOCKED
+        // on UART_SEM, consuming no CPU -- echo whatever is typed, woken by the RX ISR posting the
+        // semaphore. Needs armstub8-joe.bin (group-1 SPIs) to deliver, so keystrokes echo on real HW;
+        // QEMU won't deliver the SPI, so it just idles for the window.
+        taskState[1] = TASK_BLOCKED; taskWaitOn[1] = 3;    // park taskA/taskB/taskC on a dead semaphore
+        taskState[2] = TASK_BLOCKED; taskWaitOn[2] = 3;
+        taskState[3] = TASK_BLOCKED; taskWaitOn[3] = 3;
+        uartRxOn();
+        Magic.writeCNTP_CTL_EL0(1);            // re-arm the tick and re-unmask IRQs (phase 1 stopped both)
+        Magic.enableIrq();
+        Uart.write(Magic.bytes("type keys -> echoed by a blocked reader task (2s): "));
+        long u0 = Magic.readCNTPCT_EL0();
+        while (Magic.readCNTPCT_EL0() < u0 + Magic.readCNTFRQ_EL0() * 2L)   // ~2 s input window
+        {
+            schedPause();                      // idle; a UART IRQ during this preempts to the reader
+            taskYield();
+        }
+        Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);   // disable UART RX interrupt
+        stopTimerTick();
+        Uart.putc(0x0A);
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
@@ -3297,6 +3377,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("taskAAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskA"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskBAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskB"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("taskCAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskC"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("taskRAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskR"), Magic.bytes("()V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }

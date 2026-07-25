@@ -25,6 +25,7 @@ public final class Gic
     private static final long GICD_IGROUPR    = GICD + 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
     private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID
     private static final long GICD_IPRIORITYR = GICD + 0x400;   // 1 byte/INTID
+    private static final long GICD_ITARGETSR  = GICD + 0x800;   // 1 byte/INTID: CPU target list (SPIs only)
 
     private static final long GICC_CTLR = GICC + 0x000;
     private static final long GICC_PMR  = GICC + 0x004;         // priority mask
@@ -47,6 +48,25 @@ public final class Gic
         int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
         Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
         Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
+        Magic.store32(word(GICD_ISENABLER, intid), bit(intid));      // forwarding enable
+        Magic.store32(GICD_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
+        Magic.store32(GICC_PMR, 0xFF);                               // unmask every priority level
+        Magic.store32(GICC_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
+    }
+
+    /**
+     * Enable a shared peripheral interrupt (SPI, INTID >= 32) as non-secure group 1 and route it to
+     * CPU 0. Unlike a PPI, an SPI is not per-core, so it needs an explicit target in ITARGETSR.
+     */
+    public static void initSpi(int intid)
+    {
+        int gr = (int) Magic.load32(word(GICD_IGROUPR, intid));
+        Magic.store32(word(GICD_IGROUPR, intid), gr | bit(intid));   // group 1 (non-secure)
+        Magic.store32(GICD_IPRIORITYR + (intid / 4) * 4, 0);         // priority 0 (highest) for this word
+        long taddr = GICD_ITARGETSR + (intid / 4) * 4;               // route to CPU 0 (byte = 0x01)
+        int shift = (intid % 4) * 8;
+        int cur = (int) Magic.load32(taddr);
+        Magic.store32(taddr, (cur & ~(0xFF << shift)) | (0x01 << shift));
         Magic.store32(word(GICD_ISENABLER, intid), bit(intid));      // forwarding enable
         Magic.store32(GICD_CTLR, 1);                                 // NS view: bit0 = EnableGrp1
         Magic.store32(GICC_PMR, 0xFF);                               // unmask every priority level

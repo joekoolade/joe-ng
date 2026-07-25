@@ -66,6 +66,16 @@ public final class Bcm2711
 
     /** AUX_MU_LSR bit5: transmit FIFO can accept at least one byte. */
     public static final int  LSR_TX_EMPTY = 5;
+    /** AUX_MU_LSR bit0: the receive FIFO holds at least one byte. */
+    public static final int  LSR_RX_READY = 0;
+    /** AUX_MU_IER bit0: raise an interrupt when the receive FIFO has data. */
+    public static final int  IER_RX_ENABLE = 0x01;
+    /**
+     * The mini-UART's interrupt is the AUX interrupt = VideoCore peripheral IRQ 29 (peripherals
+     * Table 102), which the GIC-400 exposes as SPI ID 96+29 = 125 (Figure 7). A group-1 SPI, so
+     * reachable from non-secure EL1 once the armstub has group-1'd the SPIs.
+     */
+    public static final int  AUX_SPI = 125;
 
     /**
      * <em>Fallback</em> baud divisor for 115200, used only if the mailbox does not
