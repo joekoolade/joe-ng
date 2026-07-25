@@ -395,7 +395,8 @@ public final class A64Enc
     public static final int ELR_EL2     = sysReg(3, 4,  4, 0, 1);
     public static final int VBAR_EL1    = sysReg(3, 0, 12, 0, 0);   // exception vector base
     public static final int ESR_EL1     = sysReg(3, 0,  5, 2, 0);   // exception syndrome
-    public static final int ELR_EL1     = sysReg(3, 0,  4, 0, 1);   // faulting PC
+    public static final int ELR_EL1     = sysReg(3, 0,  4, 0, 1);   // faulting PC / return PC
+    public static final int SPSR_EL1    = sysReg(3, 0,  4, 0, 0);   // saved PSTATE (for context switch)
     public static final int FAR_EL1     = sysReg(3, 0,  6, 0, 0);   // faulting address
     public static final int CNTFRQ_EL0    = sysReg(3, 3, 14, 0, 0); // generic-timer frequency (Hz)
     public static final int CNTPCT_EL0    = sysReg(3, 3, 14, 0, 1); // physical count (free-running)
