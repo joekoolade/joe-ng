@@ -136,6 +136,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "spinUnlock(J)V" -> Intrinsics.SPIN_UNLOCK;
         case "dsb()V" -> Intrinsics.DSB;
         case "dcCVAU(J)V" -> Intrinsics.DC_CVAU;
+        case "dcCVAC(J)V" -> Intrinsics.DC_CVAC;
         case "icIALLU()V" -> Intrinsics.IC_IALLU;
         case "readCurrentEL()J" -> Intrinsics.READ_CURRENT_EL;
         case "readCNTFRQ_EL0()J" -> Intrinsics.READ_CNTFRQ_EL0;

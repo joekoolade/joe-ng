@@ -1227,6 +1227,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.dcCvau(popReg()));      // clean the D-cache line at the address arg
         }
+        else if (id == Intrinsics.DC_CVAC)
+        {
+            cb.emit(A64Enc.dcCvac(popReg()));      // clean the D-cache line to PoC at the address arg
+        }
         else if (id == Intrinsics.IC_IALLU)
         {
             cb.emit(A64Enc.icIallu());

@@ -370,6 +370,11 @@ public final class A64Enc
     {
         return 0xD50B_7B20 | (rt & 0x1F);
     }
+    /** {@code DC CVAC, Xt} — clean data cache line by VA to the point of coherence (visible to other cores/DMA). */
+    public static int dcCvac(int rt)
+    {
+        return 0xD50B_7A20 | (rt & 0x1F);
+    }
     /** {@code IC IALLU} — invalidate all instruction cache to the point of unification. */
     public static int icIallu()
     {

@@ -82,6 +82,13 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** {@code DC CVAC, addr} — clean the data-cache line at {@code addr} to the point of coherence
+     *  (so an uncached agent -- another core with its MMU still off, or DMA -- sees the write). */
+    public static void dcCVAC(long addr)
+    {
+        throw intrinsic();
+    }
+
     /** {@code IC IALLU} — invalidate the whole instruction cache to the point of unification. */
     public static void icIALLU()
     {

@@ -244,6 +244,19 @@ public final class VM
         Magic.isb();
     }
 
+    /** Clean the D-cache lines spanning [start,end) to the point of coherence, then barrier -- so an
+     *  uncached agent (a secondary core with its MMU still off) sees what the primary just wrote. */
+    static void cleanToPoC(long start, long end)
+    {
+        long a = start & ~63L;                             // Cortex-A72 cache line = 64 bytes
+        while (a < end)
+        {
+            Magic.dcCVAC(a);
+            a = a + 64L;
+        }
+        Magic.dsb();
+    }
+
     /**
      * Secondary-core entry (reached by the boot stub at EL1, on a per-core stack, with its MMU still off).
      * Enable the identity-mapped MMU first -- so this core is cache-coherent with the others before it
@@ -339,12 +352,12 @@ public final class VM
         Magic.store32(s + w * 4L, A64Enc.msr(A64Enc.ELR_EL2, 3));     w += 1;
         Magic.store32(s + w * 4L, A64Enc.eret());                   w += 1;   // -> secondaryMain(core) at EL1
         Heap.publishCode(s, s + w * 4L);
+        cleanToPoC(s, s + w * 4L);                         // secondaries fetch the stub uncached (MMU off) ...
 
-        Magic.dsb();                                       // stub visible before we release cores
         Magic.store64(0x00E0L, s);                         // spin_cpu1 -> stub
         Magic.store64(0x00E8L, s);                         // spin_cpu2 -> stub
         Magic.store64(0x00F0L, s);                         // spin_cpu3 -> stub
-        Magic.dsb();
+        cleanToPoC(0x00C0L, 0x0100L);                      // ... and read the spin slots uncached: push both to PoC
         Magic.sev();                                       // wake the WFE-parked cores
 
         int up = 0;                                        // wait (<=0.5 s) for them to report in

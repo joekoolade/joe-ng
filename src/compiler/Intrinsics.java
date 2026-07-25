@@ -64,4 +64,5 @@ public final class Intrinsics
     public static final int TLBI_ALL = 46;           // TLBI VMALLE1  (flush EL1 TLB)
     public static final int SPIN_LOCK = 47;          // LDAXR/STLXR test-and-set acquire
     public static final int SPIN_UNLOCK = 48;        // STLR release
+    public static final int DC_CVAC = 49;            // clean D-cache line to PoC (cross-core / uncached visibility)
 }
