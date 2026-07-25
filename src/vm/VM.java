@@ -202,25 +202,94 @@ public final class VM
         while (Magic.load64(CORE_FLAGS) == 0L)             // wait for the primary's GO (slot 0)
         {
         }
-        int i = 0;
-        while (i < 48)
-        {
-            Uart.putc((byte) (0x30 + core));               // '1'/'2'/'3'
-            long e = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 100L;   // ~10 ms
-            while (Magic.readCNTPCT_EL0() < e)
-            {
-            }
-            i = i + 1;
-        }
+        smpWork(core);                                     // pull jobs from the shared queue under the lock
         while (true)                                       // done: park
         {
             Magic.wfe();
         }
     }
 
+    // ----- SMP mutual exclusion: a Lamport bakery lock -----------------------------------------
+    // The MMU is off, so RAM is Device memory and the exclusive monitor (LDXR/STXR) is unreliable --
+    // so we use a lock built from plain (single-copy-atomic) loads/stores + DSB barriers, which are
+    // well defined on Device memory. Device accesses bypass the caches, so all cores see each other's
+    // writes; the barriers give the ordering the algorithm needs.
+    static int[] bkChoosing;                               // [4] per-core "picking a number" flags
+    static int[] bkNumber;                                 // [4] per-core ticket numbers (0 = not waiting)
+
+    static void bakeryLock(int me)
+    {
+        bkChoosing[me] = 1;
+        Magic.dsb();
+        int max = 0;                                       // ticket = 1 + max of all outstanding tickets
+        int j = 0;
+        while (j < 4)
+        {
+            if (bkNumber[j] > max) { max = bkNumber[j]; }
+            j = j + 1;
+        }
+        bkNumber[me] = max + 1;
+        Magic.dsb();
+        bkChoosing[me] = 0;
+        Magic.dsb();
+        j = 0;
+        while (j < 4)                                      // wait until we have the lowest (ticket, core)
+        {
+            while (bkChoosing[j] != 0)                     // don't compare against a core mid-pick
+            {
+            }
+            while (bkNumber[j] != 0
+                   && (bkNumber[j] < bkNumber[me]
+                       || (bkNumber[j] == bkNumber[me] && j < me)))
+            {
+            }
+            j = j + 1;
+        }
+    }
+
+    static void bakeryUnlock(int me)
+    {
+        Magic.dsb();
+        bkNumber[me] = 0;                                  // leave the queue
+        Magic.dsb();
+    }
+
+    static int smpJob;                                     // shared job counter (the "run queue")
+    static final int SMP_NJOBS = 24;
+
+    /**
+     * The SMP work loop each core runs: take the next job from the shared counter under the bakery lock
+     * (so no two cores get the same one), and print which core ran which job. The whole "grab + print"
+     * is inside the critical section, so the output lines are clean -- proof the lock serialises all four
+     * cores -- and the jobs are distributed across them: real work sharing on a shared run queue.
+     */
+    static void smpWork(int core)
+    {
+        while (true)
+        {
+            bakeryLock(core);
+            int n = smpJob;
+            if (n >= SMP_NJOBS)
+            {
+                bakeryUnlock(core);
+                return;
+            }
+            smpJob = n + 1;
+            Uart.putc((byte) 0x63);                        // 'c'
+            Uart.putc((byte) (0x30 + core));               // core id
+            Uart.putc((byte) 0x3A);                        // ':'
+            printDec(n);                                   // job number
+            Uart.putc((byte) 0x20);                        // ' '
+            bakeryUnlock(core);
+        }
+    }
+
     static void bringUpSecondaries()
     {
         if (secondaryMainAddr == 0L) { secondaryMain(0); } // dead call: compile + stash secondaryMain
+        bkChoosing = new int[4];                           // bakery-lock state (shared by all cores)
+        bkNumber = new int[4];
+        smpJob = 0;
         Magic.store64(CORE_FLAGS + 0L, 0L);                // GO = 0 (released after we report cores up)
         Magic.store64(CORE_FLAGS + 8L, 0L);                // clear the report flags for cores 1..3
         Magic.store64(CORE_FLAGS + 16L, 0L);
@@ -1031,21 +1100,18 @@ public final class VM
 
         // SMP: release cores 1-3 from the armstub spin table; each reports in and then waits for GO.
         bringUpSecondaries();
-        // All four cores now run Java concurrently: 1/2/3 on the secondaries, 0 here on the primary,
-        // each printing its id every ~10 ms. The interleaving is genuine parallelism across the A72s
-        // (single-byte writes buffer in the UART FIFO, so no lock is needed for this).
-        Uart.write(Magic.bytes("smp 4 cores concurrent: "));
+        // Per-core scheduling: all four cores pull jobs from a shared run queue, coordinated by the
+        // bakery lock. Each "cN:J" is one core taking one job; the lock guarantees no job is taken
+        // twice and serialises the output. The primary joins in as core 0. Genuine work sharing across
+        // the four A72s with software mutual exclusion (no HW atomics, since the MMU is off).
+        Uart.write(Magic.bytes("smp jobs (cCORE:JOB) across 4 cores:\n"));
         Magic.store64(CORE_FLAGS + 0L, 1L);                // GO
         Magic.dsb();
-        int sc = 0;
-        while (sc < 48)
+        smpWork(0);                                        // the primary is core 0
+        // let stragglers on the other cores finish the last few jobs before we move on
+        long q = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 20L;
+        while (Magic.readCNTPCT_EL0() < q)
         {
-            Uart.putc((byte) 0x30);                        // '0' from the primary
-            long e = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 100L;
-            while (Magic.readCNTPCT_EL0() < e)
-            {
-            }
-            sc = sc + 1;
         }
         Uart.putc(0x0A);
 
