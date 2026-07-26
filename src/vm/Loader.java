@@ -1,6 +1,7 @@
 package vm;
 
 import asm.A64Enc;
+import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import compiler.Intrinsics;
@@ -194,6 +195,27 @@ public final class Loader
      */
     static int loadGuest()
     {
+        resetLoader();
+        // Handed over deliberately worst-first — Guest depends on all three, and the
+        // implementors depend on the interface. loadAll derives the real order.
+        addBlob(VM.guestBytes, (int) VM.guestLen);
+        addBlob(VM.betaBytes, (int) VM.betaLen);
+        addBlob(VM.alphaBytes, (int) VM.alphaLen);
+        addBlob(VM.greeterBytes, (int) VM.greeterLen);
+        addBlob(VM.myExcBytes, (int) VM.myExcLen);
+        loadAll();
+        seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
+        long code = findMethod(VM.guestBytes);
+        if (code == 0L)
+        {
+            return 0;
+        }
+        return (int) Magic.call0(bufOf(code));
+    }
+
+    /** Reset every loader registry to empty, ready for a fresh {@link #loadAll} batch. */
+    private static void resetLoader()
+    {
         rgBase = new long[MAXREG];
         rgClassOff = new int[MAXREG];
         rgNameOff = new int[MAXREG];
@@ -235,22 +257,138 @@ public final class Loader
         pdCount = 0;
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
-        // Handed over deliberately worst-first — Guest depends on all three, and the
-        // implementors depend on the interface. loadAll derives the real order.
         pdLen = new int[MAXBLOB];
-        addBlob(VM.guestBytes, (int) VM.guestLen);
-        addBlob(VM.betaBytes, (int) VM.betaLen);
-        addBlob(VM.alphaBytes, (int) VM.alphaLen);
-        addBlob(VM.greeterBytes, (int) VM.greeterLen);
-        addBlob(VM.myExcBytes, (int) VM.myExcLen);
+    }
+
+    /**
+     * Demand-load and run {@code demo/DiningPhilosophers.main()} on the metal. Register only the demo
+     * blob from the embedded class directory, then pull in every class it transitively references that
+     * the image embedded in {@link VM#classDir} — the mini {@code java.base} — logging each as it loads.
+     * Build the shared run-trampoline (so {@code Thread.start()} can enter a Runnable), then JIT + call
+     * main, which spawns the philosopher tasks. The scheduler (already running) preempts them.
+     */
+    static void loadAndRun()
+    {
+        resetLoader();
+        addBlob(VM.philBytes, (int) VM.philLen);       // the program (embedded as a static blob, like Guest)
+        resolveClosureFromDir();                        // pull referenced library classes on demand
         loadAll();
-        seek(0x616e73776572L, 6, 0x282949L, 3);        // "answer" "()I"
-        long code = findMethod(VM.guestBytes);
-        if (code == 0L)
+        buildRunTramp();                               // needs Runnable loaded (ifCount populated)
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.philBytes);
+        if (code != 0L)
         {
-            return 0;
+            long unused = Magic.call0(bufOf(code));    // main()V returns void; assign to avoid a pop2
         }
-        return (int) Magic.call0(bufOf(code));
+    }
+
+    /**
+     * Repeatedly probe the registered blobs for class references and register any that are embedded in
+     * {@link VM#classDir} but not yet registered, until the transitive closure is complete. References
+     * to unembedded roots ({@code java/lang/Object}, {@code magic/Magic}) are simply not found and skipped.
+     */
+    private static void resolveClosureFromDir()
+    {
+        boolean grew = true;
+        while (grew)
+        {
+            grew = false;
+            probeAll();                                // (re)builds pdNameOff + the dep list
+            int d = 0;
+            while (d < dpCount)
+            {
+                int owner = dpOwner[d];
+                int off = dpOff[d];                    // referenced class name (Utf8 in pdBase[owner])
+                if (!nameRegistered(pdBase[owner], off) && registerNameFromDir(pdBase[owner], off) != 0L)
+                {
+                    grew = true;
+                }
+                d += 1;
+            }
+        }
+    }
+
+    /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
+    private static boolean nameRegistered(long base, int off)
+    {
+        int j = 0;
+        while (j < pdCount)
+        {
+            if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+            {
+                return true;
+            }
+            j += 1;
+        }
+        return false;
+    }
+
+    /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
+    private static long registerNameFromDir(long base, int off)
+    {
+        long namePtr = base + off + 2;                 // skip the u2 length prefix
+        int len = u2(base + off);
+        long bytes = VM.dirBytes(namePtr, len);
+        if (bytes == 0L)
+        {
+            return 0L;                                 // an unembedded root (Object/Magic) — skip
+        }
+        addBlob(bytes, (int) VM.dirLen(namePtr, len));
+        Uart.write(Magic.bytes("  load "));
+        writeName(namePtr, len);
+        Uart.putc(0x0A);
+        return bytes;
+    }
+
+    /** Write {@code len} raw name bytes to the UART (a '/'-separated internal class name). */
+    private static void writeName(long p, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            Uart.putc((byte) u1(p + i));
+            i += 1;
+        }
+    }
+
+    /**
+     * Build the shared run-trampoline (stored in {@link VM#runTrampAddr}): entered with x0 = a Runnable,
+     * it invokeinterface-dispatches {@code run()} on the receiver, then calls {@link VM#taskExit}. All the
+     * class's itable-directory entries share one imap, so the first entry's table is it — no directory scan.
+     */
+    static void buildRunTramp()
+    {
+        int slot = runInterfaceSlot();
+        long buf = Heap.alloc(64);
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 0, 0));         w += 1;  // x17 = receiver.tib
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 0));        w += 1;  // x17 = Type
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 16));       w += 1;  // x17 = itable dir
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 8));        w += 1;  // x16 = imap (shared table)
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 16, slot * 8)); w += 1;  // x16 = run() buffer
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // run() with x0 = receiver
+        long te = VM.taskExitAddr;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) te, 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) (te >> 16), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // taskExit() — never returns
+        Heap.publishCode(buf, buf + w * 4L);
+        VM.runTrampAddr = buf;
+    }
+
+    /** Global interface-method index of {@code run()} ("run"/"()V"), or 0 if not registered. */
+    private static int runInterfaceSlot()
+    {
+        int i = 0;
+        while (i < ifCount)
+        {
+            if (isName(ifBase[i], ifNameOff[i], 0x72756EL, 3)
+                    && isName(ifBase[i], ifDescOff[i], 0x282956L, 3))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return 0;
     }
 
     /** Load java.lang.Math from java.base and run Math.max(0x4D, 0x21) -> 'M'. */
@@ -1547,6 +1685,12 @@ public final class Loader
         if (isName(gbase, n, 0x73746F726538L, 6))  { return Intrinsics.STORE8; }   // "store8"
         if (isName(gbase, n, 0x73746F72653332L, 7)) { return Intrinsics.STORE32; } // "store32"
         if (isName(gbase, n, 0x73746F72653634L, 7)) { return Intrinsics.STORE64; } // "store64"
+        if (isName(gbase, n, 0x737061776EL, 5))      { return Intrinsics.SPAWN; }    // "spawn"
+        if (isName(gbase, n, 0x73656D57616974L, 7))  { return Intrinsics.SEM_WAIT; } // "semWait"
+        if (isName(gbase, n, 0x73656D506F7374L, 7))  { return Intrinsics.SEM_POST; } // "semPost"
+        if (isName(gbase, n, 0x736C6565704D73L, 7))  { return Intrinsics.SLEEP_MS; } // "sleepMs"
+        if (isName(gbase, n, 0x6E657753656DL, 6))    { return Intrinsics.NEW_SEM; }  // "newSem"
+        if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
         return -1;
     }
 

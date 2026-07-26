@@ -44,6 +44,13 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.betaBytes",    "vm/VM.betaLen",    "vm/Beta",        registry.rawBytes("vm/Beta"));
         ib.addBlob("vm/VM.myExcBytes",   "vm/VM.myExcLen",   "vm/MyExc",       registry.rawBytes("vm/MyExc"));
         ib.addBlob("vm/VM.mathBytes",    "vm/VM.mathLen",    "java/lang/Math", registry.rawBytes("java/lang/Math"));
+        // The mini java.base + the demand-loaded program (embedded raw; loaded on the metal by vm/Loader).
+        // Order here must match VM.blobClass (the metal writer's self-build model of the blob region).
+        ib.addBlob("vm/VM.runnableBytes",    "vm/VM.runnableLen",    "java/lang/Runnable",             registry.rawBytes("java/lang/Runnable"));
+        ib.addBlob("vm/VM.threadBytes",      "vm/VM.threadLen",      "java/lang/Thread",               registry.rawBytes("java/lang/Thread"));
+        ib.addBlob("vm/VM.semBytes",         "vm/VM.semLen",         "java/util/concurrent/Semaphore", registry.rawBytes("java/util/concurrent/Semaphore"));
+        ib.addBlob("vm/VM.philosopherBytes", "vm/VM.philosopherLen", "demo/Philosopher",               registry.rawBytes("demo/Philosopher"));
+        ib.addBlob("vm/VM.philBytes",        "vm/VM.philLen",        "demo/DiningPhilosophers",        registry.rawBytes("demo/DiningPhilosophers"));
         return ib.build(ENTRY);
     }
 

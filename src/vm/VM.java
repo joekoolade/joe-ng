@@ -513,8 +513,11 @@ public final class VM
     // stack swap. sleep(ms) marks a task SLEEPING so the scheduler skips it until its deadline.
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
-    static final int  MAX_TASKS = 8;
-    static final int  NUM_SEM = 4;
+    static final int  MAX_TASKS = 16;       // boot + M7 demo tasks (0..4) + up to 11 philosophers
+    static final int  NUM_SEM = 16;         // reserved 0..3 (M7/console) + dynamically-allocated forks
+    static final int  SEM_RESERVED = 4;     // dynamic semaphores (forks) allocate at/after this index
+    static int nextSem = SEM_RESERVED;      // next free semaphore index (newSem hands these out)
+    static long runTrampAddr;               // Loader-built stub: invokeinterface Runnable.run() on x0, then taskExit
     static final int  TASK_EMPTY = 0;
     static final int  TASK_READY = 1;
     static final int  TASK_SLEEPING = 2;    // waiting on a CNTPCT deadline (sleep)
@@ -751,6 +754,59 @@ public final class VM
         return id;
     }
 
+    /** Like {@link #spawn}, but the task starts with {@code arg0} in x0 (so it can enter an instance method). */
+    static int spawnArg(long entry, long arg0)
+    {
+        int id = spawn(entry);
+        Magic.store64(taskSp[id] + 0L, arg0);              // x0 slot of the initial frame = receiver
+        return id;
+    }
+
+    /**
+     * Start a task that runs the {@code java/lang/Runnable} at {@code runnable}: it enters the Loader-built
+     * run-trampoline ({@link #runTrampAddr}) with the receiver in x0, which invokeinterface-dispatches
+     * {@code run()} and, when it returns, calls {@link #taskExit}. Called from JIT'd guest code via
+     * {@code magic.spawn} (the mini {@code java.lang.Thread.start()}).
+     */
+    static void startThread(long runnable)
+    {
+        spawnArg(runTrampAddr, runnable);
+    }
+
+    /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index (a "fork"). */
+    static int newSem(int initial)
+    {
+        int s = nextSem;
+        nextSem = s + 1;
+        semCount[s] = initial;
+        return s;
+    }
+
+    /** End the current task: park it BLOCKED on a never-posted semaphore so the scheduler skips it forever. */
+    static void taskExit()
+    {
+        Magic.disableIrq();
+        taskState[curTask] = TASK_BLOCKED;
+        taskWaitOn[curTask] = 3;                           // the dead park semaphore (never posted)
+        Magic.enableIrq();
+        while (true)
+        {
+            taskYield();                                   // never rescheduled; yields the CPU permanently
+        }
+    }
+
+    /** Emit one philosopher status line: {@code P<who> <verb>} (formatting kept image-side — no concat on metal). */
+    static void philReport(int who, int state)
+    {
+        Uart.putc((byte) 0x50);                            // 'P'
+        Uart.putc((byte) (0x30 + who));                    // philosopher id (single digit)
+        Uart.putc((byte) 0x20);
+        if (state == 0)      { Uart.write(Magic.bytes("thinks\n")); }
+        else if (state == 1) { Uart.write(Magic.bytes("hungry\n")); }
+        else if (state == 2) { Uart.write(Magic.bytes("EATS\n")); }
+        else                 { Uart.write(Magic.bytes("done\n")); }
+    }
+
     /**
      * Build a runtime context-switch stub on the heap: save the interrupted context (x0..x30, ELR_EL1,
      * SPSR_EL1) to the current stack, {@code BL pickAddr} to choose the next task, then restore that
@@ -809,18 +865,15 @@ public final class VM
      * synchronous vector, create taskA/taskB with their own stacks, bring up the GIC + timer, and unmask
      * IRQs. On the first tick (or first yield) the running boot flow becomes task 0.
      */
-    static void startScheduler()
+    /**
+     * (Re)build the timer + SVC context-switch stubs and install them at the EL1 IRQ/FIQ/synchronous
+     * vectors. The stubs are heap buffers referenced only by the raw vector table, so a {@link Magic#gc}
+     * frees them; call this again after any GC (before relying on the scheduler) to rebuild them.
+     */
+    static void installSchedVectors()
     {
-        if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }    // dead calls: make schedule/yieldPick/
-        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // taskA/taskB/taskC compiled + stashed
-        if (taskAAddr == 0L) { taskA(); }
-        if (taskBAddr == 0L) { taskB(); }
-        if (taskCAddr == 0L) { taskC(); }
-        if (taskRAddr == 0L) { taskR(); }
-
         long irqStub = buildSwitchStub(scheduleAddr, false);
         long svcStub = buildSwitchStub(yieldPickAddr, true);
-
         long e4 = vbarBase + 4L * 0x80L;                   // synchronous (Current EL, SPx) -> SVC/yield
         Magic.store32(e4, A64Enc.b((int) ((svcStub - e4) / 4L)));
         long e5 = vbarBase + 5L * 0x80L;                   // IRQ (Current EL, SPx)
@@ -829,6 +882,25 @@ public final class VM
         Magic.store32(e6, A64Enc.b((int) ((irqStub - e6) / 4L)));
         Heap.publishCode(e4, e6 + 4L);
         Magic.isb();
+    }
+
+    static void startScheduler()
+    {
+        if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }    // dead calls: make schedule/yieldPick/
+        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // taskA/taskB/taskC compiled + stashed
+        if (taskAAddr == 0L) { taskA(); }
+        if (taskBAddr == 0L) { taskB(); }
+        if (taskCAddr == 0L) { taskC(); }
+        if (taskRAddr == 0L) { taskR(); }
+        // Dead calls: the mini java.base runtime reaches these only via writer-stashed addresses (from
+        // JIT'd guest code), so force the writer to compile them. Guarded on their stashed addr, so they
+        // never actually run on metal (the addr is non-zero there).
+        if (startThreadAddr == 0L) { startThread(0L); }
+        if (newSemAddr == 0L) { int u = newSem(0); }
+        if (philReportAddr == 0L) { philReport(0, 0); }
+        if (taskExitAddr == 0L) { taskExit(); }
+
+        installSchedVectors();
 
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
@@ -1176,6 +1248,12 @@ public final class VM
     static long betaBytes, betaLen;     // raw Beta.class blob (implements Greeter at vtable slot 1)
     static long myExcBytes, myExcLen;   // raw MyExc.class blob (a throwable Guest catches)
     static long mathBytes, mathLen;     // raw java.base java/lang/Math.class blob
+    // The mini java.base + the demand-loaded program (pulled from classDir on the metal by the Loader).
+    static long runnableBytes, runnableLen;         // java/lang/Runnable
+    static long threadBytes, threadLen;             // java/lang/Thread
+    static long semBytes, semLen;                   // java/util/concurrent/Semaphore
+    static long philosopherBytes, philosopherLen;   // demo/Philosopher (a Runnable)
+    static long philBytes, philLen;     // demo/DiningPhilosophers.class blob (the demand-loaded program root)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1189,6 +1267,14 @@ public final class VM
     static long instanceOfAddr;        // VM.instanceOf(JJ)I
     static long checkCastAddr;         // VM.checkCast(JJ)J
     static long unwindAddr;            // VM.unwind(JJJ)V
+    // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
+    static long startThreadAddr;       // VM.startThread(J)V
+    static long semWaitAddr;           // VM.semWait(I)V
+    static long semPostAddr;           // VM.semPost(I)V
+    static long sleepAddr;             // VM.sleep(J)V
+    static long newSemAddr;            // VM.newSem(I)I
+    static long philReportAddr;        // VM.philReport(II)V
+    static long taskExitAddr;          // VM.taskExit()V — the run-trampoline's tail (loader-emitted BL)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -1446,6 +1532,31 @@ public final class VM
         // M4: parse+compile+run a class embedded only as raw bytes, on the metal
         Uart.putc(Loader.loadGuest());                     // '*' from Guest.answer(), JIT'd at runtime
         Uart.putc(Loader.loadMath());                      // 'M' from java.base java.lang.Math.max(0x4D,0x21)
+        Uart.putc(0x0A);
+
+        // M4 capstone: demand-load and RUN a whole program. demo/DiningPhilosophers is embedded only as
+        // raw bytes; loadAndRun parses it, pulls java/lang/Thread, java/lang/Runnable,
+        // java/util/concurrent/Semaphore and demo/Philosopher from the embedded mini java.base (classDir)
+        // as it references them (logged "  load <class>"), JITs them, and runs main -- which spawns five
+        // philosopher tasks. We JIT + spawn with IRQs still masked, then re-arm the scheduler so its own
+        // timer preempts them: they think/eat/contend for fork semaphores for ~2 s. Deadlock is avoided by
+        // fork ordering. Then stop the tick so the self-build fixpoint below runs undisturbed.
+        Uart.write(Magic.bytes("dining philosophers (demand-loaded from embedded java.base):\n"));
+        installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
+        taskCount = 1;                                     // fresh scheduler table: just task 0 (the boot flow)
+        curTask = 0;
+        taskState[0] = TASK_READY;
+        Loader.loadAndRun();                               // JIT + spawn the philosopher tasks (IRQs masked)
+        Magic.writeCNTP_TVAL_EL0(timerReload);
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();                                 // preemption starts; the philosopher tasks run now
+        long d0 = Magic.readCNTPCT_EL0();
+        while (Magic.readCNTPCT_EL0() < d0 + Magic.readCNTFRQ_EL0() * 2L)   // ~2 s window
+        {
+            schedPause();
+            taskYield();                                   // let the philosophers run; we're task 0
+        }
+        stopTimerTick();
         Uart.putc(0x0A);
 
         // The runs above JIT-compiled framed methods and registered their frames.
@@ -2912,7 +3023,8 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    private static int[] dBlobOff;       // the 6 embedded blobs' word offsets (Guest/Greeter/Alpha/Beta/MyExc/Math)
+    static final int BLOB_COUNT = 11;    // embedded blobs: Guest/Greeter/Alpha/Beta/MyExc/Math + mini java.base + demo
+    private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
     private static int[] imHNa;
@@ -3442,9 +3554,9 @@ public final class VM
         cur += drHandlerCount * 8;
 
         dBlobStart = cur;                                    // embedded raw .class blobs, 8-byte aligned
-        dBlobOff = new int[6];
+        dBlobOff = new int[BLOB_COUNT];
         int bb = 0;
-        while (bb < 6)
+        while (bb < BLOB_COUNT)
         {
             dBlobOff[bb] = cur;
             cur += align8W(MetalClassModel.bytesOf(blobClass(bb)).length);
@@ -3725,7 +3837,12 @@ public final class VM
         if (b == 2) { return Magic.bytes("vm/Alpha"); }
         if (b == 3) { return Magic.bytes("vm/Beta"); }
         if (b == 4) { return Magic.bytes("vm/MyExc"); }
-        return Magic.bytes("java/lang/Math");
+        if (b == 5) { return Magic.bytes("java/lang/Math"); }
+        if (b == 6) { return Magic.bytes("java/lang/Runnable"); }
+        if (b == 7) { return Magic.bytes("java/lang/Thread"); }
+        if (b == 8) { return Magic.bytes("java/util/concurrent/Semaphore"); }
+        if (b == 9) { return Magic.bytes("demo/Philosopher"); }
+        return Magic.bytes("demo/DiningPhilosophers");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -3760,6 +3877,13 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("secondaryMainAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("secondaryMain"), Magic.bytes("(I)V")); }
         if (bytesEqual(nm, Magic.bytes("pcScheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcSchedule"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("pcTask1Addr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTask1"), Magic.bytes("(I)V")); }
+        if (bytesEqual(nm, Magic.bytes("startThreadAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("startThread"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("semWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("semWait"), Magic.bytes("(I)V")); }
+        if (bytesEqual(nm, Magic.bytes("semPostAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("semPost"), Magic.bytes("(I)V")); }
+        if (bytesEqual(nm, Magic.bytes("sleepAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("sleep"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("newSemAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newSem"), Magic.bytes("(I)I")); }
+        if (bytesEqual(nm, Magic.bytes("philReportAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("philReport"), Magic.bytes("(II)V")); }
+        if (bytesEqual(nm, Magic.bytes("taskExitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskExit"), Magic.bytes("()V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
@@ -3768,7 +3892,7 @@ public final class VM
     private static long blobStatic(byte[] nm)
     {
         int b = 0;
-        while (b < 6)
+        while (b < BLOB_COUNT)
         {
             byte[] c = blobClass(b);
             if (bytesEqual(nm, blobAddrName(b)))
@@ -3791,7 +3915,12 @@ public final class VM
         if (b == 2) { return Magic.bytes("alphaBytes"); }
         if (b == 3) { return Magic.bytes("betaBytes"); }
         if (b == 4) { return Magic.bytes("myExcBytes"); }
-        return Magic.bytes("mathBytes");
+        if (b == 5) { return Magic.bytes("mathBytes"); }
+        if (b == 6) { return Magic.bytes("runnableBytes"); }
+        if (b == 7) { return Magic.bytes("threadBytes"); }
+        if (b == 8) { return Magic.bytes("semBytes"); }
+        if (b == 9) { return Magic.bytes("philosopherBytes"); }
+        return Magic.bytes("philBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -3801,7 +3930,12 @@ public final class VM
         if (b == 2) { return Magic.bytes("alphaLen"); }
         if (b == 3) { return Magic.bytes("betaLen"); }
         if (b == 4) { return Magic.bytes("myExcLen"); }
-        return Magic.bytes("mathLen");
+        if (b == 5) { return Magic.bytes("mathLen"); }
+        if (b == 6) { return Magic.bytes("runnableLen"); }
+        if (b == 7) { return Magic.bytes("threadLen"); }
+        if (b == 8) { return Magic.bytes("semLen"); }
+        if (b == 9) { return Magic.bytes("philosopherLen"); }
+        return Magic.bytes("philLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */
@@ -3922,7 +4056,7 @@ public final class VM
         }
         // ----- blobs: raw .class bytes -----
         int b = 0;
-        while (b < 6)
+        while (b < BLOB_COUNT)
         {
             int r = chkBytes(dBlobOff[b], MetalClassModel.bytesOf(blobClass(b)));
             if (r >= 0) { return r; }
@@ -5175,6 +5309,28 @@ public final class VM
             if (Magic.load64(e + 8L) == nameLen && bytesEqual(Magic.load64(e), nameAddr, nameLen))
             {
                 return Magic.load64(e + 16L);
+            }
+            i = i + 1L;
+        }
+        return 0L;
+    }
+
+    /** Class-directory lookup for the on-metal {@link Loader}: bytes address for [namePtr,len), or 0. */
+    static long dirBytes(long namePtr, long len)
+    {
+        return findClass(namePtr, len);
+    }
+
+    /** Companion to {@link #dirBytes}: the embedded class's byte length for [namePtr,len), or 0. */
+    static long dirLen(long namePtr, long len)
+    {
+        long i = 0L;
+        while (i < classCount)
+        {
+            long e = classDir + i * 32L;
+            if (Magic.load64(e + 8L) == len && bytesEqual(Magic.load64(e), namePtr, len))
+            {
+                return Magic.load64(e + 24L);
             }
             i = i + 1L;
         }

@@ -18,17 +18,26 @@ JAVA    ?= java
 OUT     := out
 IMG     := kernel8.img
 SOURCES := $(shell find src test -name '*.java')
+# Guest sources (the mini java.base + the demand-loaded demo). Compiled as a java.base
+# patch so java/lang/* carry their real names; embedded raw and loaded on the metal (M4).
+# --add-reads lets the patched java.base see magic.Magic (the scheduler intrinsics).
+GUESTSRC := $(shell find guestsrc -name '*.java')
 
 .PHONY: all build test image qemu clean
 
 all: test image
 
-build: $(OUT)/.stamp
+build: $(OUT)/.stamp $(OUT)/.guest-stamp
 
 # Recompile the whole set whenever any source is newer than the stamp.
 $(OUT)/.stamp: $(SOURCES)
 	@mkdir -p $(OUT)
 	$(JAVAC) -d $(OUT) $(SOURCES)
+	@touch $@
+
+# Compile the guest tree into out/ after the main set (it references magic.Magic there).
+$(OUT)/.guest-stamp: $(OUT)/.stamp $(GUESTSRC)
+	$(JAVAC) --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(GUESTSRC)
 	@touch $@
 
 test: build

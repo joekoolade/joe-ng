@@ -143,6 +143,43 @@ public final class Magic
         throw intrinsic();
     }
 
+    // ----- scheduler ops for JIT-loaded guest code (the mini java.base runtime) -----
+    /** Start a task running {@code r}'s {@code run()} (java/lang/Runnable) on its own stack. */
+    public static void spawn(Object r)
+    {
+        throw intrinsic();
+    }
+
+    /** Blocking down/acquire on counting semaphore {@code s}. */
+    public static void semWait(int s)
+    {
+        throw intrinsic();
+    }
+
+    /** up/release on counting semaphore {@code s}, waking one waiter. */
+    public static void semPost(int s)
+    {
+        throw intrinsic();
+    }
+
+    /** Sleep this task at least {@code ms} milliseconds (yields; does not busy-wait). */
+    public static void sleepMs(long ms)
+    {
+        throw intrinsic();
+    }
+
+    /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
+    public static int newSem(int initial)
+    {
+        throw intrinsic();
+    }
+
+    /** Emit a formatted philosopher status line (formatting stays image-side; no String concat on metal). */
+    public static void report(int who, int state)
+    {
+        throw intrinsic();
+    }
+
     /** {@code MSR VBAR_EL1, v} — install the EL1 exception vector table base (2 KiB-aligned). */
     public static void writeVBAR_EL1(long v)
     {

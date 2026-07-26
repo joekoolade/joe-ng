@@ -1243,6 +1243,30 @@ public final class Baseline
         {
             cb.emit(A64Enc.mrs(pushReg(), A64Enc.MPIDR_EL1));
         }
+        else if (id == Intrinsics.SPAWN)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.SPAWN);       // (runnable) -> void
+        }
+        else if (id == Intrinsics.SEM_WAIT)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.SEM_WAIT);    // (sem) -> void
+        }
+        else if (id == Intrinsics.SEM_POST)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.SEM_POST);    // (sem) -> void
+        }
+        else if (id == Intrinsics.SLEEP_MS)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.SLEEP_MS);    // (ms) -> void
+        }
+        else if (id == Intrinsics.NEW_SEM)
+        {
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.NEW_SEM);      // (initial) -> int
+        }
+        else if (id == Intrinsics.REPORT)
+        {
+            emitCall(cb, 2, false, false, SYM_HELPER, Symbols.REPORT);      // (who, state) -> void
+        }
         else if (id == Intrinsics.WRITE_VBAR_EL1)
         {
             cb.emit(A64Enc.msr(A64Enc.VBAR_EL1, popReg()));

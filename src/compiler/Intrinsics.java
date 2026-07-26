@@ -48,6 +48,13 @@ public final class Intrinsics
     public static final int READ_ELR_EL1 = 30;
     public static final int READ_FAR_EL1 = 31;
     public static final int READ_MPIDR = 50;        // this core's affinity register (low 2 bits = core id)
+    // Scheduler ops the JIT-loaded mini java.base runtime calls; each lowers to a BL to a VM helper.
+    public static final int SPAWN = 51;             // magic.spawn(Object) -> VM.startThread
+    public static final int SEM_WAIT = 52;          // magic.semWait(int)  -> VM.semWait
+    public static final int SEM_POST = 53;          // magic.semPost(int)  -> VM.semPost
+    public static final int SLEEP_MS = 54;          // magic.sleepMs(long) -> VM.sleep
+    public static final int NEW_SEM = 55;           // magic.newSem(int)   -> VM.newSem
+    public static final int REPORT = 56;            // magic.report(int,int) -> VM.philReport
     public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
     public static final int READ_CNTFRQ_EL0 = 33;   // generic-timer frequency
     public static final int READ_CNTPCT_EL0 = 34;   // generic-timer physical count

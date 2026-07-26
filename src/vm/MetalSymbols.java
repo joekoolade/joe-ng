@@ -2,6 +2,7 @@ package vm;
 
 import asm.A64Enc;
 import asm.CodeBuffer;
+import compiler.Intrinsics;
 import compiler.Symbols;
 
 /**
@@ -94,7 +95,11 @@ final class MetalSymbols implements Symbols
     }
     public boolean intrinsicEmitsCall(int methodCp)
     {
-        return false;   // the memory/bytes intrinsics this JIT recognises emit no BL/BLR
+        // The memory/bytes intrinsics emit no BL/BLR; the scheduler ops (spawn/sem*/sleep/newSem/report)
+        // lower to a BL to a VM helper, so a caller using them must be treated as non-leaf.
+        int id = Loader.magicId(methodCp);
+        return id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
+            || id == Intrinsics.SLEEP_MS || id == Intrinsics.NEW_SEM || id == Intrinsics.REPORT;
     }
     public int intrinsicId(int methodCp)
     {
@@ -151,6 +156,30 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.CHECK_CAST)
         {
             return VM.checkCastAddr;
+        }
+        if (helper == Symbols.SPAWN)
+        {
+            return VM.startThreadAddr;
+        }
+        if (helper == Symbols.SEM_WAIT)
+        {
+            return VM.semWaitAddr;
+        }
+        if (helper == Symbols.SEM_POST)
+        {
+            return VM.semPostAddr;
+        }
+        if (helper == Symbols.SLEEP_MS)
+        {
+            return VM.sleepAddr;
+        }
+        if (helper == Symbols.NEW_SEM)
+        {
+            return VM.newSemAddr;
+        }
+        if (helper == Symbols.REPORT)
+        {
+            return VM.philReportAddr;
         }
         return VM.unwindAddr;                       // UNWIND
     }

@@ -35,6 +35,13 @@ public interface Symbols
     int INSTANCE_OF = 3;        // vm/VM.instanceOf(JJ)I
     int CHECK_CAST = 4;         // vm/VM.checkCast(JJ)J
     int UNWIND = 5;             // vm/VM.unwind(JJJ)V
+    // Scheduler helpers reachable from JIT-loaded guest code (the mini java.base runtime).
+    int SPAWN = 6;              // vm/VM.startThread(J)V  — start a task running a Runnable
+    int SEM_WAIT = 7;           // vm/VM.semWait(I)V
+    int SEM_POST = 8;           // vm/VM.semPost(I)V
+    int SLEEP_MS = 9;           // vm/VM.sleep(J)V
+    int NEW_SEM = 10;           // vm/VM.newSem(I)I  — allocate a semaphore, return its index
+    int REPORT = 11;            // vm/VM.philReport(II)V — formatted status line (no String concat on metal)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
