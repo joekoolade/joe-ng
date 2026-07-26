@@ -311,8 +311,9 @@ public final class Loader
     static void loadLambda()
     {
         resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);    // the SAM-with-arg lambda prints via concat -> String
         addBlob(VM.lambdaDemoBytes, (int) VM.lambdaDemoLen);
-        resolveClosureFromDir();                        // pulls java/lang/Runnable (referenced by r.run())
+        resolveClosureFromDir();                        // pulls java/lang/Runnable + demo/IntOp (referenced)
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.lambdaDemoBytes);
@@ -1827,13 +1828,37 @@ public final class Loader
         long ifaceType = lambdaIfaceType(idx);
         int ifaceSlot = lambdaIfaceSlot(idx);
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
-        // thunk: x0 = lambda obj; load captures into x0..x(nc-1) (x0 loaded last), then tail-call the body.
-        long thunk = Heap.alloc(64);
+        int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
+        // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
+        // Build the thunk: move the SAM args to x(nc)..x(nc+ia-1), load the captures into x0..x(nc-1),
+        // then tail-call the body. Shift direction avoids clobbering: dest-source = nc-1, so shift UP
+        // (high->low) when nc>=1, DOWN (low->high) when nc==0.
+        long thunk = Heap.alloc(128);
         int w = 0;
+        if (nc >= 1)
+        {
+            int j = ia - 1;
+            while (j >= 0)
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
+                w += 1;
+                j -= 1;
+            }
+        }
+        else
+        {
+            int j = 0;
+            while (j < ia)
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j]
+                w += 1;
+                j += 1;
+            }
+        }
         int c = nc - 1;
         while (c >= 0)
         {
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c]
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c] (x0 last)
             w += 1;
             c -= 1;
         }

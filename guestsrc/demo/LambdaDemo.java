@@ -22,6 +22,12 @@ public class LambdaDemo
         b.run();
 
         twice(() -> Magic.printStr("twice\n"));                 // lambda passed as an arg, invoked 2x
+
+        // slice 1d: a SAM WITH an argument (IntOp.apply(int)), capturing a value.
+        int base = 100;
+        IntOp add = (x) -> x + base;                            // captures base; SAM arg x
+        int r = add.apply(5);                                   // -> 5 + 100 = 105
+        Magic.printStr("apply(5)=" + r + "\n");
     }
 
     static void twice(Runnable r)

@@ -54,8 +54,9 @@ public final class BuildRuntimeImage
         // invokedynamic slice 1: a mini java/lang/String (concat result) + the concat demo program.
         ib.addBlob("vm/VM.stringBytes",      "vm/VM.stringLen",      "java/lang/String",               registry.rawBytes("java/lang/String"));
         ib.addBlob("vm/VM.concatDemoBytes",  "vm/VM.concatDemoLen",  "demo/ConcatDemo",                registry.rawBytes("demo/ConcatDemo"));
-        // invokedynamic slice 1c: the lambda demo program.
+        // invokedynamic slice 1c/1d: the lambda demo program + a SAM-with-arg functional interface.
         ib.addBlob("vm/VM.lambdaDemoBytes",  "vm/VM.lambdaDemoLen",  "demo/LambdaDemo",                registry.rawBytes("demo/LambdaDemo"));
+        ib.addBlob("vm/VM.intOpBytes",       "vm/VM.intOpLen",       "demo/IntOp",                     registry.rawBytes("demo/IntOp"));
         return ib.build(ENTRY);
     }
 

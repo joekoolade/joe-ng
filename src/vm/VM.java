@@ -1414,6 +1414,7 @@ public final class VM
     static long stringBytes, stringLen;             // java/lang/String (result of string concat, M-B slice 1)
     static long concatDemoBytes, concatDemoLen;     // demo/ConcatDemo (the invokedynamic-concat program)
     static long lambdaDemoBytes, lambdaDemoLen;     // demo/LambdaDemo (the invokedynamic-lambda program, 1c)
+    static long intOpBytes, intOpLen;               // demo/IntOp (a SAM-with-arg functional interface, 1d)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1612,27 +1613,9 @@ public final class VM
         printDec((int) ticks);
         Uart.write(Magic.bytes(" preemptions\n"));
 
-        // M7 capstone: an interrupt-driven Console device. Park the phase-1 tasks and hand the mini-UART
-        // to Console (RX/TX ring buffers + GIC SPI 125). taskR is now a shell: it blocks in
-        // Console.readLine (woken by the RX ISR, echoing as you type) and writes the line back via
-        // Console.write (queued, drained by the TX ISR) -- never touching the UART itself. Needs
-        // armstub8-joe.bin (group-1 SPIs) to deliver, so it's interactive on real HW; QEMU idles the window.
-        taskState[1] = TASK_BLOCKED; taskWaitOn[1] = 3;    // park taskA/taskB/taskC on a dead semaphore
-        taskState[2] = TASK_BLOCKED; taskWaitOn[2] = 3;
-        taskState[3] = TASK_BLOCKED; taskWaitOn[3] = 3;
-        Console.init();
-        Magic.writeCNTP_CTL_EL0(1);            // re-arm the tick and re-unmask IRQs (phase 1 stopped both)
-        Magic.enableIrq();
-        Uart.write(Magic.bytes("console shell (type lines, 4s):\n"));
-        long u0 = Magic.readCNTPCT_EL0();
-        while (Magic.readCNTPCT_EL0() < u0 + Magic.readCNTFRQ_EL0() * 4L)   // ~4 s interactive window
-        {
-            schedPause();                      // idle; the shell task runs when the RX ISR wakes it
-            taskYield();
-        }
-        Magic.store32(Bcm2711.AUX_MU_IER_REG, 0);   // detach the UART interrupt
-        stopTimerTick();
-        Uart.putc(0x0A);
+        // (The interactive Console-device shell phase was removed — it needed keyboard input over the
+        // UART and just idled the boot for 4 s in non-interactive runs. The scheduler/Console code stays;
+        // the philosophers phase below re-arms the timer and resets the task table for its own run.)
 
         Cell c = new Cell(0x6A);           // 'j', set by the constructor (putfield)
         c.inc();                           // virtual dispatch through the TIB vtable -> 'k'
@@ -3203,7 +3186,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 14;    // ...Guest/Math + mini java.base + philosophers + String/ConcatDemo + LambdaDemo
+    static final int BLOB_COUNT = 15;    // ...+ String/ConcatDemo + LambdaDemo + IntOp (invokedynamic demos)
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4025,7 +4008,8 @@ public final class VM
         if (b == 10) { return Magic.bytes("demo/DiningPhilosophers"); }
         if (b == 11) { return Magic.bytes("java/lang/String"); }
         if (b == 12) { return Magic.bytes("demo/ConcatDemo"); }
-        return Magic.bytes("demo/LambdaDemo");
+        if (b == 13) { return Magic.bytes("demo/LambdaDemo"); }
+        return Magic.bytes("demo/IntOp");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4113,7 +4097,8 @@ public final class VM
         if (b == 10) { return Magic.bytes("philBytes"); }
         if (b == 11) { return Magic.bytes("stringBytes"); }
         if (b == 12) { return Magic.bytes("concatDemoBytes"); }
-        return Magic.bytes("lambdaDemoBytes");
+        if (b == 13) { return Magic.bytes("lambdaDemoBytes"); }
+        return Magic.bytes("intOpBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4131,7 +4116,8 @@ public final class VM
         if (b == 10) { return Magic.bytes("philLen"); }
         if (b == 11) { return Magic.bytes("stringLen"); }
         if (b == 12) { return Magic.bytes("concatDemoLen"); }
-        return Magic.bytes("lambdaDemoLen");
+        if (b == 13) { return Magic.bytes("lambdaDemoLen"); }
+        return Magic.bytes("intOpLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

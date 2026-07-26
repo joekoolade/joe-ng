@@ -980,11 +980,6 @@ public final class Baseline
      */
     private void lowerLambda(int cpIndex, CodeBuffer cb)
     {
-        if (symbols.lambdaSamArgc(cpIndex) != 0)
-        {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3);          // SAM with parameters: a later slice
-            return;
-        }
         int nc = paramCount(cpIndex);                            // captured values, on operand slots argBase..
         int argBase = sp - nc;
         cb.emitAll(A64Enc.loadImm64(0, symbols.lambdaSize(cpIndex)));   // x0 = instance size
