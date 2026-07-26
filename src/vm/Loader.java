@@ -166,6 +166,10 @@ public final class Loader
      */
     private static void runClinit(long bytes)
     {
+        if (skipClinit != 0)
+        {
+            return;    // probe mode: compile the class but don't RUN <clinit> (real ones call natives)
+        }
         seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
         long code = findMethod(bytes);
         if (code != 0L)
@@ -460,20 +464,40 @@ public final class Loader
      */
     static void loadIntegerFull()
     {
+        // Statically map real java/lang/Integer's dependency + native surface: every distinct class it
+        // calls into (Methodref/InterfaceMethodref/Fieldref), minus itself. A pure constant-pool scan (no
+        // compile) so it never halts on an unsupported opcode -- those are a separate (float) gap. These
+        // classes carry the JNI natives + bootstrap that Integer's string/parse methods assume.
         resetLoader();
-        addBlob(VM.integerBytes, (int) VM.integerLen);
-        resolveClosureFromDir();
-        gbMiss = 0;
-        reportUnresolved = 1;                           // name every unembedded/native reference
-        loadAll();
-        reportUnresolved = 0;
-        Uart.write(Magic.bytes("  blobs registered="));
-        VM.printDec(pdCount);
-        Uart.write(Magic.bytes(" loaded="));
-        VM.printDec(clCount);
-        Uart.write(Magic.bytes(" unresolved-calls="));
-        VM.printDec(gbMiss);
-        Uart.putc(0x0A);
+        parseConstPool(VM.integerBytes, (int) VM.integerLen);
+        int[] seen = new int[64];
+        int seenN = 0;
+        int c = 1;
+        while (c < gcpCount)
+        {
+            int t = gcpTag[c];
+            if (t == 9 || t == 10 || t == 11)           // Fieldref / Methodref / InterfaceMethodref
+            {
+                int classOff = refClassNameOff(c);
+                int k = 0;
+                while (k < seenN && seen[k] != classOff)
+                {
+                    k += 1;
+                }
+                if (k == seenN && seenN < 64 && !utf8IsAtBase(gbase, classOff, Magic.bytes("java/lang/Integer")))
+                {
+                    seen[seenN] = classOff;
+                    seenN += 1;
+                    Uart.write(Magic.bytes("    needs "));
+                    writeName(gbase + classOff + 2, u2(gbase + classOff));
+                    Uart.putc(0x0A);
+                }
+            }
+            c += 1;
+        }
+        Uart.write(Magic.bytes("  (surface = "));
+        VM.printDec(seenN);
+        Uart.write(Magic.bytes(" classes)\n"));
     }
 
     /**
@@ -903,10 +927,13 @@ public final class Loader
     }
 
     /**
-     * Load every recorded blob, dependencies first. Repeatedly loads any blob whose
-     * dependencies are all satisfied (already loaded, or not among the blobs at all
-     * — {@code java/lang/Object} and other unloaded names never block). Stops if a
-     * pass makes no progress, which means a cycle or a missing class.
+     * Load every recorded blob, dependencies first. Repeatedly loads any blob whose dependencies are all
+     * satisfied (already loaded, or not among the blobs at all — {@code java/lang/Object} and other
+     * unembedded names never block). When a pass makes no progress but blobs remain, that's a dependency
+     * CYCLE (real java.base is a cyclic graph — e.g. {@code Integer} <-> {@code Math}); break it by
+     * force-loading the first pending blob. A class's superclass/interfaces are still laid out first by
+     * the dependency order; a still-unloaded cross-class METHOD reference in the force-loaded class simply
+     * compiles to an unresolved call ({@link #globalBuf} -> 0), and later blobs resolve back to it.
      */
     private static void loadAll()
     {
@@ -927,9 +954,23 @@ public final class Loader
                 }
                 i += 1;
             }
-            if (progress == 0)
+            if (progress == 0)                          // stalled: a cycle — force-load one pending blob
             {
-                remaining = 0;                          // cycle / missing dependency: give up
+                int j = 0;
+                while (j < pdCount && pdDone[j] != 0)
+                {
+                    j += 1;
+                }
+                if (j < pdCount)
+                {
+                    loadOne(pdBase[j], pdLen[j]);
+                    pdDone[j] = 1;
+                    remaining -= 1;                      // then re-scan; loading this may unblock others
+                }
+                else
+                {
+                    remaining = 0;                      // nothing pending (shouldn't happen)
+                }
             }
         }
     }
@@ -1229,6 +1270,7 @@ public final class Loader
 
     static int reportUnresolved;                        // when != 0, globalBuf prints each unresolved reference
     static int gbMiss;                                  // count of unresolved cross-class calls (debug)
+    static int skipClinit;                              // when != 0, loadOne compiles but does NOT run <clinit>
 
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
     static long resolveCallBuf(int idx)

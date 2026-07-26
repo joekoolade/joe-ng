@@ -1747,8 +1747,8 @@ public final class VM
         Uart.write(Magic.bytes("  reverse(0x00000001)="));
         printHex(Loader.intReverse(1) & 0xFFFFFFFFL);            // expect 0x80000000
         Uart.putc(0x0A);
-        Uart.write(Magic.bytes("  full load of java/lang/Integer:\n"));
-        Loader.loadIntegerFull();                                // maps the reach (jitFail names any gap)
+        Uart.write(Magic.bytes("  dependency+native surface of java/lang/Integer:\n"));
+        Loader.loadIntegerFull();                                // static scan: classes Integer calls into
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
