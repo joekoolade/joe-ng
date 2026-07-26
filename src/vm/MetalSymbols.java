@@ -226,6 +226,14 @@ final class MetalSymbols implements Symbols
         {
             return VM.printStrAddr;
         }
+        if (helper == Symbols.SC_STR)
+        {
+            return VM.scStrAddr;
+        }
+        if (helper == Symbols.SC_LONG)
+        {
+            return VM.scLongAddr;
+        }
         return VM.unwindAddr;                       // UNWIND
     }
 }

@@ -17,11 +17,18 @@ public class ConcatDemo
     {
         int n = 42;
         int k = 7;
-        String s = "value=" + n + " k=" + k + "\n";     // -> invokedynamic makeConcatWithConstants
+        String s = "value=" + n + " k=" + k + "\n";     // int args + literals
         Magic.printStr(s);
 
         int sum = n + k;
         String t = "sum=" + sum + " (neg " + (0 - sum) + ")\n";
         Magic.printStr(t);
+
+        // slice 1b: a String-object arg (s2 feeds a second concat) + a long arg + a bare-literal print.
+        long big = 1234567890123L;
+        String label = "val=" + n;                      // -> a String object
+        String u = label + " big=" + big + "!\n";       // String arg (label) + long arg (big)
+        Magic.printStr(u);
+        Magic.printStr("bare literal ok\n");            // a raw byte[] literal -> printStr handles it too
     }
 }

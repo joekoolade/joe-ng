@@ -1021,9 +1021,17 @@ public final class Baseline
         {
             helper = Symbols.SC_INT;
         }
+        else if (k == 'J')
+        {
+            helper = Symbols.SC_LONG;                            // long -> decimal
+        }
+        else if (k == 'L')
+        {
+            helper = Symbols.SC_STR;                             // String/byte[] -> its bytes (TIB-disambiguated)
+        }
         else
         {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 2);          // unsupported concat arg type (J/ref: slice 1b)
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 2);          // unsupported concat arg type (D/F: later)
             return;
         }
         cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder

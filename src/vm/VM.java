@@ -893,10 +893,61 @@ public final class VM
         return out;
     }
 
-    /** Print a mini java/lang/String: its sole {@code value} field (offset 16) is a byte[]; write its bytes. */
-    static void printStr(long strObj)
+    /**
+     * The byte[] behind a "string" ref: a raw byte[] (array TIB = 0) is itself; a mini java/lang/String
+     * (TIB != 0) yields its {@code value} field (offset 16). Lets literals (interned byte[]) and concat
+     * results (String objects) be used interchangeably wherever a string is expected.
+     */
+    static long strBytes(long ref)
     {
-        long arr = Magic.load64(strObj + 16L);
+        return Magic.load64(ref + 0L) == 0L ? ref : Magic.load64(ref + 16L);
+    }
+
+    /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
+    static void scStr(long sb, long ref)
+    {
+        long arr = strBytes(ref);
+        long len = Magic.load64(arr + 16L);
+        long i = 0L;
+        while (i < len)
+        {
+            scChar(sb, Magic.load8(arr + 24L + i));
+            i = i + 1L;
+        }
+    }
+
+    /** Append {@code v} in decimal to the concat builder. */
+    static void scLong(long sb, long v)
+    {
+        if (v == 0L)
+        {
+            scChar(sb, 0x30);
+            return;
+        }
+        if (v < 0L)
+        {
+            scChar(sb, 0x2D);                              // '-' (Long.MIN_VALUE not special-cased)
+            v = -v;
+        }
+        byte[] tmp = new byte[24];
+        int n = 0;
+        while (v > 0L)
+        {
+            tmp[n] = (byte) (0x30 + (int) (v % 10L));
+            n = n + 1;
+            v = v / 10L;
+        }
+        while (n > 0)
+        {
+            n = n - 1;
+            scChar(sb, tmp[n]);
+        }
+    }
+
+    /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
+    static void printStr(long ref)
+    {
+        long arr = strBytes(ref);
         long len = Magic.load64(arr + 16L);
         long i = 0L;
         while (i < len)
@@ -1002,6 +1053,8 @@ public final class VM
         if (scCharAddr == 0L) { scChar(0L, 0); }
         if (scIntAddr == 0L) { scInt(0L, 0); }
         if (scEndAddr == 0L) { long u = scEnd(0L); }
+        if (scStrAddr == 0L) { scStr(0L, 0L); }
+        if (scLongAddr == 0L) { scLong(0L, 0L); }
         if (printStrAddr == 0L) { printStr(0L); }
 
         installSchedVectors();
@@ -1386,6 +1439,8 @@ public final class VM
     static long scCharAddr;            // VM.scChar(JI)V
     static long scIntAddr;             // VM.scInt(JI)V
     static long scEndAddr;             // VM.scEnd(J)J
+    static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
+    static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
     static long printStrAddr;          // VM.printStr(J)V
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
@@ -4008,6 +4063,8 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("scCharAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scChar"), Magic.bytes("(JI)V")); }
         if (bytesEqual(nm, Magic.bytes("scIntAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scInt"), Magic.bytes("(JI)V")); }
         if (bytesEqual(nm, Magic.bytes("scEndAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scEnd"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("scStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scStr"), Magic.bytes("(JJ)V")); }
+        if (bytesEqual(nm, Magic.bytes("scLongAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scLong"), Magic.bytes("(JJ)V")); }
         if (bytesEqual(nm, Magic.bytes("printStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStr"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
         return blobV;

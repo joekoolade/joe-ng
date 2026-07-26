@@ -48,6 +48,8 @@ public interface Symbols
     int SC_INT = 14;            // vm/VM.scInt(JI)V   — append an int in decimal
     int SC_END = 15;            // vm/VM.scEnd(J)J    — finish -> a trimmed byte[]
     int PRINT_STR = 16;         // vm/VM.printStr(J)V — print a mini java/lang/String's value bytes
+    int SC_STR = 17;            // vm/VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
+    int SC_LONG = 18;           // vm/VM.scLong(JJ)V  — append a long in decimal (slice 1b)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
