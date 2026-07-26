@@ -30,10 +30,14 @@ public final class BuildRuntimeImage
         // are ever parsed). The metal harness will fill it from embedded blobs instead.
         ClassRegistry registry = new ClassRegistry();
         registerTree(classesDir, registry);
-        // A real class from the JDK's java.base module (not in the compiled tree).
+        // Real, unmodified classes from the JDK's java.base module (not in the compiled tree).
         try (var in = Integer.class.getResourceAsStream("/java/lang/Math.class"))
         {
             registry.add("java/lang/Math", in.readAllBytes());
+        }
+        try (var in = Integer.class.getResourceAsStream("/java/lang/Integer.class"))
+        {
+            registry.add("java/lang/Integer", in.readAllBytes());
         }
 
         ImageBuilder ib = new ImageBuilder(registry);
@@ -57,6 +61,8 @@ public final class BuildRuntimeImage
         // invokedynamic slice 1c/1d: the lambda demo program + a SAM-with-arg functional interface.
         ib.addBlob("vm/VM.lambdaDemoBytes",  "vm/VM.lambdaDemoLen",  "demo/LambdaDemo",                registry.rawBytes("demo/LambdaDemo"));
         ib.addBlob("vm/VM.intOpBytes",       "vm/VM.intOpLen",       "demo/IntOp",                     registry.rawBytes("demo/IntOp"));
+        // Experiment: a real, unmodified java.base class (java/lang/Integer) to map the loader's reach.
+        ib.addBlob("vm/VM.integerBytes",     "vm/VM.integerLen",     "java/lang/Integer",              registry.rawBytes("java/lang/Integer"));
         return ib.build(ENTRY);
     }
 

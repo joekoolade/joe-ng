@@ -1120,6 +1120,22 @@ public final class VM
     }
 
     /**
+     * Report an on-metal JIT compile failure (the {@link compiler.Symbols} fail() seam, metal side) over
+     * the UART so an unsupported bytecode/intrinsic in a loaded class is NAMED rather than a silent hang.
+     * reason = the Symbols.FAIL_* code; for FAIL_OPCODE a = the opcode, b = the bytecode position.
+     */
+    static void jitFail(int reason, int a, int b)
+    {
+        Uart.write(Magic.bytes("\nJIT unsupported: reason="));
+        printDec(reason);
+        Uart.write(Magic.bytes(" a="));
+        printHex(a & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes(" b="));
+        printDec(b);
+        Uart.putc(0x0A);
+    }
+
+    /**
      * Runs every used class's {@code <clinit>} once, eagerly, before the program.
      * The body is empty here — the boot-image writer replaces it with a sequence
      * of calls to the discovered static initializers (closed-world eager init).
@@ -1415,6 +1431,7 @@ public final class VM
     static long concatDemoBytes, concatDemoLen;     // demo/ConcatDemo (the invokedynamic-concat program)
     static long lambdaDemoBytes, lambdaDemoLen;     // demo/LambdaDemo (the invokedynamic-lambda program, 1c)
     static long intOpBytes, intOpLen;               // demo/IntOp (a SAM-with-arg functional interface, 1d)
+    static long integerBytes, integerLen;           // java/lang/Integer — a real, unmodified java.base class
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1721,6 +1738,17 @@ public final class VM
         // (captured fields + an itable thunk into the lambda body), so r.run() dispatches into the body.
         Uart.write(Magic.bytes("invokedynamic lambdas (demand-loaded):\n"));
         Loader.loadLambda();
+
+        // Experiment: compile + run methods from a REAL, unmodified java.base class (java/lang/Integer).
+        // First two pure methods (should just work), then a full-class load to see where the reach ends.
+        Uart.write(Magic.bytes("real java.base (unmodified java/lang/Integer):\n"));
+        Uart.write(Magic.bytes("  bitCount(0x0F0F0F0F)="));
+        printDec(Loader.intBitCount(0x0F0F0F0F));                 // expect 16
+        Uart.write(Magic.bytes("  reverse(0x00000001)="));
+        printHex(Loader.intReverse(1) & 0xFFFFFFFFL);            // expect 0x80000000
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  full load of java/lang/Integer:\n"));
+        Loader.loadIntegerFull();                                // maps the reach (jitFail names any gap)
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3186,7 +3214,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 15;    // ...+ String/ConcatDemo + LambdaDemo + IntOp (invokedynamic demos)
+    static final int BLOB_COUNT = 16;    // ...+ invokedynamic demos + java/lang/Integer (real java.base probe)
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4009,7 +4037,8 @@ public final class VM
         if (b == 11) { return Magic.bytes("java/lang/String"); }
         if (b == 12) { return Magic.bytes("demo/ConcatDemo"); }
         if (b == 13) { return Magic.bytes("demo/LambdaDemo"); }
-        return Magic.bytes("demo/IntOp");
+        if (b == 14) { return Magic.bytes("demo/IntOp"); }
+        return Magic.bytes("java/lang/Integer");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4098,7 +4127,8 @@ public final class VM
         if (b == 11) { return Magic.bytes("stringBytes"); }
         if (b == 12) { return Magic.bytes("concatDemoBytes"); }
         if (b == 13) { return Magic.bytes("lambdaDemoBytes"); }
-        return Magic.bytes("intOpBytes");
+        if (b == 14) { return Magic.bytes("intOpBytes"); }
+        return Magic.bytes("integerBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4117,7 +4147,8 @@ public final class VM
         if (b == 11) { return Magic.bytes("stringLen"); }
         if (b == 12) { return Magic.bytes("concatDemoLen"); }
         if (b == 13) { return Magic.bytes("lambdaDemoLen"); }
-        return Magic.bytes("intOpLen");
+        if (b == 14) { return Magic.bytes("intOpLen"); }
+        return Magic.bytes("integerLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

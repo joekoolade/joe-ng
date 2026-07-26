@@ -66,7 +66,7 @@ public final class Loader
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
-    private static final int MAXREG = 128;
+    private static final int MAXREG = 512;
     private static long[] rgBase;   // declaring class blob base (holds its Utf8 strings)
     private static int[] rgClassOff;   // class name Utf8 offset
     private static int[] rgNameOff;    // method name Utf8 offset
@@ -97,7 +97,7 @@ public final class Loader
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 128;
+    private static final int MAXVT = 256;
     private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
     private static long[] vtNameBase;    // method signature blob (may be a superclass's)
@@ -439,6 +439,43 @@ public final class Loader
         return (int) load2(VM.mathBytes, (int) VM.mathLen, 0x4DL, 0x21L);
     }
 
+    /** Compile+run a real, unmodified {@code java/lang/Integer.bitCount(int)} (a pure SWAR popcount). */
+    static int intBitCount(int n)
+    {
+        seek(0x626974436F756E74L, 8, 0x28492949L, 4);  // "bitCount" "(I)I"
+        return (int) load2(VM.integerBytes, (int) VM.integerLen, n & 0xFFFFFFFFL, 0L);
+    }
+
+    /** Compile+run real {@code java/lang/Integer.reverse(int)} (pure bit reversal). */
+    static int intReverse(int n)
+    {
+        seek(0x72657665727365L, 7, 0x28492949L, 4);    // "reverse" "(I)I"
+        return (int) load2(VM.integerBytes, (int) VM.integerLen, n & 0xFFFFFFFFL, 0L);
+    }
+
+    /**
+     * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
+     * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
+     * named by {@link vm.VM#jitFail}, and missing cross-class references / natives surface here.
+     */
+    static void loadIntegerFull()
+    {
+        resetLoader();
+        addBlob(VM.integerBytes, (int) VM.integerLen);
+        resolveClosureFromDir();
+        gbMiss = 0;
+        reportUnresolved = 1;                           // name every unembedded/native reference
+        loadAll();
+        reportUnresolved = 0;
+        Uart.write(Magic.bytes("  blobs registered="));
+        VM.printDec(pdCount);
+        Uart.write(Magic.bytes(" loaded="));
+        VM.printDec(clCount);
+        Uart.write(Magic.bytes(" unresolved-calls="));
+        VM.printDec(gbMiss);
+        Uart.putc(0x0A);
+    }
+
     /**
      * Parse the constant pool with the <em>shared</em> {@link ClassReader} — the same
      * code the seed JVM runs, now compiled into the image by our own compiler (M5).
@@ -747,7 +784,7 @@ public final class Loader
     // method a buffer before emitting any, so invokestatic's BL targets are known
     // without compiling nested-and-reentrant (the shared static compile state and
     // the writer-side 10-local ceiling both make on-the-fly recursion awkward).
-    private static final int MAXM = 64;
+    private static final int MAXM = 256;
     private static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
@@ -1178,8 +1215,20 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;
+        gbMiss += 1;
+        if (reportUnresolved != 0)                      // probe mode: name the unembedded reference (surface)
+        {
+            Uart.write(Magic.bytes("    ? "));
+            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            Uart.putc(0x2E);                            // '.'
+            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            Uart.putc(0x0A);
+        }
+        return 0L;                                      // unresolved: an unloaded class or a native
     }
+
+    static int reportUnresolved;                        // when != 0, globalBuf prints each unresolved reference
+    static int gbMiss;                                  // count of unresolved cross-class calls (debug)
 
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
     static long resolveCallBuf(int idx)

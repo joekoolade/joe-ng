@@ -163,9 +163,10 @@ final class MetalSymbols implements Symbols
     /** A compile failure on metal is unrecoverable and message-free: halt. */
     public void fail(int reason, int a, int b)
     {
+        VM.jitFail(reason, a, b);           // name the gap over the UART (unsupported bytecode/intrinsic/...)
         for (;;)
         {
-            // spin — a JIT bug or an unsupported bytecode; nothing to recover to
+            // then halt — a JIT bug or an unsupported bytecode; nothing to recover to
         }
     }
 
