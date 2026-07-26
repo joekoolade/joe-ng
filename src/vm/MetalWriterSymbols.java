@@ -273,6 +273,10 @@ final class MetalWriterSymbols implements Symbols
     public boolean isConcatIndy(int idx) { return false; }
     public int concatRecipeOff(int idx) { return -1; }
     public void newStringFromBytes(CodeBuffer cb) { failed = true; }
+    public boolean isLambdaIndy(int idx) { return false; }
+    public int lambdaSize(int idx) { return 0; }
+    public int lambdaSamArgc(int idx) { return 0; }
+    public void lambdaTib(CodeBuffer cb, int reg, int idx) { failed = true; }
 
     // ----- accessors for the marker / (later) the layout driver -----
 

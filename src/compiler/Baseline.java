@@ -959,11 +959,53 @@ public final class Baseline
      */
     private void lowerInvokeDynamic(int cpIndex, CodeBuffer cb)
     {
-        if (!symbols.isConcatIndy(cpIndex))
+        if (symbols.isConcatIndy(cpIndex))
         {
-            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // only string concat is supported
+            lowerConcat(cpIndex, cb);
+        }
+        else if (symbols.isLambdaIndy(cpIndex))
+        {
+            lowerLambda(cpIndex, cb);
+        }
+        else
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // unsupported bootstrap
+        }
+    }
+
+    /**
+     * A lambda ({@code LambdaMetafactory}): allocate the synthetic lambda object, set its (synthesised) TIB,
+     * store the captured values (the call-site args on the operand stack) into its fields, and push it. Its
+     * itable then dispatches the functional-interface method into the lambda body. Slice 1c: zero-arg SAM.
+     */
+    private void lowerLambda(int cpIndex, CodeBuffer cb)
+    {
+        if (symbols.lambdaSamArgc(cpIndex) != 0)
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3);          // SAM with parameters: a later slice
             return;
         }
+        int nc = paramCount(cpIndex);                            // captured values, on operand slots argBase..
+        int argBase = sp - nc;
+        cb.emitAll(A64Enc.loadImm64(0, symbols.lambdaSize(cpIndex)));   // x0 = instance size
+        spillLive(cb);                                           // Heap.alloc clobbers x9.. (the captures)
+        symbols.callHelper(cb, Symbols.HEAP_ALLOC);              // x0 = lambda object
+        reloadLive(cb);                                          // captures back in their operand slots
+        symbols.lambdaTib(cb, 1, cpIndex);                       // x1 = synthetic TIB
+        cb.emit(A64Enc.strx(1, 0, ObjectModel.TIB_OFFSET));      // obj.tib = TIB
+        int c = 0;
+        while (c < nc)
+        {
+            cb.emit(A64Enc.strx(OP_BASE + argBase + c, 0, 16 + c * 8));   // obj.field[c] = capture c
+            c = c + 1;
+        }
+        sp = argBase;                                            // drop the captures
+        cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the lambda object
+    }
+
+    /** A string concatenation ({@code StringConcatFactory}). */
+    private void lowerConcat(int cpIndex, CodeBuffer cb)
+    {
         int nargs = paramCount(cpIndex);                         // args occupy the top nargs operand slots
         int argBase = sp - nargs;                                // operand-slot index of the first arg
         emitCall(cb, 0, true, false, SYM_HELPER, Symbols.SC_START);   // scStart -> builder on top

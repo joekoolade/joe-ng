@@ -157,4 +157,18 @@ public interface Symbols
      * knows String's TIB/layout; the writer never reaches this — image code has no invokedynamic).
      */
     void newStringFromBytes(CodeBuffer cb);
+
+    // ----- invokedynamic (lambda, M-B slice 1c) -----
+
+    /** Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code LambdaMetafactory.metafactory}. */
+    boolean isLambdaIndy(int idx);
+
+    /** Instance size (bytes) of the lambda object at {@code idx} (header + captured fields). */
+    int lambdaSize(int idx);
+
+    /** Parameter count of the lambda's functional-interface method (SAM) — slice 1c handles only 0. */
+    int lambdaSamArgc(int idx);
+
+    /** Load into {@code reg} the synthetic lambda class's TIB address (building the class on the metal). */
+    void lambdaTib(CodeBuffer cb, int reg, int idx);
 }

@@ -128,6 +128,24 @@ final class MetalSymbols implements Symbols
         return Loader.concatRecipeOff(idx);
     }
 
+    // ----- invokedynamic (lambda) -----
+    public boolean isLambdaIndy(int idx)
+    {
+        return Loader.isLambdaIndy(idx);
+    }
+    public int lambdaSize(int idx)
+    {
+        return Loader.lambdaSize(idx);
+    }
+    public int lambdaSamArgc(int idx)
+    {
+        return Loader.lambdaSamArgc(idx);
+    }
+    public void lambdaTib(CodeBuffer cb, int reg, int idx)
+    {
+        emitAddr(cb, reg, Loader.buildLambdaTib(idx));      // synthesise the lambda class now; bake its TIB
+    }
+
     /** Wrap the byte[] in x0 as a java/lang/String: alloc, set TIB, store into the sole `value` field. */
     public void newStringFromBytes(CodeBuffer cb)
     {

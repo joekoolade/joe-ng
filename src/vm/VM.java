@@ -1413,6 +1413,7 @@ public final class VM
     static long philBytes, philLen;     // demo/DiningPhilosophers.class blob (the demand-loaded program root)
     static long stringBytes, stringLen;             // java/lang/String (result of string concat, M-B slice 1)
     static long concatDemoBytes, concatDemoLen;     // demo/ConcatDemo (the invokedynamic-concat program)
+    static long lambdaDemoBytes, lambdaDemoLen;     // demo/LambdaDemo (the invokedynamic-lambda program, 1c)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1731,6 +1732,12 @@ public final class VM
         // byte[] build wrapped in a mini java/lang/String (demand-loaded from classDir), then prints it.
         Uart.write(Magic.bytes("invokedynamic string concat (demand-loaded):\n"));
         Loader.loadConcat();
+
+        // M-B slice 1c: invokedynamic lambdas. demo/LambdaDemo's () -> ... sites lower to
+        // invokedynamic LambdaMetafactory.metafactory; the metal JIT synthesises a lambda class per site
+        // (captured fields + an itable thunk into the lambda body), so r.run() dispatches into the body.
+        Uart.write(Magic.bytes("invokedynamic lambdas (demand-loaded):\n"));
+        Loader.loadLambda();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3196,7 +3203,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 13;    // Guest/Greeter/Alpha/Beta/MyExc/Math + mini java.base + philosophers + String/ConcatDemo
+    static final int BLOB_COUNT = 14;    // ...Guest/Math + mini java.base + philosophers + String/ConcatDemo + LambdaDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4017,7 +4024,8 @@ public final class VM
         if (b == 9) { return Magic.bytes("demo/Philosopher"); }
         if (b == 10) { return Magic.bytes("demo/DiningPhilosophers"); }
         if (b == 11) { return Magic.bytes("java/lang/String"); }
-        return Magic.bytes("demo/ConcatDemo");
+        if (b == 12) { return Magic.bytes("demo/ConcatDemo"); }
+        return Magic.bytes("demo/LambdaDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4104,7 +4112,8 @@ public final class VM
         if (b == 9) { return Magic.bytes("philosopherBytes"); }
         if (b == 10) { return Magic.bytes("philBytes"); }
         if (b == 11) { return Magic.bytes("stringBytes"); }
-        return Magic.bytes("concatDemoBytes");
+        if (b == 12) { return Magic.bytes("concatDemoBytes"); }
+        return Magic.bytes("lambdaDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4121,7 +4130,8 @@ public final class VM
         if (b == 9) { return Magic.bytes("philosopherLen"); }
         if (b == 10) { return Magic.bytes("philLen"); }
         if (b == 11) { return Magic.bytes("stringLen"); }
-        return Magic.bytes("concatDemoLen");
+        if (b == 12) { return Magic.bytes("concatDemoLen"); }
+        return Magic.bytes("lambdaDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

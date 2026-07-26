@@ -304,6 +304,25 @@ public final class Loader
     }
 
     /**
+     * Demand-load and run {@code demo/LambdaDemo.main()} — the invokedynamic (lambda) proof. Its
+     * {@code () -> ...} sites JIT into synthetic lambda classes (see {@link #buildLambdaTib}); calling
+     * {@code r.run()} dispatches into the lambda body. {@code java/lang/Runnable} is pulled from classDir.
+     */
+    static void loadLambda()
+    {
+        resetLoader();
+        addBlob(VM.lambdaDemoBytes, (int) VM.lambdaDemoLen);
+        resolveClosureFromDir();                        // pulls java/lang/Runnable (referenced by r.run())
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.lambdaDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
+    /**
      * Repeatedly probe the registered blobs for class references and register any that are embedded in
      * {@link VM#classDir} but not yet registered, until the transitive closure is complete. References
      * to unembedded roots ({@code java/lang/Object}, {@code magic/Magic}) are simply not found and skipped.
@@ -1706,6 +1725,165 @@ public final class Loader
     {
         int i = stringClassIndex();
         return i >= 0 ? (16 + clFieldCount[i] * 8) : 24;
+    }
+
+    // ----- invokedynamic: lambda synthesis (LambdaMetafactory), M-B slice 1c -----
+    // A lambda `(caps...) -> body(caps..., samArgs...)` is synthesised as a tiny class: a heap object whose
+    // fields hold the captures, a Type whose itable maps the functional-interface method to a THUNK that
+    // loads the captures into arg registers and tail-calls the lambda-body method. So `iface.sam()` on the
+    // lambda dispatches (via the normal itable path) into the body with the captured values. Slice 1c
+    // supports a zero-arg SAM (Runnable-like); the body may capture any number of values.
+
+    private static int indyBsmIndex(int idx)
+    {
+        return u2(gbase + gcp[idx]);                    // invokedynamic.bootstrap_method_attr_index
+    }
+
+    /** True if the invokedynamic at {@code idx} bootstraps via {@code LambdaMetafactory.metafactory}. */
+    static boolean isLambdaIndy(int idx)
+    {
+        if (gBsmOff == 0L)
+        {
+            return false;
+        }
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mhIdx = u2(e);                              // bootstrap_method_ref -> MethodHandle
+        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);       // MethodHandle.reference_index -> Methodref
+        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory"))
+            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("metafactory"));
+    }
+
+    /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */
+    private static long lambdaImplBuf(int idx)
+    {
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mhIdx = u2(e + 6);                          // bootstrap_arguments[1] = the impl MethodHandle
+        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);
+        return resolveCallBuf(mrefIdx);
+    }
+
+    /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
+    private static long lambdaIfaceType(int idx)
+    {
+        int descOff = mrefDescOff(idx);
+        long p = gbase + descOff + 2;                   // skip the u2 length
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;                                         // past ')'
+        if (u1(p) != 'L')
+        {
+            return 0L;
+        }
+        long nameStart = p + 1;
+        long q = nameStart;
+        while (u1(q) != ';')
+        {
+            q += 1;
+        }
+        int nameLen = (int) (q - nameStart);
+        int i = 0;
+        while (i < clCount)
+        {
+            if (rawNameEq(clBase[i], clNameOff[i], nameStart, nameLen))
+            {
+                return clType[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Global itable slot of the SAM: name = the indy's name, descriptor = bootstrap_arguments[0] MethodType. */
+    private static int lambdaIfaceSlot(int idx)
+    {
+        int nameOff = mrefNameOff(idx);
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mtIdx = u2(e + 4);                          // bootstrap_arguments[0] = MethodType (SAM signature)
+        int descOff = gcp[u2(gbase + gcp[mtIdx])];      // MethodType.descriptor_index -> Utf8 offset
+        return ifIndexOf(gbase, nameOff, descOff);
+    }
+
+    /** SAM parameter count (bootstrap_arguments[0] MethodType) — slice 1c supports only 0. */
+    static int lambdaSamArgc(int idx)
+    {
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mtIdx = u2(e + 4);
+        int descOff = gcp[u2(gbase + gcp[mtIdx])];
+        return ClassReader.descParamCount(gbytes, descOff);
+    }
+
+    /** Instance size of a lambda object: header + one field per captured value. */
+    static int lambdaSize(int idx)
+    {
+        return 16 + ClassReader.descParamCount(gbytes, mrefDescOff(idx)) * 8;
+    }
+
+    /** Build the synthetic lambda class (thunk + imap + itable dir + Type + TIB); returns the TIB address. */
+    static long buildLambdaTib(int idx)
+    {
+        long implBuf = lambdaImplBuf(idx);
+        long ifaceType = lambdaIfaceType(idx);
+        int ifaceSlot = lambdaIfaceSlot(idx);
+        int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
+        // thunk: x0 = lambda obj; load captures into x0..x(nc-1) (x0 loaded last), then tail-call the body.
+        long thunk = Heap.alloc(64);
+        int w = 0;
+        int c = nc - 1;
+        while (c >= 0)
+        {
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));   // xC = obj.field[c]
+            w += 1;
+            c -= 1;
+        }
+        long bAt = thunk + w * 4L;
+        Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));         // b implBuf (tail call)
+        w += 1;
+        Heap.publishCode(thunk, thunk + w * 4L);
+        // imap: the flat interface-method table, indexed by global SAM slot -> the thunk.
+        long imap = Heap.alloc(MAXIFM * 8);
+        int j = 0;
+        while (j < MAXIFM)
+        {
+            Magic.store64(imap + j * 8L, 0L);
+            j += 1;
+        }
+        Magic.store64(imap + ifaceSlot * 8L, thunk);
+        // itable directory: { interfaceType, imap } + a zero sentinel.
+        long dir = Heap.alloc(2 * 16);
+        Magic.store64(dir + 0L, ifaceType);
+        Magic.store64(dir + 8L, imap);
+        Magic.store64(dir + 16L, 0L);
+        Magic.store64(dir + 24L, 0L);
+        // Type { instanceSize, superType=Object(0), itableDir }.
+        long type = Heap.alloc(24);
+        Magic.store64(type + 0L, 16 + nc * 8);
+        Magic.store64(type + 8L, 0L);
+        Magic.store64(type + 16L, dir);
+        // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
+        long tib = Heap.alloc(8);
+        Magic.store64(tib + 0L, type);
+        return tib;
+    }
+
+    /** True if the Utf8 at {@code off} in {@code base} equals the {@code len} raw bytes at {@code raw}. */
+    private static boolean rawNameEq(long base, int off, long raw, int len)
+    {
+        if (u2(base + off) != len)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < len)
+        {
+            if (u1(base + off + 2 + i) != u1(raw + i))
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
     }
 
 
