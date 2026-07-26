@@ -807,6 +807,105 @@ public final class VM
         else                 { Uart.write(Magic.bytes("done\n")); }
     }
 
+    // ----- invokedynamic string-concat: a growable byte[] builder, driven by the JIT'd concat lowering.
+    // A builder is a heap holder { value@16 = byte[] buf, count@24 = length so far }. The compiler emits
+    // scStart, then scChar/scInt per recipe literal/arg, then scEnd -> a trimmed byte[] (wrapped in a
+    // java/lang/String by the JIT). Kept image-side so the intrinsic bottoms out in one place.
+
+    /** Begin a concat: a fresh builder over a 64-byte byte[]. */
+    static long scStart()
+    {
+        long buf = Heap.allocArray(64, 1);
+        long sb = Heap.alloc(32);
+        Magic.store64(sb + 16L, buf);
+        Magic.store64(sb + 24L, 0L);
+        return sb;
+    }
+
+    /** Grow a builder's backing byte[] to twice {@code cap}, copying {@code count} bytes; returns the new buf. */
+    static long scGrow(long sb, long buf, long count, long cap)
+    {
+        long nbuf = Heap.allocArray((int) (cap * 2L), 1);
+        long i = 0L;
+        while (i < count)
+        {
+            Magic.store8(nbuf + 24L + i, (byte) Magic.load8(buf + 24L + i));
+            i = i + 1L;
+        }
+        Magic.store64(sb + 16L, nbuf);
+        return nbuf;
+    }
+
+    /** Append one byte {@code c} to the builder. */
+    static void scChar(long sb, int c)
+    {
+        long buf = Magic.load64(sb + 16L);
+        long count = Magic.load64(sb + 24L);
+        long cap = Magic.load64(buf + 16L);                // byte[] length (ARRAY_LENGTH_OFFSET)
+        if (count >= cap)
+        {
+            buf = scGrow(sb, buf, count, cap);
+        }
+        Magic.store8(buf + 24L + count, (byte) c);         // ARRAY_BASE_OFFSET = 24
+        Magic.store64(sb + 24L, count + 1L);
+    }
+
+    /** Append {@code v} in decimal to the builder. */
+    static void scInt(long sb, int v)
+    {
+        if (v == 0)
+        {
+            scChar(sb, 0x30);
+            return;
+        }
+        if (v < 0)
+        {
+            scChar(sb, 0x2D);                              // '-' (Integer.MIN_VALUE not special-cased)
+            v = -v;
+        }
+        byte[] tmp = new byte[12];
+        int n = 0;
+        while (v > 0)
+        {
+            tmp[n] = (byte) (0x30 + v % 10);
+            n = n + 1;
+            v = v / 10;
+        }
+        while (n > 0)
+        {
+            n = n - 1;
+            scChar(sb, tmp[n]);
+        }
+    }
+
+    /** Finish a concat: a fresh byte[] trimmed to the builder's length. */
+    static long scEnd(long sb)
+    {
+        long buf = Magic.load64(sb + 16L);
+        long count = Magic.load64(sb + 24L);
+        long out = Heap.allocArray((int) count, 1);
+        long i = 0L;
+        while (i < count)
+        {
+            Magic.store8(out + 24L + i, (byte) Magic.load8(buf + 24L + i));
+            i = i + 1L;
+        }
+        return out;
+    }
+
+    /** Print a mini java/lang/String: its sole {@code value} field (offset 16) is a byte[]; write its bytes. */
+    static void printStr(long strObj)
+    {
+        long arr = Magic.load64(strObj + 16L);
+        long len = Magic.load64(arr + 16L);
+        long i = 0L;
+        while (i < len)
+        {
+            Uart.putc((byte) Magic.load8(arr + 24L + i));
+            i = i + 1L;
+        }
+    }
+
     /**
      * Build a runtime context-switch stub on the heap: save the interrupted context (x0..x30, ELR_EL1,
      * SPSR_EL1) to the current stack, {@code BL pickAddr} to choose the next task, then restore that
@@ -899,6 +998,11 @@ public final class VM
         if (newSemAddr == 0L) { int u = newSem(0); }
         if (philReportAddr == 0L) { philReport(0, 0); }
         if (taskExitAddr == 0L) { taskExit(); }
+        if (scStartAddr == 0L) { long u = scStart(); }        // string-concat helpers (JIT'd concat only)
+        if (scCharAddr == 0L) { scChar(0L, 0); }
+        if (scIntAddr == 0L) { scInt(0L, 0); }
+        if (scEndAddr == 0L) { long u = scEnd(0L); }
+        if (printStrAddr == 0L) { printStr(0L); }
 
         installSchedVectors();
 
@@ -1254,6 +1358,8 @@ public final class VM
     static long semBytes, semLen;                   // java/util/concurrent/Semaphore
     static long philosopherBytes, philosopherLen;   // demo/Philosopher (a Runnable)
     static long philBytes, philLen;     // demo/DiningPhilosophers.class blob (the demand-loaded program root)
+    static long stringBytes, stringLen;             // java/lang/String (result of string concat, M-B slice 1)
+    static long concatDemoBytes, concatDemoLen;     // demo/ConcatDemo (the invokedynamic-concat program)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1275,6 +1381,12 @@ public final class VM
     static long newSemAddr;            // VM.newSem(I)I
     static long philReportAddr;        // VM.philReport(II)V
     static long taskExitAddr;          // VM.taskExit()V — the run-trampoline's tail (loader-emitted BL)
+    // invokedynamic string-concat helpers (JIT'd concat lowering BLs these).
+    static long scStartAddr;           // VM.scStart()J
+    static long scCharAddr;            // VM.scChar(JI)V
+    static long scIntAddr;             // VM.scInt(JI)V
+    static long scEndAddr;             // VM.scEnd(J)J
+    static long printStrAddr;          // VM.printStr(J)V
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -1558,6 +1670,12 @@ public final class VM
         }
         stopTimerTick();
         Uart.putc(0x0A);
+
+        // M-B slice 1: invokedynamic string concat. demo/ConcatDemo uses "a"+b, which javac lowers to
+        // invokedynamic StringConcatFactory.makeConcatWithConstants. The metal JIT intrinsifies it into a
+        // byte[] build wrapped in a mini java/lang/String (demand-loaded from classDir), then prints it.
+        Uart.write(Magic.bytes("invokedynamic string concat (demand-loaded):\n"));
+        Loader.loadConcat();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3023,7 +3141,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 11;    // embedded blobs: Guest/Greeter/Alpha/Beta/MyExc/Math + mini java.base + demo
+    static final int BLOB_COUNT = 13;    // Guest/Greeter/Alpha/Beta/MyExc/Math + mini java.base + philosophers + String/ConcatDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -3842,7 +3960,9 @@ public final class VM
         if (b == 7) { return Magic.bytes("java/lang/Thread"); }
         if (b == 8) { return Magic.bytes("java/util/concurrent/Semaphore"); }
         if (b == 9) { return Magic.bytes("demo/Philosopher"); }
-        return Magic.bytes("demo/DiningPhilosophers");
+        if (b == 10) { return Magic.bytes("demo/DiningPhilosophers"); }
+        if (b == 11) { return Magic.bytes("java/lang/String"); }
+        return Magic.bytes("demo/ConcatDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -3884,6 +4004,11 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("newSemAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newSem"), Magic.bytes("(I)I")); }
         if (bytesEqual(nm, Magic.bytes("philReportAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("philReport"), Magic.bytes("(II)V")); }
         if (bytesEqual(nm, Magic.bytes("taskExitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("taskExit"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("scStartAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scStart"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("scCharAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scChar"), Magic.bytes("(JI)V")); }
+        if (bytesEqual(nm, Magic.bytes("scIntAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scInt"), Magic.bytes("(JI)V")); }
+        if (bytesEqual(nm, Magic.bytes("scEndAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scEnd"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("printStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStr"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
@@ -3920,7 +4045,9 @@ public final class VM
         if (b == 7) { return Magic.bytes("threadBytes"); }
         if (b == 8) { return Magic.bytes("semBytes"); }
         if (b == 9) { return Magic.bytes("philosopherBytes"); }
-        return Magic.bytes("philBytes");
+        if (b == 10) { return Magic.bytes("philBytes"); }
+        if (b == 11) { return Magic.bytes("stringBytes"); }
+        return Magic.bytes("concatDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -3935,7 +4062,9 @@ public final class VM
         if (b == 7) { return Magic.bytes("threadLen"); }
         if (b == 8) { return Magic.bytes("semLen"); }
         if (b == 9) { return Magic.bytes("philosopherLen"); }
-        return Magic.bytes("philLen");
+        if (b == 10) { return Magic.bytes("philLen"); }
+        if (b == 11) { return Magic.bytes("stringLen"); }
+        return Magic.bytes("concatDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

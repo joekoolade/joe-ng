@@ -549,6 +549,11 @@ public final class Baseline
             lowerInvokeInterface(u2(code, pos + 1), cb);
             return 5;
         }  // invokeinterface
+        else if (op == 0xBA)
+        {
+            lowerInvokeDynamic(u2(code, pos + 1), cb);
+            return 5;
+        }  // invokedynamic (index(2) + zero(2))
         else if (op == 0xBB)
         {
             lowerNew(u2(code, pos + 1), cb);
@@ -945,6 +950,125 @@ public final class Baseline
         }
     }
 
+    /**
+     * invokedynamic — string concatenation only (M-B slice 1). Recognise the
+     * {@code StringConcatFactory.makeConcatWithConstants} bootstrap and lower it directly (no MethodHandle
+     * runtime): the N call-site args sit on the operand stack (slots 0..N-1); build a byte[] with the
+     * VM string-builder (scStart, then scChar per recipe literal and scChar/scInt per  arg), then
+     * wrap it in a mini {@code java/lang/String}. Args + builder survive each append via spill/reload.
+     */
+    private void lowerInvokeDynamic(int cpIndex, CodeBuffer cb)
+    {
+        if (!symbols.isConcatIndy(cpIndex))
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // only string concat is supported
+            return;
+        }
+        int nargs = paramCount(cpIndex);                         // args occupy the top nargs operand slots
+        int argBase = sp - nargs;                                // operand-slot index of the first arg
+        emitCall(cb, 0, true, false, SYM_HELPER, Symbols.SC_START);   // scStart -> builder on top
+        int sbSlot = OP_BASE + sp - 1;                           // register holding the builder
+        int recipeOff = symbols.concatRecipeOff(cpIndex);        // Utf8 body: [u2 len][chars]
+        int len = u2(classBytes, recipeOff);
+        int p = recipeOff + 2;
+        int argIdx = 0;
+        int i = 0;
+        while (i < len)
+        {
+            int c = classBytes[p + i] & 0xFF;
+            if (c == 0x01)                                       //  -> the next dynamic arg
+            {
+                appendArg(cb, sbSlot, OP_BASE + argBase + argIdx, cpIndex, argIdx);
+                argIdx = argIdx + 1;
+            }
+            else if (c == 0x02)                                  //  -> a constant operand (slice 1b)
+            {
+                symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 1);
+            }
+            else
+            {
+                appendChar(cb, sbSlot, c);                       // a literal recipe byte
+            }
+            i = i + 1;
+        }
+        cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder
+        sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
+        symbols.callHelper(cb, Symbols.SC_END);                  // x0 = the finished byte[]
+        symbols.newStringFromBytes(cb);                          // x0 = a mini java/lang/String
+        cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the result String (at slot argBase)
+    }
+
+    /** Append one literal recipe byte {@code c} to the builder in {@code sbSlot}. */
+    private void appendChar(CodeBuffer cb, int sbSlot, int c)
+    {
+        cb.emit(A64Enc.movReg(0, sbSlot));
+        cb.emitAll(A64Enc.loadImm64(1, c));
+        spillLive(cb);                                           // the append helper clobbers x9.. (operand slots)
+        symbols.callHelper(cb, Symbols.SC_CHAR);
+        reloadLive(cb);
+    }
+
+    /** Append the arg in register {@code argReg} (call-site arg {@code argIdx}) to the builder, by its kind. */
+    private void appendArg(CodeBuffer cb, int sbSlot, int argReg, int cpIndex, int argIdx)
+    {
+        int k = paramKind(cpIndex, argIdx);
+        int helper;
+        if (k == 'C')
+        {
+            helper = Symbols.SC_CHAR;
+        }
+        else if (k == 'I' || k == 'S' || k == 'B' || k == 'Z')
+        {
+            helper = Symbols.SC_INT;
+        }
+        else
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 2);          // unsupported concat arg type (J/ref: slice 1b)
+            return;
+        }
+        cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder
+        cb.emit(A64Enc.movReg(1, argReg));                       // x1 = arg
+        spillLive(cb);
+        symbols.callHelper(cb, helper);
+        reloadLive(cb);
+    }
+
+    /** Descriptor kind of param {@code j} of the {@code *ref} at {@code refCp}: a primitive char, or 'L' for a ref. */
+    private int paramKind(int refCp, int j)
+    {
+        int descOff = ClassReader.refDescOff(classBytes, cpOff, refCp);
+        int p = descOff + 3;                                     // past u2 length(2) + '(' (1)
+        int idx = 0;
+        while ((classBytes[p] & 0xFF) != ')')
+        {
+            boolean arr = false;
+            while ((classBytes[p] & 0xFF) == '[')
+            {
+                arr = true;
+                p = p + 1;
+            }
+            int c = classBytes[p] & 0xFF;
+            if (c == 'L')
+            {
+                while ((classBytes[p] & 0xFF) != ';')
+                {
+                    p = p + 1;
+                }
+                p = p + 1;
+            }
+            else
+            {
+                p = p + 1;
+            }
+            if (idx == j)
+            {
+                return arr ? 'L' : c;
+            }
+            idx = idx + 1;
+        }
+        return 'V';
+    }
+
     private void lowerInvokeSpecial(int cpIndex, CodeBuffer cb)
     {
         if (symbols.isSkippableInit(cpIndex))
@@ -1267,6 +1391,10 @@ public final class Baseline
         {
             emitCall(cb, 2, false, false, SYM_HELPER, Symbols.REPORT);      // (who, state) -> void
         }
+        else if (id == Intrinsics.PRINT_STR)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.PRINT_STR);   // (string) -> void
+        }
         else if (id == Intrinsics.WRITE_VBAR_EL1)
         {
             cb.emit(A64Enc.msr(A64Enc.VBAR_EL1, popReg()));
@@ -1476,9 +1604,9 @@ public final class Baseline
         while (pos < code.length)
         {
             int op = code[pos] & 0xFF;
-            if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBF || op == 0xC0 || op == 0xC1)
+            if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBA || op == 0xBF || op == 0xC0 || op == 0xC1)
             {
-                return true;    // new/newarray/anewarray/invokevirtual/invokeinterface/athrow/checkcast/instanceof
+                return true;    // new/newarray/anewarray/invokevirtual/invoke{interface,dynamic}/athrow/checkcast/instanceof
             }
             if (op == 0xB8)                                      // invokestatic
             {
@@ -1509,7 +1637,7 @@ public final class Baseline
         {
             return 2;
         }
-        if (op == 0xB9)                                      // invokeinterface (idx, count, 0)
+        if (op == 0xB9 || op == 0xBA)                        // invokeinterface (idx,count,0) / invokedynamic (idx,0)
         {
             return 5;
         }

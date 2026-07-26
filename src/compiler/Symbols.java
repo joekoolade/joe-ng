@@ -42,6 +42,12 @@ public interface Symbols
     int SLEEP_MS = 9;           // vm/VM.sleep(J)V
     int NEW_SEM = 10;           // vm/VM.newSem(I)I  — allocate a semaphore, return its index
     int REPORT = 11;            // vm/VM.philReport(II)V — formatted status line (no String concat on metal)
+    // invokedynamic string-concat (M-B slice 1): a growable byte[] builder + a status print.
+    int SC_START = 12;          // vm/VM.scStart()J -> a builder
+    int SC_CHAR = 13;           // vm/VM.scChar(JI)V  — append one byte
+    int SC_INT = 14;            // vm/VM.scInt(JI)V   — append an int in decimal
+    int SC_END = 15;            // vm/VM.scEnd(J)J    — finish -> a trimmed byte[]
+    int PRINT_STR = 16;         // vm/VM.printStr(J)V — print a mini java/lang/String's value bytes
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -135,4 +141,18 @@ public interface Symbols
 
     /** Whether the {@code invokespecial} at {@code methodCp} is a root-class {@code <init>} to skip. */
     boolean isSkippableInit(int methodCp);
+
+    // ----- invokedynamic (string concat, M-B slice 1) -----
+
+    /** Whether the {@code invokedynamic} at {@code idx} bootstraps via StringConcatFactory (concat). */
+    boolean isConcatIndy(int idx);
+
+    /** Utf8 body offset of the concat recipe (bootstrap arg 0) for the indy at {@code idx}. */
+    int concatRecipeOff(int idx);
+
+    /**
+     * Wrap the {@code byte[]} in x0 as a {@code java/lang/String} object, leaving it in x0 (the metal JIT
+     * knows String's TIB/layout; the writer never reaches this — image code has no invokedynamic).
+     */
+    void newStringFromBytes(CodeBuffer cb);
 }

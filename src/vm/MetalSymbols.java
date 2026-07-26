@@ -99,7 +99,8 @@ final class MetalSymbols implements Symbols
         // lower to a BL to a VM helper, so a caller using them must be treated as non-leaf.
         int id = Loader.magicId(methodCp);
         return id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
-            || id == Intrinsics.SLEEP_MS || id == Intrinsics.NEW_SEM || id == Intrinsics.REPORT;
+            || id == Intrinsics.SLEEP_MS || id == Intrinsics.NEW_SEM || id == Intrinsics.REPORT
+            || id == Intrinsics.PRINT_STR;
     }
     public int intrinsicId(int methodCp)
     {
@@ -115,6 +116,30 @@ final class MetalSymbols implements Symbols
         // A real same-class / loaded ctor is a call; anything else (Object.<init>,
         // an unloaded root) is the super() we skip.
         return !Loader.isRealSpecial(methodCp);
+    }
+
+    // ----- invokedynamic (string concat) -----
+    public boolean isConcatIndy(int idx)
+    {
+        return Loader.isStringConcat(idx);
+    }
+    public int concatRecipeOff(int idx)
+    {
+        return Loader.concatRecipeOff(idx);
+    }
+
+    /** Wrap the byte[] in x0 as a java/lang/String: alloc, set TIB, store into the sole `value` field. */
+    public void newStringFromBytes(CodeBuffer cb)
+    {
+        cb.emit(A64Enc.subImm(31, 31, 16));                 // sub sp, #16 (preserve byte[] across the alloc)
+        cb.emit(A64Enc.strx(0, 31, 0));                     // str x0, [sp]
+        cb.emitAll(A64Enc.loadImm64(0, Loader.stringSize())); // x0 = String instance size
+        emitBl(cb, VM.heapAlloc);                            // x0 = new object (header/size set, payload zeroed)
+        cb.emit(A64Enc.ldrx(1, 31, 0));                     // x1 = byte[]
+        cb.emit(A64Enc.addImm(31, 31, 16));                 // add sp, #16
+        emitAddr(cb, 2, Loader.stringTib());                // x2 = String TIB
+        cb.emit(A64Enc.strx(2, 0, 0));                      // obj.tib   = String TIB (TIB_OFFSET = 0)
+        cb.emit(A64Enc.strx(1, 0, 16));                     // obj.value = byte[]      (field 0 -> offset 16)
     }
 
     /** A compile failure on metal is unrecoverable and message-free: halt. */
@@ -180,6 +205,26 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.REPORT)
         {
             return VM.philReportAddr;
+        }
+        if (helper == Symbols.SC_START)
+        {
+            return VM.scStartAddr;
+        }
+        if (helper == Symbols.SC_CHAR)
+        {
+            return VM.scCharAddr;
+        }
+        if (helper == Symbols.SC_INT)
+        {
+            return VM.scIntAddr;
+        }
+        if (helper == Symbols.SC_END)
+        {
+            return VM.scEndAddr;
+        }
+        if (helper == Symbols.PRINT_STR)
+        {
+            return VM.printStrAddr;
         }
         return VM.unwindAddr;                       // UNWIND
     }

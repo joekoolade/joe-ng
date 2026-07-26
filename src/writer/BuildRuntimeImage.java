@@ -51,6 +51,9 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.semBytes",         "vm/VM.semLen",         "java/util/concurrent/Semaphore", registry.rawBytes("java/util/concurrent/Semaphore"));
         ib.addBlob("vm/VM.philosopherBytes", "vm/VM.philosopherLen", "demo/Philosopher",               registry.rawBytes("demo/Philosopher"));
         ib.addBlob("vm/VM.philBytes",        "vm/VM.philLen",        "demo/DiningPhilosophers",        registry.rawBytes("demo/DiningPhilosophers"));
+        // invokedynamic slice 1: a mini java/lang/String (concat result) + the concat demo program.
+        ib.addBlob("vm/VM.stringBytes",      "vm/VM.stringLen",      "java/lang/String",               registry.rawBytes("java/lang/String"));
+        ib.addBlob("vm/VM.concatDemoBytes",  "vm/VM.concatDemoLen",  "demo/ConcatDemo",                registry.rawBytes("demo/ConcatDemo"));
         return ib.build(ENTRY);
     }
 

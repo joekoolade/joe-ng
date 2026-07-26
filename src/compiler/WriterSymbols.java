@@ -184,6 +184,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         return ClassFile.isRoot(r.owner()) && r.name().equals("<init>");
     }
 
+    // invokedynamic never occurs in the image's own (JDK-free) classes, so the writer never lowers it.
+    public boolean isConcatIndy(int idx) { return false; }
+    public int concatRecipeOff(int idx) { return -1; }
+    public void newStringFromBytes(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
+
     // ----- fatal diagnostics: the writer-side rendering of the core's fail() seam -----
     // The exception *types* matter: an unsupported opcode/atype/etc. is an
     // UnsupportedOperationException (how gaps stay loud and how M5Gap classifies

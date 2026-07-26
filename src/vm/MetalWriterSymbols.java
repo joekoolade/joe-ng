@@ -269,6 +269,11 @@ final class MetalWriterSymbols implements Symbols
         failed = true;   // record, don't hang: the marker asserts a clean compile
     }
 
+    // invokedynamic never occurs in the image's own classes, so the metal writer never lowers it either.
+    public boolean isConcatIndy(int idx) { return false; }
+    public int concatRecipeOff(int idx) { return -1; }
+    public void newStringFromBytes(CodeBuffer cb) { failed = true; }
+
     // ----- accessors for the marker / (later) the layout driver -----
 
     int callCount()

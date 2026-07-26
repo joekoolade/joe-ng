@@ -45,6 +45,7 @@ public final class Loader
     private static int gifCount;
     private static int gThisNameOff;     // Utf8 offset of this class's own name
     private static long gMethodsStart;   // address of the methods_count (for callee lookup)
+    private static long gBsmOff;         // address of the BootstrapMethods attr body (num_bootstrap_methods), or 0
     // Flattened vtable of the class being built: superclass slots first, overrides
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
@@ -279,6 +280,26 @@ public final class Loader
         if (code != 0L)
         {
             long unused = Magic.call0(bufOf(code));    // main()V returns void; assign to avoid a pop2
+        }
+    }
+
+    /**
+     * Demand-load and run {@code demo/ConcatDemo.main()} — the invokedynamic (string-concat) proof.
+     * {@code java/lang/String} is registered first so it loads (and gets a TIB) before the concat compiles;
+     * ConcatDemo's {@code "a" + b} sites JIT into byte[] builds wrapped in a mini String, then print.
+     */
+    static void loadConcat()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);           // load java/lang/String first (concat needs its TIB)
+        addBlob(VM.concatDemoBytes, (int) VM.concatDemoLen);   // the program
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.concatDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
         }
     }
 
@@ -920,6 +941,7 @@ public final class Loader
     {
         parseConstPool(bytes, len);
         parseFields();                                  // hierarchy-aware field layout
+        findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
         {
             registerInterface();                        // give its methods global itable indices
@@ -1559,6 +1581,133 @@ public final class Loader
         return ClassReader.refDescOff(gbytes, gcp, idx);
     }
 
+    // ----- invokedynamic: BootstrapMethods + StringConcatFactory recognition (M-B slice 1) -----
+
+    /** True if the Utf8 at {@code off} in the current class equals the literal {@code want} (raw bytes). */
+    private static boolean utf8IsStr(int off, byte[] want)
+    {
+        return utf8IsAtBase(gbase, off, want);
+    }
+
+    /** Locate the class-level {@code BootstrapMethods} attribute (after the methods table); set gBsmOff (0 if none). */
+    private static void findBootstrapMethods()
+    {
+        gBsmOff = 0L;
+        long p = gMethodsStart;                         // methods_count
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)                              // skip every method + its attributes
+        {
+            int macount = u2(p + 6);                    // access(2) name(2) desc(2) attrs_count(2)
+            p = skipAttributes(p + 8, macount);
+            m += 1;
+        }
+        int cacount = u2(p);                            // class attributes_count
+        p += 2;
+        byte[] want = Magic.bytes("BootstrapMethods");
+        int a = 0;
+        while (a < cacount)
+        {
+            int nameIdx = u2(p);
+            int alen = u4(p + 2);
+            if (utf8IsStr(gcp[nameIdx], want))
+            {
+                gBsmOff = p + 6;                        // attribute body: num_bootstrap_methods
+                return;
+            }
+            p += 6 + alen;
+            a += 1;
+        }
+    }
+
+    /** Address of {@code bootstrap_methods[k]} (its {@code bootstrap_method_ref}) within the attribute. */
+    private static long bsmEntryOff(int k)
+    {
+        long p = gBsmOff + 2;                           // skip num_bootstrap_methods
+        int j = 0;
+        while (j < k)
+        {
+            int nargs = u2(p + 2);
+            p += 4 + nargs * 2;                         // bsm_ref(2) num_args(2) args(num_args*2)
+            j += 1;
+        }
+        return p;
+    }
+
+    /** True if the invokedynamic at cp {@code idx} bootstraps via {@code StringConcatFactory.makeConcatWithConstants}. */
+    static boolean isStringConcat(int idx)
+    {
+        if (gBsmOff == 0L)
+        {
+            return false;
+        }
+        int bmIdx = u2(gbase + gcp[idx]);               // invokedynamic.bootstrap_method_attr_index
+        long e = bsmEntryOff(bmIdx);
+        int mhIdx = u2(e);                              // bootstrap_method_ref -> CONSTANT_MethodHandle
+        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);       // MethodHandle{ kind(u1), reference_index(u2) }
+        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/StringConcatFactory"))
+            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("makeConcatWithConstants"));
+    }
+
+    /** Utf8 body offset of the concat recipe (bootstrap_arguments[0], a String) for indy {@code idx}. */
+    static int concatRecipeOff(int idx)
+    {
+        int bmIdx = u2(gbase + gcp[idx]);
+        long e = bsmEntryOff(bmIdx);
+        int arg0Idx = u2(e + 4);                        // bootstrap_arguments[0] = String cp index (the recipe)
+        return ClassReader.stringUtf8Off(gbytes, gcp, arg0Idx);
+    }
+
+    /** True if the Utf8 at {@code off} in blob {@code base} equals the literal {@code want}. */
+    private static boolean utf8IsAtBase(long base, int off, byte[] want)
+    {
+        if (u2(base + off) != want.length)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < want.length)
+        {
+            if (u1(base + off + 2 + j) != (want[j] & 0xFF))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
+    }
+
+    /** Loaded-class-registry index of {@code java/lang/String}, or -1 if it isn't loaded. */
+    private static int stringClassIndex()
+    {
+        byte[] want = Magic.bytes("java/lang/String");
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8IsAtBase(clBase[i], clNameOff[i], want))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */
+    static long stringTib()
+    {
+        int i = stringClassIndex();
+        return i >= 0 ? clTib[i] : 0L;
+    }
+
+    /** Instance size (bytes) of the loaded mini {@code java/lang/String} (header + fields). */
+    static int stringSize()
+    {
+        int i = stringClassIndex();
+        return i >= 0 ? (16 + clFieldCount[i] * 8) : 24;
+    }
+
 
     /** Compare two Utf8 entries in the current class by length + bytes. */
     private static boolean utf8Eq(int offA, int offB)
@@ -1691,6 +1840,7 @@ public final class Loader
         if (isName(gbase, n, 0x736C6565704D73L, 7))  { return Intrinsics.SLEEP_MS; } // "sleepMs"
         if (isName(gbase, n, 0x6E657753656DL, 6))    { return Intrinsics.NEW_SEM; }  // "newSem"
         if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
+        if (isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
         return -1;
     }
 
@@ -1748,9 +1898,9 @@ public final class Loader
         {
             return 2;    // bipush/iload/istore/aload/astore
         }
-        if (op == 0xb9)
+        if (op == 0xb9 || op == 0xba)
         {
-            return 5;    // invokeinterface: index(2) + count(1) + zero(1)
+            return 5;    // invokeinterface: index(2)+count(1)+zero(1) / invokedynamic: index(2)+zero(2)
         }
         if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
                 || op == 0xb2 || op == 0xb3 || op == 0xb8

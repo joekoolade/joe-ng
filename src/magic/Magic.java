@@ -180,6 +180,12 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** Print a mini {@code java/lang/String}'s bytes to the UART (its {@code value} byte[] at offset 16). */
+    public static void printStr(Object s)
+    {
+        throw intrinsic();
+    }
+
     /** {@code MSR VBAR_EL1, v} — install the EL1 exception vector table base (2 KiB-aligned). */
     public static void writeVBAR_EL1(long v)
     {
