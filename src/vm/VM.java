@@ -1524,6 +1524,7 @@ public final class VM
     static long excDemoBytes, excDemoLen;           // demo/ExcDemo
     // Mini collections.
     static long arrayListBytes, arrayListLen;       // java/util/ArrayList
+    static long listBytes, listLen;                 // java/util/List (interface ArrayList implements)
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
@@ -3485,7 +3486,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 53;    // ...+ Number + IntegerCache + BoxingDemo + StrOpsDemo
+    static final int BLOB_COUNT = 54;    // ...+ Number + IntegerCache + BoxingDemo + StrOpsDemo + List
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4346,7 +4347,8 @@ public final class VM
         if (b == 49) { return Magic.bytes("java/lang/Number"); }
         if (b == 50) { return Magic.bytes("java/lang/Integer$IntegerCache"); }
         if (b == 51) { return Magic.bytes("demo/BoxingDemo"); }
-        return Magic.bytes("demo/StrOpsDemo");
+        if (b == 52) { return Magic.bytes("demo/StrOpsDemo"); }
+        return Magic.bytes("java/util/List");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4479,7 +4481,8 @@ public final class VM
         if (b == 49) { return Magic.bytes("numberBytes"); }
         if (b == 50) { return Magic.bytes("integerCacheBytes"); }
         if (b == 51) { return Magic.bytes("boxingDemoBytes"); }
-        return Magic.bytes("strOpsDemoBytes");
+        if (b == 52) { return Magic.bytes("strOpsDemoBytes"); }
+        return Magic.bytes("listBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4536,7 +4539,8 @@ public final class VM
         if (b == 49) { return Magic.bytes("numberLen"); }
         if (b == 50) { return Magic.bytes("integerCacheLen"); }
         if (b == 51) { return Magic.bytes("boxingDemoLen"); }
-        return Magic.bytes("strOpsDemoLen");
+        if (b == 52) { return Magic.bytes("strOpsDemoLen"); }
+        return Magic.bytes("listLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

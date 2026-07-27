@@ -1203,7 +1203,8 @@ public final class Loader
     {
         resetLoader();
         addBlob(VM.stringBytes, (int) VM.stringLen);              // String (elements + concat literals)
-        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);
+        addBlob(VM.listBytes, (int) VM.listLen);                  // List interface: registered before ArrayList
+        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);        //   so its itable directory keys on List's Type
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();

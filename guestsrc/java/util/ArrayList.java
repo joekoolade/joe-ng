@@ -5,8 +5,9 @@ package java.util;
  * provided {@code System.arraycopy} native. Enough of the real surface (add/get/size/isEmpty) for real
  * code that stores references. Element access rides the JIT's array bounds checks (a bad index throws
  * {@link ArrayIndexOutOfBoundsException}). Compiled as a {@code java.base} patch so it carries the real name.
+ * Implements the mini {@link List} so callers can hold it by the interface and dispatch via invokeinterface.
  */
-public class ArrayList
+public class ArrayList implements List
 {
     private Object[] elementData;
     private int size;

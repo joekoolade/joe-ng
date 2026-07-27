@@ -132,6 +132,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.boxingDemoBytes",  "vm/VM.boxingDemoLen",  "demo/BoxingDemo",                         registry.rawBytes("demo/BoxingDemo"));
         // String indexOf/substring (methods added to the mini String) + its demo.
         ib.addBlob("vm/VM.strOpsDemoBytes",  "vm/VM.strOpsDemoLen",  "demo/StrOpsDemo",                         registry.rawBytes("demo/StrOpsDemo"));
+        ib.addBlob("vm/VM.listBytes",        "vm/VM.listLen",        "java/util/List",                          registry.rawBytes("java/util/List"));
         return ib.build(ENTRY);
     }
 
