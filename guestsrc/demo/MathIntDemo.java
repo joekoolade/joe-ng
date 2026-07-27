@@ -18,17 +18,32 @@ public class MathIntDemo
         show("floorMod(7,-3)", Math.floorMod(7, -3));       // -2
         show("addExact(100,23)", Math.addExact(100, 23));   // 123
         show("addExact(-5,-8)", Math.addExact(-5, -8));     // -13
+        show("multiplyExact(1000,1000)", Math.multiplyExact(1000, 1000));   // 1000000
+        show("multiplyExact(-7,8)", Math.multiplyExact(-7, 8));             // -56
+        show("subtractExact(10,3)", Math.subtractExact(10, 3));            // 7
+        show("negateExact(42)", Math.negateExact(42));                     // -42
 
-        int caught = 0;
+        show("addExact(MAX,1) overflow", caught(0));                        // 1
+        show("multiplyExact(MAX,2) overflow", caught(1));                   // 1
+        show("subtractExact(MIN,1) overflow", caught(2));                   // 1
+        show("negateExact(MIN) overflow", caught(3));                      // 1
+    }
+
+    /** Run the exact-op that overflows for {@code which} and report whether its ArithmeticException was caught. */
+    private static int caught(int which)
+    {
         try
         {
-            int x = Math.addExact(2147483647, 1);           // MAX_VALUE + 1 -> overflow -> ArithmeticException
+            if (which == 0) { Math.addExact(2147483647, 1); }
+            else if (which == 1) { Math.multiplyExact(2147483647, 2); }
+            else if (which == 2) { Math.subtractExact(-2147483648, 1); }
+            else { Math.negateExact(-2147483648); }
         }
         catch (Exception e)
         {
-            caught = 1;
+            return 1;
         }
-        show("addExact(MAX,1) overflow caught", caught);    // 1
+        return 0;
     }
 
     private static void show(String label, int v)
