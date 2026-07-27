@@ -203,6 +203,82 @@ public final class String
         return new String(buf, coder);
     }
 
+    /** True if {@code delim} (LATIN1) matches this string starting at {@code off}. */
+    private boolean regionMatches(int off, String delim, int len)
+    {
+        int j = 0;
+        while (j < len)
+        {
+            if (value[off + j] != delim.value[j])
+            {
+                return false;
+            }
+            j = j + 1;
+        }
+        return true;
+    }
+
+    /**
+     * Split around the literal delimiter {@code delim} (NOT a regex -- the common plain-string case), with
+     * trailing empty strings removed (the real {@code split(regex)} = limit-0 semantics). Returns a fresh
+     * {@code String[]}.
+     */
+    public String[] split(String delim)
+    {
+        int dlen = delim.value.length;
+        int max = value.length - dlen;
+        int count = 0;                                  // pass 1: count non-overlapping occurrences
+        int i = 0;
+        while (i <= max)
+        {
+            if (regionMatches(i, delim, dlen))
+            {
+                count = count + 1;
+                i = i + dlen;
+            }
+            else
+            {
+                i = i + 1;
+            }
+        }
+        String[] parts = new String[count + 1];         // pass 2: fill segments
+        int idx = 0;
+        int start = 0;
+        i = 0;
+        while (i <= max)
+        {
+            if (regionMatches(i, delim, dlen))
+            {
+                parts[idx] = substring(start, i);
+                idx = idx + 1;
+                i = i + dlen;
+                start = i;
+            }
+            else
+            {
+                i = i + 1;
+            }
+        }
+        parts[idx] = substring(start, value.length);
+        idx = idx + 1;
+        while (idx > 0 && parts[idx - 1].value.length == 0)   // drop trailing empties (limit 0)
+        {
+            idx = idx - 1;
+        }
+        if (idx == parts.length)
+        {
+            return parts;
+        }
+        String[] result = new String[idx];
+        int k = 0;
+        while (k < idx)
+        {
+            result[k] = parts[k];
+            k = k + 1;
+        }
+        return result;
+    }
+
     public String substring(int begin)
     {
         return substring(begin, value.length);

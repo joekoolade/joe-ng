@@ -35,6 +35,28 @@ public class StrOpsDemo
         showStr("\"a.b.c\".replace('.','/')", "a.b.c".replace('.', '/'));  // a/b/c
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
+
+        showSplit("\"a,b,c\".split(\",\")", "a,b,c".split(","));           // [a, b, c]
+        showSplit("\"a::b::c\".split(\"::\")", "a::b::c".split("::"));     // [a, b, c]
+        showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)
+        showSplit("\"whole\".split(\",\")", "whole".split(","));          // [whole]
+    }
+
+    private static void showSplit(String label, String[] parts)
+    {
+        Magic.printStr("  Str.");
+        Magic.printStr(label);
+        Magic.printStr(" len=");
+        Magic.printStr(Integer.toString(parts.length));
+        Magic.printStr(" = [");
+        int i = 0;
+        while (i < parts.length)
+        {
+            if (i > 0) { Magic.printStr(", "); }
+            Magic.printStr(parts[i]);
+            i = i + 1;
+        }
+        Magic.printStr("]\n");
     }
 
     private static void showBool(String label, boolean v)
