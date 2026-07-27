@@ -1030,7 +1030,8 @@ public final class Baseline
     private void branchCmpZero(CodeBuffer cb, byte[] code, int pos, int cond)
     {
         int v = popReg();
-        cb.emit(A64Enc.cmpImm(v, 0));
+        cb.emit(A64Enc.sxtw(v, v));                          // canonicalize: an overflowed int isn't sign-extended,
+        cb.emit(A64Enc.cmpImm(v, 0));                        // and this is a 64-bit compare
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
@@ -1041,6 +1042,8 @@ public final class Baseline
     {
         int b = popReg();
         int a = popReg();
+        cb.emit(A64Enc.sxtw(a, a));                          // canonicalize both (overflowed ints); harmless for
+        cb.emit(A64Enc.sxtw(b, b));                          // canonical ints, equality-preserving for if_acmp refs
         cb.emit(A64Enc.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
         int w = cb.emit(A64Enc.b(0));

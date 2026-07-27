@@ -103,6 +103,9 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.hexLongDemoBytes", "vm/VM.hexLongDemoLen", "demo/HexLongDemo",                        registry.rawBytes("demo/HexLongDemo"));
         // Long.parseLong + Long.toHexString demo (formatUnsignedLong0 also indexes the seeded Integer.digits).
         ib.addBlob("vm/VM.longMoreDemoBytes","vm/VM.longMoreDemoLen","demo/LongMoreDemo",                       registry.rawBytes("demo/LongMoreDemo"));
+        // integer Math methods (floorDiv/floorMod/addExact) + the ArithmeticException addExact throws on overflow.
+        ib.addBlob("vm/VM.arithExcBytes",    "vm/VM.arithExcLen",    "java/lang/ArithmeticException",           registry.rawBytes("java/lang/ArithmeticException"));
+        ib.addBlob("vm/VM.mathIntDemoBytes", "vm/VM.mathIntDemoLen", "demo/MathIntDemo",                        registry.rawBytes("demo/MathIntDemo"));
         return ib.build(ENTRY);
     }
 

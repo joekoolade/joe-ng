@@ -1540,6 +1540,8 @@ public final class VM
     static long toStringDemoBytes, toStringDemoLen; // demo/ToStringDemo
     static long hexLongDemoBytes, hexLongDemoLen;   // demo/HexLongDemo (Integer.toHexString + Long.toString)
     static long longMoreDemoBytes, longMoreDemoLen; // demo/LongMoreDemo (Long.parseLong + Long.toHexString)
+    static long arithExcBytes, arithExcLen;         // java/lang/ArithmeticException (Math.addExact overflow)
+    static long mathIntDemoBytes, mathIntDemoLen;   // demo/MathIntDemo (floorDiv/floorMod/addExact)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1989,6 +1991,10 @@ public final class VM
         // Real Long.parseLong + Long.toHexString.
         Uart.write(Magic.bytes("real Long.parseLong + Long.toHexString (unmodified JDK):\n"));
         Loader.loadLongMore();
+
+        // Real integer Math: floorDiv/floorMod (pure) + addExact (real ArithmeticException on overflow).
+        Uart.write(Magic.bytes("real Math floorDiv/floorMod/addExact (unmodified JDK):\n"));
+        Loader.loadMathInt();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3454,7 +3460,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 42;    // ...+ DecimalDigits/ToStringDemo + HexLongDemo + LongMoreDemo
+    static final int BLOB_COUNT = 44;    // ...+ HexLongDemo/LongMoreDemo + ArithmeticException/MathIntDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4304,7 +4310,9 @@ public final class VM
         if (b == 38) { return Magic.bytes("jdk/internal/util/DecimalDigits"); }
         if (b == 39) { return Magic.bytes("demo/ToStringDemo"); }
         if (b == 40) { return Magic.bytes("demo/HexLongDemo"); }
-        return Magic.bytes("demo/LongMoreDemo");
+        if (b == 41) { return Magic.bytes("demo/LongMoreDemo"); }
+        if (b == 42) { return Magic.bytes("java/lang/ArithmeticException"); }
+        return Magic.bytes("demo/MathIntDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4426,7 +4434,9 @@ public final class VM
         if (b == 38) { return Magic.bytes("decimalDigitsBytes"); }
         if (b == 39) { return Magic.bytes("toStringDemoBytes"); }
         if (b == 40) { return Magic.bytes("hexLongDemoBytes"); }
-        return Magic.bytes("longMoreDemoBytes");
+        if (b == 41) { return Magic.bytes("longMoreDemoBytes"); }
+        if (b == 42) { return Magic.bytes("arithExcBytes"); }
+        return Magic.bytes("mathIntDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4472,7 +4482,9 @@ public final class VM
         if (b == 38) { return Magic.bytes("decimalDigitsLen"); }
         if (b == 39) { return Magic.bytes("toStringDemoLen"); }
         if (b == 40) { return Magic.bytes("hexLongDemoLen"); }
-        return Magic.bytes("longMoreDemoLen");
+        if (b == 41) { return Magic.bytes("longMoreDemoLen"); }
+        if (b == 42) { return Magic.bytes("arithExcLen"); }
+        return Magic.bytes("mathIntDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

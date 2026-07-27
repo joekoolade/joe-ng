@@ -392,6 +392,36 @@ public final class Loader
         }
     }
 
+    /**
+     * Demand-load and run {@code demo/MathIntDemo.main()} — the UNMODIFIED real integer {@code Math} methods
+     * {@code floorDiv}/{@code floorMod} (pure) and {@code addExact} (throws a real {@code ArithmeticException}
+     * on overflow, caught via cross-method unwind), via the reachable closure. No seed-ordering (relocs).
+     */
+    static void loadMathInt()
+    {
+        resetLoader();
+        addBlob(VM.mathBytes, (int) VM.mathLen);
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer.toString for the output
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.arithExcBytes, (int) VM.arithExcLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);
+        addBlob(VM.mathIntDemoBytes, (int) VM.mathIntDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.mathIntDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/MathIntDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
