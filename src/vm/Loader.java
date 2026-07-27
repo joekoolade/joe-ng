@@ -252,6 +252,55 @@ public final class Loader
         parseIntBuf = code != 0L ? compile(code, gcodeLen, gFoundDescOff, gFoundStatic) : 0L;
     }
 
+    /**
+     * Demand-load and run {@code demo/ParseAllDemo.main()} — which loads the UNMODIFIED real
+     * {@code java/lang/Integer} through the normal closure/loadAll path (with the reachability mark set to
+     * its {@code main}) and calls {@code Integer.parseInt}. Proves loadAll compiles only reachable methods:
+     * loading real Integer whole would choke on toString/format's unbuilt deps.
+     */
+    static void loadIntegerReachable()
+    {
+        resetLoader();
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // the real, unmodified java.base class (big)
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.characterBytes, (int) VM.characterLen);
+        addBlob(VM.numberFmtBytes, (int) VM.numberFmtLen);
+        addBlob(VM.illegalArgBytes, (int) VM.illegalArgLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);
+        addBlob(VM.parseAllDemoBytes, (int) VM.parseAllDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.parseAllDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;                                          // real Integer's <clinit> would touch IntegerCache
+        loadAll();
+        skipClinit = 0;
+        // Resolve main from the global registry (robust to load order: the Integer<->Math cycle's force-load
+        // may not leave the demo as the last-compiled class, so bufOf's last-batch table can't be trusted).
+        long buf = globalMethodBuf(Magic.bytes("demo/ParseAllDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
+    /** The compiled buffer of a loaded method, by class/name/descriptor (from the global registry). */
+    private static long globalMethodBuf(byte[] cls, byte[] name, byte[] desc)
+    {
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8IsAtBase(rgBase[i], rgClassOff[i], cls)
+                    && utf8IsAtBase(rgBase[i], rgNameOff[i], name)
+                    && utf8IsAtBase(rgBase[i], rgDescOff[i], desc))
+            {
+                return rgBuf[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
@@ -371,6 +420,241 @@ public final class Loader
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
         pdLen = new int[MAXBLOB];
+        gEntryBlob = 0L;                                 // no reachability mark unless a caller sets an entry
+        markActive = 0;
+        reachCode = new long[MAXREACH];
+        reachN = 0;
+    }
+
+    // ----- reachable-method compilation (M-B) --------------------------------
+    // When a caller marks an entry point, loadAll compiles only the methods reachable from it (a call-graph
+    // closure over the loaded blobs) instead of every method of every class. This lets a big real java.base
+    // class load through the normal closure path without choking on its unreachable methods (toString,
+    // parseInt's String.format paths, ...). Without an entry set, everything compiles (unchanged behaviour).
+    private static final int MAXREACH = 1024;
+    private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
+    private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
+    private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
+    private static long[] reachCode;                     // bytecode addresses of the reachable methods
+    private static int reachN;
+
+    /** Declare the method loadAll should treat as the reachability root (call before addBlob/loadAll). */
+    static void entryPoint(long blobBytes, byte[] name, byte[] desc)
+    {
+        gEntryBlob = blobBytes;
+        gEntryName = name;
+        gEntryDesc = desc;
+    }
+
+    /**
+     * Parse a blob's constant pool and advance {@code gp}/{@code gMethodsStart} to its methods table (and set
+     * {@code gThisNameOff}) — the lightweight parse the reachability mark needs, without {@link #parseFields}'
+     * field-layout + statics allocation.
+     */
+    private static void parseForMethods(long base, int len)
+    {
+        parseConstPool(base, len);
+        long p = gp;
+        gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> name (for class-qualified call matching)
+        p += 6;                                           // access_flags, this_class, super_class
+        p += 2 + u2(p) * 2;                               // interfaces
+        int fcount = u2(p);
+        p += 2;
+        int f = 0;
+        while (f < fcount)
+        {
+            p = skipAttributes(p + 8, u2(p + 6));         // field: access(2) name(2) desc(2) count(2), then attributes
+            f += 1;
+        }
+        gMethodsStart = p;
+        gp = p;
+    }
+
+    /** True if {@code code} (a method's bytecode address) was marked reachable. */
+    private static boolean isReach(long code)
+    {
+        int i = 0;
+        while (i < reachN)
+        {
+            if (reachCode[i] == code)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** Add {@code code} to the reachable set if new; returns true if it was newly added. */
+    private static boolean addReach(long code)
+    {
+        if (code == 0L || isReach(code) || reachN >= MAXREACH)
+        {
+            return false;
+        }
+        reachCode[reachN] = code;
+        reachN += 1;
+        return true;
+    }
+
+    /**
+     * Mark every method reachable from the entry point: seed the entry (plus every {@code run()V}, which the
+     * thread trampoline enters outside the call graph), then repeatedly follow each reachable method's calls
+     * — invokestatic/special to the named class's method, invokevirtual/interface to that name+descriptor in
+     * every loaded class (a receiver could be any of them) — until the set stops growing.
+     */
+    private static final int MAXPEND = 8192;
+    private static long[] pendBase;                      // call-site refs of the round's reachable methods:
+    private static int[] pendClass, pendName, pendDesc, pendKind;   // (base, class/name/desc offsets, kind)
+    private static int pendN;
+
+    private static void markReachable()
+    {
+        reachN = 0;
+        pendBase = new long[MAXPEND];
+        pendClass = new int[MAXPEND];
+        pendName = new int[MAXPEND];
+        pendDesc = new int[MAXPEND];
+        pendKind = new int[MAXPEND];
+        parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
+        addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
+        seedAllNamed(Magic.bytes("run"), Magic.bytes("()V"));   // trampoline entry (Runnable.run)
+        // Each round is two bounded passes over the blobs (so the const pool is parsed O(blobs) times, not
+        // per-ref): collect the call-site refs of every reachable method, then mark each ref's target(s).
+        boolean grew = true;
+        while (grew)
+        {
+            grew = false;
+            pendN = 0;
+            int b = 0;
+            while (b < pdCount)                         // collect
+            {
+                collectBlob(pdBase[b], pdLen[b]);
+                b += 1;
+            }
+            b = 0;
+            while (b < pdCount)                         // resolve
+            {
+                grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                b += 1;
+            }
+        }
+        markActive = 1;
+    }
+
+    /** Collect the call-site refs of every already-reachable method in blob {@code base} into the pending set. */
+    private static void collectBlob(long base, int len)
+    {
+        parseForMethods(base, len);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            long code = findCode(base, p + 8, attrs);
+            if (code != 0L && isReach(code))
+            {
+                collectRefs(base, code, gcodeLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+    }
+
+    /** Append each invoke in {@code [code, code+len)} to the pending-ref set (offsets index the cp of {@code base}). */
+    private static void collectRefs(long base, long code, int len)
+    {
+        int pc = 0;
+        while (pc < len && pendN < MAXPEND)
+        {
+            int op = u1(code + pc);
+            if (op == 0xb8 || op == 0xb7 || op == 0xb6 || op == 0xb9)   // invoke static/special/virtual/interface
+            {
+                int idx = u2(code + pc + 1);
+                pendBase[pendN] = base;
+                pendClass[pendN] = refClassNameOff(idx);
+                pendName[pendN] = mrefNameOff(idx);
+                pendDesc[pendN] = mrefDescOff(idx);
+                pendKind[pendN] = (op == 0xb8 || op == 0xb7) ? 0 : 1;   // class-qualified vs name+desc
+                pendN += 1;
+            }
+            pc += opLen(op);
+        }
+    }
+
+    /** For blob {@code base}, mark every pending-ref target it defines. Returns true if any method was newly marked. */
+    private static boolean resolveBlob(long base, int len)
+    {
+        parseForMethods(base, len);
+        boolean grew = false;
+        int r = 0;
+        while (r < pendN)
+        {
+            if (pendKind[r] != 0 || utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))   // class-match (static/special)
+            {
+                long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
+                if (code != 0L)
+                {
+                    grew = addReach(code) || grew;
+                }
+            }
+            r += 1;
+        }
+        return grew;
+    }
+
+    /** Add the {@code name/desc} method of every loaded blob that defines it (for run()V trampoline seeds). */
+    private static void seedAllNamed(byte[] name, byte[] desc)
+    {
+        int b = 0;
+        while (b < pdCount)
+        {
+            parseForMethods(pdBase[b], pdLen[b]);
+            addReach(findMethodByBytes(gbase, name, desc));
+            b += 1;
+        }
+    }
+
+    /** Length of the blob at address {@code base} (matched against the pending-blob table). */
+    private static int blobLenOf(long base)
+    {
+        int b = 0;
+        while (b < pdCount)
+        {
+            if (pdBase[b] == base)
+            {
+                return pdLen[b];
+            }
+            b += 1;
+        }
+        return 0;
+    }
+
+
+    /** Find the method matching a name/descriptor given as cross-blob offsets ({@code refBase}), in the current cp. */
+    private static long findMethodByRef(long refBase, int nameOff, int descOff)
+    {
+        long p = gp;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(refBase, nameOff, gbase, gcp[u2(p + 2)]) && utf8EqAt(refBase, descOff, gbase, gcp[u2(p + 4)]))
+            {
+                long code = findCode(gbase, p + 8, attrs);
+                if (code != 0L)
+                {
+                    return code;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0L;
     }
 
     /**
@@ -1119,7 +1403,7 @@ public final class Loader
         {
             int attrs = u2(p + 6);
             long code = findCode(bytes, p + 8, attrs);
-            if (code != 0L)
+            if (code != 0L && (markActive == 0 || isReach(code)))   // reachability-pruned when a mark ran
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                 addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
@@ -1170,6 +1454,10 @@ public final class Loader
     private static void loadAll()
     {
         probeAll();
+        if (gEntryBlob != 0L)                            // reachability requested: compile only what the entry reaches
+        {
+            markReachable();
+        }
         int remaining = pdCount;
         while (remaining > 0)
         {
@@ -2532,22 +2820,21 @@ public final class Loader
 
     private static int opLen(int op)
     {
-        if (op == 0x10 || op == 0x15 || op == 0x36 || op == 0x19 || op == 0x3a
-                || op == 0x17 || op == 0x18 || op == 0x38 || op == 0x39)
+        if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x17 || op == 0x18 || op == 0x19
+                || op == 0x36 || op == 0x37 || op == 0x38 || op == 0x39 || op == 0x3a || op == 0xa9 || op == 0xbc)
         {
-            return 2;    // bipush/iload/istore/aload/astore/fload/dload/fstore/dstore
+            return 2;    // bipush/ldc/iload/lload/fload/dload/aload/istore/lstore/fstore/dstore/astore/ret/newarray
         }
         if (op == 0xb9 || op == 0xba)
         {
             return 5;    // invokeinterface: index(2)+count(1)+zero(1) / invokedynamic: index(2)+zero(2)
         }
-        if (op == 0x11 || op == 0x84 || (op >= 0x99 && op <= 0xa4) || op == 0xa7
-                || op == 0xb2 || op == 0xb3 || op == 0xb8
-                || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xbb
-                || op == 0xc0 || op == 0xc1)
+        if (op == 0x11 || op == 0x13 || op == 0x14 || op == 0x84 || (op >= 0x99 && op <= 0xa8) || op == 0xc6 || op == 0xc7
+                || op == 0xb2 || op == 0xb3 || op == 0xb4 || op == 0xb5 || op == 0xb6 || op == 0xb7 || op == 0xb8
+                || op == 0xbb || op == 0xbd || op == 0xc0 || op == 0xc1)
         {
-            return 3;    // ... get/putstatic / invoke* / get/putfield / new / cast / instanceof
+            return 3;    // sipush/ldc_w/ldc2_w/iinc/if*/goto/jsr/get-put(static|field)/invoke*/new/anewarray/cast/instanceof
         }
-        return 1;
+        return 1;        // (tableswitch/lookupswitch/wide/multianewarray not emitted by our sources)
     }
 }

@@ -1533,6 +1533,7 @@ public final class VM
     static long characterBytes, characterLen;       // java/lang/Character (digit)
     static long illegalArgBytes, illegalArgLen;     // java/lang/IllegalArgumentException
     static long numberFmtBytes, numberFmtLen;       // java/lang/NumberFormatException
+    static long parseAllDemoBytes, parseAllDemoLen;  // demo/ParseAllDemo (real Integer via reachable loadAll)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1962,6 +1963,12 @@ public final class VM
         parseShow(Magic.bytes("1000000"), 1000000);
         parseShow(Magic.bytes("2147483647"), 2147483647);
         parseShow(Magic.bytes("-2147483648"), -2147483648);
+
+        // Reachable loadAll: load the real Integer through the NORMAL closure path (not isolated compile) and
+        // run parseInt -- loadAll now compiles only the methods the entry reaches, so real Integer's
+        // unreachable methods (toString/format) don't drag in unbuilt deps.
+        Uart.write(Magic.bytes("real Integer via reachable loadAll:\n"));
+        Loader.loadIntegerReachable();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3427,7 +3434,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 36;    // ...+ Object + HashMap/MapDemo + Long + Character/IllegalArg/NumberFmt
+    static final int BLOB_COUNT = 37;    // ...+ Long + Character/IllegalArg/NumberFmt + ParseAllDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4271,7 +4278,8 @@ public final class VM
         if (b == 32) { return Magic.bytes("java/lang/Long"); }
         if (b == 33) { return Magic.bytes("java/lang/Character"); }
         if (b == 34) { return Magic.bytes("java/lang/IllegalArgumentException"); }
-        return Magic.bytes("java/lang/NumberFormatException");
+        if (b == 35) { return Magic.bytes("java/lang/NumberFormatException"); }
+        return Magic.bytes("demo/ParseAllDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4387,7 +4395,8 @@ public final class VM
         if (b == 32) { return Magic.bytes("longBytes"); }
         if (b == 33) { return Magic.bytes("characterBytes"); }
         if (b == 34) { return Magic.bytes("illegalArgBytes"); }
-        return Magic.bytes("numberFmtBytes");
+        if (b == 35) { return Magic.bytes("numberFmtBytes"); }
+        return Magic.bytes("parseAllDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4427,7 +4436,8 @@ public final class VM
         if (b == 32) { return Magic.bytes("longLen"); }
         if (b == 33) { return Magic.bytes("characterLen"); }
         if (b == 34) { return Magic.bytes("illegalArgLen"); }
-        return Magic.bytes("numberFmtLen");
+        if (b == 35) { return Magic.bytes("numberFmtLen"); }
+        return Magic.bytes("parseAllDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

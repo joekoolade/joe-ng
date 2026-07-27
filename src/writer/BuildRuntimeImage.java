@@ -93,6 +93,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.characterBytes",   "vm/VM.characterLen",   "java/lang/Character",                     registry.rawBytes("java/lang/Character"));
         ib.addBlob("vm/VM.illegalArgBytes",  "vm/VM.illegalArgLen",  "java/lang/IllegalArgumentException",      registry.rawBytes("java/lang/IllegalArgumentException"));
         ib.addBlob("vm/VM.numberFmtBytes",   "vm/VM.numberFmtLen",   "java/lang/NumberFormatException",         registry.rawBytes("java/lang/NumberFormatException"));
+        // reachable-loadAll demo: loads the real Integer via the closure path and calls parseInt.
+        ib.addBlob("vm/VM.parseAllDemoBytes","vm/VM.parseAllDemoLen","demo/ParseAllDemo",                       registry.rawBytes("demo/ParseAllDemo"));
         return ib.build(ENTRY);
     }
 
