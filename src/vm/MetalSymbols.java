@@ -22,7 +22,12 @@ final class MetalSymbols implements Symbols
     // ----- calls: emit a BL/BLR-free BL straight to the resolved code address -----
     public void call(CodeBuffer cb, int methodCp)
     {
-        emitBl(cb, Loader.resolveCallBuf(methodCp));
+        long target = Loader.resolveCallBuf(methodCp);
+        if (target == 0L)                               // callee's class not loaded yet (dependency cycle):
+        {                                               // record the bl for patchRelocs to fix after loadAll
+            Loader.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
+        }
+        emitBl(cb, target);
     }
     public void callHelper(CodeBuffer cb, int helper)
     {
@@ -47,7 +52,12 @@ final class MetalSymbols implements Symbols
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
-        emitAddr(cb, reg, Loader.staticAddr(fieldCp));
+        long addr = Loader.staticAddr(fieldCp);
+        if (addr == 0L)                                 // cross-class static in a not-yet-loaded class:
+        {                                               // record the movz/movk for patchRelocs
+            Loader.recordStaticReloc(cb.base() + (long) cb.wordCount() * 4L, reg, fieldCp);
+        }
+        emitAddr(cb, reg, addr);
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {

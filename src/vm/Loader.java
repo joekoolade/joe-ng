@@ -343,9 +343,8 @@ public final class Loader
     static void loadHexLong()
     {
         resetLoader();
-        addBlob(VM.mathBytes, (int) VM.mathLen);         // before Integer: Math<->Integer cycle, and toHexString's
-        addBlob(VM.integerBytes, (int) VM.integerLen);   // toUnsignedString0 calls Math.max -- seed the (leaf) Math first
-        addBlob(VM.longBytes, (int) VM.longLen);
+        addBlob(VM.integerBytes, (int) VM.integerLen);   // Math (pulled by the closure) + Integer's cross-refs that
+        addBlob(VM.longBytes, (int) VM.longLen);         // the cycle leaves unresolved are fixed by patchRelocs
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
@@ -370,9 +369,8 @@ public final class Loader
     static void loadLongMore()
     {
         resetLoader();
-        addBlob(VM.mathBytes, (int) VM.mathLen);         // seed Math + Integer before Long (cycle): toUnsignedString0
-        addBlob(VM.integerBytes, (int) VM.integerLen);   // -> Math.max, and formatUnsignedLong0 reads Integer.digits
-        addBlob(VM.longBytes, (int) VM.longLen);
+        addBlob(VM.longBytes, (int) VM.longLen);         // no seed-ordering: toUnsignedString0 -> Math.max and
+        addBlob(VM.integerBytes, (int) VM.integerLen);   // formatUnsignedLong0 -> Integer.digits are patched by relocs
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.characterBytes, (int) VM.characterLen);
@@ -482,6 +480,19 @@ public final class Loader
         sgNameOff = new int[MAXREG];
         sgAddr = new long[MAXREG];
         sgCount = 0;
+        relocRecording = 0;
+        rcAddr = new long[MAXRELOC];
+        rcBase = new long[MAXRELOC];
+        rcClass = new int[MAXRELOC];
+        rcName = new int[MAXRELOC];
+        rcDesc = new int[MAXRELOC];
+        rcCount = 0;
+        rsAddr = new long[MAXRELOC];
+        rsBase = new long[MAXRELOC];
+        rsReg = new int[MAXRELOC];
+        rsClass = new int[MAXRELOC];
+        rsName = new int[MAXRELOC];
+        rsCount = 0;
         clBase = new long[MAXCLASS];
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
@@ -1356,7 +1367,7 @@ public final class Loader
             }
             i += 1;
         }
-        return gStatics;                                // unresolved (unloaded class); harmless if never read
+        return 0L;                                      // unresolved (class not loaded yet) -> reloc will patch it
     }
 
     /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
@@ -1635,6 +1646,8 @@ public final class Loader
                 }
             }
         }
+        patchRelocs();                                  // every class is loaded now: fix up cross-class refs the
+                                                        // cycle force-load left unresolved (retires seed-ordering)
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
@@ -1900,7 +1913,9 @@ public final class Loader
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
+        relocRecording = 1;                             // record unresolved cross-class sites at their real address
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
+        relocRecording = 0;
         long out = mBuf[i];
         int k = 0;
         while (k < words.length)
@@ -2018,6 +2033,111 @@ public final class Loader
         }
         long g = globalBuf(idx);                        // cross class: another loaded class
         return g != 0L ? g : nativeBuf(idx);            // else a provided java.base native, or 0
+    }
+
+    // ----- relocation: patch cross-class refs a class couldn't resolve when it compiled ---------
+    // In a dependency cycle the loader force-loads one class before the other, so its cross-class
+    // invokestatic/special (bl) and getstatic/putstatic (address load) to the not-yet-loaded class compile
+    // to a stub. Each such site is recorded (address + the ref as base+offsets, which stay valid), and
+    // patchRelocs() re-resolves + rewrites them after every class is loaded -- so no manual seed-ordering.
+    private static final int MAXRELOC = 4096;
+    private static int relocRecording;                  // 1 only during emitMethod (the real-base emit pass)
+    private static long[] rcAddr, rcBase;               // call sites: bl address, ref blob base,
+    private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
+    private static int rcCount;
+    private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
+    private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
+    private static int rsCount;
+
+    /** Record an unresolved cross-class call at {@code blAddr} (the ref names class/name/desc in the current cp). */
+    static void recordCallReloc(long blAddr, int idx)
+    {
+        if (relocRecording == 0 || rcCount >= MAXRELOC)
+        {
+            return;
+        }
+        rcAddr[rcCount] = blAddr;
+        rcBase[rcCount] = gbase;
+        rcClass[rcCount] = refClassNameOff(idx);
+        rcName[rcCount] = mrefNameOff(idx);
+        rcDesc[rcCount] = mrefDescOff(idx);
+        rcCount += 1;
+    }
+
+    /** Record an unresolved cross-class static-field address load at {@code loadAddr} (2 words, into {@code reg}). */
+    static void recordStaticReloc(long loadAddr, int reg, int idx)
+    {
+        if (relocRecording == 0 || rsCount >= MAXRELOC)
+        {
+            return;
+        }
+        rsAddr[rsCount] = loadAddr;
+        rsReg[rsCount] = reg;
+        rsBase[rsCount] = gbase;
+        rsClass[rsCount] = refClassNameOff(idx);
+        rsName[rsCount] = mrefNameOff(idx);
+        rsCount += 1;
+    }
+
+    /** Re-resolve and rewrite every recorded reloc site now that all classes are loaded. */
+    private static void patchRelocs()
+    {
+        int i = 0;
+        while (i < rcCount)
+        {
+            long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+            if (target != 0L)
+            {
+                int off = (int) ((target - rcAddr[i]) >> 2);
+                Magic.store32(rcAddr[i], A64Enc.bl(off));      // rewrite bl 0 -> bl target
+            }
+            i += 1;
+        }
+        int j = 0;
+        while (j < rsCount)
+        {
+            long addr = globalStaticByRef(rsBase[j], rsClass[j], rsName[j]);
+            if (addr != 0L)
+            {
+                Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
+                Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
+            }
+            j += 1;
+        }
+        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the patched code
+    }
+
+    /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
+    private static long globalBufByRef(long refBase, int classOff, int nameOff, int descOff)
+    {
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(refBase, classOff, rgBase[i], rgClassOff[i])
+                    && utf8EqAt(refBase, nameOff, rgBase[i], rgNameOff[i])
+                    && utf8EqAt(refBase, descOff, rgBase[i], rgDescOff[i]))
+            {
+                return rgBuf[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
+    private static long globalStaticByRef(long refBase, int classOff, int nameOff)
+    {
+        int i = 0;
+        while (i < sgCount)
+        {
+            if (utf8EqAt(refBase, classOff, sgBase[i], sgClassOff[i])
+                    && utf8EqAt(refBase, nameOff, sgBase[i], sgNameOff[i]))
+            {
+                return sgAddr[i];
+            }
+            i += 1;
+        }
+        return 0L;
     }
 
     /**
