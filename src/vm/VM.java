@@ -1550,6 +1550,7 @@ public final class VM
     static long numberBytes, numberLen;             // java/lang/Number (Integer's super, for the vtable chain)
     static long integerCacheBytes, integerCacheLen; // java/lang/Integer$IntegerCache (statics read 0, clinit skipped)
     static long boxingDemoBytes, boxingDemoLen;     // demo/BoxingDemo (Integer.valueOf boxing via HashMap)
+    static long strOpsDemoBytes, strOpsDemoLen;     // demo/StrOpsDemo (String indexOf/substring)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -2015,6 +2016,10 @@ public final class VM
         // Real Integer.valueOf autoboxing: boxed Integer keys in a HashMap (real hashCode/equals dispatch).
         Uart.write(Magic.bytes("real Integer.valueOf boxing via HashMap (unmodified JDK):\n"));
         Loader.loadBoxing();
+
+        // String indexOf/substring on the real-shaped mini String.
+        Uart.write(Magic.bytes("String indexOf/substring (demand-loaded):\n"));
+        Loader.loadStrOps();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3480,7 +3485,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 52;    // ...+ ArraysSupport/ArraysDemo + Number + IntegerCache + BoxingDemo
+    static final int BLOB_COUNT = 53;    // ...+ Number + IntegerCache + BoxingDemo + StrOpsDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4340,7 +4345,8 @@ public final class VM
         if (b == 48) { return Magic.bytes("demo/ArraysDemo"); }
         if (b == 49) { return Magic.bytes("java/lang/Number"); }
         if (b == 50) { return Magic.bytes("java/lang/Integer$IntegerCache"); }
-        return Magic.bytes("demo/BoxingDemo");
+        if (b == 51) { return Magic.bytes("demo/BoxingDemo"); }
+        return Magic.bytes("demo/StrOpsDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4472,7 +4478,8 @@ public final class VM
         if (b == 48) { return Magic.bytes("arraysDemoBytes"); }
         if (b == 49) { return Magic.bytes("numberBytes"); }
         if (b == 50) { return Magic.bytes("integerCacheBytes"); }
-        return Magic.bytes("boxingDemoBytes");
+        if (b == 51) { return Magic.bytes("boxingDemoBytes"); }
+        return Magic.bytes("strOpsDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4528,7 +4535,8 @@ public final class VM
         if (b == 48) { return Magic.bytes("arraysDemoLen"); }
         if (b == 49) { return Magic.bytes("numberLen"); }
         if (b == 50) { return Magic.bytes("integerCacheLen"); }
-        return Magic.bytes("boxingDemoLen");
+        if (b == 51) { return Magic.bytes("boxingDemoLen"); }
+        return Magic.bytes("strOpsDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

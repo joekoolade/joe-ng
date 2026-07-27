@@ -81,4 +81,64 @@ public final class String
         }
         return true;
     }
+
+    /** Index of the first {@code ch} (LATIN1), or -1. */
+    public int indexOf(int ch)
+    {
+        int i = 0;
+        while (i < value.length)
+        {
+            if ((value[i] & 0xFF) == ch)
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    /** Index of the first occurrence of {@code str}, or -1 (a plain LATIN1 substring search). */
+    public int indexOf(String str)
+    {
+        int n = str.value.length;
+        if (n == 0)
+        {
+            return 0;
+        }
+        int last = value.length - n;
+        int i = 0;
+        while (i <= last)
+        {
+            int j = 0;
+            while (j < n && value[i + j] == str.value[j])
+            {
+                j = j + 1;
+            }
+            if (j == n)
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    public String substring(int begin)
+    {
+        return substring(begin, value.length);
+    }
+
+    /** {@code [begin, end)} as a fresh LATIN1 String (byte[]+coder). */
+    public String substring(int begin, int end)
+    {
+        int len = end - begin;
+        byte[] buf = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            buf[i] = value[begin + i];
+            i = i + 1;
+        }
+        return new String(buf, coder);
+    }
 }

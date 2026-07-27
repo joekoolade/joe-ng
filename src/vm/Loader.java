@@ -512,6 +512,27 @@ public final class Loader
         }
     }
 
+    /** Demand-load and run {@code demo/StrOpsDemo.main()} — String indexOf/substring on the mini String. */
+    static void loadStrOps()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer.toString for int results
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.strOpsDemoBytes, (int) VM.strOpsDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.strOpsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
