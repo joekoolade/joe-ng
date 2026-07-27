@@ -1310,13 +1310,13 @@ public final class VM
             jitFrameCount = jitFrameCount + 1L;
         }
     }
-    static final int JIT_FRAME_MAX = 256;
+    static final int JIT_FRAME_MAX = 512;
 
     // A jit handler table paralleling the image handlerTable, so a metal-built/JIT'd method's
     // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
     static long jitHandlerTable, jitHandlerCount;
-    static final int JIT_HANDLER_MAX = 256;
+    static final int JIT_HANDLER_MAX = 512;
 
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
     static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
@@ -1534,6 +1534,10 @@ public final class VM
     static long illegalArgBytes, illegalArgLen;     // java/lang/IllegalArgumentException
     static long numberFmtBytes, numberFmtLen;       // java/lang/NumberFormatException
     static long parseAllDemoBytes, parseAllDemoLen;  // demo/ParseAllDemo (real Integer via reachable loadAll)
+    // Real Integer.toString surface: mini StringLatin1 + DecimalDigits + the demo (String gained byte[]+coder).
+    static long stringLatin1Bytes, stringLatin1Len; // java/lang/StringLatin1
+    static long decimalDigitsBytes, decimalDigitsLen; // jdk/internal/util/DecimalDigits
+    static long toStringDemoBytes, toStringDemoLen; // demo/ToStringDemo
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1969,6 +1973,11 @@ public final class VM
         // unreachable methods (toString/format) don't drag in unbuilt deps.
         Uart.write(Magic.bytes("real Integer via reachable loadAll:\n"));
         Loader.loadIntegerReachable();
+
+        // Real Integer.toString: the produce-a-String direction -- real toString builds its result via
+        // DecimalDigits + the real byte[]+coder String constructor.
+        Uart.write(Magic.bytes("real Integer.toString (unmodified JDK + mini deps):\n"));
+        Loader.loadIntegerToString();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3434,7 +3443,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 37;    // ...+ Long + Character/IllegalArg/NumberFmt + ParseAllDemo
+    static final int BLOB_COUNT = 40;    // ...+ ParseAllDemo + StringLatin1/DecimalDigits/ToStringDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4279,7 +4288,10 @@ public final class VM
         if (b == 33) { return Magic.bytes("java/lang/Character"); }
         if (b == 34) { return Magic.bytes("java/lang/IllegalArgumentException"); }
         if (b == 35) { return Magic.bytes("java/lang/NumberFormatException"); }
-        return Magic.bytes("demo/ParseAllDemo");
+        if (b == 36) { return Magic.bytes("demo/ParseAllDemo"); }
+        if (b == 37) { return Magic.bytes("java/lang/StringLatin1"); }
+        if (b == 38) { return Magic.bytes("jdk/internal/util/DecimalDigits"); }
+        return Magic.bytes("demo/ToStringDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4396,7 +4408,10 @@ public final class VM
         if (b == 33) { return Magic.bytes("characterBytes"); }
         if (b == 34) { return Magic.bytes("illegalArgBytes"); }
         if (b == 35) { return Magic.bytes("numberFmtBytes"); }
-        return Magic.bytes("parseAllDemoBytes");
+        if (b == 36) { return Magic.bytes("parseAllDemoBytes"); }
+        if (b == 37) { return Magic.bytes("stringLatin1Bytes"); }
+        if (b == 38) { return Magic.bytes("decimalDigitsBytes"); }
+        return Magic.bytes("toStringDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4437,7 +4452,10 @@ public final class VM
         if (b == 33) { return Magic.bytes("characterLen"); }
         if (b == 34) { return Magic.bytes("illegalArgLen"); }
         if (b == 35) { return Magic.bytes("numberFmtLen"); }
-        return Magic.bytes("parseAllDemoLen");
+        if (b == 36) { return Magic.bytes("parseAllDemoLen"); }
+        if (b == 37) { return Magic.bytes("stringLatin1Len"); }
+        if (b == 38) { return Magic.bytes("decimalDigitsLen"); }
+        return Magic.bytes("toStringDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

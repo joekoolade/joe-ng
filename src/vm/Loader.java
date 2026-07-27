@@ -301,6 +301,32 @@ public final class Loader
         return 0L;
     }
 
+    /**
+     * Demand-load and run {@code demo/ToStringDemo.main()} — which calls the UNMODIFIED real
+     * {@code Integer.toString(int)}, loaded via the reachable closure path. Closes the produce-a-String wall
+     * with mini {@code jdk/internal/util/DecimalDigits} + the real byte[]+coder {@code String} constructor
+     * (and {@code java/lang/StringLatin1}).
+     */
+    static void loadIntegerToString()
+    {
+        resetLoader();
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // the real, unmodified java.base class
+        addBlob(VM.stringBytes, (int) VM.stringLen);             // real-shaped String (byte[]+coder)
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.toStringDemoBytes, (int) VM.toStringDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.toStringDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/ToStringDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
@@ -424,6 +450,8 @@ public final class Loader
         markActive = 0;
         reachCode = new long[MAXREACH];
         reachN = 0;
+        VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
+        VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
     }
 
     // ----- reachable-method compilation (M-B) --------------------------------
@@ -773,15 +801,30 @@ public final class Loader
             return 0L;
         }
         long bytes = VM.dirBytes(namePtr, len);
-        if (bytes == 0L)
+        if (bytes == 0L || alreadyBlob(bytes))
         {
-            return 0L;                                 // an unembedded root (Object/Magic) — skip
+            return 0L;                                 // unembedded root (Object/Magic), or already pulled this pass
         }
         addBlob(bytes, (int) VM.dirLen(namePtr, len));
         Uart.write(Magic.bytes("  load "));
         writeName(namePtr, len);
         Uart.putc(0x0A);
         return bytes;
+    }
+
+    /** True if a blob at address {@code bytes} is already pending/loaded. */
+    private static boolean alreadyBlob(long bytes)
+    {
+        int i = 0;
+        while (i < pdCount)
+        {
+            if (pdBase[i] == bytes)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
     }
 
     /** Write {@code len} raw name bytes to the UART (a '/'-separated internal class name). */
@@ -1436,6 +1479,15 @@ public final class Loader
     /** Hand the loader a class blob; {@link #loadAll} works out when to load it. */
     private static void addBlob(long bytes, int len)
     {
+        int i = 0;
+        while (i < pdCount)                             // dedup by address: the same class may be referenced by
+        {                                               // several others and reached twice in one closure pass
+            if (pdBase[i] == bytes)
+            {
+                return;
+            }
+            i += 1;
+        }
         pdBase[pdCount] = bytes;
         pdLen[pdCount] = len;
         pdDone[pdCount] = 0;
@@ -1493,6 +1545,13 @@ public final class Loader
                 }
             }
         }
+        markActive = 0;                                 // don't leak the reachability state past this batch
+        gEntryBlob = 0L;
+        pendBase = null;                                // free the mark's large scratch arrays for the GC
+        pendClass = null;
+        pendName = null;
+        pendDesc = null;
+        pendKind = null;
     }
 
     /** Record each blob's own name and every class it names (its {@code Class} entries). */

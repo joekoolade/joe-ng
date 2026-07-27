@@ -95,6 +95,10 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.numberFmtBytes",   "vm/VM.numberFmtLen",   "java/lang/NumberFormatException",         registry.rawBytes("java/lang/NumberFormatException"));
         // reachable-loadAll demo: loads the real Integer via the closure path and calls parseInt.
         ib.addBlob("vm/VM.parseAllDemoBytes","vm/VM.parseAllDemoLen","demo/ParseAllDemo",                       registry.rawBytes("demo/ParseAllDemo"));
+        // real Integer.toString surface: mini StringLatin1 + DecimalDigits + the demo.
+        ib.addBlob("vm/VM.stringLatin1Bytes","vm/VM.stringLatin1Len","java/lang/StringLatin1",                  registry.rawBytes("java/lang/StringLatin1"));
+        ib.addBlob("vm/VM.decimalDigitsBytes","vm/VM.decimalDigitsLen","jdk/internal/util/DecimalDigits",       registry.rawBytes("jdk/internal/util/DecimalDigits"));
+        ib.addBlob("vm/VM.toStringDemoBytes","vm/VM.toStringDemoLen","demo/ToStringDemo",                       registry.rawBytes("demo/ToStringDemo"));
         return ib.build(ENTRY);
     }
 
