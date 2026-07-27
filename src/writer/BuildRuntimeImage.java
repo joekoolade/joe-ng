@@ -51,6 +51,10 @@ public final class BuildRuntimeImage
         {
             registry.add("java/util/Arrays", in.readAllBytes());
         }
+        try (var in = Integer.class.getResourceAsStream("/java/lang/Integer$IntegerCache.class"))
+        {
+            registry.add("java/lang/Integer$IntegerCache", in.readAllBytes());
+        }
 
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
@@ -121,6 +125,11 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.arraysBytes",      "vm/VM.arraysLen",      "java/util/Arrays",                        registry.rawBytes("java/util/Arrays"));
         ib.addBlob("vm/VM.arraysSupportBytes","vm/VM.arraysSupportLen","jdk/internal/util/ArraysSupport",        registry.rawBytes("jdk/internal/util/ArraysSupport"));
         ib.addBlob("vm/VM.arraysDemoBytes",  "vm/VM.arraysDemoLen",  "demo/ArraysDemo",                         registry.rawBytes("demo/ArraysDemo"));
+        // Integer.valueOf autoboxing via HashMap: mini java/lang/Number (Integer's super) + real
+        // Integer$IntegerCache (its statics read as 0 with <clinit> skipped -> valueOf takes new Integer) + demo.
+        ib.addBlob("vm/VM.numberBytes",      "vm/VM.numberLen",      "java/lang/Number",                        registry.rawBytes("java/lang/Number"));
+        ib.addBlob("vm/VM.integerCacheBytes","vm/VM.integerCacheLen","java/lang/Integer$IntegerCache",           registry.rawBytes("java/lang/Integer$IntegerCache"));
+        ib.addBlob("vm/VM.boxingDemoBytes",  "vm/VM.boxingDemoLen",  "demo/BoxingDemo",                         registry.rawBytes("demo/BoxingDemo"));
         return ib.build(ENTRY);
     }
 

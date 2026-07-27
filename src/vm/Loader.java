@@ -481,6 +481,36 @@ public final class Loader
         }
     }
 
+    /**
+     * Demand-load and run {@code demo/BoxingDemo.main()} — real {@code Integer.valueOf} autoboxing (the
+     * {@code new Integer} path) used as HashMap keys, looked up by a distinct boxed Integer of equal value
+     * via real {@code Integer.hashCode}/{@code equals} (dispatched through the mini Object root's vtable
+     * slots down the Integer -> Number -> Object chain). Object + Number seeded as roots; no seed-ordering.
+     */
+    static void loadBoxing()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);             // root: hashCode/equals slots Integer overrides
+        addBlob(VM.numberBytes, (int) VM.numberLen);             // Integer's superclass (propagates the slots)
+        addBlob(VM.integerBytes, (int) VM.integerLen);
+        addBlob(VM.integerCacheBytes, (int) VM.integerCacheLen); // its statics read 0 (clinit skipped) -> valueOf -> new Integer
+        addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.boxingDemoBytes, (int) VM.boxingDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.boxingDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/BoxingDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
