@@ -63,6 +63,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.intOpBytes",       "vm/VM.intOpLen",       "demo/IntOp",                     registry.rawBytes("demo/IntOp"));
         // Experiment: a real, unmodified java.base class (java/lang/Integer) to map the loader's reach.
         ib.addBlob("vm/VM.integerBytes",     "vm/VM.integerLen",     "java/lang/Integer",              registry.rawBytes("java/lang/Integer"));
+        ib.addBlob("vm/VM.floatDemoBytes",   "vm/VM.floatDemoLen",   "demo/FloatDemo",                 registry.rawBytes("demo/FloatDemo"));
         return ib.build(ENTRY);
     }
 

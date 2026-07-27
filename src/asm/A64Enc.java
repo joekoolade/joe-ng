@@ -498,4 +498,43 @@ public final class A64Enc
         }
         return out;
     }
+
+    // ----- floating point (scalar S=32-bit, D=64-bit) -----
+    // The operand stack stays in GP registers holding raw float/double BITS; each FP op moves the bits
+    // into scratch FP regs (v0/v1), computes, and moves the result back. FMOV here is a bit copy (no
+    // numeric conversion). Register numbers are the same 0..31 encoding for X/W and S/D/V.
+
+    /** {@code FMOV Sd, Wn} — copy 32 GP bits into a single-precision reg (no conversion). */
+    public static int fmovWtoS(int sd, int wn) { return 0x1E27_0000 | (wn << 5) | sd; }
+    /** {@code FMOV Wd, Sn} — copy single-precision bits back to a GP reg. */
+    public static int fmovStoW(int wd, int sn) { return 0x1E26_0000 | (sn << 5) | wd; }
+    /** {@code FMOV Dd, Xn} — copy 64 GP bits into a double-precision reg. */
+    public static int fmovXtoD(int dd, int xn) { return 0x9E67_0000 | (xn << 5) | dd; }
+    /** {@code FMOV Xd, Dn} — copy double-precision bits back to a GP reg. */
+    public static int fmovDtoX(int xd, int dn) { return 0x9E66_0000 | (dn << 5) | xd; }
+
+    public static int fadds(int d, int n, int m) { return 0x1E20_2800 | (m << 16) | (n << 5) | d; }
+    public static int faddd(int d, int n, int m) { return 0x1E60_2800 | (m << 16) | (n << 5) | d; }
+    public static int fsubs(int d, int n, int m) { return 0x1E20_3800 | (m << 16) | (n << 5) | d; }
+    public static int fsubd(int d, int n, int m) { return 0x1E60_3800 | (m << 16) | (n << 5) | d; }
+    public static int fmuls(int d, int n, int m) { return 0x1E20_0800 | (m << 16) | (n << 5) | d; }
+    public static int fmuld(int d, int n, int m) { return 0x1E60_0800 | (m << 16) | (n << 5) | d; }
+    public static int fdivs(int d, int n, int m) { return 0x1E20_1800 | (m << 16) | (n << 5) | d; }
+    public static int fdivd(int d, int n, int m) { return 0x1E60_1800 | (m << 16) | (n << 5) | d; }
+    public static int fnegs(int d, int n) { return 0x1E21_4000 | (n << 5) | d; }
+    public static int fnegd(int d, int n) { return 0x1E61_4000 | (n << 5) | d; }
+
+    public static int scvtfSW(int sd, int wn) { return 0x1E22_0000 | (wn << 5) | sd; }   // i2f
+    public static int scvtfDW(int dd, int wn) { return 0x1E62_0000 | (wn << 5) | dd; }   // i2d
+    public static int scvtfSX(int sd, int xn) { return 0x9E22_0000 | (xn << 5) | sd; }   // l2f
+    public static int scvtfDX(int dd, int xn) { return 0x9E62_0000 | (xn << 5) | dd; }   // l2d
+    public static int fcvtzsWS(int wd, int sn) { return 0x1E38_0000 | (sn << 5) | wd; }  // f2i (saturating)
+    public static int fcvtzsXS(int xd, int sn) { return 0x9E38_0000 | (sn << 5) | xd; }  // f2l
+    public static int fcvtzsWD(int wd, int dn) { return 0x1E78_0000 | (dn << 5) | wd; }  // d2i
+    public static int fcvtzsXD(int xd, int dn) { return 0x9E78_0000 | (dn << 5) | xd; }  // d2l
+    public static int fcvtDS(int dd, int sn) { return 0x1E22_C000 | (sn << 5) | dd; }    // f2d
+    public static int fcvtSD(int sd, int dn) { return 0x1E62_4000 | (dn << 5) | sd; }    // d2f
+
+    public static int fcmps(int n, int m) { return 0x1E20_2000 | (m << 16) | (n << 5); } // FCMP Sn,Sm
+    public static int fcmpd(int n, int m) { return 0x1E60_2000 | (m << 16) | (n << 5); } // FCMP Dn,Dm
 }

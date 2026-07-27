@@ -457,6 +457,22 @@ public final class Loader
         return (int) load2(VM.integerBytes, (int) VM.integerLen, n & 0xFFFFFFFFL, 0L);
     }
 
+    /** Demand-load and run {@code demo/FloatDemo.main()} — verifies float/double arithmetic + conversions. */
+    static void loadFloat()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);    // results printed via concat -> String
+        addBlob(VM.floatDemoBytes, (int) VM.floatDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.floatDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
     /**
      * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
      * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
@@ -2188,9 +2204,10 @@ public final class Loader
 
     private static int opLen(int op)
     {
-        if (op == 0x10 || op == 0x15 || op == 0x36 || op == 0x19 || op == 0x3a)
+        if (op == 0x10 || op == 0x15 || op == 0x36 || op == 0x19 || op == 0x3a
+                || op == 0x17 || op == 0x18 || op == 0x38 || op == 0x39)
         {
-            return 2;    // bipush/iload/istore/aload/astore
+            return 2;    // bipush/iload/istore/aload/astore/fload/dload/fstore/dstore
         }
         if (op == 0xb9 || op == 0xba)
         {

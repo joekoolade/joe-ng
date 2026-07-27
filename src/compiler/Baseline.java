@@ -173,12 +173,12 @@ public final class Baseline
             emitEpilogue(cb);
             return 1;
         }  // return
-        else if (op == 0xAC || op == 0xAD || op == 0xB0)
+        else if (op == 0xAC || op == 0xAD || op == 0xB0 || op == 0xAE || op == 0xAF)
         {
             cb.emit(A64Enc.movReg(0, popReg()));
             emitEpilogue(cb);
             return 1;
-        }  // ireturn/lreturn/areturn
+        }  // ireturn/lreturn/areturn/freturn/dreturn (all bit-preserving)
 
         else if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07 || op == 0x08)
         {
@@ -193,6 +193,31 @@ public final class Baseline
         else if (op == 0x0A)
         {
             loadConst(cb, 1);
+            return 1;
+        }
+        else if (op == 0x0B)
+        {
+            loadConst(cb, 0x0000_0000L);        // fconst_0 = 0.0f
+            return 1;
+        }
+        else if (op == 0x0C)
+        {
+            loadConst(cb, 0x3F80_0000L);        // fconst_1 = 1.0f
+            return 1;
+        }
+        else if (op == 0x0D)
+        {
+            loadConst(cb, 0x4000_0000L);        // fconst_2 = 2.0f
+            return 1;
+        }
+        else if (op == 0x0E)
+        {
+            loadConst(cb, 0x0000_0000_0000_0000L);   // dconst_0 = 0.0
+            return 1;
+        }
+        else if (op == 0x0F)
+        {
+            loadConst(cb, 0x3FF0_0000_0000_0000L);   // dconst_1 = 1.0
             return 1;
         }
         else if (op == 0x10)
@@ -225,11 +250,21 @@ public final class Baseline
             return 3;
         }
 
-        else if (op == 0x15 || op == 0x16 || op == 0x19)
+        else if (op == 0x15 || op == 0x16 || op == 0x19 || op == 0x17 || op == 0x18)
         {
             load(cb, code[pos + 1] & 0xFF);
             return 2;
-        }  // iload/lload/aload
+        }  // iload/lload/aload/fload/dload (all bit-preserving)
+        else if (op == 0x22 || op == 0x23 || op == 0x24 || op == 0x25)
+        {
+            load(cb, op - 0x22);
+            return 1;
+        }  // fload_0..3
+        else if (op == 0x26 || op == 0x27 || op == 0x28 || op == 0x29)
+        {
+            load(cb, op - 0x26);
+            return 1;
+        }  // dload_0..3
         else if (op == 0x1A || op == 0x1B || op == 0x1C || op == 0x1D)
         {
             load(cb, op - 0x1A);
@@ -246,11 +281,21 @@ public final class Baseline
             return 1;
         }  // aload_0..3
 
-        else if (op == 0x36 || op == 0x37 || op == 0x3A)
+        else if (op == 0x36 || op == 0x37 || op == 0x3A || op == 0x38 || op == 0x39)
         {
             store(cb, code[pos + 1] & 0xFF);
             return 2;
-        }  // istore/lstore/astore
+        }  // istore/lstore/astore/fstore/dstore (all bit-preserving)
+        else if (op == 0x43 || op == 0x44 || op == 0x45 || op == 0x46)
+        {
+            store(cb, op - 0x43);
+            return 1;
+        }  // fstore_0..3
+        else if (op == 0x47 || op == 0x48 || op == 0x49 || op == 0x4A)
+        {
+            store(cb, op - 0x47);
+            return 1;
+        }  // dstore_0..3
         else if (op == 0x3B || op == 0x3C || op == 0x3D || op == 0x3E)
         {
             store(cb, op - 0x3B);
@@ -318,6 +363,16 @@ public final class Baseline
             arrayLoad(cb, 3);
             return 1;
         }  // aaload  (ref)
+        else if (op == 0x30)
+        {
+            arrayLoad(cb, 2);
+            return 1;
+        }  // faload (4-byte, bit-preserving)
+        else if (op == 0x31)
+        {
+            arrayLoad(cb, 3);
+            return 1;
+        }  // daload (8-byte)
         else if (op == 0x54)
         {
             arrayStore(cb, 0);
@@ -338,6 +393,16 @@ public final class Baseline
             arrayStore(cb, 3);
             return 1;
         }  // aastore
+        else if (op == 0x51)
+        {
+            arrayStore(cb, 2);
+            return 1;
+        }  // fastore (4-byte)
+        else if (op == 0x52)
+        {
+            arrayStore(cb, 3);
+            return 1;
+        }  // dastore (8-byte)
         else if (op == 0xBE)
         {
             arrayLength(cb);
@@ -439,6 +504,27 @@ public final class Baseline
             cb.emit(A64Enc.sxth(r, r));
             return 1;
         }  // i2s
+
+        // ---- floating point: arithmetic, conversion, compare (operands are float/double BITS in GP regs) ----
+        else if (op == 0x62 || op == 0x63) { fbinop(cb, 0, op == 0x63); return 1; }   // fadd / dadd
+        else if (op == 0x66 || op == 0x67) { fbinop(cb, 1, op == 0x67); return 1; }   // fsub / dsub
+        else if (op == 0x6A || op == 0x6B) { fbinop(cb, 2, op == 0x6B); return 1; }   // fmul / dmul
+        else if (op == 0x6E || op == 0x6F) { fbinop(cb, 3, op == 0x6F); return 1; }   // fdiv / ddiv
+        else if (op == 0x76 || op == 0x77) { fneg(cb, op == 0x77); return 1; }        // fneg / dneg
+        else if (op == 0x95) { fcmp(cb, false, false); return 1; }   // fcmpl (NaN -> -1)
+        else if (op == 0x96) { fcmp(cb, false, true); return 1; }    // fcmpg (NaN -> +1)
+        else if (op == 0x97) { fcmp(cb, true, false); return 1; }    // dcmpl
+        else if (op == 0x98) { fcmp(cb, true, true); return 1; }     // dcmpg
+        else if (op == 0x86) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfSW(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // i2f
+        else if (op == 0x87) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfDW(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // i2d
+        else if (op == 0x89) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfSX(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // l2f
+        else if (op == 0x8A) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfDX(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // l2d
+        else if (op == 0x8B) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsWS(r, 0)); return 1; }  // f2i
+        else if (op == 0x8C) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsXS(r, 0)); return 1; }  // f2l
+        else if (op == 0x8D) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtDS(0, 0)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; } // f2d
+        else if (op == 0x8E) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsWD(r, 0)); return 1; }  // d2i
+        else if (op == 0x8F) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsXD(r, 0)); return 1; }  // d2l
+        else if (op == 0x90) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtSD(0, 0)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; } // d2f
 
         else if (op == 0x99 || op == 0xC6)
         {
@@ -745,6 +831,80 @@ public final class Baseline
         cb.emit(A64Enc.cmpReg(a, b));
         cb.emit(A64Enc.cset(r, A64Enc.GT));            // a>b -> 1, else 0
         cb.emit(A64Enc.csinv(r, r, A64Enc.XZR, A64Enc.GE)); // a<b -> -1, else keep
+    }
+
+    // ----- floating point helpers (bits live in GP regs; v0/v1 are scratch FP regs) -----
+
+    /** Float/double binary op {@code kind} (0 add,1 sub,2 mul,3 div): move to v0/v1, compute, move back. */
+    private void fbinop(CodeBuffer cb, int kind, boolean dbl)
+    {
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();                              // r == a's register
+        if (dbl)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, a));
+            cb.emit(A64Enc.fmovXtoD(1, b));
+            cb.emit(kind == 0 ? A64Enc.faddd(0, 0, 1) : kind == 1 ? A64Enc.fsubd(0, 0, 1)
+                  : kind == 2 ? A64Enc.fmuld(0, 0, 1) : A64Enc.fdivd(0, 0, 1));
+            cb.emit(A64Enc.fmovDtoX(r, 0));
+        }
+        else
+        {
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fmovWtoS(1, b));
+            cb.emit(kind == 0 ? A64Enc.fadds(0, 0, 1) : kind == 1 ? A64Enc.fsubs(0, 0, 1)
+                  : kind == 2 ? A64Enc.fmuls(0, 0, 1) : A64Enc.fdivs(0, 0, 1));
+            cb.emit(A64Enc.fmovStoW(r, 0));
+        }
+    }
+
+    /** fneg/dneg on the top-of-stack float/double bits. */
+    private void fneg(CodeBuffer cb, boolean dbl)
+    {
+        int r = OP_BASE + sp - 1;
+        if (dbl)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, r));
+            cb.emit(A64Enc.fnegd(0, 0));
+            cb.emit(A64Enc.fmovDtoX(r, 0));
+        }
+        else
+        {
+            cb.emit(A64Enc.fmovWtoS(0, r));
+            cb.emit(A64Enc.fnegs(0, 0));
+            cb.emit(A64Enc.fmovStoW(r, 0));
+        }
+    }
+
+    /** fcmpl/fcmpg/dcmpl/dcmpg -> -1/0/1. {@code gExpr}: NaN -> +1 (g) vs -1 (l). */
+    private void fcmp(CodeBuffer cb, boolean dbl, boolean gExpr)
+    {
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();
+        if (dbl)
+        {
+            cb.emit(A64Enc.fmovXtoD(0, a));
+            cb.emit(A64Enc.fmovXtoD(1, b));
+            cb.emit(A64Enc.fcmpd(0, 1));
+        }
+        else
+        {
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fmovWtoS(1, b));
+            cb.emit(A64Enc.fcmps(0, 1));
+        }
+        if (gExpr)                                      // NaN is unordered -> HI (C set, Z clear) -> +1
+        {
+            cb.emit(A64Enc.cset(r, A64Enc.HI));
+            cb.emit(A64Enc.csinv(r, r, A64Enc.XZR, A64Enc.PL));   // only true LT (N set) -> -1
+        }
+        else                                            // NaN -> -1 (same shape as lcmp)
+        {
+            cb.emit(A64Enc.cset(r, A64Enc.GT));
+            cb.emit(A64Enc.csinv(r, r, A64Enc.XZR, A64Enc.GE));
+        }
     }
 
     // ----- static fields: absolute address in the image statics area --------
@@ -1676,9 +1836,9 @@ public final class Baseline
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
     private static int opLen(int op, byte[] code, int pos)
     {
-        // 2-byte: bipush/ldc/iload/lload/aload/istore/lstore/astore/newarray
-        if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x19
-            || op == 0x36 || op == 0x37 || op == 0x3A || op == 0xBC)
+        // 2-byte: bipush/ldc/iload/lload/aload/fload/dload/istore/lstore/astore/fstore/dstore/newarray
+        if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x19 || op == 0x17 || op == 0x18
+            || op == 0x36 || op == 0x37 || op == 0x3A || op == 0x38 || op == 0x39 || op == 0xBC)
         {
             return 2;
         }
@@ -1712,9 +1872,9 @@ public final class Baseline
             int r = pushReg();
             symbols.string(cb, r, cpIndex);
         }
-        else if (cpTag[cpIndex] == ClassReader.TAG_INTEGER)
+        else if (cpTag[cpIndex] == ClassReader.TAG_INTEGER || cpTag[cpIndex] == 4)
         {
-            loadConst(cb, ClassReader.intValue(classBytes, cpOff, cpIndex));
+            loadConst(cb, ClassReader.intValue(classBytes, cpOff, cpIndex));   // Integer or Float (32-bit bits)
         }
         else
         {
