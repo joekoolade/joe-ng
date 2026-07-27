@@ -81,6 +81,14 @@ public final class Loader
     private static long[] rgBuf;    // compiled buffer address
     private static int rgCount;
 
+    // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
+    // cross-class getstatic/putstatic (e.g. Long.formatUnsignedLong0 reading Integer.digits) resolves.
+    private static long[] sgBase;   // declaring class blob base
+    private static int[] sgClassOff;// class name Utf8 offset
+    private static int[] sgNameOff; // field name Utf8 offset
+    private static long[] sgAddr;   // the field's static-slot address
+    private static int sgCount;
+
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
     private static final int MAXCLASS = 32;
@@ -354,6 +362,38 @@ public final class Loader
         }
     }
 
+    /**
+     * Demand-load and run {@code demo/LongMoreDemo.main()} — the UNMODIFIED real {@code Long.parseLong}
+     * (parseInt's mini deps: String/Character/NumberFormatException) and {@code Long.toHexString}
+     * (formatUnsignedLong0 indexing the loader-seeded {@code Integer.digits}), via the reachable closure.
+     */
+    static void loadLongMore()
+    {
+        resetLoader();
+        addBlob(VM.mathBytes, (int) VM.mathLen);         // seed Math + Integer before Long (cycle): toUnsignedString0
+        addBlob(VM.integerBytes, (int) VM.integerLen);   // -> Math.max, and formatUnsignedLong0 reads Integer.digits
+        addBlob(VM.longBytes, (int) VM.longLen);
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.characterBytes, (int) VM.characterLen);
+        addBlob(VM.numberFmtBytes, (int) VM.numberFmtLen);
+        addBlob(VM.illegalArgBytes, (int) VM.illegalArgLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);
+        addBlob(VM.longMoreDemoBytes, (int) VM.longMoreDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.longMoreDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/LongMoreDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
@@ -437,6 +477,11 @@ public final class Loader
         rgDescOff = new int[MAXREG];
         rgBuf = new long[MAXREG];
         rgCount = 0;
+        sgBase = new long[MAXREG];
+        sgClassOff = new int[MAXREG];
+        sgNameOff = new int[MAXREG];
+        sgAddr = new long[MAXREG];
+        sgCount = 0;
         clBase = new long[MAXCLASS];
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
@@ -1285,7 +1330,7 @@ public final class Loader
     {
         int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
         int s = 0;
-        while (s < gsfCount)
+        while (s < gsfCount)                            // same class: match by name Utf8 offset
         {
             if (gsfName[s] == nameOff)
             {
@@ -1293,7 +1338,25 @@ public final class Loader
             }
             s += 1;
         }
-        return gStatics;
+        return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
+    }
+
+    /** Slot address of a static field declared in another loaded class, matched by class+name, or 0. */
+    private static long globalStaticAddr(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        int i = 0;
+        while (i < sgCount)
+        {
+            if (utf8EqAt(gbase, classOff, sgBase[i], sgClassOff[i])
+                    && utf8EqAt(gbase, nameOff, sgBase[i], sgNameOff[i]))
+            {
+                return sgAddr[i];
+            }
+            i += 1;
+        }
+        return gStatics;                                // unresolved (unloaded class); harmless if never read
     }
 
     /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
@@ -1995,6 +2058,16 @@ public final class Loader
         clFieldCount[clCount] = gifCount;
         clVtCount[clCount] = gvCount;
         clCount += 1;
+        int st = 0;
+        while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
+        {
+            sgBase[sgCount] = gbase;
+            sgClassOff[sgCount] = gThisNameOff;
+            sgNameOff[sgCount] = gsfName[st];
+            sgAddr[sgCount] = gStatics + st * 8L;
+            sgCount += 1;
+            st += 1;
+        }
         int s = 0;
         while (s < gifCount)
         {

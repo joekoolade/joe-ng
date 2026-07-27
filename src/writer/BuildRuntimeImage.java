@@ -101,6 +101,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.toStringDemoBytes","vm/VM.toStringDemoLen","demo/ToStringDemo",                       registry.rawBytes("demo/ToStringDemo"));
         // Integer.toHexString + Long.toString demo (real Integer.digits seeded by the loader; DecimalDigits long overloads).
         ib.addBlob("vm/VM.hexLongDemoBytes", "vm/VM.hexLongDemoLen", "demo/HexLongDemo",                        registry.rawBytes("demo/HexLongDemo"));
+        // Long.parseLong + Long.toHexString demo (formatUnsignedLong0 also indexes the seeded Integer.digits).
+        ib.addBlob("vm/VM.longMoreDemoBytes","vm/VM.longMoreDemoLen","demo/LongMoreDemo",                       registry.rawBytes("demo/LongMoreDemo"));
         return ib.build(ENTRY);
     }
 
