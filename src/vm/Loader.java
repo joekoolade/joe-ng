@@ -223,6 +223,55 @@ public final class Loader
         return Magic.call2(buf, a, b);
     }
 
+    /** The compiled entry of real {@code Integer.parseInt(String,int)}, stashed by {@link #loadParseInt}. */
+    static long parseIntBuf;
+
+    /**
+     * Close the wall to real {@code Integer.parseInt}: load the mini dep surface it actually needs
+     * ({@code String} + {@code Character.digit} + the {@code NumberFormatException} hierarchy) as a normal
+     * closure, then compile the UNMODIFIED JDK {@code Integer.parseInt(String,int)} in isolation, resolving
+     * its cross-class calls against that just-loaded registry. The error-path refs it can't satisfy
+     * (String.format, valueOf->IntegerCache) compile to unreached stubs — never taken for a valid radix-10
+     * parse. The result buffer is stashed for {@link #runParseInt}.
+     */
+    static void loadParseInt()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.illegalArgBytes, (int) VM.illegalArgLen);
+        addBlob(VM.numberFmtBytes, (int) VM.numberFmtLen);
+        addBlob(VM.characterBytes, (int) VM.characterLen);
+        resolveClosureFromDir();
+        loadAll();
+        parseConstPool(VM.integerBytes, (int) VM.integerLen);
+        parseFields();
+        long code = findMethodByBytes(gbase, Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));
+        parseIntBuf = code != 0L ? compile(code, gcodeLen, gFoundDescOff, gFoundStatic) : 0L;
+    }
+
+    /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
+    static int runParseInt(byte[] ascii)
+    {
+        if (parseIntBuf == 0L)
+        {
+            return 0;
+        }
+        long arr = Heap.allocArray(ascii.length, 1);    // a real byte[] (elem size 1, length@16, data@24)
+        int i = 0;
+        while (i < ascii.length)
+        {
+            Magic.store8(arr + 24L + i, ascii[i]);
+            i += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());           // wrap it as a mini java/lang/String
+        Magic.store64(obj + 16L, arr);                  // value field (offset 16)
+        return (int) Magic.call2(parseIntBuf, obj, 10L);
+    }
+
     /** Like {@link #findMethod} but matches name+descriptor by byte content (for names &gt; 8 chars). */
     private static long findMethodByBytes(long base, byte[] name, byte[] desc)
     {

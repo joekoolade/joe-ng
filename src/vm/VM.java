@@ -1529,6 +1529,10 @@ public final class VM
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
     static long mapDemoBytes, mapDemoLen;           // demo/MapDemo
     static long longBytes, longLen;                 // java/lang/Long — a real, unmodified java.base class (probe)
+    // Dep/native surface for real Integer.parseInt: mini Character.digit + the NumberFormatException hierarchy.
+    static long characterBytes, characterLen;       // java/lang/Character (digit)
+    static long illegalArgBytes, illegalArgLen;     // java/lang/IllegalArgumentException
+    static long numberFmtBytes, numberFmtLen;       // java/lang/NumberFormatException
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1624,6 +1628,41 @@ public final class VM
             Uart.putc(0x30 + te);
         }
         Uart.putc(0x30 + on);
+    }
+
+    /** Print an unsigned decimal (full range), most-significant digit first. */
+    private static void printUnsigned(long v)
+    {
+        if (v >= 10L)
+        {
+            printUnsigned(v / 10L);
+        }
+        Uart.putc((int) (0x30L + v % 10L));
+    }
+
+    /** Print a signed 32-bit decimal (full range; -v as long avoids MIN_VALUE overflow). */
+    private static void printSigned(int v)
+    {
+        if (v < 0)
+        {
+            Uart.putc(0x2D);                            // '-'
+            printUnsigned(-((long) v));
+        }
+        else
+        {
+            printUnsigned(v);
+        }
+    }
+
+    /** Print one real Integer.parseInt result: the input string, the parsed int, PASS/FAIL vs {@code expect}. */
+    private static void parseShow(byte[] ascii, int expect)
+    {
+        int r = Loader.runParseInt(ascii);
+        Uart.write(Magic.bytes("  parseInt(\""));
+        Uart.write(ascii);
+        Uart.write(Magic.bytes("\") = "));
+        printSigned(r);
+        Uart.write(r == expect ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL\n"));
     }
 
     /** Print one real-java.base probe line: label = 0x<low32> PASS/FAIL vs the JDK-known {@code expect}. */
@@ -1911,6 +1950,18 @@ public final class VM
         probeShow(Magic.bytes("Integer.compare(3,7)"),                Loader.probeStatic(ib, il, Magic.bytes("compare"),               Magic.bytes("(II)I"), 3L, 7L), -1);
         probeShow(Magic.bytes("Long.bitCount(0xFF)"),                 Loader.probeStatic(longBytes, (int) longLen, Magic.bytes("bitCount"), Magic.bytes("(J)I"), 0xFFL, 0L), 8);
         probeShow(Magic.bytes("Math.abs(-42)"),                       Loader.probeStatic(mathBytes, (int) mathLen, Magic.bytes("abs"),      Magic.bytes("(I)I"), -42L, 0L), 42);
+
+        // Close the dep/native wall: run the UNMODIFIED JDK Integer.parseInt(String,int) end-to-end, against
+        // a mini dep surface (Character.digit + NumberFormatException hierarchy) -- real String parsing on metal.
+        Uart.write(Magic.bytes("real Integer.parseInt (unmodified JDK + mini deps):\n"));
+        Loader.loadParseInt();
+        parseShow(Magic.bytes("0"), 0);
+        parseShow(Magic.bytes("42"), 42);
+        parseShow(Magic.bytes("-7"), -7);
+        parseShow(Magic.bytes("12345"), 12345);
+        parseShow(Magic.bytes("1000000"), 1000000);
+        parseShow(Magic.bytes("2147483647"), 2147483647);
+        parseShow(Magic.bytes("-2147483648"), -2147483648);
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3376,7 +3427,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 33;    // ...+ ArrayList/ListDemo + Object + HashMap/MapDemo + Long (probe)
+    static final int BLOB_COUNT = 36;    // ...+ Object + HashMap/MapDemo + Long + Character/IllegalArg/NumberFmt
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4217,7 +4268,10 @@ public final class VM
         if (b == 29) { return Magic.bytes("java/lang/Object"); }
         if (b == 30) { return Magic.bytes("java/util/HashMap"); }
         if (b == 31) { return Magic.bytes("demo/MapDemo"); }
-        return Magic.bytes("java/lang/Long");
+        if (b == 32) { return Magic.bytes("java/lang/Long"); }
+        if (b == 33) { return Magic.bytes("java/lang/Character"); }
+        if (b == 34) { return Magic.bytes("java/lang/IllegalArgumentException"); }
+        return Magic.bytes("java/lang/NumberFormatException");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4330,7 +4384,10 @@ public final class VM
         if (b == 29) { return Magic.bytes("objectBytes"); }
         if (b == 30) { return Magic.bytes("hashMapBytes"); }
         if (b == 31) { return Magic.bytes("mapDemoBytes"); }
-        return Magic.bytes("longBytes");
+        if (b == 32) { return Magic.bytes("longBytes"); }
+        if (b == 33) { return Magic.bytes("characterBytes"); }
+        if (b == 34) { return Magic.bytes("illegalArgBytes"); }
+        return Magic.bytes("numberFmtBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4367,7 +4424,10 @@ public final class VM
         if (b == 29) { return Magic.bytes("objectLen"); }
         if (b == 30) { return Magic.bytes("hashMapLen"); }
         if (b == 31) { return Magic.bytes("mapDemoLen"); }
-        return Magic.bytes("longLen");
+        if (b == 32) { return Magic.bytes("longLen"); }
+        if (b == 33) { return Magic.bytes("characterLen"); }
+        if (b == 34) { return Magic.bytes("illegalArgLen"); }
+        return Magic.bytes("numberFmtLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

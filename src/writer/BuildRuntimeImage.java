@@ -89,6 +89,10 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.mapDemoBytes",     "vm/VM.mapDemoLen",     "demo/MapDemo",                            registry.rawBytes("demo/MapDemo"));
         // real-java.base probe: a second unmodified class (java/lang/Long); Integer is already embedded above.
         ib.addBlob("vm/VM.longBytes",        "vm/VM.longLen",        "java/lang/Long",                          registry.rawBytes("java/lang/Long"));
+        // dep/native surface for real Integer.parseInt: mini Character.digit + NumberFormatException hierarchy.
+        ib.addBlob("vm/VM.characterBytes",   "vm/VM.characterLen",   "java/lang/Character",                     registry.rawBytes("java/lang/Character"));
+        ib.addBlob("vm/VM.illegalArgBytes",  "vm/VM.illegalArgLen",  "java/lang/IllegalArgumentException",      registry.rawBytes("java/lang/IllegalArgumentException"));
+        ib.addBlob("vm/VM.numberFmtBytes",   "vm/VM.numberFmtLen",   "java/lang/NumberFormatException",         registry.rawBytes("java/lang/NumberFormatException"));
         return ib.build(ENTRY);
     }
 
