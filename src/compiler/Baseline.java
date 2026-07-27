@@ -586,6 +586,16 @@ public final class Baseline
             branchCmp(cb, code, pos, A64Enc.LE);
             return 3;
         }
+        else if (op == 0xA5)
+        {
+            branchCmp(cb, code, pos, A64Enc.EQ);            // if_acmpeq — reference compare (addresses <4GB, eq/ne exact)
+            return 3;
+        }
+        else if (op == 0xA6)
+        {
+            branchCmp(cb, code, pos, A64Enc.NE);            // if_acmpne
+            return 3;
+        }
         else if (op == 0xA7)
         {
             int target = pos + s2(code, pos + 1);
@@ -1925,7 +1935,7 @@ public final class Baseline
         if (op == 0x11 || op == 0x13 || op == 0x14 || op == 0x84 || op == 0x99
             || op == 0x9A || op == 0x9B || op == 0x9C || op == 0x9D || op == 0x9E
             || op == 0x9F || op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3
-            || op == 0xA4 || op == 0xA7 || op == 0xB2 || op == 0xB3 || op == 0xB4
+            || op == 0xA4 || op == 0xA5 || op == 0xA6 || op == 0xA7 || op == 0xB2 || op == 0xB3 || op == 0xB4
             || op == 0xB5 || op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xBB
             || op == 0xBD || op == 0xC0 || op == 0xC1)
         {

@@ -1525,6 +1525,9 @@ public final class VM
     // Mini collections.
     static long arrayListBytes, arrayListLen;       // java/util/ArrayList
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
+    static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
+    static long hashMapBytes, hashMapLen;           // java/util/HashMap
+    static long mapDemoBytes, mapDemoLen;           // demo/MapDemo
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1873,6 +1876,11 @@ public final class VM
         // Mini collections: a real-shaped java/util/ArrayList (Object[] + grow via arraycopy).
         Uart.write(Magic.bytes("java/util/ArrayList (demand-loaded):\n"));
         Loader.loadList();
+
+        // java/util/HashMap: String keys hashed/compared via their real hashCode/equals, dispatched
+        // through the mini java/lang/Object root's vtable slots.
+        Uart.write(Magic.bytes("java/util/HashMap (demand-loaded):\n"));
+        Loader.loadMap();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3338,7 +3346,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 29;    // ...+ mini exception hierarchy (6) + ExcDemo + ArrayList + ListDemo
+    static final int BLOB_COUNT = 32;    // ...+ ExcDemo + ArrayList/ListDemo + Object + HashMap/MapDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4175,7 +4183,10 @@ public final class VM
         if (b == 25) { return Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"); }
         if (b == 26) { return Magic.bytes("demo/ExcDemo"); }
         if (b == 27) { return Magic.bytes("java/util/ArrayList"); }
-        return Magic.bytes("demo/ListDemo");
+        if (b == 28) { return Magic.bytes("demo/ListDemo"); }
+        if (b == 29) { return Magic.bytes("java/lang/Object"); }
+        if (b == 30) { return Magic.bytes("java/util/HashMap"); }
+        return Magic.bytes("demo/MapDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4284,7 +4295,10 @@ public final class VM
         if (b == 25) { return Magic.bytes("aioobeBytes"); }
         if (b == 26) { return Magic.bytes("excDemoBytes"); }
         if (b == 27) { return Magic.bytes("arrayListBytes"); }
-        return Magic.bytes("listDemoBytes");
+        if (b == 28) { return Magic.bytes("listDemoBytes"); }
+        if (b == 29) { return Magic.bytes("objectBytes"); }
+        if (b == 30) { return Magic.bytes("hashMapBytes"); }
+        return Magic.bytes("mapDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4317,7 +4331,10 @@ public final class VM
         if (b == 25) { return Magic.bytes("aioobeLen"); }
         if (b == 26) { return Magic.bytes("excDemoLen"); }
         if (b == 27) { return Magic.bytes("arrayListLen"); }
-        return Magic.bytes("listDemoLen");
+        if (b == 28) { return Magic.bytes("listDemoLen"); }
+        if (b == 29) { return Magic.bytes("objectLen"); }
+        if (b == 30) { return Magic.bytes("hashMapLen"); }
+        return Magic.bytes("mapDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

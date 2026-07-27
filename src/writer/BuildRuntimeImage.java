@@ -79,6 +79,10 @@ public final class BuildRuntimeImage
         // mini collections: java/util/ArrayList + its demo. Order matches VM.blobClass.
         ib.addBlob("vm/VM.arrayListBytes",   "vm/VM.arrayListLen",   "java/util/ArrayList",                     registry.rawBytes("java/util/ArrayList"));
         ib.addBlob("vm/VM.listDemoBytes",    "vm/VM.listDemoLen",    "demo/ListDemo",                           registry.rawBytes("demo/ListDemo"));
+        // java/util/HashMap + the mini java/lang/Object root (its hashCode/equals slots) + the demo.
+        ib.addBlob("vm/VM.objectBytes",      "vm/VM.objectLen",      "java/lang/Object",                        registry.rawBytes("java/lang/Object"));
+        ib.addBlob("vm/VM.hashMapBytes",     "vm/VM.hashMapLen",     "java/util/HashMap",                       registry.rawBytes("java/util/HashMap"));
+        ib.addBlob("vm/VM.mapDemoBytes",     "vm/VM.mapDemoLen",     "demo/MapDemo",                            registry.rawBytes("demo/MapDemo"));
         return ib.build(ENTRY);
     }
 

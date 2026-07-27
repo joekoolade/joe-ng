@@ -380,6 +380,13 @@ public final class Loader
     {
         long namePtr = base + off + 2;                 // skip the u2 length prefix
         int len = u2(base + off);
+        // java/lang/Object is every class's superclass, so auto-pulling it from the dir would drag it into
+        // EVERY closure (changing every vtable). It's an implicit root: loaded only when a demo explicitly
+        // seeds it (the HashMap closure does, so String there inherits its hashCode/equals slots).
+        if (utf8IsAtBase(base, off, Magic.bytes("java/lang/Object")))
+        {
+            return 0L;
+        }
         long bytes = VM.dirBytes(namePtr, len);
         if (bytes == 0L)
         {
@@ -550,6 +557,28 @@ public final class Loader
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.listDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
+    /**
+     * Demand-load and run {@code demo/MapDemo.main()} — verifies the real-shaped java/util/HashMap. The
+     * mini java/lang/Object is in the closure so String inherits+overrides its hashCode/equals slots,
+     * which is how Object-keyed HashMap dispatches into the String keys' real implementations.
+     */
+    static void loadMap()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: root vtable slots String inherits
+        addBlob(VM.stringBytes, (int) VM.stringLen);             // String keys/values (+ concat literals)
+        addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
+        addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.mapDemoBytes);
         if (code != 0L)
         {
             long unused = Magic.call0(bufOf(code));
