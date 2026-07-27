@@ -327,6 +327,33 @@ public final class Loader
         }
     }
 
+    /**
+     * Demand-load and run {@code demo/HexLongDemo.main()} — the UNMODIFIED real {@code Integer.toHexString}
+     * (formatUnsignedInt indexing the loader-seeded {@code Integer.digits}) and {@code Long.toString} (the
+     * {@code DecimalDigits} long overloads), via the reachable closure path.
+     */
+    static void loadHexLong()
+    {
+        resetLoader();
+        addBlob(VM.mathBytes, (int) VM.mathLen);         // before Integer: Math<->Integer cycle, and toHexString's
+        addBlob(VM.integerBytes, (int) VM.integerLen);   // toUnsignedString0 calls Math.max -- seed the (leaf) Math first
+        addBlob(VM.longBytes, (int) VM.longLen);
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.hexLongDemoBytes, (int) VM.hexLongDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.hexLongDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/HexLongDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
@@ -1638,10 +1665,54 @@ public final class Loader
             return;                                     // nothing to compile: all methods abstract
         }
         runClinit(bytes);                               // gvCount==0 here (vtable not built yet)
+        provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
         parseVtable(bytes);                             // flatten against the superclass
         compileClass(bytes);                            // compile all methods; buildTib fills TIB+imap
         registerAll();                                  // methods
         registerClass();                                // class + fields + flattened vtable
+    }
+
+    /**
+     * Seed the static tables a skipped {@code <clinit>} would have built, for known real java.base classes.
+     * Currently {@code java/lang/Integer.digits} (the radix digit chars {@code Integer.toHexString} /
+     * {@code formatUnsignedInt} index) — its real {@code <clinit>} also calls {@code Class.getPrimitiveClass}
+     * (a native), so we provide just the table. gStatics is this class's block; the compiled getstatic reads
+     * the same slot address.
+     */
+    private static void provideKnownStatics()
+    {
+        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer")))
+        {
+            return;
+        }
+        long slot = staticSlotByName(Magic.bytes("digits"));
+        if (slot == 0L)
+        {
+            return;
+        }
+        long tab = Heap.allocArray(36, 1);              // '0'..'9','a'..'z' (radix digits, LATIN1)
+        int i = 0;
+        while (i < 36)
+        {
+            Magic.store8(tab + 24L + i, (byte) (i < 10 ? 0x30 + i : 0x61 + i - 10));
+            i += 1;
+        }
+        Magic.store64(slot, tab);
+    }
+
+    /** Address of the current class's static field named {@code name}, or 0 if it has none. */
+    private static long staticSlotByName(byte[] name)
+    {
+        int s = 0;
+        while (s < gsfCount)
+        {
+            if (utf8IsAtBase(gbase, gsfName[s], name))
+            {
+                return gStatics + s * 8L;
+            }
+            s += 1;
+        }
+        return 0L;
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
