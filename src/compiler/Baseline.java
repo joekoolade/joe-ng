@@ -335,77 +335,77 @@ public final class Baseline
         // ---- array element load/store (base + index<<scale) ----
         else if (op == 0x33)
         {
-            arrayLoad(cb, 0);
+            arrayLoad(cb, 0, pos);
             return 1;
         }  // baload  (byte, zero-ext)
         else if (op == 0x34)
         {
-            arrayLoad(cb, 1);
+            arrayLoad(cb, 1, pos);
             return 1;
         }  // caload  (char, zero-ext)
         else if (op == 0x55)
         {
-            arrayStore(cb, 1);
+            arrayStore(cb, 1, pos);
             return 1;
         }  // castore
         else if (op == 0x2E)
         {
-            arrayLoad(cb, 2);
+            arrayLoad(cb, 2, pos);
             return 1;
         }  // iaload  (int, sign-ext)
         else if (op == 0x2F)
         {
-            arrayLoad(cb, 3);
+            arrayLoad(cb, 3, pos);
             return 1;
         }  // laload  (long)
         else if (op == 0x32)
         {
-            arrayLoad(cb, 3);
+            arrayLoad(cb, 3, pos);
             return 1;
         }  // aaload  (ref)
         else if (op == 0x30)
         {
-            arrayLoad(cb, 2);
+            arrayLoad(cb, 2, pos);
             return 1;
         }  // faload (4-byte, bit-preserving)
         else if (op == 0x31)
         {
-            arrayLoad(cb, 3);
+            arrayLoad(cb, 3, pos);
             return 1;
         }  // daload (8-byte)
         else if (op == 0x54)
         {
-            arrayStore(cb, 0);
+            arrayStore(cb, 0, pos);
             return 1;
         }  // bastore
         else if (op == 0x4F)
         {
-            arrayStore(cb, 2);
+            arrayStore(cb, 2, pos);
             return 1;
         }  // iastore
         else if (op == 0x50)
         {
-            arrayStore(cb, 3);
+            arrayStore(cb, 3, pos);
             return 1;
         }  // lastore
         else if (op == 0x53)
         {
-            arrayStore(cb, 3);
+            arrayStore(cb, 3, pos);
             return 1;
         }  // aastore
         else if (op == 0x51)
         {
-            arrayStore(cb, 2);
+            arrayStore(cb, 2, pos);
             return 1;
         }  // fastore (4-byte)
         else if (op == 0x52)
         {
-            arrayStore(cb, 3);
+            arrayStore(cb, 3, pos);
             return 1;
         }  // dastore (8-byte)
         else if (op == 0xBE)
         {
-            arrayLength(cb);
+            arrayLength(cb, pos);
             return 1;
         }  // arraylength
 
@@ -607,17 +607,17 @@ public final class Baseline
         }
         else if (op == 0xB4)
         {
-            getfield(cb, u2(code, pos + 1));
+            getfield(cb, u2(code, pos + 1), pos);
             return 3;
         }
         else if (op == 0xB5)
         {
-            putfield(cb, u2(code, pos + 1));
+            putfield(cb, u2(code, pos + 1), pos);
             return 3;
         }
         else if (op == 0xB6)
         {
-            lowerInvokeVirtual(u2(code, pos + 1), cb);
+            lowerInvokeVirtual(u2(code, pos + 1), cb, pos);
             return 3;
         }
         else if (op == 0xB7)
@@ -632,7 +632,7 @@ public final class Baseline
         }
         else if (op == 0xB9)
         {
-            lowerInvokeInterface(u2(code, pos + 1), cb);
+            lowerInvokeInterface(u2(code, pos + 1), cb, pos);
             return 5;
         }  // invokeinterface
         else if (op == 0xBA)
@@ -943,19 +943,21 @@ public final class Baseline
     }
 
     // ----- object fields (8-byte slots; see objectmodel.ObjectModel) --------
-    private void getfield(CodeBuffer cb, int cpIndex)
+    private void getfield(CodeBuffer cb, int cpIndex, int pos)
     {
         int off = symbols.fieldOffset(cpIndex);
         int obj = popReg();
+        nullCheck(cb, obj, pos);                                 // this.f on null -> NPE
         int r = pushReg();
         cb.emit(A64Enc.ldrx(r, obj, off));
     }
 
-    private void putfield(CodeBuffer cb, int cpIndex)
+    private void putfield(CodeBuffer cb, int cpIndex, int pos)
     {
         int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
         int obj = popReg();
+        nullCheck(cb, obj, pos);                                 // this.f = v on null -> NPE
         cb.emit(A64Enc.strx(val, obj, off));
     }
 
@@ -1043,7 +1045,7 @@ public final class Baseline
     }
 
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
-    private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb)
+    private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
@@ -1052,6 +1054,7 @@ public final class Baseline
         {
             src[k] = popReg();
         }
+        nullCheck(cb, src[nargs - 1], pos);     // src[nargs-1] = the receiver (deepest); dispatch on null -> NPE
         for (int k = 0; k < nargs; k++)
         {
             cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
@@ -1073,7 +1076,7 @@ public final class Baseline
      * interface's Type, index the itable by the method's slot, and {@code blr}.
      * Uses x16 (target/code), x17 (walker), x9 (temp) — args in x0..x7 untouched.
      */
-    private void lowerInvokeInterface(int cpIndex, CodeBuffer cb)
+    private void lowerInvokeInterface(int cpIndex, CodeBuffer cb, int pos)
     {
         int slot = symbols.interfaceSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
@@ -1082,6 +1085,7 @@ public final class Baseline
         {
             src[k] = popReg();
         }
+        nullCheck(cb, src[nargs - 1], pos);     // receiver (deepest); interface dispatch on null -> NPE
         for (int k = 0; k < nargs; k++)
         {
             cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
@@ -1294,6 +1298,17 @@ public final class Baseline
     {
         int athrowStart = cb.wordCount();
         emitStoreException(cb, popReg());                       // $exception = ref
+        throwStored(cb, pos, athrowStart);
+    }
+
+    /**
+     * Dispatch the exception already stored in {@code $exception} (the throwing bytecode is at {@code pos},
+     * whose machine code starts at word {@code athrowStart}): try each covering try/catch entry, else
+     * unwind to a caller. Shared by explicit {@code athrow} and the implicit null/bounds checks. Never
+     * falls through — every path branches to a handler or halts after the unwind call.
+     */
+    private void throwStored(CodeBuffer cb, int pos, int athrowStart)
+    {
         for (int i = 0; i < exCount; i++)
         {
             if (exStartPc[i] > pos || pos >= exEndPc[i])
@@ -1324,6 +1339,51 @@ public final class Baseline
         cb.emit(A64Enc.movFromSp(sp));
         emitCall(cb, 3, false, false, SYM_HELPER, Symbols.UNWIND);
         emitHalt(cb);                                            // unwind never returns
+    }
+
+    // ----- implicit (JVM-synthesised) exceptions: null-deref -> NPE, bad index -> AIOOBE -----
+    // Emitted only when symbols.implicitChecks() (the on-metal JIT); the image writer stays check-free.
+    // Each check branches OVER an out-of-line throw block, so the common (in-bounds / non-null) path costs
+    // one compare + one never-taken branch. The throw block synthesises the exception object and routes it
+    // through the same handler-search + unwind as an explicit athrow, at this bytecode's PC.
+
+    /** Allocate the exception (via {@code newHelper}) and throw it as if {@code athrow} occurred at {@code pos}. */
+    private void throwImplicit(CodeBuffer cb, int pos, int newHelper)
+    {
+        int savedSp = sp;                                       // the throw block is off the fall-through path
+        int athrowStart = cb.wordCount();
+        emitCall(cb, 0, true, false, SYM_HELPER, newHelper);    // -> exception object pushed
+        emitStoreException(cb, popReg());                       // $exception = it
+        sp = 0;                                                 // the JVM clears the operand stack when throwing
+        throwStored(cb, pos, athrowStart);                      // handler search + unwind — never falls through
+        sp = savedSp;                                           // restore the model for the code after the check
+    }
+
+    /** Throw NPE if {@code refReg} is null (a deref/receiver/arraylength of null). */
+    private void nullCheck(CodeBuffer cb, int refReg, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            return;
+        }
+        int over = cb.emit(A64Enc.cbnz(refReg, 0));             // ref != null -> skip the throw block
+        throwImplicit(cb, pos, Symbols.NEW_NPE);
+        cb.set(over, A64Enc.cbnz(refReg, cb.wordCount() - over));
+    }
+
+    /** Null-check the array, then throw AIOOBE unless {@code indexReg} is in {@code [0, length)}. */
+    private void boundsCheck(CodeBuffer cb, int arrReg, int indexReg, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            return;
+        }
+        nullCheck(cb, arrReg, pos);                             // a[i] on null -> NPE, not AIOOBE
+        cb.emit(A64Enc.ldrx(16, arrReg, ObjectModel.ARRAY_LENGTH_OFFSET));   // x16 = length (scratch, no call before use)
+        cb.emit(A64Enc.cmpReg(indexReg, 16));
+        int over = cb.emit(A64Enc.bcond(A64Enc.LO, 0));         // unsigned index < length -> ok (negative -> huge -> throws)
+        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
+        cb.set(over, A64Enc.bcond(A64Enc.LO, cb.wordCount() - over));
     }
 
     /** Push the pending exception and branch to a handler (which expects it at depth 1). */
@@ -1434,16 +1494,19 @@ public final class Baseline
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
     }
 
-    private void arrayLength(CodeBuffer cb)
+    private void arrayLength(CodeBuffer cb, int pos)
     {
         int arr = popReg();
+        nullCheck(cb, arr, pos);                                 // arraylength of null -> NPE
         int r = pushReg();
         cb.emit(A64Enc.ldrx(r, arr, ObjectModel.ARRAY_LENGTH_OFFSET));
     }
 
-    private void arrayLoad(CodeBuffer cb, int scale)
+    private void arrayLoad(CodeBuffer cb, int scale, int pos)
     {
-        int index = popReg(), arr = popReg(), r = pushReg();     // r == arr's register
+        int index = popReg(), arr = popReg();
+        boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw deref
+        int r = pushReg();                                       // r == arr's register
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
         cb.emit(scale == 0 ? A64Enc.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
@@ -1452,11 +1515,12 @@ public final class Baseline
                 : A64Enc.ldrx(r, arr, 0));                          // long / ref
     }
 
-    private void arrayStore(CodeBuffer cb, int scale)
+    private void arrayStore(CodeBuffer cb, int scale, int pos)
     {
         int val = popReg();
         int index = popReg();
         int arr = popReg();
+        boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw store
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));
         cb.emit(scale == 0 ? A64Enc.strb(val, arr, 0)
@@ -1812,6 +1876,15 @@ public final class Baseline
             if (op == 0xBB || op == 0xBC || op == 0xBD || op == 0xB6 || op == 0xB9 || op == 0xBA || op == 0xBF || op == 0xC0 || op == 0xC1)
             {
                 return true;    // new/newarray/anewarray/invokevirtual/invoke{interface,dynamic}/athrow/checkcast/instanceof
+            }
+            // With implicit checks on, a deref/index emits a BL to newNpe/newAioobe on its throw path — so a
+            // method with getfield/putfield/arraylength/array-load/store is non-leaf and must save LR (else a
+            // cross-method unwind can't read its return address). Image code (checks off) is unaffected.
+            if (symbols.implicitChecks()
+                && (op == 0xB4 || op == 0xB5 || op == 0xBE
+                    || (op >= 0x2E && op <= 0x35) || (op >= 0x4F && op <= 0x56)))
+            {
+                return true;
             }
             if (op == 0xB8)                                      // invokestatic
             {

@@ -61,6 +61,12 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.exceptionSlotAddr());   // the metal in-flight-exception word
     }
+    // The JIT compiles real java.base-shaped code, which relies on the VM throwing NPE/AIOOBE on a bad
+    // deref/index — and the mini exception hierarchy is loaded here, so we can allocate the object.
+    public boolean implicitChecks()
+    {
+        return true;
+    }
     public void codePc(CodeBuffer cb, int reg, int targetWord)
     {
         emitAddr(cb, reg, cb.pcAt(targetWord));          // JIT compiles at the final base -> resolve now
@@ -253,6 +259,14 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.SC_LONG)
         {
             return VM.scLongAddr;
+        }
+        if (helper == Symbols.NEW_NPE)
+        {
+            return VM.newNpeAddr;
+        }
+        if (helper == Symbols.NEW_AIOOBE)
+        {
+            return VM.newAioobeAddr;
         }
         return VM.unwindAddr;                       // UNWIND
     }

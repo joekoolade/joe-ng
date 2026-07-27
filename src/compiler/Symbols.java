@@ -50,6 +50,9 @@ public interface Symbols
     int PRINT_STR = 16;         // vm/VM.printStr(J)V — print a mini java/lang/String's value bytes
     int SC_STR = 17;            // vm/VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     int SC_LONG = 18;           // vm/VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    // Implicit (JVM-synthesised) exceptions: allocate the exception object the JIT throws on a failed check.
+    int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
+    int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -85,6 +88,18 @@ public interface Symbols
     default void codePc(CodeBuffer cb, int reg, int targetWord)
     {
         cb.patchAddr(cb.reserveAddr(reg), reg, cb.pcAt(targetWord));
+    }
+
+    /**
+     * Whether the core should emit implicit runtime checks (null-deref -> NullPointerException, bad array
+     * index -> ArrayIndexOutOfBoundsException). Only the on-metal JIT (which has the mini exception
+     * hierarchy loaded and can allocate the exception object) enables these; the image writer keeps its
+     * output check-free — trusted VM/board code doesn't rely on them, and adding checks would perturb the
+     * byte-for-byte self-hosting fixpoint. Default off; {@code MetalSymbols} overrides it on.
+     */
+    default boolean implicitChecks()
+    {
+        return false;
     }
 
     // ----- fatal compiler diagnostics -----

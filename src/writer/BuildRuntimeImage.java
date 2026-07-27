@@ -68,6 +68,14 @@ public final class BuildRuntimeImage
         // real-shaped String + StringBuilder + their demo.
         ib.addBlob("vm/VM.stringBuilderBytes", "vm/VM.stringBuilderLen", "java/lang/StringBuilder",     registry.rawBytes("java/lang/StringBuilder"));
         ib.addBlob("vm/VM.strDemoBytes",     "vm/VM.strDemoLen",     "demo/StrDemo",                   registry.rawBytes("demo/StrDemo"));
+        // implicit exceptions: the mini exception hierarchy (Type chain for catch) + the demo. Order matches VM.blobClass.
+        ib.addBlob("vm/VM.throwableBytes",   "vm/VM.throwableLen",   "java/lang/Throwable",                     registry.rawBytes("java/lang/Throwable"));
+        ib.addBlob("vm/VM.exceptionBytes",   "vm/VM.exceptionLen",   "java/lang/Exception",                     registry.rawBytes("java/lang/Exception"));
+        ib.addBlob("vm/VM.runtimeExcBytes",  "vm/VM.runtimeExcLen",  "java/lang/RuntimeException",              registry.rawBytes("java/lang/RuntimeException"));
+        ib.addBlob("vm/VM.npeBytes",         "vm/VM.npeLen",         "java/lang/NullPointerException",          registry.rawBytes("java/lang/NullPointerException"));
+        ib.addBlob("vm/VM.ioobeBytes",       "vm/VM.ioobeLen",       "java/lang/IndexOutOfBoundsException",     registry.rawBytes("java/lang/IndexOutOfBoundsException"));
+        ib.addBlob("vm/VM.aioobeBytes",      "vm/VM.aioobeLen",      "java/lang/ArrayIndexOutOfBoundsException", registry.rawBytes("java/lang/ArrayIndexOutOfBoundsException"));
+        ib.addBlob("vm/VM.excDemoBytes",     "vm/VM.excDemoLen",     "demo/ExcDemo",                            registry.rawBytes("demo/ExcDemo"));
         return ib.build(ENTRY);
     }
 

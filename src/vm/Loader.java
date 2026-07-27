@@ -35,6 +35,13 @@ public final class Loader
     private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
     private static int gFoundStatic;   // 1 if that method is static
     private static int gFrameSize;     // frame size of the last method the core compiled
+    // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
+    // captured for emitMethod to register into VM's jit handler table (cross-method unwind).
+    private static int gHN;
+    private static int[] gHStartW;
+    private static int[] gHEndW;
+    private static int[] gHandlerW;
+    private static int[] gHCatchCp;
     private static long gnameP, gdescP;   // packed name/descriptor being searched for
     private static int gnameLen;
     private static int gdescLen;
@@ -500,6 +507,32 @@ public final class Loader
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.strDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
+    /**
+     * Demand-load and run {@code demo/ExcDemo.main()} — verifies implicit exceptions: the JIT's null/bounds
+     * checks throw a real mini exception (from the loaded hierarchy) that catch clauses catch, both
+     * main-local and via cross-method unwind (a bounds check inside {@code String.charAt}).
+     */
+    static void loadExc()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);              // String (charAt bounds + concat literals)
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);       // the mini exception hierarchy (Type chain for catch)
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.npeBytes, (int) VM.npeLen);
+        addBlob(VM.ioobeBytes, (int) VM.ioobeLen);
+        addBlob(VM.aioobeBytes, (int) VM.aioobeLen);
+        addBlob(VM.excDemoBytes, (int) VM.excDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.excDemoBytes);
         if (code != 0L)
         {
             long unused = Magic.call0(bufOf(code));
@@ -1209,6 +1242,20 @@ public final class Loader
         b.setExceptionTable(es, ee, eh, ec, n);
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mLocals[i], base, false);
         gFrameSize = b.frameSize();
+        gHN = b.handlerCount();                        // capture the machine-code handler ranges for emitMethod
+        gHStartW = new int[gHN];
+        gHEndW = new int[gHN];
+        gHandlerW = new int[gHN];
+        gHCatchCp = new int[gHN];
+        int h = 0;
+        while (h < gHN)
+        {
+            gHStartW[h] = b.handlerStartWord(h);
+            gHEndW[h] = b.handlerEndWord(h);
+            gHandlerW[h] = b.handlerWord(h);
+            gHCatchCp[h] = ec[h];
+            h += 1;
+        }
         return words;
     }
 
@@ -1237,6 +1284,16 @@ public final class Loader
         if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
         {
             VM.addJitFrame(mBuf[i], out, gFrameSize);
+        }
+        int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
+        while (h < gHN)                                 // method can unwind into this method's catch (cross-method)
+        {
+            long ms = mBuf[i] + (long) gHStartW[h] * 4L;
+            long me = mBuf[i] + (long) gHEndW[h] * 4L;
+            long hh = mBuf[i] + (long) gHandlerW[h] * 4L;
+            long ct = gHCatchCp[h] == 0 ? 0L : typeOfClass(gHCatchCp[h]);   // catch-type Type (0 = catch-all)
+            VM.addJitHandler(ms, me, hh, ct);
+            h += 1;
         }
     }
 
@@ -1870,10 +1927,9 @@ public final class Loader
         return true;
     }
 
-    /** Loaded-class-registry index of {@code java/lang/String}, or -1 if it isn't loaded. */
-    private static int stringClassIndex()
+    /** Loaded-class-registry index of the class named {@code want}, or -1 if it isn't loaded. */
+    private static int classIndexByName(byte[] want)
     {
-        byte[] want = Magic.bytes("java/lang/String");
         int i = 0;
         while (i < clCount)
         {
@@ -1884,6 +1940,38 @@ public final class Loader
             i += 1;
         }
         return -1;
+    }
+
+    /** Loaded-class-registry index of {@code java/lang/String}, or -1 if it isn't loaded. */
+    private static int stringClassIndex()
+    {
+        return classIndexByName(Magic.bytes("java/lang/String"));
+    }
+
+    /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
+    static long newNpe()
+    {
+        return newExc(Magic.bytes("java/lang/NullPointerException"));
+    }
+
+    /** Allocate a mini {@code java/lang/ArrayIndexOutOfBoundsException} — the JIT's bounds-check helper. */
+    static long newAioobe()
+    {
+        return newExc(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+    }
+
+    /**
+     * Allocate a loaded exception class by name: header + fields, with its TIB stored so {@code catch}
+     * dispatch can walk its Type chain. No constructor runs — the mini exceptions are field-free, and the
+     * JIT synthesises these (there is no {@code new} bytecode to invoke {@code <init>}).
+     */
+    private static long newExc(byte[] name)
+    {
+        int i = classIndexByName(name);
+        long tib = i >= 0 ? clTib[i] : 0L;
+        long obj = Heap.alloc(i >= 0 ? (16 + clFieldCount[i] * 8) : 16);
+        Magic.store64(obj + 0L, tib);
+        return obj;
     }
 
     /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */

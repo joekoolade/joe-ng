@@ -1000,6 +1000,22 @@ public final class VM
         }
     }
 
+    /**
+     * Allocate a mini {@code java/lang/NullPointerException} — the JIT calls this on a null deref, then
+     * routes the object through the normal athrow/unwind. The Loader supplies its TIB (its Type chain is
+     * what {@code catch} dispatch walks); the object is otherwise field-free.
+     */
+    static long newNpe()
+    {
+        return Loader.newNpe();
+    }
+
+    /** Allocate a mini {@code java/lang/ArrayIndexOutOfBoundsException} — the JIT calls this on a bad index. */
+    static long newAioobe()
+    {
+        return Loader.newAioobe();
+    }
+
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
     static void printStr(long ref)
     {
@@ -1116,6 +1132,8 @@ public final class VM
         if (currentTimeMillisAddr == 0L) { long u = currentTimeMillis(); }
         if (identityAddr == 0L) { long u = identity(0L); }
         if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
+        if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
+        if (newAioobeAddr == 0L) { long u = newAioobe(); }
 
         installSchedVectors();
 
@@ -1496,6 +1514,14 @@ public final class VM
     static long nativeDemoBytes, nativeDemoLen;     // demo/NativeDemo (verifies provided java.base natives)
     static long stringBuilderBytes, stringBuilderLen; // java/lang/StringBuilder (real-shaped)
     static long strDemoBytes, strDemoLen;           // demo/StrDemo (verifies String + StringBuilder)
+    // Mini exception hierarchy + the implicit-exception demo (null-deref NPE / array-bounds AIOOBE).
+    static long throwableBytes, throwableLen;       // java/lang/Throwable
+    static long exceptionBytes, exceptionLen;       // java/lang/Exception
+    static long runtimeExcBytes, runtimeExcLen;     // java/lang/RuntimeException
+    static long npeBytes, npeLen;                   // java/lang/NullPointerException
+    static long ioobeBytes, ioobeLen;               // java/lang/IndexOutOfBoundsException
+    static long aioobeBytes, aioobeLen;             // java/lang/ArrayIndexOutOfBoundsException
+    static long excDemoBytes, excDemoLen;           // demo/ExcDemo
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1530,6 +1556,9 @@ public final class VM
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long arraycopyAddr;         // VM.arraycopy(JIJII)V — System.arraycopy
+    // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
+    static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
+    static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -1832,6 +1861,11 @@ public final class VM
         // methods on it (length/charAt/equals/hashCode). String literals are now real String objects.
         Uart.write(Magic.bytes("String + StringBuilder (demand-loaded):\n"));
         Loader.loadStr();
+
+        // Implicit (JVM-synthesised) exceptions: the JIT emits null/bounds checks that throw a real mini
+        // exception object; catch clauses catch it (main-local and via cross-method unwind).
+        Uart.write(Magic.bytes("implicit exceptions (demand-loaded):\n"));
+        Loader.loadExc();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3297,7 +3331,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 20;    // ...+ Integer/FloatDemo/NativeDemo + StringBuilder + StrDemo
+    static final int BLOB_COUNT = 27;    // ...+ StringBuilder/StrDemo + mini exception hierarchy (6) + ExcDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4125,7 +4159,14 @@ public final class VM
         if (b == 16) { return Magic.bytes("demo/FloatDemo"); }
         if (b == 17) { return Magic.bytes("demo/NativeDemo"); }
         if (b == 18) { return Magic.bytes("java/lang/StringBuilder"); }
-        return Magic.bytes("demo/StrDemo");
+        if (b == 19) { return Magic.bytes("demo/StrDemo"); }
+        if (b == 20) { return Magic.bytes("java/lang/Throwable"); }
+        if (b == 21) { return Magic.bytes("java/lang/Exception"); }
+        if (b == 22) { return Magic.bytes("java/lang/RuntimeException"); }
+        if (b == 23) { return Magic.bytes("java/lang/NullPointerException"); }
+        if (b == 24) { return Magic.bytes("java/lang/IndexOutOfBoundsException"); }
+        if (b == 25) { return Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"); }
+        return Magic.bytes("demo/ExcDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4178,6 +4219,8 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("currentTimeMillisAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("currentTimeMillis"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("identityAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("identity"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
+        if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
@@ -4223,7 +4266,14 @@ public final class VM
         if (b == 16) { return Magic.bytes("floatDemoBytes"); }
         if (b == 17) { return Magic.bytes("nativeDemoBytes"); }
         if (b == 18) { return Magic.bytes("stringBuilderBytes"); }
-        return Magic.bytes("strDemoBytes");
+        if (b == 19) { return Magic.bytes("strDemoBytes"); }
+        if (b == 20) { return Magic.bytes("throwableBytes"); }
+        if (b == 21) { return Magic.bytes("exceptionBytes"); }
+        if (b == 22) { return Magic.bytes("runtimeExcBytes"); }
+        if (b == 23) { return Magic.bytes("npeBytes"); }
+        if (b == 24) { return Magic.bytes("ioobeBytes"); }
+        if (b == 25) { return Magic.bytes("aioobeBytes"); }
+        return Magic.bytes("excDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4247,7 +4297,14 @@ public final class VM
         if (b == 16) { return Magic.bytes("floatDemoLen"); }
         if (b == 17) { return Magic.bytes("nativeDemoLen"); }
         if (b == 18) { return Magic.bytes("stringBuilderLen"); }
-        return Magic.bytes("strDemoLen");
+        if (b == 19) { return Magic.bytes("strDemoLen"); }
+        if (b == 20) { return Magic.bytes("throwableLen"); }
+        if (b == 21) { return Magic.bytes("exceptionLen"); }
+        if (b == 22) { return Magic.bytes("runtimeExcLen"); }
+        if (b == 23) { return Magic.bytes("npeLen"); }
+        if (b == 24) { return Magic.bytes("ioobeLen"); }
+        if (b == 25) { return Magic.bytes("aioobeLen"); }
+        return Magic.bytes("excDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

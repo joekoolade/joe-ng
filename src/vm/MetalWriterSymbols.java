@@ -154,6 +154,13 @@ final class MetalWriterSymbols implements Symbols
         pcN += 1;
     }
 
+    // Image code (compiled by the writer) stays check-free: trusted VM/board code doesn't rely on implicit
+    // exceptions, and adding checks would perturb the byte-for-byte self-hosting fixpoint.
+    public boolean implicitChecks()
+    {
+        return false;
+    }
+
     /** Reserve a 2-word address-load placeholder (MOVZ+MOVK width), record its site. */
     private void reserve(CodeBuffer cb, int reg)
     {
