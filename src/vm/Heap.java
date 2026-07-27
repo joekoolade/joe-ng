@@ -111,7 +111,10 @@ public final class Heap
     public static long allocArray(int length, int elemSize)
     {
         long p = alloc(ObjectModel.ARRAY_BASE_OFFSET + length * elemSize);
-        Magic.store64(p + ObjectModel.TIB_OFFSET, 0L);           // array TIBs come with typed GC
+        // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
+        // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
+        // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.
+        Magic.store64(p + ObjectModel.TIB_OFFSET, elemSize);
         Magic.store64(p + ObjectModel.ARRAY_LENGTH_OFFSET, length);
         return p;
     }

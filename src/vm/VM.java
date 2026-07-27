@@ -900,7 +900,8 @@ public final class VM
      */
     static long strBytes(long ref)
     {
-        return Magic.load64(ref + 0L) == 0L ? ref : Magic.load64(ref + 16L);
+        // A raw byte[] has a small element-size TIB (0..8); a mini java/lang/String has a heap-pointer TIB.
+        return Magic.load64(ref + 0L) <= 8L ? ref : Magic.load64(ref + 16L);
     }
 
     /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
@@ -966,6 +967,37 @@ public final class VM
     static long identity(long x)
     {
         return x;
+    }
+
+    /**
+     * {@code java/lang/System.arraycopy(src, srcPos, dst, dstPos, len)} — the most-used java.base native.
+     * The element size comes from the source array's header (TIB slot), so it's generic over element type;
+     * the copy is byte-wise and overlap-safe (like {@code memmove}, as {@code arraycopy} requires).
+     */
+    static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
+    {
+        long es = Magic.load64(src + 0L);                  // element size (bytes) from the array header
+        long n = (long) len * es;
+        long from = src + 24L + (long) srcPos * es;        // ARRAY_BASE_OFFSET = 24
+        long to = dst + 24L + (long) dstPos * es;
+        if (to <= from)                                    // forward copy (no clobber when dst <= src)
+        {
+            long i = 0L;
+            while (i < n)
+            {
+                Magic.store8(to + i, (byte) Magic.load8(from + i));
+                i = i + 1L;
+            }
+        }
+        else                                               // backward copy (overlap: dst after src)
+        {
+            long i = n;
+            while (i > 0L)
+            {
+                i = i - 1L;
+                Magic.store8(to + i, (byte) Magic.load8(from + i));
+            }
+        }
     }
 
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
@@ -1083,6 +1115,7 @@ public final class VM
         if (nanoTimeAddr == 0L) { long u = nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = currentTimeMillis(); }
         if (identityAddr == 0L) { long u = identity(0L); }
+        if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
 
         installSchedVectors();
 
@@ -1494,6 +1527,7 @@ public final class VM
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
+    static long arraycopyAddr;         // VM.arraycopy(JIJII)V — System.arraycopy
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -4134,6 +4168,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("nanoTimeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("nanoTime"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("currentTimeMillisAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("currentTimeMillis"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("identityAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("identity"), Magic.bytes("(J)J")); }
+        if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }

@@ -1328,6 +1328,7 @@ public final class Loader
         {
             if (utf8IsStr(nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
             if (utf8IsStr(nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
         {
