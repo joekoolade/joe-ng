@@ -1544,6 +1544,9 @@ public final class VM
     static long mathIntDemoBytes, mathIntDemoLen;   // demo/MathIntDemo (floorDiv/floorMod/addExact)
     static long objectsBytes, objectsLen;           // java/util/Objects — a real, unmodified java.base class
     static long objectsDemoBytes, objectsDemoLen;   // demo/ObjectsDemo
+    static long arraysBytes, arraysLen;             // java/util/Arrays — a real, unmodified java.base class
+    static long arraysSupportBytes, arraysSupportLen; // jdk/internal/util/ArraysSupport (mini mismatch)
+    static long arraysDemoBytes, arraysDemoLen;     // demo/ArraysDemo
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -2001,6 +2004,10 @@ public final class VM
         // Real java.util.Objects: equals/hashCode via the Object root's vtable, requireNonNull's NPE.
         Uart.write(Magic.bytes("real java.util.Objects (unmodified JDK):\n"));
         Loader.loadObjects();
+
+        // Real java.util.Arrays: fill/equals/binarySearch on int[].
+        Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
+        Loader.loadArrays();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3466,7 +3473,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 46;    // ...+ ArithmeticException/MathIntDemo + Objects/ObjectsDemo
+    static final int BLOB_COUNT = 49;    // ...+ Objects/ObjectsDemo + Arrays/ArraysSupport/ArraysDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4320,7 +4327,10 @@ public final class VM
         if (b == 42) { return Magic.bytes("java/lang/ArithmeticException"); }
         if (b == 43) { return Magic.bytes("demo/MathIntDemo"); }
         if (b == 44) { return Magic.bytes("java/util/Objects"); }
-        return Magic.bytes("demo/ObjectsDemo");
+        if (b == 45) { return Magic.bytes("demo/ObjectsDemo"); }
+        if (b == 46) { return Magic.bytes("java/util/Arrays"); }
+        if (b == 47) { return Magic.bytes("jdk/internal/util/ArraysSupport"); }
+        return Magic.bytes("demo/ArraysDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4446,7 +4456,10 @@ public final class VM
         if (b == 42) { return Magic.bytes("arithExcBytes"); }
         if (b == 43) { return Magic.bytes("mathIntDemoBytes"); }
         if (b == 44) { return Magic.bytes("objectsBytes"); }
-        return Magic.bytes("objectsDemoBytes");
+        if (b == 45) { return Magic.bytes("objectsDemoBytes"); }
+        if (b == 46) { return Magic.bytes("arraysBytes"); }
+        if (b == 47) { return Magic.bytes("arraysSupportBytes"); }
+        return Magic.bytes("arraysDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4496,7 +4509,10 @@ public final class VM
         if (b == 42) { return Magic.bytes("arithExcLen"); }
         if (b == 43) { return Magic.bytes("mathIntDemoLen"); }
         if (b == 44) { return Magic.bytes("objectsLen"); }
-        return Magic.bytes("objectsDemoLen");
+        if (b == 45) { return Magic.bytes("objectsDemoLen"); }
+        if (b == 46) { return Magic.bytes("arraysLen"); }
+        if (b == 47) { return Magic.bytes("arraysSupportLen"); }
+        return Magic.bytes("arraysDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

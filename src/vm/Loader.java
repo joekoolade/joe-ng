@@ -57,7 +57,7 @@ public final class Loader
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
     // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
-    private static final int MAXMV = 64;
+    private static final int MAXMV = 128;
     private static long[] gvBase;   // blob holding this slot's name/descriptor
     private static int[] gvName;    // method name Utf8 offset (in gvBase)
     private static int[] gvDesc;    // descriptor Utf8 offset (in gvBase)
@@ -91,7 +91,7 @@ public final class Loader
 
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
-    private static final int MAXCLASS = 32;
+    private static final int MAXCLASS = 96;
     private static long[] clBase;
     private static int[] clNameOff;
     private static long[] clTib;
@@ -102,7 +102,7 @@ public final class Loader
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
-    private static final int MAXFIELD = 128;
+    private static final int MAXFIELD = 512;
     private static long[] fldBase;
     private static int[] fldClassOff;
     private static int[] fldNameOff;
@@ -112,7 +112,7 @@ public final class Loader
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 256;
+    private static final int MAXVT = 1024;
     private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
     private static long[] vtNameBase;    // method signature blob (may be a superclass's)
@@ -128,7 +128,7 @@ public final class Loader
     // call site from where the method happens to sit in a given class's vtable, so
     // two classes implementing the same interface at different vtable slots both
     // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 32;
+    private static final int MAXIFM = 96;
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
@@ -140,13 +140,13 @@ public final class Loader
     // class it names — its superclass and interfaces (needed for field layout,
     // vtable flattening and itable indices) but also anything it instantiates,
     // calls or type-tests (needed by the class/method/field registries).
-    private static final int MAXBLOB = 16;
+    private static final int MAXBLOB = 96;
     private static long[] pdBase;        // blob address
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
     private static int[] pdDone;         // 1 once loaded
     private static int pdCount;
-    private static final int MAXDEP = 256;
+    private static final int MAXDEP = 8192;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
     private static int[] dpOff;          // dependency's name Utf8 offset (in pdBase[dpOwner])
     private static int dpCount;
@@ -448,6 +448,33 @@ public final class Loader
         loadAll();
         skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ObjectsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
+    /**
+     * Demand-load and run {@code demo/ArraysDemo.main()} — the UNMODIFIED real {@code java/util/Arrays}:
+     * fill/binarySearch (leaf) and equals (via the mini {@code ArraysSupport.mismatch}), via the reachable
+     * closure. The array side of the surface.
+     */
+    static void loadArrays()
+    {
+        resetLoader();
+        addBlob(VM.arraysBytes, (int) VM.arraysLen);
+        addBlob(VM.arraysSupportBytes, (int) VM.arraysSupportLen);   // mini mismatch for Arrays.equals
+        addBlob(VM.integerBytes, (int) VM.integerLen);               // Integer.toString for the output
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.arraysDemoBytes, (int) VM.arraysDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.arraysDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/ArraysDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
             long unused = Magic.call0(buf);

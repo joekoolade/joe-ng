@@ -47,6 +47,10 @@ public final class BuildRuntimeImage
         {
             registry.add("java/util/Objects", in.readAllBytes());
         }
+        try (var in = Integer.class.getResourceAsStream("/java/util/Arrays.class"))
+        {
+            registry.add("java/util/Arrays", in.readAllBytes());
+        }
 
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
@@ -113,6 +117,10 @@ public final class BuildRuntimeImage
         // real java.util.Objects (equals/hashCode dispatch through the Object root; requireNonNull) + its demo.
         ib.addBlob("vm/VM.objectsBytes",     "vm/VM.objectsLen",     "java/util/Objects",                       registry.rawBytes("java/util/Objects"));
         ib.addBlob("vm/VM.objectsDemoBytes", "vm/VM.objectsDemoLen", "demo/ObjectsDemo",                        registry.rawBytes("demo/ObjectsDemo"));
+        // real java.util.Arrays (fill/equals/binarySearch) + mini ArraysSupport.mismatch (for equals) + demo.
+        ib.addBlob("vm/VM.arraysBytes",      "vm/VM.arraysLen",      "java/util/Arrays",                        registry.rawBytes("java/util/Arrays"));
+        ib.addBlob("vm/VM.arraysSupportBytes","vm/VM.arraysSupportLen","jdk/internal/util/ArraysSupport",        registry.rawBytes("jdk/internal/util/ArraysSupport"));
+        ib.addBlob("vm/VM.arraysDemoBytes",  "vm/VM.arraysDemoLen",  "demo/ArraysDemo",                         registry.rawBytes("demo/ArraysDemo"));
         return ib.build(ENTRY);
     }
 
