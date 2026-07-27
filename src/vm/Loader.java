@@ -489,6 +489,23 @@ public final class Loader
         }
     }
 
+    /** Demand-load and run {@code demo/StrDemo.main()} — verifies real-shaped String + StringBuilder. */
+    static void loadStr()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);              // String first (literals + StringBuilder need it)
+        addBlob(VM.stringBuilderBytes, (int) VM.stringBuilderLen);
+        addBlob(VM.strDemoBytes, (int) VM.strDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.strDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
     /**
      * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
      * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
@@ -711,9 +728,9 @@ public final class Loader
     /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
     private static boolean isVirtual(int access, int nameOff)
     {
-        if ((access & 0x0008) != 0 || (access & 0x0002) != 0)
+        if ((access & 0x0008) != 0)
         {
-            return false;                               // static or private
+            return false;                               // static
         }
         if (isName(gbase, nameOff, 0x3C696E69743EL, 6))
         {
@@ -723,6 +740,9 @@ public final class Loader
         {
             return false;                               // "<clinit>"
         }
+        // PRIVATE instance methods get a vtable slot too: javac (11+ nestmates) compiles a private-method
+        // call as invokevirtual, so it must resolve through the vtable like any other. (They still never
+        // override a superclass slot in practice; a same-name+desc collision is a rare non-issue.)
         return true;
     }
 
@@ -2110,6 +2130,14 @@ public final class Loader
     /** Type node of the class named by {@code Class} entry {@code classIdx}, or 0 if unloaded. */
     static long typeOfClass(int classIdx)
     {
+        // Self-reference (a class doing `x instanceof Self` / `(Self) x`): the current class isn't in the
+        // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
+        // and it's the very node the class's own instances carry, so instanceof/checkcast resolve correctly.
+        int nameOff = gcp[u2(gbase + gcp[classIdx])];
+        if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
+        {
+            return gType;
+        }
         int r = classRegOf(classIdx);
         return r >= 0 ? clType[r] : 0L;
     }
@@ -2149,7 +2177,7 @@ public final class Loader
     {
         int off = ClassReader.stringUtf8Off(gbytes, gcp, stringCp);   // Utf8 body offset
         int len = u2(gbase + off);
-        long arr = Heap.allocArray(len, 1);             // byte[]: TIB=0, length set
+        long arr = Heap.allocArray(len, 1);             // byte[] (element-size TIB), length set
         int i = 0;
         while (i < len)
         {
@@ -2157,6 +2185,26 @@ public final class Loader
             i += 1;
         }
         return arr;
+    }
+
+    /**
+     * Intern a string literal as a mini {@code java/lang/String} OBJECT (byte[] value wrapped) if String
+     * is loaded — so String methods work on literals — else as a raw byte[] (unchanged for String-free
+     * guests). {@code VM.strBytes}/{@code printStr} accept either, so a String and a byte[] stay
+     * interchangeable wherever raw bytes are wanted.
+     */
+    static long internStringObj(int stringCp)
+    {
+        long bytes = internString(stringCp);
+        long tib = stringTib();
+        if (tib == 0L)
+        {
+            return bytes;                               // String not loaded: a raw byte[]
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, tib);                   // TIB
+        Magic.store64(obj + 16L, bytes);                // value field (offset 16)
+        return obj;
     }
 
     /** Whether the {@code *ref} at {@code idx} names owner {@code magic/Magic}. */

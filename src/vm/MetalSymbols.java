@@ -51,10 +51,11 @@ final class MetalSymbols implements Symbols
     }
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
-        // Intern the literal as a heap byte[] now and bake in its address. (The size
-        // pass compiles at base 0 too, so a spare byte[] leaks per string — harmless
-        // under the bump allocator; interning by content would dedup it.)
-        emitAddr(cb, reg, Loader.internString(stringCp));
+        // Intern the literal now and bake in its address: a mini java/lang/String OBJECT if String is
+        // loaded (so String methods work on literals), else a raw byte[] (unchanged for String-free
+        // guests). The size pass compiles at base 0 too, so a spare copy leaks per string — harmless
+        // under the bump allocator.
+        emitAddr(cb, reg, Loader.internStringObj(stringCp));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
     {

@@ -1,12 +1,11 @@
 package java.lang;
 
 /**
- * joe-ng's minimal, JDK-free {@link java.lang.String} — enough to be the result type of string
- * concatenation. A single {@code byte[] value} field (kept first, so it sits at the fixed object offset
- * 16 the JIT's {@code newStringFromBytes} and {@code VM.printStr} assume). Compiled as a {@code java.base}
- * patch so it carries the real {@code java/lang/String} name, embedded as a blob, and loaded on the metal
- * before any concat compiles (the concat's {@code newStringFromBytes} needs its TIB). Real
- * {@code java.lang.String} is thousands of lines with natives + its own invokedynamic — this stands in.
+ * A real-shaped, JDK-free {@link java.lang.String}: a {@code byte[] value} (LATIN1/ASCII — no coder) plus
+ * the methods real code (and now the mini {@link StringBuilder}) actually calls. Kept {@code value} the
+ * sole/first field (offset 16), which the JIT's {@code newStringFromBytes} / interned string literals /
+ * {@code VM.strBytes} all assume. Compiled as a {@code java.base} patch so it carries the real name;
+ * embedded + loaded like the rest of the mini java.base.
  */
 public final class String
 {
@@ -22,8 +21,48 @@ public final class String
         return value.length;
     }
 
-    public byte byteAt(int i)
+    public char charAt(int i)
     {
-        return value[i];
+        return (char) (value[i] & 0xFF);
+    }
+
+    public boolean isEmpty()
+    {
+        return value.length == 0;
+    }
+
+    public int hashCode()
+    {
+        int h = 0;
+        int i = 0;
+        while (i < value.length)
+        {
+            h = 31 * h + (value[i] & 0xFF);         // the real String.hashCode recurrence (ASCII)
+            i = i + 1;
+        }
+        return h;
+    }
+
+    public boolean equals(Object o)
+    {
+        if (!(o instanceof String))
+        {
+            return false;
+        }
+        String s = (String) o;
+        if (s.value.length != value.length)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < value.length)
+        {
+            if (value[i] != s.value[i])
+            {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
     }
 }

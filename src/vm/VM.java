@@ -1494,6 +1494,8 @@ public final class VM
     static long integerBytes, integerLen;           // java/lang/Integer — a real, unmodified java.base class
     static long floatDemoBytes, floatDemoLen;       // demo/FloatDemo (verifies float/double support)
     static long nativeDemoBytes, nativeDemoLen;     // demo/NativeDemo (verifies provided java.base natives)
+    static long stringBuilderBytes, stringBuilderLen; // java/lang/StringBuilder (real-shaped)
+    static long strDemoBytes, strDemoLen;           // demo/StrDemo (verifies String + StringBuilder)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1825,6 +1827,11 @@ public final class VM
         // bytecode) that the loader wires to VM helpers.
         Uart.write(Magic.bytes("java.base natives (demand-loaded):\n"));
         Loader.loadNative();
+
+        // Real-shaped String + StringBuilder: build a string with an append-chain, then call String
+        // methods on it (length/charAt/equals/hashCode). String literals are now real String objects.
+        Uart.write(Magic.bytes("String + StringBuilder (demand-loaded):\n"));
+        Loader.loadStr();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3290,7 +3297,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 18;    // ...+ java/lang/Integer + demo/FloatDemo + demo/NativeDemo
+    static final int BLOB_COUNT = 20;    // ...+ Integer/FloatDemo/NativeDemo + StringBuilder + StrDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4116,7 +4123,9 @@ public final class VM
         if (b == 14) { return Magic.bytes("demo/IntOp"); }
         if (b == 15) { return Magic.bytes("java/lang/Integer"); }
         if (b == 16) { return Magic.bytes("demo/FloatDemo"); }
-        return Magic.bytes("demo/NativeDemo");
+        if (b == 17) { return Magic.bytes("demo/NativeDemo"); }
+        if (b == 18) { return Magic.bytes("java/lang/StringBuilder"); }
+        return Magic.bytes("demo/StrDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4212,7 +4221,9 @@ public final class VM
         if (b == 14) { return Magic.bytes("intOpBytes"); }
         if (b == 15) { return Magic.bytes("integerBytes"); }
         if (b == 16) { return Magic.bytes("floatDemoBytes"); }
-        return Magic.bytes("nativeDemoBytes");
+        if (b == 17) { return Magic.bytes("nativeDemoBytes"); }
+        if (b == 18) { return Magic.bytes("stringBuilderBytes"); }
+        return Magic.bytes("strDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4234,7 +4245,9 @@ public final class VM
         if (b == 14) { return Magic.bytes("intOpLen"); }
         if (b == 15) { return Magic.bytes("integerLen"); }
         if (b == 16) { return Magic.bytes("floatDemoLen"); }
-        return Magic.bytes("nativeDemoLen");
+        if (b == 17) { return Magic.bytes("nativeDemoLen"); }
+        if (b == 18) { return Magic.bytes("stringBuilderLen"); }
+        return Magic.bytes("strDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

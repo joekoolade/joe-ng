@@ -65,6 +65,9 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.integerBytes",     "vm/VM.integerLen",     "java/lang/Integer",              registry.rawBytes("java/lang/Integer"));
         ib.addBlob("vm/VM.floatDemoBytes",   "vm/VM.floatDemoLen",   "demo/FloatDemo",                 registry.rawBytes("demo/FloatDemo"));
         ib.addBlob("vm/VM.nativeDemoBytes",  "vm/VM.nativeDemoLen",  "demo/NativeDemo",                registry.rawBytes("demo/NativeDemo"));
+        // real-shaped String + StringBuilder + their demo.
+        ib.addBlob("vm/VM.stringBuilderBytes", "vm/VM.stringBuilderLen", "java/lang/StringBuilder",     registry.rawBytes("java/lang/StringBuilder"));
+        ib.addBlob("vm/VM.strDemoBytes",     "vm/VM.strDemoLen",     "demo/StrDemo",                   registry.rawBytes("demo/StrDemo"));
         return ib.build(ENTRY);
     }
 
