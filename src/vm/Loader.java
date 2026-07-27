@@ -504,6 +504,7 @@ public final class Loader
         skipClinit = 1;
         loadAll();
         skipClinit = 0;
+        seedIntegerCache();                             // build the [-128,127] cache valueOf uses (clinit unrunnable)
         long buf = globalMethodBuf(Magic.bytes("demo/BoxingDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1908,6 +1909,52 @@ public final class Loader
             s += 1;
         }
         return 0L;
+    }
+
+    /** Slot address of a static field {@code cls.name} from the global registry (any loaded class), or 0. */
+    private static long staticSlotOf(byte[] cls, byte[] name)
+    {
+        int i = 0;
+        while (i < sgCount)
+        {
+            if (utf8IsAtBase(sgBase[i], sgClassOff[i], cls) && utf8IsAtBase(sgBase[i], sgNameOff[i], name))
+            {
+                return sgAddr[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /**
+     * Seed {@code Integer$IntegerCache} (call after loadAll, once Integer is loaded): build the real
+     * {@code Integer[256]} for -128..127 (each a boxed Integer with its {@code value}) and set {@code cache}
+     * + {@code high}=127. Its real {@code <clinit>} is CDS/system-property driven (unrunnable), so we build
+     * the table directly — the way {@code valueOf} expects it, so small-int boxing returns cached instances.
+     */
+    static void seedIntegerCache()
+    {
+        long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("cache"));
+        long highSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("high"));
+        int ii = classIndexByName(Magic.bytes("java/lang/Integer"));
+        if (cacheSlot == 0L || highSlot == 0L || ii < 0)
+        {
+            return;
+        }
+        long itib = clTib[ii];
+        int isize = 16 + clFieldCount[ii] * 8;          // Integer: header + its instance fields (value)
+        long arr = Heap.allocArray(256, 8);             // Integer[256] (8-byte reference elements)
+        int k = 0;
+        while (k < 256)
+        {
+            long box = Heap.alloc(isize);
+            Magic.store64(box + 0L, itib);              // TIB
+            Magic.store64(box + 16L, (long) (k - 128)); // value (Integer's first/only instance field, offset 16)
+            Magic.store64(arr + 24L + k * 8L, box);
+            k += 1;
+        }
+        Magic.store64(cacheSlot, arr);
+        Magic.store64(highSlot, 127L);
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
