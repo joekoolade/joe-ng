@@ -291,6 +291,11 @@ public final class A64Enc
     {
         return 0x5300_3C00 | (rn << 5) | rd;
     }
+    /** {@code UXTW Xd, Wn} — zero-extend word 32→64 (UBFM Xd,Xn,#0,#31); treat an int as unsigned 32-bit. */
+    public static int uxtw(int rd, int rn)
+    {
+        return 0xD340_7C00 | (rn << 5) | rd;
+    }
     /** {@code CSET Xd, cond} — Xd = 1 if cond else 0 (alias of CSINC Xd, XZR, XZR, !cond). */
     public static int cset(int rd, int cond)
     {

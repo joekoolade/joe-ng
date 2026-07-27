@@ -450,11 +450,16 @@ public final class Baseline
             binop(cb, BIN_ASR);
             return 1;
         }  // ishr/lshr
-        else if (op == 0x7C || op == 0x7D)
+        else if (op == 0x7C)
         {
-            binop(cb, BIN_LSR);
+            iushr(cb);                                   // int >>> : zero-extend the (maybe sign-extended) 32-bit value first
             return 1;
-        }  // iushr/lushr
+        }  // iushr
+        else if (op == 0x7D)
+        {
+            binop(cb, BIN_LSR);                          // long >>> : the full 64-bit lsrv is correct
+            return 1;
+        }  // lushr
         else if (op == 0x7E || op == 0x7F)
         {
             binop(cb, BIN_AND);
@@ -794,6 +799,17 @@ public final class Baseline
         cb.emit(A64Enc.movReg(SCRATCH, a));         // SCRATCH = a (original dividend)
         cb.emit(A64Enc.sdivReg(r, SCRATCH, b));     // r = a / b
         cb.emit(A64Enc.msub(r, r, b, SCRATCH));     // r = a - (a/b)*b
+    }
+
+    /** {@code iushr}: an int logical shift-right. Ints live sign-extended in 64-bit regs (see l2i/i2l), so a
+     *  64-bit lsrv would shift the sign bits in — zero-extend the low 32 bits (uxtw) before the shift. */
+    private void iushr(CodeBuffer cb)
+    {
+        int b = popReg();
+        int a = popReg();
+        int r = pushReg();
+        cb.emit(A64Enc.uxtw(r, a));
+        cb.emit(A64Enc.lsrv(r, r, b));
     }
 
     private void binop(CodeBuffer cb, int kind)
