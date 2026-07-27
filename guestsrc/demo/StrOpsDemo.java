@@ -40,6 +40,10 @@ public class StrOpsDemo
         showSplit("\"a::b::c\".split(\"::\")", "a::b::c".split("::"));     // [a, b, c]
         showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)
         showSplit("\"whole\".split(\",\")", "whole".split(","));          // [whole]
+
+        showStr("join(\",\", \"a\",\"b\",\"c\")", String.join(",", "a", "b", "c"));      // a,b,c  (varargs)
+        showStr("join(\"-\", split(\"a,b,c\"))", String.join("-", "a,b,c".split(",")));  // a-b-c  (round-trip)
+        showStr("join(\"/\", \"one\")", String.join("/", "one"));                        // one    (single elem)
     }
 
     private static void showSplit(String label, String[] parts)

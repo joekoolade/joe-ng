@@ -279,6 +279,53 @@ public final class String
         return result;
     }
 
+    /**
+     * Join {@code elements} with {@code delimiter} between each (the real {@code String.join}, but over our
+     * mini {@code String} rather than {@code CharSequence}). Varargs, so it takes both a literal element list
+     * and a {@code String[]} -- e.g. round-trips a {@link #split}. Static, so it builds a LATIN1 result directly.
+     */
+    public static String join(String delimiter, String... elements)
+    {
+        int n = elements.length;
+        if (n == 0)
+        {
+            return "";
+        }
+        int total = delimiter.value.length * (n - 1);
+        int i = 0;
+        while (i < n)
+        {
+            total = total + elements[i].value.length;
+            i = i + 1;
+        }
+        byte[] buf = new byte[total];
+        int pos = 0;
+        i = 0;
+        while (i < n)
+        {
+            if (i > 0)
+            {
+                int d = 0;
+                while (d < delimiter.value.length)
+                {
+                    buf[pos] = delimiter.value[d];
+                    pos = pos + 1;
+                    d = d + 1;
+                }
+            }
+            byte[] ev = elements[i].value;
+            int k = 0;
+            while (k < ev.length)
+            {
+                buf[pos] = ev[k];
+                pos = pos + 1;
+                k = k + 1;
+            }
+            i = i + 1;
+        }
+        return new String(buf, (byte) 0);               // LATIN1
+    }
+
     public String substring(int begin)
     {
         return substring(begin, value.length);
