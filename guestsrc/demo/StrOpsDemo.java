@@ -28,6 +28,13 @@ public class StrOpsDemo
         showInt("h.compareTo(\"apple\")", h.compareTo("apple"));           // 7  ('h'-'a')
         showInt("h.compareTo(\"world\")", h.compareTo("world"));           // -15 ('h'-'w')
         showInt("h.compareTo(\"hell\")", h.compareTo("hell"));             // 1  (length)
+
+        showStr("\"  hi  \".trim()", "  hi  ".trim());                      // hi
+        showStr("\"nospace\".trim()", "nospace".trim());                   // nospace
+        showStr("\"   \".trim()", "[" + "   ".trim() + "]");               // []
+        showStr("\"a.b.c\".replace('.','/')", "a.b.c".replace('.', '/'));  // a/b/c
+        showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
+        showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
     }
 
     private static void showBool(String label, boolean v)

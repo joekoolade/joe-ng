@@ -160,6 +160,49 @@ public final class String
         return value.length - other.value.length;
     }
 
+    /** Strip leading/trailing chars {@code <= ' '} (the real {@code trim} bound), returning a fresh String. */
+    public String trim()
+    {
+        int len = value.length;
+        int st = 0;
+        while (st < len && (value[st] & 0xFF) <= ' ')
+        {
+            st = st + 1;
+        }
+        while (st < len && (value[len - 1] & 0xFF) <= ' ')
+        {
+            len = len - 1;
+        }
+        if (st == 0 && len == value.length)
+        {
+            return this;
+        }
+        return substring(st, len);
+    }
+
+    /** Every {@code oldChar} replaced by {@code newChar} (LATIN1); {@code this} if none occur. */
+    public String replace(char oldChar, char newChar)
+    {
+        int i = 0;
+        while (i < value.length && (value[i] & 0xFF) != oldChar)
+        {
+            i = i + 1;
+        }
+        if (i == value.length)
+        {
+            return this;                                // no occurrence -> unchanged
+        }
+        byte[] buf = new byte[value.length];
+        int j = 0;
+        while (j < value.length)
+        {
+            int c = value[j] & 0xFF;
+            buf[j] = (byte) (c == oldChar ? newChar : c);
+            j = j + 1;
+        }
+        return new String(buf, coder);
+    }
+
     public String substring(int begin)
     {
         return substring(begin, value.length);
