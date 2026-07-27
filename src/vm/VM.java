@@ -944,6 +944,30 @@ public final class VM
         }
     }
 
+    // ----- provided java.base natives (called by loaded guest code via Loader.nativeBuf) -----
+
+    /** {@code java/lang/System.nanoTime()} — a monotonic clock in ns, from the ARM generic timer. */
+    static long nanoTime()
+    {
+        return Magic.readCNTPCT_EL0() * (1000000000L / Magic.readCNTFRQ_EL0());
+    }
+
+    /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
+    static long currentTimeMillis()
+    {
+        return Magic.readCNTPCT_EL0() / (Magic.readCNTFRQ_EL0() / 1000L);
+    }
+
+    /**
+     * Identity native for the *ToRawBits / bitsTo* conversions ({@code Float.floatToRawIntBits},
+     * {@code Float.intBitsToFloat}, {@code Double.doubleToRawLongBits}, {@code Double.longBitsToDouble}):
+     * joe-ng already holds floats/doubles as raw bits in GP registers, so these are pass-throughs.
+     */
+    static long identity(long x)
+    {
+        return x;
+    }
+
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
     static void printStr(long ref)
     {
@@ -1056,6 +1080,9 @@ public final class VM
         if (scStrAddr == 0L) { scStr(0L, 0L); }
         if (scLongAddr == 0L) { scLong(0L, 0L); }
         if (printStrAddr == 0L) { printStr(0L); }
+        if (nanoTimeAddr == 0L) { long u = nanoTime(); }              // provided java.base natives (guest-called)
+        if (currentTimeMillisAddr == 0L) { long u = currentTimeMillis(); }
+        if (identityAddr == 0L) { long u = identity(0L); }
 
         installSchedVectors();
 
@@ -1433,6 +1460,7 @@ public final class VM
     static long intOpBytes, intOpLen;               // demo/IntOp (a SAM-with-arg functional interface, 1d)
     static long integerBytes, integerLen;           // java/lang/Integer — a real, unmodified java.base class
     static long floatDemoBytes, floatDemoLen;       // demo/FloatDemo (verifies float/double support)
+    static long nativeDemoBytes, nativeDemoLen;     // demo/NativeDemo (verifies provided java.base natives)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1462,6 +1490,10 @@ public final class VM
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
     static long printStrAddr;          // VM.printStr(J)V
+    // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
+    static long nanoTimeAddr;          // VM.nanoTime()J
+    static long currentTimeMillisAddr; // VM.currentTimeMillis()J
+    static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -1754,6 +1786,11 @@ public final class VM
         // Float/double support: a demand-loaded class doing float+double arithmetic, conversions, compare.
         Uart.write(Magic.bytes("float/double (demand-loaded):\n"));
         Loader.loadFloat();
+
+        // Provided java.base natives: a demand-loaded class calls real java.lang native methods (no
+        // bytecode) that the loader wires to VM helpers.
+        Uart.write(Magic.bytes("java.base natives (demand-loaded):\n"));
+        Loader.loadNative();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3219,7 +3256,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 17;    // ...+ invokedynamic demos + java/lang/Integer + demo/FloatDemo
+    static final int BLOB_COUNT = 18;    // ...+ java/lang/Integer + demo/FloatDemo + demo/NativeDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4044,7 +4081,8 @@ public final class VM
         if (b == 13) { return Magic.bytes("demo/LambdaDemo"); }
         if (b == 14) { return Magic.bytes("demo/IntOp"); }
         if (b == 15) { return Magic.bytes("java/lang/Integer"); }
-        return Magic.bytes("demo/FloatDemo");
+        if (b == 16) { return Magic.bytes("demo/FloatDemo"); }
+        return Magic.bytes("demo/NativeDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4093,6 +4131,9 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("scStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scStr"), Magic.bytes("(JJ)V")); }
         if (bytesEqual(nm, Magic.bytes("scLongAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("scLong"), Magic.bytes("(JJ)V")); }
         if (bytesEqual(nm, Magic.bytes("printStrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStr"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("nanoTimeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("nanoTime"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("currentTimeMillisAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("currentTimeMillis"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("identityAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("identity"), Magic.bytes("(J)J")); }
         long blobV = blobStatic(nm);
         return blobV;
     }
@@ -4135,7 +4176,8 @@ public final class VM
         if (b == 13) { return Magic.bytes("lambdaDemoBytes"); }
         if (b == 14) { return Magic.bytes("intOpBytes"); }
         if (b == 15) { return Magic.bytes("integerBytes"); }
-        return Magic.bytes("floatDemoBytes");
+        if (b == 16) { return Magic.bytes("floatDemoBytes"); }
+        return Magic.bytes("nativeDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4156,7 +4198,8 @@ public final class VM
         if (b == 13) { return Magic.bytes("lambdaDemoLen"); }
         if (b == 14) { return Magic.bytes("intOpLen"); }
         if (b == 15) { return Magic.bytes("integerLen"); }
-        return Magic.bytes("floatDemoLen");
+        if (b == 16) { return Magic.bytes("floatDemoLen"); }
+        return Magic.bytes("nativeDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

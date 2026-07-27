@@ -473,6 +473,22 @@ public final class Loader
         }
     }
 
+    /** Demand-load and run {@code demo/NativeDemo.main()} — verifies provided java.base natives. */
+    static void loadNative()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.nativeDemoBytes, (int) VM.nativeDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.nativeDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
     /**
      * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
      * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
@@ -1295,7 +1311,35 @@ public final class Loader
         {
             return bufOf(calleeCodeOf(idx));            // same class: local buffer
         }
-        return globalBuf(idx);                          // cross class: another loaded class
+        long g = globalBuf(idx);                        // cross class: another loaded class
+        return g != 0L ? g : nativeBuf(idx);            // else a provided java.base native, or 0
+    }
+
+    /**
+     * Resolve an {@code invokestatic}/{@code invokespecial} to a PROVIDED java.base native — a real
+     * method with no bytecode, implemented by a writer-stashed VM helper. This is how unmodified java.base
+     * classes reach the runtime services they assume (time, bit conversions, ...) on metal.
+     */
+    private static long nativeBuf(int idx)
+    {
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/System")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("floatToRawIntBits"))) { return VM.identityAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("intBitsToFloat")))    { return VM.identityAddr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Double")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("doubleToRawLongBits"))) { return VM.identityAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("longBitsToDouble")))    { return VM.identityAddr; }
+        }
+        return 0L;
     }
 
     /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
