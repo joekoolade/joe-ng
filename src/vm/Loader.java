@@ -199,6 +199,58 @@ public final class Loader
         return Magic.call2(buf, a, b);
     }
 
+    /** Set by {@link #probeStatic} to 1 if the target method was found+run, 0 if the class lacks it. */
+    static int probeFound;
+
+    /**
+     * Real-java.base probe: compile (in isolation, transitively pulling same-class callees) and run the
+     * static method named {@code name}{@code desc} in the raw class blob, with up to two args. Byte-name
+     * matching (so method names longer than the 8-char packed seek work), no {@code <clinit>} — for pure
+     * numeric methods that touch no static state. Returns the (long) result; sets {@link #probeFound}.
+     */
+    static long probeStatic(long bytes, int len, byte[] name, byte[] desc, long a, long b)
+    {
+        parseConstPool(bytes, len);
+        parseFields();
+        long code = findMethodByBytes(gbase, name, desc);
+        if (code == 0L)
+        {
+            probeFound = 0;
+            return 0L;
+        }
+        probeFound = 1;
+        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+        return Magic.call2(buf, a, b);
+    }
+
+    /** Like {@link #findMethod} but matches name+descriptor by byte content (for names &gt; 8 chars). */
+    private static long findMethodByBytes(long base, byte[] name, byte[] desc)
+    {
+        long p = gp;
+        gMethodsStart = p;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int access = u2(p);
+            int attrs = u2(p + 6);                      // access, name, descriptor, attrs
+            if (utf8IsAtBase(base, gcp[u2(p + 2)], name) && utf8IsAtBase(base, gcp[u2(p + 4)], desc))
+            {
+                long code = findCode(base, p + 8, attrs);
+                if (code != 0L)
+                {
+                    gFoundDescOff = gcp[u2(p + 4)];
+                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
+                    return code;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0L;
+    }
+
     /**
      * Load a small class hierarchy on the metal and run it. Animal is loaded first,
      * then Dog (which inherits Animal's fields and flattened vtable and overrides a

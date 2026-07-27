@@ -484,8 +484,10 @@ public final class Baseline
         }  // i2l
         else if (op == 0x88)
         {
-            return 1;
-        }  // l2i: no-op (low 32 bits already hold the int)
+            int r = OP_BASE + sp - 1;
+            cb.emit(A64Enc.sxtw(r, r));     // l2i: canonicalise to a sign-extended int (the invariant i2l relies
+            return 1;                       // on) -- the truncated long may carry dirty/unrelated high bits
+        }  // l2i
         else if (op == 0x91)
         {
             int r = OP_BASE + sp - 1;

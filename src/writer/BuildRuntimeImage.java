@@ -39,6 +39,10 @@ public final class BuildRuntimeImage
         {
             registry.add("java/lang/Integer", in.readAllBytes());
         }
+        try (var in = Integer.class.getResourceAsStream("/java/lang/Long.class"))
+        {
+            registry.add("java/lang/Long", in.readAllBytes());
+        }
 
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
@@ -83,6 +87,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.objectBytes",      "vm/VM.objectLen",      "java/lang/Object",                        registry.rawBytes("java/lang/Object"));
         ib.addBlob("vm/VM.hashMapBytes",     "vm/VM.hashMapLen",     "java/util/HashMap",                       registry.rawBytes("java/util/HashMap"));
         ib.addBlob("vm/VM.mapDemoBytes",     "vm/VM.mapDemoLen",     "demo/MapDemo",                            registry.rawBytes("demo/MapDemo"));
+        // real-java.base probe: a second unmodified class (java/lang/Long); Integer is already embedded above.
+        ib.addBlob("vm/VM.longBytes",        "vm/VM.longLen",        "java/lang/Long",                          registry.rawBytes("java/lang/Long"));
         return ib.build(ENTRY);
     }
 

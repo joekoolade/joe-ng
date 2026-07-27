@@ -1528,6 +1528,7 @@ public final class VM
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
     static long mapDemoBytes, mapDemoLen;           // demo/MapDemo
+    static long longBytes, longLen;                 // java/lang/Long — a real, unmodified java.base class (probe)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1623,6 +1624,17 @@ public final class VM
             Uart.putc(0x30 + te);
         }
         Uart.putc(0x30 + on);
+    }
+
+    /** Print one real-java.base probe line: label = 0x<low32> PASS/FAIL vs the JDK-known {@code expect}. */
+    private static void probeShow(byte[] label, long result, int expect)
+    {
+        Uart.write(Magic.bytes("  "));
+        Uart.write(label);
+        Uart.write(Magic.bytes(" = "));
+        printHex(result & 0xFFFFFFFFL);
+        Uart.write(Loader.probeFound == 0 ? Magic.bytes("  MISSING\n")
+                 : ((int) result) == expect ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL\n"));
     }
 
     static void run()
@@ -1881,6 +1893,24 @@ public final class VM
         // through the mini java/lang/Object root's vtable slots.
         Uart.write(Magic.bytes("java/util/HashMap (demand-loaded):\n"));
         Loader.loadMap();
+
+        // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
+        // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
+        // results. Pure/leaf methods that touch no static state -- the frontier of "real java.base on metal".
+        Uart.write(Magic.bytes("real java.base numeric probe (unmodified Integer/Long/Math):\n"));
+        long ib = integerBytes;
+        int il = (int) integerLen;
+        probeShow(Magic.bytes("Integer.bitCount(0xF0F0F0F0)"),        Loader.probeStatic(ib, il, Magic.bytes("bitCount"),              Magic.bytes("(I)I"),  0xF0F0F0F0L, 0L), 16);
+        probeShow(Magic.bytes("Integer.numberOfLeadingZeros(1)"),     Loader.probeStatic(ib, il, Magic.bytes("numberOfLeadingZeros"),  Magic.bytes("(I)I"),  1L, 0L), 31);
+        probeShow(Magic.bytes("Integer.numberOfTrailingZeros(0x10000)"), Loader.probeStatic(ib, il, Magic.bytes("numberOfTrailingZeros"), Magic.bytes("(I)I"), 0x10000L, 0L), 16);
+        probeShow(Magic.bytes("Integer.reverseBytes(0x12345678)"),    Loader.probeStatic(ib, il, Magic.bytes("reverseBytes"),          Magic.bytes("(I)I"),  0x12345678L, 0L), 0x78563412);
+        probeShow(Magic.bytes("Integer.reverse(1)"),                  Loader.probeStatic(ib, il, Magic.bytes("reverse"),               Magic.bytes("(I)I"),  1L, 0L), 0x80000000);
+        probeShow(Magic.bytes("Integer.highestOneBit(100)"),          Loader.probeStatic(ib, il, Magic.bytes("highestOneBit"),         Magic.bytes("(I)I"),  100L, 0L), 64);
+        probeShow(Magic.bytes("Integer.signum(-5)"),                  Loader.probeStatic(ib, il, Magic.bytes("signum"),                Magic.bytes("(I)I"),  -5L, 0L), -1);
+        probeShow(Magic.bytes("Integer.rotateLeft(1,4)"),             Loader.probeStatic(ib, il, Magic.bytes("rotateLeft"),            Magic.bytes("(II)I"), 1L, 4L), 16);
+        probeShow(Magic.bytes("Integer.compare(3,7)"),                Loader.probeStatic(ib, il, Magic.bytes("compare"),               Magic.bytes("(II)I"), 3L, 7L), -1);
+        probeShow(Magic.bytes("Long.bitCount(0xFF)"),                 Loader.probeStatic(longBytes, (int) longLen, Magic.bytes("bitCount"), Magic.bytes("(J)I"), 0xFFL, 0L), 8);
+        probeShow(Magic.bytes("Math.abs(-42)"),                       Loader.probeStatic(mathBytes, (int) mathLen, Magic.bytes("abs"),      Magic.bytes("(I)I"), -42L, 0L), 42);
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3346,7 +3376,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 32;    // ...+ ExcDemo + ArrayList/ListDemo + Object + HashMap/MapDemo
+    static final int BLOB_COUNT = 33;    // ...+ ArrayList/ListDemo + Object + HashMap/MapDemo + Long (probe)
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4186,7 +4216,8 @@ public final class VM
         if (b == 28) { return Magic.bytes("demo/ListDemo"); }
         if (b == 29) { return Magic.bytes("java/lang/Object"); }
         if (b == 30) { return Magic.bytes("java/util/HashMap"); }
-        return Magic.bytes("demo/MapDemo");
+        if (b == 31) { return Magic.bytes("demo/MapDemo"); }
+        return Magic.bytes("java/lang/Long");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4298,7 +4329,8 @@ public final class VM
         if (b == 28) { return Magic.bytes("listDemoBytes"); }
         if (b == 29) { return Magic.bytes("objectBytes"); }
         if (b == 30) { return Magic.bytes("hashMapBytes"); }
-        return Magic.bytes("mapDemoBytes");
+        if (b == 31) { return Magic.bytes("mapDemoBytes"); }
+        return Magic.bytes("longBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4334,7 +4366,8 @@ public final class VM
         if (b == 28) { return Magic.bytes("listDemoLen"); }
         if (b == 29) { return Magic.bytes("objectLen"); }
         if (b == 30) { return Magic.bytes("hashMapLen"); }
-        return Magic.bytes("mapDemoLen");
+        if (b == 31) { return Magic.bytes("mapDemoLen"); }
+        return Magic.bytes("longLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */
