@@ -1522,6 +1522,9 @@ public final class VM
     static long ioobeBytes, ioobeLen;               // java/lang/IndexOutOfBoundsException
     static long aioobeBytes, aioobeLen;             // java/lang/ArrayIndexOutOfBoundsException
     static long excDemoBytes, excDemoLen;           // demo/ExcDemo
+    // Mini collections.
+    static long arrayListBytes, arrayListLen;       // java/util/ArrayList
+    static long listDemoBytes, listDemoLen;         // demo/ListDemo
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1866,6 +1869,10 @@ public final class VM
         // exception object; catch clauses catch it (main-local and via cross-method unwind).
         Uart.write(Magic.bytes("implicit exceptions (demand-loaded):\n"));
         Loader.loadExc();
+
+        // Mini collections: a real-shaped java/util/ArrayList (Object[] + grow via arraycopy).
+        Uart.write(Magic.bytes("java/util/ArrayList (demand-loaded):\n"));
+        Loader.loadList();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
@@ -3331,7 +3338,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 27;    // ...+ StringBuilder/StrDemo + mini exception hierarchy (6) + ExcDemo
+    static final int BLOB_COUNT = 29;    // ...+ mini exception hierarchy (6) + ExcDemo + ArrayList + ListDemo
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4166,7 +4173,9 @@ public final class VM
         if (b == 23) { return Magic.bytes("java/lang/NullPointerException"); }
         if (b == 24) { return Magic.bytes("java/lang/IndexOutOfBoundsException"); }
         if (b == 25) { return Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"); }
-        return Magic.bytes("demo/ExcDemo");
+        if (b == 26) { return Magic.bytes("demo/ExcDemo"); }
+        if (b == 27) { return Magic.bytes("java/util/ArrayList"); }
+        return Magic.bytes("demo/ListDemo");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4273,7 +4282,9 @@ public final class VM
         if (b == 23) { return Magic.bytes("npeBytes"); }
         if (b == 24) { return Magic.bytes("ioobeBytes"); }
         if (b == 25) { return Magic.bytes("aioobeBytes"); }
-        return Magic.bytes("excDemoBytes");
+        if (b == 26) { return Magic.bytes("excDemoBytes"); }
+        if (b == 27) { return Magic.bytes("arrayListBytes"); }
+        return Magic.bytes("listDemoBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4304,7 +4315,9 @@ public final class VM
         if (b == 23) { return Magic.bytes("npeLen"); }
         if (b == 24) { return Magic.bytes("ioobeLen"); }
         if (b == 25) { return Magic.bytes("aioobeLen"); }
-        return Magic.bytes("excDemoLen");
+        if (b == 26) { return Magic.bytes("excDemoLen"); }
+        if (b == 27) { return Magic.bytes("arrayListLen"); }
+        return Magic.bytes("listDemoLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

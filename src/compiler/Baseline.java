@@ -1194,8 +1194,10 @@ public final class Baseline
         }
         cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder
         sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
-        symbols.callHelper(cb, Symbols.SC_END);                  // x0 = the finished byte[]
-        symbols.newStringFromBytes(cb);                          // x0 = a mini java/lang/String
+        spillLive(cb);                                           // the operand stack is x9.. (caller-saved): preserve any
+        symbols.callHelper(cb, Symbols.SC_END);                  // live operand BELOW the args (e.g. a receiver pushed
+        symbols.newStringFromBytes(cb);                          // before `a + b`) across these two BLs. x0 = mini String.
+        reloadLive(cb);
         cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the result String (at slot argBase)
     }
 

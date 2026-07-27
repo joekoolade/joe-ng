@@ -76,6 +76,9 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.ioobeBytes",       "vm/VM.ioobeLen",       "java/lang/IndexOutOfBoundsException",     registry.rawBytes("java/lang/IndexOutOfBoundsException"));
         ib.addBlob("vm/VM.aioobeBytes",      "vm/VM.aioobeLen",      "java/lang/ArrayIndexOutOfBoundsException", registry.rawBytes("java/lang/ArrayIndexOutOfBoundsException"));
         ib.addBlob("vm/VM.excDemoBytes",     "vm/VM.excDemoLen",     "demo/ExcDemo",                            registry.rawBytes("demo/ExcDemo"));
+        // mini collections: java/util/ArrayList + its demo. Order matches VM.blobClass.
+        ib.addBlob("vm/VM.arrayListBytes",   "vm/VM.arrayListLen",   "java/util/ArrayList",                     registry.rawBytes("java/util/ArrayList"));
+        ib.addBlob("vm/VM.listDemoBytes",    "vm/VM.listDemoLen",    "demo/ListDemo",                           registry.rawBytes("demo/ListDemo"));
         return ib.build(ENTRY);
     }
 

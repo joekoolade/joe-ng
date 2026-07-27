@@ -539,6 +539,23 @@ public final class Loader
         }
     }
 
+    /** Demand-load and run {@code demo/ListDemo.main()} — verifies the real-shaped java/util/ArrayList. */
+    static void loadList()
+    {
+        resetLoader();
+        addBlob(VM.stringBytes, (int) VM.stringLen);              // String (elements + concat literals)
+        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);
+        addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
+        resolveClosureFromDir();
+        loadAll();
+        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
+        long code = findMethod(VM.listDemoBytes);
+        if (code != 0L)
+        {
+            long unused = Magic.call0(bufOf(code));
+        }
+    }
+
     /**
      * Attempt a FULL load of real {@code java/lang/Integer} (all methods + {@code <clinit>}), to map where
      * the loader's reach ends on unmodified java.base bytecode: the first unsupported opcode/intrinsic is
