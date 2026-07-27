@@ -43,6 +43,10 @@ public final class BuildRuntimeImage
         {
             registry.add("java/lang/Long", in.readAllBytes());
         }
+        try (var in = Integer.class.getResourceAsStream("/java/util/Objects.class"))
+        {
+            registry.add("java/util/Objects", in.readAllBytes());
+        }
 
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
@@ -106,6 +110,9 @@ public final class BuildRuntimeImage
         // integer Math methods (floorDiv/floorMod/addExact) + the ArithmeticException addExact throws on overflow.
         ib.addBlob("vm/VM.arithExcBytes",    "vm/VM.arithExcLen",    "java/lang/ArithmeticException",           registry.rawBytes("java/lang/ArithmeticException"));
         ib.addBlob("vm/VM.mathIntDemoBytes", "vm/VM.mathIntDemoLen", "demo/MathIntDemo",                        registry.rawBytes("demo/MathIntDemo"));
+        // real java.util.Objects (equals/hashCode dispatch through the Object root; requireNonNull) + its demo.
+        ib.addBlob("vm/VM.objectsBytes",     "vm/VM.objectsLen",     "java/util/Objects",                       registry.rawBytes("java/util/Objects"));
+        ib.addBlob("vm/VM.objectsDemoBytes", "vm/VM.objectsDemoLen", "demo/ObjectsDemo",                        registry.rawBytes("demo/ObjectsDemo"));
         return ib.build(ENTRY);
     }
 

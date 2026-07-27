@@ -422,6 +422,38 @@ public final class Loader
         }
     }
 
+    /**
+     * Demand-load and run {@code demo/ObjectsDemo.main()} — the UNMODIFIED real {@code java/util/Objects}:
+     * equals/hashCode dispatch through the mini {@code java/lang/Object} root's vtable slots into String's
+     * real overrides; requireNonNull throws a real {@code NullPointerException} (caught via cross-method
+     * unwind). Object is seeded explicitly (implicit root). No seed-ordering (relocs handle any cycle).
+     */
+    static void loadObjects()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);             // root: hashCode/equals slots String overrides
+        addBlob(VM.objectsBytes, (int) VM.objectsLen);
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer.toString for the output
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.npeBytes, (int) VM.npeLen);
+        addBlob(VM.runtimeExcBytes, (int) VM.runtimeExcLen);
+        addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
+        addBlob(VM.throwableBytes, (int) VM.throwableLen);
+        addBlob(VM.objectsDemoBytes, (int) VM.objectsDemoLen);
+        resolveClosureFromDir();
+        entryPoint(VM.objectsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;
+        loadAll();
+        skipClinit = 0;
+        long buf = globalMethodBuf(Magic.bytes("demo/ObjectsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
