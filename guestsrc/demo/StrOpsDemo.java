@@ -19,6 +19,20 @@ public class StrOpsDemo
         showStr("substring(6)", s.substring(6));                           // world
         showStr("substring(0,5)", s.substring(0, 5));                      // hello
         showStr("substring(indexOf(' ')+1)", s.substring(s.indexOf(' ') + 1));   // world
+
+        String h = "hello";
+        showBool("h.startsWith(\"hel\")", h.startsWith("hel"));            // 1
+        showBool("h.startsWith(\"xyz\")", h.startsWith("xyz"));            // 0
+        showBool("h.startsWith(\"hello!\")", h.startsWith("hello!"));      // 0 (prefix longer)
+        showInt("h.compareTo(\"hello\")", h.compareTo("hello"));           // 0
+        showInt("h.compareTo(\"apple\")", h.compareTo("apple"));           // 7  ('h'-'a')
+        showInt("h.compareTo(\"world\")", h.compareTo("world"));           // -15 ('h'-'w')
+        showInt("h.compareTo(\"hell\")", h.compareTo("hell"));             // 1  (length)
+    }
+
+    private static void showBool(String label, boolean v)
+    {
+        showInt(label, v ? 1 : 0);
     }
 
     private static void showStr(String label, String v)

@@ -123,6 +123,43 @@ public final class String
         return -1;
     }
 
+    public boolean startsWith(String prefix)
+    {
+        int n = prefix.value.length;
+        if (n > value.length)
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < n)
+        {
+            if (value[i] != prefix.value[i])
+            {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    /** Lexicographic (LATIN1): first differing char's difference, else the length difference. */
+    public int compareTo(String other)
+    {
+        int lim = value.length < other.value.length ? value.length : other.value.length;
+        int i = 0;
+        while (i < lim)
+        {
+            int a = value[i] & 0xFF;
+            int b = other.value[i] & 0xFF;
+            if (a != b)
+            {
+                return a - b;
+            }
+            i = i + 1;
+        }
+        return value.length - other.value.length;
+    }
+
     public String substring(int begin)
     {
         return substring(begin, value.length);
