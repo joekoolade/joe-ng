@@ -1208,6 +1208,9 @@ public final class Loader
         addBlob(VM.listBytes, (int) VM.listLen);                  // List interface: registered before ArrayList
         addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);   // the iterator ArrayList.iterator() returns
         addBlob(VM.arrayListBytes, (int) VM.arrayListLen);        //   so its itable directory keys on List's Type
+        addBlob(VM.linkedListNodeBytes, (int) VM.linkedListNodeLen);         // second List impl: node + its iterator
+        addBlob(VM.linkedListIteratorBytes, (int) VM.linkedListIteratorLen);
+        addBlob(VM.linkedListBytes, (int) VM.linkedListLen);
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();

@@ -136,6 +136,9 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.iterableBytes",    "vm/VM.iterableLen",    "java/lang/Iterable",                      registry.rawBytes("java/lang/Iterable"));
         ib.addBlob("vm/VM.iteratorBytes",    "vm/VM.iteratorLen",    "java/util/Iterator",                      registry.rawBytes("java/util/Iterator"));
         ib.addBlob("vm/VM.arrayListIteratorBytes","vm/VM.arrayListIteratorLen","java/util/ArrayListIterator",   registry.rawBytes("java/util/ArrayListIterator"));
+        ib.addBlob("vm/VM.linkedListBytes",  "vm/VM.linkedListLen",  "java/util/LinkedList",                    registry.rawBytes("java/util/LinkedList"));
+        ib.addBlob("vm/VM.linkedListNodeBytes","vm/VM.linkedListNodeLen","java/util/LinkedListNode",             registry.rawBytes("java/util/LinkedListNode"));
+        ib.addBlob("vm/VM.linkedListIteratorBytes","vm/VM.linkedListIteratorLen","java/util/LinkedListIterator", registry.rawBytes("java/util/LinkedListIterator"));
         return ib.build(ENTRY);
     }
 
