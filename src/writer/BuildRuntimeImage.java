@@ -143,6 +143,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.collectionBytes",  "vm/VM.collectionLen",  "java/util/Collection",                    registry.rawBytes("java/util/Collection"));
         ib.addBlob("vm/VM.collectionsBytes", "vm/VM.collectionsLen", "java/util/Collections",                   registry.rawBytes("java/util/Collections"));
         ib.addBlob("vm/VM.comparableBytes",  "vm/VM.comparableLen",  "java/lang/Comparable",                    registry.rawBytes("java/lang/Comparable"));
+        ib.addBlob("vm/VM.numBytes",         "vm/VM.numLen",         "demo/Num",                                registry.rawBytes("demo/Num"));
         return ib.build(ENTRY);
     }
 

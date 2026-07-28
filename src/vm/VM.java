@@ -1535,6 +1535,7 @@ public final class VM
     static long collectionBytes, collectionLen;      // java/util/Collection (List extends it)
     static long collectionsBytes, collectionsLen;    // java/util/Collections (static sort)
     static long comparableBytes, comparableLen;      // java/lang/Comparable (String implements it)
+    static long numBytes, numLen;                    // demo/Num (a second Comparable type for the generic sort)
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
@@ -3496,7 +3497,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 64;    // ...+ Map + Collection + Collections + Comparable
+    static final int BLOB_COUNT = 65;    // ...+ Collection + Collections + Comparable + Num
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4368,7 +4369,8 @@ public final class VM
         if (b == 60) { return Magic.bytes("java/util/Map"); }
         if (b == 61) { return Magic.bytes("java/util/Collection"); }
         if (b == 62) { return Magic.bytes("java/util/Collections"); }
-        return Magic.bytes("java/lang/Comparable");
+        if (b == 63) { return Magic.bytes("java/lang/Comparable"); }
+        return Magic.bytes("demo/Num");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4512,7 +4514,8 @@ public final class VM
         if (b == 60) { return Magic.bytes("mapBytes"); }
         if (b == 61) { return Magic.bytes("collectionBytes"); }
         if (b == 62) { return Magic.bytes("collectionsBytes"); }
-        return Magic.bytes("comparableBytes");
+        if (b == 63) { return Magic.bytes("comparableBytes"); }
+        return Magic.bytes("numBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4580,7 +4583,8 @@ public final class VM
         if (b == 60) { return Magic.bytes("mapLen"); }
         if (b == 61) { return Magic.bytes("collectionLen"); }
         if (b == 62) { return Magic.bytes("collectionsLen"); }
-        return Magic.bytes("comparableLen");
+        if (b == 63) { return Magic.bytes("comparableLen"); }
+        return Magic.bytes("numLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

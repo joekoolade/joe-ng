@@ -1226,6 +1226,7 @@ public final class Loader
         addBlob(VM.linkedListIteratorBytes, (int) VM.linkedListIteratorLen);
         addBlob(VM.linkedListBytes, (int) VM.linkedListLen);
         addBlob(VM.collectionsBytes, (int) VM.collectionsLen);   // Collections.sort(List) static helper
+        addBlob(VM.numBytes, (int) VM.numLen);                   // a second Comparable type for the generic sort
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();

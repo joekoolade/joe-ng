@@ -129,6 +129,20 @@ public class ListDemo
         lnames.add("cat");
         Collections.sort(lnames);
         Magic.printStr("llSorted=" + join(lnames) + "\n");                       // ant cat dog
+
+        // Same Collections.sort on a SECOND Comparable type (Num) -> type-agnostic via each type's bridge.
+        List nums = new ArrayList();
+        nums.add(new Num(30));
+        nums.add(new Num(4));
+        nums.add(new Num(15));
+        nums.add(new Num(9));
+        Collections.sort(nums);
+        String ns = "";
+        for (Object o : nums)
+        {
+            ns = ns + ((Num) o).value() + " ";
+        }
+        Magic.printStr("sortedNums=" + ns + "\n");                               // 4 9 15 30
     }
 
     private static String join(List l)
