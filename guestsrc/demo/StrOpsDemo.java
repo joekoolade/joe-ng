@@ -36,6 +36,11 @@ public class StrOpsDemo
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
 
+        showStr("\"Hello World\".toUpperCase()", "Hello World".toUpperCase());   // HELLO WORLD
+        showStr("\"Hello World\".toLowerCase()", "Hello World".toLowerCase());   // hello world
+        showStr("\"abc123XYZ\".toUpperCase()", "abc123XYZ".toUpperCase());       // ABC123XYZ
+        showStr("\"abc123XYZ\".toLowerCase()", "abc123XYZ".toLowerCase());       // abc123xyz
+
         showSplit("\"a,b,c\".split(\",\")", "a,b,c".split(","));           // [a, b, c]
         showSplit("\"a::b::c\".split(\"::\")", "a::b::c".split("::"));     // [a, b, c]
         showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)

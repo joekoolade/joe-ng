@@ -326,6 +326,42 @@ public final class String implements Comparable<String>
         return new String(buf, (byte) 0);               // LATIN1
     }
 
+    /** ASCII upper-casing (a..z -> A..Z; other bytes unchanged), returning a fresh LATIN1 String. */
+    public String toUpperCase()
+    {
+        byte[] buf = new byte[value.length];
+        int i = 0;
+        while (i < value.length)
+        {
+            int c = value[i] & 0xFF;
+            if (c >= 'a' && c <= 'z')
+            {
+                c = c - 32;
+            }
+            buf[i] = (byte) c;
+            i = i + 1;
+        }
+        return new String(buf, coder);
+    }
+
+    /** ASCII lower-casing (A..Z -> a..z; other bytes unchanged), returning a fresh LATIN1 String. */
+    public String toLowerCase()
+    {
+        byte[] buf = new byte[value.length];
+        int i = 0;
+        while (i < value.length)
+        {
+            int c = value[i] & 0xFF;
+            if (c >= 'A' && c <= 'Z')
+            {
+                c = c + 32;
+            }
+            buf[i] = (byte) c;
+            i = i + 1;
+        }
+        return new String(buf, coder);
+    }
+
     public String substring(int begin)
     {
         return substring(begin, value.length);
