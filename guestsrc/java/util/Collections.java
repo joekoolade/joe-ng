@@ -31,4 +31,27 @@ public final class Collections
             i = i + 1;
         }
     }
+
+    /** As {@link #sort(List)}, but ordered by a caller-supplied {@link Comparator} (typically a lambda). */
+    public static void sort(List list, Comparator cmp)
+    {
+        int n = list.size();
+        int i = 0;
+        while (i < n - 1)
+        {
+            int j = 0;
+            while (j < n - 1 - i)
+            {
+                Object x = list.get(j);
+                Object y = list.get(j + 1);
+                if (cmp.compare(x, y) > 0)              // out of order per the comparator -> swap
+                {
+                    list.set(j, y);
+                    list.set(j + 1, x);
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+    }
 }

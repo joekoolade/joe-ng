@@ -3,6 +3,7 @@ package demo;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import magic.Magic;
@@ -143,6 +144,18 @@ public class ListDemo
             ns = ns + ((Num) o).value() + " ";
         }
         Magic.printStr("sortedNums=" + ns + "\n");                               // 4 9 15 30
+
+        // sort(List, Comparator): a lambda comparator (2-arg SAM) -> descending order.
+        Collections.sort(names, (a, b) -> ((String) b).compareTo((String) a));
+        Magic.printStr("descNames=" + join(names) + "\n");                       // date cherry banana apple
+
+        Collections.sort(nums, (a, b) -> ((Num) b).value() - ((Num) a).value());
+        String dn = "";
+        for (Object o : nums)
+        {
+            dn = dn + ((Num) o).value() + " ";
+        }
+        Magic.printStr("descNums=" + dn + "\n");                                 // 30 15 9 4
     }
 
     private static String join(List l)
