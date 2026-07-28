@@ -3,10 +3,10 @@ package java.util;
 /**
  * A JDK-free, mini {@code java/util/Collections}: just a static {@code sort(List)} for the probe. Operates on
  * any {@link List} through the interface (get/set/size are invokeinterface, so it sorts an ArrayList or a
- * LinkedList alike), comparing elements with the mini {@code String}'s real {@code compareTo} (invokevirtual)
- * -- the real Collections.sort is generic over {@code Comparable}; the mini String isn't Comparable-shaped, so
- * this specialises to String, which is enough to tie the collection stack back to the String surface. Plain
- * bubble sort (small demand-loaded lists; O(n^2) get/set, fine here).
+ * LinkedList alike), comparing elements GENERICALLY via {@link Comparable} -- {@code ((Comparable) x).compareTo(y)}
+ * is invokeinterface {@code Comparable.compareTo(Object)}, which for a String element dispatches through the
+ * synthetic {@code compareTo(Object)} bridge into the typed {@code compareTo(String)}. Plain bubble sort (small
+ * demand-loaded lists; O(n^2) get/set, fine here).
  */
 public final class Collections
 {
@@ -19,12 +19,12 @@ public final class Collections
             int j = 0;
             while (j < n - 1 - i)
             {
-                String a = (String) list.get(j);
-                String b = (String) list.get(j + 1);
-                if (a.compareTo(b) > 0)                 // out of order -> swap through the List interface
+                Object x = list.get(j);
+                Object y = list.get(j + 1);
+                if (((Comparable) x).compareTo(y) > 0)  // generic compare -> String's bridge -> compareTo(String)
                 {
-                    list.set(j, b);
-                    list.set(j + 1, a);
+                    list.set(j, y);                     // out of order -> swap through the List interface
+                    list.set(j + 1, x);
                 }
                 j = j + 1;
             }

@@ -142,6 +142,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.mapBytes",         "vm/VM.mapLen",         "java/util/Map",                           registry.rawBytes("java/util/Map"));
         ib.addBlob("vm/VM.collectionBytes",  "vm/VM.collectionLen",  "java/util/Collection",                    registry.rawBytes("java/util/Collection"));
         ib.addBlob("vm/VM.collectionsBytes", "vm/VM.collectionsLen", "java/util/Collections",                   registry.rawBytes("java/util/Collections"));
+        ib.addBlob("vm/VM.comparableBytes",  "vm/VM.comparableLen",  "java/lang/Comparable",                    registry.rawBytes("java/lang/Comparable"));
         return ib.build(ENTRY);
     }
 

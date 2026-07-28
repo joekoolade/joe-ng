@@ -8,7 +8,7 @@ package java.lang;
  * the JIT's {@code newStringFromBytes} / interned literals / {@code VM.strBytes} all assume; {@code coder}
  * is the second (offset 24, zero = LATIN1). Compiled as a {@code java.base} patch so it carries the real name.
  */
-public final class String
+public final class String implements Comparable<String>
 {
     private final byte[] value;
     private final byte coder;
