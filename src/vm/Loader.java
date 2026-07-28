@@ -1264,6 +1264,12 @@ public final class Loader
         addBlob(VM.arrayListBytes, (int) VM.arrayListLen);
         addBlob(VM.mapBytes, (int) VM.mapLen);                   // Map interface: registered before HashMap
         addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
+        addBlob(VM.predicateBytes, (int) VM.predicateLen);       // demo streams the map's keySet() through Stream
+        addBlob(VM.functionBytes, (int) VM.functionLen);
+        addBlob(VM.consumerBytes, (int) VM.consumerLen);
+        addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);
+        addBlob(VM.numBytes, (int) VM.numLen);
+        addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         resolveClosureFromDir();
         loadAll();

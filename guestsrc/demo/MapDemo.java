@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import magic.Magic;
+// demo.Stream, demo.Num are in this package (no import needed).
 
 /**
  * Verifies the mini {@code java/util/HashMap} DRIVEN THROUGH the {@link Map} interface: String keys hashed/
@@ -59,5 +60,12 @@ public class MapDemo
         Magic.printStr("after remove: one=" + (String) map.get("one")
                 + " three=" + (String) map.get("three")
                 + " removeAbsent=" + (map.remove("nope") == null ? 1 : 0) + "\n");             // 1, 3, 1
+
+        // Stream sourced from the Map: pipe keySet() through map+reduce to sum the key lengths.
+        // Remaining keys after remove("two"): {one, three} -> 3 + 5 = 8.
+        Object sum = Stream.of(map.keySet())
+                .map(o -> new Num(((String) o).length()))
+                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
+        Magic.printStr("stream(keySet) lenSum=" + ((Num) sum).value() + "\n");                 // 8
     }
 }
