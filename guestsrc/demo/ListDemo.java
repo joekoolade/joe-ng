@@ -178,6 +178,20 @@ public class ListDemo
             bd = bd + ((Num) o).value() + " ";
         }
         Magic.printStr("byDist(pivot=10)=" + bd + "\n");                         // 9 15 4 30
+
+        // A METHOD-REFERENCE comparator: the indy's impl handle points at byLength (an existing static
+        // method), not a synthesised lambda$ body -- a different invokedynamic shape, same thunk path.
+        Collections.sort(names, ListDemo::byLength);
+        Magic.printStr("byLength=" + join(names) + "\n");                        // date apple banana cherry
+    }
+
+    /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */
+    private static int byLength(Object a, Object b)
+    {
+        String sa = (String) a;
+        String sb = (String) b;
+        int d = sa.length() - sb.length();
+        return d != 0 ? d : sa.compareTo(sb);
     }
 
     private static String join(List l)
