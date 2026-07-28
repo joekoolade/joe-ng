@@ -37,6 +37,17 @@ public class ListDemo
         }
         Magic.printStr("forEach count=" + count + " joined=" + joined + "\n");   // 10, "item0 ... item9 "
 
+        // Transitive-interface dispatch: hold the ArrayList by Iterable (super-interface of List). The
+        // enhanced-for emits invokeinterface java/lang/Iterable.iterator -- resolvable only because the
+        // itable directory now carries the transitively-implemented Iterable, not just the direct List.
+        Iterable iterable = list;
+        int itCount = 0;
+        for (Object o : iterable)
+        {
+            itCount = itCount + 1;
+        }
+        Magic.printStr("iterableForEach count=" + itCount + "\n");                // 10
+
         // Second List impl: a singly-linked LinkedList driven through the SAME interface + helpers.
         List ll = new LinkedList();
         int j = 0;

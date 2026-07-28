@@ -99,6 +99,14 @@ public final class Loader
     private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
     private static long[] clType;        // each class's Type node (for instanceof/checkcast)
     private static int clCount;
+    // Directly-declared interfaces per registered class/interface, as registry indices, flat:
+    // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
+    // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
+    // -> its directory has both List and Iterable, so invokeinterface Iterable.iterator resolves).
+    private static final int MAX_DIRECT_IF = 8;
+    private static int[] clIfaceReg;
+    private static int[] clIfaceRegN;
+    private static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
@@ -641,6 +649,9 @@ public final class Loader
         clVtCount = new int[MAXCLASS];
         clType = new long[MAXCLASS];
         clCount = 0;
+        clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
+        clIfaceRegN = new int[MAXCLASS];
+        ifClosureBuf = new int[MAXIFM];
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
@@ -1892,6 +1903,7 @@ public final class Loader
             clType[clCount] = gType;
             clFieldCount[clCount] = 0;
             clVtCount[clCount] = 0;
+            captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clCount += 1;
             return;                                     // nothing to compile: all methods abstract
         }
@@ -2369,6 +2381,28 @@ public final class Loader
         return 0L;
     }
 
+    /**
+     * Record the current class's directly-declared interfaces (from {@code gImplIfName}) as registry indices
+     * at {@code clCount}, for {@link #buildItableDir}'s transitive closure. Interfaces this class implements
+     * are already loaded (dep ordering), so they resolve now.
+     */
+    private static void captureDirectIfaces()
+    {
+        int n = 0;
+        int k = 0;
+        while (k < gImplIfCount && n < MAX_DIRECT_IF)
+        {
+            int r = classRegByName(gImplIfName[k]);
+            if (r >= 0)
+            {
+                clIfaceReg[clCount * MAX_DIRECT_IF + n] = r;
+                n += 1;
+            }
+            k += 1;
+        }
+        clIfaceRegN[clCount] = n;
+    }
+
     /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
     private static void registerClass()
     {
@@ -2378,6 +2412,7 @@ public final class Loader
         clType[clCount] = gType;
         clFieldCount[clCount] = gifCount;
         clVtCount[clCount] = gvCount;
+        captureDirectIfaces();
         clCount += 1;
         int st = 0;
         while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
@@ -2664,29 +2699,97 @@ public final class Loader
 
     /**
      * itable directory (ObjectModel): one {@code {interfaceType, itable}} entry per
-     * implemented interface. Every entry shares this class's flat imap as its itable —
-     * the metal indexes the imap by the interface method's <em>global</em> slot
-     * ({@link #ifSlotOf}), so one table serves all interfaces. The directory adds the
-     * interfaceType-keyed lookup the shared core's {@code invokeinterface} searches for.
+     * implemented interface — TRANSITIVELY, so a super-interface reached only through
+     * another interface (or the superclass) is keyed too. Every entry shares this class's
+     * flat imap as its itable — the metal indexes the imap by the interface method's
+     * <em>global</em> slot ({@link #ifSlotOf}), so one table serves all interfaces. The
+     * directory adds the interfaceType-keyed lookup the core's {@code invokeinterface}
+     * searches for; without the transitive entries, a call site typed to a super-interface
+     * (e.g. {@code Iterable.iterator} on an {@code ArrayList implements List extends Iterable})
+     * would miss and the search would run past the sentinel.
      */
     private static long buildItableDir(long imap)
     {
-        if (gImplIfCount == 0)
+        int n = ifaceClosure();
+        if (n == 0)
         {
             return 0L;
         }
-        long dir = Heap.alloc((gImplIfCount + 1) * 16);  // {interfaceType@0, itable@8} + sentinel
+        long dir = Heap.alloc((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
         int k = 0;
-        while (k < gImplIfCount)
+        while (k < n)
         {
-            int r = classRegByName(gImplIfName[k]);
-            Magic.store64(dir + k * 16 + 0, r >= 0 ? clType[r] : 0L);   // interfaceType
+            Magic.store64(dir + k * 16 + 0, clType[ifClosureBuf[k]]);   // interfaceType
             Magic.store64(dir + k * 16 + 8, imap);                      // itable (the shared imap)
             k += 1;
         }
         Magic.store64(dir + k * 16 + 0, 0L);             // sentinel: interfaceType 0 ends the directory
         Magic.store64(dir + k * 16 + 8, 0L);
         return dir;
+    }
+
+    /**
+     * The transitive set of interfaces the current class implements, as registry indices in
+     * {@link #ifClosureBuf} (return = count). Seeds with this class's directly-declared interfaces plus the
+     * superclass's, then repeatedly folds in each collected interface's own extended interfaces
+     * ({@link #clIfaceReg}) until closed. De-duped.
+     */
+    private static int ifaceClosure()
+    {
+        int n = 0;
+        int k = 0;
+        while (k < gImplIfCount)                         // this class's directly-declared interfaces
+        {
+            int r = classRegByName(gImplIfName[k]);
+            if (r >= 0)
+            {
+                n = addIfaceUnique(n, r);
+            }
+            k += 1;
+        }
+        int sr = classRegByName(gSuperNameOff);          // interfaces inherited from the superclass
+        if (sr >= 0)
+        {
+            int j = 0;
+            while (j < clIfaceRegN[sr])
+            {
+                n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
+                j += 1;
+            }
+        }
+        int i = 0;
+        while (i < n)                                    // fold in each collected interface's extended interfaces
+        {
+            int r = ifClosureBuf[i];
+            int j = 0;
+            while (j < clIfaceRegN[r])
+            {
+                n = addIfaceUnique(n, clIfaceReg[r * MAX_DIRECT_IF + j]);
+                j += 1;
+            }
+            i += 1;
+        }
+        return n;
+    }
+
+    /** Append registry index {@code r} to {@link #ifClosureBuf} if absent; return the new count. */
+    private static int addIfaceUnique(int n, int r)
+    {
+        int i = 0;
+        while (i < n)
+        {
+            if (ifClosureBuf[i] == r)
+            {
+                return n;
+            }
+            i += 1;
+        }
+        if (n < ifClosureBuf.length)
+        {
+            ifClosureBuf[n] = r;
+            n += 1;
+        }
+        return n;
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
