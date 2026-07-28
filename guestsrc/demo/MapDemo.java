@@ -73,5 +73,11 @@ public class MapDemo
         Object c2 = map.computeIfAbsent("one", k -> "SHOULD_NOT_RUN");                          // present -> "1"
         Magic.printStr("computeIfAbsent(four)=" + (String) c1 + " (one)=" + (String) c2
                 + " size=" + map.size() + " get(four)=" + (String) map.get("four") + "\n");     // len4, 1, 3, len4
+
+        // Map.forEach(BiConsumer): a 2-arg (k,v) lambda, accumulating into a captured int[] (mutable-capture
+        // idiom). Map now {one:1, three:3, four:len4}: sum of key+value lengths, order-independent.
+        int[] acc = new int[1];
+        map.forEach((k, v) -> acc[0] = acc[0] + ((String) k).length() + ((String) v).length());
+        Magic.printStr("forEach charTotal=" + acc[0] + "\n");                                   // 4+6+8 = 18
     }
 }

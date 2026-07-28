@@ -1544,6 +1544,7 @@ public final class VM
     static long consumerBytes, consumerLen;          // java/util/function/Consumer (forEach)
     static long streamBytes, streamLen;              // demo/Stream (mini pipeline)
     static long binaryOpBytes, binaryOpLen;          // java/util/function/BinaryOperator (reduce accumulator)
+    static long biConsumerBytes, biConsumerLen;      // java/util/function/BiConsumer (Map.forEach action)
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
@@ -3505,7 +3506,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 73;    // ...+ Factory + Predicate + Function + Consumer + Stream + BinaryOperator
+    static final int BLOB_COUNT = 74;    // ...+ Predicate + Function + Consumer + Stream + BinaryOperator + BiConsumer
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4386,7 +4387,8 @@ public final class VM
         if (b == 69) { return Magic.bytes("java/util/function/Function"); }
         if (b == 70) { return Magic.bytes("java/util/function/Consumer"); }
         if (b == 71) { return Magic.bytes("demo/Stream"); }
-        return Magic.bytes("java/util/function/BinaryOperator");
+        if (b == 72) { return Magic.bytes("java/util/function/BinaryOperator"); }
+        return Magic.bytes("java/util/function/BiConsumer");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4539,7 +4541,8 @@ public final class VM
         if (b == 69) { return Magic.bytes("functionBytes"); }
         if (b == 70) { return Magic.bytes("consumerBytes"); }
         if (b == 71) { return Magic.bytes("streamBytes"); }
-        return Magic.bytes("binaryOpBytes");
+        if (b == 72) { return Magic.bytes("binaryOpBytes"); }
+        return Magic.bytes("biConsumerBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4616,7 +4619,8 @@ public final class VM
         if (b == 69) { return Magic.bytes("functionLen"); }
         if (b == 70) { return Magic.bytes("consumerLen"); }
         if (b == 71) { return Magic.bytes("streamLen"); }
-        return Magic.bytes("binaryOpLen");
+        if (b == 72) { return Magic.bytes("binaryOpLen"); }
+        return Magic.bytes("biConsumerLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

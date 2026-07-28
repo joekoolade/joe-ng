@@ -1,5 +1,6 @@
 package java.util;
 
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -22,6 +23,8 @@ public interface Map
     Object getOrDefault(Object key, Object defaultValue);
 
     Object computeIfAbsent(Object key, Function mappingFunction);
+
+    void forEach(BiConsumer action);
 
     int size();
 

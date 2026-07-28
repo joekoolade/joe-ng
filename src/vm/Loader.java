@@ -1268,6 +1268,7 @@ public final class Loader
         addBlob(VM.functionBytes, (int) VM.functionLen);
         addBlob(VM.consumerBytes, (int) VM.consumerLen);
         addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);
+        addBlob(VM.biConsumerBytes, (int) VM.biConsumerLen);     // Map.forEach action (2-arg SAM)
         addBlob(VM.numBytes, (int) VM.numLen);
         addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);

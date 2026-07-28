@@ -1,5 +1,6 @@
 package java.util;
 
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -123,6 +124,20 @@ public class HashMap implements Map
             keys[i] = keys[j];
             vals[i] = vals[j];
             i = j;                                      // the gap is now at j
+        }
+    }
+
+    /** Run {@code action} on each live (key, value) entry, in open-addressing slot order. */
+    public void forEach(BiConsumer action)
+    {
+        int i = 0;
+        while (i < cap)
+        {
+            if (keys[i] != null)
+            {
+                action.accept(keys[i], vals[i]);
+            }
+            i = i + 1;
         }
     }
 

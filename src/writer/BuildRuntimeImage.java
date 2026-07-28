@@ -152,6 +152,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.consumerBytes",    "vm/VM.consumerLen",    "java/util/function/Consumer",             registry.rawBytes("java/util/function/Consumer"));
         ib.addBlob("vm/VM.streamBytes",      "vm/VM.streamLen",      "demo/Stream",                             registry.rawBytes("demo/Stream"));
         ib.addBlob("vm/VM.binaryOpBytes",    "vm/VM.binaryOpLen",    "java/util/function/BinaryOperator",       registry.rawBytes("java/util/function/BinaryOperator"));
+        ib.addBlob("vm/VM.biConsumerBytes",  "vm/VM.biConsumerLen",  "java/util/function/BiConsumer",           registry.rawBytes("java/util/function/BiConsumer"));
         return ib.build(ENTRY);
     }
 
