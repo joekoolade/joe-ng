@@ -36,6 +36,14 @@ public class ArrayList implements List
         return elementData[i];
     }
 
+    /** Replace the element at {@code i}, returning the old one. */
+    public Object set(int i, Object element)
+    {
+        Object old = elementData[i];
+        elementData[i] = element;
+        return old;
+    }
+
     public int size()
     {
         return size;

@@ -37,6 +37,20 @@ public class LinkedList implements List
 
     public Object get(int index)
     {
+        return nodeAt(index).item;
+    }
+
+    /** Replace the element at {@code index}, returning the old one. */
+    public Object set(int index, Object element)
+    {
+        LinkedListNode n = nodeAt(index);
+        Object old = n.item;
+        n.item = element;
+        return old;
+    }
+
+    private LinkedListNode nodeAt(int index)
+    {
         LinkedListNode n = head;
         int i = 0;
         while (i < index)
@@ -44,7 +58,7 @@ public class LinkedList implements List
             n = n.next;
             i = i + 1;
         }
-        return n.item;
+        return n;
     }
 
     public int size()

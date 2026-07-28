@@ -1224,6 +1224,7 @@ public final class Loader
         addBlob(VM.linkedListNodeBytes, (int) VM.linkedListNodeLen);         // second List impl: node + its iterator
         addBlob(VM.linkedListIteratorBytes, (int) VM.linkedListIteratorLen);
         addBlob(VM.linkedListBytes, (int) VM.linkedListLen);
+        addBlob(VM.collectionsBytes, (int) VM.collectionsLen);   // Collections.sort(List) static helper
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();

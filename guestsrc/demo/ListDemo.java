@@ -2,6 +2,7 @@ package demo;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import magic.Magic;
@@ -112,6 +113,32 @@ public class ListDemo
         cll.add("b");
         Magic.printStr("countVia(ArrayList)=" + countVia(coll)                   // 2
                 + " countVia(LinkedList)=" + countVia(cll) + "\n");              // 2
+
+        // Collections.sort(List): a static helper over the List interface, comparing via String.compareTo.
+        List names = new ArrayList();
+        names.add("banana");
+        names.add("apple");
+        names.add("cherry");
+        names.add("date");
+        Collections.sort(names);
+        Magic.printStr("sorted=" + join(names) + "\n");                          // apple banana cherry date
+
+        List lnames = new LinkedList();                                          // same sort, LinkedList impl
+        lnames.add("dog");
+        lnames.add("ant");
+        lnames.add("cat");
+        Collections.sort(lnames);
+        Magic.printStr("llSorted=" + join(lnames) + "\n");                       // ant cat dog
+    }
+
+    private static String join(List l)
+    {
+        String s = "";
+        for (Object o : l)
+        {
+            s = s + (String) o + " ";
+        }
+        return s;
     }
 
     /** Collection-typed param: the enhanced-for emits invokeinterface Collection.iterator (via Iterable). */

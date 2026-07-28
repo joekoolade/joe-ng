@@ -13,6 +13,8 @@ public interface List extends Collection
 {
     Object get(int index);
 
+    Object set(int index, Object element);
+
     int indexOf(Object o);
 
     Object remove(int index);
