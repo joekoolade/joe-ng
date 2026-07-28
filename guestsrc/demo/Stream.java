@@ -69,4 +69,15 @@ public final class Stream
         }
         return acc;
     }
+
+    /** Materialise the pipeline into a fresh {@link List} -- a terminal that re-collects into a collection. */
+    public List toList()
+    {
+        List out = new ArrayList();
+        for (Object o : elements)
+        {
+            out.add(o);
+        }
+        return out;
+    }
 }

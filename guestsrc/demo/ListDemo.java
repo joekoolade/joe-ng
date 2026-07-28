@@ -234,6 +234,26 @@ public class ListDemo
                 .map(o -> new Num(((Num) o).value() * 10))                       // 20,40,60
                 .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
         Magic.printStr("reduce sum=" + ((Num) total).value() + "\n");           // 120
+
+        // collect/toList terminal: materialise the pipeline into a List, then re-stream it (round-trip).
+        List collected = Stream.of(src)
+                .filter(o -> ((Num) o).value() % 2 == 0)
+                .map(o -> new Num(((Num) o).value() * 10))
+                .toList();
+        Magic.printStr("toList size=" + collected.size() + " = " + join2(collected) + "\n");   // 3 = 20 40 60
+        Object again = Stream.of(collected)                                      // stream the collected List again
+                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
+        Magic.printStr("re-reduce=" + ((Num) again).value() + "\n");            // 120
+    }
+
+    private static String join2(List l)
+    {
+        String s = "";
+        for (Object o : l)
+        {
+            s = s + ((Num) o).value() + " ";
+        }
+        return s;
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */
