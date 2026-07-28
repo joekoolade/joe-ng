@@ -1,5 +1,7 @@
 package java.util;
 
+import java.util.function.Function;
+
 /**
  * A JDK-free, real-shaped {@code java/util/HashMap} (open addressing / linear probing): parallel
  * {@code Object[]} key/value tables sized to a power of two, indexed by {@code key.hashCode() & (cap-1)}
@@ -68,6 +70,21 @@ public class HashMap implements Map
     {
         int i = slotFor(key);
         return keys[i] == null ? defaultValue : vals[i];
+    }
+
+    /** If {@code key} is absent, compute a value from {@code mappingFunction}, insert it, and return it. */
+    public Object computeIfAbsent(Object key, Function mappingFunction)
+    {
+        int i = slotFor(key);
+        if (keys[i] != null)
+        {
+            return vals[i];                             // already present -> the function is not run
+        }
+        Object v = mappingFunction.apply(key);
+        keys[i] = key;                                  // slotFor stopped at this empty slot
+        vals[i] = v;
+        size = size + 1;
+        return v;
     }
 
     /**

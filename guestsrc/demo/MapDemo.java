@@ -67,5 +67,11 @@ public class MapDemo
                 .map(o -> new Num(((String) o).length()))
                 .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
         Magic.printStr("stream(keySet) lenSum=" + ((Num) sum).value() + "\n");                 // 8
+
+        // computeIfAbsent(key, Function lambda): absent -> compute+insert; present -> existing (lambda not run).
+        Object c1 = map.computeIfAbsent("four", k -> "len" + ((String) k).length());           // absent -> "len4"
+        Object c2 = map.computeIfAbsent("one", k -> "SHOULD_NOT_RUN");                          // present -> "1"
+        Magic.printStr("computeIfAbsent(four)=" + (String) c1 + " (one)=" + (String) c2
+                + " size=" + map.size() + " get(four)=" + (String) map.get("four") + "\n");     // len4, 1, 3, len4
     }
 }

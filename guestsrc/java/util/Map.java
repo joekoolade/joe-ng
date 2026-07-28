@@ -1,5 +1,7 @@
 package java.util;
 
+import java.util.function.Function;
+
 /**
  * A JDK-free, mini {@code java/util/Map}: the methods {@link HashMap} implements and the demo drives through
  * the interface. {@code keySet()}/{@code values()} return a {@link List} snapshot of the live entries (real
@@ -18,6 +20,8 @@ public interface Map
     Object remove(Object key);
 
     Object getOrDefault(Object key, Object defaultValue);
+
+    Object computeIfAbsent(Object key, Function mappingFunction);
 
     int size();
 
