@@ -227,6 +227,13 @@ public class ListDemo
                 .map(o -> new Num(((Num) o).value() * 10))
                 .forEach(o -> Magic.printStr(((Num) o).value() + " "));
         Magic.printStr("\n");                                                    // streamPipeline=20 40 60
+
+        // reduce terminal: fold the same pipeline to a single value with a 2-arg BinaryOperator lambda.
+        Object total = Stream.of(src)
+                .filter(o -> ((Num) o).value() % 2 == 0)                         // 2,4,6
+                .map(o -> new Num(((Num) o).value() * 10))                       // 20,40,60
+                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
+        Magic.printStr("reduce sum=" + ((Num) total).value() + "\n");           // 120
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */

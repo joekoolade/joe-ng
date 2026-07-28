@@ -2,6 +2,7 @@ package demo;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -56,5 +57,16 @@ public final class Stream
         {
             c.accept(o);
         }
+    }
+
+    /** Fold to a single value: {@code acc = op.apply(acc, element)} from {@code identity}. A terminal op. */
+    public Object reduce(Object identity, BinaryOperator op)
+    {
+        Object acc = identity;
+        for (Object o : elements)
+        {
+            acc = op.apply(acc, o);
+        }
+        return acc;
     }
 }

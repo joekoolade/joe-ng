@@ -1234,6 +1234,7 @@ public final class Loader
         addBlob(VM.functionBytes, (int) VM.functionLen);
         addBlob(VM.consumerBytes, (int) VM.consumerLen);
         addBlob(VM.streamBytes, (int) VM.streamLen);
+        addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);         // reduce accumulator (2-arg SAM)
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();
