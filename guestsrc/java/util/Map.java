@@ -15,6 +15,10 @@ public interface Map
 
     boolean containsKey(Object key);
 
+    Object remove(Object key);
+
+    Object getOrDefault(Object key, Object defaultValue);
+
     int size();
 
     List keySet();

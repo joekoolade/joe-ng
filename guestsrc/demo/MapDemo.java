@@ -47,5 +47,17 @@ public class MapDemo
             valChars = valChars + ((String) v).length();
         }
         Magic.printStr("nvals=" + nvals + " valChars=" + valChars + "\n");           // 3, 4 (1+22+3, post-overwrite)
+
+        // getOrDefault: present key -> its value; absent -> the default.
+        Magic.printStr("getOrDefault(one,X)=" + (String) map.getOrDefault("one", "X")
+                + " getOrDefault(four,X)=" + (String) map.getOrDefault("four", "X") + "\n");   // 1, X
+
+        // remove + backward-shift: pull out "two", check the remaining keys are still found (probe intact).
+        Object removed = map.remove("two");
+        Magic.printStr("remove(two)=" + (String) removed + " size=" + map.size()
+                + " hasTwo=" + (map.containsKey("two") ? 1 : 0) + "\n");                       // 22, 2, 0
+        Magic.printStr("after remove: one=" + (String) map.get("one")
+                + " three=" + (String) map.get("three")
+                + " removeAbsent=" + (map.remove("nope") == null ? 1 : 0) + "\n");             // 1, 3, 1
     }
 }

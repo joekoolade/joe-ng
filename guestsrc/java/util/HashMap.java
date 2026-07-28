@@ -63,6 +63,52 @@ public class HashMap implements Map
         return keys[slotFor(key)] != null;
     }
 
+    /** Value for {@code key}, or {@code defaultValue} if absent. */
+    public Object getOrDefault(Object key, Object defaultValue)
+    {
+        int i = slotFor(key);
+        return keys[i] == null ? defaultValue : vals[i];
+    }
+
+    /**
+     * Remove {@code key}, returning its old value (or null). Open-addressing backward-shift deletion: after
+     * clearing the slot, pull following entries of the same probe cluster back into the gap, so no tombstones
+     * are needed and {@code get}'s probe-until-null still finds every remaining key.
+     */
+    public Object remove(Object key)
+    {
+        int i = slotFor(key);
+        if (keys[i] == null)
+        {
+            return null;                                // not present
+        }
+        Object old = vals[i];
+        size = size - 1;
+        int j = i;
+        while (true)
+        {
+            keys[i] = null;
+            vals[i] = null;
+            while (true)
+            {
+                j = (j + 1) & (cap - 1);
+                if (keys[j] == null)
+                {
+                    return old;                         // cluster ended
+                }
+                int k = keys[j].hashCode() & (cap - 1);   // this entry's ideal slot
+                boolean keep = i <= j ? (i < k && k <= j) : (i < k || k <= j);
+                if (!keep)
+                {
+                    break;                              // keys[j] must shift back into the gap at i
+                }
+            }
+            keys[i] = keys[j];
+            vals[i] = vals[j];
+            i = j;                                      // the gap is now at j
+        }
+    }
+
     public int size()
     {
         return size;
