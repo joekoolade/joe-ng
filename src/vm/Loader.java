@@ -1233,6 +1233,12 @@ public final class Loader
         resetLoader();
         addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: root vtable slots String inherits
         addBlob(VM.stringBytes, (int) VM.stringLen);             // String keys/values (+ concat literals)
+        addBlob(VM.iterableBytes, (int) VM.iterableLen);         // List family: keySet()/values() return an ArrayList,
+        addBlob(VM.iteratorBytes, (int) VM.iteratorLen);         //   iterated by the demo's enhanced-for
+        addBlob(VM.listBytes, (int) VM.listLen);
+        addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);
+        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);
+        addBlob(VM.mapBytes, (int) VM.mapLen);                   // Map interface: registered before HashMap
         addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         resolveClosureFromDir();

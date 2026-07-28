@@ -7,8 +7,10 @@ package java.util;
  * {@code key.equals()} (static type Object) dispatch into the key's real overrides (e.g. String's), which
  * is the whole point of the mini {@link Object} root. Fixed capacity (no resize) — enough for demand-loaded
  * demos. Compiled as a {@code java.base} patch so it carries the real name.
+ * Implements the mini {@link Map} so callers can drive it by the interface, and exposes {@code keySet()}/
+ * {@code values()} as {@link List} snapshots for iteration.
  */
-public class HashMap
+public class HashMap implements Map
 {
     private Object[] keys;
     private Object[] vals;
@@ -64,5 +66,37 @@ public class HashMap
     public int size()
     {
         return size;
+    }
+
+    /** A fresh {@link List} of the live keys (open-addressing order). */
+    public List keySet()
+    {
+        List ks = new ArrayList();
+        int i = 0;
+        while (i < cap)
+        {
+            if (keys[i] != null)
+            {
+                ks.add(keys[i]);
+            }
+            i = i + 1;
+        }
+        return ks;
+    }
+
+    /** A fresh {@link List} of the live values, parallel to {@link #keySet}. */
+    public List values()
+    {
+        List vs = new ArrayList();
+        int i = 0;
+        while (i < cap)
+        {
+            if (keys[i] != null)
+            {
+                vs.add(vals[i]);
+            }
+            i = i + 1;
+        }
+        return vs;
     }
 }
