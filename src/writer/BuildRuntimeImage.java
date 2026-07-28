@@ -146,6 +146,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.numBytes",         "vm/VM.numLen",         "demo/Num",                                registry.rawBytes("demo/Num"));
         ib.addBlob("vm/VM.comparatorBytes",  "vm/VM.comparatorLen",  "java/util/Comparator",                    registry.rawBytes("java/util/Comparator"));
         ib.addBlob("vm/VM.orderBytes",       "vm/VM.orderLen",       "demo/Order",                              registry.rawBytes("demo/Order"));
+        ib.addBlob("vm/VM.factoryBytes",     "vm/VM.factoryLen",     "demo/Factory",                            registry.rawBytes("demo/Factory"));
         return ib.build(ENTRY);
     }
 

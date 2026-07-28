@@ -1229,6 +1229,7 @@ public final class Loader
         addBlob(VM.numBytes, (int) VM.numLen);                   // a second Comparable type for the generic sort
         addBlob(VM.comparatorBytes, (int) VM.comparatorLen);     // functional iface: the lambda comparator's target
         addBlob(VM.orderBytes, (int) VM.orderLen);               // bound-instance-method-ref receiver (desc::cmp)
+        addBlob(VM.factoryBytes, (int) VM.factoryLen);           // constructor-ref (Num::new) functional iface
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();
@@ -3200,6 +3201,46 @@ public final class Loader
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 0, 0));                        w += 1;  // x16 = recv.tib (TIB@0)
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 16, 8 + slot * 8));            w += 1;  // x16 = vtable[slot]
             Magic.store32(thunk + w * 4L, A64Enc.br(16));                                w += 1;  // tail-call
+            Heap.publishCode(thunk, thunk + w * 4L);
+            return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+        }
+        if (kind == 8)
+        {
+            // CONSTRUCTOR reference (Num::new): alloc the object, set its TIB, run <init>(obj, samArgs), return
+            // the object. Unlike the other thunks this makes two CALLS (Heap.alloc, <init>), so it needs a frame
+            // to preserve LR and the SAM args across them. (No captures: the ctor args are all SAM args.)
+            int cr = classRegByName(refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
+            int size = 16 + clFieldCount[cr] * 8;
+            long ctib = clTib[cr];
+            long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
+            int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
+            Magic.store32(thunk + w * 4L, A64Enc.subImm(31, 31, frame));                 w += 1;  // sub sp, #frame
+            Magic.store32(thunk + w * 4L, A64Enc.strx(30, 31, 0));                       w += 1;  // str x30,[sp] (LR)
+            int k = 0;
+            while (k < ia)
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.strx(1 + k, 31, 16 + k * 8));       w += 1;  // save ctor arg k
+                k += 1;
+            }
+            Magic.store32(thunk + w * 4L, A64Enc.movz(0, size, 0));                      w += 1;  // x0 = instance size
+            long h1 = thunk + w * 4L;
+            Magic.store32(h1, A64Enc.bl((int) ((VM.heapAlloc - h1) / 4L)));              w += 1;  // x0 = Heap.alloc(size)
+            Magic.store32(thunk + w * 4L, A64Enc.movz(1, (int) ctib, 0));                w += 1;
+            Magic.store32(thunk + w * 4L, A64Enc.movk(1, (int) (ctib >> 16), 1));        w += 1;  // x1 = the class TIB
+            Magic.store32(thunk + w * 4L, A64Enc.strx(1, 0, 0));                         w += 1;  // obj.tib = TIB
+            Magic.store32(thunk + w * 4L, A64Enc.strx(0, 31, 8));                        w += 1;  // save obj at [sp+8]
+            k = 0;
+            while (k < ia)
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.ldrx(1 + k, 31, 16 + k * 8));       w += 1;  // restore ctor arg k
+                k += 1;
+            }
+            long h2 = thunk + w * 4L;
+            Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                   w += 1;  // <init>(obj, args)
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 31, 8));                        w += 1;  // x0 = obj (return)
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(30, 31, 0));                       w += 1;  // restore LR
+            Magic.store32(thunk + w * 4L, A64Enc.addImm(31, 31, frame));                 w += 1;  // add sp, #frame
+            Magic.store32(thunk + w * 4L, A64Enc.ret());                                 w += 1;
             Heap.publishCode(thunk, thunk + w * 4L);
             return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
         }

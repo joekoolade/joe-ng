@@ -196,6 +196,21 @@ public class ListDemo
         Comparator<String> byBoundRef = new Order(-1)::cmp;                      // provably non-null recv -> no requireNonNull
         Collections.sort(names, byBoundRef);
         Magic.printStr("boundRefDesc=" + join(names) + "\n");                    // date cherry banana apple
+
+        // A CONSTRUCTOR reference: Num::new -> make(v) allocates a new Num(v). The thunk allocs, sets the TIB,
+        // runs <init>, and returns the object. Build a few via the factory, then sort them (Comparable).
+        Factory f = Num::new;
+        List made = new ArrayList();
+        made.add(f.make(7));
+        made.add(f.make(2));
+        made.add(f.make(5));
+        Collections.sort(made);
+        String ms = "";
+        for (Object o : made)
+        {
+            ms = ms + ((Num) o).value() + " ";
+        }
+        Magic.printStr("ctorRef sorted=" + ms + "\n");                           // 2 5 7
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */
