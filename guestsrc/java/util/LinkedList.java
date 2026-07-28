@@ -79,6 +79,46 @@ public class LinkedList implements List
         return indexOf(o) >= 0;
     }
 
+    /** Remove by index: relink around the node (fixing head/tail), return its element. */
+    public Object remove(int index)
+    {
+        LinkedListNode prev = null;
+        LinkedListNode n = head;
+        int i = 0;
+        while (i < index)
+        {
+            prev = n;
+            n = n.next;
+            i = i + 1;
+        }
+        if (prev == null)
+        {
+            head = n.next;                              // removed the head
+        }
+        else
+        {
+            prev.next = n.next;
+        }
+        if (n == tail)
+        {
+            tail = prev;                                // removed the tail
+        }
+        size = size - 1;
+        return n.item;
+    }
+
+    /** Remove the first element equal to {@code o} (by the element's real equals); true if one was removed. */
+    public boolean remove(Object o)
+    {
+        int idx = indexOf(o);
+        if (idx < 0)
+        {
+            return false;
+        }
+        remove(idx);
+        return true;
+    }
+
     public Iterator iterator()
     {
         return new LinkedListIterator(head);

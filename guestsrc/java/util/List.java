@@ -21,4 +21,8 @@ public interface List extends Iterable
     int indexOf(Object o);
 
     boolean contains(Object o);
+
+    Object remove(int index);
+
+    boolean remove(Object o);
 }

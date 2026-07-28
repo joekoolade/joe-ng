@@ -66,6 +66,22 @@ public class ListDemo
         Magic.printStr("ll.indexOf(\"node2\")=" + ll.indexOf("node2")            // 2
                 + " ll.contains(\"node4\")=" + (ll.contains("node4") ? 1 : 0)    // 1
                 + " ll.contains(\"node9\")=" + (ll.contains("node9") ? 1 : 0) + "\n");   // 0
+
+        // remove (mutation) -- kept last so the assertions above still hold. remove(int) shifts/relinks;
+        // remove(Object) reuses the equals search. list=[item0..item9], ll=[node0..node4].
+        Object gone = list.remove(5);                                            // "item5"; tail shifts down
+        Magic.printStr("remove(5)=" + (String) gone + " size=" + list.size()     // item5, 9
+                + " get(5)=" + (String) list.get(5) + "\n");                      // item6 (shifted)
+        int r1 = list.remove("item0") ? 1 : 0;                                   // head, by content -> 1
+        int r2 = list.remove("nope") ? 1 : 0;                                    // absent -> 0
+        Magic.printStr("remove(\"item0\")=" + r1 + " remove(\"nope\")=" + r2
+                + " size=" + list.size() + " first=" + (String) list.get(0) + "\n");   // 1,0,8,item1
+
+        Object llGone = ll.remove(0);                                            // head "node0"
+        int llr = ll.remove("node4") ? 1 : 0;                                    // tail, by content -> 1
+        Magic.printStr("ll.remove(0)=" + (String) llGone + " ll.remove(\"node4\")=" + llr
+                + " ll.size=" + ll.size() + " ll.first=" + (String) ll.get(0)
+                + " ll.last=" + (String) ll.get(ll.size() - 1) + "\n");          // node0,1,3,node1,node3
     }
 
     /** Interface-typed param: {@code size()}/{@code get()} dispatch via invokeinterface on the passed-in List. */

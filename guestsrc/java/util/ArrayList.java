@@ -66,6 +66,33 @@ public class ArrayList implements List
         return indexOf(o) >= 0;
     }
 
+    /** Remove by index: shift the tail down one, null the vacated slot, return the old element. */
+    public Object remove(int index)
+    {
+        Object old = elementData[index];
+        int i = index;
+        while (i < size - 1)
+        {
+            elementData[i] = elementData[i + 1];
+            i = i + 1;
+        }
+        size = size - 1;
+        elementData[size] = null;                       // drop the stale reference
+        return old;
+    }
+
+    /** Remove the first element equal to {@code o} (by the element's real equals); true if one was removed. */
+    public boolean remove(Object o)
+    {
+        int idx = indexOf(o);
+        if (idx < 0)
+        {
+            return false;
+        }
+        remove(idx);
+        return true;
+    }
+
     /** A fresh cursor over this list (inherited from {@code List}/{@code Iterable}); drives the enhanced-for. */
     public Iterator iterator()
     {
