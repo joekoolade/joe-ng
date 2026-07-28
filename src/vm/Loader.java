@@ -1230,6 +1230,10 @@ public final class Loader
         addBlob(VM.comparatorBytes, (int) VM.comparatorLen);     // functional iface: the lambda comparator's target
         addBlob(VM.orderBytes, (int) VM.orderLen);               // bound-instance-method-ref receiver (desc::cmp)
         addBlob(VM.factoryBytes, (int) VM.factoryLen);           // constructor-ref (Num::new) functional iface
+        addBlob(VM.predicateBytes, (int) VM.predicateLen);       // stream pipeline: filter/map/forEach targets
+        addBlob(VM.functionBytes, (int) VM.functionLen);
+        addBlob(VM.consumerBytes, (int) VM.consumerLen);
+        addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();

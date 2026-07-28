@@ -1539,6 +1539,10 @@ public final class VM
     static long comparatorBytes, comparatorLen;      // java/util/Comparator (functional iface; lambda target)
     static long orderBytes, orderLen;                // demo/Order (bound-instance-method-ref receiver)
     static long factoryBytes, factoryLen;            // demo/Factory (constructor-ref functional iface)
+    static long predicateBytes, predicateLen;        // java/util/function/Predicate (filter)
+    static long functionBytes, functionLen;          // java/util/function/Function (map)
+    static long consumerBytes, consumerLen;          // java/util/function/Consumer (forEach)
+    static long streamBytes, streamLen;              // demo/Stream (mini pipeline)
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
@@ -3500,7 +3504,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 68;    // ...+ Num + Comparator + Order + Factory
+    static final int BLOB_COUNT = 72;    // ...+ Order + Factory + Predicate + Function + Consumer + Stream
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4376,7 +4380,11 @@ public final class VM
         if (b == 64) { return Magic.bytes("demo/Num"); }
         if (b == 65) { return Magic.bytes("java/util/Comparator"); }
         if (b == 66) { return Magic.bytes("demo/Order"); }
-        return Magic.bytes("demo/Factory");
+        if (b == 67) { return Magic.bytes("demo/Factory"); }
+        if (b == 68) { return Magic.bytes("java/util/function/Predicate"); }
+        if (b == 69) { return Magic.bytes("java/util/function/Function"); }
+        if (b == 70) { return Magic.bytes("java/util/function/Consumer"); }
+        return Magic.bytes("demo/Stream");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4524,7 +4532,11 @@ public final class VM
         if (b == 64) { return Magic.bytes("numBytes"); }
         if (b == 65) { return Magic.bytes("comparatorBytes"); }
         if (b == 66) { return Magic.bytes("orderBytes"); }
-        return Magic.bytes("factoryBytes");
+        if (b == 67) { return Magic.bytes("factoryBytes"); }
+        if (b == 68) { return Magic.bytes("predicateBytes"); }
+        if (b == 69) { return Magic.bytes("functionBytes"); }
+        if (b == 70) { return Magic.bytes("consumerBytes"); }
+        return Magic.bytes("streamBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4596,7 +4608,11 @@ public final class VM
         if (b == 64) { return Magic.bytes("numLen"); }
         if (b == 65) { return Magic.bytes("comparatorLen"); }
         if (b == 66) { return Magic.bytes("orderLen"); }
-        return Magic.bytes("factoryLen");
+        if (b == 67) { return Magic.bytes("factoryLen"); }
+        if (b == 68) { return Magic.bytes("predicateLen"); }
+        if (b == 69) { return Magic.bytes("functionLen"); }
+        if (b == 70) { return Magic.bytes("consumerLen"); }
+        return Magic.bytes("streamLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */

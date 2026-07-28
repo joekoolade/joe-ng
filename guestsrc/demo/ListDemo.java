@@ -211,6 +211,22 @@ public class ListDemo
             ms = ms + ((Num) o).value() + " ";
         }
         Magic.printStr("ctorRef sorted=" + ms + "\n");                           // 2 5 7
+
+        // A stream-ish pipeline: filter (Predicate lambda) -> map (Function lambda) -> forEach (Consumer lambda),
+        // composing collections + lambdas. src = Num(1..6); keep evens, x10, print -> "20 40 60".
+        List src = new ArrayList();
+        int v = 1;
+        while (v <= 6)
+        {
+            src.add(new Num(v));
+            v = v + 1;
+        }
+        Magic.printStr("streamPipeline=");
+        Stream.of(src)
+                .filter(o -> ((Num) o).value() % 2 == 0)
+                .map(o -> new Num(((Num) o).value() * 10))
+                .forEach(o -> Magic.printStr(((Num) o).value() + " "));
+        Magic.printStr("\n");                                                    // streamPipeline=20 40 60
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */

@@ -147,6 +147,10 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.comparatorBytes",  "vm/VM.comparatorLen",  "java/util/Comparator",                    registry.rawBytes("java/util/Comparator"));
         ib.addBlob("vm/VM.orderBytes",       "vm/VM.orderLen",       "demo/Order",                              registry.rawBytes("demo/Order"));
         ib.addBlob("vm/VM.factoryBytes",     "vm/VM.factoryLen",     "demo/Factory",                            registry.rawBytes("demo/Factory"));
+        ib.addBlob("vm/VM.predicateBytes",   "vm/VM.predicateLen",   "java/util/function/Predicate",            registry.rawBytes("java/util/function/Predicate"));
+        ib.addBlob("vm/VM.functionBytes",    "vm/VM.functionLen",    "java/util/function/Function",             registry.rawBytes("java/util/function/Function"));
+        ib.addBlob("vm/VM.consumerBytes",    "vm/VM.consumerLen",    "java/util/function/Consumer",             registry.rawBytes("java/util/function/Consumer"));
+        ib.addBlob("vm/VM.streamBytes",      "vm/VM.streamLen",      "demo/Stream",                             registry.rawBytes("demo/Stream"));
         return ib.build(ENTRY);
     }
 
