@@ -5,24 +5,15 @@ package java.util;
  * through the interface. The point is the dispatch -- a {@code List} reference to an {@code ArrayList} routes
  * {@code add}/{@code get}/{@code size}/{@code isEmpty} through {@code invokeinterface} + the itable, this time
  * with a multi-method itable and methods that take args / return values (unlike the zero-arg {@code Runnable}).
- * Extends {@code Iterable} so an enhanced-for over a {@code List} reference works; otherwise only what the
- * probe needs (no {@code Collection}). {@code iterator()} is inherited from {@code Iterable}.
+ * Extends {@link Collection} (which extends {@code Iterable}), inheriting add/size/isEmpty/contains/
+ * remove(Object)/iterator; List adds the positional operations. The 3-level chain rides the transitive
+ * itable directory, so a call site typed to List, Collection, or Iterable all dispatch to the impl.
  */
-public interface List extends Iterable
+public interface List extends Collection
 {
-    boolean add(Object e);
-
     Object get(int index);
-
-    int size();
-
-    boolean isEmpty();
 
     int indexOf(Object o);
 
-    boolean contains(Object o);
-
     Object remove(int index);
-
-    boolean remove(Object o);
 }

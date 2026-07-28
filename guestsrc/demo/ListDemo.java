@@ -1,6 +1,7 @@
 package demo;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
 import magic.Magic;
@@ -93,6 +94,35 @@ public class ListDemo
         Magic.printStr("ll.remove(0)=" + (String) llGone + " ll.remove(\"node4\")=" + llr
                 + " ll.size=" + ll.size() + " ll.first=" + (String) ll.get(0)
                 + " ll.last=" + (String) ll.get(ll.size() - 1) + "\n");          // node0,1,3,node1,node3
+
+        // Collection supertype (List extends Collection extends Iterable): drive through the MIDDLE interface.
+        Collection coll = new ArrayList();
+        coll.add("x");
+        coll.add("y");
+        coll.add("z");
+        Magic.printStr("coll.size=" + coll.size() + " contains(\"y\")=" + (coll.contains("y") ? 1 : 0)
+                + " isEmpty=" + (coll.isEmpty() ? 1 : 0) + " iter=" + countVia(coll) + "\n");   // 3,1,0,3
+        coll.remove("y");                                                        // Collection.remove(Object)
+        Magic.printStr("after remove(\"y\"): size=" + coll.size()
+                + " contains(\"y\")=" + (coll.contains("y") ? 1 : 0) + "\n");    // 2,0
+
+        // Polymorphic countVia(Collection) -- Collection-typed for-each on both concrete impls.
+        Collection cll = new LinkedList();
+        cll.add("a");
+        cll.add("b");
+        Magic.printStr("countVia(ArrayList)=" + countVia(coll)                   // 2
+                + " countVia(LinkedList)=" + countVia(cll) + "\n");              // 2
+    }
+
+    /** Collection-typed param: the enhanced-for emits invokeinterface Collection.iterator (via Iterable). */
+    private static int countVia(Collection c)
+    {
+        int n = 0;
+        for (Object o : c)
+        {
+            n = n + 1;
+        }
+        return n;
     }
 
     /** Interface-typed param: {@code size()}/{@code get()} dispatch via invokeinterface on the passed-in List. */

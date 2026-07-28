@@ -1215,8 +1215,9 @@ public final class Loader
         resetLoader();
         addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: String inherits its equals slot
         addBlob(VM.stringBytes, (int) VM.stringLen);              // String (elements + concat literals)
-        addBlob(VM.iterableBytes, (int) VM.iterableLen);          // Iterable <- List extends it (register first)
+        addBlob(VM.iterableBytes, (int) VM.iterableLen);          // Iterable <- Collection extends it
         addBlob(VM.iteratorBytes, (int) VM.iteratorLen);          // Iterator <- ArrayListIterator implements it
+        addBlob(VM.collectionBytes, (int) VM.collectionLen);      // Collection <- List extends it
         addBlob(VM.listBytes, (int) VM.listLen);                  // List interface: registered before ArrayList
         addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);   // the iterator ArrayList.iterator() returns
         addBlob(VM.arrayListBytes, (int) VM.arrayListLen);        //   so its itable directory keys on List's Type
@@ -1246,6 +1247,7 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);             // String keys/values (+ concat literals)
         addBlob(VM.iterableBytes, (int) VM.iterableLen);         // List family: keySet()/values() return an ArrayList,
         addBlob(VM.iteratorBytes, (int) VM.iteratorLen);         //   iterated by the demo's enhanced-for
+        addBlob(VM.collectionBytes, (int) VM.collectionLen);     // Collection <- List extends it
         addBlob(VM.listBytes, (int) VM.listLen);
         addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);
         addBlob(VM.arrayListBytes, (int) VM.arrayListLen);

@@ -140,6 +140,7 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.linkedListNodeBytes","vm/VM.linkedListNodeLen","java/util/LinkedListNode",             registry.rawBytes("java/util/LinkedListNode"));
         ib.addBlob("vm/VM.linkedListIteratorBytes","vm/VM.linkedListIteratorLen","java/util/LinkedListIterator", registry.rawBytes("java/util/LinkedListIterator"));
         ib.addBlob("vm/VM.mapBytes",         "vm/VM.mapLen",         "java/util/Map",                           registry.rawBytes("java/util/Map"));
+        ib.addBlob("vm/VM.collectionBytes",  "vm/VM.collectionLen",  "java/util/Collection",                    registry.rawBytes("java/util/Collection"));
         return ib.build(ENTRY);
     }
 

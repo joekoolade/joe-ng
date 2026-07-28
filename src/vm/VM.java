@@ -1532,6 +1532,7 @@ public final class VM
     static long linkedListNodeBytes, linkedListNodeLen;         // java/util/LinkedListNode
     static long linkedListIteratorBytes, linkedListIteratorLen; // java/util/LinkedListIterator
     static long mapBytes, mapLen;                    // java/util/Map (interface HashMap implements)
+    static long collectionBytes, collectionLen;      // java/util/Collection (List extends it)
     static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
@@ -3493,7 +3494,7 @@ public final class VM
     private static int[] dTibOff;        // parallel to tibSeenCls: each TIB's 0x80000-relative word offset
     private static int[] dStrOff;        // parallel to drStr: each interned byte[]'s word offset
     private static int[] dItDirOff;      // parallel to tibSeenCls: itable-directory word offset, or -1 (no itables)
-    static final int BLOB_COUNT = 61;    // ...+ Iterable + Iterator + ArrayListIterator + LinkedList{,Node,Iterator} + Map
+    static final int BLOB_COUNT = 62;    // ...+ Iterator + ArrayListIterator + LinkedList{,Node,Iterator} + Map + Collection
     private static int[] dBlobOff;       // each embedded blob's word offset, in addBlob order
     // per-method frame + handler info (parallel to im*), for the unwind-table content
     private static int[] imFrameSize;
@@ -4362,7 +4363,8 @@ public final class VM
         if (b == 57) { return Magic.bytes("java/util/LinkedList"); }
         if (b == 58) { return Magic.bytes("java/util/LinkedListNode"); }
         if (b == 59) { return Magic.bytes("java/util/LinkedListIterator"); }
-        return Magic.bytes("java/util/Map");
+        if (b == 60) { return Magic.bytes("java/util/Map"); }
+        return Magic.bytes("java/util/Collection");
     }
 
     /** The writer-stashed value of static {@code vm/VM.name}, or 0 for a runtime-init / $exception slot. */
@@ -4503,7 +4505,8 @@ public final class VM
         if (b == 57) { return Magic.bytes("linkedListBytes"); }
         if (b == 58) { return Magic.bytes("linkedListNodeBytes"); }
         if (b == 59) { return Magic.bytes("linkedListIteratorBytes"); }
-        return Magic.bytes("mapBytes");
+        if (b == 60) { return Magic.bytes("mapBytes"); }
+        return Magic.bytes("collectionBytes");
     }
 
     private static byte[] blobLenName(int b)
@@ -4568,7 +4571,8 @@ public final class VM
         if (b == 57) { return Magic.bytes("linkedListLen"); }
         if (b == 58) { return Magic.bytes("linkedListNodeLen"); }
         if (b == 59) { return Magic.bytes("linkedListIteratorLen"); }
-        return Magic.bytes("mapLen");
+        if (b == 60) { return Magic.bytes("mapLen"); }
+        return Magic.bytes("collectionLen");
     }
 
     /** First 0x80000-relative word where the reproduced data regions differ from the image, or -1 if identical. */
