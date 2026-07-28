@@ -46,6 +46,26 @@ public class ArrayList implements List
         return size == 0;
     }
 
+    /** First index whose element {@code o.equals(...)} (content, via the element's real equals), or -1. */
+    public int indexOf(Object o)
+    {
+        int i = 0;
+        while (i < size)
+        {
+            if (o.equals(elementData[i]))
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    public boolean contains(Object o)
+    {
+        return indexOf(o) >= 0;
+    }
+
     /** A fresh cursor over this list (inherited from {@code List}/{@code Iterable}); drives the enhanced-for. */
     public Iterator iterator()
     {

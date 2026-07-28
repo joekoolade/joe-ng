@@ -57,6 +57,28 @@ public class LinkedList implements List
         return size == 0;
     }
 
+    /** First index whose element {@code o.equals(...)} (content), walking the chain, or -1. */
+    public int indexOf(Object o)
+    {
+        LinkedListNode n = head;
+        int i = 0;
+        while (n != null)
+        {
+            if (o.equals(n.item))
+            {
+                return i;
+            }
+            n = n.next;
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    public boolean contains(Object o)
+    {
+        return indexOf(o) >= 0;
+    }
+
     public Iterator iterator()
     {
         return new LinkedListIterator(head);

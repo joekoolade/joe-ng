@@ -57,6 +57,15 @@ public class ListDemo
         // Polymorphism through one call site: forEachLen(List) on each concrete type.
         Magic.printStr("forEachLen(ArrayList)=" + forEachLen(list)                // 50
                 + " forEachLen(LinkedList)=" + forEachLen(ll) + "\n");            // 25 (5 x "nodeN")
+
+        // contains/indexOf: search with distinct literals (content-equal, not the same object) -> real equals.
+        Magic.printStr("indexOf(\"item3\")=" + list.indexOf("item3")             // 3
+                + " indexOf(\"nope\")=" + list.indexOf("nope") + "\n");          // -1
+        Magic.printStr("contains(\"item7\")=" + (list.contains("item7") ? 1 : 0) // 1
+                + " contains(\"xyz\")=" + (list.contains("xyz") ? 1 : 0) + "\n");// 0
+        Magic.printStr("ll.indexOf(\"node2\")=" + ll.indexOf("node2")            // 2
+                + " ll.contains(\"node4\")=" + (ll.contains("node4") ? 1 : 0)    // 1
+                + " ll.contains(\"node9\")=" + (ll.contains("node9") ? 1 : 0) + "\n");   // 0
     }
 
     /** Interface-typed param: {@code size()}/{@code get()} dispatch via invokeinterface on the passed-in List. */

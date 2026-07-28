@@ -1202,6 +1202,7 @@ public final class Loader
     static void loadList()
     {
         resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: String inherits its equals slot
         addBlob(VM.stringBytes, (int) VM.stringLen);              // String (elements + concat literals)
         addBlob(VM.iterableBytes, (int) VM.iterableLen);          // Iterable <- List extends it (register first)
         addBlob(VM.iteratorBytes, (int) VM.iteratorLen);          // Iterator <- ArrayListIterator implements it

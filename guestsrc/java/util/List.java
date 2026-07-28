@@ -17,4 +17,8 @@ public interface List extends Iterable
     int size();
 
     boolean isEmpty();
+
+    int indexOf(Object o);
+
+    boolean contains(Object o);
 }
