@@ -79,5 +79,35 @@ public class MapDemo
         int[] acc = new int[1];
         map.forEach((k, v) -> acc[0] = acc[0] + ((String) k).length() + ((String) v).length());
         Magic.printStr("forEach charTotal=" + acc[0] + "\n");                                   // 4+6+8 = 18
+
+        wordCount();
+    }
+
+    /**
+     * The classic capstone: split a sentence into words, tally occurrences into a HashMap (getOrDefault + put,
+     * with Num counts), report a few, then stream the count values through reduce for the total. Composes
+     * String.split + Map + Num + the Stream pipeline + a lambda -- a recognizably real little program on metal.
+     */
+    private static void wordCount()
+    {
+        String text = "the cat sat on the mat the cat";
+        String[] words = text.split(" ");
+        Map counts = new HashMap();
+        Num zero = new Num(0);
+        int wi = 0;
+        while (wi < words.length)
+        {
+            String w = words[wi];
+            int c = ((Num) counts.getOrDefault(w, zero)).value();
+            counts.put(w, new Num(c + 1));
+            wi = wi + 1;
+        }
+        Magic.printStr("wordcount: words=" + words.length + " distinct=" + counts.size()
+                + " the=" + ((Num) counts.get("the")).value()
+                + " cat=" + ((Num) counts.get("cat")).value()
+                + " sat=" + ((Num) counts.get("sat")).value() + "\n");                          // 8, 5, 3, 2, 1
+        Object total = Stream.of(counts.values())
+                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
+        Magic.printStr("wordcount sum(counts)=" + ((Num) total).value() + "\n");                // 8 (= total words)
     }
 }
