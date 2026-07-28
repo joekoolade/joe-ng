@@ -45,4 +45,10 @@ public class ArrayList implements List
     {
         return size == 0;
     }
+
+    /** A fresh cursor over this list (inherited from {@code List}/{@code Iterable}); drives the enhanced-for. */
+    public Iterator iterator()
+    {
+        return new ArrayListIterator(this);
+    }
 }

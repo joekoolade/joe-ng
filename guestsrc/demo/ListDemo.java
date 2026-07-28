@@ -25,6 +25,16 @@ public class ListDemo
         Magic.printStr("size=" + list.size() + " empty=" + (list.isEmpty() ? 1 : 0) + "\n");        // 10, 0
         Magic.printStr("first=" + (String) list.get(0) + " last=" + (String) list.get(9) + "\n");   // item0, item9
         Magic.printStr("sumLenViaIface=" + totalLen(list) + "\n");                                   // 50 (10 x "itemN")
+
+        // Enhanced-for: javac desugars to list.iterator() + hasNext()/next(), all invokeinterface.
+        String joined = "";
+        int count = 0;
+        for (Object o : list)
+        {
+            joined = joined + (String) o + " ";
+            count = count + 1;
+        }
+        Magic.printStr("forEach count=" + count + " joined=" + joined + "\n");   // 10, "item0 ... item9 "
     }
 
     /** Interface-typed param: {@code size()}/{@code get()} dispatch via invokeinterface on the passed-in List. */
