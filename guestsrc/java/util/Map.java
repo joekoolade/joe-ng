@@ -1,6 +1,7 @@
 package java.util;
 
 import java.util.function.BiConsumer;
+import java.util.function.BinaryOperator;
 import java.util.function.Function;
 
 /**
@@ -23,6 +24,8 @@ public interface Map
     Object getOrDefault(Object key, Object defaultValue);
 
     Object computeIfAbsent(Object key, Function mappingFunction);
+
+    Object merge(Object key, Object value, BinaryOperator remap);
 
     void forEach(BiConsumer action);
 

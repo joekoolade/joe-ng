@@ -93,13 +93,12 @@ public class MapDemo
         String text = "the cat sat on the mat the cat";
         String[] words = text.split(" ");
         Map counts = new HashMap();
-        Num zero = new Num(0);
+        Num one = new Num(1);
         int wi = 0;
         while (wi < words.length)
         {
-            String w = words[wi];
-            int c = ((Num) counts.getOrDefault(w, zero)).value();
-            counts.put(w, new Num(c + 1));
+            // The idiomatic tally: insert 1 if absent, else old+1 -- via merge with a BinaryOperator lambda.
+            counts.merge(words[wi], one, (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
             wi = wi + 1;
         }
         Magic.printStr("wordcount: words=" + words.length + " distinct=" + counts.size()
@@ -109,5 +108,12 @@ public class MapDemo
         Object total = Stream.of(counts.values())
                 .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
         Magic.printStr("wordcount sum(counts)=" + ((Num) total).value() + "\n");                // 8 (= total words)
+
+        // Direct merge check: accumulate on collision (absent -> value; present -> remap(old, value)).
+        Map m2 = new HashMap();
+        m2.merge("x", "a", (o, n) -> (String) o + (String) n);                                  // absent -> "a"
+        m2.merge("x", "b", (o, n) -> (String) o + (String) n);                                  // "a"+"b" -> "ab"
+        m2.merge("x", "c", (o, n) -> (String) o + (String) n);                                  // "ab"+"c" -> "abc"
+        Magic.printStr("merge x=" + (String) m2.get("x") + " size=" + m2.size() + "\n");        // abc, 1
     }
 }

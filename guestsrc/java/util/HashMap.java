@@ -1,6 +1,7 @@
 package java.util;
 
 import java.util.function.BiConsumer;
+import java.util.function.BinaryOperator;
 import java.util.function.Function;
 
 /**
@@ -125,6 +126,25 @@ public class HashMap implements Map
             vals[i] = vals[j];
             i = j;                                      // the gap is now at j
         }
+    }
+
+    /**
+     * If {@code key} is absent, insert {@code value}; else replace with {@code remap.apply(oldValue, value)}.
+     * The idiomatic tally: {@code counts.merge(word, ONE, sum)}.
+     */
+    public Object merge(Object key, Object value, BinaryOperator remap)
+    {
+        int i = slotFor(key);
+        if (keys[i] == null)
+        {
+            keys[i] = key;
+            vals[i] = value;
+            size = size + 1;
+            return value;
+        }
+        Object merged = remap.apply(vals[i], value);
+        vals[i] = merged;
+        return merged;
     }
 
     /** Run {@code action} on each live (key, value) entry, in open-addressing slot order. */
