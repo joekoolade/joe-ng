@@ -1092,6 +1092,53 @@ exceptions; class-library subset; framebuffer via VideoCore mailbox.
   interface still doesn't forward (`lastid=0xFFFF`) — a QEMU GICv2 modeling gap, not our setup.
   Next: real Pi 4 with `enable_gic=1` — `grp=1` will confirm the armstub ran and delivery should tick.
 
+### Milestone-B — demand-loaded class-library subset on metal (collections + strings + streams + lambdas)
+
+A long, incremental arc (all commits tagged `Milestone-B:`) building an **idiomatic, JDK-free class
+library** that the on-metal `Loader` demand-loads and JIT-compiles from embedded `.class` blobs, verified
+QEMU→real-Pi-4 each slice, and reproduced byte-for-byte by the self-build (`FIX`/`IMG` held throughout).
+Everything is `--patch-module java.base=guestsrc` so classes carry their real names. Capstone:
+`demo/MapDemo.wordCount()` — a real word-count (String.split → HashMap tally via `merge` → Stream `reduce`).
+
+**What runs (mini, real-shaped):**
+- **`java/lang/String`** (LATIN1, real `byte[] value`+`byte coder`): length/charAt/equals/hashCode/isEmpty/
+  indexOf/substring/startsWith/compareTo/trim/replace/split/join/toUpperCase/toLowerCase, `implements
+  Comparable<String>`.
+- **Collections** behind a real interface chain `List extends Collection extends Iterable`, `Map`: two
+  polymorphic `List` impls (`ArrayList`, singly-linked `LinkedList`) with add/get/set/size/isEmpty/indexOf/
+  contains/remove(int|Object)/iterator; `HashMap implements Map` (open-addressing) with put/get/containsKey/
+  remove(**backward-shift** deletion)/getOrDefault/computeIfAbsent/merge/forEach/keySet/values; `Iterator`
+  + enhanced-for; `Collections.sort(List[, Comparator])`; `Comparable` bridge + `Comparator`.
+- **Stream** (mini eager `demo/Stream`): filter/map intermediate, forEach/reduce/toList terminals, sourced
+  from a List *or* a Map's keySet()/values(); `java/util/function/{Predicate,Function,Consumer,
+  BinaryOperator,BiConsumer}`.
+- **invokedynamic — full matrix:** string-concat; lambdas {0,1,2}-arg × {no-capture, capture}; all four
+  method-reference kinds (static, unbound-instance, bound-instance, constructor); mutable-capture via a
+  captured `int[]`.
+
+**Loader/compiler extensions this arc required (the non-trivial ones):**
+- **Reachable-only compilation** + **cross-class relocation pass** (bl / movz+movk fixups) — so a demo's
+  closure compiles only what `main` reaches, and cross-class calls/statics resolve after cycle force-loads.
+- **Transitive itable directories** — `buildItableDir` closes over super-interfaces (`clIfaceReg`/
+  `ifaceClosure`), so a call site typed to a super-interface (`Iterable.iterator` on an ArrayList) resolves.
+- **Lambda/method-ref thunks** in `buildLambdaTib`: static tail-call (kind 6, general in captures+SAM
+  argc); **vtable-dispatch** for instance refs (kind 5/9, unbound shifts args / bound loads captured
+  receiver); **alloc+`<init>`+return frame** for constructor refs (kind 8, the one thunk that makes calls).
+- **Bridge methods** (`String.compareTo(Object)`→typed) resolve through the vtable + name/desc imap with
+  no special-casing. Sign-extended-int fixes (`l2i`/`iushr`/int-compare), concat spill, `isNonLeaf`,
+  implicit NPE/AIOOBE, `if_acmp`/`ifnull`, Object-root vtable inheritance (equals/hashCode) all landed here.
+
+**Recurring gotchas:** an interface referenced only via `implements`/
+`extends` must still be an embedded blob (else itableDir stores `interfaceType=0` == sentinel → wild
+`blr`); any `.equals()`/`.hashCode()` on an `Object` ref needs `java/lang/Object` seeded; a bound method
+ref on a possibly-null receiver makes javac emit `Objects.requireNonNull` → drags real `java.util.Objects`
+into a **compile-all** closure and fails on an unsupported `ldc` deep in java.base (fixed by a
+provably-non-null receiver `new X()::m`); avoid 2-class cycles where each calls the other's methods.
+
+**Open TODOs:** `loadList`/`loadMap` are compile-ALL, so they can't pull real java.base (Integer/Arrays/…)
+— to go reachable-only, `collectRefs` must follow invokedynamic to mark lambda bodies + SAMs (today it
+follows only 0xB6-B9).
+
 ---
 
 ## 5. Design decisions to lock day one
