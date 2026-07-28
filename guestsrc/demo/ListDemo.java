@@ -190,6 +190,12 @@ public class ListDemo
         Comparator<String> byNaturalRef = String::compareTo;
         Collections.sort(names, byNaturalRef);
         Magic.printStr("byNaturalRef=" + join(names) + "\n");                    // apple banana cherry date
+
+        // A BOUND instance method reference: desc::cmp captures the Order object as the SAM receiver, so the
+        // sort direction comes from its `sign` field. The thunk loads the captured receiver then vtable-dispatches.
+        Comparator<String> byBoundRef = new Order(-1)::cmp;                      // provably non-null recv -> no requireNonNull
+        Collections.sort(names, byBoundRef);
+        Magic.printStr("boundRefDesc=" + join(names) + "\n");                    // date cherry banana apple
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */

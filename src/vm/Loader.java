@@ -1228,6 +1228,7 @@ public final class Loader
         addBlob(VM.collectionsBytes, (int) VM.collectionsLen);   // Collections.sort(List[, Comparator]) static helper
         addBlob(VM.numBytes, (int) VM.numLen);                   // a second Comparable type for the generic sort
         addBlob(VM.comparatorBytes, (int) VM.comparatorLen);     // functional iface: the lambda comparator's target
+        addBlob(VM.orderBytes, (int) VM.orderLen);               // bound-instance-method-ref receiver (desc::cmp)
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         resolveClosureFromDir();
         loadAll();
@@ -3175,15 +3176,25 @@ public final class Loader
         int w = 0;
         if (kind == 5 || kind == 9)
         {
-            // UNBOUND instance method ref (String::compareTo): the SAM's first arg is the receiver, the rest
-            // are the method args (no captures). Shift the SAM args down to x0..x(ia-1) (x0 = receiver), then
-            // vtable-dispatch the referenced method on the receiver -- so overrides resolve normally.
-            int j = 0;
-            while (j < ia)
+            // Instance method ref -> vtable-dispatch the referent on its receiver (so overrides resolve).
+            if (nc == 0)
             {
-                Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j] (x0 = receiver)
+                // UNBOUND (String::compareTo): the SAM's first arg is the receiver, the rest are the method
+                // args. Shift the SAM args down to x0..x(ia-1) so x0 = receiver, x1.. = method args.
+                int j = 0;
+                while (j < ia)
+                {
+                    Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));    // x(j) = samArg[j] (x0 = receiver)
+                    w += 1;
+                    j += 1;
+                }
+            }
+            else
+            {
+                // BOUND (obj::method): the receiver is the captured field[0]; the SAM args are ALREADY in
+                // x1..x(ia) where the instance method wants them. Load the receiver into x0.
+                Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 0, 16));          // x0 = obj.field[0] (captured recv)
                 w += 1;
-                j += 1;
             }
             int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 0, 0));                        w += 1;  // x16 = recv.tib (TIB@0)
