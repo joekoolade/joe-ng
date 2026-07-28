@@ -156,6 +156,28 @@ public class ListDemo
             dn = dn + ((Num) o).value() + " ";
         }
         Magic.printStr("descNums=" + dn + "\n");                                 // 30 15 9 4
+
+        // A CAPTURING 2-arg comparator lambda: order by distance from a captured pivot (abs computed inline).
+        int pivot = 10;
+        List byDist = new ArrayList();
+        byDist.add(new Num(30));
+        byDist.add(new Num(15));
+        byDist.add(new Num(9));
+        byDist.add(new Num(4));
+        Collections.sort(byDist, (a, b) ->
+        {
+            int da = ((Num) a).value() - pivot;                                  // captures `pivot`
+            if (da < 0) { da = -da; }
+            int db = ((Num) b).value() - pivot;
+            if (db < 0) { db = -db; }
+            return da - db;
+        });
+        String bd = "";
+        for (Object o : byDist)
+        {
+            bd = bd + ((Num) o).value() + " ";
+        }
+        Magic.printStr("byDist(pivot=10)=" + bd + "\n");                         // 9 15 4 30
     }
 
     private static String join(List l)
