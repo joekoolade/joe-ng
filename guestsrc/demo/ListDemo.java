@@ -183,6 +183,13 @@ public class ListDemo
         // method), not a synthesised lambda$ body -- a different invokedynamic shape, same thunk path.
         Collections.sort(names, ListDemo::byLength);
         Magic.printStr("byLength=" + join(names) + "\n");                        // date apple banana cherry
+
+        // An UNBOUND INSTANCE method reference: String::compareTo -> compare(a,b) = a.compareTo(b). The impl
+        // handle is invokeVirtual, so the thunk vtable-dispatches on the receiver (SAM arg0), not a fixed call.
+        // (Typed as Comparator<String> so the ref binds a String receiver, not raw Comparator's Object.)
+        Comparator<String> byNaturalRef = String::compareTo;
+        Collections.sort(names, byNaturalRef);
+        Magic.printStr("byNaturalRef=" + join(names) + "\n");                    // apple banana cherry date
     }
 
     /** Comparator by string length, ties broken alphabetically -- referenced as {@code ListDemo::byLength}. */

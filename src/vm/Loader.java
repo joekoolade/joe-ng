@@ -3085,10 +3085,24 @@ public final class Loader
     /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */
     private static long lambdaImplBuf(int idx)
     {
+        return resolveCallBuf(lambdaImplMref(idx));
+    }
+
+    /** Methodref (cp index) the impl MethodHandle (bootstrap_arguments[1]) points at. */
+    private static int lambdaImplMref(int idx)
+    {
         long e = bsmEntryOff(indyBsmIndex(idx));
         int mhIdx = u2(e + 6);                          // bootstrap_arguments[1] = the impl MethodHandle
-        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);
-        return resolveCallBuf(mrefIdx);
+        return u2(gbase + gcp[mhIdx] + 1);              // MethodHandle.reference_index -> Methodref
+    }
+
+    /** reference_kind of the impl MethodHandle: 6 = invokeStatic (lambda body / static ref), 5/9 = invokeVirtual/
+     *  invokeInterface (an UNBOUND instance method ref, whose receiver is the SAM's first arg). */
+    private static int lambdaImplKind(int idx)
+    {
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mhIdx = u2(e + 6);
+        return u1(gbase + gcp[mhIdx]);                  // MethodHandle.reference_kind
     }
 
     /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
@@ -3152,17 +3166,37 @@ public final class Loader
     /** Build the synthetic lambda class (thunk + imap + itable dir + Type + TIB); returns the TIB address. */
     static long buildLambdaTib(int idx)
     {
-        long implBuf = lambdaImplBuf(idx);
         long ifaceType = lambdaIfaceType(idx);
         int ifaceSlot = lambdaIfaceSlot(idx);
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
         int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
+        int kind = lambdaImplKind(idx);
+        long thunk = Heap.alloc(128);
+        int w = 0;
+        if (kind == 5 || kind == 9)
+        {
+            // UNBOUND instance method ref (String::compareTo): the SAM's first arg is the receiver, the rest
+            // are the method args (no captures). Shift the SAM args down to x0..x(ia-1) (x0 = receiver), then
+            // vtable-dispatch the referenced method on the receiver -- so overrides resolve normally.
+            int j = 0;
+            while (j < ia)
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.movReg(j, 1 + j));        // x(j) = samArg[j] (x0 = receiver)
+                w += 1;
+                j += 1;
+            }
+            int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 0, 0));                        w += 1;  // x16 = recv.tib (TIB@0)
+            Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 16, 8 + slot * 8));            w += 1;  // x16 = vtable[slot]
+            Magic.store32(thunk + w * 4L, A64Enc.br(16));                                w += 1;  // tail-call
+            Heap.publishCode(thunk, thunk + w * 4L);
+            return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+        }
+        long implBuf = lambdaImplBuf(idx);
         // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
         // Build the thunk: move the SAM args to x(nc)..x(nc+ia-1), load the captures into x0..x(nc-1),
         // then tail-call the body. Shift direction avoids clobbering: dest-source = nc-1, so shift UP
         // (high->low) when nc>=1, DOWN (low->high) when nc==0.
-        long thunk = Heap.alloc(128);
-        int w = 0;
         if (nc >= 1)
         {
             int j = ia - 1;
@@ -3194,6 +3228,12 @@ public final class Loader
         Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));         // b implBuf (tail call)
         w += 1;
         Heap.publishCode(thunk, thunk + w * 4L);
+        return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+    }
+
+    /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
+    private static long finishLambdaClass(long thunk, long ifaceType, int ifaceSlot, int nc)
+    {
         // imap: the flat interface-method table, indexed by global SAM slot -> the thunk.
         long imap = Heap.alloc(MAXIFM * 8);
         int j = 0;
