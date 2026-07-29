@@ -803,6 +803,16 @@ public final class Loader
     private static int[] pendClass, pendName, pendDesc, pendKind;   // (base, class/name/desc offsets, kind)
     private static int pendN;
 
+    // Rapid Type Analysis (RTA): a virtual/interface call's targets are only the methods that an INSTANTIATED
+    // receiver could dispatch to -- not every loaded class carrying the name+desc (the old CHA over-approx,
+    // which marked e.g. Float/Double.toString just because they were loaded, dragging in the FloatToDecimal ->
+    // new String(...,Charset) -> charset closure). We track types created by `new` (0xbb) in reached methods;
+    // a virtual pend then marks, for each instantiated class, the method it resolves up its own superclass chain.
+    private static boolean[] pdInstantiated;             // pd blob is `new`'d in some reached method
+    private static long[] instBase;                      // `new X` sites: (base, this-name Utf8 offset)
+    private static int[] instOff;
+    private static int instN;
+
     private static void markReachable()
     {
         reachN = 0;
@@ -811,6 +821,10 @@ public final class Loader
         pendName = new int[MAXPEND];
         pendDesc = new int[MAXPEND];
         pendKind = new int[MAXPEND];
+        pdInstantiated = new boolean[MAXBLOB];
+        instBase = new long[MAXPEND];
+        instOff = new int[MAXPEND];
+        instN = 0;
         parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
         addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
         seedAllNamed(Magic.bytes("run"), Magic.bytes("()V"));   // trampoline entry (Runnable.run)
@@ -849,12 +863,14 @@ public final class Loader
                 grew = pullStructural(pdBase[b], pdLen[b]) || grew;
                 b += 1;
             }
+            grew = computeInstantiated() || grew;       // RTA: flag the pd blobs `new`'d by a reached method
             b = 0;
-            while (b < pdCount)                         // resolve: mark the invoke targets
+            while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
                 grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
                 b += 1;
             }
+            grew = resolveVirtuals() || grew;           // RTA: virtual/interface targets, in instantiated types only
         }
         markActive = 1;
     }
@@ -935,7 +951,12 @@ public final class Loader
             }
             else if (op == 0xbb || op == 0xbd || op == 0xc0 || op == 0xc1)   // new/anewarray/checkcast/instanceof
             {
-                addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
+                int cnOff = classCpNameOff(u2(code + pc + 1));
+                addPend(base, cnOff, 0, 0, PEND_PULL);
+                if (op == 0xbb)                          // RTA: `new C` makes C an instantiated receiver type
+                {
+                    addInst(base, cnOff);
+                }
             }
             else if (op == 0xba && isLambdaIndy(u2(code + pc + 1)))          // lambda/method-ref: mark its impl body
             {
@@ -978,10 +999,10 @@ public final class Loader
         int r = 0;
         while (r < pendN)
         {
-            // PEND_PULL refs pull a class only (no method to mark). Others: class-qualified (static/special)
-            // mark iff this is that class; name+desc (virtual/interface) mark in every class carrying it.
-            if (pendKind[r] != PEND_PULL
-                    && (pendKind[r] != 0 || utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff)))
+            // Only static/special calls (kind 0) resolve here: they name a concrete class, so mark that method
+            // iff this blob IS that class. PEND_PULL pulls a class only; virtual/interface (kind 1) go through
+            // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
+            if (pendKind[r] == 0 && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
                 long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -990,6 +1011,150 @@ public final class Loader
                 }
             }
             r += 1;
+        }
+        return grew;
+    }
+
+    /** Record {@code base}'s {@code new C} target (Utf8 name at {@code off}) as an instantiated type (deduped). */
+    private static void addInst(long base, int off)
+    {
+        int i = 0;
+        while (i < instN)
+        {
+            if (utf8EqAt(instBase[i], instOff[i], base, off))
+            {
+                return;
+            }
+            i += 1;
+        }
+        if (instN >= MAXPEND)
+        {
+            return;
+        }
+        instBase[instN] = base;
+        instOff[instN] = off;
+        instN += 1;
+    }
+
+    /** pd index of the loaded blob whose this-class name equals the Utf8 at {@code base+off}, or -1. */
+    private static int findPdByName(long base, int off)
+    {
+        int i = 0;
+        while (i < pdCount)
+        {
+            if (utf8EqAt(base, off, pdBase[i], pdNameOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** Flag every pd blob that was {@code new}'d by a reached method; returns true if a new one was flagged. */
+    private static boolean computeInstantiated()
+    {
+        boolean grew = false;
+        int k = 0;
+        while (k < instN)
+        {
+            int pd = findPdByName(instBase[k], instOff[k]);
+            if (pd >= 0 && !pdInstantiated[pd])
+            {
+                pdInstantiated[pd] = true;
+                grew = true;
+            }
+            k += 1;
+        }
+        // Instances the VM creates WITHOUT a bytecode `new`, so RTA can't see the site: string literals + concat
+        // materialize a String (intern / newStringFromBytes); the JIT's null/bounds/div/cast checks throw these
+        // exceptions via VM.newHelper. Flag them instantiated whenever loaded so their virtual methods resolve.
+        grew = flagInstByName(Magic.bytes("java/lang/String")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/NullPointerException")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/ArithmeticException")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/ClassCastException")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/NegativeArraySizeException")) || grew;
+        return grew;
+    }
+
+    /** Flag the loaded blob named {@code name} instantiated (a VM-created type with no `new` site); true if newly. */
+    private static boolean flagInstByName(byte[] name)
+    {
+        int i = 0;
+        while (i < pdCount)
+        {
+            if (!pdInstantiated[i] && utf8IsAtBase(pdBase[i], pdNameOff[i], name))
+            {
+                pdInstantiated[i] = true;
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** pd index of {@code pd}'s superclass, or -1 (Object / super not loaded). */
+    private static int superPdOf(int pd)
+    {
+        parseConstPool(pdBase[pd], pdLen[pd]);
+        int superIdx = u2(gp + 4);                       // gp -> access_flags; this(+2), super(+4)
+        if (superIdx == 0)
+        {
+            return -1;                                   // java/lang/Object
+        }
+        return findPdByName(gbase, gcp[u2(gbase + gcp[superIdx])]);
+    }
+
+    /**
+     * The method an instance of {@code startPd} dispatches to for the {@code name+desc} at {@code refBase} —
+     * the first definition walking {@code startPd}'s superclass chain. 0 if none (abstract/native/absent).
+     */
+    private static long resolveVirtualTarget(int startPd, long refBase, int nameOff, int descOff)
+    {
+        int cur = startPd;
+        int guard = 0;
+        while (cur >= 0 && guard < 64)
+        {
+            parseForMethods(pdBase[cur], pdLen[cur]);
+            long code = findMethodByRef(refBase, nameOff, descOff);
+            if (code != 0L)
+            {
+                return code;
+            }
+            cur = superPdOf(cur);
+            guard += 1;
+        }
+        return 0L;
+    }
+
+    /**
+     * RTA: mark each virtual/interface call's real targets — for every instantiated receiver type, the method
+     * it resolves up its own superclass chain. Replaces the CHA "mark in every class carrying name+desc".
+     */
+    private static boolean resolveVirtuals()
+    {
+        boolean grew = false;
+        int p = 0;
+        while (p < pendN)
+        {
+            if (pendKind[p] == 1)
+            {
+                int c = 0;
+                while (c < pdCount)
+                {
+                    if (pdInstantiated[c])
+                    {
+                        long code = resolveVirtualTarget(c, pendBase[p], pendName[p], pendDesc[p]);
+                        if (code != 0L)
+                        {
+                            grew = addReach(code) || grew;
+                        }
+                    }
+                    c += 1;
+                }
+            }
+            p += 1;
         }
         return grew;
     }
