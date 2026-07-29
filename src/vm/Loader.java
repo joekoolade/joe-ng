@@ -529,7 +529,7 @@ public final class Loader
         addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer.toString for int results
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.strOpsDemoBytes, (int) VM.strOpsDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
         entryPoint(VM.strOpsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -767,6 +767,7 @@ public final class Loader
      * every loaded class (a receiver could be any of them) — until the set stops growing.
      */
     private static final int MAXPEND = 8192;
+    private static final int PEND_PULL = 2;              // kind: pull the class only (field/type ref; no method)
     private static long[] pendBase;                      // call-site refs of the round's reachable methods:
     private static int[] pendClass, pendName, pendDesc, pendKind;   // (base, class/name/desc offsets, kind)
     private static int pendN;
@@ -784,25 +785,75 @@ public final class Loader
         seedAllNamed(Magic.bytes("run"), Magic.bytes("()V"));   // trampoline entry (Runnable.run)
         // Each round is two bounded passes over the blobs (so the const pool is parsed O(blobs) times, not
         // per-ref): collect the call-site refs of every reachable method, then mark each ref's target(s).
+        // Reachability-gated closure: each round (a) collects the class/method refs of every reachable
+        // method, (b) PULLS any referenced class not yet loaded from the embedded dir + its super/interfaces,
+        // (c) marks the invoke targets now resolvable. So a program pulls only its reachable closure -- the
+        // basis for embedding all of java.base without dragging every class's full constant-pool closure in.
         boolean grew = true;
         while (grew)
         {
             grew = false;
+            probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
             pendN = 0;
             int b = 0;
-            while (b < pdCount)                         // collect
+            while (b < pdCount)                         // collect refs of reachable methods
             {
                 collectBlob(pdBase[b], pdLen[b]);
                 b += 1;
             }
+            int r = 0;
+            while (r < pendN)                           // pull referenced classes not yet loaded
+            {
+                if (!nameRegistered(pendBase[r], pendClass[r])
+                        && registerNameFromDir(pendBase[r], pendClass[r]) != 0L)
+                {
+                    grew = true;
+                }
+                r += 1;
+            }
             b = 0;
-            while (b < pdCount)                         // resolve
+            while (b < pdCount)                         // pull each loaded class's super + interfaces
+            {
+                grew = pullStructural(pdBase[b], pdLen[b]) || grew;
+                b += 1;
+            }
+            b = 0;
+            while (b < pdCount)                         // resolve: mark the invoke targets
             {
                 grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
                 b += 1;
             }
         }
         markActive = 1;
+    }
+
+    /** Pull {@code base}'s superclass + interfaces from the dir (needed for its TIB/itable), if not loaded. */
+    private static boolean pullStructural(long base, int len)
+    {
+        parseConstPool(base, len);
+        long p = gp;
+        boolean grew = false;
+        int superIdx = u2(p + 4);
+        if (superIdx != 0)
+        {
+            int nameOff = gcp[u2(gbase + gcp[superIdx])];
+            if (!nameRegistered(gbase, nameOff) && registerNameFromDir(gbase, nameOff) != 0L)
+            {
+                grew = true;
+            }
+        }
+        int ifCount = u2(p + 6);
+        int k = 0;
+        while (k < ifCount)
+        {
+            int nameOff = gcp[u2(gbase + gcp[u2(p + 8 + k * 2)])];
+            if (!nameRegistered(gbase, nameOff) && registerNameFromDir(gbase, nameOff) != 0L)
+            {
+                grew = true;
+            }
+            k += 1;
+        }
+        return grew;
     }
 
     /** Collect the call-site refs of every already-reachable method in blob {@code base} into the pending set. */
@@ -827,6 +878,12 @@ public final class Loader
     }
 
     /** Append each invoke in {@code [code, code+len)} to the pending-ref set (offsets index the cp of {@code base}). */
+    /**
+     * Record every class a reachable method references, so reachability-gated closure pulls only what a
+     * reached method actually touches (not the whole class's constant pool): invoke targets (mark the method
+     * + pull its class), field owners, and {@code new}/{@code checkcast}/{@code instanceof}/{@code anewarray}
+     * types (pull-only). {@code gcp}/{@code gbase} are parsed for {@code base} by the caller.
+     */
     private static void collectRefs(long base, long code, int len)
     {
         int pc = 0;
@@ -836,15 +893,40 @@ public final class Loader
             if (op == 0xb8 || op == 0xb7 || op == 0xb6 || op == 0xb9)   // invoke static/special/virtual/interface
             {
                 int idx = u2(code + pc + 1);
-                pendBase[pendN] = base;
-                pendClass[pendN] = refClassNameOff(idx);
-                pendName[pendN] = mrefNameOff(idx);
-                pendDesc[pendN] = mrefDescOff(idx);
-                pendKind[pendN] = (op == 0xb8 || op == 0xb7) ? 0 : 1;   // class-qualified vs name+desc
-                pendN += 1;
+                addPend(base, refClassNameOff(idx), mrefNameOff(idx), mrefDescOff(idx),
+                        (op == 0xb8 || op == 0xb7) ? 0 : 1);            // class-qualified vs name+desc
+            }
+            else if (op == 0xb2 || op == 0xb3 || op == 0xb4 || op == 0xb5)   // get/put static|field: pull owner
+            {
+                addPend(base, refClassNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
+            }
+            else if (op == 0xbb || op == 0xbd || op == 0xc0 || op == 0xc1)   // new/anewarray/checkcast/instanceof
+            {
+                addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
             }
             pc += insnLen(code, pc);
         }
+    }
+
+    /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gcp}/{@code gbase}). */
+    private static int classCpNameOff(int idx)
+    {
+        return gcp[u2(gbase + gcp[idx])];
+    }
+
+    /** Append a pending ref (dedup-free; the pull/resolve phases idempotently re-check registration). */
+    private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
+    {
+        if (pendN >= MAXPEND)
+        {
+            return;
+        }
+        pendBase[pendN] = base;
+        pendClass[pendN] = classOff;
+        pendName[pendN] = nameOff;
+        pendDesc[pendN] = descOff;
+        pendKind[pendN] = kind;
+        pendN += 1;
     }
 
     /** For blob {@code base}, mark every pending-ref target it defines. Returns true if any method was newly marked. */
@@ -855,7 +937,10 @@ public final class Loader
         int r = 0;
         while (r < pendN)
         {
-            if (pendKind[r] != 0 || utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))   // class-match (static/special)
+            // PEND_PULL refs pull a class only (no method to mark). Others: class-qualified (static/special)
+            // mark iff this is that class; name+desc (virtual/interface) mark in every class carrying it.
+            if (pendKind[r] != PEND_PULL
+                    && (pendKind[r] != 0 || utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff)))
             {
                 long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -1792,11 +1877,11 @@ public final class Loader
      */
     private static void loadAll()
     {
-        probeAll();
-        if (gEntryBlob != 0L)                            // reachability requested: compile only what the entry reaches
-        {
+        if (gEntryBlob != 0L)                            // reachability requested: mark + PULL the reachable
+        {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
             markReachable();
         }
+        probeAll();                                      // dep list (pdNameOff + dpOwner/dpOff) over the final set
         int remaining = pdCount;
         while (remaining > 0)
         {
