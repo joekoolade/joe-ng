@@ -611,6 +611,14 @@ public final class Baseline
             recordDepth(target);
             return 3;
         }
+        else if (op == 0xAA)
+        {
+            return tableswitch(cb, code, pos);
+        }
+        else if (op == 0xAB)
+        {
+            return lookupswitch(cb, code, pos);
+        }
 
         else if (op == 0xB2)
         {
@@ -1049,6 +1057,68 @@ public final class Baseline
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
+    }
+
+    /**
+     * {@code tableswitch}: pop the index, then a compare-branch chain over {@code low..high} (each case value
+     * materialised in scratch x16, index canonicalised sign-extended), falling to {@code default}. The 0-3
+     * padding bytes align {@code default} to a 4-byte boundary from the start of the code array.
+     */
+    private int tableswitch(CodeBuffer cb, byte[] code, int pos)
+    {
+        int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+        int def = s4(code, p);
+        int low = s4(code, p + 4);
+        int high = s4(code, p + 8);
+        int idx = popReg();
+        cb.emit(A64Enc.sxtw(idx, idx));
+        int k = 0;
+        while (k <= high - low)
+        {
+            int target = pos + s4(code, p + 12 + k * 4);
+            cb.emitAll(A64Enc.loadImm64(16, low + k));      // case value (sign-extended) in scratch x16
+            cb.emit(A64Enc.cmpReg(idx, 16));
+            int w = cb.emit(A64Enc.b(0));                   // placeholder; FIX_BCOND re-encodes as b.eq
+            addFixup(w, target, FIX_BCOND, A64Enc.EQ);
+            recordDepth(target);
+            k += 1;
+        }
+        int wd = cb.emit(A64Enc.b(0));
+        addFixup(wd, pos + def, FIX_B, 0);
+        recordDepth(pos + def);
+        return (p + 12 + (high - low + 1) * 4) - pos;
+    }
+
+    /** {@code lookupswitch}: pop the index, then a compare-branch chain over the sorted {match,offset} pairs. */
+    private int lookupswitch(CodeBuffer cb, byte[] code, int pos)
+    {
+        int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+        int def = s4(code, p);
+        int npairs = s4(code, p + 4);
+        int idx = popReg();
+        cb.emit(A64Enc.sxtw(idx, idx));
+        int k = 0;
+        while (k < npairs)
+        {
+            int match = s4(code, p + 8 + k * 8);
+            int target = pos + s4(code, p + 8 + k * 8 + 4);
+            cb.emitAll(A64Enc.loadImm64(16, match));
+            cb.emit(A64Enc.cmpReg(idx, 16));
+            int w = cb.emit(A64Enc.b(0));
+            addFixup(w, target, FIX_BCOND, A64Enc.EQ);
+            recordDepth(target);
+            k += 1;
+        }
+        int wd = cb.emit(A64Enc.b(0));
+        addFixup(wd, pos + def, FIX_B, 0);
+        recordDepth(pos + def);
+        return (p + 8 + npairs * 8) - pos;
+    }
+
+    /** Signed big-endian 4-byte read (switch payloads). */
+    private static int s4(byte[] b, int i)
+    {
+        return (b[i] << 24) | ((b[i + 1] & 0xFF) << 16) | ((b[i + 2] & 0xFF) << 8) | (b[i + 3] & 0xFF);
     }
 
     /** Record the operand-stack depth on the edge into branch target {@code bc}. */
@@ -1961,6 +2031,24 @@ public final class Baseline
             || op == 0xBD || op == 0xC0 || op == 0xC1)
         {
             return 3;
+        }
+        if (op == 0xAA)                                     // tableswitch
+        {
+            int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+            return (p + 12 + (s4(code, p + 8) - s4(code, p + 4) + 1) * 4) - pos;
+        }
+        if (op == 0xAB)                                     // lookupswitch
+        {
+            int p = pos + 1 + ((4 - ((pos + 1) & 3)) & 3);
+            return (p + 8 + s4(code, p + 4) * 8) - pos;
+        }
+        if (op == 0xC4)                                     // wide (iinc = 6, else 4)
+        {
+            return (code[pos + 1] & 0xFF) == 0x84 ? 6 : 4;
+        }
+        if (op == 0xC5)                                     // multianewarray: index(2)+dims(1)
+        {
+            return 4;
         }
         return 1;
     }

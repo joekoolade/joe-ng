@@ -49,6 +49,37 @@ public class StrOpsDemo
         showStr("join(\",\", \"a\",\"b\",\"c\")", String.join(",", "a", "b", "c"));      // a,b,c  (varargs)
         showStr("join(\"-\", split(\"a,b,c\"))", String.join("-", "a,b,c".split(",")));  // a-b-c  (round-trip)
         showStr("join(\"/\", \"one\")", String.join("/", "one"));                        // one    (single elem)
+
+        // switch opcodes (compiler slice for real java.base): dense -> tableswitch, sparse -> lookupswitch.
+        showInt("dense(0)", dense(0));            // 10
+        showInt("dense(2)", dense(2));            // 12
+        showInt("dense(9)", dense(9));            // -1  (default)
+        showInt("sparse(1)", sparse(1));          // 100
+        showInt("sparse(1000)", sparse(1000));    // 300
+        showInt("sparse(5)", sparse(5));          // -9  (default)
+    }
+
+    private static int dense(int x)
+    {
+        switch (x)
+        {
+            case 0: return 10;
+            case 1: return 11;
+            case 2: return 12;
+            case 3: return 13;
+            default: return -1;
+        }
+    }
+
+    private static int sparse(int x)
+    {
+        switch (x)
+        {
+            case 1: return 100;
+            case 100: return 200;
+            case 1000: return 300;
+            default: return -9;
+        }
     }
 
     private static void showSplit(String label, String[] parts)

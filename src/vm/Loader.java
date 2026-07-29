@@ -843,7 +843,7 @@ public final class Loader
                 pendKind[pendN] = (op == 0xb8 || op == 0xb7) ? 0 : 1;   // class-qualified vs name+desc
                 pendN += 1;
             }
-            pc += opLen(op);
+            pc += insnLen(code, pc);
         }
     }
 
@@ -2087,7 +2087,7 @@ public final class Loader
                     addMethod(c, gcodeLen, gMaxLocals, mrefDescOff(idx), op == 0xb8 ? 1 : 0);
                 }
             }
-            pc += opLen(op);
+            pc += insnLen(code, pc);
         }
     }
 
@@ -3572,6 +3572,35 @@ public final class Loader
         {
             return 3;    // sipush/ldc_w/ldc2_w/iinc/if*/goto/jsr/get-put(static|field)/invoke*/new/anewarray/cast/instanceof
         }
-        return 1;        // (tableswitch/lookupswitch/wide/multianewarray not emitted by our sources)
+        return 1;
+    }
+
+    /**
+     * Full instruction length at {@code pc} in the bytecode at memory {@code code} — position-aware, so the
+     * variable-length {@code tableswitch}/{@code lookupswitch}/{@code wide}/{@code multianewarray} (present in
+     * real java.base) don't misalign the scanners. Falls back to the fixed table {@link #opLen(int)}.
+     */
+    private static int insnLen(long code, int pc)
+    {
+        int op = u1(code + pc);
+        if (op == 0xAA)                                    // tableswitch
+        {
+            int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
+            return (p + 12 + (u4(code + p + 8) - u4(code + p + 4) + 1) * 4) - pc;
+        }
+        if (op == 0xAB)                                    // lookupswitch
+        {
+            int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
+            return (p + 8 + u4(code + p + 4) * 8) - pc;
+        }
+        if (op == 0xC4)                                    // wide (iinc = 6, else 4)
+        {
+            return u1(code + pc + 1) == 0x84 ? 6 : 4;
+        }
+        if (op == 0xC5)                                    // multianewarray
+        {
+            return 4;
+        }
+        return opLen(op);
     }
 }
