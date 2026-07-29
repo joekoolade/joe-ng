@@ -191,16 +191,72 @@ public final class Loader
      */
     private static void runClinit(long bytes)
     {
-        if (skipClinit != 0)
+        if (clinitBlocked())
         {
-            return;    // probe mode: compile the class but don't RUN <clinit> (real ones call natives)
+            return;    // unrunnable <clinit> (calls natives / reads properties): its statics are seeded instead
         }
         seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
         long code = findMethod(bytes);
-        if (code != 0L)
+        if (code != 0L && clinitCompilable(code, gcodeLen))
         {
             long unused = Magic.call0(compile(code, gcodeLen, gFoundDescOff, gFoundStatic));
         }
+    }
+
+    /**
+     * Cheap pre-check that a {@code <clinit>} won't trip a FATAL compiler gap (symbols.fail HALTS, so we can't
+     * just try to compile and recover). Currently rejects {@code ldc}/{@code ldc_w} of a constant the Baseline
+     * compiler doesn't handle (anything but Integer/Float/String) — the common gap in stock initializers
+     * (Math, Arrays, ... ldc a Class/long/double/MethodType). Such a class is treated as unrunnable and left to
+     * seeding. Extend as other fatal gaps surface. (Native-calling <clinit>s compile fine but wild-branch at
+     * run time, so those stay in the name blocklist.)
+     */
+    private static boolean clinitCompilable(long code, int len)
+    {
+        int pc = 0;
+        while (pc < len)
+        {
+            int op = u1(code + pc);
+            int cpi = -1;
+            if (op == 0x12)                              // ldc
+            {
+                cpi = u1(code + pc + 1);
+            }
+            else if (op == 0x13)                         // ldc_w
+            {
+                cpi = u2(code + pc + 1);
+            }
+            if (cpi >= 0)
+            {
+                int tag = gcpTag[cpi];
+                if (tag != 3 && tag != 4 && tag != 8)    // not Integer / Float / String
+                {
+                    return false;
+                }
+            }
+            pc += insnLen(code, pc);
+        }
+        return true;
+    }
+
+    /**
+     * True if the current class's {@code <clinit>} must NOT be run — it calls natives / reads system properties
+     * / needs JVM services absent on metal. We run every other class's initializer by default and seed only
+     * these (provideKnownStatics / seedIntegerCache). Grows as new unrunnable stock initializers surface.
+     */
+    private static boolean clinitBlocked()
+    {
+        return utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
+                // primitive wrappers: <clinit> sets TYPE = Class.getPrimitiveClass(...) (a native)
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Long"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Float"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Double"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Boolean"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -264,9 +320,7 @@ public final class Loader
         addBlob(VM.characterBytes, (int) VM.characterLen);
         addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer as a blob: reachable pass compiles parseInt
         entryPoint(VM.integerBytes, Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));   // reachability-gated
-        skipClinit = 1;                                          // real Integer's <clinit> would touch IntegerCache
         loadAll();
-        skipClinit = 0;
         parseIntBuf = globalMethodBuf(Magic.bytes("java/lang/Integer"), Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));
     }
 
@@ -290,9 +344,7 @@ public final class Loader
         addBlob(VM.parseAllDemoBytes, (int) VM.parseAllDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.parseAllDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;                                          // real Integer's <clinit> would touch IntegerCache
         loadAll();
-        skipClinit = 0;
         // Resolve main from the global registry (robust to load order: the Integer<->Math cycle's force-load
         // may not leave the demo as the last-compiled class, so bufOf's last-batch table can't be trusted).
         long buf = globalMethodBuf(Magic.bytes("demo/ParseAllDemo"), Magic.bytes("main"), Magic.bytes("()V"));
@@ -335,9 +387,7 @@ public final class Loader
         addBlob(VM.toStringDemoBytes, (int) VM.toStringDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.toStringDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ToStringDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -361,9 +411,7 @@ public final class Loader
         addBlob(VM.hexLongDemoBytes, (int) VM.hexLongDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.hexLongDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/HexLongDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -392,9 +440,7 @@ public final class Loader
         addBlob(VM.longMoreDemoBytes, (int) VM.longMoreDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.longMoreDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/LongMoreDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -422,9 +468,7 @@ public final class Loader
         addBlob(VM.mathIntDemoBytes, (int) VM.mathIntDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.mathIntDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/MathIntDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -454,9 +498,7 @@ public final class Loader
         addBlob(VM.objectsDemoBytes, (int) VM.objectsDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.objectsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ObjectsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -481,9 +523,7 @@ public final class Loader
         addBlob(VM.arraysDemoBytes, (int) VM.arraysDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.arraysDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ArraysDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -511,9 +551,7 @@ public final class Loader
         addBlob(VM.boxingDemoBytes, (int) VM.boxingDemoLen);
         // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.boxingDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         seedIntegerCache();                             // build the [-128,127] cache valueOf uses (clinit unrunnable)
         long buf = globalMethodBuf(Magic.bytes("demo/BoxingDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
@@ -533,9 +571,7 @@ public final class Loader
         addBlob(VM.strOpsDemoBytes, (int) VM.strOpsDemoLen);
         // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
         entryPoint(VM.strOpsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1225,9 +1261,7 @@ public final class Loader
         resetLoader();
         addBlob(VM.philBytes, (int) VM.philLen);       // the program (embedded as a static blob, like Guest)
         entryPoint(VM.philBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         buildRunTramp();                               // needs Runnable loaded (ifCount populated)
         long buf = globalMethodBuf(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
@@ -1247,9 +1281,7 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);           // load java/lang/String first (concat needs its TIB)
         addBlob(VM.concatDemoBytes, (int) VM.concatDemoLen);   // the program
         entryPoint(VM.concatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ConcatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1269,9 +1301,7 @@ public final class Loader
         addBlob(VM.lambdaDemoBytes, (int) VM.lambdaDemoLen);
         // reachability-gated: markReachable follows the lambda indys to mark their bodies (+ Runnable/IntOp).
         entryPoint(VM.lambdaDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/LambdaDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1438,9 +1468,7 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);    // results printed via concat -> String
         addBlob(VM.floatDemoBytes, (int) VM.floatDemoLen);
         entryPoint(VM.floatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/FloatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1455,9 +1483,7 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.nativeDemoBytes, (int) VM.nativeDemoLen);
         entryPoint(VM.nativeDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
-        skipClinit = 1;                                          // stock Float/System <clinit> pull the constant-API closure
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/NativeDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1473,9 +1499,7 @@ public final class Loader
         addBlob(VM.stringBuilderBytes, (int) VM.stringBuilderLen);
         addBlob(VM.strDemoBytes, (int) VM.strDemoLen);
         entryPoint(VM.strDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
-        skipClinit = 1;                                          // a pulled stock System has a native-heavy <clinit>
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/StrDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1500,9 +1524,7 @@ public final class Loader
         addBlob(VM.aioobeBytes, (int) VM.aioobeLen);
         addBlob(VM.excDemoBytes, (int) VM.excDemoLen);
         entryPoint(VM.excDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ExcDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1538,9 +1560,7 @@ public final class Loader
         addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);         // reduce accumulator (2-arg SAM)
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         entryPoint(VM.listDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ListDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1575,9 +1595,7 @@ public final class Loader
         addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         entryPoint(VM.mapDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));    // reachability-gated (+ indy)
-        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
-        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/MapDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -2584,7 +2602,6 @@ public final class Loader
 
     static int reportUnresolved;                        // when != 0, globalBuf prints each unresolved reference
     static int gbMiss;                                  // count of unresolved cross-class calls (debug)
-    static int skipClinit;                              // when != 0, loadOne compiles but does NOT run <clinit>
 
     /** Buffer to BL for a static/special call: this class's own method, else the registry. */
     static long resolveCallBuf(int idx)
