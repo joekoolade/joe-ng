@@ -1032,7 +1032,9 @@ public final class Loader
         resetLoader();
         addBlob(VM.philBytes, (int) VM.philLen);       // the program (embedded as a static blob, like Guest)
         entryPoint(VM.philBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         buildRunTramp();                               // needs Runnable loaded (ifCount populated)
         long buf = globalMethodBuf(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
@@ -1052,7 +1054,9 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);           // load java/lang/String first (concat needs its TIB)
         addBlob(VM.concatDemoBytes, (int) VM.concatDemoLen);   // the program
         entryPoint(VM.concatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ConcatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1072,7 +1076,9 @@ public final class Loader
         addBlob(VM.lambdaDemoBytes, (int) VM.lambdaDemoLen);
         // reachability-gated: markReachable follows the lambda indys to mark their bodies (+ Runnable/IntOp).
         entryPoint(VM.lambdaDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/LambdaDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1239,7 +1245,9 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);    // results printed via concat -> String
         addBlob(VM.floatDemoBytes, (int) VM.floatDemoLen);
         entryPoint(VM.floatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/FloatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1254,7 +1262,9 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.nativeDemoBytes, (int) VM.nativeDemoLen);
         entryPoint(VM.nativeDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
+        skipClinit = 1;                                          // stock Float/System <clinit> pull the constant-API closure
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/NativeDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1270,7 +1280,9 @@ public final class Loader
         addBlob(VM.stringBuilderBytes, (int) VM.stringBuilderLen);
         addBlob(VM.strDemoBytes, (int) VM.strDemoLen);
         entryPoint(VM.strDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
+        skipClinit = 1;                                          // a pulled stock System has a native-heavy <clinit>
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/StrDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1295,7 +1307,9 @@ public final class Loader
         addBlob(VM.aioobeBytes, (int) VM.aioobeLen);
         addBlob(VM.excDemoBytes, (int) VM.excDemoLen);
         entryPoint(VM.excDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ExcDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1331,7 +1345,9 @@ public final class Loader
         addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);         // reduce accumulator (2-arg SAM)
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         entryPoint(VM.listDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/ListDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1366,7 +1382,9 @@ public final class Loader
         addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         entryPoint(VM.mapDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));    // reachability-gated (+ indy)
+        skipClinit = 1;                                          // pulled stock classes have native-heavy <clinit>s
         loadAll();
+        skipClinit = 0;
         long buf = globalMethodBuf(Magic.bytes("demo/MapDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
