@@ -57,7 +57,7 @@ public final class Loader
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
     // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
-    private static final int MAXMV = 128;
+    private static final int MAXMV = 512;
     private static long[] gvBase;   // blob holding this slot's name/descriptor
     private static int[] gvName;    // method name Utf8 offset (in gvBase)
     private static int[] gvDesc;    // descriptor Utf8 offset (in gvBase)
@@ -73,7 +73,7 @@ public final class Loader
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
-    private static final int MAXREG = 512;
+    private static final int MAXREG = 6144;
     private static long[] rgBase;   // declaring class blob base (holds its Utf8 strings)
     private static int[] rgClassOff;   // class name Utf8 offset
     private static int[] rgNameOff;    // method name Utf8 offset
@@ -91,7 +91,7 @@ public final class Loader
 
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
-    private static final int MAXCLASS = 96;
+    private static final int MAXCLASS = 512;
     private static long[] clBase;
     private static int[] clNameOff;
     private static long[] clTib;
@@ -110,7 +110,7 @@ public final class Loader
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
-    private static final int MAXFIELD = 512;
+    private static final int MAXFIELD = 3072;
     private static long[] fldBase;
     private static int[] fldClassOff;
     private static int[] fldNameOff;
@@ -120,7 +120,7 @@ public final class Loader
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 1024;
+    private static final int MAXVT = 8192;
     private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
     private static long[] vtNameBase;    // method signature blob (may be a superclass's)
@@ -136,7 +136,7 @@ public final class Loader
     // call site from where the method happens to sit in a given class's vtable, so
     // two classes implementing the same interface at different vtable slots both
     // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 96;
+    private static final int MAXIFM = 512;
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
@@ -148,7 +148,7 @@ public final class Loader
     // class it names — its superclass and interfaces (needed for field layout,
     // vtable flattening and itable indices) but also anything it instantiates,
     // calls or type-tests (needed by the class/method/field registries).
-    private static final int MAXBLOB = 96;
+    private static final int MAXBLOB = 512;
     private static long[] pdBase;        // blob address
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
@@ -156,7 +156,7 @@ public final class Loader
     private static boolean[] pdNeedsString;   // blob materializes a String (CONSTANT_String or invokedynamic-concat)
     private static int stringPdIndex;    // pd index of java/lang/String, or -1 (set by probeAll)
     private static int pdCount;
-    private static final int MAXDEP = 8192;
+    private static final int MAXDEP = 49152;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
     private static int[] dpOff;          // dependency's name Utf8 offset (in pdBase[dpOwner])
     private static int dpCount;
@@ -618,8 +618,35 @@ public final class Loader
     }
 
     /** Reset every loader registry to empty, ready for a fresh {@link #loadAll} batch. */
+    private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
+    private static int reclaimArmed;                    // 1 after the philosophers demo (see armHeapReclaim)
+
+    /**
+     * Start reclaiming the demand-load heap between batches. Called once, AFTER the philosophers demo — whose
+     * scheduler tasks persist on the heap and must not be reclaimed under it. From here each {@link #resetLoader}
+     * rewinds the bump pointer to the watermark, freeing the previous demo's (now-dead) code + objects. Without
+     * this the heap grows unbounded and, by the ~14th stock closure, marches demand-load code past the A64 `bl`
+     * +-128 MiB reach. Safe only single-core (see {@code VM.SMP_ENABLED}).
+     */
+    static void armHeapReclaim()
+    {
+        reclaimArmed = 1;
+    }
+
     private static void resetLoader()
     {
+        if (reclaimArmed != 0)
+        {
+            if (demandHeapMark == 0L)
+            {
+                demandHeapMark = Magic.load64(Heap.PTR_CELL);   // watermark: heap level after the philosophers demo
+            }
+            else
+            {
+                Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
+                Heap.freeHead = 0L;                             // its free-list entries are above the bump ptr again
+            }
+        }
         rgBase = new long[MAXREG];
         rgClassOff = new int[MAXREG];
         rgNameOff = new int[MAXREG];
@@ -697,7 +724,7 @@ public final class Loader
     // closure over the loaded blobs) instead of every method of every class. This lets a big real java.base
     // class load through the normal closure path without choking on its unreachable methods (toString,
     // parseInt's String.format paths, ...). Without an entry set, everything compiles (unchanged behaviour).
-    private static final int MAXREACH = 1024;
+    private static final int MAXREACH = 6144;
     private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
@@ -769,7 +796,7 @@ public final class Loader
      * — invokestatic/special to the named class's method, invokevirtual/interface to that name+descriptor in
      * every loaded class (a receiver could be any of them) — until the set stops growing.
      */
-    private static final int MAXPEND = 8192;
+    private static final int MAXPEND = 49152;
     private static final int PEND_PULL = 2;              // kind: pull the class only (field/type ref; no method)
     private static long[] pendBase;                      // call-site refs of the round's reachable methods:
     private static int[] pendClass, pendName, pendDesc, pendKind;   // (base, class/name/desc offsets, kind)
@@ -1764,7 +1791,7 @@ public final class Loader
     // method a buffer before emitting any, so invokestatic's BL targets are known
     // without compiling nested-and-reentrant (the shared static compile state and
     // the writer-side 10-local ceiling both make on-the-fly recursion awkward).
-    private static final int MAXM = 256;
+    private static final int MAXM = 512;
     private static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
@@ -2409,7 +2436,7 @@ public final class Loader
     // invokestatic/special (bl) and getstatic/putstatic (address load) to the not-yet-loaded class compile
     // to a stub. Each such site is recorded (address + the ref as base+offsets, which stay valid), and
     // patchRelocs() re-resolves + rewrites them after every class is loaded -- so no manual seed-ordering.
-    private static final int MAXRELOC = 4096;
+    private static final int MAXRELOC = 24576;
     private static int relocRecording;                  // 1 only during emitMethod (the real-base emit pass)
     private static long[] rcAddr, rcBase;               // call sites: bl address, ref blob base,
     private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets

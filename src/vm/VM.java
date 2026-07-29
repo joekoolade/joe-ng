@@ -185,6 +185,11 @@ public final class VM
     // sending an event (SEV) releases that core: it branches to the address we wrote. We build a tiny
     // secondary boot stub, point all three slots at it, and each woken core records itself in a flag
     // word then parks -- proving all four cores run our code. (Per-core stacks + scheduling come next.)
+    // SMP toggle. OFF for the embed-all bring-up: the secondary cores share the bump heap and allocate
+    // concurrently, which blocks a between-batch heap reclaim (needed so demand-load code stays within the
+    // A64 bl +-128 MiB reach). With this false the secondaries stay parked in the armstub WFE spin, so all
+    // allocation is single-core and the reclaim is safe. Flip back true once embed-all is settled.
+    static final boolean SMP_ENABLED = false;
     static final long CORE_FLAGS = 0x0304_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8 (above the image)
     // Fixed runtime scratch, relocated to the 48-64 MiB band. The embedded image now carries ALL of
     // java.base (~29 MiB from 0x80000), so the old 7.4 MiB cluster fell INSIDE the image; these addresses
@@ -454,6 +459,12 @@ public final class VM
         Magic.store64(CORE_FLAGS + 0x48L, 0L);
         Magic.store64(CORE_FLAGS + 0x50L, 0L);
         Magic.store64(CORE_FLAGS + 0x58L, 0L);
+
+        if (!SMP_ENABLED)                                  // leave cores 1-3 parked: single-core heap for reclaim
+        {
+            Uart.write(Magic.bytes("SMP: 1 of 4 cores up (SMP disabled)\n"));
+            return;
+        }
 
         // Stub (runs on each secondary at EL2): x0 = MPIDR & 3 (core id, becomes secondaryMain's arg),
         // set the per-core EL1 stack + a sane EL1 SCTLR, then drop EL2 -> EL1 (mirroring EmitBoot) and
@@ -1928,6 +1939,10 @@ public final class VM
         }
         stopTimerTick();
         Uart.putc(0x0A);
+
+        // Philosophers (the one demo with persistent scheduler tasks on the heap) is done; from here on it is
+        // safe to reclaim the demand-load heap between batches so it stays within the A64 bl reach.
+        Loader.armHeapReclaim();
 
         // M-B slice 1: invokedynamic string concat. demo/ConcatDemo uses "a"+b, which javac lowers to
         // invokedynamic StringConcatFactory.makeConcatWithConstants. The metal JIT intrinsifies it into a

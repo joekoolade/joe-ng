@@ -26,12 +26,13 @@ public final class BuildRuntimeImage
 
     private static final String ENTRY = "vm/VM.boot()V";
 
-    // Embed all of stock java.base into the class table. Gated off until the compile-all mini demos are
-    // migrated to reachable-mode so they don't compile stubs that mix stock+mini classes. See embedAllJavaBase.
-    private static final boolean EMBED_ALL_JAVABASE = false;   // ON boots the platform demos, but stock closures
-    // (NativeDemo -> stock Float/System -> Constable/ConstantDesc) still hit a wild-branch during compilation —
-    // the stock-System/closure-compilation wall (plan Milestone 1+). The memory-map relocation + cap bumps below
-    // are the prerequisites that ARE done; flip this back ON to resume that work.
+    // Embed ALL of stock java.base into the class table (~28.5 MiB image); the on-metal demand-loader pulls
+    // any of it by name, reachability-gated. ON and green: all demos run with the full java.base embedded.
+    // Prerequisites that made it work (see embedAllJavaBase): reachable-mode migration + the memory-map
+    // relocation above the image; java.lang.constant.{Constable,ConstantDesc} override stubs; skipClinit on the
+    // demand-load demos; single-core heap reclaim between batches (VM.SMP_ENABLED off) so demand-load code
+    // stays within the A64 bl +-128 MiB reach; and the bumped loader caps.
+    private static final boolean EMBED_ALL_JAVABASE = true;
 
     public static CodeBuffer build(Path classesDir) throws IOException
     {
