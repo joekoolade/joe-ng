@@ -286,7 +286,7 @@ public final class Loader
         addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
         addBlob(VM.throwableBytes, (int) VM.throwableLen);
         addBlob(VM.parseAllDemoBytes, (int) VM.parseAllDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.parseAllDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;                                          // real Integer's <clinit> would touch IntegerCache
         loadAll();
@@ -331,7 +331,7 @@ public final class Loader
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.toStringDemoBytes, (int) VM.toStringDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.toStringDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -357,7 +357,7 @@ public final class Loader
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.hexLongDemoBytes, (int) VM.hexLongDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.hexLongDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -388,7 +388,7 @@ public final class Loader
         addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
         addBlob(VM.throwableBytes, (int) VM.throwableLen);
         addBlob(VM.longMoreDemoBytes, (int) VM.longMoreDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.longMoreDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -418,7 +418,7 @@ public final class Loader
         addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
         addBlob(VM.throwableBytes, (int) VM.throwableLen);
         addBlob(VM.mathIntDemoBytes, (int) VM.mathIntDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.mathIntDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -450,7 +450,7 @@ public final class Loader
         addBlob(VM.exceptionBytes, (int) VM.exceptionLen);
         addBlob(VM.throwableBytes, (int) VM.throwableLen);
         addBlob(VM.objectsDemoBytes, (int) VM.objectsDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.objectsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -477,7 +477,7 @@ public final class Loader
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.arraysDemoBytes, (int) VM.arraysDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.arraysDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();
@@ -507,7 +507,7 @@ public final class Loader
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.boxingDemoBytes, (int) VM.boxingDemoLen);
-        resolveClosureFromDir();
+        // reachability-gated closure (no pull-all): markReachable pulls the reachable closure on demand.
         entryPoint(VM.boxingDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         skipClinit = 1;
         loadAll();

@@ -24,6 +24,7 @@ final class ClassRegistry
     private final Vec<byte[]> raw = new Vec<>();           // raw .class bytes per slot
     private final Vec<ClassFile> parsed = new Vec<>();     // parse cache (null until first resolve)
     private final Vec<String> reached = new Vec<>();       // names in first-resolve order (compile set)
+    private final Vec<String> all = new Vec<>();           // every registered name (for embedding the class table)
 
     /** Register {@code bytes} as the class {@code name} (internal form, e.g. "vm/VM"). */
     void add(String name, byte[] bytes)
@@ -31,6 +32,13 @@ final class ClassRegistry
         index.put(name, raw.size());
         raw.add(bytes);
         parsed.add(null);
+        all.add(name);
+    }
+
+    /** Every registered class name — the full set to embed in the class table (demand-loadable by name). */
+    Vec<String> allNames()
+    {
+        return all;
     }
 
     /** Whether {@code name} has been registered. */

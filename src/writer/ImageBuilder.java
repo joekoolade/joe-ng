@@ -268,20 +268,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // The class table is the compile-reachable set plus the runtime-load blobs' classes,
         // folded in so the metal writer can build closures spanning them (e.g. Guest.answer),
         // not just JIT them at runtime (PLAN.md §M5.5c step 3b.4).
-        Vec<String> classNames = new Vec<>();
-        Vec<String> reached = registry.reached();                   // snapshot: discovery is done
-        for (int i = 0; i < reached.size(); i++)
-        {
-            classNames.add(reached.get(i));
-        }
-        for (int b = 0; b < blobs.size(); b++)
-        {
-            String cn = blobs.get(b).className();
-            if (cn != null && !contains(classNames, cn))
-            {
-                classNames.add(cn);
-            }
-        }
+        // Demand-loadable classes only (stock java.base + guest overrides + demos), SORTED by name so the
+        // metal findClass binary-searches the directory. VM-internal classes (magic/*, vm/*, compiler/*, ...)
+        // are EXCLUDED: magic/Magic's methods are intrinsics (not real bytecode) and must resolve via the
+        // intrinsic path, never be demand-loaded. Runtime pulls stay bounded by the reachability-gated closure.
+        Vec<String> classNames = sortByName(demandLoadable(registry.allNames()));
         int classCount = classNames.size();
         int classDirWord = cur;
         cur += classCount * CLASS_ENTRY_WORDS;
@@ -672,6 +663,44 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
         }
         return false;
+    }
+
+    /**
+     * The names sorted ascending (ASCII/lexicographic, matching the metal {@code findClass} byte compare) so
+     * the embedded class directory can be binary-searched. Host-only (the writer runs on the seed JVM), so a
+     * JDK sort is fine.
+     */
+    /** Keep only the demand-loadable classes ({@code java/}, {@code jdk/}, {@code sun/}, {@code demo/}) —
+     *  the stock library + guest overrides + demos. VM internals resolve via AOT code / intrinsics, not the
+     *  class table. */
+    private static Vec<String> demandLoadable(Vec<String> names)
+    {
+        Vec<String> out = new Vec<>();
+        for (int i = 0; i < names.size(); i++)
+        {
+            String n = names.get(i);
+            if (n.startsWith("java/") || n.startsWith("jdk/") || n.startsWith("sun/") || n.startsWith("demo/"))
+            {
+                out.add(n);
+            }
+        }
+        return out;
+    }
+
+    private static Vec<String> sortByName(Vec<String> names)
+    {
+        String[] arr = new String[names.size()];
+        for (int i = 0; i < arr.length; i++)
+        {
+            arr[i] = names.get(i);
+        }
+        java.util.Arrays.sort(arr);
+        Vec<String> out = new Vec<>();
+        for (int i = 0; i < arr.length; i++)
+        {
+            out.add(arr[i]);
+        }
+        return out;
     }
 
     /** A class name's bytes (internal names are ASCII — no charset needed on metal). */

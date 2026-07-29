@@ -5998,19 +5998,48 @@ public final class VM
     }
 
     /** Scan the class table for the name at [nameAddr,nameLen); return its class bytes address, or 0. */
+    /** Locate a class's raw bytes by name via BINARY SEARCH over the name-sorted directory (entries are 32B
+     *  {nameAddr, nameLen, bytesAddr, bytesLen}). The whole stock java.base is embedded, so this must scale. */
     private static long findClass(long nameAddr, long nameLen)
     {
-        long i = 0L;
-        while (i < classCount)
+        long lo = 0L;
+        long hi = classCount - 1L;
+        while (lo <= hi)
         {
-            long e = classDir + i * 32L;
-            if (Magic.load64(e + 8L) == nameLen && bytesEqual(Magic.load64(e), nameAddr, nameLen))
+            long mid = (lo + hi) >> 1;
+            long e = classDir + mid * 32L;
+            int cmp = nameCompare(Magic.load64(e), Magic.load64(e + 8L), nameAddr, nameLen);
+            if (cmp == 0)
             {
-                return Magic.load64(e + 16L);
+                return Magic.load64(e + 16L);          // bytesAddr
+            }
+            if (cmp < 0)
+            {
+                lo = mid + 1L;                         // entry name < target -> search right
+            }
+            else
+            {
+                hi = mid - 1L;
+            }
+        }
+        return 0L;
+    }
+
+    /** Byte-lexicographic compare of class name {@code a} vs {@code b} (ASCII; matches the host String sort). */
+    private static int nameCompare(long aAddr, long aLen, long bAddr, long bLen)
+    {
+        long n = aLen < bLen ? aLen : bLen;
+        long i = 0L;
+        while (i < n)
+        {
+            int d = (Magic.load8(aAddr + i) & 0xFF) - (Magic.load8(bAddr + i) & 0xFF);
+            if (d != 0)
+            {
+                return d;
             }
             i = i + 1L;
         }
-        return 0L;
+        return (int) (aLen - bLen);
     }
 
     /** Class-directory lookup for the on-metal {@link Loader}: bytes address for [namePtr,len), or 0. */

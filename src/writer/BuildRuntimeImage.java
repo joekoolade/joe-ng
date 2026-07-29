@@ -4,8 +4,12 @@ import asm.CodeBuffer;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 /**
  * M2: build the multi-class runtime image. Starting from {@code vm.VM.boot},
@@ -21,6 +25,10 @@ public final class BuildRuntimeImage
 {
 
     private static final String ENTRY = "vm/VM.boot()V";
+
+    // Embed all of stock java.base into the class table. Gated off until the compile-all mini demos are
+    // migrated to reachable-mode so they don't compile stubs that mix stock+mini classes. See embedAllJavaBase.
+    private static final boolean EMBED_ALL_JAVABASE = false;
 
     public static CodeBuffer build(Path classesDir) throws IOException
     {
@@ -54,6 +62,19 @@ public final class BuildRuntimeImage
         try (var in = Integer.class.getResourceAsStream("/java/lang/Integer$IntegerCache.class"))
         {
             registry.add("java/lang/Integer$IntegerCache", in.readAllBytes());
+        }
+
+        // Embed the ENTIRE stock java.base so the on-metal demand-loader can pull any of it by name (the
+        // reachability-gated closure keeps each program to only what it reaches). Walk the seed JVM's own
+        // java.base via the jrt filesystem; guest overrides + the classes above already registered win
+        // (addIfAbsent), so the mini runtime shadows the stock class where we provide one.
+        // GATED OFF until the compile-all mini demos are migrated to reachable-mode (or retired): with stock
+        // classes present, those demos compile unreached stubs whose dangling refs to stock classes (e.g. mini
+        // Thread -> UnsupportedOperationException) now resolve and MIX stock-with-mini -> breakage. Flipping
+        // this to true is the embed-all step, paired with that migration.
+        if (EMBED_ALL_JAVABASE)
+        {
+            embedAllJavaBase(registry);
         }
 
         ImageBuilder ib = new ImageBuilder(registry);
@@ -169,6 +190,35 @@ public final class BuildRuntimeImage
                 }
                 String rel = dir.relativize(p).toString().replace(File.separatorChar, '/');
                 registry.add(rel.substring(0, rel.length() - ".class".length()), Files.readAllBytes(p));
+            }
+        }
+    }
+
+    /**
+     * Register every class of the seed JVM's stock {@code java.base} (via the {@code jrt:/} filesystem) that
+     * is not already registered — so a guest override or an explicitly-added class keeps priority. Skips
+     * {@code module-info}. This is what makes the whole stock library demand-loadable on metal.
+     */
+    private static void embedAllJavaBase(ClassRegistry registry) throws IOException
+    {
+        FileSystem jrt = FileSystems.getFileSystem(URI.create("jrt:/"));
+        Path base = jrt.getPath("/modules/java.base");
+        try (Stream<Path> paths = Files.walk(base))
+        {
+            for (Path p : (Iterable<Path>) paths::iterator)
+            {
+                String s = p.toString();
+                if (!s.endsWith(".class"))
+                {
+                    continue;
+                }
+                String name = base.relativize(p).toString();               // jrt separator is '/'
+                name = name.substring(0, name.length() - ".class".length());
+                if (name.equals("module-info") || registry.has(name))
+                {
+                    continue;
+                }
+                registry.add(name, Files.readAllBytes(p));
             }
         }
     }
