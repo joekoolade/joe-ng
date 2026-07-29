@@ -185,11 +185,11 @@ public final class VM
     // sending an event (SEV) releases that core: it branches to the address we wrote. We build a tiny
     // secondary boot stub, point all three slots at it, and each woken core records itself in a flag
     // word then parks -- proving all four cores run our code. (Per-core stacks + scheduling come next.)
-    // SMP toggle. OFF for the embed-all bring-up: the secondary cores share the bump heap and allocate
-    // concurrently, which blocks a between-batch heap reclaim (needed so demand-load code stays within the
-    // A64 bl +-128 MiB reach). With this false the secondaries stay parked in the armstub WFE spin, so all
-    // allocation is single-core and the reclaim is safe. Flip back true once embed-all is settled.
-    static final boolean SMP_ENABLED = false;
+    // SMP toggle. Back ON now that the heap is per-core-arena'd ({@link Heap}): each core bump-allocates from
+    // its own region, so cores 1-3 allocate concurrently without racing core 0's bump pointer, and core 0's
+    // between-batch demand-load heap reclaim only rewinds ITS arena. (It was briefly off during embed-all
+    // bring-up, when a single shared bump heap made the reclaim unsafe under the secondaries.)
+    static final boolean SMP_ENABLED = true;
     static final long CORE_FLAGS = 0x0304_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8 (above the image)
     // Fixed runtime scratch, relocated to the 48-64 MiB band. The embedded image now carries ALL of
     // java.base (~29 MiB from 0x80000), so the old 7.4 MiB cluster fell INSIDE the image; these addresses

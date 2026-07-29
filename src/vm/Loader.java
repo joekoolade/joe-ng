@@ -626,7 +626,8 @@ public final class Loader
      * scheduler tasks persist on the heap and must not be reclaimed under it. From here each {@link #resetLoader}
      * rewinds the bump pointer to the watermark, freeing the previous demo's (now-dead) code + objects. Without
      * this the heap grows unbounded and, by the ~14th stock closure, marches demand-load code past the A64 `bl`
-     * +-128 MiB reach. Safe only single-core (see {@code VM.SMP_ENABLED}).
+     * +-128 MiB reach. Only core 0's arena is rewound; per-core heap arenas ({@link Heap}) keep the
+     * secondaries out of it, so this is SMP-safe.
      */
     static void armHeapReclaim()
     {
@@ -644,7 +645,7 @@ public final class Loader
             else
             {
                 Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
-                Heap.freeHead = 0L;                             // its free-list entries are above the bump ptr again
+                Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
             }
         }
         rgBase = new long[MAXREG];

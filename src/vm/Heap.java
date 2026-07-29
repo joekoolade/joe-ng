@@ -17,23 +17,39 @@ public final class Heap
 {
     private Heap() {}
 
-    /** 8-byte cell holding the bump pointer (free RAM below the heap). */
-    public static final long PTR_CELL = 0x03FF_0000L;
-    /** Start of the allocation region (64 MiB). The embedded image now carries ALL of java.base (~29 MiB,
-     *  loaded from 0x80000), so the old 9 MiB heap fell INSIDE the image and the bump allocator clobbered
-     *  the embedded class blobs. Sitting the heap at 64 MiB clears the image (and the 7.4 MiB page tables)
-     *  with headroom; it grows up from here toward the peripherals at 0xFE00_0000. The MMU identity-maps
-     *  the low 4 GiB, so this region is valid cacheable RAM. */
-    public static final long BASE     = 0x0400_0000L;
+    // PER-CORE ARENAS. Each core bump-allocates from its OWN region + free-list, so cores 1-3 can allocate
+    // concurrently with core 0 (no shared-bump-pointer race), and core 0's between-batch demand-load heap
+    // reclaim (Loader) only rewinds ITS arena — never under a secondary that's allocating. Core 0's arena is
+    // the original heap (BASE, reclaimed); the secondaries only ever hold short-lived SMP-demo data, so their
+    // 64 MiB arenas up high are plenty and are never GC'd. The MMU identity-maps the low 4 GiB (Pi 4 = 4 GiB).
 
-    static long freeHead;              // free-list head, 0 = empty (nodes: [next @0][size @8])
+    /** Base of the per-core bump-pointer cells: core c's cell is {@code PTR_CELL + c*8}. Core 0's stays at
+     *  {@code PTR_CELL} so {@link VM#gcCollect} still reads it directly. */
+    public static final long PTR_CELL  = 0x03FF_0000L;
+    /** Base of the per-core free-list heads: core c's head is {@code FREE_CELL + c*8}. */
+    public static final long FREE_CELL = 0x03FF_0100L;
+    /** Start of CORE 0's allocation region (64 MiB) — above the ~29 MiB all-java.base image (from 0x80000)
+     *  and the 48-56 MiB scratch band; grows up. {@link VM#gcCollect} walks BASE..PTR_CELL. */
+    public static final long BASE      = 0x0400_0000L;
+
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
 
-    /** Seed the bump pointer. Call once, early in boot, before any {@code new}. */
+    /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from 256 MiB up. */
+    static long arenaBase(int core)
+    {
+        return core == 0 ? BASE : 0x1000_0000L + (long) (core - 1) * 0x0400_0000L;
+    }
+
+    /** Seed every core's bump pointer + free list. Call once, early in boot, before any {@code new}. */
     public static void init()
     {
-        Magic.store64(PTR_CELL, BASE);
-        freeHead = 0L;
+        int c = 0;
+        while (c < 4)
+        {
+            Magic.store64(PTR_CELL + c * 8L, arenaBase(c));
+            Magic.store64(FREE_CELL + c * 8L, 0L);
+            c += 1;
+        }
     }
 
     /**
@@ -62,9 +78,12 @@ public final class Heap
     public static long alloc(int size)
     {
         int aligned = (size + 7) & -8;
+        int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
+        long freeCell = FREE_CELL + core * 8L;
+        long ptrCell = PTR_CELL + core * 8L;
         long prev = 0L;
-        long f = freeHead;
-        while (f != 0L)                                     // first fit
+        long f = Magic.load64(freeCell);
+        while (f != 0L)                                     // first fit in this core's free list
         {
             long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
             if (fsize >= aligned)
@@ -72,7 +91,7 @@ public final class Heap
                 long next = Magic.load64(f);
                 if (prev == 0L)
                 {
-                    freeHead = next;
+                    Magic.store64(freeCell, next);
                 }
                 else
                 {
@@ -85,8 +104,8 @@ public final class Heap
             prev = f;
             f = Magic.load64(f);
         }
-        long p = Magic.load64(PTR_CELL);
-        Magic.store64(PTR_CELL, p + aligned);
+        long p = Magic.load64(ptrCell);
+        Magic.store64(ptrCell, p + aligned);
         Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
         lastFromFreeList = 0;
         zeroPayload(p, aligned);
@@ -122,17 +141,18 @@ public final class Heap
         return p;
     }
 
-    /** Reset the free list (start of a sweep). */
+    /** Reset the current core's free list (start of a sweep — the GC runs on the collecting core). */
     static void resetFreeList()
     {
-        freeHead = 0L;
+        Magic.store64(FREE_CELL + (int) (Magic.readMPIDR() & 3L) * 8L, 0L);
     }
 
-    /** Add a reclaimed block to the free list. */
+    /** Add a reclaimed block to the current core's free list. */
     static void addFree(long addr, long size)
     {
-        Magic.store64(addr, freeHead);                           // next
+        long freeCell = FREE_CELL + (int) (Magic.readMPIDR() & 3L) * 8L;
+        Magic.store64(addr, Magic.load64(freeCell));             // next
         Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);   // size
-        freeHead = addr;
+        Magic.store64(freeCell, addr);
     }
 }
