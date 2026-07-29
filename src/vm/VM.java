@@ -1715,6 +1715,11 @@ public final class VM
                  : ((int) result) == expect ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL\n"));
     }
 
+    // M5 (metal self-build / byte-for-byte fixpoint) is DEPRECATED: the host BuildRuntimeImage writer is the
+    // only image producer now (stock-java.base pivot). The self-build + fixpoint + SD-persist tail of run() is
+    // retired -- gated off here rather than deleted, pending the embedding rework. See the plan file.
+    private static final boolean SELF_BUILD = false;
+
     static void run()
     {
         Uart.write(Magic.bytes("hello from joe-ng\n"));     // putc turns \n into \r\n
@@ -2047,6 +2052,14 @@ public final class VM
         // and check frameSizeAt finds it in range and rejects a PC just past it.
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
+
+        // --- M5 self-build / fixpoint / SD-persist retired (see SELF_BUILD above). Demos ran above; the
+        //     tail below is the deprecated metal-writer verification + reproduction, no longer run. ---
+        if (!SELF_BUILD)
+        {
+            Uart.write(Magic.bytes("(self-build retired; host writer only)\n"));
+            return;
+        }
 
         // M5.5c step 2: the writer embedded the compile-reachable class set as a
         // name-indexed table. Prove the metal writer's input path: look each class up
