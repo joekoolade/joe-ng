@@ -18,10 +18,13 @@ public final class Heap
     private Heap() {}
 
     /** 8-byte cell holding the bump pointer (free RAM below the heap). */
-    public static final long PTR_CELL = 0x008F_0000L;
-    /** Start of the allocation region (9 MiB): above the image (from 0x80000, ~8 MiB of room) and the
-     *  mailbox buffer (8 MiB), growing further up, so none of them overlap. */
-    public static final long BASE     = 0x0090_0000L;
+    public static final long PTR_CELL = 0x03FF_0000L;
+    /** Start of the allocation region (64 MiB). The embedded image now carries ALL of java.base (~29 MiB,
+     *  loaded from 0x80000), so the old 9 MiB heap fell INSIDE the image and the bump allocator clobbered
+     *  the embedded class blobs. Sitting the heap at 64 MiB clears the image (and the 7.4 MiB page tables)
+     *  with headroom; it grows up from here toward the peripherals at 0xFE00_0000. The MMU identity-maps
+     *  the low 4 GiB, so this region is valid cacheable RAM. */
+    public static final long BASE     = 0x0400_0000L;
 
     static long freeHead;              // free-list head, 0 = empty (nodes: [next @0][size @8])
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)

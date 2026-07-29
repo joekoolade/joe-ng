@@ -28,7 +28,10 @@ public final class BuildRuntimeImage
 
     // Embed all of stock java.base into the class table. Gated off until the compile-all mini demos are
     // migrated to reachable-mode so they don't compile stubs that mix stock+mini classes. See embedAllJavaBase.
-    private static final boolean EMBED_ALL_JAVABASE = false;
+    private static final boolean EMBED_ALL_JAVABASE = false;   // ON boots the platform demos, but stock closures
+    // (NativeDemo -> stock Float/System -> Constable/ConstantDesc) still hit a wild-branch during compilation —
+    // the stock-System/closure-compilation wall (plan Milestone 1+). The memory-map relocation + cap bumps below
+    // are the prerequisites that ARE done; flip this back ON to resume that work.
 
     public static CodeBuffer build(Path classesDir) throws IOException
     {

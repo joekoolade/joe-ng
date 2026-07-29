@@ -13,6 +13,14 @@ public final class String implements Comparable<String>
     private final byte[] value;
     private final byte coder;
 
+    /**
+     * Stock java.base code (e.g. {@code Integer.toUnsignedString0}) branches on {@code getstatic
+     * String.COMPACT_STRINGS} — a real field here so that getstatic resolves to this slot. The whole mini
+     * String world is LATIN1, so the loader seeds it {@code true} (provideKnownStatics), steering stock code
+     * onto the LATIN1 path and away from the unsupported UTF16/Unsafe branch.
+     */
+    static boolean COMPACT_STRINGS;
+
     public String(byte[] v)
     {
         value = v;

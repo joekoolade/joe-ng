@@ -185,12 +185,15 @@ public final class VM
     // sending an event (SEV) releases that core: it branches to the address we wrote. We build a tiny
     // secondary boot stub, point all three slots at it, and each woken core records itself in a flag
     // word then parks -- proving all four cores run our code. (Per-core stacks + scheduling come next.)
-    static final long CORE_FLAGS = 0x0070_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8
-    static final long SEC_STUB   = 0x0071_0000L;          // secondary boot stub (fixed scratch, not GC'd)
-    static final int  SEC_STACK_HI = 0x0200;              // per-core stack base 0x0200_0000 + core*1MiB
-    static final long PT_BASE    = 0x0072_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
-    static final long LOCK_ADDR  = 0x0073_0000L;          // shared HW-spinlock word (cacheable RAM)
-    static final long PC_VBAR    = 0x0074_2000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
+    static final long CORE_FLAGS = 0x0304_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8 (above the image)
+    // Fixed runtime scratch, relocated to the 48-64 MiB band. The embedded image now carries ALL of
+    // java.base (~29 MiB from 0x80000), so the old 7.4 MiB cluster fell INSIDE the image; these addresses
+    // sit above it (below the 64 MiB heap). The MMU identity-maps the low 4 GiB, so all are valid RAM.
+    static final long SEC_STUB   = 0x0300_0000L;          // secondary boot stub (fixed scratch, not GC'd)
+    static final int  SEC_STACK_HI = 0x0380;              // per-core stack base 0x0380_0000 + core*1MiB
+    static final long PT_BASE    = 0x0301_0000L;          // page tables: 1 L1 + 4 L2 tables (20 KiB, fixed)
+    static final long LOCK_ADDR  = 0x0302_0000L;          // shared HW-spinlock word (cacheable RAM)
+    static final long PC_VBAR    = 0x0303_0000L;          // secondaries' shared IRQ vector table (2 KiB aligned)
 
     static long[] pcTicks;                                // per-core timer-tick count (proof each core's timer fires)
     static long[] pcTaskSp;                               // saved SP of each core's two tasks: index = core*2 + slot

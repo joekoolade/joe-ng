@@ -153,6 +153,8 @@ public final class Loader
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
     private static int[] pdDone;         // 1 once loaded
+    private static boolean[] pdNeedsString;   // blob materializes a String (CONSTANT_String or invokedynamic-concat)
+    private static int stringPdIndex;    // pd index of java/lang/String, or -1 (set by probeAll)
     private static int pdCount;
     private static final int MAXDEP = 8192;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
@@ -260,12 +262,12 @@ public final class Loader
         addBlob(VM.illegalArgBytes, (int) VM.illegalArgLen);
         addBlob(VM.numberFmtBytes, (int) VM.numberFmtLen);
         addBlob(VM.characterBytes, (int) VM.characterLen);
-        resolveClosureFromDir();
+        addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer as a blob: reachable pass compiles parseInt
+        entryPoint(VM.integerBytes, Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));   // reachability-gated
+        skipClinit = 1;                                          // real Integer's <clinit> would touch IntegerCache
         loadAll();
-        parseConstPool(VM.integerBytes, (int) VM.integerLen);
-        parseFields();
-        long code = findMethodByBytes(gbase, Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));
-        parseIntBuf = code != 0L ? compile(code, gcodeLen, gFoundDescOff, gFoundStatic) : 0L;
+        skipClinit = 0;
+        parseIntBuf = globalMethodBuf(Magic.bytes("java/lang/Integer"), Magic.bytes("parseInt"), Magic.bytes("(Ljava/lang/String;I)I"));
     }
 
     /**
@@ -677,6 +679,7 @@ public final class Loader
         pdBase = new long[MAXBLOB];
         pdNameOff = new int[MAXBLOB];
         pdDone = new int[MAXBLOB];
+        pdNeedsString = new boolean[MAXBLOB];
         pdCount = 0;
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
@@ -1028,14 +1031,13 @@ public final class Loader
     {
         resetLoader();
         addBlob(VM.philBytes, (int) VM.philLen);       // the program (embedded as a static blob, like Guest)
-        resolveClosureFromDir();                        // pull referenced library classes on demand
+        entryPoint(VM.philBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
         loadAll();
         buildRunTramp();                               // needs Runnable loaded (ifCount populated)
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.philBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));    // main()V returns void; assign to avoid a pop2
+            long unused = Magic.call0(buf);            // main()V returns void; assign to avoid a pop2
         }
     }
 
@@ -1049,13 +1051,12 @@ public final class Loader
         resetLoader();
         addBlob(VM.stringBytes, (int) VM.stringLen);           // load java/lang/String first (concat needs its TIB)
         addBlob(VM.concatDemoBytes, (int) VM.concatDemoLen);   // the program
-        resolveClosureFromDir();
+        entryPoint(VM.concatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.concatDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/ConcatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1072,11 +1073,10 @@ public final class Loader
         // reachability-gated: markReachable follows the lambda indys to mark their bodies (+ Runnable/IntOp).
         entryPoint(VM.lambdaDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.lambdaDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/LambdaDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1238,13 +1238,12 @@ public final class Loader
         resetLoader();
         addBlob(VM.stringBytes, (int) VM.stringLen);    // results printed via concat -> String
         addBlob(VM.floatDemoBytes, (int) VM.floatDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.floatDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.floatDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/FloatDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1254,13 +1253,12 @@ public final class Loader
         resetLoader();
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.nativeDemoBytes, (int) VM.nativeDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.nativeDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.nativeDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/NativeDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1271,13 +1269,12 @@ public final class Loader
         addBlob(VM.stringBytes, (int) VM.stringLen);              // String first (literals + StringBuilder need it)
         addBlob(VM.stringBuilderBytes, (int) VM.stringBuilderLen);
         addBlob(VM.strDemoBytes, (int) VM.strDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.strDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.strDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/StrDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1297,13 +1294,12 @@ public final class Loader
         addBlob(VM.ioobeBytes, (int) VM.ioobeLen);
         addBlob(VM.aioobeBytes, (int) VM.aioobeLen);
         addBlob(VM.excDemoBytes, (int) VM.excDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.excDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated closure
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.excDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/ExcDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1336,11 +1332,10 @@ public final class Loader
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         entryPoint(VM.listDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.listDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/ListDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1372,11 +1367,10 @@ public final class Loader
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         entryPoint(VM.mapDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));    // reachability-gated (+ indy)
         loadAll();
-        seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
-        long code = findMethod(VM.mapDemoBytes);
-        if (code != 0L)
+        long buf = globalMethodBuf(Magic.bytes("demo/MapDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
         {
-            long unused = Magic.call0(bufOf(code));
+            long unused = Magic.call0(buf);
         }
     }
 
@@ -1945,17 +1939,27 @@ public final class Loader
     private static void probeAll()
     {
         dpCount = 0;
+        stringPdIndex = -1;
         int i = 0;
         while (i < pdCount)
         {
             parseConstPool(pdBase[i], pdLen[i]);
             pdNameOff[i] = gcp[u2(gbase + gcp[u2(gp + 2)])];   // this_class -> name
+            if (utf8IsAtBase(pdBase[i], pdNameOff[i], Magic.bytes("java/lang/String")))
+            {
+                stringPdIndex = i;
+            }
+            pdNeedsString[i] = false;
             int c = 1;
             while (c < gcpCount)
             {
                 if (gcpTag[c] == 7)                     // CONSTANT_Class
                 {
                     addDep(i, gcp[u2(gbase + gcp[c])]);
+                }
+                else if (gcpTag[c] == 8 || gcpTag[c] == 18)   // CONSTANT_String / CONSTANT_InvokeDynamic:
+                {
+                    pdNeedsString[i] = true;            // materializes a String via newStringFromBytes (baked TIB)
                 }
                 c += 1;
             }
@@ -1973,6 +1977,13 @@ public final class Loader
     /** True if no dependency of blob {@code i} names a blob that is still unloaded. */
     private static boolean ready(int i)
     {
+        // A blob that materializes a String (string literal / concat) bakes String's TIB+size at compile time
+        // (newStringFromBytes) but carries no CONSTANT_Class dep on it — so hold it until java/lang/String's
+        // Type is registered, else it compiles against TIB=0 and yields a malformed String.
+        if (pdNeedsString[i] && stringPdIndex >= 0 && stringPdIndex != i && pdDone[stringPdIndex] == 0)
+        {
+            return false;
+        }
         int d = 0;
         while (d < dpCount)
         {
@@ -2042,6 +2053,15 @@ public final class Loader
      */
     private static void provideKnownStatics()
     {
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
+        {
+            long cs = staticSlotByName(Magic.bytes("COMPACT_STRINGS"));
+            if (cs != 0L)
+            {
+                Magic.store64(cs, 1L);                  // LATIN1 world: stock getstatic COMPACT_STRINGS -> true
+            }
+            return;
+        }
         if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer")))
         {
             return;
