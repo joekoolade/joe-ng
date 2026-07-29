@@ -27,7 +27,7 @@ GUESTSRC := $(shell find guestsrc -name '*.java')
 
 all: test image
 
-build: $(OUT)/.stamp $(OUT)/.guest-stamp
+build: $(OUT)/.stamp guest
 
 # Recompile the whole set whenever any source is newer than the stamp.
 $(OUT)/.stamp: $(SOURCES)
@@ -36,9 +36,15 @@ $(OUT)/.stamp: $(SOURCES)
 	@touch $@
 
 # Compile the guest tree into out/ after the main set (it references magic.Magic there).
-$(OUT)/.guest-stamp: $(OUT)/.stamp $(GUESTSRC)
+# ALWAYS purge the guest output packages (java/ jdk/ demo/ come only from guestsrc) before recompiling: an
+# incremental javac never deletes the .class of a REMOVED source, so a retired guest class (e.g. a mini
+# java/lang/String swapped for stock) would leave a stale .class that registerTree keeps embedding — the build
+# would silently keep running the old class. The guest tree is small; a clean recompile each build is cheap and
+# keeps "delete the source" honest.
+.PHONY: guest
+guest: $(OUT)/.stamp
+	rm -rf $(OUT)/java $(OUT)/jdk $(OUT)/demo
 	$(JAVAC) --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(GUESTSRC)
-	@touch $@
 
 test: build
 	$(JAVA) -cp $(OUT) asm.A64Test
