@@ -794,6 +794,7 @@ public final class Loader
         {
             grew = false;
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
+            grew = seedAllNamed(Magic.bytes("run"), Magic.bytes("()V")) || grew;   // Runnable trampoline entries
             pendN = 0;
             int b = 0;
             while (b < pdCount)                         // collect refs of reachable methods
@@ -860,6 +861,7 @@ public final class Loader
     private static void collectBlob(long base, int len)
     {
         parseForMethods(base, len);
+        findBootstrapMethods();                         // set gBsmOff so collectRefs can resolve lambda indys
         long p = gMethodsStart;
         int mcount = u2(p);
         p += 2;
@@ -903,6 +905,14 @@ public final class Loader
             else if (op == 0xbb || op == 0xbd || op == 0xc0 || op == 0xc1)   // new/anewarray/checkcast/instanceof
             {
                 addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
+            }
+            else if (op == 0xba && isLambdaIndy(u2(code + pc + 1)))          // lambda/method-ref: mark its impl body
+            {
+                int idx = u2(code + pc + 1);
+                int mref = lambdaImplMref(idx);
+                int mk = lambdaImplKind(idx);
+                addPend(base, refClassNameOff(mref), mrefNameOff(mref), mrefDescOff(mref),
+                        (mk == 5 || mk == 9) ? 1 : 0);   // invokeVirtual/Interface -> name+desc; else class-qualified
             }
             pc += insnLen(code, pc);
         }
@@ -954,15 +964,17 @@ public final class Loader
     }
 
     /** Add the {@code name/desc} method of every loaded blob that defines it (for run()V trampoline seeds). */
-    private static void seedAllNamed(byte[] name, byte[] desc)
+    private static boolean seedAllNamed(byte[] name, byte[] desc)
     {
+        boolean grew = false;
         int b = 0;
         while (b < pdCount)
         {
             parseForMethods(pdBase[b], pdLen[b]);
-            addReach(findMethodByBytes(gbase, name, desc));
+            grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
             b += 1;
         }
+        return grew;
     }
 
     /** Length of the blob at address {@code base} (matched against the pending-blob table). */
@@ -1057,7 +1069,8 @@ public final class Loader
         resetLoader();
         addBlob(VM.stringBytes, (int) VM.stringLen);    // the SAM-with-arg lambda prints via concat -> String
         addBlob(VM.lambdaDemoBytes, (int) VM.lambdaDemoLen);
-        resolveClosureFromDir();                        // pulls java/lang/Runnable + demo/IntOp (referenced)
+        // reachability-gated: markReachable follows the lambda indys to mark their bodies (+ Runnable/IntOp).
+        entryPoint(VM.lambdaDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.lambdaDemoBytes);
@@ -1321,7 +1334,7 @@ public final class Loader
         addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);         // reduce accumulator (2-arg SAM)
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.listDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.listDemoBytes);
@@ -1357,7 +1370,7 @@ public final class Loader
         addBlob(VM.numBytes, (int) VM.numLen);
         addBlob(VM.streamBytes, (int) VM.streamLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
-        resolveClosureFromDir();
+        entryPoint(VM.mapDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));    // reachability-gated (+ indy)
         loadAll();
         seek(0x6D61696EL, 4, 0x282956L, 3);            // "main" "()V"
         long code = findMethod(VM.mapDemoBytes);
