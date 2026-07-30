@@ -2159,7 +2159,10 @@ public final class Loader
             sizeMethod(i);
             i += 1;
         }
-        fillTib();                                      // TIB was allocated by loadOne (before <clinit>); fill slots now
+        if (!gIsInterface)                              // an interface has no instances -> no vtable/TIB to fill; its
+        {                                               // concrete static/default methods are still compiled above
+            fillTib();                                  // TIB was allocated by loadOne (before <clinit>); fill slots now
+        }
         i = 0;
         while (i < mCount)                              // emit
         {
@@ -2355,7 +2358,9 @@ public final class Loader
             clVtCount[clCount] = 0;
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clCount += 1;
-            return;                                     // nothing to compile: all methods abstract
+            compileClass(bytes);                        // compile the interface's CONCRETE methods (static like List.of
+            registerAll();                              // and default methods); abstract ones have no Code and are skipped
+            return;
         }
         parseVtable(bytes);                             // flatten against the superclass (sets gvCount)
         allocTib();                                     // allocate Type + TIB (empty): gTib is now THIS class's TIB, so a
