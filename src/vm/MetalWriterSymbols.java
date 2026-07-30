@@ -129,6 +129,14 @@ final class MetalWriterSymbols implements Symbols
     {
         // Metal writer (self-build, deprecated): no runtime array Types; arrays stay raw.
     }
+    public void classLiteral(CodeBuffer cb, int reg, int classCp)
+    {
+        throw new UnsupportedOperationException("ldc class-literal not compiled by the metal writer");
+    }
+    public boolean isGetClass(int methodCp)
+    {
+        return false;
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         staticSite[staticN] = cb.reserveAddr(reg);

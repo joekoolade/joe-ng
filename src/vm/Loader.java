@@ -107,6 +107,12 @@ public final class Loader
     private static long[] refArrElem;     // element Type key (reference arrays)
     private static long[] refArrTib;      // arrayTib for that element
     private static int refArrCount;
+    // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
+    // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
+    private static long[] mirType;        // VM Type addr key
+    private static long[] mirObj;         // its Class mirror object
+    private static int mirN;
+    private static long classTibCache;    // guest java/lang/Class's TIB (0 = not loaded)
     // Directly-declared interfaces per registered class/interface, as registry indices, flat:
     // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
     // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
@@ -741,6 +747,10 @@ public final class Loader
         refArrElem = new long[64];
         refArrTib = new long[64];
         refArrCount = 0;
+        mirType = new long[256];           // Class mirrors: also per batch (reclaimed heap)
+        mirObj = new long[256];
+        mirN = 0;
+        classTibCache = 0L;
         clBase = new long[MAXCLASS];
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
@@ -4032,6 +4042,88 @@ public final class Loader
     static long refArrayTibForClass(int classCp)
     {
         return refArrayTib(typeOfClass(classCp));
+    }
+
+    // ----- java.lang.Class mirrors -----------------------------------------
+    // A Class object per VM Type, materialised once and cached, so `X.class` (ldc class-literal) and
+    // `obj.getClass()` return the SAME identity for the same Type -- which is what stock code compares
+    // (e.g. Arrays.copyOf: `newType == Object[].class`). The mirror carries the Type node pointer in its sole
+    // field (@16); Class methods (getName/getComponentType/isInstance/...) are added on demand. It is typed as
+    // the guest java/lang/Class when loaded, else a bare identity object (TIB 0) -- enough for `==`.
+
+    /** guest java/lang/Class's TIB, or 0 if it isn't loaded in this batch. */
+    private static long classTib()
+    {
+        if (classTibCache == 0L)
+        {
+            int i = 0;
+            while (i < clCount)
+            {
+                if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Class")))
+                {
+                    classTibCache = clTib[i];
+                    break;
+                }
+                i += 1;
+            }
+        }
+        return classTibCache;
+    }
+
+    /** The Class mirror for VM Type {@code type}, materialised + cached (identity stable across ldc/getClass). */
+    static long classMirror(long type)
+    {
+        if (type == 0L)
+        {
+            return 0L;
+        }
+        int i = 0;
+        while (i < mirN)
+        {
+            if (mirType[i] == type)
+            {
+                return mirObj[i];
+            }
+            i += 1;
+        }
+        long obj = Heap.alloc(24);                          // header(16) + Type-pointer field(@16)
+        Magic.store64(obj + 0L, classTib());                // TIB (0 -> a bare identity object; fine for ==)
+        Magic.store64(obj + 16L, type);                     // the VM Type this Class mirrors
+        if (mirN < mirType.length)
+        {
+            mirType[mirN] = type;
+            mirObj[mirN] = obj;
+            mirN += 1;
+        }
+        return obj;
+    }
+
+    /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
+    static long classLiteral(int classCp)
+    {
+        return classMirror(typeOfClass(classCp));
+    }
+
+    /** {@code Object.getClass()}: object header -> TIB -> Type -> its Class mirror. */
+    static long getClassOf(long obj)
+    {
+        if (obj == 0L)
+        {
+            return 0L;
+        }
+        long tib = Magic.load64(obj + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return 0L;                                      // a raw array (no Type) — no mirror
+        }
+        return classMirror(Magic.load64(tib));              // TIB[0] = Type (class Type or array Type)
+    }
+
+    /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */
+    static boolean isGetClass(int idx)
+    {
+        return isName(gbase, mrefNameOff(idx), 0x676574436C617373L, 8)   // "getClass"
+                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
     }
 
     // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----

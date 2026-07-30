@@ -75,6 +75,14 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         // Host writer: no runtime array Types; VM's own arrays stay raw (element size in the header).
     }
+    public void classLiteral(CodeBuffer cb, int reg, int classCp)
+    {
+        throw new UnsupportedOperationException("ldc class-literal not compiled by the host writer");
+    }
+    public boolean isGetClass(int methodCp)
+    {
+        return false;   // host writer: no getClass intrinsic (VM's own code doesn't call it)
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));

@@ -1052,6 +1052,12 @@ public final class VM
         return Loader.newAioobe();
     }
 
+    /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
+    static long getClassOf(long obj)
+    {
+        return Loader.getClassOf(obj);
+    }
+
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
     static void printStr(long ref)
     {
@@ -1170,6 +1176,7 @@ public final class VM
         if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
+        if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
 
         installSchedVectors();
 
@@ -1683,6 +1690,7 @@ public final class VM
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
+    static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

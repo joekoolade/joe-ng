@@ -1194,6 +1194,12 @@ public final class Baseline
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
+        if (symbols.isGetClass(cpIndex))                        // Object.getClass(): intrinsic, not vtable dispatch
+        {                                                       // (works uniformly on arrays, whose TIB has no vtable)
+            nullCheck(cb, OP_BASE + sp - 1, pos);               // the receiver is the sole operand on top
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.GET_CLASS);   // (obj) -> Class mirror
+            return;
+        }
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
         int[] src = new int[nargs];
@@ -2128,6 +2134,11 @@ public final class Baseline
         else if (cpTag[cpIndex] == ClassReader.TAG_INTEGER || cpTag[cpIndex] == 4)
         {
             loadConst(cb, ClassReader.intValue(classBytes, cpOff, cpIndex));   // Integer or Float (32-bit bits)
+        }
+        else if (cpTag[cpIndex] == 7)                                          // CONSTANT_Class: a class literal (X.class)
+        {
+            int r = pushReg();
+            symbols.classLiteral(cb, r, cpIndex);
         }
         else
         {

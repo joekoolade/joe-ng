@@ -51,6 +51,14 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.ifaceTypeOfMethod(ifaceMethodCp));
     }
+    public void classLiteral(CodeBuffer cb, int reg, int classCp)
+    {
+        emitAddr(cb, reg, Loader.classLiteral(classCp));
+    }
+    public boolean isGetClass(int methodCp)
+    {
+        return Loader.isGetClass(methodCp);
+    }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
         long tib = isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand);
@@ -290,6 +298,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.NEW_NPE)
         {
             return VM.newNpeAddr;
+        }
+        if (helper == Symbols.GET_CLASS)
+        {
+            return VM.getClassAddr;
         }
         if (helper == Symbols.NEW_AIOOBE)
         {
