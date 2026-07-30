@@ -343,11 +343,21 @@ public final class Baseline
             arrayLoad(cb, 1, pos);
             return 1;
         }  // caload  (char, zero-ext)
+        else if (op == 0x35)
+        {
+            arrayLoad(cb, 4, pos);
+            return 1;
+        }  // saload  (short, sign-ext)
         else if (op == 0x55)
         {
             arrayStore(cb, 1, pos);
             return 1;
         }  // castore
+        else if (op == 0x56)
+        {
+            arrayStore(cb, 1, pos);
+            return 1;
+        }  // sastore  (short, 16-bit store — same as castore)
         else if (op == 0x2E)
         {
             arrayLoad(cb, 2, pos);
@@ -1610,10 +1620,12 @@ public final class Baseline
         int index = popReg(), arr = popReg();
         boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw deref
         int r = pushReg();                                       // r == arr's register
+        int shift = scale == 4 ? 1 : scale;                      // short: 2-byte element (shift 1), signed load
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
-        cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
+        cb.emit(A64Enc.addRegLsl(arr, arr, index, shift));          // arr = &elem[index]
         cb.emit(scale == 0 ? A64Enc.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
                 : scale == 1 ? A64Enc.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
+                : scale == 4 ? A64Enc.ldrsh(r, arr, 0)              // short (sign-ext)
                 : scale == 2 ? A64Enc.ldrsw(r, arr, 0)              // int (sign-ext)
                 : A64Enc.ldrx(r, arr, 0));                          // long / ref
     }
@@ -1927,6 +1939,15 @@ public final class Baseline
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64Enc.ldrb(r, addr, 0));
+        }
+        else if (id == Intrinsics.ADDR_OF)
+        {
+            int a = popReg();                   // a reference already IS its heap address
+            int d = pushReg();
+            if (d != a)
+            {
+                cb.emit(A64Enc.movReg(d, a));   // reinterpret in place (pop/push land on the same slot)
+            }
         }
         else if (id == Intrinsics.LOAD64)
         {

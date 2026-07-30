@@ -5,6 +5,7 @@ import board.bcm2711.Uart;
 import classfile.ClassReader;
 import compiler.Baseline;
 import compiler.Intrinsics;
+import compiler.Symbols;
 import magic.Magic;
 
 /**
@@ -199,7 +200,11 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L && clinitCompilable(code, gcodeLen))
         {
-            long unused = Magic.call0(compile(code, gcodeLen, gFoundDescOff, gFoundStatic));
+            // Compile now (with this class's statics block live and cross-class calls recorded as relocs), but
+            // ENQUEUE the entry — a <clinit> that calls another class (e.g. ArraysSupport -> SharedSecrets) would
+            // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
+            clinitEntry[clinitN] = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+            clinitN += 1;
         }
     }
 
@@ -244,6 +249,21 @@ public final class Loader
      * / needs JVM services absent on metal. We run every other class's initializer by default and seed only
      * these (provideKnownStatics / seedIntegerCache). Grows as new unrunnable stock initializers surface.
      */
+    /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
+    private static long[] clinitEntry;
+    private static int clinitN;
+
+    /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
+    private static void runClinits()
+    {
+        int i = 0;
+        while (i < clinitN)
+        {
+            long unused = Magic.call0(clinitEntry[i]);
+            i += 1;
+        }
+    }
+
     private static boolean clinitBlocked()
     {
         return utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
@@ -708,6 +728,8 @@ public final class Loader
         rsClass = new int[MAXRELOC];
         rsName = new int[MAXRELOC];
         rsCount = 0;
+        clinitEntry = new long[MAXBLOB];
+        clinitN = 0;
         clBase = new long[MAXCLASS];
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
@@ -876,6 +898,7 @@ public final class Loader
             grew = false;
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
             grew = seedAllNamed(Magic.bytes("run"), Magic.bytes("()V")) || grew;   // Runnable trampoline entries
+            grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             pendN = 0;
             int b = 0;
             while (b < pdCount)                         // collect refs of reachable methods
@@ -1231,6 +1254,36 @@ public final class Loader
         {
             parseForMethods(pdBase[b], pdLen[b]);
             grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
+            b += 1;
+        }
+        return grew;
+    }
+
+    /**
+     * Mark every runnable {@code <clinit>} reachable, so {@link #collectRefs} pulls the classes an initializer
+     * calls. A {@code <clinit>} is never the target of an invoke bytecode (the loader runs it implicitly at
+     * class load), so without this its callees are never in the reachable closure — e.g.
+     * {@code ArraysSupport.<clinit>} calls {@code SharedSecrets.getJavaLangAccess()}, and an unpulled
+     * {@code SharedSecrets} leaves that {@code invokestatic} unresolved (bl to an unpatched site → wild
+     * branch when the initializer runs). Only clinits that will ACTUALLY run are seeded: {@link #clinitBlocked}
+     * (native/property-reading) ones are skipped, as are {@link #clinitCompilable} rejects (an unrunnable
+     * initializer whose refs would needlessly grow the closure) — matching exactly what {@link #runClinit} executes.
+     */
+    private static boolean seedClinits()
+    {
+        boolean grew = false;
+        int b = 0;
+        while (b < pdCount)
+        {
+            parseForMethods(pdBase[b], pdLen[b]);
+            if (!clinitBlocked())
+            {
+                long code = findMethodByBytes(gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
+                if (code != 0L && clinitCompilable(code, gcodeLen))
+                {
+                    grew = addReach(code) || grew;
+                }
+            }
             b += 1;
         }
         return grew;
@@ -2095,7 +2148,7 @@ public final class Loader
             sizeMethod(i);
             i += 1;
         }
-        buildTib();
+        fillTib();                                      // TIB was allocated by loadOne (before <clinit>); fill slots now
         i = 0;
         while (i < mCount)                              // emit
         {
@@ -2182,6 +2235,7 @@ public final class Loader
         }
         patchRelocs();                                  // every class is loaded now: fix up cross-class refs the
                                                         // cycle force-load left unresolved (retires seed-ordering)
+        runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
@@ -2292,10 +2346,12 @@ public final class Loader
             clCount += 1;
             return;                                     // nothing to compile: all methods abstract
         }
-        runClinit(bytes);                               // gvCount==0 here (vtable not built yet)
+        parseVtable(bytes);                             // flatten against the superclass (sets gvCount)
+        allocTib();                                     // allocate Type + TIB (empty): gTib is now THIS class's TIB, so a
+                                                        // `new Self` in <clinit> bakes it (tibOfClass falls back to gTib)
+        runClinit(bytes);                               // compile <clinit> (a `new Self` now bakes gTib); run deferred
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
-        parseVtable(bytes);                             // flatten against the superclass
-        compileClass(bytes);                            // compile all methods; buildTib fills TIB+imap
+        compileClass(bytes);                            // compile all methods; fillTib fills the (already-allocated) TIB
         registerAll();                                  // methods
         registerClass();                                // class + fields + flattened vtable
     }
@@ -2694,7 +2750,13 @@ public final class Loader
             long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
             if (target != 0L)
             {
-                int off = (int) ((target - rcAddr[i]) >> 2);
+                long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)
+                if (d > 0x07FFFFFFL || d < -0x08000000L)
+                {
+                    VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (rcAddr[i] >> 12), (int) (target >> 12));
+                    for (;;) { }
+                }
+                int off = (int) (d >> 2);
                 Magic.store32(rcAddr[i], A64Enc.bl(off));      // rewrite bl 0 -> bl target
             }
             i += 1;
@@ -3071,6 +3133,20 @@ public final class Loader
      */
     private static void buildTib()
     {
+        allocTib();
+        fillTib();
+    }
+
+    /**
+     * Allocate this class's Type + TIB and set the fixed parts (Type node, TIB[0]=Type). The vtable slots and
+     * itable directory are filled later by {@link #fillTib} once the methods are placed. Splitting the alloc
+     * out lets loadOne register the class and pin a stable {@code gTib} address BEFORE compiling its
+     * {@code <clinit>}, so a {@code new Self()} in that initializer (e.g. {@code Unsafe.theUnsafe = new Unsafe()})
+     * bakes the correct TIB rather than the previous class's stale {@code gTib}. The <clinit> runs deferred
+     * (after patchRelocs), by which point {@link #fillTib} has populated the vtable.
+     */
+    private static void allocTib()
+    {
         int sr = classRegByName(gSuperNameOff);
         // ObjectModel layout: Type = { instanceSize@0, superType@8, itableDir@16 } (24
         // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
@@ -3080,7 +3156,12 @@ public final class Loader
         Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
         Magic.store64(gType + 8, sr >= 0 ? clType[sr] : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
         gTib = Heap.alloc((1 + gvCount) * 8);
-        Magic.store64(gTib, gType);                      // TIB[0] = Type
+        Magic.store64(gTib, gType);                      // TIB[0] = Type (slots filled by fillTib)
+    }
+
+    /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */
+    private static void fillTib()
+    {
         int s = 0;
         while (s < gvCount)
         {
@@ -3877,6 +3958,7 @@ public final class Loader
         if (isName(gbase, n, 0x6E657753656DL, 6))    { return Intrinsics.NEW_SEM; }  // "newSem"
         if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
         if (isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
+        if (isName(gbase, n, 0x616464724F66L, 6))    { return Intrinsics.ADDR_OF; }   // "addrOf"
         return -1;
     }
 

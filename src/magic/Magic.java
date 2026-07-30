@@ -331,6 +331,17 @@ public final class Magic
     }
 
     /**
+     * Reinterpret an object reference as its raw heap address. In joe-ng a reference IS the
+     * object's address (no handles, no compressed oops), so this lowers to nothing — it only
+     * lets Java source (e.g. the {@code jdk.internal.misc.Unsafe} substitute) name the pointer
+     * as a {@code long} for {@code load*}/{@code store*} at a field/element offset.
+     */
+    public static long addrOf(Object o)
+    {
+        throw intrinsic();
+    }
+
+    /**
      * Type adapter for string literals: a {@code String} constant is interned by
      * the compiler as a real heap-layout {@code byte[]} object in the image (ASCII
      * bytes), so {@code ldc "..."} already yields a {@code byte[]} reference. This

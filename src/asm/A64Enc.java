@@ -166,6 +166,11 @@ public final class A64Enc
     {
         return ldst(1, 1, rt, rn, off);
     }
+    /** {@code LDRSH Xt, [Xn, #off]} — load halfword, sign-extended to 64 (short is signed). */
+    public static int ldrsh(int rt, int rn, int off)
+    {
+        return ldst(1, 2, rt, rn, off);
+    }
 
     // ----- branches (displacements in words) --------------------------------
     /** {@code B #wordOffset}. */

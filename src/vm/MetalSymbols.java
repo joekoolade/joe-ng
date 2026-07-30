@@ -191,7 +191,13 @@ final class MetalSymbols implements Symbols
     private static void emitBl(CodeBuffer cb, long target)
     {
         long here = cb.base() + (long) cb.wordCount() * 4;
-        int words = (int) ((target - here) >> 2);       // A64Enc branches take word offsets
+        long d = target - here;                         // A64 bl reaches +-128 MiB (26-bit word offset)
+        if (d > 0x07FFFFFFL || d < -0x08000000L)
+        {
+            VM.jitFail(Symbols.FAIL_BL_RANGE, (int) (here >> 12), (int) (target >> 12));
+            for (;;) { }
+        }
+        int words = (int) (d >> 2);
         cb.emit(A64Enc.bl(words));
     }
 

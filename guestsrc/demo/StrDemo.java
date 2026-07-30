@@ -21,6 +21,7 @@ public class StrDemo
 
         String x = "hello";                             // a String OBJECT (literal), methods work on it
         int eq = x.equals("hello") ? 1 : 0;
-        Magic.printStr("equals=" + eq + " hash=" + x.hashCode() + "\n");               // 1, 99162322
+        int hc = x.hashCode();
+        Magic.printStr("equals=" + eq + " hash=" + hc + "\n");               // 1, 99162322
     }
 }

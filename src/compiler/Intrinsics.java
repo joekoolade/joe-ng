@@ -56,6 +56,7 @@ public final class Intrinsics
     public static final int NEW_SEM = 55;           // magic.newSem(int)   -> VM.newSem
     public static final int REPORT = 56;            // magic.report(int,int) -> VM.philReport
     public static final int PRINT_STR = 57;         // magic.printStr(Object) -> VM.printStr (mini String)
+    public static final int ADDR_OF = 58;            // magic.addrOf(Object) -> the object's raw address (reinterpret, no-op)
     public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
     public static final int READ_CNTFRQ_EL0 = 33;   // generic-timer frequency
     public static final int READ_CNTPCT_EL0 = 34;   // generic-timer physical count

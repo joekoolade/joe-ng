@@ -118,6 +118,7 @@ public interface Symbols
     int FAIL_BRANCH_TARGET = 7;     // a = target bytecode index
     int FAIL_STACK_OVERFLOW = 8;    // operand stack too deep
     int FAIL_STACK_UNDERFLOW = 9;   // operand stack underflow
+    int FAIL_BL_RANGE = 10;         // a = call-site addr >>12, b = target addr >>12 (bl exceeds +-128 MiB)
 
     // Sites for FAIL_STACK_NOT_EMPTY's b argument.
     int SITE_NEW = 0;

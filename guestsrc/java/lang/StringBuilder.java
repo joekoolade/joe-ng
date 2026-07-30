@@ -92,6 +92,6 @@ public final class StringBuilder
     {
         byte[] t = new byte[count];
         System.arraycopy(value, 0, t, 0, count);
-        return new String(t);
+        return new String(t, (byte) 0);
     }
 }

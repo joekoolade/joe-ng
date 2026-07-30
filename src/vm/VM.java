@@ -1255,7 +1255,12 @@ public final class VM
         {
             return 0;    // null is never an instance
         }
-        long type = Magic.load64(Magic.load64(ref));   // header→TIB (@0), TIB→Type (@0)
+        long tib = Magic.load64(ref);                  // header→TIB (@0)
+        if (tib == 0L)
+        {
+            return 0;    // a raw array (null TIB, no Type): not an instance of any class/interface type
+        }
+        long type = Magic.load64(tib);                 // TIB→Type (@0)
         while (type != 0L)
         {
             if (type == targetType)
@@ -1286,6 +1291,11 @@ public final class VM
      *  (no exceptions yet). Null always passes. */
     static long checkCast(long ref, long targetType)
     {
+        if (targetType == 0L)
+        {
+            return ref;    // unresolved target (e.g. an array type "[B" — arrays carry no Type): the class-file
+                           // verifier already proved this cast holds, so trust it rather than walk a raw array
+        }
         if (ref != 0L && instanceOf(ref, targetType) == 0)
         {
             while (true)
