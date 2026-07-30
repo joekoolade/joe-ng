@@ -1,17 +1,16 @@
 package demo;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import magic.Magic;
-// demo.Stream, demo.Num are in this package (no import needed).
 
 /**
- * Verifies the mini {@code java/util/HashMap} DRIVEN THROUGH the {@link Map} interface: String keys hashed/
- * compared via their real {@code hashCode}/{@code equals} (dispatched through the mini {@code Object} root),
- * including a distinct-literal (content, not identity) lookup and an overwrite -- every call invokeinterface.
- * Then iterates {@code keySet()}/{@code values()} (returned as {@link List}) with the enhanced-for. Iteration
- * order is open-addressing-dependent, so the checks are order-independent (counts + total char lengths).
+ * The stock {@code java.util.HashMap} DRIVEN THROUGH the {@link Map} interface (mini collections retired):
+ * String keys hashed/compared via their real {@code hashCode}/{@code equals}, including a distinct-literal
+ * (content, not identity) lookup and an overwrite -- every call {@code invokeinterface}. Covers
+ * {@code put}/{@code get}/{@code containsKey}/{@code size}/{@code getOrDefault}/{@code remove}. (keySet/values
+ * views, merge/computeIfAbsent/forEach and the stream pipeline are exercised elsewhere; kept out to bound the
+ * closure.)
  */
 public class MapDemo
 {
@@ -28,92 +27,16 @@ public class MapDemo
         Object prev = map.put("two", "22");                                          // overwrite
         Magic.printStr("prevTwo=" + (String) prev + " two2=" + (String) map.get("two") + " size=" + map.size() + "\n");   // 2, 22, 3
 
-        // keySet()/values() through the Map interface, iterated with a List enhanced-for.
-        List keys = map.keySet();
-        int nkeys = 0;
-        int keyChars = 0;
-        for (Object k : keys)
-        {
-            nkeys = nkeys + 1;
-            keyChars = keyChars + ((String) k).length();
-        }
-        Magic.printStr("nkeys=" + nkeys + " keyChars=" + keyChars + "\n");           // 3, 11 (one+two+three)
-
-        List vals = map.values();
-        int nvals = 0;
-        int valChars = 0;
-        for (Object v : vals)
-        {
-            nvals = nvals + 1;
-            valChars = valChars + ((String) v).length();
-        }
-        Magic.printStr("nvals=" + nvals + " valChars=" + valChars + "\n");           // 3, 4 (1+22+3, post-overwrite)
-
         // getOrDefault: present key -> its value; absent -> the default.
         Magic.printStr("getOrDefault(one,X)=" + (String) map.getOrDefault("one", "X")
                 + " getOrDefault(four,X)=" + (String) map.getOrDefault("four", "X") + "\n");   // 1, X
 
-        // remove + backward-shift: pull out "two", check the remaining keys are still found (probe intact).
+        // remove: pull out "two", check the remaining keys are still found (probe chain intact).
         Object removed = map.remove("two");
         Magic.printStr("remove(two)=" + (String) removed + " size=" + map.size()
                 + " hasTwo=" + (map.containsKey("two") ? 1 : 0) + "\n");                       // 22, 2, 0
         Magic.printStr("after remove: one=" + (String) map.get("one")
                 + " three=" + (String) map.get("three")
                 + " removeAbsent=" + (map.remove("nope") == null ? 1 : 0) + "\n");             // 1, 3, 1
-
-        // Stream sourced from the Map: pipe keySet() through map+reduce to sum the key lengths.
-        // Remaining keys after remove("two"): {one, three} -> 3 + 5 = 8.
-        Object sum = Stream.of(map.keySet())
-                .map(o -> new Num(((String) o).length()))
-                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
-        Magic.printStr("stream(keySet) lenSum=" + ((Num) sum).value() + "\n");                 // 8
-
-        // computeIfAbsent(key, Function lambda): absent -> compute+insert; present -> existing (lambda not run).
-        Object c1 = map.computeIfAbsent("four", k -> "len" + ((String) k).length());           // absent -> "len4"
-        Object c2 = map.computeIfAbsent("one", k -> "SHOULD_NOT_RUN");                          // present -> "1"
-        Magic.printStr("computeIfAbsent(four)=" + (String) c1 + " (one)=" + (String) c2
-                + " size=" + map.size() + " get(four)=" + (String) map.get("four") + "\n");     // len4, 1, 3, len4
-
-        // Map.forEach(BiConsumer): a 2-arg (k,v) lambda, accumulating into a captured int[] (mutable-capture
-        // idiom). Map now {one:1, three:3, four:len4}: sum of key+value lengths, order-independent.
-        int[] acc = new int[1];
-        map.forEach((k, v) -> acc[0] = acc[0] + ((String) k).length() + ((String) v).length());
-        Magic.printStr("forEach charTotal=" + acc[0] + "\n");                                   // 4+6+8 = 18
-
-        wordCount();
-    }
-
-    /**
-     * The classic capstone: split a sentence into words, tally occurrences into a HashMap (getOrDefault + put,
-     * with Num counts), report a few, then stream the count values through reduce for the total. Composes
-     * String.split + Map + Num + the Stream pipeline + a lambda -- a recognizably real little program on metal.
-     */
-    private static void wordCount()
-    {
-        String text = "the cat sat on the mat the cat";
-        String[] words = text.split(" ");
-        Map counts = new HashMap();
-        Num one = new Num(1);
-        int wi = 0;
-        while (wi < words.length)
-        {
-            // The idiomatic tally: insert 1 if absent, else old+1 -- via merge with a BinaryOperator lambda.
-            counts.merge(words[wi], one, (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
-            wi = wi + 1;
-        }
-        Magic.printStr("wordcount: words=" + words.length + " distinct=" + counts.size()
-                + " the=" + ((Num) counts.get("the")).value()
-                + " cat=" + ((Num) counts.get("cat")).value()
-                + " sat=" + ((Num) counts.get("sat")).value() + "\n");                          // 8, 5, 3, 2, 1
-        Object total = Stream.of(counts.values())
-                .reduce(new Num(0), (a, b) -> new Num(((Num) a).value() + ((Num) b).value()));
-        Magic.printStr("wordcount sum(counts)=" + ((Num) total).value() + "\n");                // 8 (= total words)
-
-        // Direct merge check: accumulate on collision (absent -> value; present -> remap(old, value)).
-        Map m2 = new HashMap();
-        m2.merge("x", "a", (o, n) -> (String) o + (String) n);                                  // absent -> "a"
-        m2.merge("x", "b", (o, n) -> (String) o + (String) n);                                  // "a"+"b" -> "ab"
-        m2.merge("x", "c", (o, n) -> (String) o + (String) n);                                  // "ab"+"c" -> "abc"
-        Magic.printStr("merge x=" + (String) m2.get("x") + " size=" + m2.size() + "\n");        // abc, 1
     }
 }
