@@ -321,6 +321,16 @@ public final class Baseline
             dup(cb);
             return 1;
         }  // dup
+        else if (op == 0x5A)
+        {
+            dupX1(cb);
+            return 1;
+        }  // dup_x1: ..,v2,v1 -> ..,v1,v2,v1
+        else if (op == 0x5B)
+        {
+            dupX2(cb);
+            return 1;
+        }  // dup_x2 (category-1 form): ..,v3,v2,v1 -> ..,v1,v3,v2,v1
         else if (op == 0x5C)
         {
             dup2(cb);
@@ -851,6 +861,32 @@ public final class Baseline
     {
         int top = OP_BASE + sp - 1;
         cb.emit(A64Enc.movReg(pushReg(), top));
+    }
+
+    /** dup_x1: {@code ..,v2,v1 -> ..,v1,v2,v1}. Each stack value is one register; x16 holds the top across the shift. */
+    private void dupX1(CodeBuffer cb)
+    {
+        int v1 = OP_BASE + sp - 1;
+        int v2 = OP_BASE + sp - 2;
+        int top = pushReg();
+        cb.emit(A64Enc.movReg(16, v1));      // save v1 (the value being inserted below v2)
+        cb.emit(A64Enc.movReg(top, 16));     // new top = v1
+        cb.emit(A64Enc.movReg(v1, v2));      // shift v2 up
+        cb.emit(A64Enc.movReg(v2, 16));      // insert v1 at the bottom
+    }
+
+    /** dup_x2 (category-1 form): {@code ..,v3,v2,v1 -> ..,v1,v3,v2,v1}. */
+    private void dupX2(CodeBuffer cb)
+    {
+        int v1 = OP_BASE + sp - 1;
+        int v2 = OP_BASE + sp - 2;
+        int v3 = OP_BASE + sp - 3;
+        int top = pushReg();
+        cb.emit(A64Enc.movReg(16, v1));
+        cb.emit(A64Enc.movReg(top, 16));     // new top = v1
+        cb.emit(A64Enc.movReg(v1, v2));      // shift v2 up
+        cb.emit(A64Enc.movReg(v2, v3));      // shift v3 up
+        cb.emit(A64Enc.movReg(v3, 16));      // insert v1 at the bottom
     }
 
     /**
