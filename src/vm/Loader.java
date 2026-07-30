@@ -975,6 +975,30 @@ public final class Loader
         while (pc < len && pendN < MAXPEND)
         {
             int op = u1(code + pc);
+            // Dead-branch pruning for metal-invariant flags: a getstatic of such a flag immediately guarding a
+            // branch is never-taken code on metal, yet reachability would still walk it and pull its whole
+            // closure. `getstatic jfrTracing; ifeq L` (JFR off -> the ThrowableTracer/JFR arm is dead, which is
+            // what otherwise drags jdk/internal/event + AtomicLong + reflect out of stock Throwable/Error), and
+            // `getstatic $assertionsDisabled; ifne L` (assertions off -> the assert arm is dead): skip to L so
+            // the guarded arm's refs aren't collected. The compiler still emits the dead call as an unresolved
+            // bl, which never executes.
+            if (op == 0xb2)                                          // getstatic
+            {
+                int fidx = u2(code + pc + 1);
+                int nextOp = u1(code + pc + 3);
+                if ((nextOp == 0x99 && utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("jfrTracing")))
+                        || (nextOp == 0x9a && utf8IsAtBase(base, mrefNameOff(fidx), Magic.bytes("$assertionsDisabled"))))
+                {
+                    int off = u2(code + pc + 4);
+                    if (off >= 0x8000) { off -= 0x10000; }
+                    int target = pc + 3 + off;                       // the taken (dead-arm-skipping) branch target
+                    if (target > pc + 6 && target <= len)
+                    {
+                        pc = target;
+                        continue;
+                    }
+                }
+            }
             if (op == 0xb8 || op == 0xb7 || op == 0xb6 || op == 0xb9)   // invoke static/special/virtual/interface
             {
                 int idx = u2(code + pc + 1);
@@ -1142,55 +1166,58 @@ public final class Loader
         return findPdByName(gbase, gcp[u2(gbase + gcp[superIdx])]);
     }
 
-    /**
-     * The method an instance of {@code startPd} dispatches to for the {@code name+desc} at {@code refBase} —
-     * the first definition walking {@code startPd}'s superclass chain. 0 if none (abstract/native/absent).
-     */
-    private static long resolveVirtualTarget(int startPd, long refBase, int nameOff, int descOff)
-    {
-        int cur = startPd;
-        int guard = 0;
-        while (cur >= 0 && guard < 64)
-        {
-            parseForMethods(pdBase[cur], pdLen[cur]);
-            long code = findMethodByRef(refBase, nameOff, descOff);
-            if (code != 0L)
-            {
-                return code;
-            }
-            cur = superPdOf(cur);
-            guard += 1;
-        }
-        return 0L;
-    }
+    private static boolean[] virtResolved;               // per-pend: already dispatched for the current class
 
     /**
      * RTA: mark each virtual/interface call's real targets — for every instantiated receiver type, the method
-     * it resolves up its own superclass chain. Replaces the CHA "mark in every class carrying name+desc".
+     * it resolves up its own superclass chain (nearest definition wins). Replaces the CHA "mark in every class
+     * carrying name+desc". Structured class-outer / level-once: each (instantiated class, superclass-chain
+     * level) is parsed ONCE and matched against every virtual pend, instead of re-parsing the whole chain per
+     * pend — the naive per-pend form re-parsed (and re-copied via toBytes/parseConstPool) tens of thousands of
+     * times, churning ~90 MiB of heap and blowing the demand-load arena past the A64 bl reach.
      */
     private static boolean resolveVirtuals()
     {
         boolean grew = false;
-        int p = 0;
-        while (p < pendN)
+        if (virtResolved == null || virtResolved.length < pendN)
         {
-            if (pendKind[p] == 1)
+            virtResolved = new boolean[pendN + 64];
+        }
+        int c = 0;
+        while (c < pdCount)
+        {
+            if (pdInstantiated[c])
             {
-                int c = 0;
-                while (c < pdCount)
+                int p = 0;
+                while (p < pendN)                        // reset: no pend dispatched yet for this class
                 {
-                    if (pdInstantiated[c])
+                    virtResolved[p] = false;
+                    p += 1;
+                }
+                int cur = c;
+                int guard = 0;
+                while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
+                {
+                    parseForMethods(pdBase[cur], pdLen[cur]);
+                    p = 0;
+                    while (p < pendN)
                     {
-                        long code = resolveVirtualTarget(c, pendBase[p], pendName[p], pendDesc[p]);
-                        if (code != 0L)
+                        if (pendKind[p] == 1 && !virtResolved[p])
                         {
-                            grew = addReach(code) || grew;
+                            long code = findMethodByRef(pendBase[p], pendName[p], pendDesc[p]);
+                            if (code != 0L)
+                            {
+                                virtResolved[p] = true;  // nearest def; don't also mark a super's override-shadowed one
+                                grew = addReach(code) || grew;
+                            }
                         }
+                        p += 1;
                     }
-                    c += 1;
+                    cur = superPdOf(cur);
+                    guard += 1;
                 }
             }
-            p += 1;
+            c += 1;
         }
         return grew;
     }
