@@ -125,6 +125,10 @@ final class MetalWriterSymbols implements Symbols
         ifClassOff[ifN] = ClassReader.refClassNameOff(classBytes, cpOff, ifaceMethodCp);
         ifN += 1;
     }
+    public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
+    {
+        // Metal writer (self-build, deprecated): no runtime array Types; arrays stay raw.
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         staticSite[staticN] = cb.reserveAddr(reg);

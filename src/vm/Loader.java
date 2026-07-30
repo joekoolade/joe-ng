@@ -6,6 +6,7 @@ import classfile.ClassReader;
 import compiler.Baseline;
 import compiler.Intrinsics;
 import compiler.Symbols;
+import objectmodel.ObjectModel;
 import magic.Magic;
 
 /**
@@ -100,6 +101,12 @@ public final class Loader
     private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
     private static long[] clType;        // each class's Type node (for instanceof/checkcast)
     private static int clCount;
+    // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
+    // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
+    private static long[] primArrTib;     // arrayTib per primitive atype (0 = not yet created)
+    private static long[] refArrElem;     // element Type key (reference arrays)
+    private static long[] refArrTib;      // arrayTib for that element
+    private static int refArrCount;
     // Directly-declared interfaces per registered class/interface, as registry indices, flat:
     // clIfaceReg[r*MAX_DIRECT_IF + j], j < clIfaceRegN[r]. buildItableDir transitively closes over these so
     // an itable directory keys on the SUPER-interfaces too (e.g. ArrayList implements List extends Iterable
@@ -730,6 +737,10 @@ public final class Loader
         rsCount = 0;
         clinitEntry = new long[MAXBLOB];
         clinitN = 0;
+        primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
+        refArrElem = new long[64];
+        refArrTib = new long[64];
+        refArrCount = 0;
         clBase = new long[MAXCLASS];
         clNameOff = new int[MAXCLASS];
         clTib = new long[MAXCLASS];
@@ -3848,12 +3859,174 @@ public final class Loader
         // registry until AFTER its own compile, but its Type node (gType) is already built by buildTib —
         // and it's the very node the class's own instances carry, so instanceof/checkcast resolve correctly.
         int nameOff = gcp[u2(gbase + gcp[classIdx])];
+        if (u1(gbase + nameOff + 2) == 0x5B)            // '[' : an array class ("[B", "[Ljava/...;", "[[I")
+        {
+            long tib = arrayTibOfDesc(gbase, nameOff);
+            return tib == 0L ? 0L : Magic.load64(tib);  // the array Type (checkcast/instanceof target)
+        }
         if (utf8EqAt(gbase, nameOff, gbase, gThisNameOff))
         {
             return gType;
         }
         int r = classRegOf(classIdx);
         return r >= 0 ? clType[r] : 0L;
+    }
+
+    // ----- array Types -----------------------------------------------------
+    // An array carries a real Type (via a 1-word array TIB in its header @0) so checkcast/instanceof against an
+    // array class resolve precisely and `arr instanceof Object` walks the super chain. Primitive-array Types are
+    // cached by atype; reference-array Types by element Type. All live in the per-batch demand heap (recreated
+    // after each resetLoader). A raw array (VM-internal byte buffers, boot-time) keeps a small element size in
+    // @0 instead — untyped, never checkcast, distinguished by magnitude (<= MAX_RAW_ARRAY_TIB).
+
+    /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
+    private static long objectTypeAddr()
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Object")))
+            {
+                return clType[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
+    private static long makeArrayTib(int elemSize, long elementType)
+    {
+        long type = Heap.alloc(ObjectModel.ARRAY_TYPE_SIZE);
+        Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET, ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // arr instanceof Object
+        Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);            // Cloneable/Serializable: later
+        Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
+        long tib = Heap.alloc(8);
+        Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
+        return tib;
+    }
+
+    /** newarray atype (4=bool..11=long) -> element size in bytes. */
+    private static int primElemSize(int atype)
+    {
+        return atype == 4 || atype == 8 ? 1              // boolean, byte
+             : atype == 5 || atype == 9 ? 2              // char, short
+             : atype == 6 || atype == 10 ? 4             // float, int
+             : 8;                                        // double, long
+    }
+
+    /** The array TIB for a primitive array of the given newarray {@code atype}; created + cached on demand. */
+    static long primArrayTib(int atype)
+    {
+        if (atype < 0 || atype >= 12)
+        {
+            return 0L;
+        }
+        if (primArrTib[atype] == 0L)
+        {
+            primArrTib[atype] = makeArrayTib(primElemSize(atype), 0L);
+        }
+        return primArrTib[atype];
+    }
+
+    /** Array TIB for a byte[] (newarray atype 8) — used to type String value arrays / interned literals. */
+    static long byteArrayTib()
+    {
+        return primArrayTib(8);
+    }
+
+    /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */
+    private static int atypeForDescChar(int c)
+    {
+        if (c == 0x5A) { return 4; }    // 'Z' boolean
+        if (c == 0x43) { return 5; }    // 'C' char
+        if (c == 0x46) { return 6; }    // 'F' float
+        if (c == 0x44) { return 7; }    // 'D' double
+        if (c == 0x42) { return 8; }    // 'B' byte
+        if (c == 0x53) { return 9; }    // 'S' short
+        if (c == 0x49) { return 10; }   // 'I' int
+        if (c == 0x4A) { return 11; }   // 'J' long
+        return -1;                      // 'L' reference or '[' nested array
+    }
+
+    /** Array TIB for the array descriptor at {@code base+nameOff} (a Utf8 like "[B" / "[Ljava/lang/String;"), or 0. */
+    private static long arrayTibOfDesc(long base, int nameOff)
+    {
+        int c = u1(base + nameOff + 3);                 // char after the leading '['
+        int atype = atypeForDescChar(c);
+        if (atype >= 0)
+        {
+            return primArrayTib(atype);                 // "[<primitive>"
+        }
+        return refArrayTib(elementTypeOfArrayDesc(base, nameOff));   // "[L...;" / "[[..." (reference element)
+    }
+
+    /** Element Type of a reference-array descriptor "[L<class>;" (the class's Type, or 0 for nested/unresolved). */
+    private static long elementTypeOfArrayDesc(long base, int nameOff)
+    {
+        if (u1(base + nameOff + 3) != 0x4C)             // not 'L' (a nested array "[[..." — leave element 0)
+        {
+            return 0L;
+        }
+        int len = u2(base + nameOff);                   // strip the leading "[L" and trailing ';' -> class name
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8SliceEq(base, nameOff + 4, len - 3, clBase[i], clNameOff[i]))
+            {
+                return clType[i];
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** True if the {@code n}-byte slice at {@code aBase+aOff} equals the Utf8 name at {@code bBase+bNameOff}. */
+    private static boolean utf8SliceEq(long aBase, int aOff, int n, long bBase, int bNameOff)
+    {
+        if (u2(bBase + bNameOff) != n)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < n)
+        {
+            if (u1(aBase + aOff + j) != u1(bBase + bNameOff + 2 + j))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
+    }
+
+    /** Array TIB for a reference array with the given element Type; created + cached (keyed by element Type). */
+    static long refArrayTib(long elementType)
+    {
+        int i = 0;
+        while (i < refArrCount)
+        {
+            if (refArrElem[i] == elementType)
+            {
+                return refArrTib[i];
+            }
+            i += 1;
+        }
+        long tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
+        if (refArrCount < refArrTib.length)
+        {
+            refArrElem[refArrCount] = elementType;
+            refArrTib[refArrCount] = tib;
+            refArrCount += 1;
+        }
+        return tib;
+    }
+
+    /** Array TIB for an {@code anewarray} whose element class is Class-entry {@code classCp}. */
+    static long refArrayTibForClass(int classCp)
+    {
+        return refArrayTib(typeOfClass(classCp));
     }
 
     // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----
@@ -3891,7 +4064,12 @@ public final class Loader
     {
         int off = ClassReader.stringUtf8Off(gbytes, gcp, stringCp);   // Utf8 body offset
         int len = u2(gbase + off);
-        long arr = Heap.allocArray(len, 1);             // byte[] (element-size TIB), length set
+        long arr = Heap.allocArray(len, 1);             // byte[] (raw element-size header), length set
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);   // type it as [B so `checkcast [B` on String.value resolves
+        }
         int i = 0;
         while (i < len)
         {

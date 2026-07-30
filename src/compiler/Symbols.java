@@ -66,6 +66,14 @@ public interface Symbols
     /** Load into {@code reg} the Type address of the class at {@code classCp}. */
     void type(CodeBuffer cb, int reg, int classCp);
 
+    /**
+     * Tag a freshly-allocated array (in {@code arrReg}) with its array Type, so checkcast/instanceof against an
+     * array class resolve. {@code operand} is the {@code newarray} atype when {@code isRef} is false, else the
+     * {@code anewarray} element-class Class-entry. A no-op where array Types don't exist (the host writer): the
+     * array stays raw (element size in its header), which is all its untyped uses need.
+     */
+    void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef);
+
     /** Load into {@code reg} the Type address of the interface owning InterfaceMethodref {@code ifaceMethodCp}. */
     void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp);
 

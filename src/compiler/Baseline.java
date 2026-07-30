@@ -687,7 +687,7 @@ public final class Baseline
         }
         else if (op == 0xBD)
         {
-            lowerAnewArray(cb);                              // operand (element class) unused
+            lowerAnewArray(cb, u2(code, pos + 1));           // operand = element-class Class-entry
             return 3;
         }
         else if (op == 0xBF)
@@ -1593,6 +1593,7 @@ public final class Baseline
     {
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+        symbols.tagArray(cb, OP_BASE + sp - 1, atype, false);    // tag the result (top of stack) as its array Type
     }
 
     /**
@@ -1601,10 +1602,11 @@ public final class Baseline
      * element class, but nothing needs it: element access ({@code aaload}/
      * {@code aastore}) is untyped, and array TIBs (for typed GC) are set later.
      */
-    private void lowerAnewArray(CodeBuffer cb)
+    private void lowerAnewArray(CodeBuffer cb, int classCp)
     {
         loadConst(cb, ObjectModel.WORD);                        // 8-byte reference elements
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+        symbols.tagArray(cb, OP_BASE + sp - 1, classCp, true);  // tag the result as [L<element>;
     }
 
     private void arrayLength(CodeBuffer cb, int pos)

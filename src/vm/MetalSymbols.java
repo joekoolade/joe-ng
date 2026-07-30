@@ -4,6 +4,7 @@ import asm.A64Enc;
 import asm.CodeBuffer;
 import compiler.Intrinsics;
 import compiler.Symbols;
+import objectmodel.ObjectModel;
 
 /**
  * The on-metal implementation of the compiler's {@link Symbols} seam (PLAN.md
@@ -49,6 +50,16 @@ final class MetalSymbols implements Symbols
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
         emitAddr(cb, reg, Loader.ifaceTypeOfMethod(ifaceMethodCp));
+    }
+    public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
+    {
+        long tib = isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand);
+        if (tib == 0L)
+        {
+            return;                                     // no array Type (Object not loaded): leave it raw
+        }
+        emitAddr(cb, 16, tib);                          // x16 = array TIB (scratch)
+        cb.emit(A64Enc.strx(16, arrReg, ObjectModel.TIB_OFFSET));   // arr.@0 = array TIB (was the raw element size)
     }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {

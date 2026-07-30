@@ -67,6 +67,23 @@ public final class ObjectModel
     /** Total Type size. */
     public static final int TYPE_SIZE = 3 * WORD;          // 24
 
+    // ----- array Type (a Type node whose objects are arrays) ---------------
+    // An array's header TIB slot (@0) holds either a small element size (1/2/4/8 — a raw, untyped array, the
+    // boot-time default) OR a pointer to an array TIB whose TIB[0] is an array Type. Discriminate by magnitude:
+    // a real TIB is a heap pointer (large); a raw element size is <= WORD. An array Type reuses the class-Type
+    // {instanceSize, super, itableDir} prefix (super = Object, so `arr instanceof Object` walks correctly), plus
+    // an element-Type field; its instanceSize slot carries a tag (so it is recognisable) with the element size.
+    /** Tag in an array Type's instanceSize slot (high bits); the low 16 bits hold the element size. */
+    public static final long ARRAY_TYPE_TAG = 0xA55A0000L;
+    /** Mask to read the tag (identify an array Type). */
+    public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
+    /** Array Type field: the element's Type (0 for a primitive element); used for reference-array covariance. */
+    public static final int ARRAY_TYPE_ELEMENT_OFFSET = 3 * WORD;   // 24
+    /** Total array Type size (class-Type prefix + element Type). */
+    public static final int ARRAY_TYPE_SIZE = 4 * WORD;    // 32
+    /** A TIB slot value at or below this is a raw array's element size, not a TIB pointer. */
+    public static final int MAX_RAW_ARRAY_TIB = WORD;      // 8
+
     /** itable-directory entry: interface Type pointer, then the itable pointer. */
     public static final int ITABLE_ENTRY_IFACE_OFFSET = 0;
     public static final int ITABLE_ENTRY_TABLE_OFFSET = WORD;  // 8

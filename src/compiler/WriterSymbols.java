@@ -71,6 +71,10 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         relocs.interfaceRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cf.memberRef(ifaceMethodCp).owner()));
     }
+    public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
+    {
+        // Host writer: no runtime array Types; VM's own arrays stay raw (element size in the header).
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));

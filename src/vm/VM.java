@@ -914,8 +914,19 @@ public final class VM
      */
     static long strBytes(long ref)
     {
-        // A raw byte[] has a small element-size TIB (0..8); a mini java/lang/String has a heap-pointer TIB.
-        return Magic.load64(ref + 0L) <= 8L ? ref : Magic.load64(ref + 16L);
+        // A byte[] is itself; a java/lang/String yields its value field (@16). A byte[]'s header @0 is either a
+        // small raw element size (VM-internal buffers) or a pointer to an array TIB whose Type is tagged; a
+        // String's @0 is a class TIB (Type not tagged).
+        long tib = Magic.load64(ref + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return ref;                                 // raw byte[] (element size in @0)
+        }
+        if ((Magic.load64(Magic.load64(tib)) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
+        }
+        return Magic.load64(ref + 16L);                 // a String object -> value field
     }
 
     /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
@@ -988,9 +999,20 @@ public final class VM
      * The element size comes from the source array's header (TIB slot), so it's generic over element type;
      * the copy is byte-wise and overlap-safe (like {@code memmove}, as {@code arraycopy} requires).
      */
+    /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
+    static long elemSize(long arr)
+    {
+        long tib = Magic.load64(arr + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return tib;                                    // raw array: @0 is the element size
+        }
+        return Magic.load64(Magic.load64(tib)) & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
+    }
+
     static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
     {
-        long es = Magic.load64(src + 0L);                  // element size (bytes) from the array header
+        long es = elemSize(src);                            // element size (bytes), raw header or typed array Type
         long n = (long) len * es;
         long from = src + 24L + (long) srcPos * es;        // ARRAY_BASE_OFFSET = 24
         long to = dst + 24L + (long) dstPos * es;
@@ -1256,16 +1278,44 @@ public final class VM
             return 0;    // null is never an instance
         }
         long tib = Magic.load64(ref);                  // header→TIB (@0)
-        if (tib == 0L)
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
-            return 0;    // a raw array (null TIB, no Type): not an instance of any class/interface type
+            return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
         }
-        long type = Magic.load64(tib);                 // TIB→Type (@0)
+        long type = Magic.load64(tib);                 // TIB→Type (@0); for a typed array, the array Type
+        return typeAssignable(type, targetType) ? 1 : 0;
+    }
+
+    /** True if an array Type (its instanceSize slot carries the tag). */
+    private static boolean isArrayType(long type)
+    {
+        return (Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+    }
+
+    /**
+     * Is a value of Type {@code type} assignable to {@code targetType}? Walks {@code type}'s superclass chain
+     * (matching the class Type or any interface in each level's itable directory), with a reference-array
+     * covariance prefix: {@code String[]} is an {@code Object[]} iff {@code String} is an {@code Object}. Both
+     * primitive-element arrays are invariant (only the exact-match in the walk succeeds). {@code arr instanceof
+     * Object} works through the array Type's super = Object.
+     */
+    private static boolean typeAssignable(long type, long targetType)
+    {
+        if (type != targetType && targetType != 0L && isArrayType(type) && isArrayType(targetType))
+        {
+            long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            long elemTarget = Magic.load64(targetType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (elemType != 0L && elemTarget != 0L)    // both reference-element arrays: covariant on the element
+            {
+                return typeAssignable(elemType, elemTarget);
+            }
+            // a primitive element on either side is invariant: only the exact-match below can succeed
+        }
         while (type != 0L)
         {
             if (type == targetType)
             {
-                return 1;
+                return true;
             }
             long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
             if (dir != 0L)
@@ -1276,7 +1326,7 @@ public final class VM
                 {
                     if (iface == targetType)
                     {
-                        return 1;
+                        return true;
                     }
                     entry += ObjectModel.ITABLE_ENTRY_SIZE;
                     iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
@@ -1284,7 +1334,7 @@ public final class VM
             }
             type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
         }
-        return 0;
+        return false;
     }
 
     /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
