@@ -1765,6 +1765,9 @@ public final class Loader
         // "item"+i concat; the reachability-gated demand-loader pulls the real closure -- ArrayList ->
         // AbstractList -> AbstractCollection, List/Collection/Iterable/Iterator, ArrayList$Itr, Arrays/Objects/
         // System/Preconditions -- all UNMODIFIED java.base, linked load-order-robustly by the two-phase loader.
+        // Object first: fixes hashCode/equals/toString to their canonical vtable slots so contains()/indexOf()'s
+        // polymorphic `Object.equals` dispatch on String elements lands on String's slot (see loadMap).
+        addBlob(VM.objectBytes, (int) VM.objectLen);
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.integerBytes, (int) VM.integerLen);
@@ -1790,6 +1793,12 @@ public final class Loader
         // Stock java.util.HashMap (mini collections retired): seed String's happy path + Integer; the demand-loader
         // pulls HashMap -> AbstractMap, Map, HashMap$Node, and the String-key hashCode/equals path -- unmodified
         // java.base, linked load-order-robustly by the two-phase loader.
+        // java/lang/Object MUST be seeded first: it fixes the canonical vtable slots of hashCode/equals/toString
+        // so EVERY class (String, AbstractMap, HashMap) puts them at the SAME slot. Without it each class numbers
+        // those inherited methods by its own method order (String.hashCode lands at slot 28, AbstractMap's at 13),
+        // and a polymorphic `Object.hashCode` dispatch -- HashMap.hash(key) does key.hashCode() -- resolves (via
+        // globalVtableSlot's name+desc fallback) to the WRONG class's slot -> blr into an empty/foreign slot.
+        addBlob(VM.objectBytes, (int) VM.objectLen);
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.integerBytes, (int) VM.integerLen);
