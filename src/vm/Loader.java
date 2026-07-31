@@ -773,6 +773,9 @@ public final class Loader
     private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
     private static long demandHeapHigh;                 // high-water: the largest extent any batch reached above the mark
     private static int reclaimArmed;                    // 1 after the philosophers demo (see armHeapReclaim)
+    /** Span pre-zeroed above the mark so cold-boot DRAM garbage can't wild-branch a tall batch (see resetLoader).
+     *  Comfortably exceeds the ~18 MiB per-batch bl-range budget; clamped below core 1's arena (0x1000_0000). */
+    private static final long DEMAND_ZERO_SPAN = 0x0180_0000L;   // 24 MiB
 
     /**
      * Start reclaiming the demand-load heap between batches. Called once, AFTER the philosophers demo — whose
@@ -794,6 +797,24 @@ public final class Loader
             if (demandHeapMark == 0L)
             {
                 demandHeapMark = Magic.load64(Heap.PTR_CELL);   // watermark: heap level after the philosophers demo
+                // Pre-zero a generous span above the mark ONCE. The else-branch below only re-zeros up to the
+                // PRIOR batches' high-water, so the FIRST batch to grow taller than every previous one would
+                // otherwise read never-touched DRAM in its top region -- at cold power-on that's arbitrary
+                // garbage (not zeroed), so an OOB slot read (a code buffer's trailing word, an itable/imap
+                // over-scan) becomes a wild branch that DIFFERS every cold boot (e.g. HashMap, the tallest
+                // batch, hanging on one boot but not the next). Zeroing [mark, mark+SPAN) makes every such
+                // read deterministically hit 0 (a caught blr 0). Batches rewind to the mark, so no successful
+                // batch approaches SPAN (the biggest fit under MAXBLOB=1024); SPAN stays far below core 1-3's
+                // arenas (0x1000_0000), so this never touches live secondary-core data.
+                long z0 = demandHeapMark;
+                long zEnd = demandHeapMark + DEMAND_ZERO_SPAN;
+                if (zEnd > 0x1000_0000L) { zEnd = 0x1000_0000L; }   // never cross into core 1's arena
+                while (z0 < zEnd)
+                {
+                    Magic.store64(z0, 0L);
+                    z0 += 8L;
+                }
+                demandHeapHigh = zEnd;                           // record it so the else-branch keeps it re-zeroed
             }
             else
             {
