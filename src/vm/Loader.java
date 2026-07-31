@@ -100,6 +100,13 @@ public final class Loader
     private static int[] clFieldCount;
     private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
     private static long[] clType;        // each class's Type node (for instanceof/checkcast)
+    // Two-phase load (structure then bodies): phase A registers every class's structure (Type, TIB, fields,
+    // vtable SLOT numbering, interface slots) in super/interface-first order (acyclic); phase B compiles all
+    // method bodies + builds the TIBs, by which point every cross-class new/field/vtable/itable/cast target is
+    // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
+    private static long[] clStatics;     // each class's static block base (gStatics), reused between the two phases
+    private static int[]  clVtStart;     // start index of this class's slots in the vt registry (phase B fills bufs)
+    private static boolean[] clIsIface;  // interface? (phase B compiles only its default/static bodies, no TIB fill)
     private static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
@@ -166,9 +173,16 @@ public final class Loader
     private static long[] pdBase;        // blob address
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
-    private static int[] pdDone;         // 1 once loaded
+    private static int[] pdDone;         // 1 once phase-A structure is loaded
+    private static int[] pdDoneB;        // 1 once phase-B bodies are compiled + TIB filled
     private static boolean[] pdNeedsString;   // blob materializes a String (CONSTANT_String or invokedynamic-concat)
     private static int stringPdIndex;    // pd index of java/lang/String, or -1 (set by probeAll)
+    // Inheritance edges (super + direct interfaces) recorded by probeAll -- an ACYCLIC graph (Java forbids cyclic
+    // inheritance), so phase A can always order super/interface-first with no stall. (This is distinct from the
+    // full CONSTANT_Class dep list, which IS cyclic and is what made single-phase linking load-order-fragile.)
+    private static int[] pdSuperOff;     // super name Utf8 offset (in pdBase[i]), or 0 if none (Object/interface)
+    private static int[] pdIfOff;        // pdIfOff[i*MAX_DIRECT_IF+k] = direct-interface name Utf8 offset
+    private static int[] pdIfN;          // number of direct interfaces recorded for blob i
     private static int pdCount;
     private static final int MAXDEP = 49152;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
@@ -217,6 +231,7 @@ public final class Loader
             // ENQUEUE the entry — a <clinit> that calls another class (e.g. ArraysSupport -> SharedSecrets) would
             // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
             clinitEntry[clinitN] = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+            clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
             clinitN += 1;
         }
     }
@@ -264,17 +279,86 @@ public final class Loader
      */
     /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
     private static long[] clinitEntry;
+    private static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
     private static int clinitN;
 
     /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
     private static void runClinits()
     {
-        int i = 0;
-        while (i < clinitN)
+        // Run each <clinit> AFTER the <clinit>s of the classes it references (its CONSTANT_Class deps), so an
+        // initializer that reads another class's static (e.g. ArraysSupport.<clinit> -> Unsafe.getUnsafe(),
+        // whose theUnsafe is set by Unsafe.<clinit>) sees it initialized. Two-phase compiles bodies
+        // superclass-first, NOT usage-dependency-first, so enqueue order is NOT a safe run order -- this
+        // restores the single-phase dependency-first init order. Cycles (rare among initializers) are broken by
+        // force-running the first pending, matching the loader's own cycle handling.
+        boolean[] done = new boolean[clinitN];
+        int remaining = clinitN;
+        while (remaining > 0)
         {
-            long unused = Magic.call0(clinitEntry[i]);
-            i += 1;
+            int progress = 0;
+            int i = 0;
+            while (i < clinitN)
+            {
+                if (!done[i] && !clinitDepBlocked(i, done))
+                {
+                    long unused = Magic.call0(clinitEntry[i]);
+                    done[i] = true;
+                    remaining -= 1;
+                    progress = 1;
+                }
+                i += 1;
+            }
+            if (progress == 0)                          // initializer cycle: force-run the first pending
+            {
+                int j = 0;
+                while (j < clinitN && done[j])
+                {
+                    j += 1;
+                }
+                if (j < clinitN)
+                {
+                    long unused = Magic.call0(clinitEntry[j]);
+                    done[j] = true;
+                    remaining -= 1;
+                }
+                else
+                {
+                    remaining = 0;
+                }
+            }
         }
+    }
+
+    /** True if clinit {@code i} references a class whose own (still-unrun) {@code <clinit>} must run first. */
+    private static boolean clinitDepBlocked(int i, boolean[] done)
+    {
+        int pd = clinitPd[i];
+        if (pd < 0)
+        {
+            return false;
+        }
+        int d = 0;
+        while (d < dpCount)
+        {
+            if (dpOwner[d] == pd)
+            {
+                int jpd = findPdByName(pdBase[pd], dpOff[d]);   // the referenced class's blob
+                if (jpd >= 0 && jpd != pd)
+                {
+                    int k = 0;
+                    while (k < clinitN)                 // does that blob have a not-yet-run <clinit>?
+                    {
+                        if (clinitPd[k] == jpd && !done[k])
+                        {
+                            return true;
+                        }
+                        k += 1;
+                    }
+                }
+            }
+            d += 1;
+        }
+        return false;
     }
 
     private static boolean clinitBlocked()
@@ -688,6 +772,7 @@ public final class Loader
 
     /** Reset every loader registry to empty, ready for a fresh {@link #loadAll} batch. */
     private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
+    private static long demandHeapHigh;                 // high-water: the largest extent any batch reached above the mark
     private static int reclaimArmed;                    // 1 after the philosophers demo (see armHeapReclaim)
 
     /**
@@ -713,6 +798,17 @@ public final class Loader
             }
             else
             {
+                long oldPtr = Magic.load64(Heap.PTR_CELL);      // ZERO all heap ever used above the mark, so a reused
+                if (oldPtr > demandHeapHigh)                     // block never carries a PRIOR batch's code bytes: an
+                {                                                // uninitialized/OOB slot then reads 0 (a caught blr 0)
+                    demandHeapHigh = oldPtr;                     // instead of stale code -> a layout-dependent wild branch.
+                }                                                // Zero up to the HIGH-WATER mark (not just the previous
+                long z = demandHeapMark;                         // batch) so a bigger batch's OOB reads land on 0 too.
+                while (z < demandHeapHigh)
+                {
+                    Magic.store64(z, 0L);
+                    z += 8L;
+                }
                 Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
                 Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
             }
@@ -742,6 +838,7 @@ public final class Loader
         rsName = new int[MAXRELOC];
         rsCount = 0;
         clinitEntry = new long[MAXBLOB];
+        clinitPd = new int[MAXBLOB];
         clinitN = 0;
         primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
         refArrElem = new long[64];
@@ -757,6 +854,9 @@ public final class Loader
         clFieldCount = new int[MAXCLASS];
         clVtCount = new int[MAXCLASS];
         clType = new long[MAXCLASS];
+        clStatics = new long[MAXCLASS];
+        clVtStart = new int[MAXCLASS];
+        clIsIface = new boolean[MAXCLASS];
         clCount = 0;
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
         clIfaceRegN = new int[MAXCLASS];
@@ -786,7 +886,11 @@ public final class Loader
         pdBase = new long[MAXBLOB];
         pdNameOff = new int[MAXBLOB];
         pdDone = new int[MAXBLOB];
+        pdDoneB = new int[MAXBLOB];
         pdNeedsString = new boolean[MAXBLOB];
+        pdSuperOff = new int[MAXBLOB];
+        pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
+        pdIfN = new int[MAXBLOB];
         pdCount = 0;
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
@@ -2126,7 +2230,10 @@ public final class Loader
             sizeMethod(i);
             i += 1;
         }
-        buildTib();                                     // vtable now that all buffers are placed
+        if (!compileReuseTib)                           // two-phase clinit: the class's TIB already exists (clTib[reg],
+        {                                               // pinned in phase A) and gets filled by loadBodies' compileClass
+            buildTib();                                 // -- rebuilding here would allocate a THROWAWAY TIB and leave
+        }                                               // gTib pointing at it, so compileClass fills the wrong TIB.
         i = 0;
         while (i < mCount)                              // emit
         {
@@ -2136,6 +2243,8 @@ public final class Loader
         Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the JIT buffers
         return mBuf[0];
     }
+    // When set, compile() reuses the caller's already-allocated gTib (two-phase clinit) instead of rebuilding it.
+    private static boolean compileReuseTib;
 
     /**
      * Compile <em>every</em> method of the current class into its own buffer (in
@@ -2221,24 +2330,27 @@ public final class Loader
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
             markReachable();
         }
-        probeAll();                                      // dep list (pdNameOff + dpOwner/dpOff) over the final set
-        int remaining = pdCount;
-        while (remaining > 0)
+        probeAll();                                      // this_class + super + interfaces + dep list over the final set
+
+        // PHASE A: register every class's STRUCTURE, super/interface-first. That graph is acyclic, so linkReady
+        // always finds a ready blob -- no force-load, no arbitrary order. (The fallback guards a malformed set.)
+        int remainingA = pdCount;
+        while (remainingA > 0)
         {
             int progress = 0;
             int i = 0;
             while (i < pdCount)
             {
-                if (pdDone[i] == 0 && ready(i))
+                if (pdDone[i] == 0 && linkReady(i))
                 {
-                    loadOne(pdBase[i], pdLen[i]);
+                    loadStructure(pdBase[i], pdLen[i]);
                     pdDone[i] = 1;
-                    remaining -= 1;
+                    remainingA -= 1;
                     progress = 1;
                 }
                 i += 1;
             }
-            if (progress == 0)                          // stalled: a cycle — force-load one pending blob
+            if (progress == 0)                          // no linkReady blob (shouldn't happen: inheritance is acyclic)
             {
                 int j = 0;
                 while (j < pdCount && pdDone[j] != 0)
@@ -2247,18 +2359,58 @@ public final class Loader
                 }
                 if (j < pdCount)
                 {
-                    loadOne(pdBase[j], pdLen[j]);
+                    loadStructure(pdBase[j], pdLen[j]);
                     pdDone[j] = 1;
-                    remaining -= 1;                      // then re-scan; loading this may unblock others
+                    remainingA -= 1;
                 }
                 else
                 {
-                    remaining = 0;                      // nothing pending (shouldn't happen)
+                    remainingA = 0;
                 }
             }
         }
-        patchRelocs();                                  // every class is loaded now: fix up cross-class refs the
-                                                        // cycle force-load left unresolved (retires seed-ordering)
+
+        // PHASE B: compile every class's method bodies + fill its TIB, superclass-first (so inherited vtable
+        // buffers are already filled). All new/field/vtable/itable/cast targets are structure-registered now, so
+        // order is irrelevant except for the super-before-subclass buffer inheritance; method CALLs are patched.
+        int remainingB = pdCount;
+        while (remainingB > 0)
+        {
+            int progress = 0;
+            int i = 0;
+            while (i < pdCount)
+            {
+                if (pdDoneB[i] == 0 && superReadyB(i))
+                {
+                    loadBodies(pdBase[i], pdLen[i]);
+                    pdDoneB[i] = 1;
+                    remainingB -= 1;
+                    progress = 1;
+                }
+                i += 1;
+            }
+            if (progress == 0)                          // no super-ready blob (shouldn't happen: super chain acyclic)
+            {
+                int j = 0;
+                while (j < pdCount && pdDoneB[j] != 0)
+                {
+                    j += 1;
+                }
+                if (j < pdCount)
+                {
+                    loadBodies(pdBase[j], pdLen[j]);
+                    pdDoneB[j] = 1;
+                    remainingB -= 1;
+                }
+                else
+                {
+                    remainingB = 0;
+                }
+            }
+        }
+
+        patchRelocs();                                  // every body is compiled now: fix up the cross-class method
+                                                        // CALLs left unresolved while their target compiled later
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
@@ -2279,6 +2431,7 @@ public final class Loader
         {
             parseConstPool(pdBase[i], pdLen[i]);
             pdNameOff[i] = gcp[u2(gbase + gcp[u2(gp + 2)])];   // this_class -> name
+            probeInheritance(i);                               // super + direct interfaces (phase-A ordering edges)
             if (utf8IsAtBase(pdBase[i], pdNameOff[i], Magic.bytes("java/lang/String")))
             {
                 stringPdIndex = i;
@@ -2299,6 +2452,88 @@ public final class Loader
             }
             i += 1;
         }
+    }
+
+    /**
+     * Record blob {@code i}'s superclass + directly-implemented interface names (the acyclic edges phase A
+     * orders by). Reads the class-file header at {@code gp} (access_flags), left current by the caller's
+     * {@code parseConstPool}. Decomposed into locals so the host writer's operand stack stays shallow. A
+     * CONSTANT_Class cp entry at index {@code c} has {@code gcp[c]} = its name_index offset; the name Utf8
+     * offset is {@code gcp[nameIndex]} (mirrors probeAll's this_class parse).
+     */
+    private static void probeInheritance(int i)
+    {
+        int superCi = u2(gp + 4);
+        pdSuperOff[i] = 0;
+        if (superCi != 0)
+        {
+            int superNameIx = u2(gbase + gcp[superCi]);
+            pdSuperOff[i] = gcp[superNameIx];
+        }
+        long p = gp + 6;
+        int ifc = u2(p);
+        p += 2;
+        int n = 0;
+        int k = 0;
+        while (k < ifc && n < MAX_DIRECT_IF)
+        {
+            int ifCi = u2(p + k * 2);
+            int ifNameIx = u2(gbase + gcp[ifCi]);
+            pdIfOff[i * MAX_DIRECT_IF + n] = gcp[ifNameIx];
+            n += 1;
+            k += 1;
+        }
+        pdIfN[i] = n;
+    }
+
+    /**
+     * Phase-A readiness: blob {@code i}'s superclass and every direct interface are already structure-loaded
+     * (or not among the blobs at all). The inheritance graph is acyclic, so scanning for a linkReady blob never
+     * stalls -> phase A lays down structure strictly super/interface-first.
+     */
+    private static boolean linkReady(int i)
+    {
+        if (pdSuperOff[i] != 0 && blocked(i, pdSuperOff[i]))
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < pdIfN[i])
+        {
+            if (blocked(i, pdIfOff[i * MAX_DIRECT_IF + k]))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
+    }
+
+    /**
+     * Phase-B readiness: blob {@code i}'s superclass has had its BODIES compiled (its TIB vtable buffers are
+     * filled), so this class's parseVtable inherits real buffers and its fillTib is complete. Interfaces need
+     * not be body-done first -- the itable directory keys on interface Types (structure) and holds THIS class's
+     * own method buffers. {@code pdDoneB} marks phase-B completion.
+     */
+    private static boolean superReadyB(int i)
+    {
+        return pdSuperOff[i] == 0 || !blockedB(i, pdSuperOff[i]);
+    }
+
+    /** Like {@link #blocked} but against phase-B completion ({@code pdDoneB}). */
+    private static boolean blockedB(int i, int off)
+    {
+        int j = 0;
+        while (j < pdCount)
+        {
+            if (j != i && pdDoneB[j] == 0
+                    && utf8EqAt(pdBase[i], off, pdBase[j], pdNameOff[j]))
+            {
+                return true;
+            }
+            j += 1;
+        }
+        return false;
     }
 
     private static void addDep(int owner, int nameOff)
@@ -2346,10 +2581,17 @@ public final class Loader
         return false;
     }
 
-    private static void loadOne(long bytes, int len)
+    /**
+     * PHASE A -- register class STRUCTURE only (no method bodies, no TIB fill). Runs in super/interface-first
+     * (acyclic) order, so parseVtable/parseFields/captureDirectIfaces always see their super+interfaces. After
+     * this pass every class has a Type, an (empty) TIB at a stable address, a field layout, a static block, its
+     * interface slots, and its vtable SLOT numbering registered -- so any OTHER class's phase-B body compile can
+     * resolve new/getfield/invokevirtual/invokeinterface/checkcast against it regardless of order.
+     */
+    private static void loadStructure(long bytes, int len)
     {
         parseConstPool(bytes, len);
-        parseFields();                                  // hierarchy-aware field layout
+        parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
         findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
         {
@@ -2366,20 +2608,49 @@ public final class Loader
             clType[clCount] = gType;
             clFieldCount[clCount] = 0;
             clVtCount[clCount] = 0;
+            clStatics[clCount] = gStatics;              // interface constants block (reused by its phase-B bodies)
+            clVtStart[clCount] = vtCount;               // no vtable entries appended for an interface
+            clIsIface[clCount] = true;
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clCount += 1;
-            compileClass(bytes);                        // compile the interface's CONCRETE methods (static like List.of
-            registerAll();                              // and default methods); abstract ones have no Code and are skipped
+            return;                                     // bodies (default/static methods) compiled in phase B
+        }
+        parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
+        allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
+        registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
+    }
+
+    /**
+     * PHASE B -- compile every method body of an already-structure-registered class and fill its TIB. Runs in
+     * superclass-first order so this class's parseVtable inherits its super's now-filled vtable buffers and its
+     * fillTib is complete. All cross-class new/field/vtable/itable/cast targets are registered (phase A), so the
+     * only unresolved refs left are method CALLS into not-yet-compiled bodies -- patchRelocs fixes those after.
+     */
+    private static void loadBodies(long bytes, int len)
+    {
+        parseConstPool(bytes, len);
+        parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
+        int reg = classRegByName(gThisNameOff);
+        gStatics = clStatics[reg];                      // REUSE the phase-A static block (cross-class getstatic keys on it)
+        findBootstrapMethods();
+        if (clIsIface[reg])
+        {
+            compileClass(bytes);                        // interface CONCRETE methods (static like List.of + defaults)
+            registerAll();
             return;
         }
-        parseVtable(bytes);                             // flatten against the superclass (sets gvCount)
-        allocTib();                                     // allocate Type + TIB (empty): gTib is now THIS class's TIB, so a
-                                                        // `new Self` in <clinit> bakes it (tibOfClass falls back to gTib)
-        runClinit(bytes);                               // compile <clinit> (a `new Self` now bakes gTib); run deferred
+        parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
+        gType = clType[reg];                            // restore this class's Type + TIB (allocated in phase A)
+        gTib = clTib[reg];
+        compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
+        runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTib[reg])
+        compileReuseTib = false;
+        gType = clType[reg];                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
+        gTib = clTib[reg];
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
-        compileClass(bytes);                            // compile all methods; fillTib fills the (already-allocated) TIB
-        registerAll();                                  // methods
-        registerClass();                                // class + fields + flattened vtable
+        compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
+        registerAll();                                  // methods -> globalBuf
+        fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
     }
 
     /**
@@ -2885,7 +3156,12 @@ public final class Loader
     }
 
     /** Register the current class (its TIB + instance-field layout) for cross-class new/fields. */
-    private static void registerClass()
+    /**
+     * PHASE A registration: record the class's Type + TIB + field layout + statics + flattened-vtable STRUCTURE
+     * (name/descriptor/slot per slot). The vtable BUFFERS are left 0 -- the method bodies aren't compiled yet;
+     * {@link #fillClassVtBuf} fills them in phase B. clVtStart pins where this class's vt entries begin.
+     */
+    private static void registerClassStructure()
     {
         clBase[clCount] = gbase;
         clNameOff[clCount] = gThisNameOff;
@@ -2893,6 +3169,9 @@ public final class Loader
         clType[clCount] = gType;
         clFieldCount[clCount] = gifCount;
         clVtCount[clCount] = gvCount;
+        clStatics[clCount] = gStatics;
+        clVtStart[clCount] = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
+        clIsIface[clCount] = false;
         captureDirectIfaces();
         clCount += 1;
         int st = 0;
@@ -2919,7 +3198,7 @@ public final class Loader
             s += 1;
         }
         int v = 0;
-        while (v < gvCount)                            // register the whole flattened vtable
+        while (v < gvCount)                            // register the whole flattened vtable STRUCTURE (bufs 0 for now)
         {
             vtClassBase[vtCount] = gbase;
             vtClassOff[vtCount] = gThisNameOff;
@@ -2927,8 +3206,25 @@ public final class Loader
             vtNameOff[vtCount] = gvName[v];
             vtDescOff[vtCount] = gvDesc[v];
             vtSlot[vtCount] = v;
-            vtBuf[vtCount] = slotBuf(v);
+            vtBuf[vtCount] = 0L;                        // filled by fillClassVtBuf once the bodies are compiled
             vtCount += 1;
+            v += 1;
+        }
+    }
+
+    /**
+     * PHASE B: fill the vtable BUFFERS for class {@code reg}'s registered slots, now that its bodies are compiled
+     * ({@code slotBuf} = this class's own compiled buffer, or -- for an inherited slot -- the super's, which
+     * phase B filled first because it runs superclass-first). Subclasses then inherit real buffers via parseVtable.
+     */
+    private static void fillClassVtBuf(int reg)
+    {
+        int start = clVtStart[reg];
+        int cnt = clVtCount[reg];
+        int v = 0;
+        while (v < cnt)
+        {
+            vtBuf[start + v] = slotBuf(v);             // gv* is current (this class's phase-B parseVtable just ran)
             v += 1;
         }
     }

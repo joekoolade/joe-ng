@@ -120,6 +120,10 @@ public final class Heap
      */
     private static void zeroPayload(long base, int aligned)
     {
+        Magic.store64(base + ObjectModel.TIB_OFFSET, 0L);   // Also zero offset 0 (the TIB slot). A RAW allocation
+        // (TIB / itableDir / imap / a code buffer) that reads offset 0 before its caller sets it would otherwise get
+        // garbage on a warm reboot (RAM isn't cleared on a guest-triggered reset) -> intermittent wild branches.
+        // Offset 8 is STATUS (deterministically the block size, set by alloc), so it needs no zeroing.
         long z = base + ObjectModel.HEADER_SIZE;
         long end = base + aligned;
         while (z < end)
