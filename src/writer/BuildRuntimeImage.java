@@ -36,6 +36,19 @@ public final class BuildRuntimeImage
 
     public static CodeBuffer build(Path classesDir) throws IOException
     {
+        ClassRegistry registry = populateRegistry(classesDir);
+
+        ImageBuilder ib = new ImageBuilder(registry);
+        return buildImage(ib, registry);
+    }
+
+    /**
+     * Fill a {@link ClassRegistry} with the exact class set the image embeds: the compiled tree (guest
+     * overrides + demos), the stock java.base classes, and the stock-collection overwrites. Factored out so
+     * the closure probe ({@link ClosureProbe}) can measure a demo's reachable closure over the identical set.
+     */
+    static ClassRegistry populateRegistry(Path classesDir) throws IOException
+    {
         // The registry is the writer's class source (PLAN.md §M5.5c): a pure name->bytes
         // lookup ImageBuilder can run on metal. The seed host fills it from the compiled
         // tree here; over-inclusion is harmless (parsing is lazy, only reachable classes
@@ -94,8 +107,12 @@ public final class BuildRuntimeImage
                 registry.overwrite(c, in.readAllBytes());
             }
         }
+        return registry;
+    }
 
-        ImageBuilder ib = new ImageBuilder(registry);
+    /** Embed the runtime blobs and compile {@code vm/VM.boot} + its reachable closure into the image. */
+    static CodeBuffer buildImage(ImageBuilder ib, ClassRegistry registry) throws IOException
+    {
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
         ib.addBlob("vm/VM.guestBytes",   "vm/VM.guestLen",   "vm/Guest",       registry.rawBytes("vm/Guest"));
         ib.addBlob("vm/VM.greeterBytes", "vm/VM.greeterLen", "vm/Greeter",     registry.rawBytes("vm/Greeter"));

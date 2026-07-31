@@ -780,4 +780,90 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         ClassFile cf = resolve(owner);
         return new Resolved(cf, cf.method(name, desc));
     }
+
+    /** Result of {@link #analyzeClosure}: the reachable class set + method-key pull graph + skipped methods. */
+    public record ClosureReport(StrSet classes, StrIntTable parent, Vec<String> parentKey, Vec<String> failures) {}
+
+    /**
+     * HOST-ONLY DIAGNOSTIC (task #41): run just the discovery BFS from {@code entryKey} — no sizing/emit —
+     * and report the reachable CLASS closure the metal demand-loader would pull. Mirrors {@link #build}'s
+     * worklist (call sites + tibRef/static-owner {@code use()} which schedules {@code <clinit>} on first use,
+     * + instantiated-class vtable methods) but tolerates a compile failure on a deep java.base method by
+     * recording and skipping it (the metal loader's jitFail-and-continue), so one unsupported opcode doesn't
+     * abort the measurement. Lets us size/attack the String-ops closure without a hardware round-trip.
+     */
+    public ClosureReport analyzeClosure(String entryKey)
+    {
+        StrSet used = new StrSet();
+        Vec<String> clinitOrder = new Vec<>();
+        Vec<String> worklist = new Vec<>();
+        Vec<String> failures = new Vec<>();
+        StrIntTable seen = new StrIntTable();
+        StrIntTable parent = new StrIntTable();          // callee key -> index into parentKey (its puller)
+        Vec<String> parentKey = new Vec<>();
+        worklist.add(entryKey);
+        parent.put(entryKey, 0);
+        parentKey.add("<root>");
+        while (worklist.size() > 0)
+        {
+            String k = worklist.removeFirst();
+            if (k.equals(INIT_CLASSES) || seen.containsKey(k))
+            {
+                continue;
+            }
+            seen.put(k, 1);
+            CompiledMethod cm;
+            try
+            {
+                cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
+            }
+            catch (RuntimeException e)
+            {
+                failures.add(k + "  ::  " + e.getMessage());
+                continue;
+            }
+            var cs = cm.relocs().callSites();
+            for (int i = 0; i < cs.size(); i++)
+            {
+                pushWl(worklist, parent, parentKey, k, cs.get(i).calleeKey());
+            }
+            var tr = cm.relocs().tibRefs();
+            for (int i = 0; i < tr.size(); i++)
+            {
+                useDiag(tr.get(i).className(), used, clinitOrder, worklist, parent, parentKey, k);
+            }
+            var sr = cm.relocs().staticRefs();
+            for (int i = 0; i < sr.size(); i++)
+            {
+                useDiag(ownerOf(sr.get(i).fieldKey()), used, clinitOrder, worklist, parent, parentKey, k);
+            }
+            useDiag(ownerOf(k), used, clinitOrder, worklist, parent, parentKey, k);
+            // NB: unlike build(), we deliberately do NOT expand every vtable method of a tibRef'd class. The
+            // writer must lay out complete vtables (so an uncalled virtual still gets code); metal RTA marks
+            // only ACTUALLY-CALLED virtuals. Expanding here would falsely pull String.matches->Pattern and
+            // String.toUpperCase->Locale for any method that merely touches a String. Call sites (above)
+            // already carry the resolved callees, which is the reachability we want to measure.
+        }
+        return new ClosureReport(used, parent, parentKey, failures);
+    }
+
+    private void pushWl(Vec<String> worklist, StrIntTable parent, Vec<String> parentKey, String from, String to)
+    {
+        if (!parent.containsKey(to))
+        {
+            parent.put(to, parentKey.size());
+            parentKey.add(from);
+        }
+        worklist.add(to);
+    }
+
+    private void useDiag(String cls, StrSet used, Vec<String> clinitOrder, Vec<String> worklist,
+                         StrIntTable parent, Vec<String> parentKey, String from)
+    {
+        if (used.add(cls) && model.hasClinit(cls))
+        {
+            pushWl(worklist, parent, parentKey, from, cls + ".<clinit>()V");
+            clinitOrder.add(cls + ".<clinit>()V");
+        }
+    }
 }

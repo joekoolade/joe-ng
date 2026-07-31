@@ -36,13 +36,12 @@ public class StrOpsDemo
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
 
-        showStr("\"Hello World\".toUpperCase()", "Hello World".toUpperCase());   // HELLO WORLD
-        showStr("\"Hello World\".toLowerCase()", "Hello World".toLowerCase());   // hello world
-        showStr("\"abc123XYZ\".toUpperCase()", "abc123XYZ".toUpperCase());       // ABC123XYZ
-        showStr("\"abc123XYZ\".toLowerCase()", "abc123XYZ".toLowerCase());       // abc123xyz
-
+        // toUpperCase()/toLowerCase() and multi-char split("::") are DEFERRED to later #41 slices: the no-arg
+        // case-mappers route through Locale.getDefault() (the LocaleProviderAdapter -> ServiceLoader ->
+        // ClassLoader -> nio.fs -> foreign-memory closure), and a multi-char regex compiles a java.util.regex
+        // Pattern (+ ICU normalizer) -- each ~hundreds of classes needing runtime substitution, not the String
+        // happy path. Single-char split takes String's char fast-path (no Pattern), so it stays here.
         showSplit("\"a,b,c\".split(\",\")", "a,b,c".split(","));           // [a, b, c]
-        showSplit("\"a::b::c\".split(\"::\")", "a::b::c".split("::"));     // [a, b, c]
         showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)
         showSplit("\"whole\".split(\",\")", "whole".split(","));          // [whole]
 
