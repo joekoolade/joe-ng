@@ -1251,10 +1251,21 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
         int search = cb.wordCount();
         cb.emit(A64Enc.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
+        // Directory-sentinel guard (metal JIT only; the image writer's trusted code is check-free like nullCheck):
+        // if the scan reaches the 0-terminator without a match, the receiver's itable dir lacks the target
+        // interface -- bail with an NPE at this PC rather than dereferencing the sentinel's itable (blr 0) or
+        // walking PAST it into arbitrary heap and blr'ing a layout-dependent garbage word (the wild branch that
+        // reset/hung nondeterministically). A well-formed program never hits it.
+        int miss = symbols.implicitChecks() ? cb.emit(A64Enc.cbz(9, 0)) : -1;
         cb.emit(A64Enc.cmpReg(9, 16));
         int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));                                    // found?
         cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
         cb.emit(A64Enc.b(search - cb.wordCount()));                                    // loop
+        if (miss >= 0)
+        {
+            cb.set(miss, A64Enc.cbz(9, cb.wordCount() - miss));
+            throwImplicit(cb, pos, Symbols.NEW_NPE);
+        }
         int found = cb.wordCount();
         cb.set(beq, A64Enc.bcond(A64Enc.EQ, found - beq));
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
