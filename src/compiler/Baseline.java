@@ -1162,7 +1162,7 @@ public final class Baseline
     }
 
     /** Signed big-endian 4-byte read (switch payloads). */
-    private static int s4(byte[] b, int i)
+    public static int s4(byte[] b, int i)
     {
         return (b[i] << 24) | ((b[i + 1] & 0xFF) << 16) | ((b[i + 2] & 0xFF) << 8) | (b[i + 3] & 0xFF);
     }
@@ -2086,7 +2086,7 @@ public final class Baseline
     }
 
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
-    private static int opLen(int op, byte[] code, int pos)
+    public static int opLen(int op, byte[] code, int pos)
     {
         // 2-byte: bipush/ldc/iload/lload/aload/fload/dload/istore/lstore/astore/fstore/dstore/newarray
         if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x19 || op == 0x17 || op == 0x18
