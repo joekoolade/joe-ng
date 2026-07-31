@@ -36,17 +36,13 @@ public class StrOpsDemo
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
 
-        // toUpperCase()/toLowerCase() and multi-char split("::") are DEFERRED to later #41 slices: the no-arg
-        // case-mappers route through Locale.getDefault() (the LocaleProviderAdapter -> ServiceLoader ->
-        // ClassLoader -> nio.fs -> foreign-memory closure), and a multi-char regex compiles a java.util.regex
-        // Pattern (+ ICU normalizer) -- each ~hundreds of classes needing runtime substitution, not the String
-        // happy path. Single-char split takes String's char fast-path (no Pattern), so it stays here.
-        showSplit("\"a,b,c\".split(\",\")", "a,b,c".split(","));           // [a, b, c]
-        showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)
-        showSplit("\"whole\".split(\",\")", "whole".split(","));          // [whole]
-
+        // split() is DEFERRED (its own regex slice): even single-char String.split(",") reaches
+        // String.split(String,int,boolean), whose body references Pattern.compile in the NEVER-TAKEN else
+        // branch (single-char delimiters take the fast path at runtime) -- and method-level reachability pulls
+        // the whole java.util.regex Pattern + ICU Normalizer + Locale/provider/foreign closure regardless
+        // (>1024 classes -> MAXBLOB). toUpperCase()/toLowerCase() are likewise deferred (Locale.getDefault).
+        // The search/slice ops here stay bounded to String internals; join() rides StringJoiner (no regex).
         showStr("join(\",\", \"a\",\"b\",\"c\")", String.join(",", "a", "b", "c"));      // a,b,c  (varargs)
-        showStr("join(\"-\", split(\"a,b,c\"))", String.join("-", "a,b,c".split(",")));  // a-b-c  (round-trip)
         showStr("join(\"/\", \"one\")", String.join("/", "one"));                        // one    (single elem)
 
         // switch opcodes (compiler slice for real java.base): dense -> tableswitch, sparse -> lookupswitch.
@@ -81,22 +77,6 @@ public class StrOpsDemo
         }
     }
 
-    private static void showSplit(String label, String[] parts)
-    {
-        Magic.printStr("  Str.");
-        Magic.printStr(label);
-        Magic.printStr(" len=");
-        Magic.printStr(Integer.toString(parts.length));
-        Magic.printStr(" = [");
-        int i = 0;
-        while (i < parts.length)
-        {
-            if (i > 0) { Magic.printStr(", "); }
-            Magic.printStr(parts[i]);
-            i = i + 1;
-        }
-        Magic.printStr("]\n");
-    }
 
     private static void showBool(String label, boolean v)
     {
