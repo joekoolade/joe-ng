@@ -32,6 +32,17 @@ public final class Heap
      *  and the 48-56 MiB scratch band; grows up. {@link VM#gcCollect} walks BASE..PTR_CELL. */
     public static final long BASE      = 0x0400_0000L;
 
+    // ----- JIT code arena (#43) -------------------------------------------------------------------------
+    // Demand-loaded methods are compiled into their OWN low arena, NOT interleaved with the data heap. Data
+    // (TIBs, 4KiB imaps, interned strings, per-batch scratch) outweighs code ~400x and marches the data heap
+    // pointer to ~200MiB; if code buffers rode along there, a JIT'd bl to the image's VM-helper island (~0.5MiB)
+    // would exceed the A64 +-128MiB reach (FAIL_BL_RANGE). Placed at 32-48MiB (above the ~28MiB image, below
+    // the 48MiB SEC_STUB scratch), every code buffer stays within ~48MiB of the helpers and of each other. The
+    // whole boot's code is only a few MiB, so this simple no-reclaim bump arena has ample room.
+    public static final long CODE_BASE     = 0x0200_0000L;   // 32 MiB
+    public static final long CODE_LIMIT    = 0x0300_0000L;   // 48 MiB (= VM.SEC_STUB) — overflow guard
+    public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
+
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
 
     /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from 256 MiB up. */
@@ -50,6 +61,21 @@ public final class Heap
             Magic.store64(FREE_CELL + c * 8L, 0L);
             c += 1;
         }
+        Magic.store64(CODE_PTR_CELL, CODE_BASE);
+    }
+
+    /**
+     * Allocate a JIT code buffer from the low code arena (see {@link #CODE_BASE}). Kept separate from the data
+     * heap so compiled code stays within the A64 {@code bl} reach of the image's VM helpers. Code is written in
+     * full by the compiler, so no zeroing; {@link #publishCode} handles I-cache coherence. Core-0 only (the JIT
+     * runs on core 0). No reclaim -- the whole boot's code is a few MiB, far under the 16 MiB arena.
+     */
+    public static long allocCode(int size)
+    {
+        int aligned = (size + 7) & -8;
+        long p = Magic.load64(CODE_PTR_CELL);
+        Magic.store64(CODE_PTR_CELL, p + aligned);
+        return p;
     }
 
     /**

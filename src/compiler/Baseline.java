@@ -715,6 +715,15 @@ public final class Baseline
             typeCheck(cb, u2(code, pos + 1), Symbols.INSTANCE_OF);
             return 3;
         }  // instanceof
+        else if (op == 0xC2 || op == 0xC3)
+        {
+            // monitorenter/monitorexit: no-op lock (single-owner on the JIT core; the metal scheduler is
+            // cooperative for demand-loaded code). Just consume the objectref the bytecode pops. A real
+            // lock is future work; stock java.base uses `synchronized` on cold init/cache paths that run
+            // uncontended here (e.g. Pattern/regex lazy singletons).
+            nullCheck(cb, popReg(), pos);                    // monitorenter/exit on null -> NPE (JVM semantics)
+            return 1;
+        }  // monitorenter / monitorexit
 
         else
         {

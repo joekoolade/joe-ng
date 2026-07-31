@@ -1692,7 +1692,7 @@ public final class Loader
     static void buildRunTramp()
     {
         int slot = runInterfaceSlot();
-        long buf = Heap.alloc(64);
+        long buf = Heap.allocCode(64);
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 0, 0));         w += 1;  // x17 = receiver.tib
         Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 0));        w += 1;  // x17 = Type
@@ -2304,7 +2304,7 @@ public final class Loader
             emitMethod(i);
             i += 1;
         }
-        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the JIT buffers
+        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the JIT buffers
         return mBuf[0];
     }
     // When set, compile() reuses the caller's already-allocated gTib (two-phase clinit) instead of rebuilding it.
@@ -2352,7 +2352,7 @@ public final class Loader
             emitMethod(i);
             i += 1;
         }
-        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the JIT buffers
+        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the JIT buffers
     }
 
     /**
@@ -2945,7 +2945,7 @@ public final class Loader
      */
     private static void sizeMethod(int i)
     {
-        mBuf[i] = Heap.alloc(compileMethod(i, 0L).length * 4);
+        mBuf[i] = Heap.allocCode(compileMethod(i, 0L).length * 4);
     }
 
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
@@ -3151,7 +3151,7 @@ public final class Loader
             }
             j += 1;
         }
-        Heap.publishCode(Heap.BASE, Magic.load64(Heap.PTR_CELL));   // I-cache maintenance over the patched code
+        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the patched code
     }
 
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
@@ -4048,7 +4048,7 @@ public final class Loader
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
         int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
         int kind = lambdaImplKind(idx);
-        long thunk = Heap.alloc(128);
+        long thunk = Heap.allocCode(128);
         int w = 0;
         if (kind == 5 || kind == 9)
         {
