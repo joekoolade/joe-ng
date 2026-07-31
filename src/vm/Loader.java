@@ -59,7 +59,7 @@ public final class Loader
     // replacing in place, new methods appended. Each slot's signature may live in a
     // superclass's blob (gvBase), and its implementation is either an inherited
     // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
-    private static final int MAXMV = 2048;
+    private static final int MAXMV = 512;
     private static long[] gvBase;   // blob holding this slot's name/descriptor
     private static int[] gvName;    // method name Utf8 offset (in gvBase)
     private static int[] gvDesc;    // descriptor Utf8 offset (in gvBase)
@@ -75,7 +75,7 @@ public final class Loader
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
-    private static final int MAXREG = 32768;
+    private static final int MAXREG = 6144;
     private static long[] rgBase;   // declaring class blob base (holds its Utf8 strings)
     private static int[] rgClassOff;   // class name Utf8 offset
     private static int[] rgNameOff;    // method name Utf8 offset
@@ -93,7 +93,7 @@ public final class Loader
 
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
-    private static final int MAXCLASS = 4096;
+    private static final int MAXCLASS = 1024;
     private static long[] clBase;
     private static int[] clNameOff;
     private static long[] clTib;
@@ -131,7 +131,7 @@ public final class Loader
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
-    private static final int MAXFIELD = 24576;
+    private static final int MAXFIELD = 4096;
     private static long[] fldBase;
     private static int[] fldClassOff;
     private static int[] fldNameOff;
@@ -141,7 +141,7 @@ public final class Loader
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 65536;
+    private static final int MAXVT = 16384;
     private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
     private static long[] vtNameBase;    // method signature blob (may be a superclass's)
@@ -157,7 +157,7 @@ public final class Loader
     // call site from where the method happens to sit in a given class's vtable, so
     // two classes implementing the same interface at different vtable slots both
     // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 4096;
+    private static final int MAXIFM = 512;
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
@@ -169,7 +169,7 @@ public final class Loader
     // class it names — its superclass and interfaces (needed for field layout,
     // vtable flattening and itable indices) but also anything it instantiates,
     // calls or type-tests (needed by the class/method/field registries).
-    private static final int MAXBLOB = 4096;
+    private static final int MAXBLOB = 1024;
     private static long[] pdBase;        // blob address
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
@@ -908,7 +908,7 @@ public final class Loader
     // closure over the loaded blobs) instead of every method of every class. This lets a big real java.base
     // class load through the normal closure path without choking on its unreachable methods (toString,
     // parseInt's String.format paths, ...). Without an entry set, everything compiles (unchanged behaviour).
-    private static final int MAXREACH = 32768;
+    private static final int MAXREACH = 8192;
     private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
@@ -3013,7 +3013,7 @@ public final class Loader
     // invokestatic/special (bl) and getstatic/putstatic (address load) to the not-yet-loaded class compile
     // to a stub. Each such site is recorded (address + the ref as base+offsets, which stay valid), and
     // patchRelocs() re-resolves + rewrites them after every class is loaded -- so no manual seed-ordering.
-    private static final int MAXRELOC = 131072;
+    private static final int MAXRELOC = 24576;
     private static int relocRecording;                  // 1 only during emitMethod (the real-base emit pass)
     private static long[] rcAddr, rcBase;               // call sites: bl address, ref blob base,
     private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
