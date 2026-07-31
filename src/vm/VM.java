@@ -78,6 +78,10 @@ public final class VM
         {
             reportFault();
         }
+        if (denylistTrapAddr == 0L)                        // same trick: force denylistTrap compiled (#43)
+        {
+            denylistTrap();
+        }
         long raw = Heap.alloc(0x1000);
         long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
         int i = 0;
@@ -1226,6 +1230,21 @@ public final class VM
         }
     }
 
+    /**
+     * Trap for a call into a DENYLISTED (pruned, never-loaded) class — see {@code Loader.isDenylisted}.
+     * patchRelocs points every unresolved cross-class call here instead of leaving a {@code bl 0} wild branch.
+     * A well-formed metal program never reaches it (denylisted subtrees are cold); if it fires, the halt +
+     * message is a deterministic signal that a denylist prefix was too broad (un-denylist that subtree).
+     */
+    static void denylistTrap()
+    {
+        Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
     /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */
     static void printHex(long v)
     {
@@ -1682,6 +1701,7 @@ public final class VM
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
     static long printStrAddr;          // VM.printStr(J)V
+    static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J

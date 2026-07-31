@@ -1560,6 +1560,61 @@ public final class Loader
         }
     }
 
+    /** True if the class name at {@code off} in {@code base} starts with {@code prefix}. */
+    private static boolean utf8HasPrefix(long base, int off, byte[] prefix)
+    {
+        int len = u2(base + off);
+        if (len < prefix.length)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < prefix.length)
+        {
+            if (u1(base + off + 2 + k) != (prefix[k] & 0xFF))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
+    }
+
+    /**
+     * DENYLIST (#43): subtrees the metal environment fundamentally lacks -- indy/MethodHandle (intrinsified,
+     * never used), foreign memory, the module/class-loader/service-loader machinery, filesystem, reflection,
+     * logging, security. Stock java.base references them only from never-executed cold paths (e.g. a literal
+     * regex match touches none of them), so pruning them from the demand-load closure keeps big classes like
+     * java.util.regex.Pattern under MAXBLOB. A call that DOES reach a pruned class traps loudly (patchRelocs
+     * points it at VM.denylistTrap) instead of wild-branching. Keep in sync with writer.ReachScan.DENY.
+     */
+    private static boolean isDenylisted(long base, int off)
+    {
+        return utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/foreign/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/foreign/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/fs/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/file/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/ServiceLoader"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/module/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/module/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/spi/"))
+                // cold ICU/normalizer/break-iterator: Pattern references but never runs them for a literal match.
+                // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"));
+    }
+
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
     private static boolean nameRegistered(long base, int off)
     {
@@ -1584,6 +1639,10 @@ public final class Loader
         // EVERY closure (changing every vtable). It's an implicit root: loaded only when a demo explicitly
         // seeds it (the HashMap closure does, so String there inherits its hashCode/equals slots).
         if (utf8IsAtBase(base, off, Magic.bytes("java/lang/Object")))
+        {
+            return 0L;
+        }
+        if (isDenylisted(base, off))                   // metal-absent subtree: prune (a call to it traps, see patchRelocs)
         {
             return 0L;
         }
@@ -3064,6 +3123,10 @@ public final class Loader
         while (i < rcCount)
         {
             long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+            if (target == 0L)
+            {
+                target = VM.denylistTrapAddr;                  // unresolved: the callee's class was pruned (#43
+            }                                                  // denylist) or never compiled -> trap, not a bl 0 wild branch
             if (target != 0L)
             {
                 long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)

@@ -25,10 +25,33 @@ public final class ReachScan
 {
     private ReachScan() {}
 
+    /** Metal-absent subtrees to prune: pulled only by never-executed cold paths on metal. Keep in sync with
+     *  the loader's denylist (Loader.isDenylisted). */
+    static final String[] DENY = {
+        "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
+        "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/", "java/lang/ClassLoader",
+        "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
+        "java/net/", "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
+        "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
+        // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
+        // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
+        "jdk/internal/icu/", "java/text/", "sun/text/",
+    };
+
+    static boolean deny = false;                       // set by the "DENY" arg
+    static final StrSet denied = new StrSet();         // denylisted classes referenced by kept code (-> trap sites)
+
+    static boolean isDenied(String c)
+    {
+        for (String p : DENY) { if (c.startsWith(p)) { return true; } }
+        return false;
+    }
+
     public static void main(String[] args) throws IOException
     {
         String entry = args.length > 0 ? args[0] : "java/lang/String.split(Ljava/lang/String;)[Ljava/lang/String;";
-        Path classesDir = Path.of(args.length > 1 ? args[1] : "out");
+        deny = args.length > 1 && args[1].equals("DENY");
+        Path classesDir = Path.of(args.length > 2 ? args[2] : "out");
         ClassRegistry reg = BuildRuntimeImage.populateRegistry(classesDir);
 
         StrSet classes = new StrSet();                 // reached classes
@@ -47,6 +70,7 @@ public final class ReachScan
             String owner = k.substring(0, dot);
             String name = k.substring(dot + 1, lp);
             String desc = k.substring(lp);
+            if (deny && isDenied(owner)) { denied.add(owner); continue; }   // trap site: don't pull its body
             useClass(owner, classes, work, reg);
             ClassFile cf = tryResolve(reg, owner);
             if (cf == null) { unresolved++; continue; }
@@ -59,9 +83,14 @@ public final class ReachScan
             scan(cf, m.code, classes, work, reg);
         }
 
-        System.out.println("entry: " + entry);
+        System.out.println("entry: " + entry + (deny ? "   [DENYLIST ON]" : ""));
         System.out.println("reachable classes: " + classes.size() + "   (MAXBLOB budget = 1024)");
         System.out.println("reachable methods: " + seenM.size() + "   (unresolved owners skipped: " + unresolved + ")");
+        if (deny)
+        {
+            System.out.println("denied classes referenced (trap sites): " + denied.size());
+            for (int i = 0; i < denied.size(); i++) { System.out.println("    TRAP " + denied.at(i)); }
+        }
         System.out.println();
         System.out.println("=== per-subtree histogram (biggest first) ===");
         StrIntTable hist = new StrIntTable();
@@ -121,12 +150,22 @@ public final class ReachScan
     private static void useClass(String cls, StrSet classes, Vec<String> work, ClassRegistry reg)
     {
         cls = stripArray(cls);
-        if (cls.startsWith("[") || cls.isEmpty() || !classes.add(cls)) { return; }
+        if (cls.startsWith("[") || cls.isEmpty()) { return; }
+        if (deny && isDenied(cls)) { denied.add(cls); return; }   // pruned: a call to it becomes a metal trap site
+        if (!classes.add(cls)) { return; }
         ClassFile cf = tryResolve(reg, cls);
         if (cf == null) { return; }
         String sup = cf.superClassName();
-        if (sup != null) { useClass(sup, classes, work, reg); }
-        for (String ifc : cf.interfaceNames()) { useClass(ifc, classes, work, reg); }
+        if (sup != null)
+        {
+            if (deny && isDenied(sup)) { System.out.println("!! STRUCTURAL: kept " + cls + " extends denied " + sup); }
+            useClass(sup, classes, work, reg);
+        }
+        for (String ifc : cf.interfaceNames())
+        {
+            if (deny && isDenied(ifc)) { System.out.println("!! STRUCTURAL: kept " + cls + " implements denied " + ifc); }
+            useClass(ifc, classes, work, reg);
+        }
         for (ClassFile.Method mm : cf.methods())
         {
             if (mm.name.equals("<clinit>")) { work.add(cls + ".<clinit>()V"); }
