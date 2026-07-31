@@ -35,6 +35,15 @@ final class ClassRegistry
         all.add(name);
     }
 
+    /** Replace the bytes registered for an already-present {@code name} (same slot, no new allNames entry) —
+     *  used to prefer STOCK java.base over a mini override for a class we've retired. */
+    void overwrite(String name, byte[] bytes)
+    {
+        int slot = slotOf(name);
+        raw.set(slot, bytes);
+        parsed.set(slot, null);          // drop any stale parse of the mini bytes
+    }
+
     /** Every registered class name — the full set to embed in the class table (demand-loadable by name). */
     Vec<String> allNames()
     {

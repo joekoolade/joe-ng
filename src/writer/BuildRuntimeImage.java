@@ -81,6 +81,20 @@ public final class BuildRuntimeImage
             embedAllJavaBase(registry);
         }
 
+        // Retire the mini java.util collections: prefer the UNMODIFIED stock java.base classes for the
+        // collection API, shadowing the mini overrides that registerTree registered first. The demand-loader
+        // (two-phase, load-order-robust) pulls each one's real closure (AbstractList/AbstractCollection,
+        // ArrayList$Itr, HashMap$Node, ...). The mini sources remain but their bytes are no longer embedded.
+        for (String c : new String[]{
+                "java/util/ArrayList", "java/util/List", "java/util/Collection", "java/util/Iterator",
+                "java/util/HashMap", "java/util/Map", "java/lang/Iterable"})
+        {
+            try (var in = Integer.class.getResourceAsStream("/" + c + ".class"))
+            {
+                registry.overwrite(c, in.readAllBytes());
+            }
+        }
+
         ImageBuilder ib = new ImageBuilder(registry);
         // Embed raw .class bytes for the on-metal loader (M4) — NOT compiled here.
         ib.addBlob("vm/VM.guestBytes",   "vm/VM.guestLen",   "vm/Guest",       registry.rawBytes("vm/Guest"));

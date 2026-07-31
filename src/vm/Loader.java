@@ -661,8 +661,7 @@ public final class Loader
         addBlob(VM.numberBytes, (int) VM.numberLen);             // Integer's superclass (propagates the slots)
         addBlob(VM.integerBytes, (int) VM.integerLen);
         addBlob(VM.integerCacheBytes, (int) VM.integerCacheLen); // its statics read 0 (clinit skipped) -> valueOf -> new Integer
-        addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
-        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringBytes, (int) VM.stringLen);             // stock java.util.HashMap demand-loaded (mini retired)
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.boxingDemoBytes, (int) VM.boxingDemoLen);
@@ -1741,28 +1740,14 @@ public final class Loader
     static void loadList()
     {
         resetLoader();
-        addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: String inherits its equals slot
-        addBlob(VM.comparableBytes, (int) VM.comparableLen);     // Comparable <- String implements it (before String)
-        addBlob(VM.stringBytes, (int) VM.stringLen);              // String (elements + concat literals)
-        addBlob(VM.iterableBytes, (int) VM.iterableLen);          // Iterable <- Collection extends it
-        addBlob(VM.iteratorBytes, (int) VM.iteratorLen);          // Iterator <- ArrayListIterator implements it
-        addBlob(VM.collectionBytes, (int) VM.collectionLen);      // Collection <- List extends it
-        addBlob(VM.listBytes, (int) VM.listLen);                  // List interface: registered before ArrayList
-        addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);   // the iterator ArrayList.iterator() returns
-        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);        //   so its itable directory keys on List's Type
-        addBlob(VM.linkedListNodeBytes, (int) VM.linkedListNodeLen);         // second List impl: node + its iterator
-        addBlob(VM.linkedListIteratorBytes, (int) VM.linkedListIteratorLen);
-        addBlob(VM.linkedListBytes, (int) VM.linkedListLen);
-        addBlob(VM.collectionsBytes, (int) VM.collectionsLen);   // Collections.sort(List[, Comparator]) static helper
-        addBlob(VM.numBytes, (int) VM.numLen);                   // a second Comparable type for the generic sort
-        addBlob(VM.comparatorBytes, (int) VM.comparatorLen);     // functional iface: the lambda comparator's target
-        addBlob(VM.orderBytes, (int) VM.orderLen);               // bound-instance-method-ref receiver (desc::cmp)
-        addBlob(VM.factoryBytes, (int) VM.factoryLen);           // constructor-ref (Num::new) functional iface
-        addBlob(VM.predicateBytes, (int) VM.predicateLen);       // stream pipeline: filter/map/forEach targets
-        addBlob(VM.functionBytes, (int) VM.functionLen);
-        addBlob(VM.consumerBytes, (int) VM.consumerLen);
-        addBlob(VM.streamBytes, (int) VM.streamLen);
-        addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);         // reduce accumulator (2-arg SAM)
+        // Stock java.util.ArrayList (mini collections retired): seed only String's happy path + Integer for the
+        // "item"+i concat; the reachability-gated demand-loader pulls the real closure -- ArrayList ->
+        // AbstractList -> AbstractCollection, List/Collection/Iterable/Iterator, ArrayList$Itr, Arrays/Objects/
+        // System/Preconditions -- all UNMODIFIED java.base, linked load-order-robustly by the two-phase loader.
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.listDemoBytes, (int) VM.listDemoLen);
         entryPoint(VM.listDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));   // reachability-gated (+ indy)
         loadAll();
@@ -1781,23 +1766,13 @@ public final class Loader
     static void loadMap()
     {
         resetLoader();
-        addBlob(VM.objectBytes, (int) VM.objectLen);             // Object first: root vtable slots String inherits
-        addBlob(VM.stringBytes, (int) VM.stringLen);             // String keys/values (+ concat literals)
-        addBlob(VM.iterableBytes, (int) VM.iterableLen);         // List family: keySet()/values() return an ArrayList,
-        addBlob(VM.iteratorBytes, (int) VM.iteratorLen);         //   iterated by the demo's enhanced-for
-        addBlob(VM.collectionBytes, (int) VM.collectionLen);     // Collection <- List extends it
-        addBlob(VM.listBytes, (int) VM.listLen);
-        addBlob(VM.arrayListIteratorBytes, (int) VM.arrayListIteratorLen);
-        addBlob(VM.arrayListBytes, (int) VM.arrayListLen);
-        addBlob(VM.mapBytes, (int) VM.mapLen);                   // Map interface: registered before HashMap
-        addBlob(VM.hashMapBytes, (int) VM.hashMapLen);
-        addBlob(VM.predicateBytes, (int) VM.predicateLen);       // demo streams the map's keySet() through Stream
-        addBlob(VM.functionBytes, (int) VM.functionLen);
-        addBlob(VM.consumerBytes, (int) VM.consumerLen);
-        addBlob(VM.binaryOpBytes, (int) VM.binaryOpLen);
-        addBlob(VM.biConsumerBytes, (int) VM.biConsumerLen);     // Map.forEach action (2-arg SAM)
-        addBlob(VM.numBytes, (int) VM.numLen);
-        addBlob(VM.streamBytes, (int) VM.streamLen);
+        // Stock java.util.HashMap (mini collections retired): seed String's happy path + Integer; the demand-loader
+        // pulls HashMap -> AbstractMap, Map, HashMap$Node, and the String-key hashCode/equals path -- unmodified
+        // java.base, linked load-order-robustly by the two-phase loader.
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
         addBlob(VM.mapDemoBytes, (int) VM.mapDemoLen);
         entryPoint(VM.mapDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));    // reachability-gated (+ indy)
         loadAll();
