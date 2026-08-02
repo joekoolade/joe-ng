@@ -302,6 +302,19 @@ public final class CompilerTest
         T.eq("run() has a try/catch entry", 1, runM.exceptions.length >= 1 ? 1 : 0);
         T.eq("catch type is MyExc", 1, vmcf.classAt(runM.exceptions[0].catchType()).equals("vm/MyExc") ? 1 : 0);
 
+        // ---- regression: a long[]/double[] PARAM is a 1-slot reference (not category-2) ----
+        // afterLongArray(long[] a, int n): a -> slot0 (x19), n -> slot1 (x20). If [J were miscounted as 2 slots,
+        // n would map to x21 and the body's iload_1 (x20) would read garbage. This was the #43 loadGuest hang.
+        int[] ala = compile(fx, "afterLongArray", "([JI)I");
+        boolean nToX20 = false;
+        boolean nToX21 = false;
+        for (int w : ala)
+        {
+            if (w == A64.movReg(20, 1)) { nToX20 = true; }   // mov x20, x1  (n -> slot1, correct)
+            if (w == A64.movReg(21, 1)) { nToX21 = true; }   // mov x21, x1  (n -> slot2, the bug)
+        }
+        T.check("long[] param is 1 slot: int n -> x20 (not x21)", nToX20 && !nToX21);
+
         // ---- string literals: interned as a byte[] object laid out in the image ----
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe-ng' in image", 1, img.contains("hello from joe-ng") ? 1 : 0);

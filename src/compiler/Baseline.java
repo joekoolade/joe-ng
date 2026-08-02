@@ -56,11 +56,11 @@ public final class Baseline
     private int[] reachDepth;     // computeDepths result: depth[pc] >= 0 iff pc is reachable (else dead code)
     private boolean[] wideTop;    // computeDepths result: the top operand entering pc is a long/double (category-2)
     private int curPos;           // bytecode offset of the op currently being lowered (for wideTop lookup)
-    // computeDepths worklist state, held as fields so the seed helpers need not pass them as arguments. Passing
-    // depth/mask/work through 7-8-arg instance calls peaked computeDepths' OWN operand stack at 9 (> OP_MAX),
-    // tipping it onto the deep-spill path -- whose circular window miscompiles across computeDepths' backward
-    // loop, so the WRITER emitted looping machine code (metal spun forever on its first JIT). As fields, every
-    // seed call stays <= OP_MAX and computeDepths compiles on the byte-identical shallow path.
+    // computeDepths worklist state, held as fields so the seed helpers need not pass depth/mask/work as arguments.
+    // This keeps this hot pre-pass register-only (peak <= OP_MAX) instead of spilling operands. NOTE: passing them
+    // as params instead is also correct now -- the loadGuest hang this once masked was a `long[]`/`double[]`
+    // PARAMETER bug in emitPrologue (a [J/[D param counted as 2 local slots), fixed there; it was never a
+    // deep-operand-spill defect (the spill path is exercised correctly by many deep methods).
     private int[] preDepth;       // depth[pc] entering each pc (>=0 reachable)
     private long[] preMask;       // wide-mask entering each pc (bit i = slot i is long/double)
     private int[] preWork;        // worklist scratch
@@ -2408,9 +2408,9 @@ public final class Baseline
                 depth[pc + len] = after; mask[pc + len] = am; work[wc++] = pc + len;
             }
             // branch/switch targets get the POST-op depth+mask too (their operands were already consumed).
-            // depth/mask/work live in fields (preDepth/preMask/preWork) so these seed calls stay <= OP_MAX and
-            // do NOT push computeDepths onto the deep-spill path (whose circular window miscompiles across this
-            // method's own backward loop -> looping machine code / metal hang). See #43 spill-with-loops limit.
+            // depth/mask/work live in fields (preDepth/preMask/preWork) so these seed calls stay <= OP_MAX,
+            // keeping this hot pre-pass register-only (see the field decls for why this is a perf choice, not
+            // a correctness workaround -- the underlying [J/[D-param bug is fixed in emitPrologue).
             if ((op >= 0x99 && op <= 0x9E) || (op >= 0x9F && op <= 0xA6) || op == 0xC6 || op == 0xC7 || op == 0xA7)
             {
                 int t = pc + s2(code, pc + 1);
@@ -2881,7 +2881,12 @@ public final class Baseline
                 q++;
             }
             int elem = ClassReader.u1(classBytes, q);
-            slot += (elem == 'J' || elem == 'D') ? 2 : 1; // matches the old paramTypes fold
+            // Only a BARE long/double is category-2 (2 local slots). An ARRAY of long/double ([J / [D) is a
+            // reference -> 1 slot; treating it as 2 shifted every later parameter's local slot by one register,
+            // so the prologue and body disagreed (e.g. seedDepth(int[], long[] mask, int[], ...) read garbage
+            // and looped forever). Real bug behind the #43 loadGuest hang -- NOT a deep-operand-spill defect.
+            boolean bareWide = (q == p) && (elem == 'J' || elem == 'D');
+            slot += bareWide ? 2 : 1;
             if (elem == 'L')
             {
                 while (ClassReader.u1(classBytes, q) != ';')
