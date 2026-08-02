@@ -3285,15 +3285,18 @@ public final class Loader
                 target = VM.denylistTrapAddr;                  // unresolved: the callee's class was pruned (#43
                 if (trapWireCount < MAXTRAPWIRE)               // denylist) or never compiled -> trap, not a bl 0 wild branch
                 {
-                    Uart.write(Magic.bytes("  TRAPWIRE["));    // #43 diagnostic: index -> callee, matched at runtime by x30
-                    VM.printDec(trapWireCount);
-                    Uart.write(Magic.bytes("] "));
-                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
-                    Uart.putc(0x2E);                           // '.'
-                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
-                    Uart.putc(0x0A);
-                    trapWireSite[trapWireCount] = rcAddr[i];   // the bl site; x30 at the trap = this + 4
-                    trapWireCount += 1;
+                    if (logTrapWire != 0)                      // verbose per-call dump (index -> callee); off by default
+                    {
+                        Uart.write(Magic.bytes("  TRAPWIRE["));   // matched at runtime by x30 in denylistTrap
+                        VM.printDec(trapWireCount);
+                        Uart.write(Magic.bytes("] "));
+                        writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
+                        Uart.putc(0x2E);                       // '.'
+                        writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
+                        Uart.putc(0x0A);
+                    }
+                    trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
+                    trapWireCount += 1;                        // site by x30, so the table must exist even when quiet
                 }
             }                                                  // denylist) or never compiled -> trap, not a bl 0 wild branch
             if (target != 0L)
@@ -3638,6 +3641,7 @@ public final class Loader
      */
     static int logVtable;                               // #43 diagnostic: when != 0, log high-slot vtable resolutions
     static int logClinit;                               // #43 diagnostic: when != 0, name each <clinit> as it runs
+    static int logTrapWire;                             // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
 
     private static int globalVtableSlot(int idx)
     {
