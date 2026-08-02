@@ -1490,7 +1490,7 @@ public final class VM
 
     static void unwind(long exc, long pc, long sp)
     {
-        if (unwindLog != 0 && unwindLogged < 8)            // #43: name the FIRST exceptions thrown (root NPE first)
+        if (unwindLog != 0 && unwindLogged < 24)            // #43: name the FIRST exceptions thrown (root NPE first)
         {
             unwindLogged += 1;
             Uart.write(Magic.bytes("\n  THROW exc="));

@@ -1339,6 +1339,12 @@ public final class Baseline
             emitCall(cb, 1, true, false, SYM_HELPER, Symbols.GET_CLASS);   // (obj) -> Class mirror
             return;
         }
+        if (symbols.isDesiredAssertionStatus(cpIndex))          // Class.desiredAssertionStatus(): assertions off -> false
+        {                                                       // (drop the receiver, push 0; no mirror vtable needed)
+            popReg();
+            cb.emit(A64Enc.movReg(pushReg(), 31));              // result = XZR = 0 = false
+            return;
+        }
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
         if (deepStack)

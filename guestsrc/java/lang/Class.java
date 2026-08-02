@@ -17,4 +17,14 @@ public final class Class
     private Class()
     {
     }
+
+    /**
+     * Assertions are off on metal (no -ea). Stock {@code <clinit>}s read this into their {@code $assertionsDisabled}
+     * flag (e.g. {@code java.util.regex.Pattern.<clinit>} does {@code ldc X.class; desiredAssertionStatus()}); with
+     * this it can run to completion and initialise its static nodes instead of being skipped.
+     */
+    public boolean desiredAssertionStatus()
+    {
+        return false;
+    }
 }

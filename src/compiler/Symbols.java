@@ -73,6 +73,9 @@ public interface Symbols
     /** True if the method ref at {@code methodCp} is {@code getClass()Ljava/lang/Class;} — intrinsified to GET_CLASS. */
     boolean isGetClass(int methodCp);
 
+    /** True if the invokevirtual is {@code Class.desiredAssertionStatus()Z} (intrinsify to false). */
+    default boolean isDesiredAssertionStatus(int methodCp) { return false; }
+
     /**
      * Tag a freshly-allocated array (in {@code arrReg}) with its array Type, so checkcast/instanceof against an
      * array class resolve. {@code operand} is the {@code newarray} atype when {@code isRef} is false, else the

@@ -59,6 +59,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isGetClass(methodCp);
     }
+    public boolean isDesiredAssertionStatus(int methodCp)
+    {
+        return Loader.isDesiredAssertionStatus(methodCp);
+    }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
         long tib = isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand);

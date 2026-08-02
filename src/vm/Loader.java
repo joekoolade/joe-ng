@@ -246,6 +246,17 @@ public final class Loader
      */
     private static boolean clinitCompilable(long code, int len)
     {
+        // Allowlist: java/util/regex/Pattern.<clinit> ldc's Pattern.class for the `desiredAssertionStatus()`
+        // assertions idiom (a tag-7 Class literal), which the generic ldc-tag gate below rejects. Its remaining
+        // work (accept/lastAccept = new Node()/new LastNode(); putstatic) is runnable, and it MUST run -- compile
+        // reads `lastAccept` (a static) as the node-chain terminal; a null lastAccept -> unlinked nodes -> NPE in
+        // SliceNode.study. Class literals are supported (Milestone 0d) + desiredAssertionStatus() returns false.
+        // Kept as a targeted allow (not a blanket tag-7 allow) because many other <clinit>s use the same idiom but
+        // are intentionally skipped-and-seeded (String/ArraysSupport/Unsafe...) and hang if actually run.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
+        {
+            return true;
+        }
         int pc = 0;
         while (pc < len)
         {
@@ -301,6 +312,13 @@ public final class Loader
             {
                 if (!done[i] && !clinitDepBlocked(i, done))
                 {
+                    if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
+                    {
+                        int cpd = clinitPd[i];
+                        Uart.write(Magic.bytes("  clinit "));
+                        writeName(pdBase[cpd] + pdNameOff[cpd] + 2, u2(pdBase[cpd] + pdNameOff[cpd]));
+                        Uart.putc(0x0A);
+                    }
                     long unused = Magic.call0(clinitEntry[i]);
                     done[i] = true;
                     remaining -= 1;
@@ -692,11 +710,11 @@ public final class Loader
         addBlob(VM.strOpsDemoBytes, (int) VM.strOpsDemoLen);
         // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
         entryPoint(VM.strOpsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        VM.unwindLog = 1;                               // #43: log exception throw-stacks during this batch (also the printStackTrace() mechanism)
         loadAll();
         long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
-            VM.unwindLog = 1;                            // #43: log the first exceptions thrown while running the demo
             long unused = Magic.call0(buf);
         }
     }
@@ -3563,6 +3581,7 @@ public final class Loader
      * while a single loaded class implements it.
      */
     static int logVtable;                               // #43 diagnostic: when != 0, log high-slot vtable resolutions
+    static int logClinit;                               // #43 diagnostic: when != 0, name each <clinit> as it runs
 
     private static int globalVtableSlot(int idx)
     {
@@ -4669,6 +4688,14 @@ public final class Loader
     {
         return isName(gbase, mrefNameOff(idx), 0x676574436C617373L, 8)   // "getClass"
                 && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
+    }
+
+    /** {@code Class.desiredAssertionStatus()Z} -- intrinsified to {@code false} (assertions are off on metal), so
+     *  a stock {@code <clinit>}'s `$assertionsDisabled` idiom needs neither the mirror's vtable nor the method. */
+    static boolean isDesiredAssertionStatus(int idx)
+    {
+        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"))
+                && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Z"));
     }
 
     // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----
