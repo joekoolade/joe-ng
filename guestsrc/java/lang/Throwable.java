@@ -21,6 +21,13 @@ public class Throwable
     // which then hits the unresolved-call trap. Never set true.
     static boolean jfrTracing;
 
+    // Inline backtrace: up to 8 frame code-addresses (0-terminated), captured at THROW time by {@code VM.unwind}
+    // (which already walks the frame chain to search for a handler). Kept as inline longs -- NOT a {@code long[]}
+    // -- so the VM fills them without allocating an array during exception propagation. {@code printStackTrace()}
+    // names each PC's method over the UART via {@code Loader.reportMethodAt}, reusing the unwind frame-walk. These
+    // are the first instance fields, so a Throwable's backtrace lives at object offsets 16..72 (header is 16).
+    long bt0, bt1, bt2, bt3, bt4, bt5, bt6, bt7;
+
     public Throwable()
     {
     }
@@ -36,4 +43,15 @@ public class Throwable
     public Throwable(Throwable cause)
     {
     }
+
+    /** Print this throwable's class and captured stack frames to the UART (metal-friendly printStackTrace). */
+    public void printStackTrace()
+    {
+        printStackTrace0(this);
+    }
+
+    /** VM native (wired in {@code Loader.nativeBuf}): formats the captured backtrace of {@code t}. STATIC so the
+     *  call is an {@code invokestatic} resolved via nativeBuf -- a private INSTANCE native would be dispatched
+     *  through an (empty) vtable slot and trip the metal's null-vtable guard. */
+    private static native void printStackTrace0(Throwable t);
 }

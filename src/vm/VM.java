@@ -1192,6 +1192,7 @@ public final class VM
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
+        if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
 
         installSchedVectors();
 
@@ -1220,6 +1221,39 @@ public final class VM
      * EL1 exception handler (reached by a branch from every vector entry): print the syndrome,
      * faulting PC and fault address, then park. Does not return — this is a last-resort report.
      */
+    /**
+     * {@code Throwable.printStackTrace0()} native (self in x0): print the throwable's class + the frames captured
+     * into its inline backtrace (bt0..bt7 @ self+16) by {@link #unwind} at throw time. Names each frame's method
+     * via {@link Loader#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
+     */
+    static void printStackTrace(long self)
+    {
+        if (self <= 0x1000L)
+        {
+            return;                                        // the boot-time force-compile calls this with 0; no-op
+        }
+        Uart.putc(0x0A);
+        long tib = Magic.load64(self);
+        if (tib > 0x1000L)
+        {
+            Loader.printClassName(Magic.load64(tib));      // TIB[0] = Type -> the exception's class name
+        }
+        Uart.putc(0x0A);
+        int i = 0;
+        while (i < 8)
+        {
+            long fpc = Magic.load64(self + 16L + i * 8L);
+            if (fpc == 0L)
+            {
+                break;
+            }
+            Uart.write(Magic.bytes("  at "));
+            Loader.printFrameAt(fpc);
+            Uart.putc(0x0A);
+            i += 1;
+        }
+    }
+
     static void reportFault()
     {
         long rcv = Magic.readX0();                         // FIRST ops: capture the faulting blr's receiver (x0) and
@@ -1505,6 +1539,31 @@ public final class VM
             Loader.reportMethodAt(pc);
             Uart.putc(0x0A);
         }
+        // Capture the throw-site frame chain into exc's inline backtrace (Throwable.bt0..bt7 at exc+16..+72), first
+        // throw only. Every thrown object is a guest Throwable, so exc+16 is bt0. Reuse the same frame walk the
+        // handler search below does (saved LR at [sp], frameSizeAt to pop) -> this is the printStackTrace() data.
+        if (exc > 0x1000L && Magic.load64(exc + 16L) == 0L)
+        {
+            long cpc = pc;
+            long csp = sp;
+            int n = 0;
+            while (n < 8 && cpc > 0x1000L)
+            {
+                Magic.store64(exc + 16L + n * 8L, cpc);
+                n += 1;
+                long cfs = frameSizeAt(cpc);
+                if (cfs == 0L)
+                {
+                    break;                              // top of the JIT/image stack
+                }
+                cpc = Magic.load64(csp) - 4L;           // caller's return address (the call site)
+                csp += cfs;
+            }
+            if (n < 8)
+            {
+                Magic.store64(exc + 16L + n * 8L, 0L);  // 0-terminate the backtrace
+            }
+        }
         while (true)
         {
             long h = findHandler(pc, exc);
@@ -1769,6 +1828,7 @@ public final class VM
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
+    static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
@@ -4621,6 +4681,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
         if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("printStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStackTrace"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
         return blobV;
     }

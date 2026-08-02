@@ -50,5 +50,32 @@ public class ExcDemo
         Magic.printStr("charAt aioobe caught=" + deep + "\n");
 
         Magic.printStr("after: still running\n");       // control returned normally from every catch
+
+        // printStackTrace(): throw a few frames deep, catch, and print the backtrace captured at throw time by
+        // VM.unwind (Throwable.bt0..bt7 -> Loader.printFrameAt). Expect level3 (throw) <- level2 <- level1 <- main.
+        try
+        {
+            level1();
+        }
+        catch (Exception e)
+        {
+            Magic.printStr("printStackTrace:");
+            e.printStackTrace();
+        }
     }
+
+    private static void level1()
+    {
+        level2();
+    }
+
+    private static void level2()
+    {
+        level3();
+    }
+
+    private static void level3()
+    {
+        throw new IllegalArgumentException();           // explicit `new` (RTA flags it instantiated -> its
+    }                                                   // inherited Throwable.printStackTrace gets compiled)
 }

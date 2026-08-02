@@ -1765,6 +1765,63 @@ public final class Loader
         Uart.write(Magic.bytes(" class=? (unregistered Type)"));
     }
 
+    /** Print the loaded class name whose Type node is {@code type} (just the bare name), or a placeholder.
+     *  Used by {@code Throwable.printStackTrace()} for the header line. */
+    static void printClassName(long type)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clType[i] == type)
+            {
+                writeName(clBase[i] + clNameOff[i] + 2, u2(clBase[i] + clNameOff[i]));
+                return;
+            }
+            i += 1;
+        }
+        Uart.write(Magic.bytes("<exception>"));
+    }
+
+    /** Print the ONE demand-compiled method (or {@code <clinit>}) containing {@code addr} as a single line
+     *  "class.method +0xoff" -- the printStackTrace frame formatter (compact vs {@link #reportMethodAt}). */
+    static void printFrameAt(long addr)
+    {
+        long bestBuf = 0L;
+        int bestReg = -1;
+        int bestClin = -1;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgBuf[i] != 0L && rgBuf[i] <= addr && rgBuf[i] > bestBuf) { bestBuf = rgBuf[i]; bestReg = i; bestClin = -1; }
+            i += 1;
+        }
+        int c = 0;
+        while (c < clinitN)
+        {
+            if (clinitEntry[c] != 0L && clinitEntry[c] <= addr && clinitEntry[c] > bestBuf) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            c += 1;
+        }
+        if (bestReg < 0 && bestClin < 0)
+        {
+            Uart.write(Magic.bytes("<image/native>"));               // image (VM) code has no on-metal symbol map
+            return;
+        }
+        if (bestReg >= 0)
+        {
+            writeName(rgBase[bestReg] + rgClassOff[bestReg] + 2, u2(rgBase[bestReg] + rgClassOff[bestReg]));
+            Uart.putc(0x2E);
+            writeName(rgBase[bestReg] + rgNameOff[bestReg] + 2, u2(rgBase[bestReg] + rgNameOff[bestReg]));
+        }
+        else
+        {
+            int pd = clinitPd[bestClin];
+            writeName(pdBase[pd] + pdNameOff[pd] + 2, u2(pdBase[pd] + pdNameOff[pd]));
+            Uart.write(Magic.bytes(".<clinit>"));
+        }
+        Uart.putc(0x2B);                                         // '+'  (printHex already prints the "0x" prefix)
+        VM.printHex(addr - bestBuf);
+    }
+
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
      *  registered buffer base <= addr), plus the byte offset into it, over the UART. */
     static void reportMethodAt(long addr)
@@ -3203,7 +3260,13 @@ public final class Loader
     {
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
-            return bufOf(calleeCodeOf(idx));            // same class: local buffer
+            long local = bufOf(calleeCodeOf(idx));      // same class: local buffer
+            if (local != 0L)
+            {
+                return local;
+            }
+            // else fall through: a same-class NATIVE (no Code attr -> calleeCodeOf 0) resolves to its VM helper;
+            // an as-yet-uncompiled same-class method stays 0 here and is patched later by globalBufByRef.
         }
         long g = globalBuf(idx);                        // cross class: another loaded class
         return g != 0L ? g : nativeBuf(idx);            // else a provided java.base native, or 0
@@ -3397,6 +3460,10 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
             if (utf8IsStr(nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
             if (utf8IsStr(nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Throwable")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
         {
