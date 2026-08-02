@@ -1222,6 +1222,8 @@ public final class VM
      */
     static void reportFault()
     {
+        long lr = Magic.readLR();                          // FIRST op: for a blr wild-branch, x30 = the caller's
+                                                           // return addr (the vector uses B, not BL, so x30 is intact)
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
         long far = Magic.readFAR_EL1();
@@ -1234,6 +1236,8 @@ public final class VM
         printHex(elr);
         Uart.write(Magic.bytes(" far="));
         printHex(far);
+        Uart.write(Magic.bytes(" lr="));
+        printHex(lr);
         Uart.putc(0x0A);
         while (true)
         {
@@ -1249,7 +1253,14 @@ public final class VM
      */
     static void denylistTrap()
     {
+        long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
         Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
+        int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
+        Uart.write(Magic.bytes("  fired TRAPWIRE index="));
+        printDec(k);
+        Uart.write(Magic.bytes(" (lr="));
+        printHex(lr);
+        Uart.write(Magic.bytes(")\n"));
         while (true)
         {
             Magic.wfe();

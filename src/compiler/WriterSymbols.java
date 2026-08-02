@@ -179,6 +179,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "writeCPACR_EL1(J)V" -> Intrinsics.WRITE_CPACR_EL1;
         case "writeSP(J)V" -> Intrinsics.WRITE_SP;
         case "readSP()J" -> Intrinsics.READ_SP;
+        case "readLR()J" -> Intrinsics.READ_LR;
         case "resume(JJJ)V" -> Intrinsics.RESUME;
         case "store32(JI)V" -> Intrinsics.STORE32;
         case "store8(JI)V" -> Intrinsics.STORE8;

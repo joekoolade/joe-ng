@@ -3095,6 +3095,11 @@ public final class Loader
     private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
     private static int rsCount;
+    // #43 trap diagnostics: every call site rewritten to bl denylistTrap, recorded so denylistTrap can read x30
+    // (the return address) and report WHICH pruned callee actually fired at runtime (vs the dead-branch refs).
+    private static final int MAXTRAPWIRE = 512;
+    private static long[] trapWireSite = new long[MAXTRAPWIRE];   // the bl call-site address
+    private static int trapWireCount;
 
     /** Record an unresolved cross-class call at {@code blAddr} (the ref names class/name/desc in the current cp). */
     static void recordCallReloc(long blAddr, int idx)
@@ -3126,9 +3131,24 @@ public final class Loader
         rsCount += 1;
     }
 
+    /** #43 diagnostic: which trap-wired call site (by index, as printed at patch time) does return address {@code lr}
+     *  belong to? Returns the TRAPWIRE index, or -1. The bl site is {@code lr - 4}. */
+    static int trapIndexFor(long lr)
+    {
+        long site = lr - 4L;
+        int i = 0;
+        while (i < trapWireCount)
+        {
+            if (trapWireSite[i] == site) { return i; }
+            i += 1;
+        }
+        return -1;
+    }
+
     /** Re-resolve and rewrite every recorded reloc site now that all classes are loaded. */
     private static void patchRelocs()
     {
+        trapWireCount = 0;                                     // #43: fresh trap-site table per batch
         int i = 0;
         while (i < rcCount)
         {
@@ -3136,6 +3156,18 @@ public final class Loader
             if (target == 0L)
             {
                 target = VM.denylistTrapAddr;                  // unresolved: the callee's class was pruned (#43
+                if (trapWireCount < MAXTRAPWIRE)               // denylist) or never compiled -> trap, not a bl 0 wild branch
+                {
+                    Uart.write(Magic.bytes("  TRAPWIRE["));    // #43 diagnostic: index -> callee, matched at runtime by x30
+                    VM.printDec(trapWireCount);
+                    Uart.write(Magic.bytes("] "));
+                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));   // callee class Utf8
+                    Uart.putc(0x2E);                           // '.'
+                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));     // callee method Utf8
+                    Uart.putc(0x0A);
+                    trapWireSite[trapWireCount] = rcAddr[i];   // the bl site; x30 at the trap = this + 4
+                    trapWireCount += 1;
+                }
             }                                                  // denylist) or never compiled -> trap, not a bl 0 wild branch
             if (target != 0L)
             {

@@ -36,14 +36,18 @@ public class StrOpsDemo
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
 
-        // split() is DEFERRED (its own regex slice): even single-char String.split(",") reaches
-        // String.split(String,int,boolean), whose body references Pattern.compile in the NEVER-TAKEN else
-        // branch (single-char delimiters take the fast path at runtime) -- and method-level reachability pulls
-        // the whole java.util.regex Pattern + ICU Normalizer + Locale/provider/foreign closure regardless
-        // (>1024 classes -> MAXBLOB). toUpperCase()/toLowerCase() are likewise deferred (Locale.getDefault).
-        // The search/slice ops here stay bounded to String internals; join() rides StringJoiner (no regex).
         showStr("join(\",\", \"a\",\"b\",\"c\")", String.join(",", "a", "b", "c"));      // a,b,c  (varargs)
         showStr("join(\"/\", \"one\")", String.join("/", "one"));                        // one    (single elem)
+
+        // split() (#43): a MULTI-char delimiter "::" takes String.split's REGEX path (Pattern.compile), unlike
+        // single-char delimiters which take the fast path. Reaches the java.util.regex Pattern closure -- the
+        // wall is the reachable-class count (>1024 -> MAXBLOB) + ICU/Locale/foreign subtrees pruned via the
+        // denylist. toUpperCase()/toLowerCase() stay deferred (Locale.getDefault, #42).
+        String[] parts = "a::b::c".split("::");
+        showInt("split(\"::\").length", parts.length);     // 3
+        showStr("split[0]", parts[0]);                      // a
+        showStr("split[1]", parts[1]);                      // b
+        showStr("split[2]", parts[2]);                      // c
 
         // switch opcodes (compiler slice for real java.base): dense -> tableswitch, sparse -> lookupswitch.
         showInt("dense(0)", dense(0));            // 10
