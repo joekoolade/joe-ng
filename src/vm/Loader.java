@@ -1694,6 +1694,62 @@ public final class Loader
         }
     }
 
+    /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
+     *  registered buffer base <= addr), plus the byte offset into it, over the UART. */
+    static void reportMethodAt(long addr)
+    {
+        // Print the (up to) 4 registered methods whose buffer base is nearest at-or-below addr, closest first,
+        // each with base + delta. If methods are densely packed the first line is the container; a large delta
+        // to the next-lower base means addr sits in a gap (an unregistered/synthetic method).
+        int printed = 0;
+        long ceil = addr + 1L;                             // strictly-below-ceil watermark; walks downward
+        while (printed < 5)
+        {
+            long bestBuf = 0L;
+            int bestReg = -1;
+            int bestClin = -1;
+            int i = 0;
+            while (i < rgCount)                            // registered cross-class methods
+            {
+                if (rgBuf[i] != 0L && rgBuf[i] < ceil && rgBuf[i] > bestBuf)
+                {
+                    bestBuf = rgBuf[i]; bestReg = i; bestClin = -1;
+                }
+                i += 1;
+            }
+            int c = 0;
+            while (c < clinitN)                            // compiled <clinit>s (NOT in rgBuf)
+            {
+                if (clinitEntry[c] != 0L && clinitEntry[c] < ceil && clinitEntry[c] > bestBuf)
+                {
+                    bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1;
+                }
+                c += 1;
+            }
+            if (bestReg < 0 && bestClin < 0) { break; }
+            Uart.write(Magic.bytes("\n    @0x"));
+            VM.printHex(bestBuf);
+            Uart.write(Magic.bytes(" (+0x"));
+            VM.printHex(addr - bestBuf);
+            Uart.write(Magic.bytes(") "));
+            if (bestReg >= 0)
+            {
+                writeName(rgBase[bestReg] + rgClassOff[bestReg] + 2, u2(rgBase[bestReg] + rgClassOff[bestReg]));
+                Uart.putc(0x2E);
+                writeName(rgBase[bestReg] + rgNameOff[bestReg] + 2, u2(rgBase[bestReg] + rgNameOff[bestReg]));
+            }
+            else
+            {
+                int pd = clinitPd[bestClin];
+                writeName(pdBase[pd] + pdNameOff[pd] + 2, u2(pdBase[pd] + pdNameOff[pd]));
+                Uart.write(Magic.bytes(".<clinit>"));
+            }
+            ceil = bestBuf;
+            printed += 1;
+        }
+        if (printed == 0) { Uart.write(Magic.bytes("(no registered method)")); }
+    }
+
     /**
      * Build the shared run-trampoline (stored in {@link VM#runTrampAddr}): entered with x0 = a Runnable,
      * it invokeinterface-dispatches {@code run()} on the receiver, then calls {@link VM#taskExit}. All the

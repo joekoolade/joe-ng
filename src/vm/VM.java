@@ -1239,6 +1239,9 @@ public final class VM
         Uart.write(Magic.bytes(" lr="));
         printHex(lr);
         Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
+        Loader.reportMethodAt(lr);
+        Uart.putc(0x0A);
         while (true)
         {
             Magic.wfe();
