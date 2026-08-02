@@ -3668,14 +3668,29 @@ public final class Loader
             }
             i += 1;
         }
-        i = 0;
-        while (i < fldCount)                            // name-only (inherited field via subclass)
+        // Class-qualified miss: the field is INHERITED. Resolve it by walking the ref class's SUPERCLASS chain
+        // and matching a field DECLARED by each ancestor -- NOT a blind name-only match. Multiple unrelated
+        // classes can declare a same-named field at different slots (e.g. Pattern.buffer @72 vs
+        // Pattern$SliceNode.buffer): a name-only match on `Slice.buffer` wrongly returned Pattern's slot, so the
+        // getfield read a bogus field off a Slice object -> null -> the #43 NPE in Pattern$BnM.optimize.
+        int pd = findPdByName(gbase, classOff);
+        while (pd >= 0)
         {
-            if (utf8EqAt(gbase, nameOff, fldBase[i], fldNameOff[i]))
+            int i2 = 0;
+            while (i2 < fldCount)
             {
-                return 16 + fldSlot[i] * 8;
+                if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldBase[i2], fldClassOff[i2])   // declared by THIS ancestor
+                        && utf8EqAt(gbase, nameOff, fldBase[i2], fldNameOff[i2]))
+                {
+                    return 16 + fldSlot[i2] * 8;
+                }
+                i2 += 1;
             }
-            i += 1;
+            if (pdSuperOff[pd] == 0)
+            {
+                break;
+            }
+            pd = findPdByName(pdBase[pd], pdSuperOff[pd]);   // ascend to the superclass
         }
         return 16;
     }
