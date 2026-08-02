@@ -36,6 +36,10 @@ public final class ReachScan
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
         "jdk/internal/icu/", "java/text/", "sun/text/",
+        // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
+        "jdk/internal/util/regex/Grapheme",
+        // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
+        "jdk/internal/lang/CaseFolding",
     };
 
     static boolean deny = false;                       // set by the "DENY" arg

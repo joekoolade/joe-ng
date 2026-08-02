@@ -82,7 +82,12 @@ public final class VM
         {
             denylistTrap();
         }
-        long raw = Heap.alloc(0x1000);
+        // The table MUST live outside the demand-load data heap: the Loader's between-batch reclaim rewinds
+        // core 0's arena back to BASE, and a later allocation would overwrite a heap-resident vector table --
+        // then the next timer IRQ vectors into clobbered/zeroed memory and the CPU spins on undefined
+        // instructions (looked like a "reset" during the long regex/split compile). The JIT code arena is
+        // never reclaimed, so allocate there (same rationale as the #43 code arena for JIT buffers).
+        long raw = Heap.allocCode(0x1000);
         long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
         int i = 0;
         while (i < 16)
@@ -1084,8 +1089,14 @@ public final class VM
      */
     static long buildSwitchStub(long pickAddr, boolean svcCheck)
     {
-        long raw = Heap.alloc(0x400);
-        long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // code past the object header
+        // The stub is referenced ONLY by the raw EL1 vector table (e4/e5/e6), which the conservative GC never
+        // scans and the demand-load heap reclaim rewinds -- so a data-heap stub gets freed/zeroed out from under
+        // the vectors, and the next svc/timer-IRQ branches into dead memory (the "reset" during the long regex
+        // compile: a GC mid-compile freed it). Allocate in the never-reclaimed, never-GC'd JIT code arena so the
+        // vectors stay valid for the whole run. (Core-0 only: both callers -- pcSetup, installSchedVectors -- are
+        // primary-only, so the non-atomic allocCode bump is race-free.)
+        long raw = Heap.allocCode(0x400);
+        long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // 16-byte-aligned code start
         int w = 0;
         Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, (int) SCHED_FRAME)); w += 1;   // sub sp, #272
         int r = 0;

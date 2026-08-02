@@ -680,6 +680,11 @@ public final class Loader
     static void loadStrOps()
     {
         resetLoader();
+        // java/lang/Object MUST be seeded first: it fixes hashCode/equals/toString to their canonical vtable
+        // slots so String's overrides land on the SAME slots (see loadMap/loadList). split("::") pulls
+        // java/util/HashMap, whose hash(Object) calls key.hashCode() polymorphically -- without this seed
+        // Object.hashCode and String.hashCode get inconsistent slots and the dispatch is a `blr 0` -> reboot.
+        addBlob(VM.objectBytes, (int) VM.objectLen);
         addBlob(VM.stringBytes, (int) VM.stringLen);
         addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
         addBlob(VM.integerBytes, (int) VM.integerLen);           // Integer.toString for int results
@@ -1612,7 +1617,12 @@ public final class Loader
                 // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"));
+                || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
+                // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray in its <clinit>; a
+                // literal split never matches graphemes, so this whole subtree is cold.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/regex/Grapheme"))
+                // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/lang/CaseFolding"));
     }
 
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */

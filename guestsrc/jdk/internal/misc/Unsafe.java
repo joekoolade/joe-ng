@@ -104,4 +104,18 @@ public final class Unsafe
     {
         return Magic.load64(Magic.addrOf(o) + offset);
     }
+
+    /**
+     * Allocate a primitive array (stock uses a native intrinsic; on metal that native + its {@code
+     * componentType.isPrimitive()}/{@code Byte.TYPE} checks are what threw). The only java.base path that
+     * reaches this on metal is {@code StringConcatHelper.newArray} (String.replace and concat fallbacks),
+     * which always allocates a {@code byte[]} -- JDK 9+ stores BOTH latin1 and utf16 Strings as {@code byte[]}.
+     * So the {@code componentType} is byte here; returning {@code new byte[length]} (zeroed, i.e. defined
+     * rather than truly uninitialised) is correct for every reachable caller. Add other element types on
+     * demand if {@code jitFail}/an exception names one.
+     */
+    public Object allocateUninitializedArray(Class componentType, int length)
+    {
+        return new byte[length];
+    }
 }

@@ -1,11 +1,15 @@
 package java.lang;
 
 /**
- * A JDK-free, minimal {@code java/lang/Object}: the root class. It exists so {@code hashCode()} and
- * {@code equals(Object)} get canonical vtable slots that subclasses ({@link String}) override — which is
- * what lets {@code java/util/HashMap} dispatch {@code key.hashCode()}/{@code key.equals()} (static type
- * Object) into a String key's real implementations. These root bodies are placeholders (String overrides
- * both); a real identity hash would need a native. Compiled as a {@code java.base} patch.
+ * A JDK-free, minimal {@code java/lang/Object}: the root class. It exists so {@code hashCode()},
+ * {@code equals(Object)} AND {@code toString()} get canonical vtable slots that subclasses ({@link String})
+ * override — which is what lets a polymorphic (static-type {@code Object}) call dispatch into the receiver's
+ * real implementation: {@code java/util/HashMap} does {@code key.hashCode()}/{@code key.equals()}, and
+ * {@code String.valueOf(Object)}/{@code String.join} do {@code element.toString()}. Object MUST declare each
+ * of these, else the method's slot is never canonicalised (the name+desc fallback in
+ * {@code Loader.globalVtableSlot} picks some other class's slot) and the override lands at a mismatched slot —
+ * a {@code blr 0} wild branch. These root bodies are placeholders (String overrides all three); a real
+ * identity hash / class-name toString would need a native. Compiled as a {@code java.base} patch.
  */
 public class Object
 {
@@ -17,5 +21,10 @@ public class Object
     public boolean equals(Object o)
     {
         return this == o;
+    }
+
+    public String toString()
+    {
+        return "object";
     }
 }

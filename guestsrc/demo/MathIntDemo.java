@@ -27,6 +27,30 @@ public class MathIntDemo
         show("multiplyExact(MAX,2) overflow", caught(1));                   // 1
         show("subtractExact(MIN,1) overflow", caught(2));                   // 1
         show("negateExact(MIN) overflow", caught(3));                      // 1
+
+        // Deep operand stack (#43): these call sites push 8/10 args -> operand depth exceeds the compiler's 7
+        // registers (OP_MAX), so main() compiles via the register-window SPILL path. Weighted sums detect any
+        // arg mis-ordering or spill/reload corruption. Runtime verification that deep codegen is correct.
+        show("deep8(1..8)", deep8(1, 2, 3, 4, 5, 6, 7, 8));                 // 204 = sum k*k, k=1..8
+        show("deep10(1..10)", deep10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));       // 385 = sum k*k, k=1..10
+        show("deepExpr(3)", deepExpr(3));                                   // 1224 (many partial products summed)
+    }
+
+    private static int deep8(int a, int b, int c, int d, int e, int f, int g, int h)
+    {
+        return a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8;
+    }
+
+    private static int deep10(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j)
+    {
+        return a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 + i * 9 + j * 10;
+    }
+
+    /** A single expression keeping many partial products live at once (in-method deep stack). */
+    private static int deepExpr(int x)
+    {
+        return ((x + 1) * (x + 2)) + ((x + 3) * (x + 4)) + ((x + 5) * (x + 6)) + ((x + 7) * (x + 8))
+             + ((x + 9) * (x + 10)) + ((x + 11) * (x + 12)) + ((x + 13) * (x + 14)) + ((x + 15) * (x + 16));
     }
 
     /** Run the exact-op that overflows for {@code which} and report whether its ArithmeticException was caught. */
