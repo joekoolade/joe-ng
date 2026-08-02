@@ -1386,7 +1386,7 @@ public final class Baseline
             cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
             cb.set(b2, A64Enc.cbnz(17, throwAt - b2));
             cb.set(b3, A64Enc.cbz(16, throwAt - b3));
-            throwImplicit(cb, pos, Symbols.NEW_NPE);
+            throwImplicit(cb, pos, Symbols.NEW_AIOOBE);   // OOB vtable slot -> AIOOBE (distinct from a null-receiver NPE)
             cb.set(ok, A64Enc.b(cb.wordCount() - ok));
         }
         cb.emit(A64Enc.blr(16));
