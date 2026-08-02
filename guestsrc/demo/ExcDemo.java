@@ -76,6 +76,6 @@ public class ExcDemo
 
     private static void level3()
     {
-        throw new IllegalArgumentException();           // explicit `new` (RTA flags it instantiated -> its
-    }                                                   // inherited Throwable.printStackTrace gets compiled)
+        throw new IllegalArgumentException("bad arg 42");   // explicit `new` (RTA flags it instantiated -> its
+    }                                                       // inherited Throwable.printStackTrace gets compiled)
 }

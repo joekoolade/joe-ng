@@ -1238,6 +1238,12 @@ public final class VM
         {
             Loader.printClassName(Magic.load64(tib));      // TIB[0] = Type -> the exception's class name
         }
+        long msg = Magic.load64(self + 80L);               // Throwable.detailMessage (after the 8-slot backtrace)
+        if (msg > 0x1000L)
+        {
+            Uart.write(Magic.bytes(": "));
+            printStr(msg);
+        }
         Uart.putc(0x0A);
         int i = 0;
         while (i < 8)

@@ -28,20 +28,32 @@ public class Throwable
     // are the first instance fields, so a Throwable's backtrace lives at object offsets 16..72 (header is 16).
     long bt0, bt1, bt2, bt3, bt4, bt5, bt6, bt7;
 
+    // The detail message. MUST come AFTER bt0..bt7 (VM.unwind / VM.printStackTrace hardcode the backtrace at
+    // obj+16..+72); this lands at obj+80, which VM.printStackTrace reads to append ": <message>".
+    private String detailMessage;
+
     public Throwable()
     {
     }
 
     public Throwable(String message)
     {
+        detailMessage = message;
     }
 
     public Throwable(String message, Throwable cause)
     {
+        detailMessage = message;
     }
 
     public Throwable(Throwable cause)
     {
+    }
+
+    /** The detail message string, or {@code null}. */
+    public String getMessage()
+    {
+        return detailMessage;
     }
 
     /** Print this throwable's class and captured stack frames to the UART (metal-friendly printStackTrace). */
