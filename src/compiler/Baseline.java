@@ -1367,11 +1367,27 @@ public final class Baseline
         // globalVtableSlot's name+desc fallback matched an unrelated class's slot (see Loader ~1864). Left as a
         // bare `blr 0` it wild-branches to 0x0 -> the boot trampoline -> a SILENT REBOOT that looks like a reset.
         // Trap it as an NPE at this PC (same shape as the itable-scan sentinel) so it's reported, not a reboot.
-        int over = symbols.implicitChecks() ? cb.emit(A64Enc.cbnz(16, 0)) : -1;
-        if (over >= 0)
+        if (symbols.implicitChecks())
         {
+            // The resolved code word (x16) must be a plausible metal code address: 4-aligned, below the code
+            // ceiling (0x1000_0000), and non-zero. A garbage word -- e.g. a vtable slot index past a SHORT guest
+            // vtable (a minimal exception overlay, or an array's tiny TIB) reading adjacent heap DATA as a code
+            // pointer -- fails these, so we throw an NPE at this PC instead of a wild `blr` into unmapped memory
+            // (which faults as an instruction-abort / silent reboot). Only the metal JIT emits this; trusted image
+            // code (implicitChecks()==false) stays check-free. (#43)
+            int b0 = cb.emit(A64Enc.tbnz(16, 0, 0));    // misaligned (bit 0 set)
+            int b1 = cb.emit(A64Enc.tbnz(16, 1, 0));    // misaligned (bit 1 set)
+            cb.emit(A64Enc.lsrImm(17, 16, 28));         // x17 = x16 >> 28  (nonzero => x16 >= 0x1000_0000)
+            int b2 = cb.emit(A64Enc.cbnz(17, 0));       // above the code ceiling
+            int b3 = cb.emit(A64Enc.cbz(16, 0));        // null slot (unresolved)
+            int ok = cb.emit(A64Enc.b(0));              // all good -> skip the throw
+            int throwAt = cb.wordCount();
+            cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
+            cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
+            cb.set(b2, A64Enc.cbnz(17, throwAt - b2));
+            cb.set(b3, A64Enc.cbz(16, throwAt - b3));
             throwImplicit(cb, pos, Symbols.NEW_NPE);
-            cb.set(over, A64Enc.cbnz(16, cb.wordCount() - over));
+            cb.set(ok, A64Enc.b(cb.wordCount() - ok));
         }
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);

@@ -696,6 +696,7 @@ public final class Loader
         long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
+            VM.unwindLog = 1;                            // #43: log the first exceptions thrown while running the demo
             long unused = Magic.call0(buf);
         }
     }

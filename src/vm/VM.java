@@ -1485,8 +1485,26 @@ public final class VM
      * caller. Halts if the exception reaches the top uncaught. (Callee-saved locals
      * are not restored during the walk — a handler must not read pre-try locals.)
      */
+    static int unwindLog;                                  // #43: when != 0, log the first few exception throws
+    static int unwindLogged;
+
     static void unwind(long exc, long pc, long sp)
     {
+        if (unwindLog != 0 && unwindLogged < 8)            // #43: name the FIRST exceptions thrown (root NPE first)
+        {
+            unwindLogged += 1;
+            Uart.write(Magic.bytes("\n  THROW exc="));
+            printHex(exc);
+            if (exc > 0x1000L && exc < 0x40000000L)
+            {
+                long tib = Magic.load64(exc);
+                if (tib > 0x1000L && tib < 0x40000000L) { Loader.reportClassOfType(Magic.load64(tib)); }
+            }
+            Uart.write(Magic.bytes(" at 0x"));
+            printHex(pc);
+            Loader.reportMethodAt(pc);
+            Uart.putc(0x0A);
+        }
         while (true)
         {
             long h = findHandler(pc, exc);
