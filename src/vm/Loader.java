@@ -1261,9 +1261,41 @@ public final class Loader
                 {
                     grew = addReach(code) || grew;
                 }
+                else
+                {
+                    // ref names THIS class but it does not declare the method: an INHERITED static/special
+                    // (declared in a superclass, e.g. ArrayList.subListRangeCheck -> AbstractList's). Walk up.
+                    grew = markInheritedStatic(pendBase[r], pendName[r], pendDesc[r], base, len) || grew;
+                }
             }
             r += 1;
         }
+        return grew;
+    }
+
+    /** Reachability for an inherited static/special call: walk the ref class's (== current blob) super chain and
+     *  mark the declaring ancestor's method. Restores the current blob's parse state before returning. */
+    private static boolean markInheritedStatic(long refBase, int nameOff, int descOff, long curBase, int curLen)
+    {
+        boolean grew = false;
+        int pd = findPdByName(gbase, gThisNameOff);        // current blob's pd (the ref class)
+        while (pd >= 0 && pdSuperOff[pd] != 0)
+        {
+            int spd = findPdByName(pdBase[pd], pdSuperOff[pd]);
+            if (spd < 0)
+            {
+                break;
+            }
+            parseForMethods(pdBase[spd], pdLen[spd]);      // search the ancestor's method table
+            long code = findMethodByRef(refBase, nameOff, descOff);
+            if (code != 0L)
+            {
+                grew = addReach(code);
+                break;
+            }
+            pd = spd;
+        }
+        parseForMethods(curBase, curLen);                  // restore resolveBlob's current blob
         return grew;
     }
 
@@ -3304,6 +3336,30 @@ public final class Loader
                 return rgBuf[i];
             }
             i += 1;
+        }
+        // Class-qualified miss: an INHERITED static/special method (invokestatic/invokespecial to a method the ref
+        // names via a subclass but that is declared in a SUPERclass, e.g. `ArrayList.subListRangeCheck` really
+        // AbstractList.subListRangeCheck). Walk the ref class's super chain and match each ancestor's registration.
+        int pd = findPdByName(refBase, classOff);
+        while (pd >= 0 && pdSuperOff[pd] != 0)
+        {
+            int spd = findPdByName(pdBase[pd], pdSuperOff[pd]);
+            if (spd < 0)
+            {
+                break;
+            }
+            int j = 0;
+            while (j < rgCount)
+            {
+                if (utf8EqAt(pdBase[spd], pdNameOff[spd], rgBase[j], rgClassOff[j])
+                        && utf8EqAt(refBase, nameOff, rgBase[j], rgNameOff[j])
+                        && utf8EqAt(refBase, descOff, rgBase[j], rgDescOff[j]))
+                {
+                    return rgBuf[j];
+                }
+                j += 1;
+            }
+            pd = spd;
         }
         return 0L;
     }
