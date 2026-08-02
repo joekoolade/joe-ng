@@ -78,7 +78,16 @@ public final class VM
         {
             reportFault();
         }
-        long raw = Heap.alloc(0x1000);
+        if (denylistTrapAddr == 0L)                        // same trick: force denylistTrap compiled (#43)
+        {
+            denylistTrap();
+        }
+        // The table MUST live outside the demand-load data heap: the Loader's between-batch reclaim rewinds
+        // core 0's arena back to BASE, and a later allocation would overwrite a heap-resident vector table --
+        // then the next timer IRQ vectors into clobbered/zeroed memory and the CPU spins on undefined
+        // instructions (looked like a "reset" during the long regex/split compile). The JIT code arena is
+        // never reclaimed, so allocate there (same rationale as the #43 code arena for JIT buffers).
+        long raw = Heap.allocCode(0x1000);
         long table = (raw + 0x7FFL) & ~0x7FFL;             // VBAR_EL1 requires 2 KiB alignment
         int i = 0;
         while (i < 16)
@@ -914,8 +923,19 @@ public final class VM
      */
     static long strBytes(long ref)
     {
-        // A raw byte[] has a small element-size TIB (0..8); a mini java/lang/String has a heap-pointer TIB.
-        return Magic.load64(ref + 0L) <= 8L ? ref : Magic.load64(ref + 16L);
+        // A byte[] is itself; a java/lang/String yields its value field (@16). A byte[]'s header @0 is either a
+        // small raw element size (VM-internal buffers) or a pointer to an array TIB whose Type is tagged; a
+        // String's @0 is a class TIB (Type not tagged).
+        long tib = Magic.load64(ref + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return ref;                                 // raw byte[] (element size in @0)
+        }
+        if ((Magic.load64(Magic.load64(tib)) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
+        }
+        return Magic.load64(ref + 16L);                 // a String object -> value field
     }
 
     /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
@@ -988,9 +1008,20 @@ public final class VM
      * The element size comes from the source array's header (TIB slot), so it's generic over element type;
      * the copy is byte-wise and overlap-safe (like {@code memmove}, as {@code arraycopy} requires).
      */
+    /** Element size (bytes) of an array: a raw array keeps it in @0; a typed array keeps it in its array Type's tag. */
+    static long elemSize(long arr)
+    {
+        long tib = Magic.load64(arr + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return tib;                                    // raw array: @0 is the element size
+        }
+        return Magic.load64(Magic.load64(tib)) & 0xFFFFL;  // typed: arr@0=TIB, TIB[0]=Type, Type[0]=tag|elemSize
+    }
+
     static void arraycopy(long src, int srcPos, long dst, int dstPos, int len)
     {
-        long es = Magic.load64(src + 0L);                  // element size (bytes) from the array header
+        long es = elemSize(src);                            // element size (bytes), raw header or typed array Type
         long n = (long) len * es;
         long from = src + 24L + (long) srcPos * es;        // ARRAY_BASE_OFFSET = 24
         long to = dst + 24L + (long) dstPos * es;
@@ -1030,6 +1061,12 @@ public final class VM
         return Loader.newAioobe();
     }
 
+    /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
+    static long getClassOf(long obj)
+    {
+        return Loader.getClassOf(obj);
+    }
+
     /** Print a "string" (a mini java/lang/String or a raw byte[]): write its bytes to the UART. */
     static void printStr(long ref)
     {
@@ -1052,8 +1089,14 @@ public final class VM
      */
     static long buildSwitchStub(long pickAddr, boolean svcCheck)
     {
-        long raw = Heap.alloc(0x400);
-        long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // code past the object header
+        // The stub is referenced ONLY by the raw EL1 vector table (e4/e5/e6), which the conservative GC never
+        // scans and the demand-load heap reclaim rewinds -- so a data-heap stub gets freed/zeroed out from under
+        // the vectors, and the next svc/timer-IRQ branches into dead memory (the "reset" during the long regex
+        // compile: a GC mid-compile freed it). Allocate in the never-reclaimed, never-GC'd JIT code arena so the
+        // vectors stay valid for the whole run. (Core-0 only: both callers -- pcSetup, installSchedVectors -- are
+        // primary-only, so the non-atomic allocCode bump is race-free.)
+        long raw = Heap.allocCode(0x400);
+        long stub = (raw + (long) ObjectModel.HEADER_SIZE + 0xFL) & ~0xFL;   // 16-byte-aligned code start
         int w = 0;
         Magic.store32(stub + w * 4L, A64Enc.subImm(31, 31, (int) SCHED_FRAME)); w += 1;   // sub sp, #272
         int r = 0;
@@ -1148,6 +1191,7 @@ public final class VM
         if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
+        if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
 
         installSchedVectors();
 
@@ -1178,6 +1222,8 @@ public final class VM
      */
     static void reportFault()
     {
+        long lr = Magic.readLR();                          // FIRST op: for a blr wild-branch, x30 = the caller's
+                                                           // return addr (the vector uses B, not BL, so x30 is intact)
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
         long far = Magic.readFAR_EL1();
@@ -1190,7 +1236,31 @@ public final class VM
         printHex(elr);
         Uart.write(Magic.bytes(" far="));
         printHex(far);
+        Uart.write(Magic.bytes(" lr="));
+        printHex(lr);
         Uart.putc(0x0A);
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
+    /**
+     * Trap for a call into a DENYLISTED (pruned, never-loaded) class — see {@code Loader.isDenylisted}.
+     * patchRelocs points every unresolved cross-class call here instead of leaving a {@code bl 0} wild branch.
+     * A well-formed metal program never reaches it (denylisted subtrees are cold); if it fires, the halt +
+     * message is a deterministic signal that a denylist prefix was too broad (un-denylist that subtree).
+     */
+    static void denylistTrap()
+    {
+        long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
+        Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
+        int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
+        Uart.write(Magic.bytes("  fired TRAPWIRE index="));
+        printDec(k);
+        Uart.write(Magic.bytes(" (lr="));
+        printHex(lr);
+        Uart.write(Magic.bytes(")\n"));
         while (true)
         {
             Magic.wfe();
@@ -1255,12 +1325,45 @@ public final class VM
         {
             return 0;    // null is never an instance
         }
-        long type = Magic.load64(Magic.load64(ref));   // header→TIB (@0), TIB→Type (@0)
+        long tib = Magic.load64(ref);                  // header→TIB (@0)
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return 0;    // a raw array (element size in @0, no Type): not an instance of any class/interface type
+        }
+        long type = Magic.load64(tib);                 // TIB→Type (@0); for a typed array, the array Type
+        return typeAssignable(type, targetType) ? 1 : 0;
+    }
+
+    /** True if an array Type (its instanceSize slot carries the tag). */
+    private static boolean isArrayType(long type)
+    {
+        return (Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+    }
+
+    /**
+     * Is a value of Type {@code type} assignable to {@code targetType}? Walks {@code type}'s superclass chain
+     * (matching the class Type or any interface in each level's itable directory), with a reference-array
+     * covariance prefix: {@code String[]} is an {@code Object[]} iff {@code String} is an {@code Object}. Both
+     * primitive-element arrays are invariant (only the exact-match in the walk succeeds). {@code arr instanceof
+     * Object} works through the array Type's super = Object.
+     */
+    private static boolean typeAssignable(long type, long targetType)
+    {
+        if (type != targetType && targetType != 0L && isArrayType(type) && isArrayType(targetType))
+        {
+            long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            long elemTarget = Magic.load64(targetType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (elemType != 0L && elemTarget != 0L)    // both reference-element arrays: covariant on the element
+            {
+                return typeAssignable(elemType, elemTarget);
+            }
+            // a primitive element on either side is invariant: only the exact-match below can succeed
+        }
         while (type != 0L)
         {
             if (type == targetType)
             {
-                return 1;
+                return true;
             }
             long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
             if (dir != 0L)
@@ -1271,7 +1374,7 @@ public final class VM
                 {
                     if (iface == targetType)
                     {
-                        return 1;
+                        return true;
                     }
                     entry += ObjectModel.ITABLE_ENTRY_SIZE;
                     iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
@@ -1279,13 +1382,18 @@ public final class VM
             }
             type = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
         }
-        return 0;
+        return false;
     }
 
     /** {@code checkcast} support: return {@code ref} if the cast holds, else halt
      *  (no exceptions yet). Null always passes. */
     static long checkCast(long ref, long targetType)
     {
+        if (targetType == 0L)
+        {
+            return ref;    // unresolved target (e.g. an array type "[B" — arrays carry no Type): the class-file
+                           // verifier already proved this cast holds, so trust it rather than walk a raw array
+        }
         if (ref != 0L && instanceOf(ref, targetType) == 0)
         {
             while (true)
@@ -1615,6 +1723,7 @@ public final class VM
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
     static long printStrAddr;          // VM.printStr(J)V
+    static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
@@ -1623,6 +1732,7 @@ public final class VM
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
+    static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

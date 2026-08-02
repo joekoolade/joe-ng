@@ -47,6 +47,29 @@ public final class Baseline
     private int regLocals;        // locals held in x19.. (min(maxLocals, LOC_MAX))
     private int overflowLocals;   // locals held in the frame (maxLocals - LOC_MAX)
     private int maxLocals;
+    // #43 operand-stack spill: a pre-pass (computeDepths) finds the ACTUAL peak depth; when it exceeds OP_MAX
+    // the operand stack becomes a circular register window (slot i -> x(OP_BASE + i%OP_MAX)) backed by frame
+    // memory at opStackBase (regHolds[r] = the slot physical reg r holds, -1 = none). Shallow methods
+    // (peak <= OP_MAX -- including any with a large DECLARED max_stack they never reach) compile byte-identically.
+    private static final int OPSTACK_MARGIN = 4;   // extra deep-spill slots for exception-search temporaries
+    private int maxActualDepth;
+    private int[] reachDepth;     // computeDepths result: depth[pc] >= 0 iff pc is reachable (else dead code)
+    private boolean[] wideTop;    // computeDepths result: the top operand entering pc is a long/double (category-2)
+    private int curPos;           // bytecode offset of the op currently being lowered (for wideTop lookup)
+    // computeDepths worklist state, held as fields so the seed helpers need not pass depth/mask/work as arguments.
+    // This keeps this hot pre-pass register-only (peak <= OP_MAX) instead of spilling operands. NOTE: passing them
+    // as params instead is also correct now -- the loadGuest hang this once masked was a `long[]`/`double[]`
+    // PARAMETER bug in emitPrologue (a [J/[D param counted as 2 local slots), fixed there; it was never a
+    // deep-operand-spill defect (the spill path is exercised correctly by many deep methods).
+    private int[] preDepth;       // depth[pc] entering each pc (>=0 reachable)
+    private long[] preMask;       // wide-mask entering each pc (bit i = slot i is long/double)
+    private int[] preWork;        // worklist scratch
+    private int opStackSlots;     // deep: sized operand-spill area (maxActualDepth + margin)
+    private boolean deepStack;
+    private int[] regHolds = new int[OP_MAX];
+    private int[] savedHolds = new int[OP_MAX];   // regHolds snapshot around an off-path (skipped) throw block
+    private int opStackBase;
+    private CodeBuffer curCb;     // the body's CodeBuffer, so push/pop can emit spill/reload
     private boolean saveLR;
     private boolean nonLeaf;
     // Branch fixups never leave this class, so they are plain data rather than a
@@ -316,11 +339,27 @@ public final class Baseline
             popReg();
             return 1;
         }  // pop (discard result)
+        else if (op == 0x58)
+        {
+            popReg();                                        // pop2: one slot for a category-2 long/double,
+            if (!wideTop[curPos]) { popReg(); }              // two for two category-1 values
+            return 1;
+        }  // pop2
         else if (op == 0x59)
         {
             dup(cb);
             return 1;
         }  // dup
+        else if (op == 0x5A)
+        {
+            dupX1(cb);
+            return 1;
+        }  // dup_x1: ..,v2,v1 -> ..,v1,v2,v1
+        else if (op == 0x5B)
+        {
+            dupX2(cb);
+            return 1;
+        }  // dup_x2 (category-1 form): ..,v3,v2,v1 -> ..,v1,v3,v2,v1
         else if (op == 0x5C)
         {
             dup2(cb);
@@ -343,11 +382,21 @@ public final class Baseline
             arrayLoad(cb, 1, pos);
             return 1;
         }  // caload  (char, zero-ext)
+        else if (op == 0x35)
+        {
+            arrayLoad(cb, 4, pos);
+            return 1;
+        }  // saload  (short, sign-ext)
         else if (op == 0x55)
         {
             arrayStore(cb, 1, pos);
             return 1;
         }  // castore
+        else if (op == 0x56)
+        {
+            arrayStore(cb, 1, pos);
+            return 1;
+        }  // sastore  (short, 16-bit store — same as castore)
         else if (op == 0x2E)
         {
             arrayLoad(cb, 2, pos);
@@ -436,7 +485,7 @@ public final class Baseline
         }  // irem/lrem
         else if (op == 0x74 || op == 0x75)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.subReg(r, A64Enc.XZR, r));
             return 1;
         }  // ineg/lneg
@@ -483,31 +532,31 @@ public final class Baseline
 
         else if (op == 0x85)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.sxtw(r, r));     // i2l: sign-extend 32->64 (int ops don't keep the high half signed)
             return 1;
         }  // i2l
         else if (op == 0x88)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.sxtw(r, r));     // l2i: canonicalise to a sign-extended int (the invariant i2l relies
             return 1;                       // on) -- the truncated long may carry dirty/unrelated high bits
         }  // l2i
         else if (op == 0x91)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.sxtb(r, r));
             return 1;
         }  // i2b
         else if (op == 0x92)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.uxth(r, r));
             return 1;
         }  // i2c
         else if (op == 0x93)
         {
-            int r = OP_BASE + sp - 1;
+            int r = opSlot(sp - 1);
             cb.emit(A64Enc.sxth(r, r));
             return 1;
         }  // i2s
@@ -522,16 +571,16 @@ public final class Baseline
         else if (op == 0x96) { fcmp(cb, false, true); return 1; }    // fcmpg (NaN -> +1)
         else if (op == 0x97) { fcmp(cb, true, false); return 1; }    // dcmpl
         else if (op == 0x98) { fcmp(cb, true, true); return 1; }     // dcmpg
-        else if (op == 0x86) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfSW(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // i2f
-        else if (op == 0x87) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfDW(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // i2d
-        else if (op == 0x89) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfSX(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // l2f
-        else if (op == 0x8A) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.scvtfDX(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // l2d
-        else if (op == 0x8B) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsWS(r, 0)); return 1; }  // f2i
-        else if (op == 0x8C) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsXS(r, 0)); return 1; }  // f2l
-        else if (op == 0x8D) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtDS(0, 0)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; } // f2d
-        else if (op == 0x8E) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsWD(r, 0)); return 1; }  // d2i
-        else if (op == 0x8F) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsXD(r, 0)); return 1; }  // d2l
-        else if (op == 0x90) { int r = OP_BASE + sp - 1; cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtSD(0, 0)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; } // d2f
+        else if (op == 0x86) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfSW(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // i2f
+        else if (op == 0x87) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfDW(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // i2d
+        else if (op == 0x89) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfSX(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // l2f
+        else if (op == 0x8A) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfDX(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // l2d
+        else if (op == 0x8B) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsWS(r, 0)); return 1; }  // f2i
+        else if (op == 0x8C) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsXS(r, 0)); return 1; }  // f2l
+        else if (op == 0x8D) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtDS(0, 0)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; } // f2d
+        else if (op == 0x8E) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsWD(r, 0)); return 1; }  // d2i
+        else if (op == 0x8F) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsXD(r, 0)); return 1; }  // d2l
+        else if (op == 0x90) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtSD(0, 0)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; } // d2f
 
         else if (op == 0x99 || op == 0xC6)
         {
@@ -606,6 +655,7 @@ public final class Baseline
         else if (op == 0xA7)
         {
             int target = pos + s2(code, pos + 1);
+            syncOut(cb);                                     // canonicalize the stack before the unconditional jump
             int w = cb.emit(A64Enc.b(0));
             addFixup(w, target, FIX_B, 0);
             recordDepth(target);
@@ -677,7 +727,7 @@ public final class Baseline
         }
         else if (op == 0xBD)
         {
-            lowerAnewArray(cb);                              // operand (element class) unused
+            lowerAnewArray(cb, u2(code, pos + 1));           // operand = element-class Class-entry
             return 3;
         }
         else if (op == 0xBF)
@@ -695,6 +745,15 @@ public final class Baseline
             typeCheck(cb, u2(code, pos + 1), Symbols.INSTANCE_OF);
             return 3;
         }  // instanceof
+        else if (op == 0xC2 || op == 0xC3)
+        {
+            // monitorenter/monitorexit: no-op lock (single-owner on the JIT core; the metal scheduler is
+            // cooperative for demand-loaded code). Just consume the objectref the bytecode pops. A real
+            // lock is future work; stock java.base uses `synchronized` on cold init/cache paths that run
+            // uncontended here (e.g. Pattern/regex lazy singletons).
+            nullCheck(cb, popReg(), pos);                    // monitorenter/exit on null -> NPE (JVM semantics)
+            return 1;
+        }  // monitorenter / monitorexit
 
         else
         {
@@ -716,15 +775,35 @@ public final class Baseline
     private static final int BIN_LSR = 9;
 
     // ----- register allocation ---------------------------------------------
+    // Shallow methods (peak depth <= OP_MAX): slot i lives in x(OP_BASE+i), byte-identical to the original.
+    // Deep methods (deepStack): the operand stack is a circular register window -- slot i lives in
+    // x(OP_BASE + i%OP_MAX), with the displaced deeper slots held in frame memory at opStackBase. regHolds[r]
+    // = the slot whose live value is currently in physical register OP_BASE+r (a "hole" = the mapped slot's
+    // value is in memory, not the register). See opSlot/pushReg/popReg/syncOut/syncIn.
     private int pushReg()
     {
-        if (sp >= OP_MAX)
+        if (!deepStack)
         {
-            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);
+            if (sp >= OP_MAX)
+            {
+                symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);
+            }
+            int r = OP_BASE + sp;      // avoid post-increment on a field (javac -> dup_x1)
+            sp += 1;
+            return r;
         }
-        int r = OP_BASE + sp;      // avoid post-increment on a field (javac -> dup_x1)
+        if (sp >= opStackSlots)
+        {
+            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, sp, 0);   // pre-pass under-counted the peak (a bug)
+        }
+        int r = sp % OP_MAX;
+        if (sp >= OP_MAX && regHolds[r] == sp - OP_MAX)         // the displaced deeper slot is live in this reg
+        {
+            curCb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + (sp - OP_MAX) * 8));   // save it before reuse
+        }
+        regHolds[r] = sp;
         sp += 1;
-        return r;
+        return OP_BASE + r;
     }
     private int popReg()
     {
@@ -733,7 +812,71 @@ public final class Baseline
             symbols.fail(Symbols.FAIL_STACK_UNDERFLOW, sp, 0);
         }
         sp -= 1;
-        return OP_BASE + sp;
+        if (!deepStack)
+        {
+            return OP_BASE + sp;
+        }
+        return opSlot(sp);         // materialise the popped value (reload from memory if it is a hole)
+    }
+
+    /**
+     * Register holding operand slot {@code slot}, ensuring its live value is resident. For deep methods a slot
+     * that was displaced to memory (a hole, or invalidated at a branch merge) is reloaded here on demand. For
+     * shallow methods this is exactly {@code OP_BASE + slot} with no emit (byte-identical output).
+     */
+    private int opSlot(int slot)
+    {
+        if (!deepStack)
+        {
+            return OP_BASE + slot;
+        }
+        int r = slot % OP_MAX;
+        if (regHolds[r] != slot)
+        {
+            curCb.emit(A64Enc.ldrx(OP_BASE + r, 31, opStackBase + slot * 8));
+            regHolds[r] = slot;
+        }
+        return OP_BASE + r;
+    }
+
+    /** Spill every resident live operand slot to its memory home so memory is canonical (before a branch/call). */
+    private void syncOut(CodeBuffer cb)
+    {
+        if (!deepStack)
+        {
+            return;
+        }
+        for (int slot = 0; slot < sp; slot++)
+        {
+            int r = slot % OP_MAX;
+            if (regHolds[r] == slot)                            // resident (holes are already in memory)
+            {
+                cb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + slot * 8));
+            }
+        }
+    }
+
+    /** Invalidate every operand register at a merge point / after a call: reads reload from (canonical) memory. */
+    private void syncIn(CodeBuffer cb)
+    {
+        if (!deepStack)
+        {
+            return;
+        }
+        for (int r = 0; r < OP_MAX; r++)
+        {
+            regHolds[r] = -1;
+        }
+    }
+
+    /** Whether {@code op} can fall through to the next bytecode (false = goto/return/athrow/switch). */
+    private static boolean fallsThrough(int op)
+    {
+        return !(op == 0xA7 || op == 0xC8                       // goto / goto_w
+              || (op >= 0xAC && op <= 0xB1)                     // *return
+              || op == 0xBF                                     // athrow
+              || op == 0xAA || op == 0xAB                       // tableswitch / lookupswitch
+              || op == 0xA9);                                   // ret
     }
     /** Register holding local {@code slot}. Only valid when {@link #inReg} says so. */
     private int localReg(int slot)
@@ -839,8 +982,39 @@ public final class Baseline
 
     private void dup(CodeBuffer cb)
     {
-        int top = OP_BASE + sp - 1;
+        int top = opSlot(sp - 1);              // resident before the push (which may spill a displaced slot)
         cb.emit(A64Enc.movReg(pushReg(), top));
+    }
+
+    /**
+     * dup_x1: {@code ..,v2,v1 -> ..,v1,v2,v1}. x16 holds v1 across the in-place register shift. Deep-safe: the
+     * three slots (sp-2,sp-1,sp) map to distinct physical registers (their indices differ by &lt; OP_MAX), and
+     * pushReg only spills a fourth (displaced) register -- so the shuffle registers are undisturbed. opSlot
+     * materialises any hole first; for shallow methods it is exactly {@code OP_BASE + slot} (byte-identical).
+     */
+    private void dupX1(CodeBuffer cb)
+    {
+        int v1 = opSlot(sp - 1);
+        int v2 = opSlot(sp - 2);
+        int top = pushReg();
+        cb.emit(A64Enc.movReg(16, v1));      // save v1 (the value being inserted below v2)
+        cb.emit(A64Enc.movReg(top, 16));     // new top = v1
+        cb.emit(A64Enc.movReg(v1, v2));      // shift v2 up
+        cb.emit(A64Enc.movReg(v2, 16));      // insert v1 at the bottom
+    }
+
+    /** dup_x2 (category-1 form): {@code ..,v3,v2,v1 -> ..,v1,v3,v2,v1}. Deep-safe (see {@link #dupX1}). */
+    private void dupX2(CodeBuffer cb)
+    {
+        int v1 = opSlot(sp - 1);
+        int v2 = opSlot(sp - 2);
+        int v3 = opSlot(sp - 3);
+        int top = pushReg();
+        cb.emit(A64Enc.movReg(16, v1));
+        cb.emit(A64Enc.movReg(top, 16));     // new top = v1
+        cb.emit(A64Enc.movReg(v1, v2));      // shift v2 up
+        cb.emit(A64Enc.movReg(v2, v3));      // shift v3 up
+        cb.emit(A64Enc.movReg(v3, 16));      // insert v1 at the bottom
     }
 
     /**
@@ -852,8 +1026,14 @@ public final class Baseline
      */
     private void dup2(CodeBuffer cb)
     {
-        int lo = OP_BASE + sp - 2;    // v2 (deeper of the two)
-        int hi = OP_BASE + sp - 1;    // v1 (top)
+        if (wideTop[curPos])          // category-2: the top is ONE long/double (1 slot) -> duplicate it, like dup
+        {
+            int top = opSlot(sp - 1);
+            cb.emit(A64Enc.movReg(pushReg(), top));
+            return;
+        }
+        int lo = opSlot(sp - 2);      // category-1: two 1-slot values -> duplicate both
+        int hi = opSlot(sp - 1);      // v1 (top)
         cb.emit(A64Enc.movReg(pushReg(), lo));
         cb.emit(A64Enc.movReg(pushReg(), hi));
     }
@@ -898,7 +1078,7 @@ public final class Baseline
     /** fneg/dneg on the top-of-stack float/double bits. */
     private void fneg(CodeBuffer cb, boolean dbl)
     {
-        int r = OP_BASE + sp - 1;
+        int r = opSlot(sp - 1);
         if (dbl)
         {
             cb.emit(A64Enc.fmovXtoD(0, r));
@@ -1030,6 +1210,7 @@ public final class Baseline
     {
         int v = popReg();
         int target = pos + s2(code, pos + 1);
+        syncOut(cb);                                         // flush the remaining stack so the taken edge is canonical
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, eq ? FIX_CBZ : FIX_CBNZ, v);
         recordDepth(target);
@@ -1041,6 +1222,7 @@ public final class Baseline
         cb.emit(A64Enc.sxtw(v, v));                          // canonicalize: an overflowed int isn't sign-extended,
         cb.emit(A64Enc.cmpImm(v, 0));                        // and this is a 64-bit compare
         int target = pos + s2(code, pos + 1);
+        syncOut(cb);
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
@@ -1054,6 +1236,7 @@ public final class Baseline
         cb.emit(A64Enc.sxtw(b, b));                          // canonical ints, equality-preserving for if_acmp refs
         cb.emit(A64Enc.cmpReg(a, b));
         int target = pos + s2(code, pos + 1);
+        syncOut(cb);
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, target, FIX_BCOND, cond);
         recordDepth(target);
@@ -1072,6 +1255,7 @@ public final class Baseline
         int high = s4(code, p + 8);
         int idx = popReg();
         cb.emit(A64Enc.sxtw(idx, idx));
+        syncOut(cb);                                        // all targets (and the default) see a canonical stack
         int k = 0;
         while (k <= high - low)
         {
@@ -1097,6 +1281,7 @@ public final class Baseline
         int npairs = s4(code, p + 4);
         int idx = popReg();
         cb.emit(A64Enc.sxtw(idx, idx));
+        syncOut(cb);                                        // all targets (and the default) see a canonical stack
         int k = 0;
         while (k < npairs)
         {
@@ -1116,7 +1301,7 @@ public final class Baseline
     }
 
     /** Signed big-endian 4-byte read (switch payloads). */
-    private static int s4(byte[] b, int i)
+    public static int s4(byte[] b, int i)
     {
         return (b[i] << 24) | ((b[i + 1] & 0xFF) << 16) | ((b[i + 2] & 0xFF) << 8) | (b[i + 3] & 0xFF);
     }
@@ -1148,21 +1333,46 @@ public final class Baseline
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
+        if (symbols.isGetClass(cpIndex))                        // Object.getClass(): intrinsic, not vtable dispatch
+        {                                                       // (works uniformly on arrays, whose TIB has no vtable)
+            nullCheck(cb, opSlot(sp - 1), pos);                 // the receiver is the sole operand on top
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.GET_CLASS);   // (obj) -> Class mirror
+            return;
+        }
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
-        int[] src = new int[nargs];
-        for (int k = 0; k < nargs; k++)
+        if (deepStack)
         {
-            src[k] = popReg();
+            marshalArgsFromMemory(cb, nargs);   // receiver -> x0
+            nullCheck(cb, 0, pos);              // dispatch on null -> NPE
         }
-        nullCheck(cb, src[nargs - 1], pos);     // src[nargs-1] = the receiver (deepest); dispatch on null -> NPE
-        for (int k = 0; k < nargs; k++)
+        else
         {
-            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            int[] src = new int[nargs];
+            for (int k = 0; k < nargs; k++)
+            {
+                src[k] = popReg();
+            }
+            nullCheck(cb, src[nargs - 1], pos);     // src[nargs-1] = the receiver (deepest); dispatch on null -> NPE
+            for (int k = 0; k < nargs; k++)
+            {
+                cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            }
+            spillLive(cb);
         }
-        spillLive(cb);
         cb.emit(A64Enc.ldrx(16, 0, ObjectModel.TIB_OFFSET));       // x16 = receiver.tib
         cb.emit(A64Enc.ldrx(16, 16, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)))); // x16 = code
+        // Null-vtable-slot guard (metal JIT only; the trusted image writer stays check-free like nullCheck): a 0
+        // code word means the resolved global vtable slot has no method for THIS receiver's type -- e.g.
+        // globalVtableSlot's name+desc fallback matched an unrelated class's slot (see Loader ~1864). Left as a
+        // bare `blr 0` it wild-branches to 0x0 -> the boot trampoline -> a SILENT REBOOT that looks like a reset.
+        // Trap it as an NPE at this PC (same shape as the itable-scan sentinel) so it's reported, not a reboot.
+        int over = symbols.implicitChecks() ? cb.emit(A64Enc.cbnz(16, 0)) : -1;
+        if (over >= 0)
+        {
+            throwImplicit(cb, pos, Symbols.NEW_NPE);
+            cb.set(over, A64Enc.cbnz(16, cb.wordCount() - over));
+        }
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
@@ -1181,17 +1391,25 @@ public final class Baseline
     {
         int slot = symbols.interfaceSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
-        int[] src = new int[nargs];
-        for (int k = 0; k < nargs; k++)
+        if (deepStack)
         {
-            src[k] = popReg();
+            marshalArgsFromMemory(cb, nargs);   // receiver -> x0
+            nullCheck(cb, 0, pos);              // interface dispatch on null -> NPE
         }
-        nullCheck(cb, src[nargs - 1], pos);     // receiver (deepest); interface dispatch on null -> NPE
-        for (int k = 0; k < nargs; k++)
+        else
         {
-            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            int[] src = new int[nargs];
+            for (int k = 0; k < nargs; k++)
+            {
+                src[k] = popReg();
+            }
+            nullCheck(cb, src[nargs - 1], pos);     // receiver (deepest); interface dispatch on null -> NPE
+            for (int k = 0; k < nargs; k++)
+            {
+                cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
+            }
+            spillLive(cb);
         }
-        spillLive(cb);
 
         symbols.interfaceType(cb, 16, cpIndex);                                     // x16 = &interfaceType
         cb.emit(A64Enc.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
@@ -1199,10 +1417,21 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir
         int search = cb.wordCount();
         cb.emit(A64Enc.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
+        // Directory-sentinel guard (metal JIT only; the image writer's trusted code is check-free like nullCheck):
+        // if the scan reaches the 0-terminator without a match, the receiver's itable dir lacks the target
+        // interface -- bail with an NPE at this PC rather than dereferencing the sentinel's itable (blr 0) or
+        // walking PAST it into arbitrary heap and blr'ing a layout-dependent garbage word (the wild branch that
+        // reset/hung nondeterministically). A well-formed program never hits it.
+        int miss = symbols.implicitChecks() ? cb.emit(A64Enc.cbz(9, 0)) : -1;
         cb.emit(A64Enc.cmpReg(9, 16));
         int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));                                    // found?
         cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
         cb.emit(A64Enc.b(search - cb.wordCount()));                                    // loop
+        if (miss >= 0)
+        {
+            cb.set(miss, A64Enc.cbz(9, cb.wordCount() - miss));
+            throwImplicit(cb, pos, Symbols.NEW_NPE);
+        }
         int found = cb.wordCount();
         cb.set(beq, A64Enc.bcond(A64Enc.EQ, found - beq));
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
@@ -1245,6 +1474,7 @@ public final class Baseline
      */
     private void lowerLambda(int cpIndex, CodeBuffer cb)
     {
+        if (deepStack) { symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3); return; }   // captures via OP_BASE+slot vs circular window: TODO
         int nc = paramCount(cpIndex);                            // captured values, on operand slots argBase..
         int argBase = sp - nc;
         cb.emitAll(A64Enc.loadImm64(0, symbols.lambdaSize(cpIndex)));   // x0 = instance size
@@ -1266,6 +1496,7 @@ public final class Baseline
     /** A string concatenation ({@code StringConcatFactory}). */
     private void lowerConcat(int cpIndex, CodeBuffer cb)
     {
+        if (deepStack) { symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 4); return; }   // args via OP_BASE+slot vs circular window: TODO
         int nargs = paramCount(cpIndex);                         // args occupy the top nargs operand slots
         int argBase = sp - nargs;                                // operand-slot index of the first arg
         emitCall(cb, 0, true, false, SYM_HELPER, Symbols.SC_START);   // scStart -> builder on top
@@ -1454,12 +1685,24 @@ public final class Baseline
     private void throwImplicit(CodeBuffer cb, int pos, int newHelper)
     {
         int savedSp = sp;                                       // the throw block is off the fall-through path
+        // The throw block is skipped at runtime (a never-taken branch guards it), so it must NOT perturb the
+        // compiler's operand-stack model for the fall-through code that follows. sp is saved below; for deep
+        // methods the circular-window residency map (regHolds) is likewise saved -- the block's spill/reload
+        // (syncOut/syncIn) mutates it, but those instructions never execute on the non-throwing path.
+        if (deepStack)
+        {
+            for (int i = 0; i < OP_MAX; i++) { savedHolds[i] = regHolds[i]; }   // (throwImplicit is not re-entrant)
+        }
         int athrowStart = cb.wordCount();
         emitCall(cb, 0, true, false, SYM_HELPER, newHelper);    // -> exception object pushed
         emitStoreException(cb, popReg());                       // $exception = it
         sp = 0;                                                 // the JVM clears the operand stack when throwing
         throwStored(cb, pos, athrowStart);                      // handler search + unwind — never falls through
         sp = savedSp;                                           // restore the model for the code after the check
+        if (deepStack)
+        {
+            for (int i = 0; i < OP_MAX; i++) { regHolds[i] = savedHolds[i]; }
+        }
     }
 
     /** Throw NPE if {@code refReg} is null (a deref/receiver/arraylength of null). */
@@ -1493,6 +1736,7 @@ public final class Baseline
     private void emitCatch(CodeBuffer cb, int handlerPc)
     {
         emitLoadException(cb, pushReg());
+        syncOut(cb);            // deep: spill the exception (slot 0) to memory; the handler reloads it via syncIn
         int w = cb.emit(A64Enc.b(0));
         addFixup(w, handlerPc, FIX_B, 0);
         recordDepth(handlerPc);
@@ -1553,16 +1797,23 @@ public final class Baseline
     private void emitCall(CodeBuffer cb, int paramCount, boolean returnsValue, boolean hasReceiver, int symKind, int symArg)
     {
         int nargs = paramCount + (hasReceiver ? 1 : 0);
-        int[] src = new int[nargs];
-        for (int k = 0; k < nargs; k++)
+        if (deepStack)
         {
-            src[k] = popReg();    // src[0] = last arg (top of stack)
+            marshalArgsFromMemory(cb, nargs);                    // load args straight from canonical memory
         }
-        for (int k = 0; k < nargs; k++)
+        else
         {
-            cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // -> x(argIndex)
+            int[] src = new int[nargs];
+            for (int k = 0; k < nargs; k++)
+            {
+                src[k] = popReg();    // src[0] = last arg (top of stack)
+            }
+            for (int k = 0; k < nargs; k++)
+            {
+                cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // -> x(argIndex)
+            }
+            spillLive(cb);                                       // preserve operand values below the args
         }
-        spillLive(cb);                                           // preserve operand values below the args
         if (symKind == SYM_CP)
         {
             symbols.call(cb, symArg);
@@ -1578,11 +1829,29 @@ public final class Baseline
         }
     }
 
+    /**
+     * Deep-method arg marshalling: spill the operand stack to memory (canonical), then load the top {@code
+     * nargs} slots directly into {@code x0..x(nargs-1)} and pop them. Reading from memory rather than the
+     * circular registers sidesteps the case where two args map to the same physical register (nargs &gt;
+     * OP_MAX) or where an arg is a not-yet-resident hole. The receiver (if any) lands in x0.
+     */
+    private void marshalArgsFromMemory(CodeBuffer cb, int nargs)
+    {
+        syncOut(cb);                                            // every live slot now in opStackBase memory
+        for (int k = 0; k < nargs; k++)
+        {
+            int slot = sp - 1 - k;                              // src[0] = top of stack -> highest arg reg
+            cb.emit(A64Enc.ldrx(nargs - 1 - k, 31, opStackBase + slot * 8));
+        }
+        sp -= nargs;                                            // args consumed
+    }
+
     // ----- arrays: [header][length @16][elements @24], element = base + index<<scale -----
     private void lowerNewArray(int atype, CodeBuffer cb)
     {
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+        symbols.tagArray(cb, opSlot(sp - 1), atype, false);    // tag the result (top of stack) as its array Type
     }
 
     /**
@@ -1591,10 +1860,11 @@ public final class Baseline
      * element class, but nothing needs it: element access ({@code aaload}/
      * {@code aastore}) is untyped, and array TIBs (for typed GC) are set later.
      */
-    private void lowerAnewArray(CodeBuffer cb)
+    private void lowerAnewArray(CodeBuffer cb, int classCp)
     {
         loadConst(cb, ObjectModel.WORD);                        // 8-byte reference elements
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
+        symbols.tagArray(cb, opSlot(sp - 1), classCp, true);  // tag the result as [L<element>;
     }
 
     private void arrayLength(CodeBuffer cb, int pos)
@@ -1610,10 +1880,12 @@ public final class Baseline
         int index = popReg(), arr = popReg();
         boundsCheck(cb, arr, index, pos);                        // null/bounds before the raw deref
         int r = pushReg();                                       // r == arr's register
+        int shift = scale == 4 ? 1 : scale;                      // short: 2-byte element (shift 1), signed load
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
-        cb.emit(A64Enc.addRegLsl(arr, arr, index, scale));          // arr = &elem[index]
+        cb.emit(A64Enc.addRegLsl(arr, arr, index, shift));          // arr = &elem[index]
         cb.emit(scale == 0 ? A64Enc.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
                 : scale == 1 ? A64Enc.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
+                : scale == 4 ? A64Enc.ldrsh(r, arr, 0)              // short (sign-ext)
                 : scale == 2 ? A64Enc.ldrsw(r, arr, 0)              // int (sign-ext)
                 : A64Enc.ldrx(r, arr, 0));                          // long / ref
     }
@@ -1650,6 +1922,11 @@ public final class Baseline
     /** Spill operand-stack values (x9..) to the frame so a call can't clobber them. */
     private void spillLive(CodeBuffer cb)
     {
+        if (deepStack)
+        {
+            syncOut(cb);       // spill the whole circular window to its canonical memory homes
+            return;
+        }
         for (int i = 0; i < sp; i++)
         {
             cb.emit(A64Enc.strx(OP_BASE + i, 31, spillBase + i * 8));
@@ -1657,6 +1934,11 @@ public final class Baseline
     }
     private void reloadLive(CodeBuffer cb)
     {
+        if (deepStack)
+        {
+            syncIn(cb);        // invalidate registers; reads reload from memory on demand
+            return;
+        }
         for (int i = 0; i < sp; i++)
         {
             cb.emit(A64Enc.ldrx(OP_BASE + i, 31, spillBase + i * 8));
@@ -1886,6 +2168,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.movFromSp(pushReg()));
         }
+        else if (id == Intrinsics.READ_LR)
+        {
+            cb.emit(A64Enc.movReg(pushReg(), 30));             // x30 (link register) = caller return address
+        }
         else if (id == Intrinsics.RESUME)
         // exc->x9, SP=sp, br pc (no return)
         {
@@ -1927,6 +2213,15 @@ public final class Baseline
             int addr = popReg();
             int r = pushReg();
             cb.emit(A64Enc.ldrb(r, addr, 0));
+        }
+        else if (id == Intrinsics.ADDR_OF)
+        {
+            int a = popReg();                   // a reference already IS its heap address
+            int d = pushReg();
+            if (d != a)
+            {
+                cb.emit(A64Enc.movReg(d, a));   // reinterpret in place (pop/push land on the same slot)
+            }
         }
         else if (id == Intrinsics.LOAD64)
         {
@@ -2010,7 +2305,313 @@ public final class Baseline
     }
 
     /** Byte length of an opcode — only the ones this compiler emits appear here. */
-    private static int opLen(int op, byte[] code, int pos)
+    /**
+     * Net operand-stack change of one bytecode (this VM keeps EVERY value -- longs/doubles included -- in a
+     * single register/slot, so all deltas are category-1). Used by {@link #computeDepths} to pre-compute the
+     * actual operand depth at every bytecode, which decides whether the method needs the deep-stack spill path
+     * ({@link #deepStack}) -- keyed off ACTUAL depth, not the classfile's declared max_stack.
+     */
+    private int stackDelta(int op, byte[] code, int pos)
+    {
+        if (op >= 0x02 && op <= 0x2D) { return 1; }        // *const / bipush..ldc2_w / *load / *load_<n>
+        if (op == 0x01) { return 1; }                      // aconst_null
+        if (op >= 0x2E && op <= 0x35) { return -1; }       // *aload (pop arrayref+index, push value)
+        if (op >= 0x36 && op <= 0x4E) { return -1; }       // *store / *store_<n>
+        if (op >= 0x4F && op <= 0x56) { return -3; }       // *astore (pop arrayref+index+value)
+        if (op == 0x57) { return -1; }                     // pop
+        if (op == 0x58) { return -2; }                     // pop2 (category-1 form)
+        if (op == 0x59 || op == 0x5A || op == 0x5B) { return 1; }   // dup / dup_x1 / dup_x2
+        if (op == 0x5C || op == 0x5D || op == 0x5E) { return 2; }   // dup2 / dup2_x1 / dup2_x2
+        if (op == 0x5F) { return 0; }                      // swap
+        if (op >= 0x60 && op <= 0x73) { return -1; }       // add/sub/mul/div/rem (i,l,f,d)
+        if (op >= 0x74 && op <= 0x77) { return 0; }        // neg
+        if (op >= 0x78 && op <= 0x83) { return -1; }       // shl/shr/ushr/and/or/xor
+        if (op == 0x84) { return 0; }                      // iinc
+        if (op >= 0x85 && op <= 0x93) { return 0; }        // i2l..i2s conversions (1 slot -> 1 slot)
+        if (op >= 0x94 && op <= 0x98) { return -1; }       // lcmp / fcmp / dcmp
+        if (op >= 0x99 && op <= 0x9E) { return -1; }       // ifeq..ifle
+        if (op >= 0x9F && op <= 0xA6) { return -2; }       // if_icmp* / if_acmp*
+        if (op == 0xA7 || op == 0xC8) { return 0; }        // goto / goto_w
+        if (op == 0xAA || op == 0xAB) { return -1; }       // tableswitch / lookupswitch (pop index)
+        if (op >= 0xAC && op <= 0xB0) { return -1; }       // ireturn..areturn
+        if (op == 0xB1) { return 0; }                      // return
+        if (op == 0xB2) { return 1; }                      // getstatic
+        if (op == 0xB3) { return -1; }                     // putstatic
+        if (op == 0xB4) { return 0; }                      // getfield (pop objref, push value)
+        if (op == 0xB5) { return -2; }                     // putfield
+        if (op == 0xB6 || op == 0xB7 || op == 0xB9)        // invoke virtual/special/interface (has receiver)
+        {
+            int cp = u2(code, pos + 1);
+            return (returnsValue(cp) ? 1 : 0) - paramCount(cp) - 1;
+        }
+        if (op == 0xB8 || op == 0xBA)                      // invokestatic / invokedynamic (no receiver)
+        {
+            int cp = u2(code, pos + 1);
+            return (returnsValue(cp) ? 1 : 0) - paramCount(cp);
+        }
+        if (op == 0xBB) { return 1; }                      // new
+        if (op == 0xBC || op == 0xBD || op == 0xBE) { return 0; }   // newarray / anewarray / arraylength
+        if (op == 0xBF) { return -1; }                     // athrow (then unwinds -- no fallthrough successor)
+        if (op == 0xC0 || op == 0xC1) { return 0; }        // checkcast / instanceof
+        if (op == 0xC2 || op == 0xC3) { return -1; }       // monitorenter / monitorexit
+        if (op == 0xC4)                                    // wide: iinc=0, load=+1, store=-1
+        {
+            int w = code[pos + 1] & 0xFF;
+            return w == 0x84 ? 0 : (w >= 0x36 ? -1 : 1);
+        }
+        if (op == 0xC5) { return 1 - (code[pos + 3] & 0xFF); }      // multianewarray: -dims + 1
+        if (op == 0xC6 || op == 0xC7) { return -1; }       // ifnull / ifnonnull
+        if (op == 0xC9) { return 1; }                      // jsr_w
+        if (op == 0xA8) { return 1; }                      // jsr
+        return 0;                                          // nop, ret, and anything else
+    }
+
+    /**
+     * Pre-pass: the actual operand-stack depth entering each bytecode, by forward data-flow (valid bytecode has
+     * one depth per pc; the JVM verifier guarantees it). Sets {@link #deepStack}/frame sizing from the real
+     * peak depth -- so a method whose DECLARED max_stack exceeds the register budget but never actually goes
+     * deep (e.g. vm/VM.run) stays on the fast register-only path. Returns depth[] (-1 = unreached).
+     */
+    private int[] computeDepths(byte[] code)
+    {
+        int[] depth = new int[code.length];
+        long[] mask = new long[code.length];               // wide-mask entering each pc: bit i = slot i is long/double
+        wideTop = new boolean[code.length];
+        int[] work = new int[code.length + 8];
+        preDepth = depth; preMask = mask; preWork = work;   // expose to the seed helpers (keeps calls <= OP_MAX)
+        int wc = 0;
+        for (int k = 0; k < code.length; k++) { depth[k] = -1; }
+        depth[0] = 0; mask[0] = 0L;
+        work[wc++] = 0;
+        for (int k = 0; k < exCount; k++)                  // handler entry: the caught exception (depth 1, a ref)
+        {
+            int h = exHandlerPc[k];
+            if (depth[h] < 0) { depth[h] = 1; mask[h] = 0L; work[wc++] = h; }
+        }
+        int peak = 0;
+        while (wc > 0)
+        {
+            int pc = work[--wc];
+            int d = depth[pc];
+            long m = mask[pc];
+            int op = code[pc] & 0xFF;
+            boolean tw = d > 0 && ((m >>> (d - 1)) & 1L) != 0L;     // is the top operand a long/double?
+            wideTop[pc] = tw;
+            int after = d + stackDeltaW(op, code, pc, tw);
+            long am = maskAfter(op, code, pc, d, m, tw);
+            if (after > peak) { peak = after; }
+            int len = opLen(op, code, pc);
+            if (op == 0xC8 || op == 0xC9) { len = 5; }
+            boolean fall = fallsThrough(op);
+            if (fall && pc + len < code.length && depth[pc + len] < 0)
+            {
+                depth[pc + len] = after; mask[pc + len] = am; work[wc++] = pc + len;
+            }
+            // branch/switch targets get the POST-op depth+mask too (their operands were already consumed).
+            // depth/mask/work live in fields (preDepth/preMask/preWork) so these seed calls stay <= OP_MAX,
+            // keeping this hot pre-pass register-only (see the field decls for why this is a perf choice, not
+            // a correctness workaround -- the underlying [J/[D-param bug is fixed in emitPrologue).
+            if ((op >= 0x99 && op <= 0x9E) || (op >= 0x9F && op <= 0xA6) || op == 0xC6 || op == 0xC7 || op == 0xA7)
+            {
+                int t = pc + s2(code, pc + 1);
+                wc = seedDepth(wc, t, after, am);
+            }
+            else if (op == 0xC8) { int t = pc + s4(code, pc + 1); wc = seedDepth(wc, t, after, am); }
+            else if (op == 0xAA) { wc = tableTargets(code, pc, after, am, wc); }
+            else if (op == 0xAB) { wc = lookupTargets(code, pc, after, am, wc); }
+        }
+        this.maxActualDepth = peak;
+        return depth;
+    }
+
+    /** Seed {@code preDepth[target]=d}/{@code preMask[target]=m} if unset and enqueue it; returns the new worklist count. */
+    private int seedDepth(int wc, int target, int d, long m)
+    {
+        if (target >= 0 && target < preDepth.length && preDepth[target] < 0)
+        {
+            preDepth[target] = d; preMask[target] = m; preWork[wc++] = target;
+        }
+        return wc;
+    }
+    private int tableTargets(byte[] code, int pc, int d, long m, int wc)
+    {
+        int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
+        int lo = s4(code, p + 4);
+        int hi = s4(code, p + 8);
+        int t0 = pc + s4(code, p);                                                      // default
+        wc = seedDepth(wc, t0, d, m);
+        for (int i = 0; i <= hi - lo; i++) { int ti = pc + s4(code, p + 12 + i * 4); wc = seedDepth(wc, ti, d, m); }
+        return wc;
+    }
+    private int lookupTargets(byte[] code, int pc, int d, long m, int wc)
+    {
+        int p = pc + 1 + ((4 - ((pc + 1) & 3)) & 3);
+        int n = s4(code, p + 4);
+        int t0 = pc + s4(code, p);                                                      // default
+        wc = seedDepth(wc, t0, d, m);
+        for (int i = 0; i < n; i++) { int ti = pc + s4(code, p + 8 + i * 8 + 4); wc = seedDepth(wc, ti, d, m); }
+        return wc;
+    }
+
+    // ----- operand wide-tracking (category-2 = long/double) --------------------------------------------
+    // This VM keeps a long/double in ONE operand slot, but the JVM's dup2/pop2/dup2_x* have DIFFERENT stack
+    // effects for a category-2 value (one long/double) vs two category-1 values. computeDepths abstract-
+    // interprets a wide-mask (which slots hold a long/double) so those ops get the right depth AND so the
+    // codegen (via wideTop[pc]) emits the 1-slot form for a long. Without this, `dup2` of a long duplicated the
+    // slot BELOW it too -- corrupting the stack (e.g. String.join's length check compared garbage -> false OOM).
+
+    /** Net stack change, wide-aware: pop2/dup2/dup2_x1/dup2_x2 differ when the top is a category-2 long/double. */
+    private int stackDeltaW(int op, byte[] code, int pos, boolean topWide)
+    {
+        if (op == 0x58) { return topWide ? -1 : -2; }                              // pop2
+        if (op == 0x5C || op == 0x5D || op == 0x5E) { return topWide ? 1 : 2; }    // dup2 / dup2_x1 / dup2_x2
+        return stackDelta(op, code, pos);
+    }
+
+    private static boolean mbit(long m, int i) { return i >= 0 && ((m >>> i) & 1L) != 0L; }
+    private static long mput(long m, int i, boolean v) { return v ? (m | (1L << i)) : (m & ~(1L << i)); }
+
+    /** The wide-mask entering the NEXT bytecode (bit i set iff operand slot i holds a long/double). */
+    private long maskAfter(int op, byte[] code, int pos, int d, long m, boolean tw)
+    {
+        if (op == 0x59) { return mput(m, d, mbit(m, d - 1)); }                     // dup
+        if (op == 0x5F)                                                            // swap (both category-1)
+        {
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);
+            return mput(mput(m, d - 1, v2), d - 2, v1);
+        }
+        if (op == 0x5A)                                                            // dup_x1: v2,v1 -> v1,v2,v1
+        {
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);
+            m = mput(m, d - 2, v1); m = mput(m, d - 1, v2); return mput(m, d, v1);
+        }
+        if (op == 0x5B)                                                            // dup_x2: v3,v2,v1 -> v1,v3,v2,v1
+        {
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2), v3 = mbit(m, d - 3);
+            m = mput(m, d - 3, v1); m = mput(m, d - 2, v3); m = mput(m, d - 1, v2); return mput(m, d, v1);
+        }
+        if (op == 0x5C)                                                            // dup2
+        {
+            if (tw) { return mput(m, d, true); }                                   // cat-2: dup the one long slot
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);                       // cat-1: dup top two
+            m = mput(m, d, v2); return mput(m, d + 1, v1);
+        }
+        if (op == 0x5D)                                                            // dup2_x1
+        {
+            if (tw)                                                                // cat-2 long over one cat-1 (= dup_x1)
+            {
+                boolean w = mbit(m, d - 1), u = mbit(m, d - 2);
+                m = mput(m, d - 2, w); m = mput(m, d - 1, u); return mput(m, d, w);
+            }
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2), v3 = mbit(m, d - 3);  // cat-1 two over one
+            m = mput(m, d - 3, v2); m = mput(m, d - 2, v1); m = mput(m, d - 1, v3);
+            m = mput(m, d, v2); return mput(m, d + 1, v1);
+        }
+        if (op == 0x5E)                                                            // dup2_x2 (rare; cat-1 four-slot form)
+        {
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2), v3 = mbit(m, d - 3), v4 = mbit(m, d - 4);
+            m = mput(m, d - 4, v2); m = mput(m, d - 3, v1); m = mput(m, d - 2, v4); m = mput(m, d - 1, v3);
+            m = mput(m, d, v2); return mput(m, d + 1, v1);
+        }
+        // generic: pop P slots off the top, then (maybe) push one value
+        int p = pops(op, code, pos);
+        int nd = d - p;
+        if (nd < 0) { nd = 0; }
+        long r = m & (nd >= 64 ? -1L : (1L << nd) - 1L);                            // clear the popped (top) bits
+        int pw = pushW(op, code, pos);
+        if (pw >= 0) { r = mput(r, nd, pw == 1); }
+        return r;
+    }
+
+    /** Number of operands {@code op} pops (matches Baseline's popReg count / DepthScan). */
+    private int pops(int op, byte[] code, int pos)
+    {
+        if (op >= 0x2E && op <= 0x35) { return 2; }        // *aload (arrayref, index)
+        if (op >= 0x36 && op <= 0x4E) { return 1; }        // *store
+        if (op >= 0x4F && op <= 0x56) { return 3; }        // *astore
+        if (op == 0x57) { return 1; }                      // pop
+        if (op >= 0x60 && op <= 0x73) { return 2; }        // add/sub/mul/div/rem
+        if (op >= 0x74 && op <= 0x77) { return 1; }        // neg
+        if (op >= 0x78 && op <= 0x83) { return 2; }        // shl/shr/ushr/and/or/xor
+        if (op >= 0x85 && op <= 0x93) { return 1; }        // conversions
+        if (op >= 0x94 && op <= 0x98) { return 2; }        // lcmp/fcmp/dcmp
+        if (op >= 0x99 && op <= 0x9E) { return 1; }        // if<cond>
+        if (op >= 0x9F && op <= 0xA6) { return 2; }        // if_icmp / if_acmp
+        if (op == 0xAA || op == 0xAB) { return 1; }        // tableswitch / lookupswitch
+        if (op >= 0xAC && op <= 0xB0) { return 1; }        // *return (value)
+        if (op == 0xB3) { return 1; }                      // putstatic
+        if (op == 0xB4) { return 1; }                      // getfield (objref)
+        if (op == 0xB5) { return 2; }                      // putfield
+        if (op == 0xB6 || op == 0xB7 || op == 0xB9) { return paramCount(u2(code, pos + 1)) + 1; }
+        if (op == 0xB8 || op == 0xBA) { return paramCount(u2(code, pos + 1)); }
+        if (op == 0xBC || op == 0xBD || op == 0xBE) { return 1; }   // newarray/anewarray/arraylength
+        if (op == 0xBF) { return 1; }                      // athrow
+        if (op == 0xC0 || op == 0xC1) { return 1; }        // checkcast/instanceof
+        if (op == 0xC2 || op == 0xC3) { return 1; }        // monitorenter/exit
+        if (op == 0xC5) { return code[pos + 3] & 0xFF; }   // multianewarray dims
+        if (op == 0xC6 || op == 0xC7) { return 1; }        // ifnull/ifnonnull
+        if (op == 0xC4) { int w = code[pos + 1] & 0xFF; return (w >= 0x36 && w != 0x84) ? 1 : 0; }   // wide store
+        return 0;
+    }
+
+    /** Whether {@code op} pushes a value, and if so whether it is wide: -1 = pushes nothing, 0 = non-wide, 1 = wide. */
+    private int pushW(int op, byte[] code, int pos)
+    {
+        if (op == 0x09 || op == 0x0A || op == 0x0E || op == 0x0F || op == 0x14 || op == 0x16 || op == 0x18) { return 1; }  // l/d const/ldc2_w/lload/dload
+        if (op >= 0x1E && op <= 0x21) { return 1; }        // lload_0-3
+        if (op >= 0x26 && op <= 0x29) { return 1; }        // dload_0-3
+        if (op == 0x2F || op == 0x31) { return 1; }        // laload / daload
+        if (op == 0x61 || op == 0x65 || op == 0x69 || op == 0x6D || op == 0x71) { return 1; }  // ladd/lsub/lmul/ldiv/lrem
+        if (op == 0x63 || op == 0x67 || op == 0x6B || op == 0x6F || op == 0x73) { return 1; }  // dadd/dsub/dmul/ddiv/drem
+        if (op == 0x75 || op == 0x77) { return 1; }        // lneg / dneg
+        if (op == 0x79 || op == 0x7B || op == 0x7D) { return 1; }   // lshl/lshr/lushr
+        if (op == 0x7F || op == 0x81 || op == 0x83) { return 1; }   // land/lor/lxor
+        if (op == 0x85 || op == 0x87 || op == 0x8A || op == 0x8C || op == 0x8D || op == 0x8F) { return 1; }  // i2l,i2d,l2d,f2l,f2d,d2l
+        if (op == 0xB2 || op == 0xB4) { return fieldIsWide(u2(code, pos + 1)) ? 1 : 0; }        // getstatic / getfield
+        if (op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xB9 || op == 0xBA)                 // invoke*
+        {
+            int cp = u2(code, pos + 1);
+            if (!returnsValue(cp)) { return -1; }
+            return returnIsWide(cp) ? 1 : 0;
+        }
+        if (op == 0xC4)                                    // wide: lload/dload push wide, other loads non-wide, store/iinc none
+        {
+            int w = code[pos + 1] & 0xFF;
+            if (w == 0x84 || (w >= 0x36 && w <= 0x39) || w == 0x3A) { return -1; }   // iinc / stores
+            return (w == 0x16 || w == 0x18) ? 1 : 0;
+        }
+        // pushes exactly one non-wide value:
+        if (op == 0x01) { return 0; }                      // aconst_null
+        if (op >= 0x02 && op <= 0x08) { return 0; }        // iconst
+        if (op == 0x0B || op == 0x0C || op == 0x0D) { return 0; }   // fconst
+        if (op == 0x10 || op == 0x11 || op == 0x12 || op == 0x13) { return 0; }     // bipush/sipush/ldc/ldc_w
+        if (op == 0x15 || op == 0x17 || op == 0x19) { return 0; }   // iload/fload/aload
+        if (op >= 0x1A && op <= 0x1D) { return 0; }        // iload_0-3
+        if (op >= 0x22 && op <= 0x25) { return 0; }        // fload_0-3
+        if (op >= 0x2A && op <= 0x2D) { return 0; }        // aload_0-3
+        if (op == 0x2E || op == 0x30 || (op >= 0x32 && op <= 0x35)) { return 0; }   // i/f/a/b/c/s aload
+        if (op >= 0x60 && op <= 0x72 && (op & 1) == 0) { return 0; }   // i*/f* add/sub/mul/div/rem (even opcodes)
+        if (op == 0x74 || op == 0x76) { return 0; }        // ineg / fneg
+        if (op == 0x78 || op == 0x7A || op == 0x7C || op == 0x7E || op == 0x80 || op == 0x82) { return 0; }  // i shifts/logic
+        if (op == 0x86 || op == 0x88 || op == 0x89 || op == 0x8B || op == 0x8E || op == 0x90) { return 0; }  // i2f,l2i,l2f,f2i,d2i,d2f
+        if (op >= 0x91 && op <= 0x98) { return 0; }        // i2b/i2c/i2s / lcmp/fcmp/dcmp
+        if (op == 0xBB || op == 0xC0 || op == 0xC1 || op == 0xC5) { return 0; }     // new/checkcast/instanceof/multianewarray
+        return -1;                                         // stores, pop*, returns, branches, put*, void: no push
+    }
+
+    private boolean returnIsWide(int refCp)
+    {
+        int k = ClassReader.descReturnKind(classBytes, ClassReader.refDescOff(classBytes, cpOff, refCp));
+        return k == 'J' || k == 'D';
+    }
+    private boolean fieldIsWide(int fieldCp)
+    {
+        int off = ClassReader.refDescOff(classBytes, cpOff, fieldCp);   // descriptor Utf8 (u2 length, then bytes)
+        int c = ClassReader.u1(classBytes, off + 2);                    // first field-descriptor char
+        return c == 'J' || c == 'D';
+    }
+
+    public static int opLen(int op, byte[] code, int pos)
     {
         // 2-byte: bipush/ldc/iload/lload/aload/fload/dload/istore/lstore/astore/fstore/dstore/newarray
         if (op == 0x10 || op == 0x12 || op == 0x15 || op == 0x16 || op == 0x19 || op == 0x17 || op == 0x18
@@ -2028,7 +2629,7 @@ public final class Baseline
             || op == 0x9F || op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3
             || op == 0xA4 || op == 0xA5 || op == 0xA6 || op == 0xA7 || op == 0xB2 || op == 0xB3 || op == 0xB4
             || op == 0xB5 || op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xBB
-            || op == 0xBD || op == 0xC0 || op == 0xC1)
+            || op == 0xBD || op == 0xC0 || op == 0xC1 || op == 0xC6 || op == 0xC7)   // ifnull / ifnonnull (3-byte)
         {
             return 3;
         }
@@ -2069,6 +2670,11 @@ public final class Baseline
         else if (cpTag[cpIndex] == ClassReader.TAG_INTEGER || cpTag[cpIndex] == 4)
         {
             loadConst(cb, ClassReader.intValue(classBytes, cpOff, cpIndex));   // Integer or Float (32-bit bits)
+        }
+        else if (cpTag[cpIndex] == 7)                                          // CONSTANT_Class: a class literal (X.class)
+        {
+            int r = pushReg();
+            symbols.classLiteral(cb, r, cpIndex);
         }
         else
         {
@@ -2136,38 +2742,83 @@ public final class Baseline
         this.localSaveBase = saveLR ? 8 : 0;
         this.overflowBase = localSaveBase + regLocals * 8;
         this.spillBase = overflowBase + overflowLocals * 8;
-        int spillWords = (!isEntry && nonLeaf) ? OP_MAX : 0;
+        // Pre-pass: the ACTUAL peak operand depth (not the DECLARED max_stack, which is often larger than a
+        // method ever reaches). Only when the real peak exceeds OP_MAX does the operand stack spill to memory;
+        // shallow methods stay register-only and byte-identical. The spill area (opStackBase) doubles as the
+        // call-preservation area (spillLive), sized to the peak for deep methods, OP_MAX otherwise.
+        this.reachDepth = computeDepths(code);   // depth[pc] >= 0 iff pc is reachable (control-flow pre-pass)
+        this.deepStack = maxActualDepth > OP_MAX;
+        if (deepStack && isEntry)
+        {
+            symbols.fail(Symbols.FAIL_STACK_OVERFLOW, maxActualDepth, 0);   // frameless entry can't spill; unexpected
+        }
+        this.opStackBase = spillBase;
+        // +OPSTACK_MARGIN: the exception-search path (throwStored) pushes a few synthetic temporaries (exc/pc/sp,
+        // or obj/catchType) ABOVE the current depth, beyond what computeDepths (which sees only normal flow) counts.
+        this.opStackSlots = deepStack ? maxActualDepth + OPSTACK_MARGIN : 0;
+        int spillWords = deepStack ? opStackSlots : ((!isEntry && nonLeaf) ? OP_MAX : 0);
         int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords;
         this.frameSize = isEntry ? 0 : A64Enc.align16(savedWords * 8);
         sp = 0;
+        for (int r = 0; r < OP_MAX; r++)
+        {
+            regHolds[r] = -1;
+        }
 
         CodeBuffer cb = new CodeBuffer(base);
+        this.curCb = cb;
         if (!isEntry)
         {
             emitPrologue(cb, descOff, isStatic);
         }
 
         int[] bcToWord = new int[code.length];
-        bcDepth = new int[code.length];
+        // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets
+        // recorded so far. A loop header reached linearly before its back-edge is compiled would otherwise carry
+        // a stale sp (the recordDepth for that edge hasn't run yet) -- and if its linear predecessor is dead/
+        // skipped, that stale sp underflows. reachDepth[pc] is the sound operand depth entering pc (>=0 reachable,
+        // -1 dead); seeding bcDepth with it makes recordDepth a consistency check rather than the sole source.
+        bcDepth = reachDepth;
         for (int k = 0; k < code.length; k++)
         {
             bcToWord[k] = -1;
-            bcDepth[k] = -1;
-        }
-        for (int k = 0; k < exCount; k++)   // handler entry: exception on stack (depth 1)
-        {
-            bcDepth[exHandlerPc[k]] = 1;
         }
         int pos = 0;
+        boolean prevFalls = true;
         while (pos < code.length)
         {
             bcToWord[pos] = cb.wordCount();
+            // Skip UNREACHABLE (dead) bytecode: javac emits cleanup stores after a goto/return/athrow in
+            // finally/synchronized patterns that no edge reaches. Compiling it linearly would run the operand
+            // model with a stale/empty sp and underflow on those stores. reachDepth (the control-flow pre-pass)
+            // marks it; nothing branches into it (a branch target has reachDepth >= 0), so dropping it is safe.
+            if (reachDepth[pos] < 0)
+            {
+                int dop = code[pos] & 0xFF;
+                int dlen = (dop == 0xC8 || dop == 0xC9) ? 5 : opLen(dop, code, pos);
+                pos += dlen < 1 ? 1 : dlen;
+                prevFalls = false;               // no reachable fall-through emerges from skipped code
+                continue;
+            }
             if (bcDepth[pos] >= 0)
             {
+                // Merge point (branch target / handler / label reached by fall-through). Normalise the deep
+                // operand stack to memory so every incoming edge agrees: if the linear predecessor falls in
+                // here, flush its live registers first; then invalidate so reads reload from memory.
+                if (deepStack)
+                {
+                    if (prevFalls)
+                    {
+                        syncOut(cb);
+                    }
+                    syncIn(cb);
+                }
                 sp = bcDepth[pos];    // merge point: adopt the branch-edge depth
             }
             int op = code[pos] & 0xFF;
+            curPos = pos;                          // so wide-sensitive lowerings (dup2/pop2) can read wideTop[pc]
             pos += step(op, code, pos, cb);
+            prevFalls = fallsThrough(op);
         }
 
         for (int fi = 0; fi < fixupCount; fi++)
@@ -2230,7 +2881,12 @@ public final class Baseline
                 q++;
             }
             int elem = ClassReader.u1(classBytes, q);
-            slot += (elem == 'J' || elem == 'D') ? 2 : 1; // matches the old paramTypes fold
+            // Only a BARE long/double is category-2 (2 local slots). An ARRAY of long/double ([J / [D) is a
+            // reference -> 1 slot; treating it as 2 shifted every later parameter's local slot by one register,
+            // so the prologue and body disagreed (e.g. seedDepth(int[], long[] mask, int[], ...) read garbage
+            // and looped forever). Real bug behind the #43 loadGuest hang -- NOT a deep-operand-spill defect.
+            boolean bareWide = (q == p) && (elem == 'J' || elem == 'D');
+            slot += bareWide ? 2 : 1;
             if (elem == 'L')
             {
                 while (ClassReader.u1(classBytes, q) != ';')

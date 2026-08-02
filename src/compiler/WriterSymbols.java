@@ -71,6 +71,18 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         relocs.interfaceRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cf.memberRef(ifaceMethodCp).owner()));
     }
+    public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
+    {
+        // Host writer: no runtime array Types; VM's own arrays stay raw (element size in the header).
+    }
+    public void classLiteral(CodeBuffer cb, int reg, int classCp)
+    {
+        throw new UnsupportedOperationException("ldc class-literal not compiled by the host writer");
+    }
+    public boolean isGetClass(int methodCp)
+    {
+        return false;   // host writer: no getClass intrinsic (VM's own code doesn't call it)
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         relocs.staticRefs().add(new StaticRef(cb.reserveAddr(reg), reg, staticKey(cf.memberRef(fieldCp))));
@@ -167,6 +179,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "writeCPACR_EL1(J)V" -> Intrinsics.WRITE_CPACR_EL1;
         case "writeSP(J)V" -> Intrinsics.WRITE_SP;
         case "readSP()J" -> Intrinsics.READ_SP;
+        case "readLR()J" -> Intrinsics.READ_LR;
         case "resume(JJJ)V" -> Intrinsics.RESUME;
         case "store32(JI)V" -> Intrinsics.STORE32;
         case "store8(JI)V" -> Intrinsics.STORE8;

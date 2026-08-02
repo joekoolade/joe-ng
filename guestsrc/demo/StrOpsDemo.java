@@ -36,19 +36,18 @@ public class StrOpsDemo
         showStr("\"hello\".replace('l','L')", "hello".replace('l', 'L'));  // heLLo
         showStr("\"none\".replace('x','y')", "none".replace('x', 'y'));    // none
 
-        showStr("\"Hello World\".toUpperCase()", "Hello World".toUpperCase());   // HELLO WORLD
-        showStr("\"Hello World\".toLowerCase()", "Hello World".toLowerCase());   // hello world
-        showStr("\"abc123XYZ\".toUpperCase()", "abc123XYZ".toUpperCase());       // ABC123XYZ
-        showStr("\"abc123XYZ\".toLowerCase()", "abc123XYZ".toLowerCase());       // abc123xyz
-
-        showSplit("\"a,b,c\".split(\",\")", "a,b,c".split(","));           // [a, b, c]
-        showSplit("\"a::b::c\".split(\"::\")", "a::b::c".split("::"));     // [a, b, c]
-        showSplit("\"a,,b,,\".split(\",\")", "a,,b,,".split(","));         // [a, , b] (trailing empties dropped)
-        showSplit("\"whole\".split(\",\")", "whole".split(","));          // [whole]
-
         showStr("join(\",\", \"a\",\"b\",\"c\")", String.join(",", "a", "b", "c"));      // a,b,c  (varargs)
-        showStr("join(\"-\", split(\"a,b,c\"))", String.join("-", "a,b,c".split(",")));  // a-b-c  (round-trip)
         showStr("join(\"/\", \"one\")", String.join("/", "one"));                        // one    (single elem)
+
+        // split() (#43): a MULTI-char delimiter "::" takes String.split's REGEX path (Pattern.compile), unlike
+        // single-char delimiters which take the fast path. Reaches the java.util.regex Pattern closure -- the
+        // wall is the reachable-class count (>1024 -> MAXBLOB) + ICU/Locale/foreign subtrees pruned via the
+        // denylist. toUpperCase()/toLowerCase() stay deferred (Locale.getDefault, #42).
+        String[] parts = "a::b::c".split("::");
+        showInt("split(\"::\").length", parts.length);     // 3
+        showStr("split[0]", parts[0]);                      // a
+        showStr("split[1]", parts[1]);                      // b
+        showStr("split[2]", parts[2]);                      // c
 
         // switch opcodes (compiler slice for real java.base): dense -> tableswitch, sparse -> lookupswitch.
         showInt("dense(0)", dense(0));            // 10
@@ -82,22 +81,6 @@ public class StrOpsDemo
         }
     }
 
-    private static void showSplit(String label, String[] parts)
-    {
-        Magic.printStr("  Str.");
-        Magic.printStr(label);
-        Magic.printStr(" len=");
-        Magic.printStr(Integer.toString(parts.length));
-        Magic.printStr(" = [");
-        int i = 0;
-        while (i < parts.length)
-        {
-            if (i > 0) { Magic.printStr(", "); }
-            Magic.printStr(parts[i]);
-            i = i + 1;
-        }
-        Magic.printStr("]\n");
-    }
 
     private static void showBool(String label, boolean v)
     {

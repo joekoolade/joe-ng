@@ -53,6 +53,7 @@ public interface Symbols
     // Implicit (JVM-synthesised) exceptions: allocate the exception object the JIT throws on a failed check.
     int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
+    int GET_CLASS = 21;         // vm/VM.getClassOf(J)J — Object.getClass() -> the receiver's Class mirror
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -65,6 +66,20 @@ public interface Symbols
 
     /** Load into {@code reg} the Type address of the class at {@code classCp}. */
     void type(CodeBuffer cb, int reg, int classCp);
+
+    /** Load into {@code reg} the Class-mirror address for the CONSTANT_Class at {@code classCp} (a class literal). */
+    void classLiteral(CodeBuffer cb, int reg, int classCp);
+
+    /** True if the method ref at {@code methodCp} is {@code getClass()Ljava/lang/Class;} — intrinsified to GET_CLASS. */
+    boolean isGetClass(int methodCp);
+
+    /**
+     * Tag a freshly-allocated array (in {@code arrReg}) with its array Type, so checkcast/instanceof against an
+     * array class resolve. {@code operand} is the {@code newarray} atype when {@code isRef} is false, else the
+     * {@code anewarray} element-class Class-entry. A no-op where array Types don't exist (the host writer): the
+     * array stays raw (element size in its header), which is all its untyped uses need.
+     */
+    void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef);
 
     /** Load into {@code reg} the Type address of the interface owning InterfaceMethodref {@code ifaceMethodCp}. */
     void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp);
@@ -118,6 +133,7 @@ public interface Symbols
     int FAIL_BRANCH_TARGET = 7;     // a = target bytecode index
     int FAIL_STACK_OVERFLOW = 8;    // operand stack too deep
     int FAIL_STACK_UNDERFLOW = 9;   // operand stack underflow
+    int FAIL_BL_RANGE = 10;         // a = call-site addr >>12, b = target addr >>12 (bl exceeds +-128 MiB)
 
     // Sites for FAIL_STACK_NOT_EMPTY's b argument.
     int SITE_NEW = 0;

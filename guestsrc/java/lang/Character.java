@@ -1,10 +1,15 @@
 package java.lang;
 
 /**
- * A JDK-free, minimal {@code java/lang/Character}: just {@code digit(char, int)} — the one method real
- * {@code Integer.parseInt} calls per input character. ASCII/Latin1 digit logic done directly (the real one
- * routes through the big {@code CharacterData} tables); enough for parsing decimal/hex on metal. Compiled
- * as a {@code java.base} patch so it carries the real name.
+ * A JDK-free, minimal {@code java/lang/Character} overlay. It shadows the stock class entirely (overlay wins by
+ * name), so it must carry every {@code Character} method a reached path calls -- otherwise the missing method is
+ * unresolved and its call hits the denylist trap.
+ *
+ * <p>{@code digit(char,int)} is the ASCII/Latin1 path real {@code Integer.parseInt} needs. The surrogate /
+ * code-point cluster below is what {@code java.util.regex} (Pattern/Matcher) calls while scanning input for a
+ * LITERAL {@code String.split} -- all pure bit arithmetic (the stock bodies route case/type queries through the
+ * big {@code CharacterData} tables, which stay cold for a literal ASCII match). Values inlined as literals so the
+ * overlay needs no {@code <clinit>} / static fields on metal.
  */
 public final class Character
 {
@@ -28,5 +33,102 @@ public final class Character
             return -1;
         }
         return d;
+    }
+
+    // ----- surrogate / BMP predicates (pure bit logic; 0xD800..0xDFFF is the surrogate range) ---------------
+    public static boolean isHighSurrogate(char ch)
+    {
+        return ch >= '\uD800' && ch < '\uDC00';           // MIN_HIGH_SURROGATE .. MAX_HIGH_SURROGATE
+    }
+
+    public static boolean isLowSurrogate(char ch)
+    {
+        return ch >= '\uDC00' && ch <= '\uDFFF';          // MIN_LOW_SURROGATE .. MAX_LOW_SURROGATE
+    }
+
+    public static boolean isSurrogate(char ch)
+    {
+        return ch >= '\uD800' && ch <= '\uDFFF';          // MIN_SURROGATE .. MAX_SURROGATE
+    }
+
+    public static boolean isSurrogatePair(char high, char low)
+    {
+        return isHighSurrogate(high) && isLowSurrogate(low);
+    }
+
+    public static boolean isBmpCodePoint(int codePoint)
+    {
+        return codePoint >>> 16 == 0;
+    }
+
+    public static boolean isValidCodePoint(int codePoint)
+    {
+        return (codePoint >>> 16) < 0x11;                 // (MAX_CODE_POINT + 1) >>> 16 == 0x110000 >>> 16
+    }
+
+    public static boolean isSupplementaryCodePoint(int codePoint)
+    {
+        return codePoint >= 0x10000 && codePoint < 0x110000;
+    }
+
+    // ----- code-point <-> surrogate-pair arithmetic --------------------------------------------------------
+    public static int charCount(int codePoint)
+    {
+        return codePoint >= 0x10000 ? 2 : 1;
+    }
+
+    public static int toCodePoint(char high, char low)
+    {
+        return ((high << 10) + low) + (0x10000 - ('\uD800' << 10) - '\uDC00');
+    }
+
+    public static char highSurrogate(int codePoint)
+    {
+        return (char) ((codePoint >>> 10) + ('\uD800' - (0x10000 >>> 10)));
+    }
+
+    public static char lowSurrogate(int codePoint)
+    {
+        return (char) ((codePoint & 0x3FF) + '\uDC00');
+    }
+
+    public static int codePointAt(CharSequence seq, int index)
+    {
+        char c1 = seq.charAt(index);
+        if (isHighSurrogate(c1) && ++index < seq.length())
+        {
+            char c2 = seq.charAt(index);
+            if (isLowSurrogate(c2))
+            {
+                return toCodePoint(c1, c2);
+            }
+        }
+        return c1;
+    }
+
+    public static int codePointBefore(CharSequence seq, int index)
+    {
+        char c2 = seq.charAt(--index);
+        if (isLowSurrogate(c2) && index > 0)
+        {
+            char c1 = seq.charAt(--index);
+            if (isHighSurrogate(c1))
+            {
+                return toCodePoint(c1, c2);
+            }
+        }
+        return c2;
+    }
+
+    public static char[] toChars(int codePoint)
+    {
+        if (isBmpCodePoint(codePoint))
+        {
+            return new char[] { (char) codePoint };
+        }
+        char[] result = new char[2];
+        result[1] = lowSurrogate(codePoint);
+        result[0] = highSurrogate(codePoint);
+        return result;
     }
 }

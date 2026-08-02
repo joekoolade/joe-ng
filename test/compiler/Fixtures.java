@@ -91,4 +91,14 @@ public final class Fixtures
         int k = x + 11;
         return a + b + c + d + e + f + g + h + i + j + k;
     }
+
+    /**
+     * Regression: a {@code long[]} parameter is a 1-slot REFERENCE. The prologue must map the following {@code int}
+     * param to the NEXT local slot (x20), not skip one as if {@code [J} were a category-2 (2-slot) long. {@code n}
+     * goes to slot 1 (x20); the body returns it, so any slot-shift corrupts the result.
+     */
+    public static int afterLongArray(long[] a, int n)
+    {
+        return n;
+    }
 }

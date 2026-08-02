@@ -293,6 +293,12 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** Read x30 (link register) = the caller's return address. Must be the FIRST body op of the callee (before
+     *  any nested call clobbers x30) to be meaningful. Used by the denylist trap to identify its call site. */
+    public static long readLR()
+    {
+        throw intrinsic();
+    }
 
     /**
      * Resume execution at a handler: set SP, place {@code exc} in the handler's
@@ -326,6 +332,17 @@ public final class Magic
         throw intrinsic();
     }
     public static long load64(long addr)
+    {
+        throw intrinsic();
+    }
+
+    /**
+     * Reinterpret an object reference as its raw heap address. In joe-ng a reference IS the
+     * object's address (no handles, no compressed oops), so this lowers to nothing — it only
+     * lets Java source (e.g. the {@code jdk.internal.misc.Unsafe} substitute) name the pointer
+     * as a {@code long} for {@code load*}/{@code store*} at a field/element offset.
+     */
+    public static long addrOf(Object o)
     {
         throw intrinsic();
     }

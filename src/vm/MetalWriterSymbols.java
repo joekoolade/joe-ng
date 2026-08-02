@@ -125,6 +125,18 @@ final class MetalWriterSymbols implements Symbols
         ifClassOff[ifN] = ClassReader.refClassNameOff(classBytes, cpOff, ifaceMethodCp);
         ifN += 1;
     }
+    public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
+    {
+        // Metal writer (self-build, deprecated): no runtime array Types; arrays stay raw.
+    }
+    public void classLiteral(CodeBuffer cb, int reg, int classCp)
+    {
+        throw new UnsupportedOperationException("ldc class-literal not compiled by the metal writer");
+    }
+    public boolean isGetClass(int methodCp)
+    {
+        return false;
+    }
     public void staticField(CodeBuffer cb, int reg, int fieldCp)
     {
         staticSite[staticN] = cb.reserveAddr(reg);
@@ -237,6 +249,7 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("writeCPACR_EL1"))) { return Intrinsics.WRITE_CPACR_EL1; }
         if (utf8Is(n, Magic.bytes("writeSP"))) { return Intrinsics.WRITE_SP; }
         if (utf8Is(n, Magic.bytes("readSP"))) { return Intrinsics.READ_SP; }
+        if (utf8Is(n, Magic.bytes("readLR"))) { return Intrinsics.READ_LR; }
         if (utf8Is(n, Magic.bytes("resume"))) { return Intrinsics.RESUME; }
         if (utf8Is(n, Magic.bytes("store32"))) { return Intrinsics.STORE32; }
         if (utf8Is(n, Magic.bytes("store8"))) { return Intrinsics.STORE8; }
