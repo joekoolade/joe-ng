@@ -76,4 +76,5 @@ public final class Intrinsics
     public static final int SPIN_UNLOCK = 48;        // STLR release
     public static final int DC_CVAC = 49;            // clean D-cache line to PoC (cross-core / uncached visibility)
     public static final int READ_LR = 59;            // read x30 (link register) — caller return addr, for trap diagnostics
+    public static final int READ_X0 = 60;            // read x0 — the faulting call's receiver, for trap diagnostics
 }

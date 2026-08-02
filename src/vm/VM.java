@@ -1222,8 +1222,8 @@ public final class VM
      */
     static void reportFault()
     {
-        long lr = Magic.readLR();                          // FIRST op: for a blr wild-branch, x30 = the caller's
-                                                           // return addr (the vector uses B, not BL, so x30 is intact)
+        long rcv = Magic.readX0();                         // FIRST ops: capture the faulting blr's receiver (x0) and
+        long lr = Magic.readLR();                          // return addr (x30) before anything clobbers them
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
         long far = Magic.readFAR_EL1();
@@ -1241,6 +1241,22 @@ public final class VM
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
         Loader.reportMethodAt(lr);
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  receiver x0="));             // #43: the wild-branch receiver + its TIB/Type
+        printHex(rcv);
+        if (rcv > 0x1000L && rcv < 0x40000000L)                // plausible heap object: dump TIB and Type
+        {
+            long tib = Magic.load64(rcv);
+            Uart.write(Magic.bytes(" tib="));
+            printHex(tib);
+            if (tib > 0x1000L && tib < 0x40000000L)
+            {
+                long type = Magic.load64(tib);                 // TIB[0] = Type
+                Uart.write(Magic.bytes(" type="));
+                printHex(type);
+                Loader.reportClassOfType(type);
+            }
+        }
         Uart.putc(0x0A);
         while (true)
         {

@@ -1694,6 +1694,26 @@ public final class Loader
         }
     }
 
+    /** #43 fault diagnostic: name the loaded class whose Type node is {@code type} (the wild-branch receiver's
+     *  class), over the UART, or nothing if unknown. */
+    static void reportClassOfType(long type)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clType[i] == type)
+            {
+                Uart.write(Magic.bytes(" class="));
+                writeName(clBase[i] + clNameOff[i] + 2, u2(clBase[i] + clNameOff[i]));
+                Uart.write(Magic.bytes(" gvCount="));
+                VM.printDec(clVtCount[i]);
+                return;
+            }
+            i += 1;
+        }
+        Uart.write(Magic.bytes(" class=? (unregistered Type)"));
+    }
+
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
      *  registered buffer base <= addr), plus the byte offset into it, over the UART. */
     static void reportMethodAt(long addr)
@@ -3356,6 +3376,14 @@ public final class Loader
         clStatics[clCount] = gStatics;
         clVtStart[clCount] = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
         clIsIface[clCount] = false;
+        if (logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
+        {
+            Uart.write(Magic.bytes("  C "));
+            writeName(gbase + gThisNameOff + 2, u2(gbase + gThisNameOff));
+            Uart.putc(0x20);
+            VM.printDec(gvCount);
+            Uart.putc(0x0A);
+        }
         captureDirectIfaces();
         clCount += 1;
         int st = 0;
@@ -3533,6 +3561,8 @@ public final class Loader
      * loaded class), so that match fails and we fall back to name+descriptor — sound
      * while a single loaded class implements it.
      */
+    static int logVtable;                               // #43 diagnostic: when != 0, log high-slot vtable resolutions
+
     private static int globalVtableSlot(int idx)
     {
         int classOff = refClassNameOff(idx);
@@ -3545,6 +3575,7 @@ public final class Loader
                     && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
                     && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
             {
+                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x51);   // 'Q' class-qualified
                 return vtSlot[i];
             }
             i += 1;
@@ -3555,11 +3586,27 @@ public final class Loader
             if (utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
                     && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
             {
+                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x46);   // 'F' name+desc fallback
                 return vtSlot[i];
             }
             i += 1;
         }
         return 0;
+    }
+
+    /** #43: print a high-slot vtable resolution (class.name slot [Q|F]) so a garbage-slot wild-branch is traceable. */
+    private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
+    {
+        if (logVtable == 0 || slot < 20) { return; }
+        Uart.write(Magic.bytes("  V "));
+        writeName(gbase + classOff + 2, u2(gbase + classOff));
+        Uart.putc(0x2E);
+        writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+        Uart.putc(0x20);
+        VM.printDec(slot);
+        Uart.putc(0x20);
+        Uart.putc((byte) path);
+        Uart.putc(0x0A);
     }
 
     /** Class-registry index of the class named by a {@code new}/type {@code Class} entry, or -1. */
@@ -3796,6 +3843,7 @@ public final class Loader
             int s = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));   // this class's flattened vtable
             if (s >= 0)
             {
+                logVtableSlot(refClassNameOff(idx), mrefNameOff(idx), mrefDescOff(idx), s, 0x53);   // 'S' same-class
                 return s;
             }
         }

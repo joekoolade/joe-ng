@@ -299,6 +299,12 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** Read x0 = the faulting call's receiver (for a wild-branch via blr). Must be the FIRST body op of a fault
+     *  handler entered via B (not BL), before x0 is clobbered. */
+    public static long readX0()
+    {
+        throw intrinsic();
+    }
 
     /**
      * Resume execution at a handler: set SP, place {@code exc} in the handler's

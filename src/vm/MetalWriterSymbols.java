@@ -250,6 +250,7 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("writeSP"))) { return Intrinsics.WRITE_SP; }
         if (utf8Is(n, Magic.bytes("readSP"))) { return Intrinsics.READ_SP; }
         if (utf8Is(n, Magic.bytes("readLR"))) { return Intrinsics.READ_LR; }
+        if (utf8Is(n, Magic.bytes("readX0"))) { return Intrinsics.READ_X0; }
         if (utf8Is(n, Magic.bytes("resume"))) { return Intrinsics.RESUME; }
         if (utf8Is(n, Magic.bytes("store32"))) { return Intrinsics.STORE32; }
         if (utf8Is(n, Magic.bytes("store8"))) { return Intrinsics.STORE8; }

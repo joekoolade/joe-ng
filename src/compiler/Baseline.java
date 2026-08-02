@@ -2172,6 +2172,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.movReg(pushReg(), 30));             // x30 (link register) = caller return address
         }
+        else if (id == Intrinsics.READ_X0)
+        {
+            cb.emit(A64Enc.movReg(pushReg(), 0));              // x0 = the faulting call's receiver (trap diagnostic)
+        }
         else if (id == Intrinsics.RESUME)
         // exc->x9, SP=sp, br pc (no return)
         {
