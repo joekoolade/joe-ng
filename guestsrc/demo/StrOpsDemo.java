@@ -65,6 +65,18 @@ public class StrOpsDemo
         showInt("sparse(1)", sparse(1));          // 100
         showInt("sparse(1000)", sparse(1000));    // 300
         showInt("sparse(5)", sparse(5));          // -9  (default)
+
+        // System.out.println (M2): stock System.out/err are set by the native-heavy initPhase1/setOut0 (absent
+        // on metal), so Loader.seedSystemStreams installs a guest PrintStream overlay that encodes Latin1 and
+        // writes straight to the UART. getstatic System.out -> invokevirtual println dispatches to the overlay.
+        System.out.println("System.out.println works on metal");
+        System.out.println("concat int=" + 42 + " bool=" + true);   // reduces to println(String)
+        System.out.print("print(no-newline) ");
+        System.out.println("then newline");
+        System.out.println(12345);                 // println(int)  -> Integer.toString
+        System.out.println(-7);                    // println(int)  negative
+        System.out.println(true);                  // println(boolean)
+        System.err.println("System.err.println works too");
     }
 
     private static int dense(int x)

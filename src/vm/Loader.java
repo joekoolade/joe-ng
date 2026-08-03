@@ -712,6 +712,7 @@ public final class Loader
         entryPoint(VM.strOpsDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
         VM.unwindLog = 1;                               // #43: log exception throw-stacks during this batch (also the printStackTrace() mechanism)
         loadAll();
+        seedSystemStreams();                            // M2: install System.out/err (PrintStream overlay -> UART)
         long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1359,6 +1360,10 @@ public final class Loader
         grew = flagInstByName(Magic.bytes("java/lang/ArithmeticException")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/ClassCastException")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/NegativeArraySizeException")) || grew;
+        // M2: System.out/err are PrintStream instances allocated by Loader.seedSystemStreams (Heap.alloc, no
+        // bytecode `new`), so RTA can't see the site -> flag it so println/print virtual methods compile + its
+        // vtable fills (else System.out.println dispatches to an unfilled slot -> wrong overload / wild branch).
+        grew = flagInstByName(Magic.bytes("java/io/PrintStream")) || grew;
         return grew;
     }
 
@@ -3021,6 +3026,39 @@ public final class Loader
         }
         Magic.store64(cacheSlot, arr);
         Magic.store64(highSlot, 127L);
+    }
+
+    /**
+     * Install {@code System.out} / {@code System.err} with a metal {@link java.io.PrintStream} overlay (call
+     * after {@code loadAll} for a batch whose closure includes {@code java/lang/System} + {@code java/io/PrintStream}).
+     * Stock {@code System.initPhase1}/{@code setOut0} that would set these are native-heavy and unrunnable, so we
+     * allocate a bare PrintStream instance (the overlay is field-free — a 16-byte header with just its TIB, no
+     * ctor call needed) and drop it into each static slot. {@code getstatic System.out} then reads a real object
+     * and {@code invokevirtual println} dispatches through the overlay's vtable. No-op if either class is absent.
+     */
+    static void seedSystemStreams()
+    {
+        int pi = classIndexByName(Magic.bytes("java/io/PrintStream"));
+        if (pi < 0)
+        {
+            return;
+        }
+        long ptib = clTib[pi];
+        int psize = 16 + clFieldCount[pi] * 8;          // field-free overlay -> 16, but honor any fields it declares
+        long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
+        if (outSlot != 0L)
+        {
+            long ps = Heap.alloc(psize);
+            Magic.store64(ps + 0L, ptib);               // TIB (vtable for println dispatch)
+            Magic.store64(outSlot, ps);
+        }
+        long errSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
+        if (errSlot != 0L)
+        {
+            long ps = Heap.alloc(psize);
+            Magic.store64(ps + 0L, ptib);
+            Magic.store64(errSlot, ps);
+        }
     }
 
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
