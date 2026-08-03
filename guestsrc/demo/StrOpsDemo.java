@@ -42,12 +42,21 @@ public class StrOpsDemo
         // split() (#43): a MULTI-char delimiter "::" takes String.split's REGEX path (Pattern.compile), unlike
         // single-char delimiters which take the fast path. Reaches the java.util.regex Pattern closure -- the
         // wall is the reachable-class count (>1024 -> MAXBLOB) + ICU/Locale/foreign subtrees pruned via the
-        // denylist. toUpperCase()/toLowerCase() stay deferred (Locale.getDefault, #42).
+        // denylist.
         String[] parts = "a::b::c".split("::");
         showInt("split(\"::\").length", parts.length);     // 3
         showStr("split[0]", parts[0]);                      // a
         showStr("split[1]", parts[1]);                      // b
         showStr("split[2]", parts[2]);                      // c
+
+        // toUpperCase/toLowerCase (#42): the no-arg forms call Locale.getDefault(); the stock initDefault reads
+        // system properties (unrunnable on metal), so a minimal guest Locale overlay returns ENGLISH. The LATIN1
+        // happy path is StringLatin1.to{Upper,Lower}Case -> CharacterDataLatin1 per-char tables (already loaded
+        // for split) + Locale.getLanguage()=="en" skipping the tr/az/lt Turkic branch.
+        showStr("\"HeLLo\".toUpperCase()", "HeLLo".toUpperCase());        // HELLO
+        showStr("\"WoRLD\".toLowerCase()", "WoRLD".toLowerCase());        // world
+        showStr("\"abc123\".toUpperCase()", "abc123".toUpperCase());      // ABC123 (digits pass through)
+        showStr("\"MixEd\".toLowerCase()", "MixEd".toLowerCase());        // mixed
 
         // switch opcodes (compiler slice for real java.base): dense -> tableswitch, sparse -> lookupswitch.
         showInt("dense(0)", dense(0));            // 10
