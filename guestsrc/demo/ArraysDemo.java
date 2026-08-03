@@ -26,6 +26,27 @@ public class ArraysDemo
         showInt("binarySearch(s,8)", Arrays.binarySearch(s, 8)); // 3
         showInt("binarySearch(s,10)", Arrays.binarySearch(s, 10)); // 4
         showInt("binarySearch(s,5)", Arrays.binarySearch(s, 5)); // -3 (insertion point 2 -> -(2)-1)
+
+        // sort(int[]) (#34): small arrays take DualPivotQuicksort's insertion-sort path (a plain loop, no
+        // natives / Unsafe) -- the tractable slice of the real sort. Verify order + endpoints.
+        int[] u = { 5, 2, 8, 1, 9, 3, 7, 4, 6, 0 };
+        Arrays.sort(u);
+        showInt("sort[0]", u[0]);                                // 0
+        showInt("sort[9]", u[9]);                                // 9
+        boolean asc = true;
+        for (int i = 1; i < u.length; i++)
+        {
+            if (u[i] < u[i - 1])
+            {
+                asc = false;
+            }
+        }
+        showBool("sort ascending", asc);                         // 1
+
+        int[] neg = { 3, -1, 0, -5, 2 };
+        Arrays.sort(neg);
+        showInt("sort(neg)[0]", neg[0]);                         // -5
+        showInt("sort(neg)[4]", neg[4]);                         // 3
     }
 
     private static void showBool(String label, boolean v)
