@@ -511,6 +511,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int b = 0; b < blobs.size(); b++)
         {

@@ -552,6 +552,7 @@ public final class VM
     static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_BLOCKED / TASK_EMPTY
     static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
     static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on
+    static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
     static int    curTask;                  // the task currently running
@@ -793,8 +794,9 @@ public final class VM
      */
     static void startThread(long runnable)
     {
-        spawnArg(runTrampAddr, runnable);
-    }
+        int id = spawnArg(runTrampAddr, runnable);
+        taskThreadObj[id] = runnable;                      // guest Thread.start() spawns the Thread ITSELF (M4):
+    }                                                      //   record it so currentThread() returns that object
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index (a "fork"). */
     static int newSem(int initial)
@@ -1194,11 +1196,15 @@ public final class VM
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
+        if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
+        if (superclassAddr == 0L) { long u = superclassOf(0L); }      // Class.superclass0() native (M4)
+        if (currentThreadAddr == 0L) { long u = currentThreadObj(); } // Thread.currentThread0() native (M4)
 
         installSchedVectors();
 
         taskSp = new long[MAX_TASKS];
         taskStackBase = new long[MAX_TASKS];
+        taskThreadObj = new long[MAX_TASKS];
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
         taskWaitOn = new int[MAX_TASKS];
@@ -1227,6 +1233,49 @@ public final class VM
      * into its inline backtrace (bt0..bt7 @ self+16) by {@link #unwind} at throw time. Names each frame's method
      * via {@link Loader#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
      */
+    /**
+     * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
+     * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
+     */
+    static long classNameOf(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        return Loader.classNameString(Magic.load64(mirror + 16L));
+    }
+
+    /**
+     * M4: {@code Class.superclass0(Class)} native — the mirror's Type's {@code superType} ({@code @8}) ->
+     * its (cached) mirror, or 0 for {@code java/lang/Object}/unloaded.
+     */
+    static long superclassOf(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        long st = Magic.load64(Magic.load64(mirror + 16L) + 8L);
+        return st == 0L ? 0L : Loader.classMirror(st);
+    }
+
+    /**
+     * M4: {@code Thread.currentThread0()} native — the calling task's guest Thread. Tasks started via
+     * {@code Thread.start()} recorded their Thread in {@link #startThread}; a task the VM created without
+     * one (the boot task) gets a bare Thread lazily wrapped around it (cached, so the answer is stable).
+     */
+    static long currentThreadObj()
+    {
+        long t = taskThreadObj[curTask];
+        if (t == 0L)
+        {
+            t = Loader.allocThreadObj();                   // 0 if java/lang/Thread isn't in the loaded batch
+            taskThreadObj[curTask] = t;
+        }
+        return t;
+    }
+
     /**
      * M3 RAMFS: resolve a guest {@code java/lang/String} path to its embedded file-table entry
      * ({nameAddr, nameLen, bytesAddr, bytesLen}), or 0 if absent. The native behind the guest
@@ -1834,6 +1883,7 @@ public final class VM
     static long boxingDemoBytes, boxingDemoLen;     // demo/BoxingDemo (Integer.valueOf boxing via HashMap)
     static long strOpsDemoBytes, strOpsDemoLen;     // demo/StrOpsDemo (String indexOf/substring)
     static long fileDemoBytes, fileDemoLen;         // demo/FileDemo (M3: FileInputStream over the RAMFS)
+    static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1877,6 +1927,9 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
+    static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
+    static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
+    static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
@@ -2323,6 +2376,10 @@ public final class VM
         // M3: java.io -- the guest FileInputStream overlay reading the embedded read-only RAMFS.
         Uart.write(Magic.bytes("java.io FileInputStream (embedded RAMFS):\n"));
         Loader.loadFileIo();
+
+        // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
+        Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
+        Loader.loadReflect();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry

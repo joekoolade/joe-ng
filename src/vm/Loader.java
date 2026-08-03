@@ -742,6 +742,31 @@ public final class Loader
         }
     }
 
+    /** M4: Thread identity + Class reflection — {@code demo/ReflectDemo} (guest Thread/Class overlays,
+     *  currentThread via {@code VM.taskThreadObj}, getName/isInstance/superclass natives). */
+    static void loadReflect()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // Integer.toString for int concat + Integer.class literal
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.reflectDemoBytes, (int) VM.reflectDemoLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.reflectDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        loadAll();
+        buildRunTramp();                                // re-bake run()'s imap slot for THIS batch: the
+                                                        //   interface-method registry resets per batch, and this
+                                                        //   closure loads Runnable LAST (the philosophers-batch
+                                                        //   tramp's baked slot would BLR a wrong imap entry)
+        long buf = globalMethodBuf(Magic.bytes("demo/ReflectDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
     static int runParseInt(byte[] ascii)
     {
@@ -1386,6 +1411,10 @@ public final class Loader
         // bytecode `new`), so RTA can't see the site -> flag it so println/print virtual methods compile + its
         // vtable fills (else System.out.println dispatches to an unfilled slot -> wrong overload / wild branch).
         grew = flagInstByName(Magic.bytes("java/io/PrintStream")) || grew;
+        // M4: Class mirrors (Loader.classMirror) and the boot task's lazy Thread (Loader.allocThreadObj) are
+        // VM-alloc'd too -> flag them so getName/isInstance/... and getName/run compile + their vtables fill.
+        grew = flagInstByName(Magic.bytes("java/lang/Class")) || grew;
+        grew = flagInstByName(Magic.bytes("java/lang/Thread")) || grew;
         return grew;
     }
 
@@ -1807,6 +1836,49 @@ public final class Loader
             i += 1;
         }
         Uart.write(Magic.bytes("<exception>"));
+    }
+
+    /** M4 {@code Class.getName()}: a fresh guest String of {@code type}'s dotted binary name (registry
+     *  name bytes, '/'->'.'), or 0 if the Type isn't in the loaded registry. */
+    static long classNameString(long type)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clType[i] == type)
+            {
+                int len = u2(clBase[i] + clNameOff[i]);
+                long src = clBase[i] + clNameOff[i] + 2;
+                long arr = Heap.allocArray(len, 1);
+                int k = 0;
+                while (k < len)
+                {
+                    int c = u1(src + k);
+                    Magic.store8(arr + 24L + k, c == 0x2F ? 0x2E : c);   // '/' -> '.'
+                    k += 1;
+                }
+                long obj = Heap.alloc(stringSize());
+                Magic.store64(obj + 0L, stringTib());
+                Magic.store64(obj + 16L, arr);          // value byte[]; coder@24 stays 0 = LATIN1
+                return obj;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** M4 {@code Thread.currentThread()}: a bare guest {@code java/lang/Thread} (no ctor run; fields null)
+     *  wrapping a VM-created task, or 0 if Thread isn't in the loaded batch. */
+    static long allocThreadObj()
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/Thread"));
+        if (i < 0)
+        {
+            return 0L;
+        }
+        long obj = Heap.alloc(16 + clFieldCount[i] * 8);
+        Magic.store64(obj + 0L, clTib[i]);
+        return obj;
     }
 
     /** Print the ONE demand-compiled method (or {@code <clinit>}) containing {@code addr} as a single line
@@ -3528,6 +3600,16 @@ public final class Loader
         if (utf8IsStr(classOff, Magic.bytes("java/io/FileInputStream")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
+            if (utf8IsStr(nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
+            if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Thread")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
         {

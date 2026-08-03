@@ -13,6 +13,14 @@ package java.lang;
  */
 public class Object
 {
+    /** Intrinsified at EVERY call site ({@code getClass()Ljava/lang/Class;} -> {@code VM.getClassOf}, the
+     *  header->TIB->Type->mirror walk); this body is never dispatched. Declared so guest sources compile
+     *  against the overlay Object (M4 ReflectDemo). */
+    public final Class getClass()
+    {
+        return null;
+    }
+
     public int hashCode()
     {
         return 0;

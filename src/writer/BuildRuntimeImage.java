@@ -209,6 +209,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.biConsumerBytes",  "vm/VM.biConsumerLen",  "java/util/function/BiConsumer",           registry.rawBytes("java/util/function/BiConsumer"));
         // M3: java.io demo (guest FileInputStream overlay over the embedded RAMFS).
         ib.addBlob("vm/VM.fileDemoBytes",    "vm/VM.fileDemoLen",    "demo/FileDemo",                           registry.rawBytes("demo/FileDemo"));
+        // M4: Thread identity + Class reflection demo.
+        ib.addBlob("vm/VM.reflectDemoBytes", "vm/VM.reflectDemoLen", "demo/ReflectDemo",                        registry.rawBytes("demo/ReflectDemo"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

@@ -1,5 +1,7 @@
 package java.lang;
 
+import magic.Magic;
+
 /**
  * Bare-metal {@code java/lang/Class} mirror. The VM materialises one Class instance per loaded VM Type (on an
  * {@code ldc} class-literal or {@code Object.getClass()}, in {@code Loader.classMirror}) and stores the raw
@@ -27,4 +29,50 @@ public final class Class
     {
         return false;
     }
+
+    /** The class's binary name with dots (M4), built by the VM from the loader registry's name bytes. */
+    public String getName()
+    {
+        return getName0(this);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.classNameOf}): mirror -> a fresh name String. */
+    private static native String getName0(Class c);
+
+    /** True if {@code obj} is non-null and assignable to this type (the {@code instanceof} walk). */
+    public boolean isInstance(Object obj)
+    {
+        return isInstance0(obj, typeAddr);
+    }
+
+    /** VM native (maps straight onto the JIT's {@code VM.instanceOf(JJ)I} helper: obj in x0, Type in x1). */
+    private static native boolean isInstance0(Object obj, long type);
+
+    /**
+     * True if {@code other}'s type equals this type or has it on its superclass chain — a pure-Java walk of
+     * the Type nodes ({@code superType} at Type+8) via the {@code Magic.load64} intrinsic. Interface
+     * assignability (itables) is not consulted; extend when reached code needs it.
+     */
+    public boolean isAssignableFrom(Class other)
+    {
+        long t = other.typeAddr;
+        while (t != 0L)
+        {
+            if (t == typeAddr)
+            {
+                return true;
+            }
+            t = Magic.load64(t + 8L);                   // Type.superType
+        }
+        return false;
+    }
+
+    /** The superclass's mirror (cached per Type, so {@code getSuperclass() == Super.class}), or null. */
+    public Class getSuperclass()
+    {
+        return superclass0(this);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.superclassOf}): super Type -> its (cached) mirror. */
+    private static native Class superclass0(Class c);
 }
