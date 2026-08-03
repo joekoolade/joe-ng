@@ -211,6 +211,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.fileDemoBytes",    "vm/VM.fileDemoLen",    "demo/FileDemo",                           registry.rawBytes("demo/FileDemo"));
         // M4: Thread identity + Class reflection demo.
         ib.addBlob("vm/VM.reflectDemoBytes", "vm/VM.reflectDemoLen", "demo/ReflectDemo",                        registry.rawBytes("demo/ReflectDemo"));
+        // Real-program milestone: WordCount from main(String[]).
+        ib.addBlob("vm/VM.wordCountBytes",   "vm/VM.wordCountLen",   "demo/WordCount",                          registry.rawBytes("demo/WordCount"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

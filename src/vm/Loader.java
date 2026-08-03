@@ -742,6 +742,34 @@ public final class Loader
         }
     }
 
+    /** The real-program milestone: {@code demo/WordCount} — ordinary stock-Java (no VM hooks) entered
+     *  through a real {@code main(String[])}, with the argument array built here (a raw Object[] of guest
+     *  Strings). Must print byte-identical output to the same class run on the host JDK. */
+    static void loadWordCount()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // parseInt(args[1]) + boxed counts + toString
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.wordCountBytes, (int) VM.wordCountLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.wordCountBytes, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        loadAll();
+        seedSystemStreams();                            // the program prints via System.out (M2 overlay)
+        long a0 = guestString(Magic.bytes("/data/sample.txt"));
+        long a1 = guestString(Magic.bytes("3"));
+        long argv = Heap.allocArray(2, 8);              // String[2] (8-byte reference elements)
+        Magic.store64(argv + 24L, a0);
+        Magic.store64(argv + 32L, a1);
+        long buf = globalMethodBuf(Magic.bytes("demo/WordCount"), Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call2(buf, argv, 0L);   // main(args) — x1 unused by a 1-arg static
+        }
+    }
+
     /** M4: Thread identity + Class reflection — {@code demo/ReflectDemo} (guest Thread/Class overlays,
      *  currentThread via {@code VM.taskThreadObj}, getName/isInstance/superclass natives). */
     static void loadReflect()
@@ -767,13 +795,9 @@ public final class Loader
         }
     }
 
-    /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
-    static int runParseInt(byte[] ascii)
+    /** A fresh guest {@code java/lang/String} (LATIN1) holding {@code ascii} (requires String loaded). */
+    static long guestString(byte[] ascii)
     {
-        if (parseIntBuf == 0L)
-        {
-            return 0;
-        }
         long arr = Heap.allocArray(ascii.length, 1);    // a real byte[] (elem size 1, length@16, data@24)
         int i = 0;
         while (i < ascii.length)
@@ -782,9 +806,19 @@ public final class Loader
             i += 1;
         }
         long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, stringTib());           // wrap it as a mini java/lang/String
-        Magic.store64(obj + 16L, arr);                  // value field (offset 16)
-        return (int) Magic.call2(parseIntBuf, obj, 10L);
+        Magic.store64(obj + 0L, stringTib());           // wrap it as a guest java/lang/String
+        Magic.store64(obj + 16L, arr);                  // value field (offset 16); coder@24 stays 0 = LATIN1
+        return obj;
+    }
+
+    /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
+    static int runParseInt(byte[] ascii)
+    {
+        if (parseIntBuf == 0L)
+        {
+            return 0;
+        }
+        return (int) Magic.call2(parseIntBuf, guestString(ascii), 10L);
     }
 
     /** Like {@link #findMethod} but matches name+descriptor by byte content (for names &gt; 8 chars). */

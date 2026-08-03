@@ -1884,6 +1884,7 @@ public final class VM
     static long strOpsDemoBytes, strOpsDemoLen;     // demo/StrOpsDemo (String indexOf/substring)
     static long fileDemoBytes, fileDemoLen;         // demo/FileDemo (M3: FileInputStream over the RAMFS)
     static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
+    static long wordCountBytes, wordCountLen;       // demo/WordCount (real-program milestone: main(String[]))
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -2380,6 +2381,11 @@ public final class VM
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
         Loader.loadReflect();
+
+        // The real-program milestone: ordinary stock-Java WordCount from main(String[]) -- must match
+        // the host JDK's output byte-for-byte on the same input file.
+        Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
+        Loader.loadWordCount();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
