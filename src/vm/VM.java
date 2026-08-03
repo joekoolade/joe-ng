@@ -1566,7 +1566,7 @@ public final class VM
     {
         if (jitFrameTable == 0L)
         {
-            jitFrameTable = Heap.alloc(JIT_FRAME_MAX * 24);      // JIT_FRAME_MAX * 24 bytes
+            jitFrameTable = Heap.allocData(JIT_FRAME_MAX * 24);      // JIT_FRAME_MAX * 24 bytes
         }
         if (jitFrameCount < JIT_FRAME_MAX)
         {
@@ -1590,7 +1590,7 @@ public final class VM
     {
         if (jitHandlerTable == 0L)
         {
-            jitHandlerTable = Heap.alloc(JIT_HANDLER_MAX * 32);
+            jitHandlerTable = Heap.allocData(JIT_HANDLER_MAX * 32);
         }
         if (jitHandlerCount < JIT_HANDLER_MAX)
         {
@@ -1746,8 +1746,22 @@ public final class VM
      */
     static void gcCollect(long scanFrom)
     {
-        markRange(scanFrom, STACK_TOP);
+        long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
+        Magic.disableIrq();                           //   would allocate into the half-swept heap
+        buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
+        long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
+        if (taskStackBase != null && curTask != 0 && taskStackBase[curTask] != 0L)
+        {
+            stackTop = taskStackBase[curTask] + 0x8000L;   // a spawned task: its stack is a heap object
+        }
+        markRange(scanFrom, stackTop);
         markRange(staticsStart, staticsEnd);
+        int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
+        while (sc < 4)                                //   collected, but their tasks hold refs into core 0's
+        {                                             //   heap — e.g. spawned Runnable receivers)
+            markRange(Heap.arenaBase(sc), Magic.load64(Heap.PTR_CELL + sc * 8L));
+            sc += 1;
+        }
         boolean changed = true;                       // trace: mark fields of marked objects to a fixpoint
         while (changed)
         {
@@ -1774,31 +1788,59 @@ public final class VM
         }
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
+        long walked = 0L;
+        long markedN = 0L;
+        long freedN = 0L;
         long o = Heap.BASE;
         long stop = Magic.load64(Heap.PTR_CELL);
+        long stoppedAt = 0L;
         while (o < stop)
         {
             long st = Magic.load64(o + 8L);
             long size = st & -8L;
             if (size == 0L || o + size > stop || o + size <= o)
             {
-                o = stop;                              // corrupt / out-of-bounds: stop
+                stoppedAt = o;                         // corrupt / out-of-bounds: stop
+                o = stop;
             }
             else
             {
+                walked = walked + 1L;
                 if ((st & 1L) != 0L)
                 {
+                    markedN = markedN + 1L;
                     Magic.store64(o + 8L, size);    // unmark (clear bit0)
                 }
                 else
                 {
+                    freedN = freedN + 1L;
                     Heap.addFree(o, size);
                     reclaimed = reclaimed + size;
                 }
                 o = o + size;
             }
         }
+        if (gcLog != 0)
+        {
+            Uart.write(Magic.bytes("  [gc walked="));
+            printHex(walked);
+            Uart.write(Magic.bytes(" marked="));
+            printHex(markedN);
+            Uart.write(Magic.bytes(" freed="));
+            printHex(freedN);
+            Uart.write(Magic.bytes(" bytes="));
+            printHex(reclaimed);
+            Uart.write(Magic.bytes(" stopAt="));
+            printHex(stoppedAt);                       // non-zero = the size walk hit a corrupt status
+            Uart.write(Magic.bytes("]\n"));
+        }
+        if ((daif & 0x80L) == 0L)
+        {
+            Magic.enableIrq();                        // restore: only unmask if the caller had IRQs on
+        }
     }
+
+    static int gcLog;        // print per-collection stats (diagnostic)
 
     static long reclaimed;   // bytes freed by the last collection
 
@@ -1885,6 +1927,7 @@ public final class VM
     static long fileDemoBytes, fileDemoLen;         // demo/FileDemo (M3: FileInputStream over the RAMFS)
     static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
     static long wordCountBytes, wordCountLen;       // demo/WordCount (real-program milestone: main(String[]))
+    static long gcDemoBytes, gcDemoLen;             // demo/GcDemo (GC milestone: churn >> arena size)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1950,19 +1993,77 @@ public final class VM
         while (lo < hi)
         {
             long w = Magic.load64(lo);
-            if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L)
+            if (tryMark(w))
             {
-                long st = Magic.load64(w + 8L);
-                long size = st & -8L;
-                if (size != 0L && (st & 1L) == 0L && w + size <= Magic.load64(Heap.PTR_CELL))
-                {
-                    Magic.store64(w + 8L, st + 1L);    // set mark bit
-                    any = true;
-                }
+                any = true;
+            }
+            if (tryMark(w - 16L))                      // a raw-data payload pointer (Heap.allocData) sits one
+            {                                          //   header past its block base: probe that base too
+                any = true;
             }
             lo = lo + 8L;
         }
         return any;
+    }
+
+    /** Mark {@code w} if it IS an unmarked heap block base; true if newly marked. Verified against the
+     *  block-start bitmap ({@link #buildBlockBitmap}) — a status-word heuristic alone would sometimes
+     *  accept an object INTERIOR and the {@code +1} mark write would corrupt real data (a stored pointer
+     *  became odd and faulted the next dispatch). With the bitmap, mark writes only ever touch genuine
+     *  status words. */
+    private static boolean tryMark(long w)
+    {
+        if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L && isBlockBase(w))
+        {
+            long st = Magic.load64(w + 8L);
+            if ((st & 1L) == 0L)
+            {
+                Magic.store64(w + 8L, st + 1L);        // set mark bit
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Block-start bitmap: 1 bit per 8 bytes of core 0's arena (3 MiB at a fixed scratch address, above
+     *  the secondary stacks and below the heap cells). Rebuilt by each collection's pre-pass. */
+    static final long MARK_BITMAP = 0x03B0_0000L;
+
+    /** Pre-pass: walk the heap by status sizes (sound — every allocation carries an intact header) and
+     *  record each block base in the bitmap, so conservative probes can be verified exactly. */
+    private static void buildBlockBitmap(long stop)
+    {
+        long z = MARK_BITMAP;
+        long zEnd = MARK_BITMAP + 0x30_0000L;
+        while (z < zEnd)
+        {
+            Magic.store64(z, 0L);
+            z += 8L;
+        }
+        long o = Heap.BASE;
+        while (o < stop)
+        {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L || o + size > stop || o + size <= o)
+            {
+                o = stop;                              // corrupt: stop (matches the sweep's guard)
+            }
+            else
+            {
+                long idx = (o - Heap.BASE) >> 3;
+                long w = MARK_BITMAP + ((idx >> 6) << 3);
+                Magic.store64(w, Magic.load64(w) | (1L << (int) (idx & 63L)));
+                o += size;
+            }
+        }
+    }
+
+    private static boolean isBlockBase(long w)
+    {
+        long idx = (w - Heap.BASE) >> 3;
+        long word = MARK_BITMAP + ((idx >> 6) << 3);
+        return (Magic.load64(word) & (1L << (int) (idx & 63L))) != 0L;
     }
 
     /**
@@ -2387,6 +2488,11 @@ public final class VM
         Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
         Loader.loadWordCount();
 
+        // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
+        // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
+        Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
+        Loader.loadGcDemo();
+
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
         // and check frameSizeAt finds it in range and rejects a PC just past it.
@@ -2596,7 +2702,7 @@ public final class VM
     /** The self-hosting generation from the scratch sector (0 if uninitialised, -1 if no card). */
     private static int readGeneration()
     {
-        long buf = Heap.alloc(512);
+        long buf = Heap.allocData(512);
         if (!Emmc.readBlock(GEN_SECTOR, buf))
         {
             return -1;
@@ -2611,7 +2717,7 @@ public final class VM
     /** Persist {@code gen} into the scratch sector (magic + count). */
     private static boolean writeGeneration(int gen)
     {
-        long buf = Heap.alloc(512);                          // Heap.alloc zeroes the rest of the sector
+        long buf = Heap.allocData(512);                          // Heap.alloc zeroes the rest of the sector
         Magic.store32(buf, GEN_MAGIC);
         Magic.store32(buf + 4L, gen);
         return Emmc.writeBlock(GEN_SECTOR, buf);
@@ -2634,7 +2740,7 @@ public final class VM
         }
         long buf = materializeImage();
         long wlen = (len + 511L) / 512L * 512L;              // whole sectors
-        long chk = Heap.alloc((int) wlen);
+        long chk = Heap.allocData((int) wlen);
         if (!Fat32.writeKernel(buf, wlen) || !Fat32.readKernel(chk, wlen))
         {
             return false;
@@ -2659,8 +2765,8 @@ public final class VM
             return false;
         }
         long nbytes = (Fat32.kernelSize() + 511L) / 512L * 512L;   // whole sectors of the file
-        long w = Heap.alloc((int) nbytes);
-        long r = Heap.alloc((int) nbytes);
+        long w = Heap.allocData((int) nbytes);
+        long r = Heap.allocData((int) nbytes);
         long i = 0L;
         while (i < nbytes)
         {
@@ -2686,7 +2792,7 @@ public final class VM
     /** Whether the EMMC driver initialises and reads block 0 with a valid boot-sector signature. */
     private static boolean sdReadOk()
     {
-        long sd = Heap.alloc(512);
+        long sd = Heap.allocData(512);
         return Emmc.init() == 0
             && Emmc.readBlock(0L, sd)
             && Magic.load8(sd + 510L) == 0x55
@@ -2696,8 +2802,8 @@ public final class VM
     /** Whether a written scratch block reads back byte-identical (single-sector write round-trip). */
     private static boolean sdWriteOk()
     {
-        long w = Heap.alloc(512);
-        long r = Heap.alloc(512);
+        long w = Heap.allocData(512);
+        long r = Heap.allocData(512);
         int i = 0;
         while (i < 128)                                    // fill with a recognizable pattern
         {
@@ -2756,7 +2862,7 @@ public final class VM
     private static long materializeImage()
     {
         int endW = imageEndWord();
-        long buf = Heap.alloc((endW * 4 + 511) & ~511);      // padded to a whole sector (zeroed tail)
+        long buf = Heap.allocData((endW * 4 + 511) & ~511);      // padded to a whole sector (zeroed tail)
         int w = 0;
         while (w < endW)                                     // copy the whole running image (byte-identical)
         {
@@ -2898,7 +3004,7 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -2957,7 +3063,7 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -3019,7 +3125,7 @@ public final class VM
             return;
         }
         ifIface[ifCount] = utf8Copy(classOff);
-        ifTypeAddr[ifCount] = Heap.alloc(ObjectModel.TYPE_SIZE);   // zeroed: instanceSize/super/itableDir = 0
+        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE);   // zeroed: instanceSize/super/itableDir = 0
         ifCount += 1;
     }
 
@@ -3046,12 +3152,12 @@ public final class VM
             return;
         }
         byte[] name = utf8Copy(classOff);
-        long type = Heap.alloc(ObjectModel.TYPE_SIZE);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);       // Cell's super is Object (a root)
         int vsize = MetalClassModel.vtableSize(name);                  // builds the vtable scratch
-        long tib = Heap.alloc(ObjectModel.tibSize(vsize));
+        long tib = Heap.allocData(ObjectModel.tibSize(vsize));
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vsize)                                           // fill each placed vtable method's address
@@ -3088,7 +3194,7 @@ public final class VM
         {
             return 0L;
         }
-        long dir = Heap.alloc((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -3109,7 +3215,7 @@ public final class VM
     private static long buildItable(byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.alloc(n * ObjectModel.WORD);
+        long itab = Heap.allocData(n * ObjectModel.WORD);
         int slot = 0;
         while (slot < n)
         {
@@ -3316,7 +3422,7 @@ public final class VM
         clSize[0] = words.length;
         clWordOff[0] = 0;
 
-        long codeBuf = Heap.alloc(words.length * 4);
+        long codeBuf = Heap.allocData(words.length * 4);
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + words.length * 4L);
@@ -3377,7 +3483,7 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -3438,7 +3544,7 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
@@ -3497,9 +3603,9 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
-        excSlot = Heap.alloc(8);                            // the closure's in-flight-exception word
+        excSlot = Heap.allocData(8);                            // the closure's in-flight-exception word
         layoutClassRegions(codeBuf);
         boolean ok = patchNewAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
@@ -3743,10 +3849,10 @@ public final class VM
             cur += gmSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         collectStaticsG();
-        long staticsBuf = Heap.alloc(stCount * 8);
+        long staticsBuf = Heap.allocData(stCount * 8);
         int s = 0;
         while (s < stCount)
         {
@@ -3756,7 +3862,7 @@ public final class VM
             s += 1;
         }
 
-        excSlot = Heap.alloc(8);                            // the closure's in-flight-exception word
+        excSlot = Heap.allocData(8);                            // the closure's in-flight-exception word
         layoutClassRegionsG(codeBuf);
         boolean ok = patchCrossAndWrite(codeBuf);
         Heap.publishCode(codeBuf, codeBuf + cur * 4L);
@@ -3795,7 +3901,7 @@ public final class VM
             return;
         }
         int total = 2 + n + 3;                              // prologue(2) + n BLs + epilogue(3)
-        long initBuf = Heap.alloc(total * 4);
+        long initBuf = Heap.allocData(total * 4);
         int frame = A64Enc.align16(8);                      // LR only
         int w = 0;
         Magic.store32(initBuf + w * 4L, A64Enc.subImm(31, 31, frame));
@@ -5340,7 +5446,7 @@ public final class VM
             return;
         }
         ifIface[ifCount] = name;
-        ifTypeAddr[ifCount] = Heap.alloc(ObjectModel.TYPE_SIZE);   // zeroed
+        ifTypeAddr[ifCount] = Heap.allocData(ObjectModel.TYPE_SIZE);   // zeroed
         ifCount += 1;
     }
 
@@ -5366,7 +5472,7 @@ public final class VM
         {
             return;   // already laid out (or an interface, whose Type is built in pass 1)
         }
-        long type = Heap.alloc(ObjectModel.TYPE_SIZE);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
                       ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(name)));
         // superType: 0 for a root super (chain ends), else the laid-out super's Type. Heap.alloc
@@ -5376,7 +5482,7 @@ public final class VM
         int si = sup == null || MetalClassModel.isRoot(sup) ? -1 : findTibClassBytes(sup);
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, si >= 0 ? nbTypeAddr[si] : 0L);
         int vs = MetalClassModel.vtableSize(name);
-        long tib = Heap.alloc(ObjectModel.tibSize(vs));
+        long tib = Heap.allocData(ObjectModel.tibSize(vs));
         Magic.store64(tib + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT), type);
         int slot = 0;
         while (slot < vs)
@@ -5414,7 +5520,7 @@ public final class VM
         {
             return 0L;
         }
-        long dir = Heap.alloc((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
+        long dir = Heap.allocData((impls + 1) * ObjectModel.ITABLE_ENTRY_SIZE);   // +1 zeroed sentinel
         int e = 0;
         k = 0;
         while (k < ifCount)
@@ -5435,7 +5541,7 @@ public final class VM
     private static long buildItableG(byte[] clsName, byte[] iface, long codeBuf)
     {
         int n = MetalClassModel.interfaceMethodCount(iface);
-        long itab = Heap.alloc(n * ObjectModel.WORD);
+        long itab = Heap.allocData(n * ObjectModel.WORD);
         int slot = 0;
         while (slot < n)
         {
@@ -5756,7 +5862,7 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long buf = Heap.alloc(cur * 4);
+        long buf = Heap.allocData(cur * 4);
 
         // patch each recorded call to its callee's base, then write the words to the buffer.
         boolean ok = patchAndWrite(buf);
@@ -6019,11 +6125,11 @@ public final class VM
             cur += clSize[p];
             p += 1;
         }
-        long codeBuf = Heap.alloc(cur * 4);
+        long codeBuf = Heap.allocData(cur * 4);
 
         // collect distinct statics and give each a zeroed 8-byte slot.
         collectStatics();
-        long staticsBuf = Heap.alloc(stCount * 8);
+        long staticsBuf = Heap.allocData(stCount * 8);
         int s = 0;
         while (s < stCount)
         {

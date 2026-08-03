@@ -44,11 +44,18 @@ public final class Heap
     public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
 
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
+    static int  gcPressure;            // collections triggered by allocation pressure (Heap.alloc slow path)
 
     /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from 256 MiB up. */
     static long arenaBase(int core)
     {
         return core == 0 ? BASE : 0x1000_0000L + (long) (core - 1) * 0x0400_0000L;
+    }
+
+    /** End of core {@code c}'s arena: core 0 runs up to the secondaries' base; each secondary has 64 MiB. */
+    static long arenaLimit(int core)
+    {
+        return core == 0 ? 0x1000_0000L : arenaBase(core) + 0x0400_0000L;
     }
 
     /** Seed every core's bump pointer + free list. Call once, early in boot, before any {@code new}. */
@@ -100,42 +107,86 @@ public final class Heap
         Magic.isb();                           // refetch past this point
     }
 
-    /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump. */
+    /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump; on core 0, an exhausted
+     *  arena triggers a collection ({@link Magic#gc}) and one retry before halting out-of-memory. */
     public static long alloc(int size)
     {
+        // The free-list unlink and the bump-pointer load..store below MUST NOT be preempted: the timer
+        // scheduler switches tasks on this core, and a task switched in mid-alloc allocates the SAME
+        // address (a lost bump) — overlapping objects and size-walk holes that break the GC's heap scan.
+        // Save/restore the I-bit so a caller that already masked (e.g. the collector) stays masked.
+        long daif = Magic.readDaif();
+        Magic.disableIrq();
+        long p = allocLocked(size);
+        if ((daif & 0x80L) == 0L)
+        {
+            Magic.enableIrq();
+        }
+        return p;
+    }
+
+    private static long allocLocked(int size)
+    {
         int aligned = (size + 7) & -8;
+        if (aligned < ObjectModel.HEADER_SIZE)
+        {
+            // Never carve a block smaller than the {TIB, status} header: an 8-byte block's status word
+            // (at +8) lies OUTSIDE its own extent, so the NEXT allocation starts at +8 and its header
+            // zeroing clobbers this block's status to 0 -- which breaks the GC's walk-by-size heap scan
+            // (it stops at the first size-0 status and sweeps nothing beyond).
+            aligned = ObjectModel.HEADER_SIZE;
+        }
         int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
         long freeCell = FREE_CELL + core * 8L;
         long ptrCell = PTR_CELL + core * 8L;
-        long prev = 0L;
-        long f = Magic.load64(freeCell);
-        while (f != 0L)                                     // first fit in this core's free list
+        int attempt = 0;
+        while (attempt < 2)
         {
-            long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
-            if (fsize >= aligned)
+            long prev = 0L;
+            long f = Magic.load64(freeCell);
+            while (f != 0L)                                 // first fit in this core's free list
             {
-                long next = Magic.load64(f);
-                if (prev == 0L)
+                long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                if (fsize >= aligned)
                 {
-                    Magic.store64(freeCell, next);
+                    long next = Magic.load64(f);
+                    if (prev == 0L)
+                    {
+                        Magic.store64(freeCell, next);
+                    }
+                    else
+                    {
+                        Magic.store64(prev, next);
+                    }
+                    lastFromFreeList = 1;
+                    zeroPayload(f, aligned);                // Java requires 0/default fields+elements
+                    return f;                               // status already holds the block size
                 }
-                else
-                {
-                    Magic.store64(prev, next);
-                }
-                lastFromFreeList = 1;
-                zeroPayload(f, aligned);                    // Java requires 0/default fields+elements
-                return f;                                   // status already holds the block size
+                prev = f;
+                f = Magic.load64(f);
             }
-            prev = f;
-            f = Magic.load64(f);
+            long p = Magic.load64(ptrCell);
+            if (p + aligned <= arenaLimit(core))
+            {
+                Magic.store64(ptrCell, p + aligned);
+                Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
+                lastFromFreeList = 0;
+                zeroPayload(p, aligned);
+                return p;
+            }
+            if (core != 0 || attempt == 1)
+            {
+                break;                                      // secondaries are never collected; core 0 tried once
+            }
+            gcPressure += 1;                                // arena full: collect (Magic.gc spills x19..x28 so
+            Magic.gc();                                     //   callee-saved refs are on the scannable stack)
+            attempt += 1;
         }
-        long p = Magic.load64(ptrCell);
-        Magic.store64(ptrCell, p + aligned);
-        Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
-        lastFromFreeList = 0;
-        zeroPayload(p, aligned);
-        return p;
+        board.bcm2711.Uart.write(Magic.bytes("heap OOM\n"));
+        while (true)
+        {
+            Magic.wfe();                                    // out of memory even after a collection: halt
+        }
     }
 
     /**
@@ -157,6 +208,20 @@ public final class Heap
             Magic.store64(z, 0L);
             z += 8L;
         }
+    }
+
+    /**
+     * Allocate a RAW data buffer whose payload legally occupies its first words (on-metal Types, TIBs,
+     * imaps, itable directories, statics blocks): the payload starts one {TIB, status} header past the
+     * block base, so the header stays intact and the GC's walk-by-size heap scan stays sound — a raw
+     * struct that stored e.g. {@code superType = 0} at +8 used to zero its own status word and stop the
+     * sweep dead at that block. All references naturally hold the PAYLOAD address; {@code VM.markRange}
+     * probes {@code w - 16} so a payload pointer marks its block, and the trace phase scans marked
+     * blocks from +16 — exactly the payload — so refs inside these structs keep their targets alive.
+     */
+    public static long allocData(int size)
+    {
+        return alloc(size + ObjectModel.HEADER_SIZE) + ObjectModel.HEADER_SIZE;
     }
 
     /** Allocate an array of {@code length} elements of {@code elemSize} bytes. */

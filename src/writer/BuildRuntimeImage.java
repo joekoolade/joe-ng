@@ -213,6 +213,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.reflectDemoBytes", "vm/VM.reflectDemoLen", "demo/ReflectDemo",                        registry.rawBytes("demo/ReflectDemo"));
         // Real-program milestone: WordCount from main(String[]).
         ib.addBlob("vm/VM.wordCountBytes",   "vm/VM.wordCountLen",   "demo/WordCount",                          registry.rawBytes("demo/WordCount"));
+        // GC milestone: allocation churn far beyond the arena size.
+        ib.addBlob("vm/VM.gcDemoBytes",      "vm/VM.gcDemoLen",      "demo/GcDemo",                             registry.rawBytes("demo/GcDemo"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

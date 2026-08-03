@@ -770,6 +770,35 @@ public final class Loader
         }
     }
 
+    /** The GC milestone: {@code demo/GcDemo} churns ~640 MB through the ~192 MB arena — it only completes
+     *  if allocation pressure triggers collections and freed blocks are reused. Prints the evidence after. */
+    static void loadGcDemo()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // Integer.toString for the int concats
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.gcDemoBytes, (int) VM.gcDemoLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.gcDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        loadAll();
+        seedSystemStreams();                            // the demo prints via System.out (M2 overlay)
+        Heap.gcPressure = 0;                            // count only THIS demo's collections
+        VM.gcLog = 1;                                   // per-collection evidence (walked/marked/freed/bytes)
+        long buf = globalMethodBuf(Magic.bytes("demo/GcDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+        Uart.write(Magic.bytes("  gc: collections="));
+        VM.printDec(Heap.gcPressure);
+        Uart.write(Magic.bytes(" lastReclaimed="));
+        VM.printHex(VM.reclaimed);
+        Uart.putc(0x0A);
+    }
+
     /** M4: Thread identity + Class reflection — {@code demo/ReflectDemo} (guest Thread/Class overlays,
      *  currentThread via {@code VM.taskThreadObj}, getName/isInstance/superclass natives). */
     static void loadReflect()
@@ -939,6 +968,8 @@ public final class Loader
                 Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
             }
         }
+        litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
+        litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
         rgBase = new long[MAXREG];
         rgClassOff = new int[MAXREG];
         rgNameOff = new int[MAXREG];
@@ -2321,7 +2352,7 @@ public final class Loader
         gifCount = islot;                               // total: inherited + own
         gvCount = 0;                                    // no vtable unless parseVtable runs
         gMethodsStart = p;                              // methods_count follows the fields
-        gStatics = Heap.alloc(slot * 8 + 8);
+        gStatics = Heap.allocData(slot * 8 + 8);
         int z = 0;
         while (z < slot)
         {
@@ -2589,7 +2620,7 @@ public final class Loader
     {
         if (gExcSlot == 0L)
         {
-            gExcSlot = Heap.alloc(8);
+            gExcSlot = Heap.allocData(8);
         }
         return gExcSlot;
     }
@@ -3003,7 +3034,7 @@ public final class Loader
             registerInterface();                        // give its methods global itable indices
             // Give the interface a Type and register it, so implementors' itable
             // directories can key on it and the core's interfaceType resolves (M5.4.e).
-            gType = Heap.alloc(24);
+            gType = Heap.allocData(24);
             Magic.store64(gType + 0, 0L);               // instanceSize (not instantiated)
             Magic.store64(gType + 8, 0L);               // superType
             Magic.store64(gType + 16, 0L);              // no itableDir
@@ -3825,7 +3856,7 @@ public final class Loader
      */
     private static long buildImap()
     {
-        long imap = Heap.alloc(MAXIFM * 8);
+        long imap = Heap.allocData(MAXIFM * 8);
         int g = 0;
         while (g < MAXIFM)
         {
@@ -4048,10 +4079,10 @@ public final class Loader
         // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
         // same way they read image objects (M5.4.e). The itableDir slot currently holds
         // the flat imap; step 2 replaces it with a proper itable directory.
-        gType = Heap.alloc(24);
+        gType = Heap.allocData(24);
         Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
         Magic.store64(gType + 8, sr >= 0 ? clType[sr] : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
-        gTib = Heap.alloc((1 + gvCount) * 8);
+        gTib = Heap.allocData((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type (slots filled by fillTib)
     }
 
@@ -4085,7 +4116,7 @@ public final class Loader
         {
             return 0L;
         }
-        long dir = Heap.alloc((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
+        long dir = Heap.allocData((n + 1) * 16);             // {interfaceType@0, itable@8} + sentinel
         int k = 0;
         while (k < n)
         {
@@ -4650,7 +4681,7 @@ public final class Loader
     private static long finishLambdaClass(long thunk, long ifaceType, int ifaceSlot, int nc)
     {
         // imap: the flat interface-method table, indexed by global SAM slot -> the thunk.
-        long imap = Heap.alloc(MAXIFM * 8);
+        long imap = Heap.allocData(MAXIFM * 8);
         int j = 0;
         while (j < MAXIFM)
         {
@@ -4659,18 +4690,18 @@ public final class Loader
         }
         Magic.store64(imap + ifaceSlot * 8L, thunk);
         // itable directory: { interfaceType, imap } + a zero sentinel.
-        long dir = Heap.alloc(2 * 16);
+        long dir = Heap.allocData(2 * 16);
         Magic.store64(dir + 0L, ifaceType);
         Magic.store64(dir + 8L, imap);
         Magic.store64(dir + 16L, 0L);
         Magic.store64(dir + 24L, 0L);
         // Type { instanceSize, superType=Object(0), itableDir }.
-        long type = Heap.alloc(24);
+        long type = Heap.allocData(24);
         Magic.store64(type + 0L, 16 + nc * 8);
         Magic.store64(type + 8L, 0L);
         Magic.store64(type + 16L, dir);
         // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
-        long tib = Heap.alloc(8);
+        long tib = Heap.allocData(8);
         Magic.store64(tib + 0L, type);
         return tib;
     }
@@ -4783,12 +4814,12 @@ public final class Loader
     /** Allocate an array Type {tag|elemSize, super=Object, itableDir=0, elementType} + a 1-word TIB; return the TIB. */
     private static long makeArrayTib(int elemSize, long elementType)
     {
-        long type = Heap.alloc(ObjectModel.ARRAY_TYPE_SIZE);
+        long type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET, ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // arr instanceof Object
         Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);            // Cloneable/Serializable: later
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
-        long tib = Heap.alloc(8);
+        long tib = Heap.allocData(8);
         Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
         return tib;
     }
@@ -5067,11 +5098,39 @@ public final class Loader
         long tib = stringTib();
         if (tib == 0L)
         {
-            return bytes;                               // String not loaded: a raw byte[]
+            return anchorLiteral(bytes);                // String not loaded: a raw byte[]
         }
         long obj = Heap.alloc(stringSize());
         Magic.store64(obj + 0L, tib);                   // TIB
         Magic.store64(obj + 16L, bytes);                // value field (offset 16)
+        return anchorLiteral(obj);
+    }
+
+    // GC ROOT for interned literals: a JIT'd `ldc "..."` bakes the literal's heap address into code
+    // IMMEDIATES only (movz/movk), which the conservative collector cannot see — so without an anchor a
+    // collection would sweep every string literal not currently live on a stack, and the next execution of
+    // that ldc would push a freed (re-zeroed / reused) object. Every interned literal is therefore also
+    // recorded here; the array is reachable from this static -> the image statics root -> its body is
+    // traced -> the literals stay marked. Literals live until the next batch rewind reclaims them wholesale.
+    private static long[] litAnchor;
+    private static int litAnchorN;
+
+    /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */
+    private static long anchorLiteral(long obj)
+    {
+        if (litAnchor == null || litAnchorN == litAnchor.length)
+        {
+            long[] grown = new long[litAnchor == null ? 256 : litAnchor.length * 2];
+            int i = 0;
+            while (i < litAnchorN)
+            {
+                grown[i] = litAnchor[i];
+                i += 1;
+            }
+            litAnchor = grown;
+        }
+        litAnchor[litAnchorN] = obj;
+        litAnchorN += 1;
         return obj;
     }
 

@@ -36,8 +36,8 @@ public final class Fat32
      */
     public static boolean mount()
     {
-        fatBuf = Heap.alloc(512);
-        long mbr = Heap.alloc(512);
+        fatBuf = Heap.allocData(512);
+        long mbr = Heap.allocData(512);
         if (!Emmc.readBlock(0L, mbr))
         {
             return false;
@@ -48,7 +48,7 @@ public final class Fat32
             return false;                                      // not a FAT32 partition
         }
         long partStart = u32(mbr, 446 + 8);                    // partition 1 start LBA
-        long bpb = Heap.alloc(512);
+        long bpb = Heap.allocData(512);
         if (!Emmc.readBlock(partStart, bpb))
         {
             return false;
