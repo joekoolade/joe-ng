@@ -207,7 +207,29 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.streamBytes",      "vm/VM.streamLen",      "demo/Stream",                             registry.rawBytes("demo/Stream"));
         ib.addBlob("vm/VM.binaryOpBytes",    "vm/VM.binaryOpLen",    "java/util/function/BinaryOperator",       registry.rawBytes("java/util/function/BinaryOperator"));
         ib.addBlob("vm/VM.biConsumerBytes",  "vm/VM.biConsumerLen",  "java/util/function/BiConsumer",           registry.rawBytes("java/util/function/BiConsumer"));
+        // M3: java.io demo (guest FileInputStream overlay over the embedded RAMFS).
+        ib.addBlob("vm/VM.fileDemoBytes",    "vm/VM.fileDemoLen",    "demo/FileDemo",                           registry.rawBytes("demo/FileDemo"));
+        embedRamfs(ib);
         return ib.build(ENTRY);
+    }
+
+    /** M3: bake the repo's {@code ramfs/} tree into the image's read-only file table, each file keyed
+     *  by its absolute path (e.g. {@code ramfs/etc/motd} -> {@code "/etc/motd"}). */
+    private static void embedRamfs(ImageBuilder ib) throws IOException
+    {
+        Path root = Path.of("ramfs");
+        if (!Files.isDirectory(root))
+        {
+            return;
+        }
+        try (var paths = Files.walk(root))
+        {
+            for (Path p : (Iterable<Path>) paths.filter(Files::isRegularFile).sorted()::iterator)
+            {
+                String name = "/" + root.relativize(p).toString().replace(File.separatorChar, '/');
+                ib.addFile(name, Files.readAllBytes(p));
+            }
+        }
     }
 
     /** Register every {@code .class} under {@code dir}, keyed by its internal name. */

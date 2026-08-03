@@ -1193,6 +1193,7 @@ public final class VM
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
+        if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
 
         installSchedVectors();
 
@@ -1226,6 +1227,42 @@ public final class VM
      * into its inline backtrace (bt0..bt7 @ self+16) by {@link #unwind} at throw time. Names each frame's method
      * via {@link Loader#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
      */
+    /**
+     * M3 RAMFS: resolve a guest {@code java/lang/String} path to its embedded file-table entry
+     * ({nameAddr, nameLen, bytesAddr, bytesLen}), or 0 if absent. The native behind the guest
+     * {@code java/io/FileInputStream.open0(String)} overlay (wired in {@code Loader.nativeBuf});
+     * the overlay then reads the content directly via {@code Magic.load8/load64} on the entry.
+     */
+    static long fileOpen(long nameRef)
+    {
+        if (nameRef <= 0x1000L || fileDir == 0L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no RAMFS -> 0
+        }
+        long arr = strBytes(nameRef);                      // String -> its value byte[] (len@+16, data@+24)
+        long len = Magic.load64(arr + 16L);
+        int i = 0;
+        while (i < (int) fileCount)
+        {
+            long e = fileDir + i * 32L;
+            if (Magic.load64(e + 8L) == len)
+            {
+                long na = Magic.load64(e);                 // path bytes
+                int k = 0;
+                while (k < (int) len && Magic.load8(na + k) == Magic.load8(arr + 24L + k))
+                {
+                    k += 1;
+                }
+                if (k == (int) len)
+                {
+                    return e;
+                }
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     static void printStackTrace(long self)
     {
         if (self <= 0x1000L)
@@ -1796,9 +1833,13 @@ public final class VM
     static long integerCacheBytes, integerCacheLen; // java/lang/Integer$IntegerCache (statics read 0, clinit skipped)
     static long boxingDemoBytes, boxingDemoLen;     // demo/BoxingDemo (Integer.valueOf boxing via HashMap)
     static long strOpsDemoBytes, strOpsDemoLen;     // demo/StrOpsDemo (String indexOf/substring)
+    static long fileDemoBytes, fileDemoLen;         // demo/FileDemo (M3: FileInputStream over the RAMFS)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
+    // ----- M3: embedded read-only RAMFS -- file table, same directory shape as the class table -----
+    static long fileDir;                // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
+    static long fileCount;              // number of files
     // Addresses of the runtime helpers the shared baseline compiler calls, stashed by
     // the writer so the on-metal JIT (via MetalSymbols) can BL them. Indexed to match
     // the ids in compiler/Symbols: heapAlloc=0, allocArray=1, gcCollect=2, instanceOf=3,
@@ -1835,6 +1876,7 @@ public final class VM
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
+    static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
@@ -2277,6 +2319,10 @@ public final class VM
         // String indexOf/substring on the real-shaped mini String.
         Uart.write(Magic.bytes("String indexOf/substring (demand-loaded):\n"));
         Loader.loadStrOps();
+
+        // M3: java.io -- the guest FileInputStream overlay reading the embedded read-only RAMFS.
+        Uart.write(Magic.bytes("java.io FileInputStream (embedded RAMFS):\n"));
+        Loader.loadFileIo();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry

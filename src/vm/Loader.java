@@ -718,6 +718,28 @@ public final class Loader
         {
             long unused = Magic.call0(buf);
         }
+        VM.unwindLog = 0;                               // scoped to this batch: later demos throw EXPECTED exceptions
+    }
+
+    /** M3: java.io on the embedded read-only RAMFS — the guest {@code java/io/FileInputStream} overlay
+     *  (open0 -> {@code VM.fileOpen}; reads via Magic loads) driven by {@code demo/FileDemo}. */
+    static void loadFileIo()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // Integer.toString for int concat in the demo output
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.fileDemoBytes, (int) VM.fileDemoLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.fileDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        loadAll();
+        long buf = globalMethodBuf(Magic.bytes("demo/FileDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
     }
 
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
@@ -3502,6 +3524,10 @@ public final class Loader
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Throwable")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/io/FileInputStream")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
         {

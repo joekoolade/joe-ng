@@ -38,6 +38,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     private final ClassRegistry registry;
     private final Vec<Blob> blobs = new Vec<>();
+    private final Vec<RFile> files = new Vec<>();     // M3: embedded RAMFS files
     /** Class-model queries behind a seam; the metal writer swaps in a registry-backed impl (§M5.5c). */
     private final ClassModel model = new SeedClassModel(this);
 
@@ -45,6 +46,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
      *  {@code className} is the class those bytes are (also folded into the class table so the
      *  metal writer can build from it), or {@code null} for a non-class blob. */
     private record Blob(String addrKey, String lenKey, String className, byte[] bytes) {}
+
+    /** M3: an embedded read-only RAMFS file — laid out like the class table, as a directory of
+     *  {nameAddr, nameLen, bytesAddr, bytesLen} entries ({@code vm/VM.fileDir}/{@code fileCount})
+     *  followed by the path + content bytes. {@code VM.fileOpen} resolves a path to its entry. */
+    private record RFile(String path, byte[] bytes) {}
 
     public ImageBuilder(ClassRegistry registry)
     {
@@ -57,6 +63,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     public void addBlob(String addrKey, String lenKey, String className, byte[] bytes)
     {
         blobs.add(new Blob(addrKey, lenKey, className, bytes));
+    }
+
+    /** M3: embed a read-only RAMFS file at {@code path} (e.g. {@code "/etc/motd"}). */
+    public void addFile(String path, byte[] bytes)
+    {
+        files.add(new RFile(path, bytes));
     }
 
     @Override public ClassFile resolve(String owner)
@@ -285,6 +297,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             classBytesWord[i] = cur;
             cur += align8Words(registry.rawBytes(classNames.get(i)).length);
         }
+        // M3: RAMFS file table — same {nameAddr, nameLen, bytesAddr, bytesLen} shape as the class table,
+        // then each file's path bytes and content bytes. VM.fileOpen walks the directory by path.
+        int fileCount = files.size();
+        int fileDirWord = cur;
+        cur += fileCount * CLASS_ENTRY_WORDS;
+        int[] fileNameWord = new int[fileCount];
+        int[] fileBytesWord = new int[fileCount];
+        for (int i = 0; i < fileCount; i++)
+        {
+            fileNameWord[i] = cur;
+            cur += align8Words(files.get(i).path().length());
+            fileBytesWord[i] = cur;
+            cur += align8Words(files.get(i).bytes().length);
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -484,6 +510,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNpe()J",         "vm/VM.newNpeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int b = 0; b < blobs.size(); b++)
         {
@@ -507,6 +534,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         fillStatic(image, staticWord, "vm/VM.classDir",   addr(classDirWord));
         fillStatic(image, staticWord, "vm/VM.classCount", classCount);
+        // M3: RAMFS file table — path bytes + content bytes, then the directory pointing at them.
+        for (int i = 0; i < fileCount; i++)
+        {
+            byte[] name = asciiBytes(files.get(i).path());
+            byte[] bytes = files.get(i).bytes();
+            writeBytes(image, fileNameWord[i], name);
+            writeBytes(image, fileBytesWord[i], bytes);
+            int e = fileDirWord + i * CLASS_ENTRY_WORDS;
+            writeLong(image, e,     addr(fileNameWord[i]));
+            writeLong(image, e + 2, name.length);
+            writeLong(image, e + 4, addr(fileBytesWord[i]));
+            writeLong(image, e + 6, bytes.length);
+        }
+        fillStatic(image, staticWord, "vm/VM.fileDir",   addr(fileDirWord));
+        fillStatic(image, staticWord, "vm/VM.fileCount", fileCount);
 
         // --- interned string literals as byte[] objects ([null TIB][status][length][bytes]) ---
         for (int _s11 = 0; _s11 < strings.size(); _s11++)
