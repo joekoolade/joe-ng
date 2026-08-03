@@ -2,6 +2,7 @@ package demo;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedList;
 import java.util.List;
 import magic.Magic;
 
@@ -73,6 +74,34 @@ public class ListDemo
         coll.remove("y");                                                        // Collection.remove(Object)
         Magic.printStr("after remove(\"y\"): size=" + coll.size()
                 + " contains(\"y\")=" + (coll.contains("y") ? 1 : 0) + "\n");    // 2,0
+
+        // subList view (#34): a live window over the backing ArrayList (java.util.ArrayList$SubList). get/size
+        // read through to the parent. Now that the mini List overlay is retired, subList host-compiles.
+        List base = new ArrayList();
+        base.add("p");
+        base.add("q");
+        base.add("r");
+        base.add("s");
+        List sub = base.subList(1, 3);                                           // [q, r]
+        Magic.printStr("subList(1,3).size=" + sub.size()
+                + " sub[0]=" + (String) sub.get(0)
+                + " sub[1]=" + (String) sub.get(1) + "\n");                      // 2, q, r
+
+        // stock LinkedList (#34): a SECOND List impl (mini LinkedList retired) -> the same List-typed call
+        // sites (totalLen / enhanced-for) dispatch polymorphically across ArrayList and stock LinkedList.
+        List ll = new LinkedList();
+        ll.add("aa");
+        ll.add("bbb");
+        ll.add("c");
+        Magic.printStr("linkedList size=" + ll.size()
+                + " get(1)=" + (String) ll.get(1)                               // bbb
+                + " totalLenViaIface=" + totalLen(ll) + "\n");                  // 2+3+1 = 6
+        int llCount = 0;
+        for (Object o : ll)                                                     // LinkedList$ListItr via Iterable
+        {
+            llCount += 1;
+        }
+        Magic.printStr("linkedList forEach count=" + llCount + "\n");           // 3
     }
 
     /** Collection-typed param: the enhanced-for emits invokeinterface Collection.iterator (via Iterable). */

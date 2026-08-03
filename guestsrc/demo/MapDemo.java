@@ -38,5 +38,38 @@ public class MapDemo
         Magic.printStr("after remove: one=" + (String) map.get("one")
                 + " three=" + (String) map.get("three")
                 + " removeAbsent=" + (map.remove("nope") == null ? 1 : 0) + "\n");             // 1, 3, 1
+
+        // views (#34): iterate keySet / values / entrySet (stock HashMap$KeySet / Values / EntrySet + their
+        // iterators; entrySet reads Map.Entry.getKey/getValue off the HashMap$Node). Enhanced-for =
+        // invokeinterface iterator()/hasNext()/next() on each view. (Now that the mini Map overlay is retired,
+        // the demo host-compiles against stock's full Map API -- entrySet/Entry.)
+        Map m2 = new HashMap();
+        m2.put("a", "1");
+        m2.put("b", "2");
+        m2.put("c", "3");
+        int ks = 0;
+        for (Object k : m2.keySet())
+        {
+            ks += 1;
+        }
+        int vs = 0;
+        for (Object v : m2.values())
+        {
+            vs += 1;
+        }
+        int es = 0;
+        boolean pairsOk = true;
+        for (Object o : m2.entrySet())
+        {
+            Map.Entry en = (Map.Entry) o;
+            Object v = m2.get(en.getKey());                 // getKey round-trips; getValue matches the map
+            if (v == null || !v.equals(en.getValue()))
+            {
+                pairsOk = false;
+            }
+            es += 1;
+        }
+        Magic.printStr("keySet=" + ks + " values=" + vs + " entrySet=" + es
+                + " pairsOk=" + (pairsOk ? 1 : 0) + "\n");                                     // 3,3,3,1
     }
 }
