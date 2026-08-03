@@ -1748,6 +1748,28 @@ public final class VM
     {
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
+        // Stale-root hygiene: reap dead-parked tasks BEFORE marking. A task that ran taskExit (BLOCKED on
+        // the reserved dead semaphore) can never be rescheduled -- pickNext skips BLOCKED tasks -- so its
+        // 32 KB heap stack, saved context, and guest Thread object are garbage; as roots they retained
+        // everything their final frames happened to reference. Clearing the table entries makes the stack
+        // object unreachable, so THIS collection sweeps it.
+        int reaped = 0;
+        if (taskState != null)
+        {
+            int t = 1;                                // task 0 is the boot flow; it never exits
+            while (t < taskCount)
+            {
+                if (taskState[t] == TASK_BLOCKED && taskWaitOn[t] == 3 && taskStackBase[t] != 0L)
+                {
+                    taskStackBase[t] = 0L;
+                    taskSp[t] = 0L;
+                    taskThreadObj[t] = 0L;
+                    taskState[t] = TASK_EMPTY;
+                    reaped += 1;
+                }
+                t += 1;
+            }
+        }
         buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
         if (taskStackBase != null && curTask != 0 && taskStackBase[curTask] != 0L)
@@ -1830,6 +1852,8 @@ public final class VM
             printHex(freedN);
             Uart.write(Magic.bytes(" bytes="));
             printHex(reclaimed);
+            Uart.write(Magic.bytes(" reaped="));
+            printHex(reaped);                          // dead-parked tasks whose stacks this collection freed
             Uart.write(Magic.bytes(" stopAt="));
             printHex(stoppedAt);                       // non-zero = the size walk hit a corrupt status
             Uart.write(Magic.bytes("]\n"));

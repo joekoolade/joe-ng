@@ -1015,6 +1015,19 @@ public final class Loader
                 }
                 Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over the dead code
                 Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
+                // Stale-root hygiene: a still-registered task Thread from a RECLAIMED batch (e.g. a sleeper
+                // that never exited) now points at rewound memory -- as a conservative GC root it would
+                // falsely retain whatever the NEXT batch allocates at that address. Its object is gone
+                // either way; currentThread() lazily re-wraps if such a task ever asks again.
+                int tt = 0;
+                while (tt < VM.taskCount)
+                {
+                    if (VM.taskThreadObj[tt] >= demandHeapMark)
+                    {
+                        VM.taskThreadObj[tt] = 0L;
+                    }
+                    tt += 1;
+                }
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
