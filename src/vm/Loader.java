@@ -799,6 +799,18 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
+    /** Evidence line for the code-arena rewind: cur (mark + one batch) far below high (max batch ever). */
+    static void printCodeArena()
+    {
+        Uart.write(Magic.bytes("code arena: mark="));
+        VM.printHex(codeHeapMark);
+        Uart.write(Magic.bytes(" cur="));
+        VM.printHex(Magic.load64(Heap.CODE_PTR_CELL));
+        Uart.write(Magic.bytes(" high="));
+        VM.printHex(codeHeapHigh);
+        Uart.putc(0x0A);
+    }
+
     /** M4: Thread identity + Class reflection — {@code demo/ReflectDemo} (guest Thread/Class overlays,
      *  currentThread via {@code VM.taskThreadObj}, getName/isInstance/superclass natives). */
     static void loadReflect()
@@ -908,6 +920,9 @@ public final class Loader
     private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
     private static long demandHeapHigh;                 // high-water: the largest extent any batch reached above the mark
     private static int reclaimArmed;                    // 1 after the philosophers demo (see armHeapReclaim)
+    private static long codeHeapMark;                   // code-arena level at arm time (boot stubs live below)
+    private static long codeHeapHigh;                   // highest code level any batch reached (re-zero bound)
+    private static final long CODE_ZERO_SPAN = 0x0080_0000L;   // pre-zero 8 MiB above the code mark (cold DRAM)
     /** Span pre-zeroed above the mark so cold-boot DRAM garbage can't wild-branch a tall batch (see resetLoader).
      *  Comfortably exceeds the ~18 MiB per-batch bl-range budget; clamped below core 1's arena (0x1000_0000). */
     private static final long DEMAND_ZERO_SPAN = 0x0180_0000L;   // 24 MiB
@@ -932,6 +947,22 @@ public final class Loader
             if (demandHeapMark == 0L)
             {
                 demandHeapMark = Magic.load64(Heap.PTR_CELL);   // watermark: heap level after the philosophers demo
+                // Code-arena watermark, captured at the same moment: everything below it (the boot-time
+                // vector table + scheduler switch stubs, the original run-trampoline, the pre-mark demos'
+                // code) is permanent; everything a later batch compiles above it dies with the batch --
+                // the demand model already assumes nothing but the image survives across batches (the data
+                // rewind kills a batch's objects), so its code is dead too. Pre-zero a span above the mark
+                // for the same cold-DRAM reason as the data heap.
+                codeHeapMark = Magic.load64(Heap.CODE_PTR_CELL);
+                long cz = codeHeapMark;
+                long czEnd = codeHeapMark + CODE_ZERO_SPAN;
+                if (czEnd > Heap.CODE_LIMIT) { czEnd = Heap.CODE_LIMIT; }
+                while (cz < czEnd)
+                {
+                    Magic.store64(cz, 0L);
+                    cz += 8L;
+                }
+                codeHeapHigh = czEnd;
                 // Pre-zero a generous span above the mark ONCE. The else-branch below only re-zeros up to the
                 // PRIOR batches' high-water, so the FIRST batch to grow taller than every previous one would
                 // otherwise read never-touched DRAM in its top region -- at cold power-on that's arbitrary
@@ -966,6 +997,24 @@ public final class Loader
                 }
                 Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
                 Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
+                // Code-arena rewind (same batch-death model): zero every code byte the previous batches wrote
+                // above the mark -- a stale JIT buffer executed through a dangling pointer is the worst kind of
+                // wild branch (zeros decode as a caught udf instead) -- flush the zeroes past the I-cache, and
+                // rewind the bump. A batch that spawns threads must (already) rebuild the run-trampoline; its
+                // compiled methods die with its registries exactly like its heap objects.
+                long ocPtr = Magic.load64(Heap.CODE_PTR_CELL);
+                if (ocPtr > codeHeapHigh)
+                {
+                    codeHeapHigh = ocPtr;
+                }
+                long cz = codeHeapMark;
+                while (cz < codeHeapHigh)
+                {
+                    Magic.store64(cz, 0L);
+                    cz += 8L;
+                }
+                Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over the dead code
+                Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind

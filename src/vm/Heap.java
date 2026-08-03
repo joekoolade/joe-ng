@@ -81,6 +81,14 @@ public final class Heap
     {
         int aligned = (size + 7) & -8;
         long p = Magic.load64(CODE_PTR_CELL);
+        if (p + aligned > CODE_LIMIT)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("code arena OOM\n"));
+            while (true)
+            {
+                Magic.wfe();                            // should never fire: batches rewind to the code mark
+            }
+        }
         Magic.store64(CODE_PTR_CELL, p + aligned);
         return p;
     }

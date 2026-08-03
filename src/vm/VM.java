@@ -2492,6 +2492,7 @@ public final class VM
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
         Loader.loadGcDemo();
+        Loader.printCodeArena();                           // code-arena rewind evidence: cur far below high
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
