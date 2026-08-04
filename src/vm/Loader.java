@@ -1038,6 +1038,8 @@ public final class Loader
                 }
                 Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over the dead code
                 Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
+                VM.dropJitTablesAbove(codeHeapMark);            // frame/handler entries for the dead code would
+                                                                //   ALIAS the next batch's reused addresses
                 // Stale-root hygiene: a still-registered task Thread from a RECLAIMED batch (e.g. a sleeper
                 // that never exited) now points at rewound memory -- as a conservative GC root it would
                 // falsely retain whatever the NEXT batch allocates at that address. Its object is gone

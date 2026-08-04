@@ -1613,6 +1613,47 @@ public final class VM
     }
     static final int JIT_FRAME_MAX = 512;
 
+    /**
+     * Drop JIT frame/handler entries for code at/above {@code codeMark} — called by the Loader's batch
+     * rewind, which just reclaimed that code. Stale entries would ALIAS the next batch's code (the arena
+     * reuses the same addresses), so an unwind could match a dead batch's frame size/handler for a live
+     * PC; they also filled the fixed tables across batches (the jitUnwindReady probe regressed to 'n').
+     * Entries below the mark (pre-reclaim permanent code) are kept.
+     */
+    static void dropJitTablesAbove(long codeMark)
+    {
+        jitFrameCount = compactTable(jitFrameTable, jitFrameCount, 24L, codeMark);
+        jitHandlerCount = compactTable(jitHandlerTable, jitHandlerCount, 32L, codeMark);
+    }
+
+    /** Keep only entries whose first word (code start) is below {@code codeMark}; the kept count. */
+    private static long compactTable(long table, long count, long entryBytes, long codeMark)
+    {
+        if (table == 0L)
+        {
+            return 0L;
+        }
+        long kept = 0L;
+        long i = 0L;
+        while (i < count)
+        {
+            long src = table + i * entryBytes;
+            if (Magic.load64(src) < codeMark)
+            {
+                long dst = table + kept * entryBytes;
+                long b = 0L;
+                while (b < entryBytes)
+                {
+                    Magic.store64(dst + b, Magic.load64(src + b));
+                    b += 8L;
+                }
+                kept += 1L;
+            }
+            i += 1L;
+        }
+        return kept;
+    }
+
     // A jit handler table paralleling the image handlerTable, so a metal-built/JIT'd method's
     // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
@@ -6598,7 +6639,10 @@ public final class VM
         {
             return false;                                  // no framed JIT'd method ran
         }
-        long e = jitFrameTable;                            // first registered entry
+        // The LAST entry: code buffers allocate in ascending order, so no frame is ever registered past
+        // its end — the "just past" negative check can't collide with a NEIGHBORING method that happens
+        // to share the same frame size (probing the FIRST entry did, and the answer flipped with layout).
+        long e = jitFrameTable + (jitFrameCount - 1L) * 24L;
         long start = Magic.load64(e);
         long end = Magic.load64(e + 8L);
         long size = Magic.load64(e + 16L);
