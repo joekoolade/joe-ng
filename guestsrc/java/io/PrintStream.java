@@ -7,8 +7,11 @@ import magic.Magic;
  * overlays). Stock {@code PrintStream.println(String)} routes through {@code textOut:BufferedWriter} ->
  * {@code OutputStreamWriter} -> {@code StreamEncoder}/{@code CharsetEncoder} — the deep nio charset closure —
  * and the raw sink under it is a native ({@code FileOutputStream.writeBytes}). Both are absent on metal, so we
- * substitute the whole class: every method encodes Latin1 and writes straight to the UART via the
- * {@code Magic.printStr} intrinsic (which already understands the stock {@code String} value@16/coder@24 shape).
+ * substitute the whole class: every print encodes through the STOCK {@code String.getBytes()} (the UTF-8 fast
+ * path of the charset closure) and writes the raw bytes to the UART via {@code Magic.printStr(byte[])} — so a
+ * Latin1 é goes out as {@code 0xC3 0xA9} and a UTF16 string (chars &gt; 0xFF) encodes correctly; ASCII bytes
+ * are unchanged. (The metal CONCAT intrinsic builds Latin1 byte-strings, so non-Latin1 text should be printed
+ * directly, not via {@code "x" + s} concatenation.)
  *
  * <p>{@code System.out}/{@code System.err} are installed by {@code Loader.seedSystemStreams()} — which allocates
  * a bare instance of this class (no ctor call, no instance state) and stores it into the static slots — because
@@ -24,25 +27,31 @@ public class PrintStream
     {
     }
 
+    /** The one sink: stock UTF-8 encode, then raw bytes to the UART ({@code putc} translates {@code \n}). */
+    private static void emit(String s)
+    {
+        Magic.printStr(s.getBytes());
+    }
+
     public void print(String s)
     {
-        Magic.printStr(s == null ? "null" : s);
+        emit(s == null ? "null" : s);
     }
 
     public void println(String s)
     {
         print(s);
-        Magic.printStr("\n");
+        emit("\n");
     }
 
     public void println()
     {
-        Magic.printStr("\n");
+        emit("\n");
     }
 
     public void print(int i)
     {
-        Magic.printStr(Integer.toString(i));
+        emit(Integer.toString(i));
     }
 
     public void println(int i)
@@ -52,7 +61,7 @@ public class PrintStream
 
     public void print(long l)
     {
-        Magic.printStr(Long.toString(l));
+        emit(Long.toString(l));
     }
 
     public void println(long l)
@@ -62,7 +71,7 @@ public class PrintStream
 
     public void print(boolean b)
     {
-        Magic.printStr(b ? "true" : "false");
+        emit(b ? "true" : "false");
     }
 
     public void println(boolean b)
@@ -72,18 +81,18 @@ public class PrintStream
 
     public void print(char c)
     {
-        Magic.printStr(String.valueOf(c));
+        emit(String.valueOf(c));                        // a char > 0x7F UTF-8-encodes via getBytes
     }
 
     public void println(char c)
     {
         print(c);
-        Magic.printStr("\n");
+        emit("\n");
     }
 
     public void print(Object o)
     {
-        Magic.printStr(String.valueOf(o));
+        emit(String.valueOf(o));
     }
 
     public void println(Object o)
@@ -91,9 +100,12 @@ public class PrintStream
         println(String.valueOf(o));
     }
 
+    /** Stream semantics: ONE raw byte on the wire, never re-encoded. */
     public void write(int b)
     {
-        Magic.printStr(String.valueOf((char) (b & 0xff)));
+        byte[] one = new byte[1];
+        one[0] = (byte) b;
+        Magic.printStr(one);
     }
 
     public void flush()

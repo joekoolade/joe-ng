@@ -1055,6 +1055,7 @@ public final class Loader
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
+        VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
         rgBase = new long[MAXREG];
         rgClassOff = new int[MAXREG];
         rgNameOff = new int[MAXREG];
@@ -2948,6 +2949,8 @@ public final class Loader
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
+        VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
+                                                        //   checkcast/clone a concat String's value
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
@@ -3205,6 +3208,18 @@ public final class Loader
             if (cs != 0L)
             {
                 Magic.store64(cs, 1L);                  // LATIN1 world: stock getstatic COMPACT_STRINGS -> true
+            }
+            return;
+        }
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/StringUTF16")))
+        {
+            // Its <clinit> sets the UTF-16 byte-order shifts via Unsafe.isBigEndian (unrunnable, skipped),
+            // leaving BOTH shifts 0 -- putChar then stores the LOW byte twice and a char > 0xFF truncates
+            // (the euro U+20AC read back as 0xAC). AArch64 runs little-endian: HI=0 (default), LO=8.
+            long lo = staticSlotByName(Magic.bytes("LO_BYTE_SHIFT"));
+            if (lo != 0L)
+            {
+                Magic.store64(lo, 8L);
             }
             return;
         }

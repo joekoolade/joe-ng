@@ -904,11 +904,21 @@ public final class VM
     }
 
     /** Finish a concat: a fresh byte[] trimmed to the builder's length. */
+    // The current batch's [B array TIB (Loader-set after each loadAll; 0 between batches). scEnd types its
+    // result with it so a concat-built String's value is a REAL typed byte[] -- stock code checkcasts/clones
+    // String.value (Arrays.copyOf -> "[B".clone -> checkcast "[B" inside getBytes), and VM.checkCast rejects
+    // raw (elem-size-header) arrays, which used to halt the first System.out print of a concat string.
+    static long byteArrayTibCache;
+
     static long scEnd(long sb)
     {
         long buf = Magic.load64(sb + 16L);
         long count = Magic.load64(sb + 24L);
         long out = Heap.allocArray((int) count, 1);
+        if (byteArrayTibCache != 0L)
+        {
+            Magic.store64(out, byteArrayTibCache);
+        }
         long i = 0L;
         while (i < count)
         {
