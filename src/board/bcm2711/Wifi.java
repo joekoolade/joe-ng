@@ -18,7 +18,7 @@ public final class Wifi
 {
     private Wifi() {}
 
-    /** Power the chip, bring up the SDIO host, enumerate. Logs each step over the UART (real-HW only). */
+    /** Power the chip, bring up the SDIO host, enumerate + probe. Logs each step over the UART (real-HW only). */
     public static void bringUp()
     {
         Uart.write(Magic.bytes("wifi: bring-up\n"));
@@ -30,15 +30,13 @@ public final class Wifi
         VM.printDec(emmcHz / 1000000);
         Uart.write(Magic.bytes(" MHz\n"));
 
-        int rc = Sdio.init();
-        Uart.write(Magic.bytes("  sdio init rc="));
-        VM.printDec(rc);
-        Uart.putc(0x0A);
-        if (rc != 0)
+        // M1a: enumerate + read the chip ID through the backplane (proves the SDIO link end to end).
+        int chipId = board.cyw43.Cyw43.probeChip();
+        if (chipId == 0)
         {
-            return;                                     // negative step code names where enumeration stalled
+            Uart.write(Magic.bytes("wifi: probe failed (see step above)\n"));
+            return;
         }
-        Uart.write(Magic.bytes("  sdio: enumerated, 4-bit\n"));
-        // M1 continues here: CCCR function enable, backplane, firmware upload, SDPCM.
+        // M1b continues here: firmware + NVRAM upload, release the chip's ARM, F2 ready, then SDPCM.
     }
 }

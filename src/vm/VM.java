@@ -2279,8 +2279,11 @@ public final class VM
     // retired -- gated off here rather than deleted, pending the embedding rework. See the plan file.
     private static final boolean SELF_BUILD = false;
     // NON-final on purpose: the writer's BFS compiles the WiFi subsystem (guarded call in run()) into the
-    // image regardless, but the driver runs only when this is true (flipped in M1 with chip detection).
-    static boolean WIFI_ENABLED = false;
+    // image regardless. Now live (M1), but the RUN is additionally gated on real hardware in run() via
+    // Uart.coreHz: QEMU's mailbox reports ~0 for the measured core clock (baud falls back, "core 0MHz"),
+    // a real Pi 4 reports ~166 MHz — so the WiFi driver only pokes the SDIO controller on real silicon,
+    // never QEMU (whose 0xFE300000 is the SD card).
+    static boolean WIFI_ENABLED = true;
 
     static void run()
     {
@@ -2651,7 +2654,7 @@ public final class VM
         // subsystem (Wifi -> Sdio/Gpio/Mailbox) into the image for regression, but it runs on neither QEMU
         // (no chip; 0xFE300000 there is the SD card) nor metal until M1 flips WIFI_ENABLED true + adds
         // chip detection. delayMs (busy-wait) is used throughout, so it is timer/scheduler-independent here.
-        if (WIFI_ENABLED)
+        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)   // real-HW gate (see WIFI_ENABLED)
         {
             board.bcm2711.Wifi.bringUp();
         }
