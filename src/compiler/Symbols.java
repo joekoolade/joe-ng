@@ -54,6 +54,7 @@ public interface Symbols
     int NEW_NPE = 19;           // vm/VM.newNpe()J    — a java/lang/NullPointerException (null deref)
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
     int GET_CLASS = 21;         // vm/VM.getClassOf(J)J — Object.getClass() -> the receiver's Class mirror
+    int ARRAY_CLONE = 22;       // vm/VM.arrayClone(J)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -75,6 +76,9 @@ public interface Symbols
 
     /** True if the invokevirtual is {@code Class.desiredAssertionStatus()Z} (intrinsify to false). */
     default boolean isDesiredAssertionStatus(int methodCp) { return false; }
+
+    /** True if the method ref at {@code methodCp} is an ARRAY {@code clone()} (owner starts '[') — intrinsified to ARRAY_CLONE. */
+    default boolean isArrayClone(int methodCp) { return false; }
 
     /**
      * Tag a freshly-allocated array (in {@code arrReg}) with its array Type, so checkcast/instanceof against an

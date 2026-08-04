@@ -215,6 +215,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.wordCountBytes",   "vm/VM.wordCountLen",   "demo/WordCount",                          registry.rawBytes("demo/WordCount"));
         // GC milestone: allocation churn far beyond the arena size.
         ib.addBlob("vm/VM.gcDemoBytes",      "vm/VM.gcDemoLen",      "demo/GcDemo",                             registry.rawBytes("demo/GcDemo"));
+        // Charset closure: stock new String(byte[]) / getBytes() via the UTF-8 fast path.
+        ib.addBlob("vm/VM.charsetDemoBytes", "vm/VM.charsetDemoLen", "demo/CharsetDemo",                        registry.rawBytes("demo/CharsetDemo"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

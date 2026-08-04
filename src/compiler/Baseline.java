@@ -245,10 +245,9 @@ public final class Baseline
         }
         else if (op == 0x10)
         {
-            // Mask then cast so the sign-extension is an explicit i2b (sxtb), not a reliance on the
-            // JVM's sign-extending baload: this compiler's own baload zero-extends (ASCII bytes), so a
-            // bare `(byte) code[..]` — which javac lowers to baload+i2l, no i2b — would read a negative
-            // bipush operand as unsigned when *this* compiler compiles itself (the self-build fixpoint).
+            // Mask then cast so the sign-extension is an explicit i2b (sxtb): correct and identical under
+            // both baload semantics (the JVM's and this compiler's now both sign-extend; the mask+cast is
+            // kept so the expression never depends on which one compiled this code).
             loadConst(cb, (byte) (code[pos + 1] & 0xFF));
             return 2;
         }
@@ -1339,6 +1338,12 @@ public final class Baseline
             emitCall(cb, 1, true, false, SYM_HELPER, Symbols.GET_CLASS);   // (obj) -> Class mirror
             return;
         }
+        if (symbols.isArrayClone(cpIndex))                      // [T.clone(): intrinsic copy -- an array TIB has no
+        {                                                       // vtable, so dispatch would BLR garbage
+            nullCheck(cb, opSlot(sp - 1), pos);
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.ARRAY_CLONE);   // (array) -> shallow copy
+            return;
+        }
         if (symbols.isDesiredAssertionStatus(cpIndex))          // Class.desiredAssertionStatus(): assertions off -> false
         {                                                       // (drop the receiver, push 0; no mirror vtable needed)
             popReg();
@@ -1905,7 +1910,9 @@ public final class Baseline
         int shift = scale == 4 ? 1 : scale;                      // short: 2-byte element (shift 1), signed load
         cb.emit(A64Enc.addImm(arr, arr, ObjectModel.ARRAY_BASE_OFFSET));
         cb.emit(A64Enc.addRegLsl(arr, arr, index, shift));          // arr = &elem[index]
-        cb.emit(scale == 0 ? A64Enc.ldrb(r, arr, 0)                 // byte (zero-ext, ASCII)
+        cb.emit(scale == 0 ? A64Enc.ldrsb(r, arr, 0)                // byte (SIGN-ext — JVM baload semantics;
+                                                                    //   stock String.utf8/countPositives branch
+                                                                    //   on negative bytes, so zero-ext mis-decodes)
                 : scale == 1 ? A64Enc.ldrh(r, arr, 0)               // char (zero-ext — unsigned)
                 : scale == 4 ? A64Enc.ldrsh(r, arr, 0)              // short (sign-ext)
                 : scale == 2 ? A64Enc.ldrsw(r, arr, 0)              // int (sign-ext)

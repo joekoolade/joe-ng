@@ -40,6 +40,12 @@ public final class ReachScan
         "jdk/internal/util/regex/Grapheme",
         // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
         "jdk/internal/lang/CaseFolding",
+        // charset encoder/decoder fallback (never taken: the overlay singletons pin the UTF-8 fast path).
+        "java/nio/charset/CharsetDecoder", "java/nio/charset/CharsetEncoder",
+        "java/nio/charset/Coder", "java/nio/charset/Coding", "java/nio/charset/CharacterCoding",
+        "java/nio/charset/Malformed", "java/nio/charset/Unmappable",
+        "java/nio/charset/IllegalCharsetName", "java/nio/charset/UnsupportedCharset",
+        "java/nio/ByteBuffer", "java/nio/CharBuffer", "sun/nio/cs/Array",
     };
 
     static boolean deny = false;                       // set by the "DENY" arg

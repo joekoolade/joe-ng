@@ -770,6 +770,29 @@ public final class Loader
         }
     }
 
+    /** The charset closure: {@code demo/CharsetDemo} — stock {@code new String(byte[])}/{@code getBytes()}
+     *  via the overlay {@code Charset.defaultCharset()} -> {@code sun.nio.cs.UTF_8.INSTANCE} identity,
+     *  pinning String's pure-Java UTF-8 fast paths (the decoder fallback is denylisted). */
+    static void loadCharset()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // Integer.toString for the int concats
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.charsetDemoBytes, (int) VM.charsetDemoLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.charsetDemoBytes, Magic.bytes("main"), Magic.bytes("()V"));
+        loadAll();
+        seedSystemStreams();                            // the demo prints via System.out (M2 overlay)
+        long buf = globalMethodBuf(Magic.bytes("demo/CharsetDemo"), Magic.bytes("main"), Magic.bytes("()V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call0(buf);
+        }
+    }
+
     /** The GC milestone: {@code demo/GcDemo} churns ~640 MB through the ~192 MB arena — it only completes
      *  if allocation pressure triggers collections and freed blocks are reused. Prints the evidence after. */
     static void loadGcDemo()
@@ -1856,7 +1879,23 @@ public final class Loader
                 // literal split never matches graphemes, so this whole subtree is cold.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/regex/Grapheme"))
                 // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/lang/CaseFolding"));
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/lang/CaseFolding"))
+                // The charset ENCODER/DECODER fallback: stock String's byte[]-ctor/getBytes take the pure-Java
+                // UTF-8 fast path (identity vs the overlay sun/nio/cs singletons); the decode/encodeWithEncoder
+                // branches that would pull CharsetDecoder/nio buffers are statically present but never taken.
+                // (java/nio/charset/Charset itself is NOT denied -- the overlay must load.)
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetDecoder"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharacterCoding"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Malformed"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Unmappable"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/ByteBuffer"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/CharBuffer"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
     }
 
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
@@ -3623,6 +3662,16 @@ public final class Loader
             }                                                  // denylist) or never compiled -> trap, not a bl 0 wild branch
             if (target != 0L)
             {
+                if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
+                {                                              //   (blob/object, not code) -> name the callee
+                    Uart.write(Magic.bytes("  BADPATCH "));
+                    writeName(rcBase[i] + rcClass[i] + 2, u2(rcBase[i] + rcClass[i]));
+                    Uart.putc(0x2E);
+                    writeName(rcBase[i] + rcName[i] + 2, u2(rcBase[i] + rcName[i]));
+                    Uart.write(Magic.bytes(" -> "));
+                    VM.printHex(target);
+                    Uart.putc(0x0A);
+                }
                 long d = target - rcAddr[i];                   // A64 bl reaches +-128 MiB (26-bit word offset)
                 if (d > 0x07FFFFFFL || d < -0x08000000L)
                 {
@@ -5088,6 +5137,15 @@ public final class Loader
     {
         return isName(gbase, mrefNameOff(idx), 0x676574436C617373L, 8)   // "getClass"
                 && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
+    }
+
+    /** {@code invokevirtual "[T".clone()} — a virtual call on an ARRAY receiver (owner Utf8 starts '[').
+     *  Array TIBs carry no vtable, so this is intrinsified to {@code VM.arrayClone} instead of dispatching. */
+    static boolean isArrayClone(int idx)
+    {
+        long p = gbase + ClassReader.refClassNameOff(gbytes, gcp, idx);
+        return u2(p) >= 1 && u1(p + 2) == 0x5B                            // owner "[..." (an array class)
+                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("clone"));
     }
 
     /** {@code Class.desiredAssertionStatus()Z} -- intrinsified to {@code false} (assertions are off on metal), so

@@ -171,6 +171,11 @@ public final class A64Enc
     {
         return ldst(1, 2, rt, rn, off);
     }
+    /** {@code LDRSB Xt, [Xn, #off]} — load byte, sign-extended to 64 (JVM baload semantics: byte is signed). */
+    public static int ldrsb(int rt, int rn, int off)
+    {
+        return ldst(0, 2, rt, rn, off);
+    }
 
     // ----- branches (displacements in words) --------------------------------
     /** {@code B #wordOffset}. */

@@ -202,7 +202,7 @@ public final class CompilerTest
         addAll(elemWant, A64.loadImm64(10, 0));           // iconst_0 (index)
         elemWant.add(A64.addImm(9, 9, 24));              // &elem0
         elemWant.add(A64.addRegLsl(9, 9, 10, 0));        // &elem[index]
-        elemWant.add(A64.ldrb(9, 9, 0));                 // baload
+        elemWant.add(asm.A64Enc.ldrsb(9, 9, 0));        // baload (SIGN-extends: JVM byte semantics)
         elemWant.add(A64.movReg(0, 9));                  // ireturn
         elemWant.add(A64.ldrx(19, 31, 0));
         elemWant.add(A64.addImm(31, 31, 16));

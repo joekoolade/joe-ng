@@ -1194,6 +1194,7 @@ public final class VM
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
+        if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
@@ -1233,6 +1234,29 @@ public final class VM
      * into its inline backtrace (bt0..bt7 @ self+16) by {@link #unwind} at throw time. Names each frame's method
      * via {@link Loader#printFrameAt} (demand-compiled methods / {@code <clinit>}s; image code shows "image/native").
      */
+    /**
+     * {@code [T.clone()} intrinsic: a shallow copy of any array. Copies the whole block body (length word +
+     * elements, from the status-word size — every allocation records it) and carries the TIB over, so raw
+     * (elem-size) and typed (array-Type TIB) arrays clone alike. Element values copy verbatim (shallow).
+     */
+    static long arrayClone(long ref)
+    {
+        if (ref <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        long size = Magic.load64(ref + 8L) & -8L;          // block size from the status word
+        long copy = Heap.alloc((int) size);
+        Magic.store64(copy, Magic.load64(ref));            // same TIB (raw elem size or typed array TIB)
+        long i = 16L;
+        while (i < size)
+        {
+            Magic.store64(copy + i, Magic.load64(ref + i));
+            i += 8L;
+        }
+        return copy;
+    }
+
     /**
      * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
      * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
@@ -1952,6 +1976,7 @@ public final class VM
     static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
     static long wordCountBytes, wordCountLen;       // demo/WordCount (real-program milestone: main(String[]))
     static long gcDemoBytes, gcDemoLen;             // demo/GcDemo (GC milestone: churn >> arena size)
+    static long charsetDemoBytes, charsetDemoLen;   // demo/CharsetDemo (new String(byte[]) / getBytes)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -1999,6 +2024,7 @@ public final class VM
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
+    static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
@@ -2511,6 +2537,10 @@ public final class VM
         // the host JDK's output byte-for-byte on the same input file.
         Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
         Loader.loadWordCount();
+
+        // The charset closure: stock new String(byte[]) + getBytes() via the UTF-8 fast path.
+        Uart.write(Magic.bytes("charset: new String(byte[]) / getBytes() (stock, UTF-8 fast path):\n"));
+        Loader.loadCharset();
 
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
