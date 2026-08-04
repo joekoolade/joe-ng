@@ -11,9 +11,10 @@ import java.util.Map;
  * The real-program milestone: a classic word-frequency counter written as ORDINARY Java — stock library
  * only, no VM hooks (no {@code magic.Magic} import), entered through a real {@code main(String[])} with
  * arguments the VM passes in. Composes the whole stock-java.base arc in one program: {@code FileInputStream}
- * over the embedded RAMFS (M3), {@code StringBuilder}, {@code toLowerCase}/{@code replace}/{@code split}/
- * {@code trim} (#41/#42), {@code HashMap} + Integer autoboxing (#33), {@code ArrayList} + entrySet views
- * (#34), {@code System.out.println} (M2), and checked-exception handling with {@code getMessage()}.
+ * over the embedded RAMFS (M3), {@code new String(byte[])} (the UTF-8 charset closure),
+ * {@code toLowerCase}/{@code replace}/{@code split}/{@code trim} (#41/#42), {@code HashMap} + Integer
+ * autoboxing (#33), {@code ArrayList} + entrySet views (#34), {@code System.out.println} (M2), and
+ * checked-exception handling with {@code getMessage()}.
  *
  * <p>Differential check: the SAME class runs on the host JDK
  * ({@code java -cp out demo.WordCount ramfs/data/sample.txt 3}) and must print byte-identical output.
@@ -29,16 +30,8 @@ public class WordCount
         try
         {
             FileInputStream in = new FileInputStream(path);
-            byte[] all = in.readAllBytes();
+            text = new String(in.readAllBytes());       // stock UTF-8 decode (the charset closure)
             in.close();
-            StringBuilder sb = new StringBuilder();
-            int i = 0;
-            while (i < all.length)
-            {
-                sb.append((char) (all[i] & 0xff));      // Latin1 bytes -> chars (avoids the charset closure)
-                i += 1;
-            }
-            text = sb.toString();
         }
         catch (IOException e)
         {
