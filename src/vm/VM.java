@@ -1611,7 +1611,9 @@ public final class VM
             jitFrameCount = jitFrameCount + 1L;
         }
     }
-    static final int JIT_FRAME_MAX = 512;
+    static final int JIT_FRAME_MAX = 4096;     // one BATCH's framed methods must fit (compacted at each
+                                               //   rewind); 512 overflowed on the ~170-class Lisp closure and
+                                               //   the unwinder could not size the dropped frames
 
     /**
      * Drop JIT frame/handler entries for code at/above {@code codeMark} — called by the Loader's batch
@@ -1658,7 +1660,7 @@ public final class VM
     // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
     static long jitHandlerTable, jitHandlerCount;
-    static final int JIT_HANDLER_MAX = 512;
+    static final int JIT_HANDLER_MAX = 4096;   // same sizing rule as JIT_FRAME_MAX
 
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
     static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
@@ -1741,6 +1743,17 @@ public final class VM
             long fs = frameSizeAt(pc);
             if (fs == 0L)
             {
+                Uart.write(Magic.bytes("\nUNWIND LOST pc="));   // no frame entry for this pc: either an
+                printHex(pc);                                    //   uncaught-at-top throw or a frame-table gap
+                Uart.write(Magic.bytes(" exc="));                //   (overflowed/unregistered method) -- say so
+                printHex(exc);                                   //   instead of halting silently
+                long xt = Magic.load64(exc);
+                if (xt > 0x1000L)
+                {
+                    Uart.putc(0x20);
+                    Loader.printClassName(Magic.load64(xt));
+                }
+                Uart.putc(0x0A);
                 while (true)
                 {
                     Magic.wfe();    // uncaught at the top
@@ -2027,6 +2040,7 @@ public final class VM
     static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
     static long wordCountBytes, wordCountLen;       // demo/WordCount (real-program milestone: main(String[]))
     static long gcDemoBytes, gcDemoLen;             // demo/GcDemo (GC milestone: churn >> arena size)
+    static long lispDemoBytes, lispDemoLen;         // demo/LispDemo (long-running Lisp interpreter)
     static long charsetDemoBytes, charsetDemoLen;   // demo/CharsetDemo (new String(byte[]) / getBytes)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
@@ -2598,6 +2612,11 @@ public final class VM
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
         Loader.loadGcDemo();
         Loader.printCodeArena();                           // code-arena rewind evidence: cur far below high
+
+        // The long-running-program milestone: a Lisp interpreter whose churn forces collections
+        // mid-computation -- every evaluation afterwards must still be correct.
+        Uart.write(Magic.bytes("Lisp interpreter (long-running, stock java.base):\n"));
+        Loader.loadLisp();
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry

@@ -217,6 +217,8 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.gcDemoBytes",      "vm/VM.gcDemoLen",      "demo/GcDemo",                             registry.rawBytes("demo/GcDemo"));
         // Charset closure: stock new String(byte[]) / getBytes() via the UTF-8 fast path.
         ib.addBlob("vm/VM.charsetDemoBytes", "vm/VM.charsetDemoLen", "demo/CharsetDemo",                        registry.rawBytes("demo/CharsetDemo"));
+        // Long-running-program milestone: the Lisp interpreter.
+        ib.addBlob("vm/VM.lispDemoBytes",    "vm/VM.lispDemoLen",    "demo/LispDemo",                           registry.rawBytes("demo/LispDemo"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

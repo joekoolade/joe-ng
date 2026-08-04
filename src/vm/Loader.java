@@ -793,6 +793,37 @@ public final class Loader
         }
     }
 
+    /** The long-running-program milestone: {@code demo/LispDemo} — a Lisp interpreter (ordinary stock
+     *  Java) whose churn loop forces collections MID-COMPUTATION; every iteration must stay correct. */
+    static void loadLisp()
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);    // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);  // parseInt(args[1]) + boxed interpreter arithmetic
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        addBlob(VM.lispDemoBytes, (int) VM.lispDemoLen);
+        // reachability-gated closure: markReachable pulls the reachable closure on demand (no pull-all).
+        entryPoint(VM.lispDemoBytes, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        loadAll();
+        seedSystemStreams();                            // the interpreter prints via System.out (M2 overlay)
+        Heap.gcPressure = 0;                            // count only THIS run's mid-computation collections
+        long a0 = guestString(Magic.bytes("/data/prog.lisp"));
+        long a1 = guestString(Magic.bytes("600"));
+        long argv = Heap.allocArray(2, 8);              // String[2] (8-byte reference elements)
+        Magic.store64(argv + 24L, a0);
+        Magic.store64(argv + 32L, a1);
+        long buf = globalMethodBuf(Magic.bytes("demo/LispDemo"), Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        if (buf != 0L)
+        {
+            long unused = Magic.call2(buf, argv, 0L);   // main(args) — x1 unused by a 1-arg static
+        }
+        Uart.write(Magic.bytes("  gc during lisp: collections="));
+        VM.printDec(Heap.gcPressure);
+        Uart.putc(0x0A);
+    }
+
     /** The GC milestone: {@code demo/GcDemo} churns ~640 MB through the ~192 MB arena — it only completes
      *  if allocation pressure triggers collections and freed blocks are reused. Prints the evidence after. */
     static void loadGcDemo()
@@ -820,6 +851,7 @@ public final class Loader
         Uart.write(Magic.bytes(" lastReclaimed="));
         VM.printHex(VM.reclaimed);
         Uart.putc(0x0A);
+        VM.gcLog = 0;                                   // scoped to this batch: later demos just count collections
     }
 
     /** Evidence line for the code-arena rewind: cur (mark + one batch) far below high (max batch ever). */
@@ -2953,6 +2985,11 @@ public final class Loader
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
+        seedIntegerCache();                             // EVERY batch: with IntegerCache.<clinit> skipped its
+                                                        //   statics read low=high=0, so valueOf(0) -- and only
+                                                        //   0 -- indexes the NULL cache array -> NPE (bit the
+                                                        //   Lisp interpreter's boxed booleans); no-op if
+                                                        //   Integer isn't in this batch
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC

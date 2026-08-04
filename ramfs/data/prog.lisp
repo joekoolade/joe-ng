@@ -1,0 +1,5 @@
+(define fact (lambda (n) (if (< n 2) 1 (* n (fact (- n 1))))))
+(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))
+(define sum (lambda (a b) (if (< a 1) b (sum (- a 1) (+ a b)))))
+(define twice (lambda (f x) (f (f x))))
+(define inc (lambda (x) (+ x 1)))
