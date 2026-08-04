@@ -999,6 +999,26 @@ public final class VM
         return Magic.readCNTPCT_EL0() * (1000000000L / Magic.readCNTFRQ_EL0());
     }
 
+    /**
+     * Busy-wait at least {@code us} microseconds on the generic timer (CNTPCT). Unlike {@link #sleep} this
+     * does NOT yield, so it is valid before the scheduler exists — which is where device bring-up runs
+     * (WiFi/SDIO settle delays). Unlike {@code Emmc}'s iteration-count spins it is wall-clock accurate
+     * regardless of CPU/cache state.
+     */
+    public static void delayUs(long us)
+    {
+        long end = Magic.readCNTPCT_EL0() + (Magic.readCNTFRQ_EL0() * us) / 1000000L;
+        while (Magic.readCNTPCT_EL0() < end)
+        {
+        }
+    }
+
+    /** Busy-wait at least {@code ms} milliseconds (see {@link #delayUs}). */
+    public static void delayMs(long ms)
+    {
+        delayUs(ms * 1000L);
+    }
+
     /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
     static long currentTimeMillis()
     {
@@ -1447,7 +1467,7 @@ public final class VM
     }
 
     /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */
-    static void printHex(long v)
+    public static void printHex(long v)
     {
         Uart.putc(0x30);                                   // '0'
         Uart.putc(0x78);                                   // 'x'
@@ -2187,7 +2207,7 @@ public final class VM
      * heap object, mutate its field, and print the result.
      */
     /** Print {@code v} (0..9999) in decimal, no leading zeros. Uses only / and * (no irem). */
-    static void printDec(int v)
+    public static void printDec(int v)
     {
         int th = v / 1000;
         int hu = (v - th * 1000) / 100;
@@ -2258,6 +2278,9 @@ public final class VM
     // only image producer now (stock-java.base pivot). The self-build + fixpoint + SD-persist tail of run() is
     // retired -- gated off here rather than deleted, pending the embedding rework. See the plan file.
     private static final boolean SELF_BUILD = false;
+    // NON-final on purpose: the writer's BFS compiles the WiFi subsystem (guarded call in run()) into the
+    // image regardless, but the driver runs only when this is true (flipped in M1 with chip detection).
+    static boolean WIFI_ENABLED = false;
 
     static void run()
     {
@@ -2623,6 +2646,15 @@ public final class VM
         // and check frameSizeAt finds it in range and rejects a PC just past it.
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
+
+        // WiFi (CYW43455) bring-up. Guarded by a NON-final flag so the writer still compiles the whole
+        // subsystem (Wifi -> Sdio/Gpio/Mailbox) into the image for regression, but it runs on neither QEMU
+        // (no chip; 0xFE300000 there is the SD card) nor metal until M1 flips WIFI_ENABLED true + adds
+        // chip detection. delayMs (busy-wait) is used throughout, so it is timer/scheduler-independent here.
+        if (WIFI_ENABLED)
+        {
+            board.bcm2711.Wifi.bringUp();
+        }
 
         // --- M5 self-build / fixpoint / SD-persist retired (see SELF_BUILD above). Demos ran above; the
         //     tail below is the deprecated metal-writer verification + reproduction, no longer run. ---

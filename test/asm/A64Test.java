@@ -77,6 +77,10 @@ public final class A64Test
         T.eqWord("DMB SY", 0xD5033FBF, A64.dmb());
         T.eqWord("ISB",    0xD5033FDF, A64.isb());
 
+        // ---- cache maintenance ---------------------------------------------
+        T.eqWord("DC CIVAC x0",  0xD50B7E20, asm.A64Enc.dcCivac(0));   // SYS #3,c7,c14,#1
+        T.eqWord("DC CIVAC x9",  0xD50B7E29, asm.A64Enc.dcCivac(9));
+
         // ---- load/store (unsigned offset) ----------------------------------
         T.eqWord("STR  w0,[x1]",   0xB9000020, A64.strw(0, 1, 0));
         T.eqWord("STR  w1,[x0]",   0xB9000001, A64.strw(1, 0, 0));

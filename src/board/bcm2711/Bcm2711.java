@@ -40,17 +40,37 @@ public final class Bcm2711
      * everything. The measured tag reports what the hardware actually does.
      */
     public static final int  TAG_GET_CLOCK_RATE_MEASURED = 0x0003_0047;
+    public static final int  TAG_GET_CLOCK_RATE = 0x0003_0002;   // requested (not measured) rate
+    public static final int  TAG_SET_GPIO_STATE = 0x0003_8041;   // drive a firmware GPIO-expander pin (128+n)
     public static final int  CLOCK_ID_CORE = 4;           // the clock feeding the mini-UART
+    public static final int  CLOCK_ID_EMMC = 1;           // the clock feeding the SD/SDIO (EMMC) controller
+    public static final int  EXPANDER_GPIO_BASE = 128;    // firmware GPIO-expander pins start here
 
     // ----- GPIO ------------------------------------------------------------
     public static final long GPIO_BASE   = PERIPHERAL_BASE + 0x20_0000; // 0xFE200000
     /** Function select for GPIO10..19 (3 bits/pin). TXD1/RXD1 are GPIO14/15. */
     public static final long GPFSEL1     = GPIO_BASE + 0x04;            // 0xFE200004
-    /** Pull up/down control for GPIO0..15 (2 bits/pin) — BCM2711-specific. */
+    /** Pull up/down control for GPIO0..15 (2 bits/pin) — BCM2711-specific. Register n (16 pins each) is
+     *  at {@code GPIO_PUP_PDN_CNTRL_REG0 + n*4}; {@link Gpio#setPull} computes it from the pin. */
     public static final long GPIO_PUP_PDN_CNTRL_REG0 = GPIO_BASE + 0xE4; // 0xFE2000E4
 
+    // GPFSELn (function select, 10 pins each, 3 bits/pin) is at GPIO_BASE + n*4; Gpio.setAlt derives it.
+    // Alt-function field values (3-bit GPFSEL encoding), NOT the same as the ALTn ordinal:
+    public static final int  ALT0        = 0b100;
+    public static final int  ALT1        = 0b101;
+    public static final int  ALT2        = 0b110;
+    /** ALT3 — the WiFi (CYW43455) SDIO function on GPIO34..39 (CLK/CMD/DAT0..3). */
+    public static final int  ALT3        = 0b111;
+    public static final int  ALT4        = 0b011;
     /** ALT5 selects the mini-UART on GPIO14/15. Field value per pin is 0b010. */
     public static final int  ALT5        = 0b010;
+    public static final int  GPIO_INPUT  = 0b000;
+    public static final int  GPIO_OUTPUT = 0b001;
+
+    // BCM2711 pull encoding (NOTE: reversed from BCM2835 — 1=up, 2=down).
+    public static final int  PULL_NONE   = 0b00;
+    public static final int  PULL_UP     = 0b01;
+    public static final int  PULL_DOWN   = 0b10;
 
     // ----- AUX / mini-UART (UART1) -----------------------------------------
     public static final long AUX_BASE    = PERIPHERAL_BASE + 0x21_5000; // 0xFE215000
