@@ -697,6 +697,211 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes("\n  dns     "));
         printIp(dnsIp);
         board.bcm2711.Uart.putc(0x0A);
+
+        arpPing();                                       // M4: ARP the gateway, then ping it
+    }
+
+    static long gwMac;                                   // gateway MAC (6 bytes), learned via ARP
+
+    /** M4: resolve the gateway's MAC via ARP, then ICMP-ping it — the first "IP packets flow" proof. */
+    static void arpPing()
+    {
+        gwMac = Heap.allocData(8);
+        if (!arpResolve(gwIp, gwMac))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: arp no reply\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: gateway mac "));
+        int i = 0;
+        while (i < 6)
+        {
+            printHex2(Magic.load8(gwMac + i) & 0xFF);
+            if (i < 5)
+            {
+                board.bcm2711.Uart.putc(0x3A);
+            }
+            i = i + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+
+        if (ping(gwIp, gwMac))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: ping reply from "));
+            printIp(gwIp);
+            board.bcm2711.Uart.putc(0x0A);
+        }
+        else
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: ping no reply\n"));
+        }
+    }
+
+    /** Send an ARP request for {@code targetIp} and wait (~4 s) for the reply, storing the sender MAC in
+     *  {@code macOut}. Returns true on a matching reply. */
+    private static boolean arpResolve(long targetIp, long macOut)
+    {
+        long buf = Heap.allocData(128);
+        txData(buf, buildArp(buf, targetIp));
+        long rx = Heap.allocData(2048);
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
+        while (Magic.readCNTPCT_EL0() < endT)
+        {
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;
+            }
+            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip BDC
+            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0806)
+            {
+                continue;                                // not ARP
+            }
+            long arp = eth + 14;
+            if (((Magic.load8(arp + 6) & 0xFF) << 8 | (Magic.load8(arp + 7) & 0xFF)) != 2)
+            {
+                continue;                                // not a reply
+            }
+            if (ipEq(arp + 14, targetIp))                // sender protocol addr == target
+            {
+                int i = 0;
+                while (i < 6)
+                {
+                    Magic.store8(macOut + i, Magic.load8(arp + 8 + i));   // sender hardware addr
+                    i = i + 1;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Build an ARP request (who-has {@code targetIp}) into {@code buf}, padded to 60 bytes; returns 60. */
+    private static int buildArp(long buf, long targetIp)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0806 = ARP
+        Magic.store8(buf + 13, 0x06);
+        long a = buf + 14;
+        be16(a + 0, 1);                                  // htype = ethernet
+        be16(a + 2, 0x0800);                             // ptype = IPv4
+        Magic.store8(a + 4, 6);                          // hlen
+        Magic.store8(a + 5, 4);                          // plen
+        be16(a + 6, 1);                                  // oper = request
+        i = 0;
+        while (i < 6)
+        {
+            Magic.store8(a + 8 + i, Magic.load8(ourMac + i));   // sender hardware addr
+            i = i + 1;
+        }
+        copy4(ourIp, a + 14);                            // sender protocol addr
+        copy4(targetIp, a + 24);                         // target protocol addr (tha stays 0)
+        return 60;                                       // 14 + 28, padded to the 60-byte minimum
+    }
+
+    /** Send an ICMP echo request to {@code targetIp} (via {@code targetMac}) and wait (~4 s) for the reply. */
+    private static boolean ping(long targetIp, long targetMac)
+    {
+        long buf = Heap.allocData(128);
+        txData(buf, buildPing(buf, targetIp, targetMac));
+        long rx = Heap.allocData(2048);
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
+        while (Magic.readCNTPCT_EL0() < endT)
+        {
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;
+            }
+            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
+            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+            {
+                continue;
+            }
+            long ip = eth + 14;
+            if ((Magic.load8(ip + 9) & 0xFF) != 1)
+            {
+                continue;                                // not ICMP
+            }
+            long icmp = ip + (Magic.load8(ip) & 0x0F) * 4;
+            if ((Magic.load8(icmp) & 0xFF) != 0)
+            {
+                continue;                                // not echo reply
+            }
+            if (ipEq(ip + 12, targetIp))                 // from the target
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Build an ICMP echo request (32-byte payload) into {@code buf}; returns the total frame length. */
+    private static int buildPing(long buf, long targetIp, long targetMac)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, Magic.load8(targetMac + i));   // dst = gateway
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800
+        Magic.store8(buf + 13, 0x00);
+        long ip = buf + 14;
+        long icmp = buf + 34;
+        Magic.store8(icmp + 0, 8);                       // type = echo request
+        Magic.store8(icmp + 1, 0);                       // code
+        be16(icmp + 2, 0);                               // checksum (fill below)
+        be16(icmp + 4, 0x1234);                          // id
+        be16(icmp + 6, 1);                               // seq
+        int icmpLen = 8 + 32;                            // header + 32 zero payload bytes
+        be16(icmp + 2, ipCksum(icmp, icmpLen));          // ICMP checksum over the whole message
+        Magic.store8(ip + 0, 0x45);
+        Magic.store8(ip + 1, 0);
+        be16(ip + 2, 20 + icmpLen);
+        be16(ip + 4, 0);
+        be16(ip + 6, 0);
+        Magic.store8(ip + 8, 64);                        // TTL
+        Magic.store8(ip + 9, 1);                         // protocol = ICMP
+        be16(ip + 10, 0);
+        copy4(ourIp, ip + 12);
+        copy4(targetIp, ip + 16);
+        be16(ip + 10, ipCksum(ip, 20));
+        return 14 + 20 + icmpLen;
+    }
+
+    /** Compare two 4-byte IPv4 addresses. */
+    private static boolean ipEq(long a, long b)
+    {
+        int i = 0;
+        while (i < 4)
+        {
+            if ((Magic.load8(a + i) & 0xFF) != (Magic.load8(b + i) & 0xFF))
+            {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
     }
 
     /**
