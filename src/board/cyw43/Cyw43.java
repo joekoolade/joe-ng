@@ -388,6 +388,7 @@ public final class Cyw43
 
     private static int reqId = 1;                        // BCDC request id (echoed in the response)
     private static final int WLC_UP = 2;                 // ioctl: bring the interface up
+    private static final int WLC_DOWN = 3;               // ioctl: bring the interface down
     private static final int WLC_SCAN = 50;              // ioctl: start a scan
     private static final int WLC_SCAN_RESULTS = 51;      // ioctl: read the scan result list (GET)
     private static final int WLC_SET_VAR = 263;          // ioctl: set a named iovar
@@ -547,7 +548,6 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
         dumpRaw(ssid, sl);
 
-        setInt(WLC_SET_INFRA, 1);                        // infrastructure BSS
         if (pl > 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  security: WPA2-PSK\n"));
@@ -556,6 +556,7 @@ public final class Cyw43
         else
         {
             board.bcm2711.Uart.write(Magic.bytes("  security: open\n"));
+            setInt(WLC_SET_INFRA, 1);
             setInt(WLC_SET_WSEC, 0);
             setInt(WLC_SET_AUTH, 0);
             setInt(WLC_SET_WPA_AUTH, 0);
@@ -587,8 +588,10 @@ public final class Cyw43
      */
     static void setupWpa2(long psk, int pl)
     {
+        setInt(WLC_DOWN, 0);                             // security config must be applied while DOWN
+        setInt(WLC_SET_INFRA, 1);                        // infrastructure BSS
         setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
-        iovarInt(Magic.bytes("sup_wpa"), 1);             // enable the in-chip supplicant (plain iovar, ifidx 0)
+        iovarInt(Magic.bytes("sup_wpa"), 1);             // enable the in-firmware supplicant
         iovarInt(Magic.bytes("sup_wpa2_eapver"), -1);
         iovarInt(Magic.bytes("sup_wpa_tmo"), 2500);
         long pmk = Heap.allocData(72);                   // wsec_pmk_t {key_len u16, flags u16, key[64]}
@@ -603,6 +606,7 @@ public final class Cyw43
         readCtrl(sendBcdc(WLC_SET_WSEC_PMK, pmk, 68, true));
         setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth; WPA does the rest via the 4-way
         setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
+        setInt(WLC_UP, 0);                               // back up; WLC_SET_SSID then associates
     }
 
     /** Wait up to ~15 s for the E_LINK up event, tracing join events; returns true if the link came up. */
