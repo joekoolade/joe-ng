@@ -735,6 +735,186 @@ public final class Cyw43
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: ping no reply\n"));
         }
+        dns();                                           // M4: resolve a hostname -> IP
+    }
+
+    /** M4: resolve example.com via DNS and print the A record. */
+    static void dns()
+    {
+        long ip = Heap.allocData(4);
+        if (dnsResolve(Magic.bytes("example.com"), ip))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dns example.com = "));
+            printIp(ip);
+            board.bcm2711.Uart.putc(0x0A);
+        }
+        else
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dns no reply\n"));
+        }
+    }
+
+    /**
+     * Send a DNS A-query for {@code host} to {@code dnsIp} (via the gateway) and parse the first A record
+     * into {@code ipOut}. Resends every 0.5 s, drains fast (the unicast-RX pattern). Returns true on answer.
+     */
+    private static boolean dnsResolve(byte[] host, long ipOut)
+    {
+        long buf = Heap.allocData(256);
+        int flen = buildDnsQuery(buf, host);
+        long rx = Heap.allocData(2048);
+        long freq = Magic.readCNTFRQ_EL0();
+        long endT = Magic.readCNTPCT_EL0() + freq * 6L;
+        long nextSend = 0L;
+        while (Magic.readCNTPCT_EL0() < endT)
+        {
+            long now = Magic.readCNTPCT_EL0();
+            if (now >= nextSend)
+            {
+                txData(buf, flen);
+                nextSend = now + freq / 2L;
+            }
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;
+            }
+            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
+            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+            {
+                continue;
+            }
+            long ip = eth + 14;
+            if ((Magic.load8(ip + 9) & 0xFF) != 17)
+            {
+                continue;                                // not UDP
+            }
+            long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
+            if (((Magic.load8(udp) & 0xFF) << 8 | (Magic.load8(udp + 1) & 0xFF)) != 53)
+            {
+                continue;                                // not from a DNS server
+            }
+            long d = udp + 8;
+            if (((Magic.load8(d) & 0xFF) << 8 | (Magic.load8(d + 1) & 0xFF)) != 0x1234)
+            {
+                continue;                                // id mismatch
+            }
+            int ancount = (Magic.load8(d + 6) & 0xFF) << 8 | (Magic.load8(d + 7) & 0xFF);
+            if (ancount < 1)
+            {
+                continue;
+            }
+            long q = skipName(d + 12) + 4;               // skip question: qname + qtype(2) + qclass(2)
+            int a = 0;
+            while (a < ancount)
+            {
+                q = skipName(q);                         // answer name (often a compression pointer)
+                int type = (Magic.load8(q) & 0xFF) << 8 | (Magic.load8(q + 1) & 0xFF);
+                int rdlen = (Magic.load8(q + 8) & 0xFF) << 8 | (Magic.load8(q + 9) & 0xFF);
+                if (type == 1 && rdlen == 4)             // A record
+                {
+                    copy4(q + 10, ipOut);
+                    return true;
+                }
+                q = q + 10 + rdlen;
+                a = a + 1;
+            }
+        }
+        return false;
+    }
+
+    /** Build a DNS A-record query for {@code host} into {@code buf}; returns the total frame length. */
+    private static int buildDnsQuery(long buf, byte[] host)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, Magic.load8(gwMac + i));       // dst = gateway (route off-subnet)
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);
+        Magic.store8(buf + 13, 0x00);
+        long ip = buf + 14;
+        long udp = buf + 34;
+        long d = buf + 42;
+        be16(d + 0, 0x1234);                             // id
+        be16(d + 2, 0x0100);                             // flags: recursion desired
+        be16(d + 4, 1);                                  // qdcount
+        be16(d + 6, 0);
+        be16(d + 8, 0);
+        be16(d + 10, 0);
+        int qn = encodeQname(d + 12, host);
+        be16(d + 12 + qn, 1);                            // qtype = A
+        be16(d + 12 + qn + 2, 1);                        // qclass = IN
+        int dnsLen = 12 + qn + 4;
+        be16(udp + 0, 0xC000);                           // src port (ephemeral)
+        be16(udp + 2, 53);                               // dst port = DNS
+        be16(udp + 4, 8 + dnsLen);
+        be16(udp + 6, 0);                                // no UDP checksum
+        Magic.store8(ip + 0, 0x45);
+        Magic.store8(ip + 1, 0);
+        be16(ip + 2, 20 + 8 + dnsLen);
+        be16(ip + 4, 0);
+        be16(ip + 6, 0);
+        Magic.store8(ip + 8, 64);
+        Magic.store8(ip + 9, 17);
+        be16(ip + 10, 0);
+        copy4(ourIp, ip + 12);
+        copy4(dnsIp, ip + 16);
+        be16(ip + 10, ipCksum(ip, 20));
+        return 14 + 20 + 8 + dnsLen;
+    }
+
+    /** Encode a hostname as DNS labels (len-prefixed, root-terminated) at {@code dst}; returns bytes written. */
+    private static int encodeQname(long dst, byte[] host)
+    {
+        int p = 0;
+        int hp = 0;
+        while (hp < host.length)
+        {
+            long lenPos = dst + p;                       // reserve the label-length byte
+            p = p + 1;
+            int seg = 0;
+            while (hp < host.length && (host[hp] & 0xFF) != 0x2E)   // until '.' or end
+            {
+                Magic.store8(dst + p, host[hp] & 0xFF);
+                p = p + 1;
+                hp = hp + 1;
+                seg = seg + 1;
+            }
+            Magic.store8(lenPos, seg);
+            if (hp < host.length && (host[hp] & 0xFF) == 0x2E)
+            {
+                hp = hp + 1;                             // skip the dot
+            }
+        }
+        Magic.store8(dst + p, 0);                        // root label
+        p = p + 1;
+        return p;
+    }
+
+    /** Advance past a DNS name (labels, or a 2-byte 0xC0 compression pointer); returns the position after it. */
+    private static long skipName(long q)
+    {
+        while (true)
+        {
+            int b = Magic.load8(q) & 0xFF;
+            if (b == 0)
+            {
+                return q + 1;
+            }
+            if ((b & 0xC0) == 0xC0)
+            {
+                return q + 2;                            // compression pointer ends the name
+            }
+            q = q + 1 + b;
+        }
     }
 
     /** Send an ARP request for {@code targetIp} and wait (~4 s) for the reply, storing the sender MAC in
