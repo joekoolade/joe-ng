@@ -120,7 +120,33 @@ public final class Cyw43
         // ramTest();   (M1b-2a done — TCM writable at rambase 0x198000 once the CR4 is out of reset + CPUHALT)
         armCr4Prepare(ARMCR4_WRAP);                      // core out of reset, CPU halted -> TCM accessible
         uploadFirmware();                                // M1b-2b-i: stream the .bin into RAM + verify
+        computeRamsize();                                // M1b-2b-ii prep: read the TCM size for NVRAM placement
         return chipId;
+    }
+
+    /** Read the ARM CR4 TCM size by summing its banks (as brcmf_chip_get_raminfo does), logging each bank
+     *  and the total — needed to place the NVRAM at rambase+ramsize-varsz. Benign (reads + bank-index writes). */
+    static int computeRamsize()
+    {
+        int cap = bpRead32(ARMCR4_CORE + 0x00);
+        int totb = (cap & 0xF) + ((cap >> 4) & 0xF);     // TCBANB + TCBBNB
+        log(Magic.bytes("tcm banks="), totb);
+        int ramsize = 0;
+        int i = 0;
+        while (i < totb)
+        {
+            bpWrite32(ARMCR4_CORE + 0x40, i);            // ARMCR4_BANKIDX
+            int bx = bpRead32(ARMCR4_CORE + 0x44);       // ARMCR4_BANKINFO
+            int banksz = ((bx & 0x7F) + 1) * 8192;       // (BSZ+1) * 8K
+            log(Magic.bytes("bank info="), bx);
+            ramsize = ramsize + banksz;
+            i = i + 1;
+        }
+        log(Magic.bytes("tcm ramsize="), ramsize);
+        board.bcm2711.Uart.write(Magic.bytes("  fw end="));
+        VM.printHex(RAMBASE + 0x94C1DL);                 // where the 609 KB firmware ends (for NVRAM-fit check)
+        board.bcm2711.Uart.putc(0x0A);
+        return ramsize;
     }
 
     private static final long RAMBASE = 0x198000L;       // brcmfmac 4345 firmware load address (confirmed writable)
