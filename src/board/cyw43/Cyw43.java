@@ -450,6 +450,7 @@ public final class Cyw43
             events = events + 1;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
+        joinOpen();                                      // M2: associate to the open network in wifi.conf
     }
 
     /**
@@ -510,6 +511,149 @@ public final class Cyw43
     {
         return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
                 | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
+    }
+
+    private static final int WLC_SET_INFRA    = 20;      // 1 = infrastructure (BSS), not IBSS
+    private static final int WLC_SET_AUTH     = 22;      // 0 = open-system auth
+    private static final int WLC_SET_SSID     = 26;      // associate to a wlc_ssid_t {len, SSID[32]}
+    private static final int WLC_SET_WSEC     = 134;     // 0 = no link encryption
+    private static final int WLC_SET_WPA_AUTH = 165;     // 0 = no WPA
+
+    /**
+     * M2 join (open network): read the SSID from {@code /etc/wifi.conf}, configure an open/unencrypted BSS
+     * (INFRA=1, AUTH=0, wsec=0, wpa_auth=0), fire WLC_SET_SSID, then watch the event stream for the
+     * association to come up — E_SET_SSID(53) then E_LINK(16) with the link flag set = joined.
+     */
+    static void joinOpen()
+    {
+        long e = VM.fileFind(Magic.bytes("/etc/wifi.conf"));
+        if (e == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
+            return;
+        }
+        long src = Magic.load64(e + 16L);
+        int flen = (int) Magic.load64(e + 24L);
+        long ssid = Heap.allocData(48);
+        int sl = parseSsid(src, flen, ssid);
+        if (sl == 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
+        dumpRaw(ssid, sl);
+
+        setInt(WLC_SET_INFRA, 1);                        // infrastructure BSS
+        setInt(WLC_SET_WSEC, 0);                         // open: no encryption
+        setInt(WLC_SET_AUTH, 0);                         // open-system auth
+        setInt(WLC_SET_WPA_AUTH, 0);                     // no WPA
+
+        long ss = Heap.allocData(48);                    // wlc_ssid_t: len (u32) + SSID[32]
+        Magic.store32(ss, sl);
+        int i = 0;
+        while (i < sl)
+        {
+            Magic.store8(ss + 4 + i, Magic.load8(ssid + i));
+            i = i + 1;
+        }
+        readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
+
+        // Wait up to ~8 s for the link-up event.
+        long rx = Heap.allocData(2048);
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 8L;
+        boolean linked = false;
+        while (Magic.readCNTPCT_EL0() < endT && !linked)
+        {
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;                                // ioctl ack
+            }
+            linked = parseJoinEvent(rx, len);
+        }
+        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
+    }
+
+    /** Send a 4-byte (u32) SET ioctl and log its ack status. */
+    private static void setInt(int cmd, int val)
+    {
+        long b = Heap.allocData(16);
+        Magic.store32(b, val);
+        readCtrl(sendBcdc(cmd, b, 4, true));
+    }
+
+    /** Copy the SSID from wifi.conf's first line into {@code dst} (strips an optional "ssid=" prefix and any
+     *  trailing CR/LF); returns its length (<=32). */
+    private static int parseSsid(long src, int flen, long dst)
+    {
+        int start = 0;
+        if (flen >= 5 && (Magic.load8(src) & 0xFF) == 0x73 && (Magic.load8(src + 1) & 0xFF) == 0x73
+                && (Magic.load8(src + 2) & 0xFF) == 0x69 && (Magic.load8(src + 3) & 0xFF) == 0x64
+                && (Magic.load8(src + 4) & 0xFF) == 0x3D)                 // "ssid="
+        {
+            start = 5;
+        }
+        int n = 0;
+        int i = start;
+        while (i < flen && n < 32)
+        {
+            int c = Magic.load8(src + i) & 0xFF;
+            if (c == 0x0A || c == 0x0D || c == 0)
+            {
+                break;
+            }
+            Magic.store8(dst + n, c);
+            n = n + 1;
+            i = i + 1;
+        }
+        return n;
+    }
+
+    /** Find the BRCM event ethertype 0x886C in a frame; returns its offset, or -1. */
+    private static int findEthertype(long rx, int len)
+    {
+        int i = 12;
+        while (i < 64 && i < len - 2)
+        {
+            if ((Magic.load8(rx + i) & 0xFF) == 0x88 && (Magic.load8(rx + i + 1) & 0xFF) == 0x6C)
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Log join-relevant firmware events and report link-up. event_msg fields are big-endian: flags@+2 (bit0 =
+     * WLC_EVENT_MSG_LINK), event_type@+4, status@+8. Returns true on E_LINK(16) with the link flag set.
+     */
+    private static boolean parseJoinEvent(long rx, int len)
+    {
+        int eth = findEthertype(rx, len);
+        if (eth < 0)
+        {
+            return false;
+        }
+        long em = rx + eth + 12;                         // event_msg = ethertype(2) + bcmeth_hdr(10)
+        int flags = ((Magic.load8(em + 2) & 0xFF) << 8) | (Magic.load8(em + 3) & 0xFF);
+        int et = beU32(em + 4);
+        int status = beU32(em + 8);
+        if (et == 16 || et == 53 || et == 3 || et == 7 || et == 0 || et == 5 || et == 6 || et == 12)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  event "));
+            VM.printDec(et);
+            board.bcm2711.Uart.write(Magic.bytes(" status "));
+            VM.printDec(status);
+            board.bcm2711.Uart.putc(0x0A);
+        }
+        return et == 16 && (flags & 1) != 0;             // E_LINK, link up
     }
 
     /**
