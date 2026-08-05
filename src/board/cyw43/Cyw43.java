@@ -27,7 +27,7 @@ public final class Cyw43
     // SDIO function numbers.
     private static final int F0 = 0;            // CCCR / FBR (standard SDIO)
     private static final int F1 = 1;            // chip backplane (registers + RAM, windowed)
-    // F2 (WLAN data / SDPCM) — used from M1b.
+    private static final int F2 = 2;            // WLAN data (SDPCM packets) — enabled once firmware boots
 
     // CCCR (F0) register offsets.
     private static final int CCCR_IOEx = 0x02;  // enable I/O functions (bit n)
@@ -119,8 +119,17 @@ public final class Cyw43
         // dumpErom();  (M1b-1 done — core map decoded: ARM CR4 wrapper 0x18102000, RAM at 0x0/0x180000/0x200000)
         // ramTest();   (M1b-2a done — TCM writable at rambase 0x198000 once the CR4 is out of reset + CPUHALT)
         armCr4Prepare(ARMCR4_WRAP);                      // core out of reset, CPU halted -> TCM accessible
-        uploadFirmware();                                // M1b-2b-i: stream the .bin into RAM + verify
-        computeRamsize();                                // M1b-2b-ii prep: read the TCM size for NVRAM placement
+        int rstvec = uploadFirmware();                   // M1b-2b-i: stream the .bin into RAM; returns fw[0]
+        if (rstvec == 0)
+        {
+            return chipId;
+        }
+        int ramsize = computeRamsize();                  // TCM size (0xC8000) for NVRAM placement
+        if (!uploadNvram(ramsize))                       // M1b-2b-ii: NVRAM at rambase+ramsize-varsz + token
+        {
+            return chipId;
+        }
+        bootFirmware(ramsize, rstvec);                   // reset vector -> 0, release the ARM, wait F2 ready
         return chipId;
     }
 
@@ -156,13 +165,14 @@ public final class Cyw43
      * block CMD53 writes, then read back the first and last words to verify. (NVRAM + reset-vector + ARM
      * release + F2-ready come in M1b-2b-ii.)
      */
-    static boolean uploadFirmware()
+    /** Upload the firmware; returns the ARM reset vector (fw[0]) on success, 0 on failure. */
+    static int uploadFirmware()
     {
         long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.bin"));
         if (e == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
-            return false;
+            return 0;
         }
         long src = Magic.load64(e + 16L);                // firmware bytes (baked into the image)
         long len = Magic.load64(e + 24L);
@@ -172,20 +182,138 @@ public final class Cyw43
         Sdio.setClock(25000000);
         log(Magic.bytes("sdio clk ctl="), Sdio.control1());
 
-        int first = Magic.load32(src);                   // the ARM reset vector (first word) — logged for M1b-2b-ii
+        int first = Magic.load32(src);                   // the ARM reset vector (first word)
         if (!bpWrite(RAMBASE, src, len))
         {
             board.bcm2711.Uart.write(Magic.bytes("  fw upload FAILED\n"));
+            return 0;
+        }
+        int rb0 = bpRead32(RAMBASE);
+        log(Magic.bytes("fw[0] readback="), rb0);
+        board.bcm2711.Uart.write(rb0 == first ? Magic.bytes("  fw upload OK\n") : Magic.bytes("  fw upload MISMATCH\n"));
+        return rb0 == first ? first : 0;
+    }
+
+    /**
+     * M1b-2b-ii: process the NVRAM .txt (strip comment/blank lines, join key=value with NUL, pad to 4) and
+     * write it at {@code rambase + ramsize - varsz}, then the length token at {@code rambase + ramsize - 4}
+     * ({@code (~(varsz/4)<<16) | (varsz/4 & 0xFFFF)}) — the trailer the chip ROM reads to find the NVRAM.
+     */
+    static boolean uploadNvram(int ramsize)
+    {
+        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt"));
+        if (e == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  nvram NOT FOUND\n"));
             return false;
         }
-        // Verify: read back the first word and a word near the end.
-        int rb0 = bpRead32(RAMBASE);
-        int rbN = bpRead32(RAMBASE + ((len - 4L) & ~3L));
-        log(Magic.bytes("fw[0] src="), first);
-        log(Magic.bytes("fw[0] readback="), rb0);
-        log(Magic.bytes("fw[last] readback="), rbN);
-        board.bcm2711.Uart.write(rb0 == first ? Magic.bytes("  fw upload OK\n") : Magic.bytes("  fw upload MISMATCH\n"));
-        return rb0 == first;
+        long src = Magic.load64(e + 16L);
+        int srcLen = (int) Magic.load64(e + 24L);
+        long buf = Heap.allocData(8192);
+        int varsz = processNvram(src, srcLen, buf);
+        long addr = RAMBASE + (long) ramsize - (long) varsz;
+        log(Magic.bytes("nvram varsz="), varsz);
+        board.bcm2711.Uart.write(Magic.bytes("  nvram addr="));
+        VM.printHex(addr);
+        board.bcm2711.Uart.putc(0x0A);
+        if (!bpWrite(addr, buf, varsz))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  nvram upload FAILED\n"));
+            return false;
+        }
+        int varsizew = varsz / 4;
+        int token = (~varsizew << 16) | (varsizew & 0xFFFF);
+        bpWrite32(RAMBASE + (long) ramsize - 4L, token);
+        log(Magic.bytes("nvram token="), token);
+        return true;
+    }
+
+    /** Strip comment/blank lines from the NVRAM at {@code src}, join {@code key=value} entries with NUL into
+     *  {@code dst}, pad to a 4-byte boundary. Returns the padded length (varsz). */
+    private static int processNvram(long src, int srcLen, long dst)
+    {
+        int di = 0;
+        int i = 0;
+        while (i < srcLen)
+        {
+            int ls = i;
+            while (i < srcLen && (Magic.load8(src + i) & 0xFF) != 0x0A)   // to end of line
+            {
+                i = i + 1;
+            }
+            int le = i;
+            if (i < srcLen) { i = i + 1; }                               // skip '\n'
+            if (le > ls && (Magic.load8(src + le - 1) & 0xFF) == 0x0D) { le = le - 1; }   // trim '\r'
+            int cs = ls;
+            while (cs < le && ((Magic.load8(src + cs) & 0xFF) == 0x20 || (Magic.load8(src + cs) & 0xFF) == 0x09))
+            {
+                cs = cs + 1;                                             // skip leading whitespace
+            }
+            if (cs >= le || (Magic.load8(src + cs) & 0xFF) == 0x23)      // blank or '#' comment
+            {
+                continue;
+            }
+            int j = cs;
+            while (j < le)
+            {
+                Magic.store8(dst + di, Magic.load8(src + j));
+                di = di + 1;
+                j = j + 1;
+            }
+            Magic.store8(dst + di, 0);                                   // NUL terminate each entry
+            di = di + 1;
+        }
+        while ((di & 3) != 0)                                           // pad to 4 bytes
+        {
+            Magic.store8(dst + di, 0);
+            di = di + 1;
+        }
+        return di;
+    }
+
+    /**
+     * Boot the firmware: write the reset vector to backplane address 0 (where the CR4 fetches it), bring the
+     * ARM CR4 out of reset with the CPU RUNNING (resetcore, CPUHALT cleared), enable F2 and wait for the
+     * firmware to report F2-ready — the moment it comes alive.
+     */
+    static void bootFirmware(int ramsize, int rstvec)
+    {
+        bpWrite32(0x0L, rstvec);                          // CR4 boots from address 0
+        armCr4Run(ARMCR4_WRAP);                           // out of reset, CPU running
+        Sdio.cmd52Write(F0, CCCR_IOEx, (1 << F1) | (1 << F2));   // enable the WLAN data function
+        int tries = 0;
+        while ((Sdio.cmd52Read(F0, CCCR_IORx) & (1 << F2)) == 0 && tries < 2000)
+        {
+            tries = tries + 1;
+            VM.delayMs(1);
+        }
+        int ior = Sdio.cmd52Read(F0, CCCR_IORx);
+        log(Magic.bytes("after release ior="), ior);
+        board.bcm2711.Uart.write((ior & (1 << F2)) != 0
+                ? Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n")
+                : Magic.bytes("wifi: F2 not ready (firmware did not come up)\n"));
+    }
+
+    /** Bring the ARM CR4 OUT of reset with the CPU RUNNING (resetcore, CPUHALT cleared) — boots the firmware. */
+    private static void armCr4Run(long wrap)
+    {
+        // coredisable(prereset=CPUHALT, reset=0)
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CPUHALT | IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        bpWrite32(wrap + AI_RESETCTRL, 1);
+        bpRead32(wrap + AI_RESETCTRL);
+        VM.delayUs(10);
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        // resetcore: out of reset, CPU running (postreset=0 -> CPUHALT cleared)
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        bpWrite32(wrap + AI_RESETCTRL, 0);
+        bpRead32(wrap + AI_RESETCTRL);
+        VM.delayUs(10);
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        VM.delayUs(10);
     }
 
     /**
