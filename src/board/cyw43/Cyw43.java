@@ -446,13 +446,70 @@ public final class Cyw43
             {
                 continue;                                // an ioctl ack, not an event
             }
-            board.bcm2711.Uart.write(Magic.bytes("  evt len="));
-            VM.printDec(len);
-            board.bcm2711.Uart.write(Magic.bytes(" : "));
-            dumpRaw(rx + 12, len - 12 > 300 ? 300 : len - 12);   // skip SDPCM hdr; SSIDs appear in-line
+            parseEvent(rx, len);
             events = events + 1;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
+    }
+
+    /**
+     * Parse a firmware event frame and, for an escan result, print the AP's SSID. Layout: locate the BRCM
+     * event ethertype 0x886C (this skips the leading BDC header/padding), then event_msg = ethertype(2) +
+     * bcmeth_hdr(10) later; its fields are BIG-ENDIAN. event_type (69 = E_ESCAN_RESULT) at +4. The escan
+     * result follows the 48-byte event_msg: brcmf_escan_result {buflen,version,sync_id,bss_count} then
+     * bss_info {version,length,BSSID,beacon,capability,SSID_len@18,SSID@19}.
+     */
+    private static void parseEvent(long rx, int len)
+    {
+        int eth = -1;
+        int i = 12;
+        while (i < 64 && i < len - 2)                    // find 0x886C after the SDPCM/BDC headers
+        {
+            if ((Magic.load8(rx + i) & 0xFF) == 0x88 && (Magic.load8(rx + i + 1) & 0xFF) == 0x6C)
+            {
+                eth = i;
+                break;
+            }
+            i = i + 1;
+        }
+        if (eth < 0)
+        {
+            return;                                      // not a BRCM event frame
+        }
+        long em = rx + eth + 2 + 10;                     // event_msg = after ethertype(2) + bcmeth_hdr(10)
+        int et = beU32(em + 4);                          // event_type (big-endian)
+        if (et != 69)
+        {
+            return;                                      // not E_ESCAN_RESULT
+        }
+        long esr = em + 48;                              // escan result after the 48-byte event_msg
+        int bssCount = (Magic.load8(esr + 10) & 0xFF) | ((Magic.load8(esr + 11) & 0xFF) << 8);
+        if (bssCount == 0)
+        {
+            return;                                      // scan-progress / completion, no AP
+        }
+        long bss = esr + 12;
+        int ssidLen = Magic.load8(bss + 18) & 0xFF;
+        if (ssidLen == 0 || ssidLen > 32)
+        {
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("  SSID: "));
+        int k = 0;
+        while (k < ssidLen)
+        {
+            int c = Magic.load8(bss + 19 + k) & 0xFF;
+            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
+            k = k + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+    }
+
+    /** Read a big-endian u32 (firmware event_msg fields are network-order). */
+    private static int beU32(long addr)
+    {
+        return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
+                | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
     }
 
     /**
