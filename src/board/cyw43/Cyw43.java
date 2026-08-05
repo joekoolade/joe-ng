@@ -138,7 +138,9 @@ public final class Cyw43
         bpWrite32(wrap + AI_RESETCTRL, 1);
         bpRead32(wrap + AI_RESETCTRL);
         VM.delayUs(10);
-        bpWrite32(wrap + AI_IOCTRL, IOCTL_CLK);
+        // Leave FORCE-GATED-CLOCK on (brcmf_chip_ai_coredisable's final IOCTL is reset|FGC|CLK): a held-in-
+        // reset CR4 keeps its TCM clocked (and thus backplane-accessible) only while FGC stays asserted.
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
         bpRead32(wrap + AI_IOCTRL);
         VM.delayUs(10);
     }
@@ -148,6 +150,8 @@ public final class Cyw43
      * RAM address and read it back — the one(s) that round-trip 0xDEADBEEF are writable chip RAM, pinning the
      * firmware load address (and proving the backplane block-write path) before the 609 KB upload.
      */
+    private static final long ARMCR4_CORE = 0x18002000L;  // ARM CR4 core registers (EROM slave port 0)
+
     static void ramTest()
     {
         coreDisable(ARMCR4_WRAP);
@@ -156,6 +160,11 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes(" ioctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_IOCTRL) & 0xFFFFFFFFL));
         board.bcm2711.Uart.putc(0x0A);
+
+        // ARM CR4 core registers (always accessible — confirm the core base + TCM bank config).
+        log(Magic.bytes("cr4 cap[0x00]="), bpRead32(ARMCR4_CORE + 0x00));
+        log(Magic.bytes("cr4 cap[0x04]="), bpRead32(ARMCR4_CORE + 0x04));
+        log(Magic.bytes("cr4 cap[0x08]="), bpRead32(ARMCR4_CORE + 0x08));
 
         testAddr(0x00000000L);
         testAddr(0x00180000L);
