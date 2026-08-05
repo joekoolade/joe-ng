@@ -759,7 +759,14 @@ public final class Cyw43
             }
             long eth = rx + (Magic.load8(rx + 7) & 0xFF);
             eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip BDC
-            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0806)
+            int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
+            board.bcm2711.Uart.write(Magic.bytes("  rx et="));   // DIAG: show every data frame's ethertype
+            VM.printHex(et);
+            board.bcm2711.Uart.write(Magic.bytes(" dst="));
+            printHex2(Magic.load8(eth) & 0xFF);
+            printHex2(Magic.load8(eth + 5) & 0xFF);
+            board.bcm2711.Uart.putc(0x0A);
+            if (et != 0x0806)
             {
                 continue;                                // not ARP
             }
