@@ -369,8 +369,8 @@ public final class Cyw43
         }
         txSeq = txSeq + 1;
 
-        long rx = Heap.allocData(512);
-        int rlen = pollFrame(rx, 256);
+        long rx = Heap.allocData(1024);
+        int rlen = waitFrame(rx, 1024);
         if (rlen == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  no ioctl response\n"));
@@ -387,68 +387,58 @@ public final class Cyw43
 
     private static int reqId = 1;                        // BCDC request id (echoed in the response)
     private static final int WLC_UP = 2;                 // ioctl: bring the interface up
+    private static final int WLC_SCAN = 50;              // ioctl: start a scan
+    private static final int WLC_SCAN_RESULTS = 51;      // ioctl: read the scan result list (GET)
     private static final int WLC_SET_VAR = 263;          // ioctl: set a named iovar
 
     /**
-     * M2 (scan-only): bring the interface up, enable events, start an escan (results pushed as events), and
-     * dump every frame that arrives for a few seconds — the escan result events carry each AP's SSID, so
-     * they show up in the ASCII dump. Proves the radio sees networks before we attempt a join.
+     * M2 (scan-only): bring the interface up, run a synchronous scan (WLC_SCAN, wait, WLC_SCAN_RESULTS), and
+     * dump the result buffer's ASCII so the visible SSIDs show up — no event_msgs / escan dependency, just
+     * the proven GET path. Proves the radio hears networks before we attempt a join.
      */
     static void scanOnly()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
         sendBcdc(WLC_UP, 0L, 0, true);                   // bring the interface up
         readCtrl();
+        VM.delayMs(100);
 
-        // enable all events (event_msgs = "event_msgs\0" + 16-byte 0xFF mask)
-        long em = Heap.allocData(64);
-        int n = putStr(em, Magic.bytes("event_msgs"));
-        int k = 0;
-        while (k < 16)
-        {
-            Magic.store8(em + n + k, 0xFF);
-            k = k + 1;
-        }
-        sendBcdc(WLC_SET_VAR, em, n + 16, true);
-        readCtrl();
-
-        // escan params: version=1, action=start, sync_id, broadcast SSID, any BSS, active, all channels
-        long es = Heap.allocData(256);
-        int np = putStr(es, Magic.bytes("escan"));       // "escan\0"
-        long pp = es + np;
-        Magic.store32(pp + 0, 1);                        // version = ESCAN_REQ_VERSION
-        store16(pp + 4, 1);                              // action = WL_SCAN_ACTION_START
-        store16(pp + 6, 0x1234);                         // sync_id
-        // ssid (36 bytes @ pp+8) left zero = broadcast
+        // wl_scan_params_t (64 bytes): broadcast SSID, broadcast BSSID, any BSS, active, all channels.
+        long sp = Heap.allocData(128);
         int b = 0;
         while (b < 6)
         {
-            Magic.store8(pp + 44 + b, 0xFF);             // bssid = broadcast
+            Magic.store8(sp + 36 + b, 0xFF);             // bssid = broadcast
             b = b + 1;
         }
-        Magic.store8(pp + 50, 2);                        // bss_type = DOT11_BSSTYPE_ANY
-        Magic.store8(pp + 51, 0);                        // scan_type = active
-        Magic.store32(pp + 52, -1);                      // nprobes
-        Magic.store32(pp + 56, -1);                      // active_time
-        Magic.store32(pp + 60, -1);                      // passive_time
-        Magic.store32(pp + 64, -1);                      // home_time
-        Magic.store32(pp + 68, 0);                       // channel_num = 0 (all)
-        sendBcdc(WLC_SET_VAR, es, np + 72, true);        // "escan\0" + 72-byte params
+        Magic.store8(sp + 42, 2);                        // bss_type = DOT11_BSSTYPE_ANY
+        Magic.store8(sp + 43, 0);                        // scan_type = active
+        Magic.store32(sp + 44, -1);                      // nprobes
+        Magic.store32(sp + 48, -1);                      // active_time
+        Magic.store32(sp + 52, -1);                      // passive_time
+        Magic.store32(sp + 56, -1);                      // home_time
+        Magic.store32(sp + 60, 0);                       // channel_num = 0 (all)
+        sendBcdc(WLC_SCAN, sp, 64, true);                // start the scan
         readCtrl();
 
-        // Dump frames for ~4 s — escan result events appear here with SSIDs.
-        long rx = Heap.allocData(512);
-        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
-        int frames = 0;
-        while (Magic.readCNTPCT_EL0() < endT && frames < 40)
+        VM.delayMs(2500);                                // let the scan sweep the channels
+
+        // WLC_SCAN_RESULTS is a GET: send a zeroed buffer the firmware fills with wl_scan_results_t.
+        long req = Heap.allocData(512);                  // zeroed request buffer
+        sendBcdc(WLC_SCAN_RESULTS, req, 460, false);
+        long rx = Heap.allocData(1024);
+        int len = waitFrame(rx, 1024);
+        if (len == 0)
         {
-            int len = pollFrameOnce(rx, 256);
-            if (len > 0)
-            {
-                dumpFrame(rx, len);
-                frames = frames + 1;
-            }
+            board.bcm2711.Uart.write(Magic.bytes("  no scan results\n"));
+            return;
         }
+        int doff = Magic.load8(rx + 7) & 0xFF;
+        long data = rx + doff + 16;                      // wl_scan_results_t: buflen, version, count, bss[]
+        log(Magic.bytes("scan status="), Magic.load32(rx + doff + 12));
+        log(Magic.bytes("scan count="), Magic.load32(data + 8));
+        board.bcm2711.Uart.write(Magic.bytes("  results: "));
+        dumpAscii(data, 400);                            // SSIDs appear as readable runs in the bss_info list
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
     }
 
@@ -484,8 +474,8 @@ public final class Cyw43
     /** Read the ioctl ack (control-channel BCDC response) and log its status word (0 = OK). */
     static void readCtrl()
     {
-        long rx = Heap.allocData(512);
-        int len = pollFrame(rx, 128);
+        long rx = Heap.allocData(1024);
+        int len = waitFrame(rx, 1024);
         if (len == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
@@ -495,40 +485,54 @@ public final class Cyw43
         log(Magic.bytes("ctrl status="), Magic.load32(rx + doff + 12));
     }
 
-    /** One F2 read attempt; returns the SDPCM frame length if a valid frame arrived, else 0 (no wait loop). */
-    private static int pollFrameOnce(long dst, int maxlen)
+    /**
+     * Read exactly one SDPCM frame: the 4-byte hw header (gives len/~len), then exactly len-4 body bytes —
+     * so we never over-read into the next frame (the bug that corrupted the escan stream). Returns the frame
+     * length, or 0 if this attempt saw no valid frame.
+     */
+    private static int readFrameOnce(long dst, int cap)
     {
-        if (Sdio.cmd53Read(F2, 0, true, dst, 1, maxlen))
+        if (!Sdio.cmd53Read(F2, 0, true, dst, 1, 4))     // hw header
         {
-            int hw = Magic.load32(dst);
-            int len = hw & 0xFFFF;
-            int nlen = (hw >> 16) & 0xFFFF;
-            if (len > 0 && ((len ^ nlen) & 0xFFFF) == 0xFFFF)
+            return 0;
+        }
+        int hw = Magic.load32(dst);
+        int len = hw & 0xFFFF;
+        int nlen = (hw >> 16) & 0xFFFF;
+        if (len < 12 || ((len ^ nlen) & 0xFFFF) != 0xFFFF)
+        {
+            return 0;                                    // no frame / invalid header
+        }
+        int body = len - 4;
+        if (body > cap - 4)
+        {
+            body = cap - 4;                              // clamp to the buffer
+        }
+        if (body > 0)
+        {
+            if (!Sdio.cmd53Read(F2, 0, true, dst + 4, 1, body))
+            {
+                return 0;
+            }
+        }
+        return len;
+    }
+
+    /** Retry {@link #readFrameOnce} (1 ms apart) until a valid frame arrives or ~2 s elapses; 0 on timeout. */
+    private static int waitFrame(long dst, int cap)
+    {
+        int tries = 0;
+        while (tries < 2000)
+        {
+            int len = readFrameOnce(dst, cap);
+            if (len > 0)
             {
                 return len;
             }
+            tries = tries + 1;
+            VM.delayMs(1);
         }
         return 0;
-    }
-
-    /** Log a received frame's channel + length, then its printable ASCII (to spot SSIDs in scan events). */
-    private static void dumpFrame(long rx, int len)
-    {
-        int ch = Magic.load8(rx + 5) & 0x0F;
-        board.bcm2711.Uart.write(Magic.bytes("  frame ch="));
-        VM.printDec(ch);
-        board.bcm2711.Uart.write(Magic.bytes(" len="));
-        VM.printDec(len);
-        board.bcm2711.Uart.write(Magic.bytes(" : "));
-        int n = len > 240 ? 240 : len;
-        int i = 12;                                      // skip the SDPCM header
-        while (i < n)
-        {
-            int c = Magic.load8(rx + i) & 0xFF;
-            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
-            i = i + 1;
-        }
-        board.bcm2711.Uart.putc(0x0A);
     }
 
     /** Copy the bytes of {@code s} to {@code dst} then a NUL; returns the length written (incl. NUL). */
@@ -542,28 +546,6 @@ public final class Cyw43
         }
         Magic.store8(dst + s.length, 0);
         return s.length + 1;
-    }
-
-    /** Poll-read F2 for a valid SDPCM frame (hw len/~len match, len>0); returns the length, or 0 on timeout. */
-    private static int pollFrame(long dst, int maxlen)
-    {
-        int tries = 0;
-        while (tries < 2000)
-        {
-            if (Sdio.cmd53Read(F2, 0, true, dst, 1, maxlen))
-            {
-                int hw = Magic.load32(dst);
-                int len = hw & 0xFFFF;
-                int nlen = (hw >> 16) & 0xFFFF;
-                if (len > 0 && ((len ^ nlen) & 0xFFFF) == 0xFFFF)
-                {
-                    return len;
-                }
-            }
-            tries = tries + 1;
-            VM.delayMs(1);
-        }
-        return 0;
     }
 
     /** Store a 16-bit little-endian value (no Magic.store16). */
