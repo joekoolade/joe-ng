@@ -47,7 +47,9 @@ public final class Cyw43
 
     // CHIPCLKCSR bits.
     private static final int ALP_AVAIL_REQ = 0x08;
+    private static final int HT_AVAIL_REQ  = 0x10;
     private static final int ALP_AVAIL     = 0x40;
+    private static final int HT_AVAIL      = 0x80;
 
     // Chip backplane: the ChipCommon core sits at the silicon enumeration base; its first word is the ID.
     private static final long SI_ENUM_BASE = 0x18000000L;
@@ -154,6 +156,17 @@ public final class Cyw43
 
     static void ramTest()
     {
+        // Request the HT clock: ChipCommon + the AI wrappers run on ALP (which we have), but the ARM CR4
+        // core and its TCM appear to need HT (their reads returned 0 on ALP alone). Wait for HT_AVAIL.
+        Sdio.cmd52Write(F1, CHIPCLKCSR, HT_AVAIL_REQ | ALP_AVAIL_REQ);
+        int tries = 0;
+        while ((Sdio.cmd52Read(F1, CHIPCLKCSR) & HT_AVAIL) == 0 && tries < 500)
+        {
+            tries = tries + 1;
+            VM.delayMs(1);
+        }
+        log(Magic.bytes("ht clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
+
         coreDisable(ARMCR4_WRAP);
         board.bcm2711.Uart.write(Magic.bytes("  armcr4 resetctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_RESETCTRL) & 0xFFFFFFFFL));
