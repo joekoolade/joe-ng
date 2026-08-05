@@ -141,6 +141,12 @@ public final class Sdio
         return Magic.load32(base + CONTROL1);
     }
 
+    /** SDHCI INTERRUPT (normal status) register — bit 8 is the SDIO Card Interrupt (device has data). */
+    public static int interrupt()
+    {
+        return Magic.load32(base + INTERRUPT);
+    }
+
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {

@@ -32,7 +32,8 @@ public final class Cyw43
     // CCCR (F0) register offsets.
     private static final int CCCR_IOEx = 0x02;  // enable I/O functions (bit n)
     private static final int CCCR_IORx = 0x03;  // I/O function n ready (bit n)
-    private static final int CCCR_IEN  = 0x04;  // interrupt enable
+    private static final int CCCR_IEN  = 0x04;  // interrupt enable (bit0 master, bit1 F1, bit2 F2)
+    private static final int SDHCI_CARD_INT = 1 << 8;   // SDHCI INTERRUPT: SDIO device asserted its IRQ
     private static final int CCCR_BUS  = 0x07;  // bus interface control (bus width — set by Sdio.init)
     private static final int CCCR_CAP  = 0x08;  // card capability
     private static final int CCCR_REV  = 0x00;  // CCCR/SDIO revision
@@ -289,9 +290,47 @@ public final class Cyw43
         }
         int ior = Sdio.cmd52Read(F0, CCCR_IORx);
         log(Magic.bytes("after release ior="), ior);
-        board.bcm2711.Uart.write((ior & (1 << F2)) != 0
-                ? Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n")
-                : Magic.bytes("wifi: F2 not ready (firmware did not come up)\n"));
+        if ((ior & (1 << F2)) == 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: F2 not ready (firmware did not come up)\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: FIRMWARE UP (F2 ready)\n"));
+        readFirstFrame();                                // M1c-1: dump the firmware's first SDPCM frame
+    }
+
+    /**
+     * M1c-1: enable SDIO interrupts, wait for the firmware's first SDPCM frame (it announces bus credits /
+     * an initial event after boot), and dump the raw SDPCM header — the ground truth for the framing the TX
+     * and BCDC layers need. hw header = [len:16][~len:16]; sw header = seq/channel/nextlen/dataoff/flow/maxseq.
+     */
+    static void readFirstFrame()
+    {
+        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // enable interrupts: master + F1 + F2
+        int tries = 0;
+        while ((Sdio.interrupt() & SDHCI_CARD_INT) == 0 && tries < 1000)
+        {
+            tries = tries + 1;
+            VM.delayMs(1);
+        }
+        log(Magic.bytes("sdhci int="), Sdio.interrupt());
+        long rb = Heap.allocData(256);
+        if (!Sdio.cmd53Read(F2, 0, true, rb, 1, 64))     // read the first 64 bytes of the F2 stream (byte mode)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  F2 read FAILED\n"));
+            return;
+        }
+        int hw = Magic.load32(rb);                       // [len:16][~len:16]
+        int sw = Magic.load32(rb + 4);                   // seq(8) | channel+flags(8) | nextlen(8) | dataoff(8)
+        int sw2 = Magic.load32(rb + 8);                  // flow(8) | maxseq(8) | reserved(16)
+        int len = hw & 0xFFFF;
+        int nlen = (hw >> 16) & 0xFFFF;
+        log(Magic.bytes("rx hw="), hw);
+        log(Magic.bytes("rx sw="), sw);
+        log(Magic.bytes("rx sw2="), sw2);
+        board.bcm2711.Uart.write(((len ^ nlen) & 0xFFFF) == 0xFFFF
+                ? Magic.bytes("  SDPCM frame valid (len/~len match)\n")
+                : Magic.bytes("  SDPCM header invalid (len/~len mismatch)\n"));
     }
 
     /** Bring the ARM CR4 OUT of reset with the CPU RUNNING (resetcore, CPUHALT cleared) — boots the firmware. */
