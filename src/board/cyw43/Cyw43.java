@@ -331,6 +331,102 @@ public final class Cyw43
         board.bcm2711.Uart.write(((len ^ nlen) & 0xFFFF) == 0xFFFF
                 ? Magic.bytes("  SDPCM frame valid (len/~len match)\n")
                 : Magic.bytes("  SDPCM header invalid (len/~len mismatch)\n"));
+
+        verIoctl();                                      // M1c-2: ask the firmware its version
+    }
+
+    private static int txSeq = 0;                        // SDPCM tx sequence (credit-limited by maxseq)
+    private static final int WLC_GET_VAR = 262;          // ioctl: read a named iovar
+
+    /**
+     * M1c-2: send a BCDC {@code WLC_GET_VAR "ver"} ioctl over the SDPCM control channel and dump the
+     * firmware's version string from the response — the "we're talking to live firmware" proof.
+     * Frame = SDPCM hdr(12) + BCDC hdr(16) + data. BCDC hdr = [cmd:u32][len:u32][flags:u32 (id&lt;&lt;16)][status:u32].
+     */
+    static void verIoctl()
+    {
+        long tx = Heap.allocData(512);                   // zeroed
+        int dataLen = 192;                               // response buffer for the version string
+        Magic.store8(tx + 28, 0x76);                     // "ver\0" (BCDC data, right after the 16-byte BCDC hdr)
+        Magic.store8(tx + 29, 0x65);
+        Magic.store8(tx + 30, 0x72);
+        Magic.store8(tx + 31, 0);
+        Magic.store32(tx + 12, WLC_GET_VAR);             // BCDC cmd
+        Magic.store32(tx + 16, dataLen);                 // BCDC len (buffer size the fw fills)
+        Magic.store32(tx + 20, 1 << 16);                 // BCDC flags: id=1 (high 16), GET (no SET bit)
+        Magic.store32(tx + 24, 0);                       // BCDC status
+        int frameLen = 12 + 16 + dataLen;                // 220
+        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM sw: seq
+        Magic.store8(tx + 5, 0);                         //   channel 0 = control
+        Magic.store8(tx + 6, 0);                         //   nextlen
+        Magic.store8(tx + 7, 12);                        //   dataoffset = 12 (payload after the 12-byte hdr)
+        store16(tx + 0, frameLen);                       // SDPCM hw: len
+        store16(tx + 2, ~frameLen);                      //   ~len
+        if (!Sdio.cmd53Write(F2, 0, true, tx, 1, (frameLen + 3) & ~3))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  ioctl tx FAILED\n"));
+            return;
+        }
+        txSeq = txSeq + 1;
+
+        long rx = Heap.allocData(512);
+        int rlen = pollFrame(rx, 256);
+        if (rlen == 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  no ioctl response\n"));
+            return;
+        }
+        int doff = Magic.load8(rx + 7) & 0xFF;           // response data offset
+        log(Magic.bytes("resp len="), rlen);
+        log(Magic.bytes("resp doff="), doff);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: ver = "));
+        dumpAscii(rx + doff + 16, 180);                  // value = after sdpcm(doff) + bcdc(16)
+    }
+
+    /** Poll-read F2 for a valid SDPCM frame (hw len/~len match, len>0); returns the length, or 0 on timeout. */
+    private static int pollFrame(long dst, int maxlen)
+    {
+        int tries = 0;
+        while (tries < 2000)
+        {
+            if (Sdio.cmd53Read(F2, 0, true, dst, 1, maxlen))
+            {
+                int hw = Magic.load32(dst);
+                int len = hw & 0xFFFF;
+                int nlen = (hw >> 16) & 0xFFFF;
+                if (len > 0 && ((len ^ nlen) & 0xFFFF) == 0xFFFF)
+                {
+                    return len;
+                }
+            }
+            tries = tries + 1;
+            VM.delayMs(1);
+        }
+        return 0;
+    }
+
+    /** Store a 16-bit little-endian value (no Magic.store16). */
+    private static void store16(long addr, int v)
+    {
+        Magic.store8(addr, v & 0xFF);
+        Magic.store8(addr + 1, (v >> 8) & 0xFF);
+    }
+
+    /** Print up to {@code len} printable bytes at {@code addr} (NUL-terminated) to the UART. */
+    private static void dumpAscii(long addr, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            int c = Magic.load8(addr + i) & 0xFF;
+            if (c == 0)
+            {
+                break;
+            }
+            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
+            i = i + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
     }
 
     /** Bring the ARM CR4 OUT of reset with the CPU RUNNING (resetcore, CPUHALT cleared) — boots the firmware. */
