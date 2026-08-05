@@ -119,23 +119,42 @@ public final class Cyw43
         return chipId;
     }
 
-    // Decoded from the EROM: the ARM CR4 core's wrapper (AI reset control) and candidate RAM bases.
+    // Decoded from the EROM: the ARM CR4 core's wrapper (AI reset/ioctl control) and candidate RAM bases.
     private static final long ARMCR4_WRAP = 0x18102000L;
-    private static final long AI_RESETCTRL = 0x800;      // wrapper offset: bit0 = core in reset
+    private static final long AI_IOCTRL   = 0x408;       // wrapper: bit0 clock-enable, bit1 force-gated-clock
+    private static final long AI_RESETCTRL = 0x800;      // wrapper: bit0 = core in reset
+    private static final int IOCTL_CLK = 0x1, IOCTL_FGC = 0x2;
 
     /**
-     * M1b-2a: hold the ARM CR4 in reset, then write a test word to each candidate backplane RAM address and
-     * read it back — the one(s) that round-trip 0xDEADBEEF are writable chip RAM, which pins down the
-     * firmware load address (and proves the backplane block-write path) before the 609 KB upload. Restores
-     * each original word.
+     * Disable an AI core but leave its clock forced ON, so its RAM/registers stay accessible over the
+     * backplane (the standard brcmfmac ai_coredisable dance): force the clock (IOCTRL FGC|CLK), assert
+     * reset (RESETCTRL=1), then drop FGC leaving CLK on. Without the forced clock a reset core's slave port
+     * reads back 0 — which is exactly why the first RAM probe saw all zeros.
+     */
+    private static void coreDisable(long wrap)
+    {
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        bpWrite32(wrap + AI_RESETCTRL, 1);
+        bpRead32(wrap + AI_RESETCTRL);
+        VM.delayUs(10);
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        VM.delayUs(10);
+    }
+
+    /**
+     * M1b-2a: disable the ARM CR4 with its clock forced on, then write a test word to each candidate backplane
+     * RAM address and read it back — the one(s) that round-trip 0xDEADBEEF are writable chip RAM, pinning the
+     * firmware load address (and proving the backplane block-write path) before the 609 KB upload.
      */
     static void ramTest()
     {
-        // Assert reset on the ARM CR4 via its wrapper so RAM writes don't race a running core.
-        bpWrite32(ARMCR4_WRAP + AI_RESETCTRL, 1);
-        VM.delayUs(50);
+        coreDisable(ARMCR4_WRAP);
         board.bcm2711.Uart.write(Magic.bytes("  armcr4 resetctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_RESETCTRL) & 0xFFFFFFFFL));
+        board.bcm2711.Uart.write(Magic.bytes(" ioctrl="));
+        VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_IOCTRL) & 0xFFFFFFFFL));
         board.bcm2711.Uart.putc(0x0A);
 
         testAddr(0x00000000L);
