@@ -588,9 +588,9 @@ public final class Cyw43
     static void setupWpa2(long psk, int pl)
     {
         setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
-        bsscfgInt(Magic.bytes("sup_wpa"), 1);            // enable the in-chip supplicant
-        bsscfgInt(Magic.bytes("sup_wpa2_eapver"), -1);
-        bsscfgInt(Magic.bytes("sup_wpa_tmo"), 2500);
+        iovarInt(Magic.bytes("sup_wpa"), 1);             // enable the in-chip supplicant (plain iovar, ifidx 0)
+        iovarInt(Magic.bytes("sup_wpa2_eapver"), -1);
+        iovarInt(Magic.bytes("sup_wpa_tmo"), 2500);
         long pmk = Heap.allocData(72);                   // wsec_pmk_t {key_len u16, flags u16, key[64]}
         store16(pmk, pl);                                // key_len = passphrase length
         store16(pmk + 2, 1);                             // flags = WSEC_PASSPHRASE (fw derives the PMK)
@@ -626,6 +626,19 @@ public final class Cyw43
             linked = parseJoinEvent(rx, len);
         }
         return linked;
+    }
+
+    /** Set a plain integer iovar: "&lt;name&gt;\0" + value(u32). (For interface 0, brcmfmac uses this — the
+     *  "bsscfg:" prefix is only for non-zero interface indices.) */
+    private static void iovarInt(byte[] name, int value)
+    {
+        long b = Heap.allocData(64);
+        int p = putBytes(b, 0, name);
+        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        p = p + 1;
+        Magic.store32(b + p, value);
+        p = p + 4;
+        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
     }
 
     /** Set a bsscfg-scoped integer iovar on interface 0: "bsscfg:&lt;name&gt;\0" + index(u32) + value(u32). */
