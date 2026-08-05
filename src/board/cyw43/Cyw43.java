@@ -450,7 +450,7 @@ public final class Cyw43
             events = events + 1;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
-        joinOpen();                                      // M2: associate to the open network in wifi.conf
+        join();                                          // M2/M5: associate (open or WPA2) per wifi.conf
     }
 
     /**
@@ -516,15 +516,16 @@ public final class Cyw43
     private static final int WLC_SET_INFRA    = 20;      // 1 = infrastructure (BSS), not IBSS
     private static final int WLC_SET_AUTH     = 22;      // 0 = open-system auth
     private static final int WLC_SET_SSID     = 26;      // associate to a wlc_ssid_t {len, SSID[32]}
-    private static final int WLC_SET_WSEC     = 134;     // 0 = no link encryption
-    private static final int WLC_SET_WPA_AUTH = 165;     // 0 = no WPA
+    private static final int WLC_SET_WSEC     = 134;     // 0 = open, 4 = AES/CCMP
+    private static final int WLC_SET_WPA_AUTH = 165;     // 0 = no WPA, 0x80 = WPA2-PSK
+    private static final int WLC_SET_WSEC_PMK = 268;     // set passphrase/PMK (wsec_pmk_t)
 
     /**
-     * M2 join (open network): read the SSID from {@code /etc/wifi.conf}, configure an open/unencrypted BSS
-     * (INFRA=1, AUTH=0, wsec=0, wpa_auth=0), fire WLC_SET_SSID, then watch the event stream for the
-     * association to come up — E_SET_SSID(53) then E_LINK(16) with the link flag set = joined.
+     * M2/M5 join: read {@code ssid=}/{@code psk=} from {@code /etc/wifi.conf}. If a psk is present, configure
+     * WPA2-PSK (in-chip supplicant offload); otherwise an open BSS. Fire WLC_SET_SSID and wait for E_LINK up,
+     * then run DHCP.
      */
-    static void joinOpen()
+    static void join()
     {
         long e = VM.fileFind(Magic.bytes("/etc/wifi.conf"));
         if (e == 0L)
@@ -532,10 +533,12 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  no /etc/wifi.conf\n"));
             return;
         }
-        long src = Magic.load64(e + 16L);
+        long conf = Magic.load64(e + 16L);
         int flen = (int) Magic.load64(e + 24L);
         long ssid = Heap.allocData(48);
-        int sl = parseSsid(src, flen, ssid);
+        int sl = confValue(conf, flen, Magic.bytes("ssid"), ssid);
+        long psk = Heap.allocData(72);
+        int pl = confValue(conf, flen, Magic.bytes("psk"), psk);
         if (sl == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
@@ -545,9 +548,18 @@ public final class Cyw43
         dumpRaw(ssid, sl);
 
         setInt(WLC_SET_INFRA, 1);                        // infrastructure BSS
-        setInt(WLC_SET_WSEC, 0);                         // open: no encryption
-        setInt(WLC_SET_AUTH, 0);                         // open-system auth
-        setInt(WLC_SET_WPA_AUTH, 0);                     // no WPA
+        if (pl > 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  security: WPA2-PSK\n"));
+            setupWpa2(psk, pl);
+        }
+        else
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  security: open\n"));
+            setInt(WLC_SET_WSEC, 0);
+            setInt(WLC_SET_AUTH, 0);
+            setInt(WLC_SET_WPA_AUTH, 0);
+        }
 
         long ss = Heap.allocData(48);                    // wlc_ssid_t: len (u32) + SSID[32]
         Magic.store32(ss, sl);
@@ -559,7 +571,43 @@ public final class Cyw43
         }
         readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
 
-        // Wait up to ~15 s for the link-up event (trace every event in the meantime).
+        boolean linked = waitLink();
+        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
+        if (linked)
+        {
+            VM.delayMs(500);                             // let the link settle (+ let the 4-way finish for WPA2)
+            dhcp();
+        }
+    }
+
+    /**
+     * Configure WPA2-PSK via the in-chip supplicant offload — the firmware runs PBKDF2 (passphrase→PMK) and
+     * the 4-way handshake, so no crypto lives in Java. wsec=AES, enable the supplicant (bsscfg iovars), hand
+     * it the passphrase (WLC_SET_WSEC_PMK with the WSEC_PASSPHRASE flag), auth=open, wpa_auth=WPA2-PSK.
+     */
+    static void setupWpa2(long psk, int pl)
+    {
+        setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
+        bsscfgInt(Magic.bytes("sup_wpa"), 1);            // enable the in-chip supplicant
+        bsscfgInt(Magic.bytes("sup_wpa2_eapver"), -1);
+        bsscfgInt(Magic.bytes("sup_wpa_tmo"), 2500);
+        long pmk = Heap.allocData(72);                   // wsec_pmk_t {key_len u16, flags u16, key[64]}
+        store16(pmk, pl);                                // key_len = passphrase length
+        store16(pmk + 2, 1);                             // flags = WSEC_PASSPHRASE (fw derives the PMK)
+        int i = 0;
+        while (i < pl)
+        {
+            Magic.store8(pmk + 4 + i, Magic.load8(psk + i));
+            i = i + 1;
+        }
+        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, pmk, 68, true));
+        setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth; WPA does the rest via the 4-way
+        setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
+    }
+
+    /** Wait up to ~15 s for the E_LINK up event, tracing join events; returns true if the link came up. */
+    private static boolean waitLink()
+    {
         long rx = Heap.allocData(2048);
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 15L;
         boolean linked = false;
@@ -577,12 +625,62 @@ public final class Cyw43
             }
             linked = parseJoinEvent(rx, len);
         }
-        board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
-        if (linked)
+        return linked;
+    }
+
+    /** Set a bsscfg-scoped integer iovar on interface 0: "bsscfg:&lt;name&gt;\0" + index(u32) + value(u32). */
+    private static void bsscfgInt(byte[] name, int value)
+    {
+        long b = Heap.allocData(64);
+        int p = putBytes(b, 0, Magic.bytes("bsscfg:"));
+        p = putBytes(b, p, name);
+        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        p = p + 1;
+        Magic.store32(b + p, 0);                         // bsscfg index 0
+        p = p + 4;
+        Magic.store32(b + p, value);
+        p = p + 4;
+        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
+    }
+
+    /** Find a {@code key=value} line in wifi.conf and copy the value (to CR/LF/end) into {@code dst}; returns
+     *  its length, or 0 if the key is absent. */
+    private static int confValue(long conf, int flen, byte[] key, long dst)
+    {
+        int i = 0;
+        while (i < flen)
         {
-            VM.delayMs(500);                             // let the link settle
-            dhcp();                                      // M3: data path + DHCP discover -> get an IP
+            int k = 0;
+            int j = i;
+            while (k < key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == (key[k] & 0xFF))
+            {
+                k = k + 1;
+                j = j + 1;
+            }
+            if (k == key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == 0x3D)   // "key="
+            {
+                j = j + 1;
+                int n = 0;
+                while (j < flen && n < 63)
+                {
+                    int c = Magic.load8(conf + j) & 0xFF;
+                    if (c == 0x0A || c == 0x0D || c == 0)
+                    {
+                        break;
+                    }
+                    Magic.store8(dst + n, c);
+                    n = n + 1;
+                    j = j + 1;
+                }
+                return n;
+            }
+            while (i < flen && (Magic.load8(conf + i) & 0xFF) != 0x0A)   // skip to the next line
+            {
+                i = i + 1;
+            }
+            i = i + 1;
         }
+        return 0;
     }
 
     static long ourMac;                                  // heap addr of our 6-byte station MAC

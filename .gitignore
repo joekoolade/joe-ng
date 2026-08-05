@@ -7,3 +7,6 @@ sdcard/
 # Firmware download archives (extract into ramfs/lib/firmware/; do not commit).
 fw.tar.gz
 *.tar.gz
+
+# WiFi credentials (real SSID/password) stay local-only
+ramfs/etc/wifi.conf
