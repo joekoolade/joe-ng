@@ -559,9 +559,9 @@ public final class Cyw43
         }
         readCtrl(sendBcdc(WLC_SET_SSID, ss, 36, true));
 
-        // Wait up to ~8 s for the link-up event.
+        // Wait up to ~15 s for the link-up event (trace every event in the meantime).
         long rx = Heap.allocData(2048);
-        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 8L;
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 15L;
         boolean linked = false;
         while (Magic.readCNTPCT_EL0() < endT && !linked)
         {
@@ -645,14 +645,13 @@ public final class Cyw43
         int flags = ((Magic.load8(em + 2) & 0xFF) << 8) | (Magic.load8(em + 3) & 0xFF);
         int et = beU32(em + 4);
         int status = beU32(em + 8);
-        if (et == 16 || et == 53 || et == 3 || et == 7 || et == 0 || et == 5 || et == 6 || et == 12)
-        {
-            board.bcm2711.Uart.write(Magic.bytes("  event "));
-            VM.printDec(et);
-            board.bcm2711.Uart.write(Magic.bytes(" status "));
-            VM.printDec(status);
-            board.bcm2711.Uart.putc(0x0A);
-        }
+        board.bcm2711.Uart.write(Magic.bytes("  event "));   // print EVERY join-phase event to trace the flow
+        VM.printDec(et);
+        board.bcm2711.Uart.write(Magic.bytes(" status "));
+        VM.printDec(status);
+        board.bcm2711.Uart.write(Magic.bytes(" flags="));
+        VM.printHex(flags);
+        board.bcm2711.Uart.putc(0x0A);
         return et == 16 && (flags & 1) != 0;             // E_LINK, link up
     }
 
