@@ -648,22 +648,153 @@ public final class Cyw43
         txSeq = txSeq + 1;
     }
 
+    static long ourIp;                                   // our leased IP (4 bytes)
+    static long gwIp;                                    // default gateway
+    static long snMask;                                  // subnet mask
+    static long dnsIp;                                   // DNS server
+
     /**
-     * M3: DHCP. Broadcast a DHCP Discover (Ethernet/IP/UDP/BOOTP) from ourMac and wait for the Offer,
-     * printing the offered IP (yiaddr). No prior IP needed, so this is the first end-to-end data-path proof.
+     * M4: full DHCP handshake — Discover → Offer → Request → Ack. The Offer proposes an IP + server-id; we
+     * Request it (echoing both), the Ack commits the lease and carries subnet(1)/gateway(3)/DNS(6). Stores
+     * and prints the lease. All frames go over the SDPCM data path built in M3.
      */
     static void dhcp()
     {
         readMac();
-        long buf = Heap.allocData(512);                  // zeroed
-        int flen = buildDiscover(buf);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp discover\n"));
-        txData(buf, flen);
-
+        ourIp = Heap.allocData(4);
+        gwIp = Heap.allocData(4);
+        snMask = Heap.allocData(4);
+        dnsIp = Heap.allocData(4);
+        long serverId = Heap.allocData(4);
+        long buf = Heap.allocData(512);
         long rx = Heap.allocData(2048);
+
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp discover\n"));
+        txData(buf, buildDhcp(buf, 1, 0L, 0L));          // DISCOVER
+        if (!recvDhcp(rx, 2, ourIp, serverId, 0L, 0L, 0L))   // wait OFFER (type 2)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no offer\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp offer ip "));
+        printIp(ourIp);
+        board.bcm2711.Uart.putc(0x0A);
+
+        long buf2 = Heap.allocData(512);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp request\n"));
+        txData(buf2, buildDhcp(buf2, 3, ourIp, serverId));   // REQUEST (opt 50 req-ip, opt 54 server-id)
+        if (!recvDhcp(rx, 5, ourIp, serverId, snMask, gwIp, dnsIp))   // wait ACK (type 5)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no ack\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp ACK ip "));
+        printIp(ourIp);
+        board.bcm2711.Uart.write(Magic.bytes("\n  gateway "));
+        printIp(gwIp);
+        board.bcm2711.Uart.write(Magic.bytes("\n  subnet  "));
+        printIp(snMask);
+        board.bcm2711.Uart.write(Magic.bytes("\n  dns     "));
+        printIp(dnsIp);
+        board.bcm2711.Uart.putc(0x0A);
+    }
+
+    /**
+     * Build a DHCP message into {@code buf}: Ethernet(bcast)/IP/UDP(68→67)/BOOTP + options. {@code msgType}
+     * 1=DISCOVER 3=REQUEST. If {@code reqIp}/{@code serverId} are non-zero, adds option 50 (requested IP) /
+     * option 54 (server id). Returns the total frame length.
+     */
+    private static int buildDhcp(long buf, int msgType, long reqIp, long serverId)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));   // src = ourMac
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800
+        Magic.store8(buf + 13, 0x00);
+        long ip = buf + 14;
+        long udp = buf + 34;
+        long bootp = buf + 42;
+        Magic.store8(bootp + 0, 1);                      // op = BOOTREQUEST
+        Magic.store8(bootp + 1, 1);                      // htype
+        Magic.store8(bootp + 2, 6);                      // hlen
+        Magic.store32(bootp + 4, 0x3903F326);            // xid
+        be16(bootp + 10, 0x8000);                        // broadcast flag
+        i = 0;
+        while (i < 6)
+        {
+            Magic.store8(bootp + 28 + i, Magic.load8(ourMac + i));   // chaddr
+            i = i + 1;
+        }
+        Magic.store8(bootp + 236, 0x63);                 // magic cookie
+        Magic.store8(bootp + 237, 0x82);
+        Magic.store8(bootp + 238, 0x53);
+        Magic.store8(bootp + 239, 0x63);
+        long opt = bootp + 240;
+        int p = 0;
+        Magic.store8(opt + p, 53);                       // DHCP message type
+        Magic.store8(opt + p + 1, 1);
+        Magic.store8(opt + p + 2, msgType);
+        p = p + 3;
+        if (reqIp != 0L)
+        {
+            Magic.store8(opt + p, 50);                   // requested IP address
+            Magic.store8(opt + p + 1, 4);
+            copy4(reqIp, opt + p + 2);
+            p = p + 6;
+        }
+        if (serverId != 0L)
+        {
+            Magic.store8(opt + p, 54);                   // server identifier
+            Magic.store8(opt + p + 1, 4);
+            copy4(serverId, opt + p + 2);
+            p = p + 6;
+        }
+        Magic.store8(opt + p, 55);                       // parameter request list
+        Magic.store8(opt + p + 1, 4);
+        Magic.store8(opt + p + 2, 1);                    //   subnet
+        Magic.store8(opt + p + 3, 3);                    //   router
+        Magic.store8(opt + p + 4, 6);                    //   DNS
+        Magic.store8(opt + p + 5, 15);                   //   domain
+        p = p + 6;
+        Magic.store8(opt + p, 255);                      // end
+        p = p + 1;
+        int dhcpLen = 240 + p;
+        be16(udp + 0, 68);                               // UDP src port
+        be16(udp + 2, 67);                               // UDP dst port
+        be16(udp + 4, 8 + dhcpLen);
+        be16(udp + 6, 0);                                // no UDP checksum
+        Magic.store8(ip + 0, 0x45);                      // IPv4, IHL=5
+        Magic.store8(ip + 1, 0);
+        be16(ip + 2, 20 + 8 + dhcpLen);
+        be16(ip + 4, 0);
+        be16(ip + 6, 0);
+        Magic.store8(ip + 8, 64);                        // TTL
+        Magic.store8(ip + 9, 17);                        // UDP
+        be16(ip + 10, 0);
+        i = 0;
+        while (i < 4)
+        {
+            Magic.store8(ip + 16 + i, 0xFF);             // dst = 255.255.255.255
+            i = i + 1;
+        }
+        be16(ip + 10, ipCksum(ip, 20));
+        return 14 + 20 + 8 + dhcpLen;
+    }
+
+    /**
+     * Wait (~6 s) for a DHCP reply of message type {@code wantType} (2=Offer, 5=Ack) on UDP port 68. On a
+     * match: copies yiaddr → {@code yiOut} and, when the corresponding out is non-zero, options
+     * 54→serverIdOut, 1→snOut, 3→gwOut, 6→dnsOut. Returns true if a matching reply arrived.
+     */
+    private static boolean recvDhcp(long rx, int wantType, long yiOut, long serverIdOut, long snOut,
+            long gwOut, long dnsOut)
+    {
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 6L;
-        boolean got = false;
-        while (Magic.readCNTPCT_EL0() < endT && !got)
+        while (Magic.readCNTPCT_EL0() < endT)
         {
             int len = readFrameOnce(rx, 2048);
             if (len == 0)
@@ -676,98 +807,111 @@ public final class Cyw43
                 continue;                                // ioctl ack
             }
             int doff = Magic.load8(rx + 7) & 0xFF;
-            long bdc = rx + doff;                         // BDC header on RX data
+            long bdc = rx + doff;
             long eth = bdc + 4 + (Magic.load8(bdc + 3) & 0xFF) * 4;
             int ethertype = ((Magic.load8(eth + 12) & 0xFF) << 8) | (Magic.load8(eth + 13) & 0xFF);
             if (ethertype != 0x0800)
             {
-                continue;                                // not IPv4 (skips 0x886C events)
+                continue;
             }
             long ip = eth + 14;
             if ((Magic.load8(ip + 9) & 0xFF) != 17)
             {
-                continue;                                // not UDP
+                continue;
             }
             long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
             int dport = ((Magic.load8(udp + 2) & 0xFF) << 8) | (Magic.load8(udp + 3) & 0xFF);
             if (dport != 68)
             {
-                continue;                                // not the DHCP client port
+                continue;
             }
             long bootp = udp + 8;
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp offer ip "));
-            printIp(bootp + 16);                         // yiaddr
-            board.bcm2711.Uart.putc(0x0A);
-            got = true;
+            long opt = bootp + 240;
+            long optEnd = rx + len;
+            if (optFirst(opt, optEnd, 53) != wantType)   // DHCP message type option
+            {
+                continue;
+            }
+            copy4(bootp + 16, yiOut);                     // yiaddr
+            optCopy(opt, optEnd, 54, serverIdOut);
+            optCopy(opt, optEnd, 1, snOut);
+            optCopy(opt, optEnd, 3, gwOut);
+            optCopy(opt, optEnd, 6, dnsOut);
+            return true;
         }
-        if (!got)
+        return false;
+    }
+
+    /** Return the first value byte of DHCP option {@code code}, or -1 if absent. */
+    private static int optFirst(long opt, long end, int code)
+    {
+        long o = opt;
+        while (o < end)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no offer\n"));
+            int c = Magic.load8(o) & 0xFF;
+            if (c == 255)
+            {
+                return -1;
+            }
+            if (c == 0)
+            {
+                o = o + 1;
+                continue;
+            }
+            int l = Magic.load8(o + 1) & 0xFF;
+            if (c == code)
+            {
+                return Magic.load8(o + 2) & 0xFF;
+            }
+            o = o + 2 + l;
+        }
+        return -1;
+    }
+
+    /** Copy up to 4 bytes of DHCP option {@code code} to {@code dst} (no-op if dst==0 or option absent). */
+    private static void optCopy(long opt, long end, int code, long dst)
+    {
+        if (dst == 0L)
+        {
+            return;
+        }
+        long o = opt;
+        while (o < end)
+        {
+            int c = Magic.load8(o) & 0xFF;
+            if (c == 255)
+            {
+                return;
+            }
+            if (c == 0)
+            {
+                o = o + 1;
+                continue;
+            }
+            int l = Magic.load8(o + 1) & 0xFF;
+            if (c == code)
+            {
+                int i = 0;
+                while (i < 4 && i < l)
+                {
+                    Magic.store8(dst + i, Magic.load8(o + 2 + i));
+                    i = i + 1;
+                }
+                return;
+            }
+            o = o + 2 + l;
         }
     }
 
-    /** Build a DHCP Discover into {@code buf} (Ethernet+IP+UDP+BOOTP+options); returns the total frame length. */
-    private static int buildDiscover(long buf)
+    /** Copy 4 bytes from {@code src} to {@code dst}. */
+    private static void copy4(long src, long dst)
     {
         int i = 0;
-        while (i < 6)
-        {
-            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
-            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));   // src = ourMac
-            i = i + 1;
-        }
-        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800 (IPv4)
-        Magic.store8(buf + 13, 0x00);
-        long ip = buf + 14;
-        long udp = buf + 34;
-        long bootp = buf + 42;
-        Magic.store8(bootp + 0, 1);                      // op = BOOTREQUEST
-        Magic.store8(bootp + 1, 1);                      // htype = ethernet
-        Magic.store8(bootp + 2, 6);                      // hlen
-        Magic.store32(bootp + 4, 0x3903F326);            // xid (arbitrary, echoed back)
-        be16(bootp + 10, 0x8000);                        // flags = broadcast
-        i = 0;
-        while (i < 6)
-        {
-            Magic.store8(bootp + 28 + i, Magic.load8(ourMac + i));   // chaddr
-            i = i + 1;
-        }
-        Magic.store8(bootp + 236, 0x63);                 // magic cookie
-        Magic.store8(bootp + 237, 0x82);
-        Magic.store8(bootp + 238, 0x53);
-        Magic.store8(bootp + 239, 0x63);
-        long opt = bootp + 240;
-        Magic.store8(opt + 0, 53);                       // option: DHCP message type
-        Magic.store8(opt + 1, 1);
-        Magic.store8(opt + 2, 1);                        //   = DISCOVER
-        Magic.store8(opt + 3, 55);                       // option: parameter request list
-        Magic.store8(opt + 4, 4);
-        Magic.store8(opt + 5, 1);                        //   subnet mask
-        Magic.store8(opt + 6, 3);                        //   router
-        Magic.store8(opt + 7, 6);                        //   DNS
-        Magic.store8(opt + 8, 15);                       //   domain name
-        Magic.store8(opt + 9, 255);                      // option: end
-        int dhcpLen = 240 + 10;
-        be16(udp + 0, 68);                               // UDP src port
-        be16(udp + 2, 67);                               // UDP dst port
-        be16(udp + 4, 8 + dhcpLen);                      // UDP length
-        be16(udp + 6, 0);                                // UDP checksum (0 = none)
-        Magic.store8(ip + 0, 0x45);                      // IPv4, IHL=5
-        Magic.store8(ip + 1, 0);                         // TOS
-        be16(ip + 2, 20 + 8 + dhcpLen);                  // total length
-        be16(ip + 4, 0);                                 // id
-        be16(ip + 6, 0);                                 // flags/frag
-        Magic.store8(ip + 8, 64);                        // TTL
-        Magic.store8(ip + 9, 17);                        // protocol = UDP
-        be16(ip + 10, 0);                                // checksum (fill below)
-        i = 0;
         while (i < 4)
         {
-            Magic.store8(ip + 16 + i, 0xFF);             // dst = 255.255.255.255 (src stays 0.0.0.0)
+            Magic.store8(dst + i, Magic.load8(src + i));
             i = i + 1;
         }
-        be16(ip + 10, ipCksum(ip, 20));
-        return 14 + 20 + 8 + dhcpLen;
     }
 
     /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */
