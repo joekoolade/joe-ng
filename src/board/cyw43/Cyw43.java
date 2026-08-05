@@ -368,9 +368,10 @@ public final class Cyw43
             return;
         }
         txSeq = txSeq + 1;
+        reqId = reqId + 1;                               // ver consumed id 1; scan ioctls get 2,3,...
 
         long rx = Heap.allocData(1024);
-        int rlen = waitFrame(rx, 1024);
+        int rlen = recvCtrl(rx, 1024, 1);                // ver uses BCDC id 1
         if (rlen == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  no ioctl response\n"));
@@ -399,8 +400,7 @@ public final class Cyw43
     static void scanOnly()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
-        sendBcdc(WLC_UP, 0L, 0, true);                   // bring the interface up
-        readCtrl();
+        readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
         VM.delayMs(100);
 
         // wl_scan_params_t (64 bytes): broadcast SSID, broadcast BSSID, any BSS, active, all channels.
@@ -418,16 +418,15 @@ public final class Cyw43
         Magic.store32(sp + 52, -1);                      // passive_time
         Magic.store32(sp + 56, -1);                      // home_time
         Magic.store32(sp + 60, 0);                       // channel_num = 0 (all)
-        sendBcdc(WLC_SCAN, sp, 64, true);                // start the scan
-        readCtrl();
+        readCtrl(sendBcdc(WLC_SCAN, sp, 64, true));      // start the scan
 
         VM.delayMs(2500);                                // let the scan sweep the channels
 
         // WLC_SCAN_RESULTS is a GET: send a zeroed buffer the firmware fills with wl_scan_results_t.
         long req = Heap.allocData(512);                  // zeroed request buffer
-        sendBcdc(WLC_SCAN_RESULTS, req, 460, false);
+        int id = sendBcdc(WLC_SCAN_RESULTS, req, 460, false);
         long rx = Heap.allocData(1024);
-        int len = waitFrame(rx, 1024);
+        int len = recvCtrl(rx, 1024, id);
         if (len == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  no scan results\n"));
@@ -471,11 +470,11 @@ public final class Cyw43
         return id;
     }
 
-    /** Read the ioctl ack (control-channel BCDC response) and log its status word (0 = OK). */
-    static void readCtrl()
+    /** Read the ioctl ack matching request {@code id} and log its status word (0 = OK). */
+    static void readCtrl(int id)
     {
         long rx = Heap.allocData(1024);
-        int len = waitFrame(rx, 1024);
+        int len = recvCtrl(rx, 1024, id);
         if (len == 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("  (no ctrl resp)\n"));
@@ -483,6 +482,42 @@ public final class Cyw43
         }
         int doff = Magic.load8(rx + 7) & 0xFF;
         log(Magic.bytes("ctrl status="), Magic.load32(rx + doff + 12));
+    }
+
+    /**
+     * Receive the control-channel BCDC response for request {@code wantId} into {@code dst}, skipping the
+     * event/credit frames the firmware interleaves on other channels (they are logged). Returns the frame
+     * length, or 0 on timeout. This is the RX dispatch: an ioctl ack is a channel-0 frame whose BCDC id
+     * (flags bits 16..31) echoes the id we sent — anything else is an async event, not our answer.
+     */
+    static int recvCtrl(long dst, int cap, int wantId)
+    {
+        int tries = 0;
+        while (tries < 600)
+        {
+            int len = readFrameOnce(dst, cap);
+            if (len == 0)
+            {
+                tries = tries + 1;
+                VM.delayMs(2);
+                continue;
+            }
+            int ch = Magic.load8(dst + 5) & 0x0F;
+            if (ch != 0)                                 // event (1) / data (2) — not an ioctl ack
+            {
+                log(Magic.bytes("  (skip ch="), ch);
+                continue;
+            }
+            int doff = Magic.load8(dst + 7) & 0xFF;
+            int id = (Magic.load32(dst + doff + 8) >> 16) & 0xFFFF;   // BCDC flags: id in bits 16..31
+            if (wantId != 0 && id != wantId)
+            {
+                log(Magic.bytes("  (skip id="), id);
+                continue;
+            }
+            return len;
+        }
+        return 0;
     }
 
     /**
