@@ -125,24 +125,33 @@ public final class Cyw43
     private static final long ARMCR4_WRAP = 0x18102000L;
     private static final long AI_IOCTRL   = 0x408;       // wrapper: bit0 clock-enable, bit1 force-gated-clock
     private static final long AI_RESETCTRL = 0x800;      // wrapper: bit0 = core in reset
-    private static final int IOCTL_CLK = 0x1, IOCTL_FGC = 0x2;
+    private static final int IOCTL_CLK = 0x1, IOCTL_FGC = 0x2, IOCTL_CPUHALT = 0x20;
 
     /**
-     * Disable an AI core but leave its clock forced ON, so its RAM/registers stay accessible over the
-     * backplane (the standard brcmfmac ai_coredisable dance): force the clock (IOCTRL FGC|CLK), assert
-     * reset (RESETCTRL=1), then drop FGC leaving CLK on. Without the forced clock a reset core's slave port
-     * reads back 0 — which is exactly why the first RAM probe saw all zeros.
+     * Prepare the ARM CR4 for firmware download the way brcmf_chip_disable_arm(CR4) does: NOT a plain
+     * coredisable (which holds the core in reset and turns the TCM OFF — that gave all-zero RAM reads), but
+     * a resetcore with the CPU HALT bit — bring the core OUT of reset ({@code RESETCTRL=0}) with
+     * {@code IOCTL=CPUHALT|CLK}. The CPU is halted (won't run garbage) but the core + TCM are clocked and
+     * out of reset, so the TCM is backplane-accessible for the download. Sequence = coredisable(reset=HALT)
+     * then bring out of reset (the ai_resetcore dance).
      */
-    private static void coreDisable(long wrap)
+    private static void armCr4Prepare(long wrap)
     {
+        // coredisable(prereset=0, reset=CPUHALT)
         bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
         bpRead32(wrap + AI_IOCTRL);
         bpWrite32(wrap + AI_RESETCTRL, 1);
         bpRead32(wrap + AI_RESETCTRL);
         VM.delayUs(10);
-        // Leave FORCE-GATED-CLOCK on (brcmf_chip_ai_coredisable's final IOCTL is reset|FGC|CLK): a held-in-
-        // reset CR4 keeps its TCM clocked (and thus backplane-accessible) only while FGC stays asserted.
-        bpWrite32(wrap + AI_IOCTRL, IOCTL_FGC | IOCTL_CLK);
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CPUHALT | IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        // resetcore: bring OUT of reset with CPU halted
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CPUHALT | IOCTL_FGC | IOCTL_CLK);
+        bpRead32(wrap + AI_IOCTRL);
+        bpWrite32(wrap + AI_RESETCTRL, 0);              // DEASSERT reset — this is what turns the TCM on
+        bpRead32(wrap + AI_RESETCTRL);
+        VM.delayUs(10);
+        bpWrite32(wrap + AI_IOCTRL, IOCTL_CPUHALT | IOCTL_CLK);
         bpRead32(wrap + AI_IOCTRL);
         VM.delayUs(10);
     }
@@ -156,18 +165,7 @@ public final class Cyw43
 
     static void ramTest()
     {
-        // Request the HT clock: ChipCommon + the AI wrappers run on ALP (which we have), but the ARM CR4
-        // core and its TCM appear to need HT (their reads returned 0 on ALP alone). Wait for HT_AVAIL.
-        Sdio.cmd52Write(F1, CHIPCLKCSR, HT_AVAIL_REQ | ALP_AVAIL_REQ);
-        int tries = 0;
-        while ((Sdio.cmd52Read(F1, CHIPCLKCSR) & HT_AVAIL) == 0 && tries < 500)
-        {
-            tries = tries + 1;
-            VM.delayMs(1);
-        }
-        log(Magic.bytes("ht clock csr="), Sdio.cmd52Read(F1, CHIPCLKCSR));
-
-        coreDisable(ARMCR4_WRAP);
+        armCr4Prepare(ARMCR4_WRAP);                      // out of reset + CPU halted -> TCM accessible
         board.bcm2711.Uart.write(Magic.bytes("  armcr4 resetctrl="));
         VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_RESETCTRL) & 0xFFFFFFFFL));
         board.bcm2711.Uart.write(Magic.bytes(" ioctrl="));
