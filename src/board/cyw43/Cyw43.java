@@ -113,7 +113,39 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes(" rev "));
         VM.printDec(chipRev);
         board.bcm2711.Uart.putc(0x0A);
+
+        dumpErom();                                      // M1b-1: raw core map, decoded offline for the upload
         return chipId;
+    }
+
+    /**
+     * M1b-1: dump the chip's EROM (enumeration ROM) — the list of on-chip cores and their base addresses —
+     * so the firmware-upload step (M1b-2) can use the ARM core / RAM core addresses read from THIS silicon
+     * rather than guessed BCM4345 constants. Reads only (backplane), so low-risk. The AI/DMP descriptor
+     * format is decoded offline from this dump. Stops at the end-of-table descriptor (0x0000000F) or 96 words.
+     */
+    static void dumpErom()
+    {
+        int eromptr = bpRead32(SI_ENUM_BASE + 0xFC);     // ChipCommon EROMPTR
+        board.bcm2711.Uart.write(Magic.bytes("  eromptr="));
+        VM.printHex((long) (eromptr & 0xFFFFFFFFL));
+        board.bcm2711.Uart.putc(0x0A);
+        long erom = eromptr & 0xFFFFFFFFL;
+        int i = 0;
+        while (i < 96)
+        {
+            int w = bpRead32(erom + i * 4L);
+            board.bcm2711.Uart.write(Magic.bytes("  erom["));
+            VM.printDec(i);
+            board.bcm2711.Uart.write(Magic.bytes("]="));
+            VM.printHex((long) (w & 0xFFFFFFFFL));
+            board.bcm2711.Uart.putc(0x0A);
+            if (w == 0x0000000F)                         // DMP_DESC_EOT
+            {
+                break;
+            }
+            i = i + 1;
+        }
     }
 
     // ----- backplane (F1) 32-bit access through the SB window ---------------------------------------------
