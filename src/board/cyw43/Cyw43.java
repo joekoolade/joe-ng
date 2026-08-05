@@ -742,16 +742,23 @@ public final class Cyw43
     private static boolean arpResolve(long targetIp, long macOut)
     {
         long buf = Heap.allocData(128);
-        txData(buf, buildArp(buf, targetIp));
+        int flen = buildArp(buf, targetIp);
         long rx = Heap.allocData(2048);
-        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
+        long freq = Magic.readCNTFRQ_EL0();
+        long endT = Magic.readCNTPCT_EL0() + freq * 6L;
+        long nextSend = 0L;                              // (re)send the request every 0.5 s
         while (Magic.readCNTPCT_EL0() < endT)
         {
+            long now = Magic.readCNTPCT_EL0();
+            if (now >= nextSend)
+            {
+                txData(buf, flen);
+                nextSend = now + freq / 2L;
+            }
             int len = readFrameOnce(rx, 2048);
             if (len == 0)
             {
-                VM.delayMs(2);
-                continue;
+                continue;                                // no delay — drain the FIFO as fast as possible
             }
             if ((Magic.load8(rx + 5) & 0x0F) == 0)
             {
@@ -760,12 +767,15 @@ public final class Cyw43
             long eth = rx + (Magic.load8(rx + 7) & 0xFF);
             eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;   // skip BDC
             int et = (Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF);
-            board.bcm2711.Uart.write(Magic.bytes("  rx et="));   // DIAG: show every data frame's ethertype
-            VM.printHex(et);
-            board.bcm2711.Uart.write(Magic.bytes(" dst="));
-            printHex2(Magic.load8(eth) & 0xFF);
-            printHex2(Magic.load8(eth + 5) & 0xFF);
-            board.bcm2711.Uart.putc(0x0A);
+            if ((Magic.load8(eth) & 0xFF) != 0xFF)       // DIAG: print only UNICAST frames (skip the bcast flood)
+            {
+                board.bcm2711.Uart.write(Magic.bytes("  uni et="));
+                VM.printHex(et);
+                board.bcm2711.Uart.write(Magic.bytes(" dst="));
+                printHex2(Magic.load8(eth) & 0xFF);
+                printHex2(Magic.load8(eth + 5) & 0xFF);
+                board.bcm2711.Uart.putc(0x0A);
+            }
             if (et != 0x0806)
             {
                 continue;                                // not ARP
