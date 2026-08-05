@@ -135,6 +135,12 @@ public final class Sdio
         return 0;
     }
 
+    /** CONTROL1 (clock/reset control) — for diagnostics after {@link #setClock}. */
+    public static int control1()
+    {
+        return Magic.load32(base + CONTROL1);
+    }
+
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {

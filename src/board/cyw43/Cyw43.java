@@ -142,6 +142,10 @@ public final class Cyw43
         long len = Magic.load64(e + 24L);
         log(Magic.bytes("fw bytes="), (int) len);
 
+        // The bus is still at the ~400 kHz ID clock; raise it so a 609 KB upload isn't glacial.
+        Sdio.setClock(25000000);
+        log(Magic.bytes("sdio clk ctl="), Sdio.control1());
+
         int first = Magic.load32(src);                   // the ARM reset vector (first word) — logged for M1b-2b-ii
         if (!bpWrite(RAMBASE, src, len))
         {
@@ -166,22 +170,18 @@ public final class Cyw43
      */
     static boolean bpWrite(long bpAddr, long src, long byteLen)
     {
+        long n = (byteLen + 3) & ~3L;                    // whole 32-bit words (a few trailing bytes harmless)
         long off = 0;
-        while (off < byteLen)
+        while (off < n)
         {
-            long addr = bpAddr + off;
-            setWindow(addr);
-            int winRem = (int) (0x8000L - (addr & 0x7FFFL));
-            int chunk = (int) (byteLen - off);
-            if (chunk > 512) { chunk = 512; }
-            if (chunk > winRem) { chunk = winRem; }
-            int aligned = (chunk + 3) & ~3;              // 32-bit backplane accesses
-            int f1off = (int) (addr & SB_WIN_MASK) | SB_ACCESS_4B;
-            if (!Sdio.cmd53Write(F1, f1off, true, src + off, 1, aligned))
+            if (!bpWrite32(bpAddr + off, Magic.load32(src + off)))   // proven 4-byte path (setWindow cached)
             {
+                board.bcm2711.Uart.write(Magic.bytes("  bpWrite fail @off="));
+                VM.printHex(off);
+                board.bcm2711.Uart.putc(0x0A);
                 return false;
             }
-            off += chunk;
+            off = off + 4;
         }
         return true;
     }
