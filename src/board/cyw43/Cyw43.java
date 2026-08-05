@@ -656,8 +656,9 @@ public final class Cyw43
     }
 
     /**
-     * Enable firmware events by reading the current {@code event_msgs} mask (GET tells us its exact length —
-     * no guessing) and writing it back all-ones so every event, including E_ESCAN_RESULT, is delivered.
+     * Enable just the events we act on (a targeted {@code event_msgs} bitmask, not all-ones) so the join
+     * trace isn't buried under RSSI/probe/misc event spam. GET first to learn the mask length. Bits: scan
+     * result + the association-lifecycle events (set_ssid/join/auth/deauth/assoc/disassoc/link/psk_sup).
      */
     static void enableEvents()
     {
@@ -678,14 +679,27 @@ public final class Cyw43
         }
         log(Magic.bytes("evt masklen="), mlen);
         long s = Heap.allocData(256);
-        int q = putStr(s, Magic.bytes("event_msgs"));
-        int k = 0;
-        while (k < mlen)
-        {
-            Magic.store8(s + q + k, 0xFF);
-            k = k + 1;
-        }
+        int q = putStr(s, Magic.bytes("event_msgs"));    // mask is zeroed by allocData
+        long m = s + q;
+        setEvt(m, 0);                                    // E_SET_SSID
+        setEvt(m, 1);                                    // E_JOIN
+        setEvt(m, 3);                                    // E_AUTH
+        setEvt(m, 5);                                    // E_DEAUTH
+        setEvt(m, 6);                                    // E_DEAUTH_IND
+        setEvt(m, 7);                                    // E_ASSOC
+        setEvt(m, 11);                                   // E_DISASSOC
+        setEvt(m, 12);                                   // E_DISASSOC_IND
+        setEvt(m, 16);                                   // E_LINK
+        setEvt(m, 46);                                   // E_PSK_SUP (for WPA later)
+        setEvt(m, 69);                                   // E_ESCAN_RESULT (scan)
         readCtrl(sendBcdc(WLC_SET_VAR, s, q + mlen, true));
+    }
+
+    /** Set event bit {@code ev} in the event_msgs bitmask (byte ev/8, bit ev%8). */
+    private static void setEvt(long mask, int ev)
+    {
+        long b = mask + (ev >> 3);
+        Magic.store8(b, (Magic.load8(b) & 0xFF) | (1 << (ev & 7)));
     }
 
     /** Print {@code len} bytes at {@code addr} as printable ASCII (non-printable -> '.'), not NUL-terminated. */
