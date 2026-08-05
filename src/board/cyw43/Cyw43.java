@@ -423,8 +423,10 @@ public final class Cyw43
 
         VM.delayMs(2500);                                // let the scan sweep the channels
 
-        // WLC_SCAN_RESULTS is a GET: send a zeroed buffer the firmware fills with wl_scan_results_t.
-        long req = Heap.allocData(512);                  // zeroed request buffer
+        // WLC_SCAN_RESULTS is a GET: the caller must preset wl_scan_results_t.buflen (first u32) to the
+        // buffer size, else the firmware returns BCME_BADARG (-2). It then fills buflen/version/count/bss[].
+        long req = Heap.allocData(512);
+        Magic.store32(req, 460);                         // buflen = available space
         int id = sendBcdc(WLC_SCAN_RESULTS, req, 460, false);
         long rx = Heap.allocData(1024);
         int len = recvCtrl(rx, 1024, id);
