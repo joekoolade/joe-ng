@@ -2284,6 +2284,8 @@ public final class VM
     // a real Pi 4 reports ~166 MHz — so the WiFi driver only pokes the SDIO controller on real silicon,
     // never QEMU (whose 0xFE300000 is the SD card).
     static boolean WIFI_ENABLED = true;
+    // TEMP (WiFi iteration): true = boot straight to WiFi, skipping SMP/scheduler/all demos (see run()).
+    static final boolean WIFI_ONLY = true;
 
     static void run()
     {
@@ -2298,6 +2300,23 @@ public final class VM
         buildPageTables();
         enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
+
+        // TEMP (WiFi iteration): skip SMP + scheduler + the whole demo suite and go straight to WiFi, for
+        // fast flash cycles. WiFi uses only Heap (up early), the mailbox, MMIO and delayMs busy-waits -- no
+        // scheduler/SMP -- so this is a complete WiFi run. static-final so the demos are dead-code-eliminated
+        // (smaller/faster image). Set false to restore the full boot before merging to main.
+        if (WIFI_ONLY)
+        {
+            if (WIFI_ENABLED && Uart.coreHz > 10000000)
+            {
+                board.bcm2711.Wifi.bringUp();
+            }
+            else
+            {
+                Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
+            }
+            return;
+        }
 
         // Self-hosting generation counter (M5.5d demo): a scratch SD sector survives across reboots,
         // so each time joe-ng reproduces + persists itself and reboots into the image it wrote, this
