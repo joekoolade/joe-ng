@@ -114,8 +114,47 @@ public final class Cyw43
         VM.printDec(chipRev);
         board.bcm2711.Uart.putc(0x0A);
 
-        dumpErom();                                      // M1b-1: raw core map, decoded offline for the upload
+        // dumpErom();  (M1b-1 done — core map decoded: ARM CR4 wrapper 0x18102000, RAM at 0x0/0x180000/0x200000)
+        ramTest();                                       // M1b-2a: pin down the firmware RAM address + write path
         return chipId;
+    }
+
+    // Decoded from the EROM: the ARM CR4 core's wrapper (AI reset control) and candidate RAM bases.
+    private static final long ARMCR4_WRAP = 0x18102000L;
+    private static final long AI_RESETCTRL = 0x800;      // wrapper offset: bit0 = core in reset
+
+    /**
+     * M1b-2a: hold the ARM CR4 in reset, then write a test word to each candidate backplane RAM address and
+     * read it back — the one(s) that round-trip 0xDEADBEEF are writable chip RAM, which pins down the
+     * firmware load address (and proves the backplane block-write path) before the 609 KB upload. Restores
+     * each original word.
+     */
+    static void ramTest()
+    {
+        // Assert reset on the ARM CR4 via its wrapper so RAM writes don't race a running core.
+        bpWrite32(ARMCR4_WRAP + AI_RESETCTRL, 1);
+        VM.delayUs(50);
+        board.bcm2711.Uart.write(Magic.bytes("  armcr4 resetctrl="));
+        VM.printHex((long) (bpRead32(ARMCR4_WRAP + AI_RESETCTRL) & 0xFFFFFFFFL));
+        board.bcm2711.Uart.putc(0x0A);
+
+        testAddr(0x00000000L);
+        testAddr(0x00180000L);
+        testAddr(0x00198000L);
+        testAddr(0x00200000L);
+    }
+
+    private static void testAddr(long addr)
+    {
+        int orig = bpRead32(addr);
+        bpWrite32(addr, 0xDEADBEEF);
+        int rb = bpRead32(addr);
+        bpWrite32(addr, orig);                           // restore
+        board.bcm2711.Uart.write(Magic.bytes("  ram["));
+        VM.printHex(addr);
+        board.bcm2711.Uart.write(Magic.bytes("] wrote DEADBEEF read "));
+        VM.printHex((long) (rb & 0xFFFFFFFFL));
+        board.bcm2711.Uart.putc(0x0A);
     }
 
     /**
