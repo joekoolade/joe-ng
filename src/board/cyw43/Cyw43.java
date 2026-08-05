@@ -578,6 +578,247 @@ public final class Cyw43
             linked = parseJoinEvent(rx, len);
         }
         board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
+        if (linked)
+        {
+            VM.delayMs(500);                             // let the link settle
+            dhcp();                                      // M3: data path + DHCP discover -> get an IP
+        }
+    }
+
+    static long ourMac;                                  // heap addr of our 6-byte station MAC
+
+    /** M3: read our station MAC (iovar cur_etheraddr) into {@link #ourMac} and print it. */
+    static void readMac()
+    {
+        long g = Heap.allocData(64);
+        int p = putStr(g, Magic.bytes("cur_etheraddr"));
+        int id = sendBcdc(WLC_GET_VAR, g, p + 6, false);
+        long rx = Heap.allocData(256);
+        int len = recvCtrl(rx, 256, id);
+        ourMac = Heap.allocData(8);
+        if (len == 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  no mac\n"));
+            return;
+        }
+        int doff = Magic.load8(rx + 7) & 0xFF;
+        long m = rx + doff + 16;
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(ourMac + i, Magic.load8(m + i));
+            i = i + 1;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: mac "));
+        i = 0;
+        while (i < 6)
+        {
+            printHex2(Magic.load8(ourMac + i) & 0xFF);
+            if (i < 5)
+            {
+                board.bcm2711.Uart.putc(0x3A);           // ':'
+            }
+            i = i + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+    }
+
+    /** Send an 802.3 frame over the SDPCM data channel (2) with a 4-byte BDC header (proto ver 2, no pad). */
+    static void txData(long frame, int flen)
+    {
+        long tx = Heap.allocData(2048);
+        Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
+        Magic.store8(tx + 5, 2);                         // channel 2 = data
+        Magic.store8(tx + 6, 0);
+        Magic.store8(tx + 7, 12);                        // dataoffset
+        Magic.store8(tx + 12, 0x20);                     // BDC flags = proto ver (2) << 4
+        Magic.store8(tx + 13, 0);                        // priority
+        Magic.store8(tx + 14, 0);                        // flags2 (interface 0)
+        Magic.store8(tx + 15, 0);                        // data_offset = 0 words
+        int i = 0;
+        while (i < flen)
+        {
+            Magic.store8(tx + 16 + i, Magic.load8(frame + i));
+            i = i + 1;
+        }
+        int total = 12 + 4 + flen;
+        store16(tx + 0, total);
+        store16(tx + 2, ~total);
+        Sdio.cmd53Write(F2, 0, true, tx, 1, (total + 3) & ~3);
+        txSeq = txSeq + 1;
+    }
+
+    /**
+     * M3: DHCP. Broadcast a DHCP Discover (Ethernet/IP/UDP/BOOTP) from ourMac and wait for the Offer,
+     * printing the offered IP (yiaddr). No prior IP needed, so this is the first end-to-end data-path proof.
+     */
+    static void dhcp()
+    {
+        readMac();
+        long buf = Heap.allocData(512);                  // zeroed
+        int flen = buildDiscover(buf);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp discover\n"));
+        txData(buf, flen);
+
+        long rx = Heap.allocData(2048);
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 6L;
+        boolean got = false;
+        while (Magic.readCNTPCT_EL0() < endT && !got)
+        {
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;                                // ioctl ack
+            }
+            int doff = Magic.load8(rx + 7) & 0xFF;
+            long bdc = rx + doff;                         // BDC header on RX data
+            long eth = bdc + 4 + (Magic.load8(bdc + 3) & 0xFF) * 4;
+            int ethertype = ((Magic.load8(eth + 12) & 0xFF) << 8) | (Magic.load8(eth + 13) & 0xFF);
+            if (ethertype != 0x0800)
+            {
+                continue;                                // not IPv4 (skips 0x886C events)
+            }
+            long ip = eth + 14;
+            if ((Magic.load8(ip + 9) & 0xFF) != 17)
+            {
+                continue;                                // not UDP
+            }
+            long udp = ip + (Magic.load8(ip) & 0x0F) * 4;
+            int dport = ((Magic.load8(udp + 2) & 0xFF) << 8) | (Magic.load8(udp + 3) & 0xFF);
+            if (dport != 68)
+            {
+                continue;                                // not the DHCP client port
+            }
+            long bootp = udp + 8;
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp offer ip "));
+            printIp(bootp + 16);                         // yiaddr
+            board.bcm2711.Uart.putc(0x0A);
+            got = true;
+        }
+        if (!got)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no offer\n"));
+        }
+    }
+
+    /** Build a DHCP Discover into {@code buf} (Ethernet+IP+UDP+BOOTP+options); returns the total frame length. */
+    private static int buildDiscover(long buf)
+    {
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, 0xFF);                 // dst = broadcast
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));   // src = ourMac
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);                    // ethertype 0x0800 (IPv4)
+        Magic.store8(buf + 13, 0x00);
+        long ip = buf + 14;
+        long udp = buf + 34;
+        long bootp = buf + 42;
+        Magic.store8(bootp + 0, 1);                      // op = BOOTREQUEST
+        Magic.store8(bootp + 1, 1);                      // htype = ethernet
+        Magic.store8(bootp + 2, 6);                      // hlen
+        Magic.store32(bootp + 4, 0x3903F326);            // xid (arbitrary, echoed back)
+        be16(bootp + 10, 0x8000);                        // flags = broadcast
+        i = 0;
+        while (i < 6)
+        {
+            Magic.store8(bootp + 28 + i, Magic.load8(ourMac + i));   // chaddr
+            i = i + 1;
+        }
+        Magic.store8(bootp + 236, 0x63);                 // magic cookie
+        Magic.store8(bootp + 237, 0x82);
+        Magic.store8(bootp + 238, 0x53);
+        Magic.store8(bootp + 239, 0x63);
+        long opt = bootp + 240;
+        Magic.store8(opt + 0, 53);                       // option: DHCP message type
+        Magic.store8(opt + 1, 1);
+        Magic.store8(opt + 2, 1);                        //   = DISCOVER
+        Magic.store8(opt + 3, 55);                       // option: parameter request list
+        Magic.store8(opt + 4, 4);
+        Magic.store8(opt + 5, 1);                        //   subnet mask
+        Magic.store8(opt + 6, 3);                        //   router
+        Magic.store8(opt + 7, 6);                        //   DNS
+        Magic.store8(opt + 8, 15);                       //   domain name
+        Magic.store8(opt + 9, 255);                      // option: end
+        int dhcpLen = 240 + 10;
+        be16(udp + 0, 68);                               // UDP src port
+        be16(udp + 2, 67);                               // UDP dst port
+        be16(udp + 4, 8 + dhcpLen);                      // UDP length
+        be16(udp + 6, 0);                                // UDP checksum (0 = none)
+        Magic.store8(ip + 0, 0x45);                      // IPv4, IHL=5
+        Magic.store8(ip + 1, 0);                         // TOS
+        be16(ip + 2, 20 + 8 + dhcpLen);                  // total length
+        be16(ip + 4, 0);                                 // id
+        be16(ip + 6, 0);                                 // flags/frag
+        Magic.store8(ip + 8, 64);                        // TTL
+        Magic.store8(ip + 9, 17);                        // protocol = UDP
+        be16(ip + 10, 0);                                // checksum (fill below)
+        i = 0;
+        while (i < 4)
+        {
+            Magic.store8(ip + 16 + i, 0xFF);             // dst = 255.255.255.255 (src stays 0.0.0.0)
+            i = i + 1;
+        }
+        be16(ip + 10, ipCksum(ip, 20));
+        return 14 + 20 + 8 + dhcpLen;
+    }
+
+    /** One's-complement IPv4 header checksum over {@code len} bytes at {@code addr}. */
+    private static int ipCksum(long addr, int len)
+    {
+        int sum = 0;
+        int i = 0;
+        while (i < len)
+        {
+            sum = sum + (((Magic.load8(addr + i) & 0xFF) << 8) | (Magic.load8(addr + i + 1) & 0xFF));
+            i = i + 2;
+        }
+        while ((sum >> 16) != 0)
+        {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        return (~sum) & 0xFFFF;
+    }
+
+    /** Store a 16-bit big-endian (network-order) value. */
+    private static void be16(long addr, int v)
+    {
+        Magic.store8(addr, (v >> 8) & 0xFF);
+        Magic.store8(addr + 1, v & 0xFF);
+    }
+
+    /** Print a dotted-quad IPv4 address (4 bytes at addr). */
+    private static void printIp(long addr)
+    {
+        int i = 0;
+        while (i < 4)
+        {
+            VM.printDec(Magic.load8(addr + i) & 0xFF);
+            if (i < 3)
+            {
+                board.bcm2711.Uart.putc(0x2E);           // '.'
+            }
+            i = i + 1;
+        }
+    }
+
+    /** Print a byte as two lowercase hex digits. */
+    private static void printHex2(int v)
+    {
+        board.bcm2711.Uart.putc(hexDigit((v >> 4) & 0x0F));
+        board.bcm2711.Uart.putc(hexDigit(v & 0x0F));
+    }
+
+    private static int hexDigit(int n)
+    {
+        return n < 10 ? (0x30 + n) : (0x61 + n - 10);
     }
 
     /** Send a 4-byte (u32) SET ioctl and log its ack status. */
