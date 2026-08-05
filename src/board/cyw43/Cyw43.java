@@ -401,47 +401,104 @@ public final class Cyw43
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
         clmLoad();                                       // regulatory/PHY data — the radio needs it to scan
+        enableEvents();                                  // turn on E_ESCAN_RESULT so results are pushed to us
         readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
         VM.delayMs(100);
 
-        // wl_scan_params_t (64 bytes): broadcast SSID, broadcast BSSID, any BSS, active, all channels.
-        long sp = Heap.allocData(128);
+        // This is fullmac firmware: scan via the escan iovar, results arrive as E_ESCAN_RESULT events (not
+        // WLC_SCAN_RESULTS, which it rejects). escan params = 8-byte header + wl_scan_params_t (broadcast).
+        long es = Heap.allocData(256);
+        int np = putStr(es, Magic.bytes("escan"));       // "escan\0"
+        long pp = es + np;
+        Magic.store32(pp + 0, 1);                        // version = ESCAN_REQ_VERSION
+        store16(pp + 4, 1);                              // action = WL_SCAN_ACTION_START
+        store16(pp + 6, 0x1234);                         // sync_id
         int b = 0;
         while (b < 6)
         {
-            Magic.store8(sp + 36 + b, 0xFF);             // bssid = broadcast
+            Magic.store8(pp + 44 + b, 0xFF);             // bssid = broadcast
             b = b + 1;
         }
-        Magic.store8(sp + 42, 2);                        // bss_type = DOT11_BSSTYPE_ANY
-        Magic.store8(sp + 43, 0);                        // scan_type = active
-        Magic.store32(sp + 44, -1);                      // nprobes
-        Magic.store32(sp + 48, -1);                      // active_time
-        Magic.store32(sp + 52, -1);                      // passive_time
-        Magic.store32(sp + 56, -1);                      // home_time
-        Magic.store32(sp + 60, 0);                       // channel_num = 0 (all)
-        readCtrl(sendBcdc(WLC_SCAN, sp, 64, true));      // start the scan
+        Magic.store8(pp + 50, 2);                        // bss_type = DOT11_BSSTYPE_ANY
+        Magic.store8(pp + 51, 0);                        // scan_type = active
+        Magic.store32(pp + 52, -1);                      // nprobes
+        Magic.store32(pp + 56, -1);                      // active_time
+        Magic.store32(pp + 60, -1);                      // passive_time
+        Magic.store32(pp + 64, -1);                      // home_time
+        Magic.store32(pp + 68, 0);                       // channel_num = 0 (all)
+        readCtrl(sendBcdc(WLC_SET_VAR, es, np + 72, true));   // escan ack (0 = scan started)
 
-        VM.delayMs(2500);                                // let the scan sweep the channels
-
-        // WLC_SCAN_RESULTS is a GET: the caller must preset wl_scan_results_t.buflen (first u32) to the
-        // buffer size, else the firmware returns BCME_BADARG (-2). It then fills buflen/version/count/bss[].
-        long req = Heap.allocData(512);
-        Magic.store32(req, 460);                         // buflen = available space
-        int id = sendBcdc(WLC_SCAN_RESULTS, req, 460, false);
-        long rx = Heap.allocData(1024);
-        int len = recvCtrl(rx, 1024, id);
-        if (len == 0)
+        // Read event frames (channel 1) for ~6 s and dump their ASCII — each escan result carries a
+        // bss_info whose SSID shows up as a readable run. Control-channel (0) frames are acks, skip them.
+        long rx = Heap.allocData(2048);
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 6L;
+        int events = 0;
+        while (Magic.readCNTPCT_EL0() < endT && events < 80)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  no scan results\n"));
-            return;
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            int ch = Magic.load8(rx + 5) & 0x0F;
+            if (ch == 0)
+            {
+                continue;                                // an ioctl ack, not an event
+            }
+            board.bcm2711.Uart.write(Magic.bytes("  evt len="));
+            VM.printDec(len);
+            board.bcm2711.Uart.write(Magic.bytes(" : "));
+            dumpRaw(rx + 12, len - 12 > 300 ? 300 : len - 12);   // skip SDPCM hdr; SSIDs appear in-line
+            events = events + 1;
         }
-        int doff = Magic.load8(rx + 7) & 0xFF;
-        long data = rx + doff + 16;                      // wl_scan_results_t: buflen, version, count, bss[]
-        log(Magic.bytes("scan status="), Magic.load32(rx + doff + 12));
-        log(Magic.bytes("scan count="), Magic.load32(data + 8));
-        board.bcm2711.Uart.write(Magic.bytes("  results: "));
-        dumpAscii(data, 400);                            // SSIDs appear as readable runs in the bss_info list
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
+    }
+
+    /**
+     * Enable firmware events by reading the current {@code event_msgs} mask (GET tells us its exact length —
+     * no guessing) and writing it back all-ones so every event, including E_ESCAN_RESULT, is delivered.
+     */
+    static void enableEvents()
+    {
+        long g = Heap.allocData(256);
+        int p = putStr(g, Magic.bytes("event_msgs"));
+        long rx = Heap.allocData(256);
+        int id = sendBcdc(WLC_GET_VAR, g, p + 64, false);
+        int len = recvCtrl(rx, 256, id);
+        int mlen = 16;                                   // fallback
+        if (len > 0)
+        {
+            int doff = Magic.load8(rx + 7) & 0xFF;
+            int returned = Magic.load32(rx + doff + 4);  // BCDC len = mask length the fw uses
+            if (returned > 0 && returned <= 64)
+            {
+                mlen = returned;
+            }
+        }
+        log(Magic.bytes("evt masklen="), mlen);
+        long s = Heap.allocData(256);
+        int q = putStr(s, Magic.bytes("event_msgs"));
+        int k = 0;
+        while (k < mlen)
+        {
+            Magic.store8(s + q + k, 0xFF);
+            k = k + 1;
+        }
+        readCtrl(sendBcdc(WLC_SET_VAR, s, q + mlen, true));
+    }
+
+    /** Print {@code len} bytes at {@code addr} as printable ASCII (non-printable -> '.'), not NUL-terminated. */
+    private static void dumpRaw(long addr, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            int c = Magic.load8(addr + i) & 0xFF;
+            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x2E);
+            i = i + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
     }
 
     /**
@@ -596,14 +653,21 @@ public final class Cyw43
         int body = len - 4;
         if (body > cap - 4)
         {
-            body = cap - 4;                              // clamp to the buffer
+            body = cap - 4;                              // clamp to the buffer (event frames can be large)
         }
-        if (body > 0)
+        int done = 0;
+        while (done < body)                              // read the body in <=512-byte CMD53 bursts
         {
-            if (!Sdio.cmd53Read(F2, 0, true, dst + 4, 1, body))
+            int n = body - done;
+            if (n > 512)
+            {
+                n = 512;
+            }
+            if (!Sdio.cmd53Read(F2, 0, true, dst + 4 + done, 1, n))
             {
                 return 0;
             }
+            done = done + n;
         }
         return len;
     }
