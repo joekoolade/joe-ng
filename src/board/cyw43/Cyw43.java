@@ -117,8 +117,73 @@ public final class Cyw43
         board.bcm2711.Uart.putc(0x0A);
 
         // dumpErom();  (M1b-1 done — core map decoded: ARM CR4 wrapper 0x18102000, RAM at 0x0/0x180000/0x200000)
-        ramTest();                                       // M1b-2a: pin down the firmware RAM address + write path
+        // ramTest();   (M1b-2a done — TCM writable at rambase 0x198000 once the CR4 is out of reset + CPUHALT)
+        armCr4Prepare(ARMCR4_WRAP);                      // core out of reset, CPU halted -> TCM accessible
+        uploadFirmware();                                // M1b-2b-i: stream the .bin into RAM + verify
         return chipId;
+    }
+
+    private static final long RAMBASE = 0x198000L;       // brcmfmac 4345 firmware load address (confirmed writable)
+
+    /**
+     * M1b-2b-i: stream {@code brcmfmac43455-sdio.bin} from the RAMFS into chip RAM at {@link #RAMBASE} via
+     * block CMD53 writes, then read back the first and last words to verify. (NVRAM + reset-vector + ARM
+     * release + F2-ready come in M1b-2b-ii.)
+     */
+    static boolean uploadFirmware()
+    {
+        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.bin"));
+        if (e == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  fw NOT FOUND in ramfs\n"));
+            return false;
+        }
+        long src = Magic.load64(e + 16L);                // firmware bytes (baked into the image)
+        long len = Magic.load64(e + 24L);
+        log(Magic.bytes("fw bytes="), (int) len);
+
+        int first = Magic.load32(src);                   // the ARM reset vector (first word) — logged for M1b-2b-ii
+        if (!bpWrite(RAMBASE, src, len))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  fw upload FAILED\n"));
+            return false;
+        }
+        // Verify: read back the first word and a word near the end.
+        int rb0 = bpRead32(RAMBASE);
+        int rbN = bpRead32(RAMBASE + ((len - 4L) & ~3L));
+        log(Magic.bytes("fw[0] src="), first);
+        log(Magic.bytes("fw[0] readback="), rb0);
+        log(Magic.bytes("fw[last] readback="), rbN);
+        board.bcm2711.Uart.write(rb0 == first ? Magic.bytes("  fw upload OK\n") : Magic.bytes("  fw upload MISMATCH\n"));
+        return rb0 == first;
+    }
+
+    /**
+     * Write {@code byteLen} bytes from heap address {@code src} to backplane address {@code bpAddr} via
+     * 32-bit CMD53 block transfers, re-windowing at each 32 KB SB boundary. Transfers ≤512-byte byte-mode
+     * chunks that never cross a window boundary (RAMBASE is 32 KB-aligned, 512 divides 32 KB). Rounds the
+     * final chunk up to a 4-byte word (a few trailing image bytes are harmless — the chip has spare RAM).
+     */
+    static boolean bpWrite(long bpAddr, long src, long byteLen)
+    {
+        long off = 0;
+        while (off < byteLen)
+        {
+            long addr = bpAddr + off;
+            setWindow(addr);
+            int winRem = (int) (0x8000L - (addr & 0x7FFFL));
+            int chunk = (int) (byteLen - off);
+            if (chunk > 512) { chunk = 512; }
+            if (chunk > winRem) { chunk = winRem; }
+            int aligned = (chunk + 3) & ~3;              // 32-bit backplane accesses
+            int f1off = (int) (addr & SB_WIN_MASK) | SB_ACCESS_4B;
+            if (!Sdio.cmd53Write(F1, f1off, true, src + off, 1, aligned))
+            {
+                return false;
+            }
+            off += chunk;
+        }
+        return true;
     }
 
     // Decoded from the EROM: the ARM CR4 core's wrapper (AI reset/ioctl control) and candidate RAM bases.

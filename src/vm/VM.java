@@ -1336,6 +1336,37 @@ public final class VM
      * {@code java/io/FileInputStream.open0(String)} overlay (wired in {@code Loader.nativeBuf});
      * the overlay then reads the content directly via {@code Magic.load8/load64} on the entry.
      */
+    /** Find a RAMFS file by a raw path {@code byte[]} (for VM/driver code with no guest String); returns the
+     *  directory entry addr {nameAddr, nameLen@8, bytesAddr@16, bytesLen@24}, or 0. */
+    public static long fileFind(byte[] path)
+    {
+        if (fileDir == 0L)
+        {
+            return 0L;
+        }
+        int len = path.length;
+        int i = 0;
+        while (i < (int) fileCount)
+        {
+            long e = fileDir + i * 32L;
+            if (Magic.load64(e + 8L) == (long) len)
+            {
+                long na = Magic.load64(e);
+                int k = 0;
+                while (k < len && (Magic.load8(na + k) & 0xFF) == (path[k] & 0xFF))
+                {
+                    k += 1;
+                }
+                if (k == len)
+                {
+                    return e;
+                }
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
