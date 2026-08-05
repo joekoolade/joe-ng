@@ -747,11 +747,277 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("wifi: dns example.com = "));
             printIp(ip);
             board.bcm2711.Uart.putc(0x0A);
+            httpGet(ip, Magic.bytes("example.com"));      // M4: TCP connect + HTTP GET (acceptance test)
         }
         else
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: dns no reply\n"));
         }
+    }
+
+    /**
+     * M4 acceptance test: TCP 3-way handshake to {@code serverIp}:80, then an HTTP/1.0 GET, printing the
+     * response. Piggybacks the request on the handshake-completing ACK. Tracks seq/ack, ACKs received data,
+     * and ACKs the server's FIN. Off-subnet, so all frames go to the gateway MAC. Uses retry + fast-drain.
+     */
+    static void httpGet(long serverIp, byte[] host)
+    {
+        long rx = Heap.allocData(2048);
+        long freq = Magic.readCNTFRQ_EL0();
+        int sport = 0xC001;
+        int isn = 0x1000;
+        int ourSeq = isn;
+        int ourAck = 0;
+
+        // --- SYN, wait for SYN-ACK ---
+        boolean synAcked = false;
+        long endT = Magic.readCNTPCT_EL0() + freq * 6L;
+        long nextSend = 0L;
+        while (Magic.readCNTPCT_EL0() < endT && !synAcked)
+        {
+            long now = Magic.readCNTPCT_EL0();
+            if (now >= nextSend)
+            {
+                sendTcp(serverIp, sport, 80, ourSeq, 0, 0x02, 0L, 0);   // SYN
+                nextSend = now + freq / 2L;
+            }
+            long tcp = findTcp(rx, serverIp, sport);
+            if (tcp == 0L)
+            {
+                continue;
+            }
+            int flags = Magic.load8(tcp + 13) & 0x3F;
+            if ((flags & 0x04) != 0)                     // RST
+            {
+                board.bcm2711.Uart.write(Magic.bytes("wifi: tcp reset\n"));
+                return;
+            }
+            if ((flags & 0x12) == 0x12)                  // SYN|ACK
+            {
+                ourAck = readBe32(tcp + 4) + 1;          // their ISN + 1
+                ourSeq = isn + 1;
+                synAcked = true;
+            }
+        }
+        if (!synAcked)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: tcp no synack\n"));
+            return;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: tcp connected\n"));
+
+        // --- send the GET (PSH|ACK also completes the handshake) ---
+        long req = Heap.allocData(256);
+        int reqLen = buildHttpReq(req, host);
+        sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x18, req, reqLen);
+        ourSeq = ourSeq + reqLen;
+        board.bcm2711.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
+
+        // --- receive the response ---
+        endT = Magic.readCNTPCT_EL0() + freq * 8L;
+        boolean done = false;
+        int total = 0;
+        while (Magic.readCNTPCT_EL0() < endT && !done)
+        {
+            long tcp = findTcp(rx, serverIp, sport);
+            if (tcp == 0L)
+            {
+                continue;
+            }
+            int flags = Magic.load8(tcp + 13) & 0x3F;
+            int segSeq = readBe32(tcp + 4);
+            int dataOff = ((Magic.load8(tcp + 12) >> 4) & 0x0F) * 4;
+            int payLen = lastIpTotal - lastIhl - dataOff;
+            long payload = tcp + dataOff;
+            if (payLen > 0 && segSeq == ourAck)          // in-order data
+            {
+                printText(payload, payLen);
+                ourAck = ourAck + payLen;
+                total = total + payLen;
+                sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x10, 0L, 0);   // ACK
+            }
+            if ((flags & 0x01) != 0)                     // FIN
+            {
+                ourAck = ourAck + 1;
+                sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x11, 0L, 0);   // FIN|ACK
+                done = true;
+            }
+        }
+        board.bcm2711.Uart.write(Magic.bytes("\n----- http done, "));
+        VM.printDec(total);
+        board.bcm2711.Uart.write(Magic.bytes(" bytes\n"));
+    }
+
+    private static int lastIhl;                          // IP header length of the last frame findTcp accepted
+    private static int lastIpTotal;                      // IP total length of that frame
+
+    /** Return the TCP header address of a received segment from {@code serverIp} to our {@code sport} (0 if
+     *  none this read). Records the frame's IP IHL / total-length in {@link #lastIhl}/{@link #lastIpTotal}. */
+    private static long findTcp(long rx, long serverIp, int sport)
+    {
+        int len = readFrameOnce(rx, 2048);
+        if (len == 0)
+        {
+            return 0L;
+        }
+        if ((Magic.load8(rx + 5) & 0x0F) == 0)
+        {
+            return 0L;
+        }
+        long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+        eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
+        if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x0800)
+        {
+            return 0L;
+        }
+        long ip = eth + 14;
+        if ((Magic.load8(ip + 9) & 0xFF) != 6)
+        {
+            return 0L;                                   // not TCP
+        }
+        if (!ipEq(ip + 12, serverIp))
+        {
+            return 0L;
+        }
+        lastIhl = (Magic.load8(ip) & 0x0F) * 4;
+        lastIpTotal = (Magic.load8(ip + 2) & 0xFF) << 8 | (Magic.load8(ip + 3) & 0xFF);
+        long tcp = ip + lastIhl;
+        if (((Magic.load8(tcp + 2) & 0xFF) << 8 | (Magic.load8(tcp + 3) & 0xFF)) != sport)
+        {
+            return 0L;                                   // not our connection
+        }
+        return tcp;
+    }
+
+    /** Build a TCP segment (Ethernet via gwMac / IP / TCP + payload) and send it. */
+    private static void sendTcp(long serverIp, int sport, int dport, int seq, int ack, int flags,
+            long payload, int plen)
+    {
+        long buf = Heap.allocData(2048);
+        int i = 0;
+        while (i < 6)
+        {
+            Magic.store8(buf + i, Magic.load8(gwMac + i));
+            Magic.store8(buf + 6 + i, Magic.load8(ourMac + i));
+            i = i + 1;
+        }
+        Magic.store8(buf + 12, 0x08);
+        Magic.store8(buf + 13, 0x00);
+        long ip = buf + 14;
+        long tcp = buf + 34;
+        be16(tcp + 0, sport);
+        be16(tcp + 2, dport);
+        be32(tcp + 4, seq);
+        be32(tcp + 8, ack);
+        Magic.store8(tcp + 12, 0x50);                    // data offset = 5 (20-byte header)
+        Magic.store8(tcp + 13, flags);
+        be16(tcp + 14, 64240);                           // window
+        be16(tcp + 16, 0);                               // checksum (fill below)
+        be16(tcp + 18, 0);                               // urgent pointer
+        i = 0;
+        while (i < plen)
+        {
+            Magic.store8(tcp + 20 + i, Magic.load8(payload + i));
+            i = i + 1;
+        }
+        int tcpLen = 20 + plen;
+        be16(tcp + 16, tcpCksum(tcp, tcpLen, ourIp, serverIp));
+        Magic.store8(ip + 0, 0x45);
+        Magic.store8(ip + 1, 0);
+        be16(ip + 2, 20 + tcpLen);
+        be16(ip + 4, 0);
+        be16(ip + 6, 0x4000);                            // don't fragment
+        Magic.store8(ip + 8, 64);
+        Magic.store8(ip + 9, 6);                         // protocol = TCP
+        be16(ip + 10, 0);
+        copy4(ourIp, ip + 12);
+        copy4(serverIp, ip + 16);
+        be16(ip + 10, ipCksum(ip, 20));
+        txData(buf, 14 + 20 + tcpLen);
+    }
+
+    /** TCP checksum: one's complement over the IPv4 pseudo-header + the TCP segment (checksum field must be 0). */
+    private static int tcpCksum(long tcp, int tcpLen, long srcIp, long dstIp)
+    {
+        int sum = 0;
+        sum = sum + ((Magic.load8(srcIp) & 0xFF) << 8 | (Magic.load8(srcIp + 1) & 0xFF));
+        sum = sum + ((Magic.load8(srcIp + 2) & 0xFF) << 8 | (Magic.load8(srcIp + 3) & 0xFF));
+        sum = sum + ((Magic.load8(dstIp) & 0xFF) << 8 | (Magic.load8(dstIp + 1) & 0xFF));
+        sum = sum + ((Magic.load8(dstIp + 2) & 0xFF) << 8 | (Magic.load8(dstIp + 3) & 0xFF));
+        sum = sum + 6;                                   // zero byte + protocol
+        sum = sum + tcpLen;
+        int i = 0;
+        while (i + 1 < tcpLen)
+        {
+            sum = sum + ((Magic.load8(tcp + i) & 0xFF) << 8 | (Magic.load8(tcp + i + 1) & 0xFF));
+            i = i + 2;
+        }
+        if (i < tcpLen)
+        {
+            sum = sum + ((Magic.load8(tcp + i) & 0xFF) << 8);   // odd trailing byte
+        }
+        while ((sum >> 16) != 0)
+        {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        return (~sum) & 0xFFFF;
+    }
+
+    /** Build "GET / HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n"; returns its length. */
+    private static int buildHttpReq(long buf, byte[] host)
+    {
+        int p = putBytes(buf, 0, Magic.bytes("GET / HTTP/1.0\r\nHost: "));
+        p = putBytes(buf, p, host);
+        p = putBytes(buf, p, Magic.bytes("\r\nConnection: close\r\n\r\n"));
+        return p;
+    }
+
+    /** Copy {@code s} into {@code buf} at offset {@code p}; returns the new offset. */
+    private static int putBytes(long buf, int p, byte[] s)
+    {
+        int i = 0;
+        while (i < s.length)
+        {
+            Magic.store8(buf + p, s[i] & 0xFF);
+            p = p + 1;
+            i = i + 1;
+        }
+        return p;
+    }
+
+    /** Write {@code len} bytes to the UART, keeping CR/LF/TAB + printable ASCII (else '.'). */
+    private static void printText(long addr, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            int c = Magic.load8(addr + i) & 0xFF;
+            if (c == 0x0A || c == 0x0D || c == 0x09 || (c >= 0x20 && c < 0x7F))
+            {
+                board.bcm2711.Uart.putc(c);
+            }
+            else
+            {
+                board.bcm2711.Uart.putc(0x2E);
+            }
+            i = i + 1;
+        }
+    }
+
+    /** Store a 32-bit big-endian value. */
+    private static void be32(long addr, int v)
+    {
+        Magic.store8(addr, (v >> 24) & 0xFF);
+        Magic.store8(addr + 1, (v >> 16) & 0xFF);
+        Magic.store8(addr + 2, (v >> 8) & 0xFF);
+        Magic.store8(addr + 3, v & 0xFF);
+    }
+
+    /** Read a 32-bit big-endian value. */
+    private static int readBe32(long addr)
+    {
+        return ((Magic.load8(addr) & 0xFF) << 24) | ((Magic.load8(addr + 1) & 0xFF) << 16)
+                | ((Magic.load8(addr + 2) & 0xFF) << 8) | (Magic.load8(addr + 3) & 0xFF);
     }
 
     /**
