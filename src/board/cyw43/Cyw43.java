@@ -400,6 +400,7 @@ public final class Cyw43
     static void scanOnly()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
+        clmLoad();                                       // regulatory/PHY data — the radio needs it to scan
         readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
         VM.delayMs(100);
 
@@ -439,6 +440,58 @@ public final class Cyw43
         board.bcm2711.Uart.write(Magic.bytes("  results: "));
         dumpAscii(data, 400);                            // SSIDs appear as readable runs in the bss_info list
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan done\n"));
+    }
+
+    /**
+     * Download the CLM blob (regulatory + PHY calibration) the firmware needs before it can scan/join —
+     * without it {@code WLC_SCAN} returns BCME_NOTUP. Sent as the chunked {@code clmload} iovar: each chunk
+     * is a 12-byte brcmf_dload_data header {flag, dload_type=CLM, len, crc=0} + data, with DL_BEGIN on the
+     * first chunk and DL_END on the last (flag also carries the handler version in bits 12+).
+     */
+    static void clmLoad()
+    {
+        long e = VM.fileFind(Magic.bytes("/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"));
+        if (e == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("  clm NOT FOUND\n"));
+            return;
+        }
+        long src = Magic.load64(e + 16L);
+        int total = (int) Magic.load64(e + 24L);
+        log(Magic.bytes("clm bytes="), total);
+        int off = 0;
+        while (off < total)
+        {
+            int n = total - off;
+            if (n > 400)
+            {
+                n = 400;                                 // keep name+header+chunk under the 512-byte TX limit
+            }
+            int flag = 0x1000;                           // DLOAD_HANDLER_VER (1) << 12
+            if (off == 0)
+            {
+                flag = flag | 0x2;                       // DL_BEGIN
+            }
+            if (off + n >= total)
+            {
+                flag = flag | 0x4;                       // DL_END
+            }
+            long buf = Heap.allocData(512);
+            int p = putStr(buf, Magic.bytes("clmload")); // "clmload\0"
+            store16(buf + p, flag);
+            store16(buf + p + 2, 2);                     // dload_type = DL_TYPE_CLM
+            Magic.store32(buf + p + 4, n);               // chunk len
+            Magic.store32(buf + p + 8, 0);               // crc unused
+            int i = 0;
+            while (i < n)
+            {
+                Magic.store8(buf + p + 12 + i, Magic.load8(src + off + i));
+                i = i + 1;
+            }
+            readCtrl(sendBcdc(WLC_SET_VAR, buf, p + 12 + n, true));
+            off = off + n;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("  clm loaded\n"));
     }
 
     /** Build + send a BCDC ioctl (SET or GET) with {@code dataLen} bytes at {@code dataAddr} on the control
