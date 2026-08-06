@@ -583,12 +583,12 @@ public final class Cyw43
         {
             return;
         }
-        if (staPskLen > 0 && !fourWay())                 // WPA2: run the 4-way handshake ourselves
-        {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
-            return;
+        if (staPskLen > 0)                               // WPA2: give the firmware ~3 s to run the 4-way from
+        {                                                //   the raw PMK, then see if data flows (DHCP)
+            board.bcm2711.Uart.write(Magic.bytes("wifi: waiting for firmware 4-way...\n"));
+            VM.delayMs(3000);
         }
-        VM.delayMs(500);                                 // let the keys settle
+        VM.delayMs(500);
         dhcp();
     }
 
@@ -610,6 +610,25 @@ public final class Cyw43
         setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
         setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth
         setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
+
+        // Hand the firmware the RAW 32-byte PMK (we compute it correctly) in case it can run the 4-way itself
+        // even without the sup_wpa iovar. wsec_pmk_t {key_len=32, flags=0 (raw PMK, not passphrase), key[64]}.
+        byte[] pass = heapBytes(staPsk, staPskLen);
+        byte[] ssid = heapBytes(staSsid, staSsidLen);
+        byte[] pmk = new byte[32];
+        crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
+        long pmkbuf = Heap.allocData(72);
+        store16(pmkbuf, 32);                             // key_len = 32
+        store16(pmkbuf + 2, 0);                          // flags = 0 (raw PMK)
+        int i = 0;
+        while (i < 32)
+        {
+            Magic.store8(pmkbuf + 4 + i, pmk[i] & 0xFF);
+            i = i + 1;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: set raw PMK -> "));
+        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, pmkbuf, 68, true));
+
         setInt(WLC_UP, 0);                               // WLC_SET_SSID then associates
     }
 
