@@ -685,6 +685,13 @@ public final class Cyw43
             {
                 aNonce = heapBytes(f + 17, 32);
                 replay = heapBytes(f + 9, 8);
+                board.bcm2711.Uart.write(Magic.bytes("    anonce="));   // stable = retransmit; changing = restart
+                printHexBytes(aNonce, 6);
+                board.bcm2711.Uart.write(Magic.bytes(" desc="));
+                VM.printDec(Magic.load8(f + 4) & 0xFF);
+                board.bcm2711.Uart.write(Magic.bytes(" klen="));
+                VM.printDec(((Magic.load8(f + 7) & 0xFF) << 8) | (Magic.load8(f + 8) & 0xFF));
+                board.bcm2711.Uart.putc(0x0A);
                 derivePtk(pmk, apMac, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
                 kck = slice(ptk, 0, 16);
                 kek = slice(ptk, 16, 16);
