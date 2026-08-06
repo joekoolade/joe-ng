@@ -389,6 +389,7 @@ public final class Cyw43
     private static int reqId = 1;                        // BCDC request id (echoed in the response)
     private static final int WLC_UP = 2;                 // ioctl: bring the interface up
     private static final int WLC_DOWN = 3;               // ioctl: bring the interface down
+    private static final int WLC_GET_BSSID = 23;         // ioctl: the associated BSSID
     private static final int WLC_SET_KEY = 45;           // ioctl: install a key (wsec_key)
     private static final int WLC_SCAN = 50;              // ioctl: start a scan
     private static final int WLC_SCAN_RESULTS = 51;      // ioctl: read the scan result list (GET)
@@ -652,10 +653,33 @@ public final class Cyw43
         int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
         byte[] replay = heapBytes(m1 + 9, 8);            // echo msg1's replay counter in msg2
 
+        // The Authenticator address (AA) for the PTK is the AP's BSSID. Use the real associated BSSID rather
+        // than msg1's Ethernet source, which can differ on multi-BSSID / band-steering APs (e.g. AT&T).
+        byte[] bssid = new byte[6];
+        long gb = Heap.allocData(64);
+        int bid = sendBcdc(WLC_GET_BSSID, gb, 6, false);
+        long rxb = Heap.allocData(256);
+        if (recvCtrl(rxb, 256, bid) > 0)
+        {
+            int bdoff = Magic.load8(rxb + 7) & 0xFF;
+            int k = 0;
+            while (k < 6)
+            {
+                bssid[k] = (byte) Magic.load8(rxb + bdoff + 16 + k);
+                k = k + 1;
+            }
+        }
+        board.bcm2711.Uart.write(Magic.bytes("  msg1-src="));
+        printHexBytes(apMac, 6);
+        board.bcm2711.Uart.write(Magic.bytes(" bssid="));
+        printHexBytes(bssid, 6);
+        board.bcm2711.Uart.putc(0x0A);
+        byte[] aa = (bssid[0] != 0 || bssid[1] != 0 || bssid[2] != 0) ? bssid : apMac;
+
         byte[] sNonce = new byte[32];
         genNonce(sNonce);
         byte[] ptk = new byte[48];
-        derivePtk(pmk, apMac, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+        derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
         byte[] kck = slice(ptk, 0, 16);
         byte[] kek = slice(ptk, 16, 16);
         byte[] tk = slice(ptk, 32, 16);
@@ -689,7 +713,7 @@ public final class Cyw43
         int tries = 0;
         while (tries < 6 && m3 == 0L)
         {
-            sendEapol(apMac, 0x010a, replay, keyLen, sNonce, ie, ieLen, kck);
+            sendEapol(aa, 0x010a, replay, keyLen, sNonce, ie, ieLen, kck);
             board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
             long f = recvEapol(apMac);
             if (f == 0L)
@@ -719,7 +743,7 @@ public final class Cyw43
                 board.bcm2711.Uart.write(Magic.bytes(" klen="));
                 VM.printDec(((Magic.load8(f + 7) & 0xFF) << 8) | (Magic.load8(f + 8) & 0xFF));
                 board.bcm2711.Uart.putc(0x0A);
-                derivePtk(pmk, apMac, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+                derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
                 kck = slice(ptk, 0, 16);
                 kek = slice(ptk, 16, 16);
                 tk = slice(ptk, 32, 16);
