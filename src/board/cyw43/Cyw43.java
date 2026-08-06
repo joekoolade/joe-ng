@@ -661,17 +661,35 @@ public final class Cyw43
         byte[] tk = slice(ptk, 32, 16);
         board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived\n"));
 
+        // The msg2 key data is the STA's RSN IE, which the AP checks against our association request. Ask the
+        // firmware for the exact IE it advertised (wpaie) so they match; fall back to the standard WPA2-PSK-
+        // CCMP IE if the GET returns nothing.
         byte[] rsnie = {
             (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
             (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x00, 0x00
         };
+        byte[] ie = rsnie;
+        int ieLen = rsnie.length;
+        byte[] fwie = new byte[64];
+        int fwLen = iovarGet(Magic.bytes("wpaie"), fwie);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: wpaie len="));
+        VM.printDec(fwLen);
+        board.bcm2711.Uart.write(Magic.bytes(" ="));
+        printHexBytes(fwie, fwLen > 32 ? 32 : fwLen);
+        board.bcm2711.Uart.putc(0x0A);
+        if (fwLen >= 4 && (fwie[0] & 0xFF) == 0x30)
+        {
+            ie = fwie;
+            ieLen = fwLen;
+        }
+
         // Send msg2 and wait for msg3. A frame with no MIC bit is a (re)transmitted msg1 — re-derive the PTK
         // from its ANonce/replay and resend msg2. A frame with the MIC bit is msg3.
         long m3 = 0L;
         int tries = 0;
         while (tries < 6 && m3 == 0L)
         {
-            sendEapol(apMac, 0x010a, replay, keyLen, sNonce, rsnie, rsnie.length, kck);
+            sendEapol(apMac, 0x010a, replay, keyLen, sNonce, ie, ieLen, kck);
             board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
             long f = recvEapol(apMac);
             if (f == 0L)
@@ -1000,6 +1018,34 @@ public final class Cyw43
             linked = parseJoinEvent(rx, len);
         }
         return linked;
+    }
+
+    /** GET a named iovar into {@code out}; returns the number of bytes the firmware returned (0 on failure). */
+    private static int iovarGet(byte[] name, byte[] out)
+    {
+        long g = Heap.allocData(256);
+        int p = putStr(g, name);
+        int id = sendBcdc(WLC_GET_VAR, g, p + 128, false);
+        long rx = Heap.allocData(512);
+        int len = recvCtrl(rx, 512, id);
+        if (len == 0)
+        {
+            return 0;
+        }
+        int doff = Magic.load8(rx + 7) & 0xFF;
+        int dlen = Magic.load32(rx + doff + 4);          // BCDC len = returned data length
+        if (dlen < 0 || dlen > out.length)
+        {
+            dlen = out.length;
+        }
+        long data = rx + doff + 16;
+        int i = 0;
+        while (i < dlen)
+        {
+            out[i] = (byte) Magic.load8(data + i);
+            i = i + 1;
+        }
+        return dlen;
     }
 
     /** Set a plain integer iovar: "&lt;name&gt;\0" + value(u32). (For interface 0, brcmfmac uses this — the
