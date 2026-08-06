@@ -51,6 +51,7 @@ test: build
 	$(JAVA) -cp $(OUT) objectmodel.ObjectModelTest
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
 	$(JAVA) -cp $(OUT) compiler.CompilerTest $(OUT)
+	$(JAVA) -cp $(OUT) crypto.CryptoTest
 
 image: build
 	$(JAVA) -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
