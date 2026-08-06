@@ -40,7 +40,54 @@ public final class CryptoTest
         // (the full PTK is ultimately proven by the on-metal 4-way handshake).
         prfConsistency();
 
+        // AES-128 (FIPS-197 C.1), both directions.
+        aesEnc("000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff",
+                "69c4e0d86a7b0430d8cdb78070b4c55a");
+        aesDec("000102030405060708090a0b0c0d0e0f", "69c4e0d86a7b0430d8cdb78070b4c55a",
+                "00112233445566778899aabbccddeeff");
+
+        // AES Key Unwrap (RFC 3394, 128-bit KEK + 128-bit key) — the GTK path.
+        keyUnwrap("000102030405060708090a0b0c0d0e0f",
+                "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5", "00112233445566778899aabbccddeeff");
+
         T.summary("crypto");
+    }
+
+    private static void aesEnc(String keyHex, String ptHex, String expect)
+    {
+        int[] w = new int[44];
+        Aes.expandKey(bytes(keyHex), w);
+        byte[] out = new byte[16];
+        Aes.encryptBlock(w, bytes(ptHex), 0, out, 0);
+        T.eqStr("aes-enc", expect, hex(out, 16));
+    }
+
+    private static void aesDec(String keyHex, String ctHex, String expect)
+    {
+        int[] w = new int[44];
+        Aes.expandKey(bytes(keyHex), w);
+        byte[] out = new byte[16];
+        Aes.decryptBlock(w, bytes(ctHex), 0, out, 0);
+        T.eqStr("aes-dec", expect, hex(out, 16));
+    }
+
+    private static void keyUnwrap(String kekHex, String wrappedHex, String expect)
+    {
+        byte[] wrapped = bytes(wrappedHex);
+        byte[] out = new byte[wrapped.length - 8];
+        boolean ok = KeyWrap.unwrap(bytes(kekHex), wrapped, wrapped.length, out);
+        T.check("keyunwrap-iv", ok);
+        T.eqStr("keyunwrap", expect, hex(out, out.length));
+    }
+
+    private static byte[] bytes(String hex)
+    {
+        byte[] b = new byte[hex.length() / 2];
+        for (int i = 0; i < b.length; i++)
+        {
+            b[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return b;
     }
 
     private static void prfConsistency()
