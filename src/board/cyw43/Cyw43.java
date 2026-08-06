@@ -862,7 +862,7 @@ public final class Cyw43
             Magic.store8(buf + i, f[i] & 0xFF);
             i = i + 1;
         }
-        txData(buf, total);
+        txDataP(buf, total, 7);                          // EAPOL at 802.1D network-control priority
     }
 
     /** Find the GTK KDE (OUI 00-0f-ac, type 1) in unwrapped key data; copies the 16-byte GTK to {@code out}
@@ -1166,13 +1166,20 @@ public final class Cyw43
     /** Send an 802.3 frame over the SDPCM data channel (2) with a 4-byte BDC header (proto ver 2, no pad). */
     static void txData(long frame, int flen)
     {
+        txDataP(frame, flen, 0);
+    }
+
+    /** Send an 802.3 frame over the SDPCM data channel with an explicit BDC priority (EAPOL uses 7, the
+     *  802.1D network-control priority, like dhd/brcmfmac). */
+    static void txDataP(long frame, int flen, int prio)
+    {
         long tx = Heap.allocData(2048);
         Magic.store8(tx + 4, txSeq & 0xFF);              // SDPCM seq
         Magic.store8(tx + 5, 2);                         // channel 2 = data
         Magic.store8(tx + 6, 0);
         Magic.store8(tx + 7, 12);                        // dataoffset
         Magic.store8(tx + 12, 0x20);                     // BDC flags = proto ver (2) << 4
-        Magic.store8(tx + 13, 0);                        // priority
+        Magic.store8(tx + 13, prio);                     // priority
         Magic.store8(tx + 14, 0);                        // flags2 (interface 0)
         Magic.store8(tx + 15, 0);                        // data_offset = 0 words
         int i = 0;
