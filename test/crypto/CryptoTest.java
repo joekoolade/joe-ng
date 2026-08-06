@@ -35,7 +35,42 @@ public final class CryptoTest
         pbkdf2("password", "IEEE", 4096, 32,
                 "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
 
+        // PRF self-consistency: each 20-byte block must equal HMAC-SHA1(K, A || 0x00 || B || i). HMAC is
+        // already RFC-validated above, so this confirms the PRF's input construction + counter across blocks
+        // (the full PTK is ultimately proven by the on-metal 4-way handshake).
+        prfConsistency();
+
         T.summary("crypto");
+    }
+
+    private static void prfConsistency()
+    {
+        byte[] key = rep((byte) 0x0b, 32);
+        byte[] label = ascii("Pairwise key expansion");
+        byte[] data = ascii("some 22-byte nonce-ish");
+        byte[] prf = new byte[48];
+        Prf.sha1(key, key.length, label, label.length, data, data.length, prf, 48);
+
+        // rebuild the expected first three blocks independently from the tested Hmac
+        byte[] in = new byte[label.length + 1 + data.length + 1];
+        System.arraycopy(label, 0, in, 0, label.length);
+        in[label.length] = 0;
+        System.arraycopy(data, 0, in, label.length + 1, data.length);
+        for (int blk = 0; blk < 3; blk++)
+        {
+            in[in.length - 1] = (byte) blk;
+            byte[] mac = new byte[Sha1.DIGEST];
+            Hmac.sha1(key, key.length, in, in.length, mac);
+            int n = Math.min(20, 48 - blk * 20);
+            T.eqStr("prf block " + blk, hex(mac, n), hexSlice(prf, blk * 20, n));
+        }
+    }
+
+    private static String hexSlice(byte[] b, int off, int len)
+    {
+        byte[] s = new byte[len];
+        System.arraycopy(b, off, s, 0, len);
+        return hex(s, len);
     }
 
     private static void hmac(byte[] key, String msg, String expect)
