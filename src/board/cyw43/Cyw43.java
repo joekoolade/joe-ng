@@ -628,6 +628,16 @@ public final class Cyw43
         crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
         board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
 
+        // Diagnostic: does the baseline-compiled crypto match the host? SHA-1("abc") must be
+        // a9993e364706816aba3e25717850c26c9cd0d89d. And print the PMK to compare vs `wpa_passphrase`.
+        byte[] st = new byte[20];
+        crypto.Sha1.hash(Magic.bytes("abc"), 3, st);
+        board.bcm2711.Uart.write(Magic.bytes("  sha1(abc)="));
+        printHexBytes(st, 20);
+        board.bcm2711.Uart.write(Magic.bytes("\n  pmk="));
+        printHexBytes(pmk, 32);
+        board.bcm2711.Uart.putc(0x0A);
+
         rxbuf = Heap.allocData(2048);
         byte[] apMac = new byte[6];
         long m1 = recvEapol(apMac);                      // msg1
@@ -923,6 +933,17 @@ public final class Cyw43
             i = i + 1;
         }
         return b;
+    }
+
+    /** Print {@code len} bytes as lowercase hex. */
+    private static void printHexBytes(byte[] b, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            printHex2(b[i] & 0xFF);
+            i = i + 1;
+        }
     }
 
     private static void put(byte[] dst, int off, byte[] src, int len)
