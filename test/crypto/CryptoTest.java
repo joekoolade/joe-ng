@@ -21,7 +21,54 @@ public final class CryptoTest
         sha1("The quick brown fox jumps over the lazy dog", "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
         sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",   // 56 bytes -> two blocks
                 "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+
+        // HMAC-SHA1 (RFC 2202).
+        hmac(rep((byte) 0x0b, 20), "Hi There", "b617318655057264e28bc0b6fb378c8ef146be00");
+        hmac(ascii("Jefe"), "what do ya want for nothing?", "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
+
+        // PBKDF2-HMAC-SHA1 (RFC 6070).
+        pbkdf2("password", "salt", 1, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6");
+        pbkdf2("password", "salt", 2, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957");
+        pbkdf2("password", "salt", 4096, 20, "4b007901b765489abead49d926f721d065a429c1");
+
+        // WPA2 PMK = PBKDF2(passphrase, ssid, 4096, 32) — IEEE 802.11i test vector.
+        pbkdf2("password", "IEEE", 4096, 32,
+                "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
+
         T.summary("crypto");
+    }
+
+    private static void hmac(byte[] key, String msg, String expect)
+    {
+        byte[] m = ascii(msg);
+        byte[] out = new byte[Sha1.DIGEST];
+        Hmac.sha1(key, key.length, m, m.length, out);
+        String label = msg.length() > 12 ? msg.substring(0, 12) + "..." : msg;
+        T.eqStr("hmac(\"" + label + "\")", expect, hex(out, out.length));
+    }
+
+    private static void pbkdf2(String pw, String salt, int iters, int dkLen, String expect)
+    {
+        byte[] p = ascii(pw);
+        byte[] s = ascii(salt);
+        byte[] out = new byte[dkLen];
+        Pbkdf2.deriveSha1(p, p.length, s, s.length, iters, out, dkLen);
+        T.eqStr("pbkdf2(\"" + salt + "\"," + iters + ")", expect, hex(out, dkLen));
+    }
+
+    private static byte[] ascii(String s)
+    {
+        return s.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] rep(byte v, int n)
+    {
+        byte[] b = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            b[i] = v;
+        }
+        return b;
     }
 
     private static void sha1(String msg, String expect)
