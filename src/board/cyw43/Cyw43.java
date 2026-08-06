@@ -545,6 +545,10 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("  wifi.conf: no ssid\n"));
             return;
         }
+        staSsid = ssid;                                  // kept for the WPA2 PMK (PBKDF2 salt = SSID)
+        staSsidLen = sl;
+        staPsk = psk;
+        staPskLen = pl;
         board.bcm2711.Uart.write(Magic.bytes("wifi: join "));
         dumpRaw(ssid, sl);
 
@@ -574,39 +578,171 @@ public final class Cyw43
 
         boolean linked = waitLink();
         board.bcm2711.Uart.write(linked ? Magic.bytes("wifi: JOINED\n") : Magic.bytes("wifi: join timeout\n"));
-        if (linked)
+        if (!linked)
         {
-            VM.delayMs(500);                             // let the link settle (+ let the 4-way finish for WPA2)
-            dhcp();
+            return;
         }
+        if (staPskLen > 0 && !fourWay())                 // WPA2: run the 4-way handshake ourselves
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
+            return;
+        }
+        VM.delayMs(500);                                 // let the keys settle
+        dhcp();
     }
 
+    static long staSsid;                                 // SSID bytes (PBKDF2 salt)
+    static int staSsidLen;
+    static long staPsk;                                  // passphrase bytes
+    static int staPskLen;
+
     /**
-     * Configure WPA2-PSK via the in-chip supplicant offload — the firmware runs PBKDF2 (passphrase→PMK) and
-     * the 4-way handshake, so no crypto lives in Java. wsec=AES, enable the supplicant (bsscfg iovars), hand
-     * it the passphrase (WLC_SET_WSEC_PMK with the WSEC_PASSPHRASE flag), auth=open, wpa_auth=WPA2-PSK.
+     * Configure WPA2-PSK in HOST-supplicant mode: this firmware has no in-chip supplicant (sup_wpa → -23), so
+     * we only tell it the ciphers — wsec=AES/CCMP, wpa_auth=WPA2-PSK, open 802.11 auth — and it associates
+     * (unkeyed) then forwards the AP's EAPOL frames to us. We run the 4-way handshake ({@link #fourWay}) and
+     * install the keys with WLC_SET_KEY. Applied while DOWN.
      */
     static void setupWpa2(long psk, int pl)
     {
-        setInt(WLC_DOWN, 0);                             // security config must be applied while DOWN
+        setInt(WLC_DOWN, 0);
         setInt(WLC_SET_INFRA, 1);                        // infrastructure BSS
         setInt(WLC_SET_WSEC, 4);                         // AES/CCMP
-        iovarInt(Magic.bytes("sup_wpa"), 1);             // enable the in-firmware supplicant
-        iovarInt(Magic.bytes("sup_wpa2_eapver"), -1);
-        iovarInt(Magic.bytes("sup_wpa_tmo"), 2500);
-        long pmk = Heap.allocData(72);                   // wsec_pmk_t {key_len u16, flags u16, key[64]}
-        store16(pmk, pl);                                // key_len = passphrase length
-        store16(pmk + 2, 1);                             // flags = WSEC_PASSPHRASE (fw derives the PMK)
-        int i = 0;
-        while (i < pl)
+        setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth
+        setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
+        setInt(WLC_UP, 0);                               // WLC_SET_SSID then associates
+    }
+
+    /**
+     * The WPA2 4-way handshake, run in Java (Stage A: PMK + msg1 + PTK). Compute PMK = PBKDF2(psk, ssid),
+     * wait for the AP's EAPOL message 1 (ethertype 0x888E) to get the ANonce + AP MAC, then derive the PTK
+     * with our SNonce. Verifying that EAPOL reaches us here confirms host-supplicant mode works before we
+     * build msg2/3/4 + WLC_SET_KEY. Returns false for now (Stage A stops after the PTK).
+     */
+    static boolean fourWay()
+    {
+        byte[] pass = heapBytes(staPsk, staPskLen);
+        byte[] ssid = heapBytes(staSsid, staSsidLen);
+        byte[] pmk = new byte[32];
+        crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
+
+        long rx = Heap.allocData(2048);
+        long freq = Magic.readCNTFRQ_EL0();
+        long endT = Magic.readCNTPCT_EL0() + freq * 8L;
+        long eapol = 0L;
+        byte[] apMac = new byte[6];
+        while (Magic.readCNTPCT_EL0() < endT && eapol == 0L)
         {
-            Magic.store8(pmk + 4 + i, Magic.load8(psk + i));
+            int len = readFrameOnce(rx, 2048);
+            if (len == 0)
+            {
+                VM.delayMs(2);
+                continue;
+            }
+            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            {
+                continue;
+            }
+            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+            eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
+            if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x888E)
+            {
+                continue;                                // not EAPOL
+            }
+            int i = 0;
+            while (i < 6)
+            {
+                apMac[i] = (byte) Magic.load8(eth + 6 + i);   // Ethernet source = AP (authenticator)
+                i = i + 1;
+            }
+            eapol = eth + 14;
+        }
+        if (eapol == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg1\n"));
+            return false;
+        }
+        log(Magic.bytes("wifi: eapol msg1 key-info="), (Magic.load8(eapol + 5) & 0xFF) << 8 | (Magic.load8(eapol + 6) & 0xFF));
+
+        byte[] aNonce = new byte[32];                    // ANonce is at EAPOL-Key offset 17
+        int i = 0;
+        while (i < 32)
+        {
+            aNonce[i] = (byte) Magic.load8(eapol + 17 + i);
             i = i + 1;
         }
-        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, pmk, 68, true));
-        setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth; WPA does the rest via the 4-way
-        setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
-        setInt(WLC_UP, 0);                               // back up; WLC_SET_SSID then associates
+        byte[] sNonce = new byte[32];
+        genNonce(sNonce);
+        byte[] ourMacB = heapBytes(ourMac, 6);
+        byte[] ptk = new byte[48];
+        derivePtk(pmk, apMac, ourMacB, aNonce, sNonce, ptk);   // KCK=ptk[0:16] KEK=[16:32] TK=[32:48]
+        board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived (stage A ok; msg2/3/4 next)\n"));
+        return false;
+    }
+
+    /** PTK = PRF(PMK, "Pairwise key expansion", min(AA,SPA)||max(AA,SPA)||min(An,Sn)||max(An,Sn), 48). */
+    private static void derivePtk(byte[] pmk, byte[] aa, byte[] spa, byte[] an, byte[] sn, byte[] ptk)
+    {
+        byte[] data = new byte[76];
+        boolean aaFirst = cmp(aa, spa, 6) < 0;
+        put(data, 0, aaFirst ? aa : spa, 6);
+        put(data, 6, aaFirst ? spa : aa, 6);
+        boolean anFirst = cmp(an, sn, 32) < 0;
+        put(data, 12, anFirst ? an : sn, 32);
+        put(data, 44, anFirst ? sn : an, 32);
+        byte[] label = Magic.bytes("Pairwise key expansion");
+        crypto.Prf.sha1(pmk, 32, label, label.length, data, 76, ptk, 48);
+    }
+
+    /** A pseudo-random SNonce from the counter-timer (good enough for a one-shot join). */
+    private static void genNonce(byte[] out)
+    {
+        int i = 0;
+        while (i < 32)
+        {
+            long t = Magic.readCNTPCT_EL0() + (long) i * 0x9E3779B9L;
+            out[i] = (byte) (t ^ (t >>> 13) ^ (t >>> 27));
+            i = i + 1;
+        }
+    }
+
+    /** Copy {@code len} bytes from heap {@code addr} into a fresh byte[]. */
+    private static byte[] heapBytes(long addr, int len)
+    {
+        byte[] b = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            b[i] = (byte) Magic.load8(addr + i);
+            i = i + 1;
+        }
+        return b;
+    }
+
+    private static void put(byte[] dst, int off, byte[] src, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            dst[off + i] = src[i];
+            i = i + 1;
+        }
+    }
+
+    /** Unsigned lexicographic compare of the first {@code len} bytes. */
+    private static int cmp(byte[] a, byte[] b, int len)
+    {
+        int i = 0;
+        while (i < len)
+        {
+            int d = (a[i] & 0xFF) - (b[i] & 0xFF);
+            if (d != 0)
+            {
+                return d;
+            }
+            i = i + 1;
+        }
+        return 0;
     }
 
     /** Wait up to ~15 s for the E_LINK up event, tracing join events; returns true if the link came up. */
