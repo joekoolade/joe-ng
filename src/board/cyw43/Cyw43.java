@@ -389,6 +389,7 @@ public final class Cyw43
     private static int reqId = 1;                        // BCDC request id (echoed in the response)
     private static final int WLC_UP = 2;                 // ioctl: bring the interface up
     private static final int WLC_DOWN = 3;               // ioctl: bring the interface down
+    private static final int WLC_SET_KEY = 45;           // ioctl: install a key (wsec_key)
     private static final int WLC_SCAN = 50;              // ioctl: start a scan
     private static final int WLC_SCAN_RESULTS = 51;      // ioctl: read the scan result list (GET)
     private static final int WLC_SET_VAR = 263;          // ioctl: set a named iovar
@@ -612,11 +613,12 @@ public final class Cyw43
         setInt(WLC_UP, 0);                               // WLC_SET_SSID then associates
     }
 
+    private static long rxbuf;                           // shared RX frame buffer for the handshake
+
     /**
-     * The WPA2 4-way handshake, run in Java (Stage A: PMK + msg1 + PTK). Compute PMK = PBKDF2(psk, ssid),
-     * wait for the AP's EAPOL message 1 (ethertype 0x888E) to get the ANonce + AP MAC, then derive the PTK
-     * with our SNonce. Verifying that EAPOL reaches us here confirms host-supplicant mode works before we
-     * build msg2/3/4 + WLC_SET_KEY. Returns false for now (Stage A stops after the PTK).
+     * The WPA2 4-way handshake, run in Java. PMK = PBKDF2(psk, ssid); receive msg1 (ANonce, AP MAC); derive
+     * PTK (KCK/KEK/TK); send msg2 (SNonce + MIC + our RSN IE); receive msg3 (verify MIC, AES-unwrap the GTK);
+     * send msg4; install the pairwise TK and the GTK with WLC_SET_KEY. Then CCMP flows and DHCP can run.
      */
     static boolean fourWay()
     {
@@ -626,58 +628,237 @@ public final class Cyw43
         crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
         board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
 
-        long rx = Heap.allocData(2048);
+        rxbuf = Heap.allocData(2048);
+        byte[] apMac = new byte[6];
+        long m1 = recvEapol(apMac);                      // msg1
+        if (m1 == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg1\n"));
+            return false;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg1\n"));
+
+        byte[] aNonce = heapBytes(m1 + 17, 32);
+        int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
+        byte[] replay = heapBytes(m1 + 9, 8);            // echo msg1's replay counter in msg2
+
+        byte[] sNonce = new byte[32];
+        genNonce(sNonce);
+        byte[] ptk = new byte[48];
+        derivePtk(pmk, apMac, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+        byte[] kck = slice(ptk, 0, 16);
+        byte[] kek = slice(ptk, 16, 16);
+        byte[] tk = slice(ptk, 32, 16);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived\n"));
+
+        byte[] rsnie = {
+            (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
+            (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x00, 0x00
+        };
+        sendEapol(apMac, 0x010a, replay, keyLen, sNonce, rsnie, rsnie.length, kck);   // msg2
+        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
+
+        long m3 = recvEapol(apMac);                      // msg3
+        if (m3 == 0L)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg3\n"));
+            return false;
+        }
+        int eapLen3 = ((Magic.load8(m3 + 2) & 0xFF) << 8) | (Magic.load8(m3 + 3) & 0xFF);
+        byte[] frame3 = heapBytes(m3, 4 + eapLen3);
+        byte[] rxMic = slice(frame3, 81, 16);
+        int j = 0;
+        while (j < 16)
+        {
+            frame3[81 + j] = 0;                          // zero the MIC field before recomputing
+            j = j + 1;
+        }
+        byte[] calc = new byte[20];
+        crypto.Hmac.sha1(kck, 16, frame3, frame3.length, calc);
+        if (cmp(calc, rxMic, 16) != 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC mismatch\n"));
+            return false;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC ok\n"));
+
+        int kdLen = ((Magic.load8(m3 + 97) & 0xFF) << 8) | (Magic.load8(m3 + 98) & 0xFF);
+        byte[] wrapped = heapBytes(m3 + 99, kdLen);
+        byte[] kd = new byte[kdLen - 8];
+        if (!crypto.KeyWrap.unwrap(kek, wrapped, kdLen, kd))
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: GTK unwrap failed\n"));
+            return false;
+        }
+        byte[] gtk = new byte[16];
+        int gtkId = extractGtk(kd, kd.length, gtk);
+        if (gtkId < 0)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: no GTK KDE\n"));
+            return false;
+        }
+        board.bcm2711.Uart.write(Magic.bytes("wifi: GTK unwrapped\n"));
+
+        byte[] replay3 = heapBytes(m3 + 9, 8);           // echo msg3's replay counter in msg4
+        byte[] zero32 = new byte[32];
+        byte[] empty = new byte[0];
+        sendEapol(apMac, 0x030a, replay3, keyLen, zero32, empty, 0, kck);   // msg4
+        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg4 sent\n"));
+
+        installKey(0, tk, 16, apMac, true);              // pairwise TK, bound to the AP
+        installKey(gtkId, gtk, 16, new byte[6], false);  // group GTK
+        board.bcm2711.Uart.write(Magic.bytes("wifi: keys installed\n"));
+        return true;
+    }
+
+    /** Wait (~8 s) for an EAPOL frame (ethertype 0x888E) from the AP; fills {@code apMac} (source), returns
+     *  the EAPOL-Key body's heap offset, or 0 on timeout. */
+    private static long recvEapol(byte[] apMac)
+    {
         long freq = Magic.readCNTFRQ_EL0();
         long endT = Magic.readCNTPCT_EL0() + freq * 8L;
-        long eapol = 0L;
-        byte[] apMac = new byte[6];
-        while (Magic.readCNTPCT_EL0() < endT && eapol == 0L)
+        while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = readFrameOnce(rx, 2048);
+            int len = readFrameOnce(rxbuf, 2048);
             if (len == 0)
             {
                 VM.delayMs(2);
                 continue;
             }
-            if ((Magic.load8(rx + 5) & 0x0F) == 0)
+            if ((Magic.load8(rxbuf + 5) & 0x0F) == 0)
             {
                 continue;
             }
-            long eth = rx + (Magic.load8(rx + 7) & 0xFF);
+            long eth = rxbuf + (Magic.load8(rxbuf + 7) & 0xFF);
             eth = eth + 4 + (Magic.load8(eth + 3) & 0xFF) * 4;
             if (((Magic.load8(eth + 12) & 0xFF) << 8 | (Magic.load8(eth + 13) & 0xFF)) != 0x888E)
             {
-                continue;                                // not EAPOL
+                continue;
             }
             int i = 0;
             while (i < 6)
             {
-                apMac[i] = (byte) Magic.load8(eth + 6 + i);   // Ethernet source = AP (authenticator)
+                apMac[i] = (byte) Magic.load8(eth + 6 + i);
                 i = i + 1;
             }
-            eapol = eth + 14;
+            return eth + 14;
         }
-        if (eapol == 0L)
-        {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg1\n"));
-            return false;
-        }
-        log(Magic.bytes("wifi: eapol msg1 key-info="), (Magic.load8(eapol + 5) & 0xFF) << 8 | (Magic.load8(eapol + 6) & 0xFF));
+        return 0L;
+    }
 
-        byte[] aNonce = new byte[32];                    // ANonce is at EAPOL-Key offset 17
-        int i = 0;
-        while (i < 32)
+    /** Build + send an EAPOL-Key frame; computes the MIC over the frame (MIC field zeroed) with KCK when the
+     *  key-info MIC bit is set. */
+    private static void sendEapol(byte[] apMac, int keyInfo, byte[] replay, int keyLen, byte[] nonce,
+            byte[] keyData, int kdLen, byte[] kck)
+    {
+        int eapLen = 95 + kdLen;                         // EAPOL body length (after the 4-byte EAPOL header)
+        int total = 14 + 4 + eapLen;
+        byte[] f = new byte[total];
+        put(f, 0, apMac, 6);
+        put(f, 6, heapBytes(ourMac, 6), 6);
+        f[12] = (byte) 0x88;
+        f[13] = (byte) 0x8e;
+        int o = 14;
+        f[o] = 2;                                        // EAPOL version 2
+        f[o + 1] = 3;                                    // type = EAPOL-Key
+        f[o + 2] = (byte) (eapLen >>> 8);
+        f[o + 3] = (byte) eapLen;
+        f[o + 4] = 2;                                    // descriptor type = RSN
+        f[o + 5] = (byte) (keyInfo >>> 8);
+        f[o + 6] = (byte) keyInfo;
+        f[o + 7] = (byte) (keyLen >>> 8);
+        f[o + 8] = (byte) keyLen;
+        put(f, o + 9, replay, 8);
+        put(f, o + 17, nonce, 32);
+        // IV(16)/RSC(8)/reserved(8)/MIC(16) stay zero
+        f[o + 97] = (byte) (kdLen >>> 8);
+        f[o + 98] = (byte) kdLen;
+        put(f, o + 99, keyData, kdLen);
+        if ((keyInfo & 0x100) != 0)                      // MIC bit set: fill it
         {
-            aNonce[i] = (byte) Magic.load8(eapol + 17 + i);
+            byte[] eap = slice(f, o, 4 + eapLen);
+            byte[] mic = new byte[20];
+            crypto.Hmac.sha1(kck, 16, eap, eap.length, mic);
+            int i = 0;
+            while (i < 16)
+            {
+                f[o + 81 + i] = mic[i];
+                i = i + 1;
+            }
+        }
+        long buf = Heap.allocData(total + 16);
+        int i = 0;
+        while (i < total)
+        {
+            Magic.store8(buf + i, f[i] & 0xFF);
             i = i + 1;
         }
-        byte[] sNonce = new byte[32];
-        genNonce(sNonce);
-        byte[] ourMacB = heapBytes(ourMac, 6);
-        byte[] ptk = new byte[48];
-        derivePtk(pmk, apMac, ourMacB, aNonce, sNonce, ptk);   // KCK=ptk[0:16] KEK=[16:32] TK=[32:48]
-        board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived (stage A ok; msg2/3/4 next)\n"));
-        return false;
+        txData(buf, total);
+    }
+
+    /** Find the GTK KDE (OUI 00-0f-ac, type 1) in unwrapped key data; copies the 16-byte GTK to {@code out}
+     *  and returns its key id, or -1 if absent. */
+    private static int extractGtk(byte[] kd, int len, byte[] out)
+    {
+        int p = 0;
+        while (p + 2 <= len)
+        {
+            int type = kd[p] & 0xFF;
+            int l = kd[p + 1] & 0xFF;
+            if (type == 0xdd && l >= 6 && (kd[p + 2] & 0xFF) == 0x00 && (kd[p + 3] & 0xFF) == 0x0f
+                    && (kd[p + 4] & 0xFF) == 0xac && (kd[p + 5] & 0xFF) == 0x01)
+            {
+                int id = kd[p + 6] & 0x03;               // GTK KDE: OUI(3) type(1) keyinfo(1) rsv(1) GTK
+                int i = 0;
+                while (i < 16)
+                {
+                    out[i] = kd[p + 8 + i];
+                    i = i + 1;
+                }
+                return id;
+            }
+            if (l == 0)
+            {
+                break;
+            }
+            p = p + 2 + l;
+        }
+        return -1;
+    }
+
+    /** Install a key via WLC_SET_KEY (brcmf_wsec_key_le): CCMP algo, ea = peer for the pairwise key. */
+    private static void installKey(int index, byte[] key, int keyLen, byte[] ea, boolean pairwise)
+    {
+        long b = Heap.allocData(200);                    // zeroed
+        Magic.store32(b + 0, index);
+        Magic.store32(b + 4, keyLen);
+        int i = 0;
+        while (i < keyLen)
+        {
+            Magic.store8(b + 8 + i, key[i] & 0xFF);
+            i = i + 1;
+        }
+        Magic.store32(b + 112, 4);                       // algo = CRYPTO_ALGO_AES_CCM
+        Magic.store32(b + 116, pairwise ? 2 : 0);        // flags = WSEC_PRIMARY_KEY for the pairwise key
+        i = 0;
+        while (i < 6)
+        {
+            Magic.store8(b + 156 + i, ea[i] & 0xFF);     // ea = peer MAC (pairwise) / zero (group)
+            i = i + 1;
+        }
+        readCtrl(sendBcdc(WLC_SET_KEY, b, 164, true));
+    }
+
+    private static byte[] slice(byte[] src, int off, int len)
+    {
+        byte[] b = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            b[i] = src[off + i];
+            i = i + 1;
+        }
+        return b;
     }
 
     /** PTK = PRF(PMK, "Pairwise key expansion", min(AA,SPA)||max(AA,SPA)||min(An,Sn)||max(An,Sn), 48). */
