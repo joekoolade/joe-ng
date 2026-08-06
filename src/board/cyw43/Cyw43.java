@@ -655,10 +655,35 @@ public final class Cyw43
             (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
             (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x00, 0x00
         };
-        sendEapol(apMac, 0x010a, replay, keyLen, sNonce, rsnie, rsnie.length, kck);   // msg2
-        board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
-
-        long m3 = recvEapol(apMac);                      // msg3
+        // Send msg2 and wait for msg3. A frame with no MIC bit is a (re)transmitted msg1 — re-derive the PTK
+        // from its ANonce/replay and resend msg2. A frame with the MIC bit is msg3.
+        long m3 = 0L;
+        int tries = 0;
+        while (tries < 6 && m3 == 0L)
+        {
+            sendEapol(apMac, 0x010a, replay, keyLen, sNonce, rsnie, rsnie.length, kck);
+            board.bcm2711.Uart.write(Magic.bytes("wifi: eapol msg2 sent\n"));
+            long f = recvEapol(apMac);
+            if (f == 0L)
+            {
+                tries = tries + 1;
+                continue;
+            }
+            int ki = ((Magic.load8(f + 5) & 0xFF) << 8) | (Magic.load8(f + 6) & 0xFF);
+            log(Magic.bytes("wifi: eapol key-info="), ki);
+            if ((ki & 0x100) == 0)                       // no MIC → another msg1
+            {
+                aNonce = heapBytes(f + 17, 32);
+                replay = heapBytes(f + 9, 8);
+                derivePtk(pmk, apMac, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
+                kck = slice(ptk, 0, 16);
+                kek = slice(ptk, 16, 16);
+                tk = slice(ptk, 32, 16);
+                tries = tries + 1;
+                continue;
+            }
+            m3 = f;                                      // has MIC → msg3
+        }
         if (m3 == 0L)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: no eapol msg3\n"));
