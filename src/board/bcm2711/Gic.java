@@ -23,7 +23,8 @@ public final class Gic
 
     private static final long GICD_CTLR       = GICD + 0x000;
     private static final long GICD_IGROUPR    = GICD + 0x080;   // 1 bit/INTID: 0 = group0, 1 = group1
-    private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID
+    private static final long GICD_ISENABLER  = GICD + 0x100;   // 1 bit/INTID: write 1 to enable forwarding
+    private static final long GICD_ICENABLER  = GICD + 0x180;   // 1 bit/INTID: write 1 to disable forwarding
     private static final long GICD_IPRIORITYR = GICD + 0x400;   // 1 byte/INTID
     private static final long GICD_ITARGETSR  = GICD + 0x800;   // 1 byte/INTID: CPU target list (SPIs only)
 
@@ -83,6 +84,19 @@ public final class Gic
     public static void end(int intid)
     {
         Magic.store32(GICC_EOIR, intid);
+    }
+
+    /** Stop forwarding {@code intid} to any CPU (GICD_ICENABLER). Used by an ISR to prevent a level interrupt
+     *  re-firing until the handler task has serviced and re-enabled it. */
+    public static void disableSpi(int intid)
+    {
+        Magic.store32(word(GICD_ICENABLER, intid), bit(intid));
+    }
+
+    /** Resume forwarding {@code intid} (GICD_ISENABLER) after servicing. */
+    public static void enableSpi(int intid)
+    {
+        Magic.store32(word(GICD_ISENABLER, intid), bit(intid));
     }
 
 }

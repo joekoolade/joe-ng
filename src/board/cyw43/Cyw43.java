@@ -403,19 +403,15 @@ public final class Cyw43
     static int irqCount;                                 // SDIO card interrupts serviced (IRQ-driven RX)
 
     /**
-     * ISR — called from {@link vm.VM#schedule} when SPI 158 fires: the CYW43 raised the SDIO card interrupt,
-     * meaning it has an F2 frame for us. For now count it and mask the (level-triggered) interrupt so it
-     * doesn't re-fire; the full path will read the frame into a ring here and post WIFI_SEM. Returns true if
-     * it was our interrupt.
+     * ISR — called from {@link vm.VM#schedule} when SPI 158 fires: the CYW43 has an F2 frame for us. Disable
+     * the interrupt at the GIC (the reliable way to stop a level interrupt re-firing — masking at the SDHCI
+     * didn't de-assert it) and return true so the scheduler posts WIFI_SEM; the handler task services the
+     * frame and re-enables the SPI. No SDIO work in interrupt context.
      */
     public static boolean onIrq()
     {
-        if ((Sdio.interrupt() & (1 << 8)) == 0)          // not the card interrupt
-        {
-            return false;
-        }
+        board.bcm2711.Gic.disableSpi(board.bcm2711.Bcm2711.SDIO_SPI);
         irqCount = irqCount + 1;
-        Sdio.maskCardInt();
         return true;
     }
 
@@ -441,17 +437,18 @@ public final class Cyw43
 
     /**
      * Block on the SDIO card interrupt until the chip signals a frame, then read it. The task sleeps in
-     * semWait (no busy-polling) until the ISR ({@link #onIrq}) masks the interrupt and posts WIFI_SEM; we then
-     * clear the SDIOD + SDHCI interrupt status, read the frame, and re-arm the card interrupt for the next.
+     * semWait (no busy-polling) until the ISR ({@link #onIrq}) disables the GIC SPI and posts WIFI_SEM; we
+     * then read the frame, clear the SDIOD + SDHCI interrupt status (de-asserting DAT1), and re-enable the
+     * GIC SPI for the next frame.
      */
     static int waitFrameIrq(long dst, int cap)
     {
         vm.VM.semWait(vm.VM.WIFI_SEM);
+        int len = readFrameOnce(dst, cap);               // read the frame the chip signaled
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
         Sdio.clearCardInt();                             // clear the SDHCI card-int status
-        int len = readFrameOnce(dst, cap);
-        Sdio.unmaskCardInt();                            // re-arm for the next frame
+        board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-enable for the next frame
         return len;
     }
 
