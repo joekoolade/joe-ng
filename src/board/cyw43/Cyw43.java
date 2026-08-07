@@ -629,30 +629,6 @@ public final class Cyw43
         crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
         board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
 
-        // Diagnostic: does the baseline-compiled crypto match the host? SHA-1("abc") must be
-        // a9993e364706816aba3e25717850c26c9cd0d89d. And print the PMK to compare vs `wpa_passphrase`.
-        byte[] st = new byte[20];
-        crypto.Sha1.hash(Magic.bytes("abc"), 3, st);
-        board.bcm2711.Uart.write(Magic.bytes("  sha1(abc)="));
-        printHexBytes(st, 20);
-        board.bcm2711.Uart.write(Magic.bytes("\n  pmk="));
-        printHexBytes(pmk, 32);
-        board.bcm2711.Uart.putc(0x0A);
-
-        // The firmware won't relay our EAPOL (confirmed by an over-the-air capture), so the only path is the
-        // in-firmware supplicant (FWSUP). Dump the firmware capability list to see if "sup"/FWSUP is present.
-        byte[] cap = new byte[600];
-        int capLen = iovarGet(Magic.bytes("cap"), cap);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: cap="));
-        int ci = 0;
-        while (ci < capLen)
-        {
-            int c = cap[ci] & 0xFF;
-            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x20);
-            ci = ci + 1;
-        }
-        board.bcm2711.Uart.putc(0x0A);
-
         rxbuf = Heap.allocData(2048);
         byte[] apMac = new byte[6];
         long m1 = recvEapol(apMac);                      // msg1
@@ -667,8 +643,8 @@ public final class Cyw43
         int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
         byte[] replay = heapBytes(m1 + 9, 8);            // echo msg1's replay counter in msg2
 
-        // The Authenticator address (AA) for the PTK is the AP's BSSID. Use the real associated BSSID rather
-        // than msg1's Ethernet source, which can differ on multi-BSSID / band-steering APs (e.g. AT&T).
+        // Authenticator address (AA) for the PTK = the associated BSSID (WLC_GET_BSSID), which can differ from
+        // msg1's Ethernet source on multi-BSSID / band-steering APs.
         byte[] bssid = new byte[6];
         long gb = Heap.allocData(64);
         int bid = sendBcdc(WLC_GET_BSSID, gb, 6, false);
@@ -683,11 +659,6 @@ public final class Cyw43
                 k = k + 1;
             }
         }
-        board.bcm2711.Uart.write(Magic.bytes("  msg1-src="));
-        printHexBytes(apMac, 6);
-        board.bcm2711.Uart.write(Magic.bytes(" bssid="));
-        printHexBytes(bssid, 6);
-        board.bcm2711.Uart.putc(0x0A);
         byte[] aa = (bssid[0] != 0 || bssid[1] != 0 || bssid[2] != 0) ? bssid : apMac;
 
         byte[] sNonce = new byte[32];
@@ -699,9 +670,8 @@ public final class Cyw43
         byte[] tk = slice(ptk, 32, 16);
         board.bcm2711.Uart.write(Magic.bytes("wifi: ptk derived\n"));
 
-        // The msg2 key data is the STA's RSN IE, which the AP checks against our association request. Ask the
-        // firmware for the exact IE it advertised (wpaie) so they match; fall back to the standard WPA2-PSK-
-        // CCMP IE if the GET returns nothing.
+        // msg2 key data = the STA's RSN IE; use the firmware's advertised IE (wpaie) if it provides one, else
+        // the standard WPA2-PSK-CCMP IE.
         byte[] rsnie = {
             (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
             (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x00, 0x00
@@ -710,11 +680,6 @@ public final class Cyw43
         int ieLen = rsnie.length;
         byte[] fwie = new byte[64];
         int fwLen = iovarGet(Magic.bytes("wpaie"), fwie);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: wpaie len="));
-        VM.printDec(fwLen);
-        board.bcm2711.Uart.write(Magic.bytes(" ="));
-        printHexBytes(fwie, fwLen > 32 ? 32 : fwLen);
-        board.bcm2711.Uart.putc(0x0A);
         if (fwLen >= 4 && (fwie[0] & 0xFF) == 0x30)
         {
             ie = fwie;
@@ -736,27 +701,10 @@ public final class Cyw43
                 continue;
             }
             int ki = ((Magic.load8(f + 5) & 0xFF) << 8) | (Magic.load8(f + 6) & 0xFF);
-            // SDPCM flow control: flowctl @ rxbuf+8, maxseq @ rxbuf+9 — if we've exceeded the tx credit or
-            // the firmware asserted flow control, our data-channel msg2 is dropped while ioctls still work.
-            board.bcm2711.Uart.write(Magic.bytes("  txseq="));
-            VM.printDec(txSeq & 0xFF);
-            board.bcm2711.Uart.write(Magic.bytes(" maxseq="));
-            VM.printDec(Magic.load8(rxbuf + 9) & 0xFF);
-            board.bcm2711.Uart.write(Magic.bytes(" flow="));
-            VM.printDec(Magic.load8(rxbuf + 8) & 0xFF);
-            board.bcm2711.Uart.putc(0x0A);
-            log(Magic.bytes("wifi: eapol key-info="), ki);
-            if ((ki & 0x100) == 0)                       // no MIC → another msg1
+            if ((ki & 0x100) == 0)                       // no MIC → another msg1: re-derive and resend msg2
             {
                 aNonce = heapBytes(f + 17, 32);
                 replay = heapBytes(f + 9, 8);
-                board.bcm2711.Uart.write(Magic.bytes("    anonce="));   // stable = retransmit; changing = restart
-                printHexBytes(aNonce, 6);
-                board.bcm2711.Uart.write(Magic.bytes(" desc="));
-                VM.printDec(Magic.load8(f + 4) & 0xFF);
-                board.bcm2711.Uart.write(Magic.bytes(" klen="));
-                VM.printDec(((Magic.load8(f + 7) & 0xFF) << 8) | (Magic.load8(f + 8) & 0xFF));
-                board.bcm2711.Uart.putc(0x0A);
                 derivePtk(pmk, aa, heapBytes(ourMac, 6), aNonce, sNonce, ptk);
                 kck = slice(ptk, 0, 16);
                 kek = slice(ptk, 16, 16);
@@ -1005,17 +953,6 @@ public final class Cyw43
             i = i + 1;
         }
         return b;
-    }
-
-    /** Print {@code len} bytes as lowercase hex. */
-    private static void printHexBytes(byte[] b, int len)
-    {
-        int i = 0;
-        while (i < len)
-        {
-            printHex2(b[i] & 0xFF);
-            i = i + 1;
-        }
     }
 
     private static void put(byte[] dst, int off, byte[] src, int len)
