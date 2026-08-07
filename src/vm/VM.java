@@ -2443,6 +2443,16 @@ public final class VM
         // then re-mask so the self-build fixpoint below runs undisturbed.
         Uart.write(Magic.bytes("sched (.=main A=yield B=post->C blocked): "));
         startScheduler();
+
+        // M6 IRQ test (temporary, wifi-irq branch): the scheduler is now up with IRQs ENABLED (the demo tail
+        // below masks them at stopTimerTick), so run WiFi here to exercise the SDIO card interrupt, then skip
+        // the long demo suite. QEMU (coreHz 0) falls through to the normal demos.
+        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
+        {
+            board.bcm2711.Wifi.bringUp();
+            return;
+        }
+
         long t0 = Magic.readCNTPCT_EL0();
         while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 4L)   // ~250 ms
         {
