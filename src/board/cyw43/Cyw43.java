@@ -436,16 +436,17 @@ public final class Cyw43
     static void irqTest()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: irq test...\n"));
-        irqCount = 0;
-        enableWifiIrq();
+        // Enable the card-interrupt STATUS only (no GIC yet) and check whether it ever latches when the chip
+        // has a pending frame — the make-or-break question, tested safely (no interrupt storm risk).
+        Sdio.enableCardInt();
         long g = Heap.allocData(64);
         int p = putStr(g, Magic.bytes("ver"));
-        int id = sendBcdc(WLC_GET_VAR, g, p + 32, false);   // triggers a response frame
-        VM.delayMs(300);                                    // don't poll -> response pending -> card int asserted
-        log(Magic.bytes("wifi: irqCount="), irqCount);
+        int id = sendBcdc(WLC_GET_VAR, g, p + 32, false);   // trigger a response frame (leave it pending)
+        VM.delayMs(300);
+        log(Magic.bytes("wifi: sdhci-int="), Sdio.interrupt());   // bit 8 (0x100) set = in-band card int works
         long rx = Heap.allocData(512);
         recvCtrl(rx, 512, id);                              // drain the response
-        Sdio.maskCardInt();                                 // back to polling for the rest of bring-up
+        Sdio.maskCardInt();
     }
 
     static void scanOnly()
