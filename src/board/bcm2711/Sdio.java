@@ -160,16 +160,20 @@ public final class Sdio
         Magic.store32(base + IRPT_EN, INT_CARD);
     }
 
-    /** Stop the (level-triggered) card interrupt from re-firing by clearing its signal-enable bit. */
+    /**
+     * Mask the level-triggered card interrupt so it stops driving the IRQ line. Per the SDHCI spec the card
+     * interrupt is masked by clearing its Status Enable (IRPT_MASK bit 8) — that makes the status read 0 and
+     * the line drop. Clearing only the Signal Enable (IRPT_EN) does NOT de-assert it and storms the GIC.
+     */
     public static void maskCardInt()
     {
-        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) & ~INT_CARD);
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) & ~INT_CARD);
     }
 
-    /** Re-arm the card interrupt after servicing it (set the signal-enable bit again). */
+    /** Re-arm the card interrupt after servicing it (set the Status Enable bit again). */
     public static void unmaskCardInt()
     {
-        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) | INT_CARD);
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
     }
 
     /** Write-1-to-clear the card-interrupt status bit in the SDHCI INTERRUPT register. */
