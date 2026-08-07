@@ -537,8 +537,9 @@ public final class VM
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
     static final int  MAX_TASKS = 16;       // boot + M7 demo tasks (0..4) + up to 11 philosophers
-    static final int  NUM_SEM = 16;         // reserved 0..3 (M7/console) + dynamically-allocated forks
-    static final int  SEM_RESERVED = 4;     // dynamic semaphores (forks) allocate at/after this index
+    static final int  NUM_SEM = 16;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks
+    public static final int  WIFI_SEM = 4;  // posted by the SDIO RX ISR when a WiFi frame arrives
+    static final int  SEM_RESERVED = 5;     // dynamic semaphores (forks) allocate at/after this index
     static int nextSem = SEM_RESERVED;      // next free semaphore index (newSem hands these out)
     static long runTrampAddr;               // Loader-built stub: invokeinterface Runnable.run() on x0, then taskExit
     static final int  TASK_EMPTY = 0;
@@ -569,11 +570,17 @@ public final class VM
         taskSp[curTask] = curSp;                            // save the interrupted/yielding task
         long now = Magic.readCNTPCT_EL0();
         int i = 0;
-        while (i < taskCount)                              // wake expired sleepers
+        while (i < taskCount)                              // wake expired sleepers + timed-out blocked waiters
         {
             if (taskState[i] == TASK_SLEEPING && now >= taskWake[i])
             {
                 taskState[i] = TASK_READY;
+                taskWake[i] = 0L;                          // clear so a later BLOCKED wait isn't deadline-woken
+            }
+            else if (taskState[i] == TASK_BLOCKED && taskWake[i] != 0L && now >= taskWake[i])
+            {
+                taskState[i] = TASK_READY;                 // semWaitTimeout deadline passed: wake to return false
+                taskWake[i] = 0L;
             }
             i = i + 1;
         }
@@ -617,6 +624,15 @@ public final class VM
             Gic.end(id);
             return pickNext(curSp);
         }
+        if (id == Bcm2711.SDIO_SPI)                        // WiFi SDIO card interrupt -> the CYW43 driver
+        {
+            if (board.cyw43.Cyw43.onIrq())                 // ISR: the chip has an F2 frame for us
+            {
+                semPostRaw(WIFI_SEM);
+            }
+            Gic.end(id);
+            return pickNext(curSp);
+        }
         if (id != 0x3FF) { Gic.end(id); }                 // other/real INTID: EOI, don't switch
         return curSp;
     }
@@ -656,9 +672,10 @@ public final class VM
      * across the test-and-block so a post can't slip in between (lost-wakeup race); yield/SVC still works
      * with IRQs masked, and each task resumes with its own PSTATE, so masking here is safe.
      */
-    static void semWait(int s)
+    public static void semWait(int s)
     {
         Magic.disableIrq();
+        taskWake[curTask] = 0L;                            // no deadline: pickNext must not spuriously wake us
         while (semCount[s] <= 0)
         {
             taskState[curTask] = TASK_BLOCKED;
@@ -669,6 +686,38 @@ public final class VM
         }
         semCount[s] = semCount[s] - 1;
         Magic.enableIrq();
+    }
+
+    /**
+     * Like {@link #semWait} but bounded: consume a token if one arrives within {@code ms} milliseconds and
+     * return true, else wake at the CNTPCT deadline and return false. Implemented by blocking on the
+     * semaphore <em>and</em> recording a deadline in {@code taskWake}; {@link #pickNext} wakes the task when
+     * a post arrives (via {@link #semPostRaw}) or the deadline passes. Used by the WiFi RX loops so a lost
+     * frame times out instead of hanging forever (the polling loops it replaces had per-attempt timeouts).
+     */
+    public static boolean semWaitTimeout(int s, long ms)
+    {
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
+        Magic.disableIrq();
+        while (semCount[s] <= 0)
+        {
+            if (Magic.readCNTPCT_EL0() >= deadline)
+            {
+                taskWake[curTask] = 0L;
+                Magic.enableIrq();
+                return false;                              // timed out with no token
+            }
+            taskState[curTask] = TASK_BLOCKED;
+            taskWaitOn[curTask] = s;
+            taskWake[curTask] = deadline;                  // also become ready at the deadline
+            Magic.enableIrq();
+            taskYield();
+            Magic.disableIrq();
+        }
+        taskWake[curTask] = 0L;                            // got a token: drop the deadline marker
+        semCount[s] = semCount[s] - 1;
+        Magic.enableIrq();
+        return true;
     }
 
     /** The core of {@link #semPost}, without touching IRQ masking — safe to call from an ISR. */
@@ -2433,6 +2482,7 @@ public final class VM
         // then re-mask so the self-build fixpoint below runs undisturbed.
         Uart.write(Magic.bytes("sched (.=main A=yield B=post->C blocked): "));
         startScheduler();
+
         long t0 = Magic.readCNTPCT_EL0();
         while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 4L)   // ~250 ms
         {
@@ -2701,13 +2751,25 @@ public final class VM
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
 
-        // WiFi (CYW43455) bring-up. Guarded by a NON-final flag so the writer still compiles the whole
-        // subsystem (Wifi -> Sdio/Gpio/Mailbox) into the image for regression, but it runs on neither QEMU
-        // (no chip; 0xFE300000 there is the SD card) nor metal until M1 flips WIFI_ENABLED true + adds
-        // chip detection. delayMs (busy-wait) is used throughout, so it is timer/scheduler-independent here.
-        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)   // real-HW gate (see WIFI_ENABLED)
+        // WiFi (CYW43455) bring-up -- the real-hardware finale, after the full feature showcase above.
+        // IRQ-driven RX needs the context-switch machinery + a live timer + IRQs, all of which the demo tail
+        // tore down (stopTimerTick after the philosophers; the GC/JIT churn also freed the switch stubs). So
+        // re-arm a MINIMAL scheduler -- just task 0 (this boot flow), no A/B/C demo tasks -- and turn IRQs
+        // back on, so the WiFi task can block in semWaitTimeout and be woken by the SDIO card interrupt (SPI
+        // 158) instead of busy-polling. Guarded by the non-final WIFI_ENABLED flag (so the writer still
+        // compiles the subsystem in) and HW-gated on coreHz: QEMU reports 0 and skips (no CYW43 there; its
+        // 0xFE300000 is the SD card).
+        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
         {
+            installSchedVectors();                         // rebuild the switch stubs the GC/JIT demos freed
+            taskCount = 1;                                 // fresh table: only task 0 -- no demo tasks to spew
+            curTask = 0;
+            taskState[0] = TASK_READY;
+            Magic.writeCNTP_TVAL_EL0(timerReload);
+            Magic.writeCNTP_CTL_EL0(1);                    // re-arm the periodic timer tick
+            Magic.enableIrq();                             // IRQs on: SDIO SPI 158 + timer deadline wakes
             board.bcm2711.Wifi.bringUp();
+            stopTimerTick();                               // WiFi done: disable the timer + mask IRQs before parking
         }
 
         // --- M5 self-build / fixpoint / SD-persist retired (see SELF_BUILD above). Demos ran above; the

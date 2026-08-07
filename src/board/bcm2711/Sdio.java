@@ -147,6 +147,41 @@ public final class Sdio
         return Magic.load32(base + INTERRUPT);
     }
 
+    private static final int INT_CARD = 1 << 8;          // SDIO card interrupt (device has data)
+
+    /**
+     * Enable the SDIO card interrupt. Keep it latching in the status (IRPT_MASK bit 8) but make it the ONLY
+     * bit that signals the ARM/GIC (IRPT_EN = bit 8): cmd/data-done still latch for the polling cmd52/cmd53
+     * code, but they no longer raise SPI 158 — otherwise every command would storm the interrupt line.
+     */
+    public static void enableCardInt()
+    {
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
+        Magic.store32(base + IRPT_EN, INT_CARD);
+    }
+
+    /**
+     * Mask the level-triggered card interrupt so it stops driving the IRQ line. Per the SDHCI spec the card
+     * interrupt is masked by clearing its Status Enable (IRPT_MASK bit 8) — that makes the status read 0 and
+     * the line drop. Clearing only the Signal Enable (IRPT_EN) does NOT de-assert it and storms the GIC.
+     */
+    public static void maskCardInt()
+    {
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) & ~INT_CARD);
+    }
+
+    /** Re-arm the card interrupt after servicing it (set the Status Enable bit again). */
+    public static void unmaskCardInt()
+    {
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
+    }
+
+    /** Write-1-to-clear the card-interrupt status bit in the SDHCI INTERRUPT register. */
+    public static void clearCardInt()
+    {
+        Magic.store32(base + INTERRUPT, INT_CARD);
+    }
+
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {
