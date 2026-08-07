@@ -306,18 +306,13 @@ public final class Cyw43
      */
     static void readFirstFrame()
     {
-        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // enable interrupts: master + F1 + F2
-        int tries = 0;
-        while ((Sdio.interrupt() & SDHCI_CARD_INT) == 0 && tries < 1000)
-        {
-            tries = tries + 1;
-            VM.delayMs(1);
-        }
-        log(Magic.bytes("sdhci int="), Sdio.interrupt());
+        enableWifiIrq();                                 // M6: arm the SDIO card interrupt once; stays armed for
+                                                         // every RX below (all frame reads go through waitFrameIrq)
         long rb = Heap.allocData(256);
-        if (!Sdio.cmd53Read(F2, 0, true, rb, 1, 64))     // read the first 64 bytes of the F2 stream (byte mode)
+        int flen = waitFrameIrq(rb, 256, 1000);          // block until the firmware's first SDPCM frame arrives
+        if (flen == 0)
         {
-            board.bcm2711.Uart.write(Magic.bytes("  F2 read FAILED\n"));
+            board.bcm2711.Uart.write(Magic.bytes("  F2 first frame TIMEOUT\n"));
             return;
         }
         int hw = Magic.load32(rb);                       // [len:16][~len:16]
@@ -425,6 +420,11 @@ public final class Cyw43
     private static final int SD_MAILBOXINT = 1 << 7;
     private static final int SD_FCCHANGE = 1 << 5;
 
+    /** Per-attempt block for {@link #waitFrameIrq}: how long a single RX wait sleeps before returning 0 so its
+     *  caller can re-check its own (longer) outer deadline / resend a request. Small enough that a periodic
+     *  retransmit (e.g. TCP SYN every 500 ms) still fires roughly on time. */
+    private static final int RX_WAIT_MS = 200;
+
     /** Enable IRQ-driven WiFi RX: tell the chip to assert on F2-frame/mailbox/fc events, enable the SDIO
      *  function + card interrupts, and route the SDHCI SPI to the GIC. Leaves the card interrupt armed. */
     static void enableWifiIrq()
@@ -441,38 +441,23 @@ public final class Cyw43
      * then read the frame, clear the SDIOD + SDHCI interrupt status (de-asserting DAT1), and re-enable the
      * GIC SPI for the next frame.
      */
-    static int waitFrameIrq(long dst, int cap)
+    static int waitFrameIrq(long dst, int cap, int ms)
     {
-        vm.VM.semWait(vm.VM.WIFI_SEM);
-        int len = readFrameOnce(dst, cap);               // read the frame the chip signaled
+        if (!vm.VM.semWaitTimeout(vm.VM.WIFI_SEM, ms))
+        {
+            return 0;                                    // no frame within the timeout (GIC SPI still armed)
+        }
+        int len = readFrameOnce(dst, cap);               // the ISR posted: read the frame the chip signaled
         int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
         bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
-        Sdio.clearCardInt();                             // clear the SDHCI card-int status
-        board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-enable for the next frame
+        Sdio.clearCardInt();                             // clear the SDHCI card-int status (de-assert DAT1)
+        board.bcm2711.Gic.enableSpi(board.bcm2711.Bcm2711.SDIO_SPI);   // re-arm the SPI the ISR disabled
         return len;
-    }
-
-    /** Test the full IRQ-driven RX path end to end: arm the interrupt, trigger a frame, and block on WIFI_SEM
-     *  until the ISR delivers it — proving the ISR -> semaphore -> task wake-up chain works. */
-    static void irqTest()
-    {
-        board.bcm2711.Uart.write(Magic.bytes("wifi: irq test...\n"));
-        enableWifiIrq();
-        long g = Heap.allocData(64);
-        int p = putStr(g, Magic.bytes("ver"));
-        sendBcdc(WLC_GET_VAR, g, p + 32, false);         // trigger a response frame
-        board.bcm2711.Uart.write(Magic.bytes("wifi: blocking on WIFI_SEM...\n"));
-        long rx = Heap.allocData(2048);
-        int len = waitFrameIrq(rx, 2048);                // sleeps until the ISR posts, then reads the frame
-        log(Magic.bytes("wifi: irq frame len="), len);
-        log(Magic.bytes("wifi: irqCount="), irqCount);
-        Sdio.maskCardInt();                              // back to polling for the rest of bring-up
     }
 
     static void scanOnly()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
-        irqTest();                                       // M6: does the SDIO card interrupt reach the GIC?
         clmLoad();                                       // regulatory/PHY data — the radio needs it to scan
         enableEvents();                                  // turn on E_ESCAN_RESULT so results are pushed to us
         readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
@@ -508,7 +493,7 @@ public final class Cyw43
         int events = 0;
         while (Magic.readCNTPCT_EL0() < endT && events < 80)
         {
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -844,7 +829,7 @@ public final class Cyw43
         long endT = Magic.readCNTPCT_EL0() + freq * 8L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = readFrameOnce(rxbuf, 2048);
+            int len = waitFrameIrq(rxbuf, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -1059,7 +1044,7 @@ public final class Cyw43
         boolean linked = false;
         while (Magic.readCNTPCT_EL0() < endT && !linked)
         {
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -1447,7 +1432,7 @@ public final class Cyw43
      *  none this read). Records the frame's IP IHL / total-length in {@link #lastIhl}/{@link #lastIpTotal}. */
     private static long findTcp(long rx, long serverIp, int sport)
     {
-        int len = readFrameOnce(rx, 2048);
+        int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
         if (len == 0)
         {
             return 0L;
@@ -1632,7 +1617,7 @@ public final class Cyw43
                 txData(buf, flen);
                 nextSend = now + freq / 2L;
             }
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 continue;
@@ -1793,7 +1778,7 @@ public final class Cyw43
                 txData(buf, flen);
                 nextSend = now + freq / 2L;
             }
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 continue;                                // no delay — drain the FIFO as fast as possible
@@ -1875,7 +1860,7 @@ public final class Cyw43
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 4L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -2056,7 +2041,7 @@ public final class Cyw43
         long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 6L;
         while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = readFrameOnce(rx, 2048);
+            int len = waitFrameIrq(rx, 2048, RX_WAIT_MS);
             if (len == 0)
             {
                 VM.delayMs(2);
@@ -2463,14 +2448,12 @@ public final class Cyw43
      */
     static int recvCtrl(long dst, int cap, int wantId)
     {
-        int tries = 0;
-        while (tries < 600)
+        long endT = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 3L / 2L;   // ~1.5 s (was 600 * 2 ms poll)
+        while (Magic.readCNTPCT_EL0() < endT)
         {
-            int len = readFrameOnce(dst, cap);
+            int len = waitFrameIrq(dst, cap, RX_WAIT_MS);
             if (len == 0)
             {
-                tries = tries + 1;
-                VM.delayMs(2);
                 continue;
             }
             int ch = Magic.load8(dst + 5) & 0x0F;
@@ -2529,23 +2512,6 @@ public final class Cyw43
             done = done + n;
         }
         return len;
-    }
-
-    /** Retry {@link #readFrameOnce} (1 ms apart) until a valid frame arrives or ~2 s elapses; 0 on timeout. */
-    private static int waitFrame(long dst, int cap)
-    {
-        int tries = 0;
-        while (tries < 2000)
-        {
-            int len = readFrameOnce(dst, cap);
-            if (len > 0)
-            {
-                return len;
-            }
-            tries = tries + 1;
-            VM.delayMs(1);
-        }
-        return 0;
     }
 
     /** Copy the bytes of {@code s} to {@code dst} then a NUL; returns the length written (incl. NUL). */

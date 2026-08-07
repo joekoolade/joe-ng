@@ -570,11 +570,17 @@ public final class VM
         taskSp[curTask] = curSp;                            // save the interrupted/yielding task
         long now = Magic.readCNTPCT_EL0();
         int i = 0;
-        while (i < taskCount)                              // wake expired sleepers
+        while (i < taskCount)                              // wake expired sleepers + timed-out blocked waiters
         {
             if (taskState[i] == TASK_SLEEPING && now >= taskWake[i])
             {
                 taskState[i] = TASK_READY;
+                taskWake[i] = 0L;                          // clear so a later BLOCKED wait isn't deadline-woken
+            }
+            else if (taskState[i] == TASK_BLOCKED && taskWake[i] != 0L && now >= taskWake[i])
+            {
+                taskState[i] = TASK_READY;                 // semWaitTimeout deadline passed: wake to return false
+                taskWake[i] = 0L;
             }
             i = i + 1;
         }
@@ -669,6 +675,7 @@ public final class VM
     public static void semWait(int s)
     {
         Magic.disableIrq();
+        taskWake[curTask] = 0L;                            // no deadline: pickNext must not spuriously wake us
         while (semCount[s] <= 0)
         {
             taskState[curTask] = TASK_BLOCKED;
@@ -679,6 +686,38 @@ public final class VM
         }
         semCount[s] = semCount[s] - 1;
         Magic.enableIrq();
+    }
+
+    /**
+     * Like {@link #semWait} but bounded: consume a token if one arrives within {@code ms} milliseconds and
+     * return true, else wake at the CNTPCT deadline and return false. Implemented by blocking on the
+     * semaphore <em>and</em> recording a deadline in {@code taskWake}; {@link #pickNext} wakes the task when
+     * a post arrives (via {@link #semPostRaw}) or the deadline passes. Used by the WiFi RX loops so a lost
+     * frame times out instead of hanging forever (the polling loops it replaces had per-attempt timeouts).
+     */
+    public static boolean semWaitTimeout(int s, long ms)
+    {
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
+        Magic.disableIrq();
+        while (semCount[s] <= 0)
+        {
+            if (Magic.readCNTPCT_EL0() >= deadline)
+            {
+                taskWake[curTask] = 0L;
+                Magic.enableIrq();
+                return false;                              // timed out with no token
+            }
+            taskState[curTask] = TASK_BLOCKED;
+            taskWaitOn[curTask] = s;
+            taskWake[curTask] = deadline;                  // also become ready at the deadline
+            Magic.enableIrq();
+            taskYield();
+            Magic.disableIrq();
+        }
+        taskWake[curTask] = 0L;                            // got a token: drop the deadline marker
+        semCount[s] = semCount[s] - 1;
+        Magic.enableIrq();
+        return true;
     }
 
     /** The core of {@link #semPost}, without touching IRQ masking — safe to call from an ISR. */
