@@ -639,6 +639,20 @@ public final class Cyw43
         printHexBytes(pmk, 32);
         board.bcm2711.Uart.putc(0x0A);
 
+        // The firmware won't relay our EAPOL (confirmed by an over-the-air capture), so the only path is the
+        // in-firmware supplicant (FWSUP). Dump the firmware capability list to see if "sup"/FWSUP is present.
+        byte[] cap = new byte[600];
+        int capLen = iovarGet(Magic.bytes("cap"), cap);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: cap="));
+        int ci = 0;
+        while (ci < capLen)
+        {
+            int c = cap[ci] & 0xFF;
+            board.bcm2711.Uart.putc((c >= 0x20 && c < 0x7F) ? c : 0x20);
+            ci = ci + 1;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+
         rxbuf = Heap.allocData(2048);
         byte[] apMac = new byte[6];
         long m1 = recvEapol(apMac);                      // msg1
