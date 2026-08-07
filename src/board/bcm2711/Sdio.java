@@ -149,11 +149,15 @@ public final class Sdio
 
     private static final int INT_CARD = 1 << 8;          // SDIO card interrupt (device has data)
 
-    /** Enable the SDIO card interrupt: status-enable (IRPT_MASK) + signal-enable (IRPT_EN) bit 8. */
+    /**
+     * Enable the SDIO card interrupt. Keep it latching in the status (IRPT_MASK bit 8) but make it the ONLY
+     * bit that signals the ARM/GIC (IRPT_EN = bit 8): cmd/data-done still latch for the polling cmd52/cmd53
+     * code, but they no longer raise SPI 158 — otherwise every command would storm the interrupt line.
+     */
     public static void enableCardInt()
     {
         Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
-        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) | INT_CARD);
+        Magic.store32(base + IRPT_EN, INT_CARD);
     }
 
     /** Stop the (level-triggered) card interrupt from re-firing by clearing its signal-enable bit. */
