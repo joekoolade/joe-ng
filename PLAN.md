@@ -1141,6 +1141,63 @@ follows only 0xB6-B9).
 
 ---
 
+### WiFi arc — the CYW43455 as an internet device (all-Java SDIO driver + TCP/IP + WPA2 crypto)
+
+Bring the Pi 4's on-board WiFi (Cypress CYW43455, SDIO) online and use it as an internet device — driver,
+TCP/IP stack, and WPA2 crypto all in Java over `magic.Magic` MMIO, **no C**, consistent with the project's
+hard constraints. **Real-hardware-only from the first SDIO command** (QEMU `raspi4b` does not emulate the
+chip; its `0xFE300000` block is the SD card), so UART logs are the only scope and every step is heavily
+instrumented. `make test` + a QEMU boot still gate that the rest of the image is intact — the WiFi path is
+gated on `Uart.coreHz` and skipped under QEMU. **Verified end-to-end on a real Pi 4.**
+
+- **M0 — enablers.** `board/bcm2711/Gpio` (setAlt/setPull read-modify-write; GPIO34–39 ALT3), a generic
+  `Mailbox.tag()` (+ GPIO-expander WL_ON, the *measured* EMMC clock), `Magic.dcIVAC`, `VM.delayUs/delayMs`
+  (CNTPCT-based, for pre-scheduler driver code), and a **standalone** `board/bcm2711/Sdio` SDHCI driver
+  (CMD52/53 IO_RW_DIRECT/EXTENDED, R4/R5, 4-bit @ ~25–50 MHz, PIO not DMA, real clock divider from the
+  mailbox) — kept separate from the boot-critical `Emmc` (~100 duplicated lines is cheap insurance).
+- **M1 — chip alive.** CMD5 enumerate; upload `brcmfmac43455-sdio.bin` + NVRAM `.txt` + `.clm_blob` from
+  RAMFS via CMD53 into chip SRAM; release the internal ARM from reset; poll ALP/HT clock (CHIPCLKCSR) +
+  F2-ready; **SDPCM** framing (hw `[len:16][~len:16]` + sw seq/channel/credit-based flow control) and the
+  **BCDC** control layer (ioctl/iovar with request-id matching). Prints chip id `0x4345` rev 6,
+  "FIRMWARE UP (F2 ready)", and the `ver` iovar (`wl0 … 7.45.265`).
+- **M2 — join an open network.** `clmload` the CLM blob, set country + `WLC_UP`, a *targeted* event mask
+  (not all-`0xFF`, or the RX loop floods); **escan** → parse `E_ESCAN_RESULT` events into an SSID list;
+  open join (`WLC_SET_INFRA=1`, `wsec=0`, `wpa_auth=0`, `WLC_SET_SSID`) → wait `E_LINK` up. SSID from
+  `ramfs/etc/wifi.conf`.
+- **M3/M4 — data path + TCP/IP (built from scratch).** SDPCM channel-2 data + a 4-byte BDC header; then
+  ARP, IPv4, ICMP (ping the gateway), UDP+DHCP (lease → ip/gw/subnet/DNS), DNS, and TCP (pseudo-header
+  checksum, one in-flight segment) → **HTTP/1.0 GET** → prints `HTTP/1.1 200 OK` + the body (829 bytes from
+  example.com). The "internet device" **acceptance test — passed on real hardware.**
+- **M5 — WPA2-PSK (banked).** In-chip supplicant offload didn't relay host EAPOL, so a full **JDK-free WPA2
+  supplicant** was built and reference-verified: SHA-1, HMAC-SHA1, PBKDF2 (PMK), PRF (PTK), AES-128 +
+  RFC-3394 key-unwrap (GTK) in `crypto/*` (17 vectors in `test/crypto/CryptoTest`), plus the EAPOL 4-way
+  handshake logic. Blocked only by the **fullmac firmware swallowing host EAPOL frames** (needs the WLFC
+  subsystem) — proven by a monitor-mode packet capture. The crypto is on main; the handshake is correct but
+  unexercised until WLFC lands.
+- **M6 — IRQ-driven RX (DONE, on main).** F2 receive moved off busy-polling onto the SDIO card interrupt
+  (GIC SPI 158 = VC IRQ 62). The card interrupt is a **level** line, so it is gated at the **GIC**
+  (`GICD_ICENABLER`/`ISENABLER`), *not* the SDHCI — masking at the SDHCI (Signal- or Status-Enable) never
+  de-asserts it and stormed core 0. The ISR (`Cyw43.onIrq`, dispatched from `VM.schedule`) disables the SPI
+  and posts `WIFI_SEM`; the WiFi task blocks in **`VM.semWaitTimeout`** — block on a semaphore *or* a CNTPCT
+  deadline (so a lost frame times out instead of hanging; `pickNext` wakes a BLOCKED task whose `taskWake`
+  deadline passed) — and on wake reads the frame, clears the SDIOD + SDHCI status, and re-arms the SPI. Every
+  RX loop (first frame, ioctl, scan, join, DHCP/ARP/ICMP/DNS/TCP, EAPOL) now blocks in `waitFrameIrq`,
+  keeping each loop's existing time-based deadline. The chip only asserts once the CYW43 **SDIOD-core
+  Intmask** (backplane `0x18004000 + 0x24` = FrameInt|MailboxInt|Fcchange = `0xE0`) is set. WiFi runs as the
+  **boot finale** on a re-armed minimal scheduler (`installSchedVectors`; `taskCount=1` — task 0 only, no
+  demo tasks; re-arm the timer; `enableIrq`), so the UART trace is clean and the WiFi task sleeps off-CPU
+  between frames. **Verified on a real Pi 4:** full feature showcase → join `joe-ng-open` → HTTP 200 OK, no
+  storm, no demo-task noise.
+  - **mini-UART baud is self-calibrating — never hardcode a divisor.** The VPU core clock is not predictable
+    (it differed across firmware builds and SD cards); `Mailbox` asks `GET_CLOCK_RATE_MEASURED` (0x00030047,
+    *not* `GET_CLOCK_RATE`, which echoes the requested rate) and `Uart.baudDivisor()` computes it at boot.
+    Serial must be CRLF. See the `wifi-driver-arc` memory for the full hard-won detail.
+
+Files: `board/cyw43/Cyw43` (driver + full stack + supplicant), `board/bcm2711/{Sdio,Gpio,Gic,Mailbox}`,
+`crypto/*`, firmware blobs in `ramfs/lib/firmware/brcm/`, credentials in gitignored `ramfs/etc/wifi.conf`.
+
+---
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

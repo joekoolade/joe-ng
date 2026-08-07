@@ -73,6 +73,31 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **Phase: M4 done + M5 started + loading java.base classes on the metal.**
+- **WiFi (CYW43455) DONE through M6 — an all-Java internet device.** The Pi 4's
+  on-board WiFi is driven entirely in Java over SDIO (`board/cyw43/Cyw43` +
+  `board/bcm2711/{Sdio,Gpio,Gic,Mailbox}`, no C): chip bring-up (firmware/NVRAM/
+  CLM upload from RAMFS, SDPCM/BCDC framing), scan + open join (`joe-ng-open`),
+  and a from-scratch TCP/IP stack (ARP/IPv4/ICMP/UDP/DHCP/DNS/TCP) → **HTTP GET
+  returns 200 OK** on real hardware — the "internet device" acceptance test.
+  **Real-HW-only** (QEMU `raspi4b` has no CYW43; the WiFi path is HW-gated on
+  `Uart.coreHz` and skipped there) and runs as the boot finale after the full
+  demo suite. WPA2-PSK crypto (SHA-1/HMAC-SHA1/PBKDF2/PRF/AES-128/RFC-3394
+  key-unwrap, `crypto/*`, 17 vectors in `CryptoTest`) is built + reference-
+  verified but **banked** — the fullmac firmware won't relay host EAPOL (needs the
+  WLFC subsystem; proven by a monitor-mode capture). **M6 IRQ-driven RX (latest,
+  on main):** F2 receive is interrupt-driven — the SDIO card interrupt (GIC SPI
+  158) is a *level* line gated at the **GIC** (`GICD_ICENABLER`/`ISENABLER`), not
+  the SDHCI (masking there never de-asserts it and stormed core 0); the ISR
+  (`Cyw43.onIrq` from `VM.schedule`) disables the SPI + posts `WIFI_SEM`, and every
+  RX loop (first frame, ioctl, scan, join, DHCP/ARP/ICMP/DNS/TCP, EAPOL) blocks in
+  **`VM.semWaitTimeout`** (block on a semaphore OR a CNTPCT deadline, so a lost
+  frame times out instead of hanging) via `waitFrameIrq` instead of busy-polling —
+  on wake it reads the frame, clears the SDIOD/SDHCI status, and re-arms the SPI.
+  The chip only asserts once the CYW43 **SDIOD-core Intmask** (backplane
+  `0x18004024` = FrameInt|MailboxInt|Fcchange) is set. Verified end-to-end on a
+  real Pi 4 with a clean UART trace (no storm, no demo-task noise). Full detail in
+  the `wifi-driver-arc` memory + PLAN.md "WiFi" section. Credentials live in the
+  gitignored `ramfs/etc/wifi.conf` (never committed).
 - **Loading a real JDK class on bare metal.** `BuildRuntimeImage` extracts
   `java/lang/Math.class` from the seed JDK's `java.base` (via
   `getResourceAsStream`, since it lives in `lib/modules`) and embeds the raw
