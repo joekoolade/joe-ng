@@ -999,6 +999,26 @@ public final class VM
         return Magic.readCNTPCT_EL0() * (1000000000L / Magic.readCNTFRQ_EL0());
     }
 
+    /**
+     * Busy-wait at least {@code us} microseconds on the generic timer (CNTPCT). Unlike {@link #sleep} this
+     * does NOT yield, so it is valid before the scheduler exists — which is where device bring-up runs
+     * (WiFi/SDIO settle delays). Unlike {@code Emmc}'s iteration-count spins it is wall-clock accurate
+     * regardless of CPU/cache state.
+     */
+    public static void delayUs(long us)
+    {
+        long end = Magic.readCNTPCT_EL0() + (Magic.readCNTFRQ_EL0() * us) / 1000000L;
+        while (Magic.readCNTPCT_EL0() < end)
+        {
+        }
+    }
+
+    /** Busy-wait at least {@code ms} milliseconds (see {@link #delayUs}). */
+    public static void delayMs(long ms)
+    {
+        delayUs(ms * 1000L);
+    }
+
     /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
     static long currentTimeMillis()
     {
@@ -1316,6 +1336,37 @@ public final class VM
      * {@code java/io/FileInputStream.open0(String)} overlay (wired in {@code Loader.nativeBuf});
      * the overlay then reads the content directly via {@code Magic.load8/load64} on the entry.
      */
+    /** Find a RAMFS file by a raw path {@code byte[]} (for VM/driver code with no guest String); returns the
+     *  directory entry addr {nameAddr, nameLen@8, bytesAddr@16, bytesLen@24}, or 0. */
+    public static long fileFind(byte[] path)
+    {
+        if (fileDir == 0L)
+        {
+            return 0L;
+        }
+        int len = path.length;
+        int i = 0;
+        while (i < (int) fileCount)
+        {
+            long e = fileDir + i * 32L;
+            if (Magic.load64(e + 8L) == (long) len)
+            {
+                long na = Magic.load64(e);
+                int k = 0;
+                while (k < len && (Magic.load8(na + k) & 0xFF) == (path[k] & 0xFF))
+                {
+                    k += 1;
+                }
+                if (k == len)
+                {
+                    return e;
+                }
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
@@ -1447,7 +1498,7 @@ public final class VM
     }
 
     /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */
-    static void printHex(long v)
+    public static void printHex(long v)
     {
         Uart.putc(0x30);                                   // '0'
         Uart.putc(0x78);                                   // 'x'
@@ -2187,7 +2238,7 @@ public final class VM
      * heap object, mutate its field, and print the result.
      */
     /** Print {@code v} (0..9999) in decimal, no leading zeros. Uses only / and * (no irem). */
-    static void printDec(int v)
+    public static void printDec(int v)
     {
         int th = v / 1000;
         int hu = (v - th * 1000) / 100;
@@ -2258,6 +2309,15 @@ public final class VM
     // only image producer now (stock-java.base pivot). The self-build + fixpoint + SD-persist tail of run() is
     // retired -- gated off here rather than deleted, pending the embedding rework. See the plan file.
     private static final boolean SELF_BUILD = false;
+    // NON-final on purpose: the writer's BFS compiles the WiFi subsystem (guarded call in run()) into the
+    // image regardless. Now live (M1), but the RUN is additionally gated on real hardware in run() via
+    // Uart.coreHz: QEMU's mailbox reports ~0 for the measured core clock (baud falls back, "core 0MHz"),
+    // a real Pi 4 reports ~166 MHz — so the WiFi driver only pokes the SDIO controller on real silicon,
+    // never QEMU (whose 0xFE300000 is the SD card).
+    static boolean WIFI_ENABLED = true;
+    // true = boot straight to WiFi, skipping SMP/scheduler/all demos (fast flash cycles). false = the full
+    // boot (demos + scheduler + SMP), with WiFi run at the end on real hardware (WIFI_ENABLED gate).
+    static final boolean WIFI_ONLY = false;
 
     static void run()
     {
@@ -2272,6 +2332,23 @@ public final class VM
         buildPageTables();
         enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
+
+        // TEMP (WiFi iteration): skip SMP + scheduler + the whole demo suite and go straight to WiFi, for
+        // fast flash cycles. WiFi uses only Heap (up early), the mailbox, MMIO and delayMs busy-waits -- no
+        // scheduler/SMP -- so this is a complete WiFi run. static-final so the demos are dead-code-eliminated
+        // (smaller/faster image). Set false to restore the full boot before merging to main.
+        if (WIFI_ONLY)
+        {
+            if (WIFI_ENABLED && Uart.coreHz > 10000000)
+            {
+                board.bcm2711.Wifi.bringUp();
+            }
+            else
+            {
+                Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
+            }
+            return;
+        }
 
         // Self-hosting generation counter (M5.5d demo): a scratch SD sector survives across reboots,
         // so each time joe-ng reproduces + persists itself and reboots into the image it wrote, this
@@ -2623,6 +2700,15 @@ public final class VM
         // and check frameSizeAt finds it in range and rejects a PC just past it.
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
+
+        // WiFi (CYW43455) bring-up. Guarded by a NON-final flag so the writer still compiles the whole
+        // subsystem (Wifi -> Sdio/Gpio/Mailbox) into the image for regression, but it runs on neither QEMU
+        // (no chip; 0xFE300000 there is the SD card) nor metal until M1 flips WIFI_ENABLED true + adds
+        // chip detection. delayMs (busy-wait) is used throughout, so it is timer/scheduler-independent here.
+        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)   // real-HW gate (see WIFI_ENABLED)
+        {
+            board.bcm2711.Wifi.bringUp();
+        }
 
         // --- M5 self-build / fixpoint / SD-persist retired (see SELF_BUILD above). Demos ran above; the
         //     tail below is the deprecated metal-writer verification + reproduction, no longer run. ---

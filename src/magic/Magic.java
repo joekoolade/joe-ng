@@ -89,6 +89,14 @@ public final class Magic
         throw intrinsic();
     }
 
+    /** {@code DC CIVAC, addr} — clean AND invalidate the data-cache line at {@code addr} to the point of
+     *  coherence: pushes any dirty write out, then drops the stale cached copy so a subsequent read sees what
+     *  an uncached agent (DMA, or the mailbox firmware via the bus alias) wrote. Use before reading a reply. */
+    public static void dcCIVAC(long addr)
+    {
+        throw intrinsic();
+    }
+
     /** {@code IC IALLU} — invalidate the whole instruction cache to the point of unification. */
     public static void icIALLU()
     {

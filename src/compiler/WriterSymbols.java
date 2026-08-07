@@ -149,6 +149,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "dsb()V" -> Intrinsics.DSB;
         case "dcCVAU(J)V" -> Intrinsics.DC_CVAU;
         case "dcCVAC(J)V" -> Intrinsics.DC_CVAC;
+        case "dcCIVAC(J)V" -> Intrinsics.DC_CIVAC;
         case "icIALLU()V" -> Intrinsics.IC_IALLU;
         case "readCurrentEL()J" -> Intrinsics.READ_CURRENT_EL;
         case "readMPIDR()J" -> Intrinsics.READ_MPIDR;

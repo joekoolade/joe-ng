@@ -30,35 +30,116 @@ public final class Mailbox
     private static final int SPIN_LIMIT = 2_000_000;
 
     /**
-     * Ask the firmware for the core clock in Hz; 0 if it does not answer.
-     * Property buffer (8 words): size, request-code, then one GET_CLOCK_RATE tag
-     * (id, value-size, req/resp code, clock id, rate-out) and the end tag.
+     * Generic single-tag property call. {@code words} holds the tag's value buffer (request words in,
+     * response words out in place); {@code words.length * 4} is the value-buffer size. Returns true on a
+     * firmware reply, false on timeout (leaving {@code words} untouched). Cache-maintains the buffer, so it
+     * is correct both before the MMU is on (maintenance is a harmless no-op) and after (RAM is cacheable and
+     * the firmware writes the reply through the uncached bus alias).
+     *
+     * <p>Buffer layout at {@link Bcm2711#MBOX_BUFFER}: [total size][request=0][tag id][value size]
+     * [req code=0][value words...][end tag=0].
      */
-    public static int coreClockHz()
+    public static boolean tag(int id, int[] words)
     {
         long b = Bcm2711.MBOX_BUFFER;
-        Magic.store32(b, 32);                            // total size in bytes
+        int nwords = words.length;
+        int total = (6 + nwords) * 4;                    // hdr(2) + tag hdr(3) + value(nwords) + end(1)
+        Magic.store32(b, total);
         Magic.store32(b + 4, 0);                         // 0 = request
-        Magic.store32(b + 8, Bcm2711.TAG_GET_CLOCK_RATE_MEASURED);
-        Magic.store32(b + 12, 8);                        // value buffer is 8 bytes
+        Magic.store32(b + 8, id);
+        Magic.store32(b + 12, nwords * 4);               // value buffer size in bytes
         Magic.store32(b + 16, 0);                        // request code
-        Magic.store32(b + 20, Bcm2711.CLOCK_ID_CORE);    // in: which clock
-        Magic.store32(b + 24, 0);                        // out: rate in Hz
-        Magic.store32(b + 28, 0);                        // end tag
-        Magic.dsb();
+        int i = 0;
+        while (i < nwords)
+        {
+            Magic.store32(b + 20 + i * 4, words[i]);
+            i = i + 1;
+        }
+        Magic.store32(b + 20 + nwords * 4, 0);           // end tag
+        cleanBuffer(b, total);                           // push the request out to the point of coherence
         if (!waitWritable())
         {
-            return 0;
+            return false;
         }
-        // The VC wants a bus address with the channel in the low 4 bits.
+        // The VC wants a bus address (uncached alias) with the channel in the low 4 bits.
         Magic.store32(Bcm2711.MBOX_WRITE,
                       (int) (b | Bcm2711.MBOX_BUS_ALIAS) | Bcm2711.MBOX_CH_PROP);
         if (!waitResponse())
         {
+            return false;
+        }
+        invalidateBuffer(b, total);                      // drop our stale cached copy; read the firmware's reply
+        i = 0;
+        while (i < nwords)
+        {
+            words[i] = Magic.load32(b + 20 + i * 4);
+            i = i + 1;
+        }
+        return true;
+    }
+
+    /** Ask the firmware for the <em>measured</em> core clock in Hz; 0 if it does not answer. */
+    public static int coreClockHz()
+    {
+        int[] w = new int[2];
+        w[0] = Bcm2711.CLOCK_ID_CORE;                    // in: which clock
+        w[1] = 0;                                        // out: rate in Hz
+        if (!tag(Bcm2711.TAG_GET_CLOCK_RATE_MEASURED, w))
+        {
             return 0;
         }
+        return w[1];
+    }
+
+    /** The (requested, not measured) rate of clock {@code clockId} in Hz; 0 if unavailable. Used to compute
+     *  the SDIO clock divider from the EMMC clock ({@link Bcm2711#CLOCK_ID_EMMC}). */
+    public static int getClockRate(int clockId)
+    {
+        int[] w = new int[2];
+        w[0] = clockId;
+        w[1] = 0;
+        if (!tag(Bcm2711.TAG_GET_CLOCK_RATE, w))
+        {
+            return 0;
+        }
+        return w[1];
+    }
+
+    /** Drive a firmware GPIO-expander pin ({@code expanderPin} = {@link Bcm2711#EXPANDER_GPIO_BASE}+n), e.g.
+     *  the WiFi WL_ON power line. Returns the firmware's reply success. */
+    public static boolean setExpanderGpio(int expanderPin, boolean on)
+    {
+        int[] w = new int[2];
+        w[0] = expanderPin;
+        w[1] = on ? 1 : 0;
+        return tag(Bcm2711.TAG_SET_GPIO_STATE, w);
+    }
+
+    /** Clean the mailbox buffer's cache lines to the point of coherence (make our request visible). */
+    private static void cleanBuffer(long b, int total)
+    {
+        long a = b & ~63L;
+        long end = b + total;
+        while (a < end)
+        {
+            Magic.dcCVAC(a);
+            a = a + 64L;
+        }
         Magic.dsb();
-        return Magic.load32(b + 24);
+    }
+
+    /** Clean+invalidate the buffer's cache lines (drop stale copies before reading the firmware's reply). */
+    private static void invalidateBuffer(long b, int total)
+    {
+        Magic.dsb();
+        long a = b & ~63L;
+        long end = b + total;
+        while (a < end)
+        {
+            Magic.dcCIVAC(a);
+            a = a + 64L;
+        }
+        Magic.dsb();
     }
 
     /** Spin until the mailbox can accept a write; false if it never can. */

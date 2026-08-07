@@ -395,6 +395,12 @@ public final class A64Enc
     {
         return 0xD508_751F;
     }
+    /** {@code DC CIVAC, Xt} — clean AND invalidate data cache line by VA to PoC (SYS #3,c7,c14,#1). Used to
+     *  read a reply an uncached agent (DMA/mailbox firmware) wrote after our request write cleaned the line. */
+    public static int dcCivac(int rt)
+    {
+        return 0xD50B_7E20 | (rt & 0x1F);
+    }
     /** {@code ERET} — exception return. */
     public static int eret()
     {
