@@ -2483,15 +2483,6 @@ public final class VM
         Uart.write(Magic.bytes("sched (.=main A=yield B=post->C blocked): "));
         startScheduler();
 
-        // M6 IRQ test (temporary, wifi-irq branch): the scheduler is now up with IRQs ENABLED (the demo tail
-        // below masks them at stopTimerTick), so run WiFi here to exercise the SDIO card interrupt, then skip
-        // the long demo suite. QEMU (coreHz 0) falls through to the normal demos.
-        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
-        {
-            board.bcm2711.Wifi.bringUp();
-            return;
-        }
-
         long t0 = Magic.readCNTPCT_EL0();
         while (Magic.readCNTPCT_EL0() < t0 + Magic.readCNTFRQ_EL0() / 4L)   // ~250 ms
         {
@@ -2760,13 +2751,25 @@ public final class VM
         Uart.putc(jitUnwindReady() ? 0x46 : 0x6E);         // 'F' frame found / 'n' not
         Uart.putc(0x0A);
 
-        // WiFi (CYW43455) bring-up. Guarded by a NON-final flag so the writer still compiles the whole
-        // subsystem (Wifi -> Sdio/Gpio/Mailbox) into the image for regression, but it runs on neither QEMU
-        // (no chip; 0xFE300000 there is the SD card) nor metal until M1 flips WIFI_ENABLED true + adds
-        // chip detection. delayMs (busy-wait) is used throughout, so it is timer/scheduler-independent here.
-        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)   // real-HW gate (see WIFI_ENABLED)
+        // WiFi (CYW43455) bring-up -- the real-hardware finale, after the full feature showcase above.
+        // IRQ-driven RX needs the context-switch machinery + a live timer + IRQs, all of which the demo tail
+        // tore down (stopTimerTick after the philosophers; the GC/JIT churn also freed the switch stubs). So
+        // re-arm a MINIMAL scheduler -- just task 0 (this boot flow), no A/B/C demo tasks -- and turn IRQs
+        // back on, so the WiFi task can block in semWaitTimeout and be woken by the SDIO card interrupt (SPI
+        // 158) instead of busy-polling. Guarded by the non-final WIFI_ENABLED flag (so the writer still
+        // compiles the subsystem in) and HW-gated on coreHz: QEMU reports 0 and skips (no CYW43 there; its
+        // 0xFE300000 is the SD card).
+        if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
         {
+            installSchedVectors();                         // rebuild the switch stubs the GC/JIT demos freed
+            taskCount = 1;                                 // fresh table: only task 0 -- no demo tasks to spew
+            curTask = 0;
+            taskState[0] = TASK_READY;
+            Magic.writeCNTP_TVAL_EL0(timerReload);
+            Magic.writeCNTP_CTL_EL0(1);                    // re-arm the periodic timer tick
+            Magic.enableIrq();                             // IRQs on: SDIO SPI 158 + timer deadline wakes
             board.bcm2711.Wifi.bringUp();
+            stopTimerTick();                               // WiFi done: disable the timer + mask IRQs before parking
         }
 
         // --- M5 self-build / fixpoint / SD-persist retired (see SELF_BUILD above). Demos ran above; the
