@@ -2315,8 +2315,9 @@ public final class VM
     // a real Pi 4 reports ~166 MHz — so the WiFi driver only pokes the SDIO controller on real silicon,
     // never QEMU (whose 0xFE300000 is the SD card).
     static boolean WIFI_ENABLED = true;
-    // TEMP (WiFi iteration): true = boot straight to WiFi, skipping SMP/scheduler/all demos (see run()).
-    static final boolean WIFI_ONLY = true;
+    // true = boot straight to WiFi, skipping SMP/scheduler/all demos (fast flash cycles). false = the full
+    // boot (demos + scheduler + SMP), with WiFi run at the end on real hardware (WIFI_ENABLED gate).
+    static final boolean WIFI_ONLY = false;
 
     static void run()
     {
