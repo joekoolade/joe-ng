@@ -100,6 +100,13 @@ public final class Bcm2711
     public static final int  AUX_SPI = 125;
 
     /**
+     * The Arasan SDHCI controller (0xFE300000, the WiFi SDIO — {@code mmcnr} in the BCM2711 device tree) is
+     * VideoCore peripheral IRQ 62, which the GIC-400 exposes as SPI 96+62 = 158. Used for IRQ-driven WiFi RX
+     * (the CYW43 raises the SDIO card interrupt when it has an F2 frame for the host).
+     */
+    public static final int  SDIO_SPI = 158;
+
+    /**
      * <em>Fallback</em> baud divisor for 115200, used only if the mailbox does not
      * report a core clock. mini-UART baud = core_clock / (8*(divisor+1)), so the
      * divisor depends entirely on the VPU core clock — and that is not something we

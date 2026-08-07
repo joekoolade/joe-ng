@@ -537,8 +537,9 @@ public final class VM
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
     static final int  MAX_TASKS = 16;       // boot + M7 demo tasks (0..4) + up to 11 philosophers
-    static final int  NUM_SEM = 16;         // reserved 0..3 (M7/console) + dynamically-allocated forks
-    static final int  SEM_RESERVED = 4;     // dynamic semaphores (forks) allocate at/after this index
+    static final int  NUM_SEM = 16;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks
+    static final int  WIFI_SEM = 4;         // posted by the SDIO RX ISR when a WiFi frame arrives
+    static final int  SEM_RESERVED = 5;     // dynamic semaphores (forks) allocate at/after this index
     static int nextSem = SEM_RESERVED;      // next free semaphore index (newSem hands these out)
     static long runTrampAddr;               // Loader-built stub: invokeinterface Runnable.run() on x0, then taskExit
     static final int  TASK_EMPTY = 0;
@@ -613,6 +614,15 @@ public final class VM
             if (Console.onIrq())                           // drains RX+TX; true if RX bytes arrived
             {
                 semPostRaw(Console.RX_SEM);                // wake a blocked reader (ISR-safe post)
+            }
+            Gic.end(id);
+            return pickNext(curSp);
+        }
+        if (id == Bcm2711.SDIO_SPI)                        // WiFi SDIO card interrupt -> the CYW43 driver
+        {
+            if (board.cyw43.Cyw43.onIrq())                 // ISR: the chip has an F2 frame for us
+            {
+                semPostRaw(WIFI_SEM);
             }
             Gic.end(id);
             return pickNext(curSp);

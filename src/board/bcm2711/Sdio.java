@@ -147,6 +147,27 @@ public final class Sdio
         return Magic.load32(base + INTERRUPT);
     }
 
+    private static final int INT_CARD = 1 << 8;          // SDIO card interrupt (device has data)
+
+    /** Enable the SDIO card interrupt: status-enable (IRPT_MASK) + signal-enable (IRPT_EN) bit 8. */
+    public static void enableCardInt()
+    {
+        Magic.store32(base + IRPT_MASK, Magic.load32(base + IRPT_MASK) | INT_CARD);
+        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) | INT_CARD);
+    }
+
+    /** Stop the (level-triggered) card interrupt from re-firing by clearing its signal-enable bit. */
+    public static void maskCardInt()
+    {
+        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) & ~INT_CARD);
+    }
+
+    /** Re-arm the card interrupt after servicing it (set the signal-enable bit again). */
+    public static void unmaskCardInt()
+    {
+        Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) | INT_CARD);
+    }
+
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {

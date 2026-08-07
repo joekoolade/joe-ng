@@ -400,9 +400,58 @@ public final class Cyw43
      * dump the result buffer's ASCII so the visible SSIDs show up — no event_msgs / escan dependency, just
      * the proven GET path. Proves the radio hears networks before we attempt a join.
      */
+    static int irqCount;                                 // SDIO card interrupts serviced (IRQ-driven RX)
+
+    /**
+     * ISR — called from {@link vm.VM#schedule} when SPI 158 fires: the CYW43 raised the SDIO card interrupt,
+     * meaning it has an F2 frame for us. For now count it and mask the (level-triggered) interrupt so it
+     * doesn't re-fire; the full path will read the frame into a ring here and post WIFI_SEM. Returns true if
+     * it was our interrupt.
+     */
+    public static boolean onIrq()
+    {
+        if ((Sdio.interrupt() & (1 << 8)) == 0)          // not the card interrupt
+        {
+            return false;
+        }
+        irqCount = irqCount + 1;
+        Sdio.maskCardInt();
+        return true;
+    }
+
+    /** Route the SDHCI controller's SPI to the GIC and enable the SDIO card interrupt (SDHCI + CCCR funcs). */
+    static void enableWifiIrq()
+    {
+        Sdio.enableCardInt();
+        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
+        board.bcm2711.Gic.initSpi(board.bcm2711.Bcm2711.SDIO_SPI);
+    }
+
+    /**
+     * Make-or-break diagnostic: enable the WiFi IRQ, trigger an F2 response (a "ver" GET) but do NOT poll it,
+     * so the pending frame keeps the card interrupt asserted long enough for the ISR to fire. Reports whether
+     * SPI 158 actually reached the CPU (irqCount > 0), then drains the frame and masks the int for the
+     * polling-based flow that follows.
+     */
+    static void irqTest()
+    {
+        board.bcm2711.Uart.write(Magic.bytes("wifi: irq test...\n"));
+        irqCount = 0;
+        enableWifiIrq();
+        long g = Heap.allocData(64);
+        int p = putStr(g, Magic.bytes("ver"));
+        int id = sendBcdc(WLC_GET_VAR, g, p + 32, false);   // triggers a response frame
+        VM.delayMs(300);                                    // don't poll -> response pending -> card int asserted
+        log(Magic.bytes("wifi: irqCount="), irqCount);
+        long rx = Heap.allocData(512);
+        recvCtrl(rx, 512, id);                              // drain the response
+        Sdio.maskCardInt();                                 // back to polling for the rest of bring-up
+    }
+
     static void scanOnly()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: scan...\n"));
+        irqTest();                                       // M6: does the SDIO card interrupt reach the GIC?
         clmLoad();                                       // regulatory/PHY data — the radio needs it to scan
         enableEvents();                                  // turn on E_ESCAN_RESULT so results are pushed to us
         readCtrl(sendBcdc(WLC_UP, 0L, 0, true));         // bring the interface up
