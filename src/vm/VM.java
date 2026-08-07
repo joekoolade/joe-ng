@@ -538,7 +538,7 @@ public final class VM
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
     static final int  MAX_TASKS = 16;       // boot + M7 demo tasks (0..4) + up to 11 philosophers
     static final int  NUM_SEM = 16;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks
-    static final int  WIFI_SEM = 4;         // posted by the SDIO RX ISR when a WiFi frame arrives
+    public static final int  WIFI_SEM = 4;  // posted by the SDIO RX ISR when a WiFi frame arrives
     static final int  SEM_RESERVED = 5;     // dynamic semaphores (forks) allocate at/after this index
     static int nextSem = SEM_RESERVED;      // next free semaphore index (newSem hands these out)
     static long runTrampAddr;               // Loader-built stub: invokeinterface Runnable.run() on x0, then taskExit
@@ -666,7 +666,7 @@ public final class VM
      * across the test-and-block so a post can't slip in between (lost-wakeup race); yield/SVC still works
      * with IRQs masked, and each task resumes with its own PSTATE, so masking here is safe.
      */
-    static void semWait(int s)
+    public static void semWait(int s)
     {
         Magic.disableIrq();
         while (semCount[s] <= 0)

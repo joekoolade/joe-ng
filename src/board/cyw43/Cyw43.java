@@ -420,21 +420,8 @@ public final class Cyw43
     }
 
     /** Route the SDHCI controller's SPI to the GIC and enable the SDIO card interrupt (SDHCI + CCCR funcs). */
-    static void enableWifiIrq()
-    {
-        Sdio.enableCardInt();
-        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
-        board.bcm2711.Gic.initSpi(board.bcm2711.Bcm2711.SDIO_SPI);
-    }
-
-    /**
-     * Make-or-break diagnostic: enable the WiFi IRQ, trigger an F2 response (a "ver" GET) but do NOT poll it,
-     * so the pending frame keeps the card interrupt asserted long enough for the ISR to fire. Reports whether
-     * SPI 158 actually reached the CPU (irqCount > 0), then drains the frame and masks the int for the
-     * polling-based flow that follows.
-     */
     // The chip only raises the SDIO card interrupt if its SDIOD-core interrupt mask is set (Plan9/Circle
-    // ether4330 line 971). Without this, DAT1 is never asserted, so the SDHCI card-int status stays 0.
+    // ether4330 line 971): FrameInt = an F2 frame is ready. Without it, DAT1 is never asserted.
     private static final long SDIOD_CORE = 0x18004000L;   // SDIOD core base (from the EROM enumeration)
     private static final long SD_INTSTATUS = 0x20L;
     private static final long SD_INTMASK = 0x24L;
@@ -442,23 +429,47 @@ public final class Cyw43
     private static final int SD_MAILBOXINT = 1 << 7;
     private static final int SD_FCCHANGE = 1 << 5;
 
+    /** Enable IRQ-driven WiFi RX: tell the chip to assert on F2-frame/mailbox/fc events, enable the SDIO
+     *  function + card interrupts, and route the SDHCI SPI to the GIC. Leaves the card interrupt armed. */
+    static void enableWifiIrq()
+    {
+        bpWrite32(SDIOD_CORE + SD_INTMASK, SD_FRAMEINT | SD_MAILBOXINT | SD_FCCHANGE);
+        Sdio.cmd52Write(F0, CCCR_IEN, 0x07);             // master + F1 + F2 function interrupts
+        Sdio.enableCardInt();                            // IRPT_MASK bit8 (status) + IRPT_EN bit8 (armed)
+        board.bcm2711.Gic.initSpi(board.bcm2711.Bcm2711.SDIO_SPI);
+    }
+
+    /**
+     * Block on the SDIO card interrupt until the chip signals a frame, then read it. The task sleeps in
+     * semWait (no busy-polling) until the ISR ({@link #onIrq}) masks the interrupt and posts WIFI_SEM; we then
+     * clear the SDIOD + SDHCI interrupt status, read the frame, and re-arm the card interrupt for the next.
+     */
+    static int waitFrameIrq(long dst, int cap)
+    {
+        vm.VM.semWait(vm.VM.WIFI_SEM);
+        int ints = bpRead32(SDIOD_CORE + SD_INTSTATUS);
+        bpWrite32(SDIOD_CORE + SD_INTSTATUS, ints);      // write-1-to-clear the SDIOD interrupt status
+        Sdio.clearCardInt();                             // clear the SDHCI card-int status
+        int len = readFrameOnce(dst, cap);
+        Sdio.unmaskCardInt();                            // re-arm for the next frame
+        return len;
+    }
+
+    /** Test the full IRQ-driven RX path end to end: arm the interrupt, trigger a frame, and block on WIFI_SEM
+     *  until the ISR delivers it — proving the ISR -> semaphore -> task wake-up chain works. */
     static void irqTest()
     {
         board.bcm2711.Uart.write(Magic.bytes("wifi: irq test...\n"));
-        // THE FIX: tell the chip to assert the SDIO interrupt on F2-frame / mailbox / flow-control events.
-        bpWrite32(SDIOD_CORE + SD_INTMASK, SD_FRAMEINT | SD_MAILBOXINT | SD_FCCHANGE);
-        log(Magic.bytes("wifi: sdiod intmask="), bpRead32(SDIOD_CORE + SD_INTMASK));
-
-        Sdio.enableCardInt();                              // card-int status only (no GIC yet — poll it safely)
+        enableWifiIrq();
         long g = Heap.allocData(64);
         int p = putStr(g, Magic.bytes("ver"));
-        int id = sendBcdc(WLC_GET_VAR, g, p + 32, false);   // trigger a response frame (leave it pending)
-        VM.delayMs(300);
-        log(Magic.bytes("wifi: sdhci-int="), Sdio.interrupt());        // bit 8 (0x100) set = card int now works
-        log(Magic.bytes("wifi: sdiod intstatus="), bpRead32(SDIOD_CORE + SD_INTSTATUS));
-        long rx = Heap.allocData(512);
-        recvCtrl(rx, 512, id);                              // drain the response
-        Sdio.maskCardInt();
+        sendBcdc(WLC_GET_VAR, g, p + 32, false);         // trigger a response frame
+        board.bcm2711.Uart.write(Magic.bytes("wifi: blocking on WIFI_SEM...\n"));
+        long rx = Heap.allocData(2048);
+        int len = waitFrameIrq(rx, 2048);                // sleeps until the ISR posts, then reads the frame
+        log(Magic.bytes("wifi: irq frame len="), len);
+        log(Magic.bytes("wifi: irqCount="), irqCount);
+        Sdio.maskCardInt();                              // back to polling for the rest of bring-up
     }
 
     static void scanOnly()

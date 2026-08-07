@@ -172,6 +172,12 @@ public final class Sdio
         Magic.store32(base + IRPT_EN, Magic.load32(base + IRPT_EN) | INT_CARD);
     }
 
+    /** Write-1-to-clear the card-interrupt status bit in the SDHCI INTERRUPT register. */
+    public static void clearCardInt()
+    {
+        Magic.store32(base + INTERRUPT, INT_CARD);
+    }
+
     /** Raise the SDIO clock to {@code hz} (call after enumeration; e.g. 25-50 MHz once F2 is stable). */
     public static void setClock(int hz)
     {
