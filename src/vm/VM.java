@@ -1305,6 +1305,35 @@ public final class VM
     }
 
     /**
+     * Minimal scheduler for the {@code WIFI_ONLY} fast-cycle path: allocate the task table, install the
+     * context-switch vectors, and arm the GIC timer + IRQs with ONLY task 0 (no demo tasks). IRQ-driven WiFi
+     * RX needs the switch machinery (`semWaitTimeout` → `taskYield`) and a live timer/IRQ, which the old
+     * wifi-only path (a bare `bringUp`) never set up. This is the {@link #startScheduler} essentials minus the
+     * demo-task spawns and the loader/JIT dead-call stashing (those features are dead-code-eliminated here).
+     */
+    static void startWifiScheduler()
+    {
+        if (scheduleAddr == 0L) { scheduleAddr = schedule(0L); }   // dead calls: force schedule/yieldPick
+        if (yieldPickAddr == 0L) { yieldPickAddr = yieldPick(0L); } // compiled + stashed for the vector stubs
+        installSchedVectors();
+        taskSp = new long[MAX_TASKS];
+        taskStackBase = new long[MAX_TASKS];
+        taskThreadObj = new long[MAX_TASKS];
+        taskState = new int[MAX_TASKS];
+        taskWake = new long[MAX_TASKS];
+        taskWaitOn = new int[MAX_TASKS];
+        semCount = new int[NUM_SEM];
+        taskState[0] = TASK_READY;                          // task 0 = the WiFi boot flow
+        taskCount = 1;
+        curTask = 0;
+        Gic.init(Gic.PPI_CNTPNS);
+        timerReload = Magic.readCNTFRQ_EL0() / 100L;        // ~10 ms tick (deadline wakes for semWaitTimeout)
+        Magic.writeCNTP_TVAL_EL0(timerReload);
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();                                  // IRQs on: SDIO SPI 158 + timer
+    }
+
+    /**
      * EL1 exception handler (reached by a branch from every vector entry): print the syndrome,
      * faulting PC and fault address, then park. Does not return — this is a last-resort report.
      */
@@ -2382,14 +2411,15 @@ public final class VM
         enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
 
-        // TEMP (WiFi iteration): skip SMP + scheduler + the whole demo suite and go straight to WiFi, for
-        // fast flash cycles. WiFi uses only Heap (up early), the mailbox, MMIO and delayMs busy-waits -- no
-        // scheduler/SMP -- so this is a complete WiFi run. static-final so the demos are dead-code-eliminated
-        // (smaller/faster image). Set false to restore the full boot before merging to main.
+        // TEMP (WiFi iteration): skip SMP + the whole demo suite and go straight to WiFi, for fast flash
+        // cycles. static-final so the demos are dead-code-eliminated (smaller/faster image). Unlike the old
+        // wifi-only path, IRQ-driven RX needs a scheduler, so stand up a MINIMAL one (task 0 only, no demo
+        // tasks) before bringUp. Set WIFI_ONLY false to restore the full boot before merging to main.
         if (WIFI_ONLY)
         {
             if (WIFI_ENABLED && Uart.coreHz > 10000000)
             {
+                startWifiScheduler();                      // task table + switch vectors + timer + IRQs
                 board.bcm2711.Wifi.bringUp();
             }
             else

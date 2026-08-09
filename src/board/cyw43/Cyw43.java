@@ -639,10 +639,16 @@ public final class Cyw43
         {
             return;
         }
-        if (staPskLen > 0 && !fourWay())                 // WPA2: run the 4-way handshake ourselves
+        readMac();                                       // MUST precede fourWay: the PTK/MIC and msg2's source
+                                                         // address both use ourMac (was 0 → wrong MIC → no msg3)
+        if (staPskLen > 0 && !WPA2_OFFLOAD && !fourWay())   // host 4-way (skipped when the firmware runs it)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: 4-way failed\n"));
             return;
+        }
+        if (staPskLen > 0 && WPA2_OFFLOAD)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("wifi: offload link up (fw ran the 4-way)\n"));
         }
         VM.delayMs(500);
         dhcp();
@@ -653,11 +659,17 @@ public final class Cyw43
     static long staPsk;                                  // passphrase bytes
     static int staPskLen;
 
+    /** true = let the firmware's own supplicant run the 4-way (hand it the PMK via WLC_SET_WSEC_PMK, like
+     *  brcmfmac's PSK offload); false = run the host 4-way ({@link #fourWay}) and relay EAPOL ourselves.
+     *  Offload avoids the host-EAPOL-TX path entirely (which draws no msg3 on this firmware). */
+    static final boolean WPA2_OFFLOAD = false;
+
     /**
-     * Configure WPA2-PSK in HOST-supplicant mode: this firmware has no in-chip supplicant (sup_wpa → -23), so
-     * we only tell it the ciphers — wsec=AES/CCMP, wpa_auth=WPA2-PSK, open 802.11 auth — and it associates
-     * (unkeyed) then forwards the AP's EAPOL frames to us. We run the 4-way handshake ({@link #fourWay}) and
-     * install the keys with WLC_SET_KEY. Applied while DOWN.
+     * Configure WPA2-PSK. Common: ciphers (wsec=AES/CCMP), wpa_auth=WPA2-PSK, open 802.11 auth, and the
+     * association RSN IE (`wpaie`, brcmf_configure_wpaie) so it matches the handshake. Then either
+     * {@link #WPA2_OFFLOAD} — enable the firmware supplicant (`sup_wpa=1`) and hand it the 32-byte PMK
+     * (WLC_SET_WSEC_PMK, brcmf_set_pmk), so the chip runs the whole 4-way after WLC_SET_SSID and E_LINK-up
+     * means "authenticated" — or the host path, where we associate unkeyed and run {@link #fourWay} ourselves.
      */
     static void setupWpa2(long psk, int pl)
     {
@@ -667,6 +679,44 @@ public final class Cyw43
         setInt(WLC_SET_AUTH, 0);                         // open 802.11 auth
         setInt(WLC_SET_WPA_AUTH, 0x80);                  // WPA2-PSK
         setInt(WLC_UP, 0);                               // WLC_SET_SSID then associates
+        // Set the association RSN IE (brcmf_configure_wpaie) BEFORE the join, so the firmware advertises the
+        // SAME IE in the assoc request that we echo in EAPOL msg2's key data (host path) / the handshake.
+        iovarData(Magic.bytes("wpaie"), rsnIe(), 22);
+        // Precompute the PMK NOW, before WLC_SET_SSID associates. PBKDF2(4096) is by far the slowest step;
+        // computing it here (while the AP is idle, pre-association) keeps it OFF the msg1->msg2 critical path,
+        // so we answer the AP's first msg1 in milliseconds. The AP restarts the 4-way with a fresh ANonce
+        // ~once a second and silently drops stale replies, so a slow first response loses the race forever.
+        staPmk = new byte[32];
+        byte[] pass = heapBytes(psk, pl);
+        byte[] ssid = heapBytes(staSsid, staSsidLen);
+        crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, staPmk, 32);
+        board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
+        if (WPA2_OFFLOAD)
+        {
+            iovarInt(Magic.bytes("sup_wpa"), 1);         // enable the firmware supplicant (may be a no-op)
+            setPmk(staPmk);                              // WLC_SET_WSEC_PMK: the chip runs the 4-way itself
+            board.bcm2711.Uart.write(Magic.bytes("wifi: offload pmk set\n"));
+        }
+    }
+
+    private static byte[] staPmk;                        // PBKDF2(psk, ssid), precomputed pre-association
+
+    /**
+     * Hand the firmware the 32-byte PMK for its own supplicant (brcmf_set_wsec → WLC_SET_WSEC_PMK). Struct
+     * {@code brcmf_wsec_pmk_le} = key_len(u16 LE) + flags(u16 LE) + key[128], zeroed; key_len=32, flags=0
+     * (a raw PMK, not the WSEC_PASSPHRASE flag), 32-byte PMK, the whole 132-byte struct sent.
+     */
+    private static void setPmk(byte[] pmk)
+    {
+        long b = Heap.allocData(140);                    // allocData zeroes; struct is 132 bytes
+        Magic.store32(b, 32);                            // key_len = 32 (LE u16) | flags = 0 (LE u16)
+        int i = 0;
+        while (i < 32)
+        {
+            Magic.store8(b + 4 + i, pmk[i] & 0xFF);
+            i = i + 1;
+        }
+        readCtrl(sendBcdc(WLC_SET_WSEC_PMK, b, 132, true));
     }
 
     private static long rxbuf;                           // shared RX frame buffer for the handshake
@@ -678,11 +728,7 @@ public final class Cyw43
      */
     static boolean fourWay()
     {
-        byte[] pass = heapBytes(staPsk, staPskLen);
-        byte[] ssid = heapBytes(staSsid, staSsidLen);
-        byte[] pmk = new byte[32];
-        crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, pmk, 32);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
+        byte[] pmk = staPmk;                             // precomputed in setupWpa2 (off the critical path)
 
         rxbuf = Heap.allocData(2048);
         byte[] apMac = new byte[6];
@@ -698,23 +744,12 @@ public final class Cyw43
         int keyLen = ((Magic.load8(m1 + 7) & 0xFF) << 8) | (Magic.load8(m1 + 8) & 0xFF);
         byte[] replay = heapBytes(m1 + 9, 8);            // echo msg1's replay counter in msg2
 
-        // Authenticator address (AA) for the PTK = the associated BSSID (WLC_GET_BSSID), which can differ from
-        // msg1's Ethernet source on multi-BSSID / band-steering APs.
-        byte[] bssid = new byte[6];
-        long gb = Heap.allocData(64);
-        int bid = sendBcdc(WLC_GET_BSSID, gb, 6, false);
-        long rxb = Heap.allocData(256);
-        if (recvCtrl(rxb, 256, bid) > 0)
-        {
-            int bdoff = Magic.load8(rxb + 7) & 0xFF;
-            int k = 0;
-            while (k < 6)
-            {
-                bssid[k] = (byte) Magic.load8(rxb + bdoff + 16 + k);
-                k = k + 1;
-            }
-        }
-        byte[] aa = (bssid[0] != 0 || bssid[1] != 0 || bssid[2] != 0) ? bssid : apMac;
+        // AA = msg1's Ethernet source = the AP's BSSID (verified against a monitor capture: for this
+        // association it IS the over-the-air BSSID). NOTHING slow may go between receiving msg1 and sending
+        // msg2: the AP restarts the handshake with a fresh ANonce roughly once a second, so a stale reply is
+        // silently dropped. (An earlier get_bssid/get_channel ioctl here added ~14 s of latency and lost the
+        // race every time, even though the MIC was correct.)
+        byte[] aa = apMac;
 
         byte[] sNonce = new byte[32];
         genNonce(sNonce);
@@ -727,10 +762,7 @@ public final class Cyw43
 
         // msg2 key data = the STA's RSN IE; use the firmware's advertised IE (wpaie) if it provides one, else
         // the standard WPA2-PSK-CCMP IE.
-        byte[] rsnie = {
-            (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
-            (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x00, 0x00
-        };
+        byte[] rsnie = rsnIe();                          // same IE we set as `wpaie` at association
         byte[] ie = rsnie;
         int ieLen = rsnie.length;
         byte[] fwie = new byte[64];
@@ -903,7 +935,11 @@ public final class Cyw43
             Magic.store8(buf + i, f[i] & 0xFF);
             i = i + 1;
         }
-        txDataP(buf, total, 7);                          // EAPOL at 802.1D network-control priority
+        txDataP(buf, total, 0);                          // EAPOL at BDC priority 0 (AC_BE) -- brcmfmac classifies
+                                                         // a bare 0x888E frame via cfg80211_classify8021d, which
+                                                         // returns 0; priority 7 (AC_VO) is dropped by the firmware
+                                                         // on the unauthorized controlled port (why our EAPOL never
+                                                         // left the chip while all priority-0 data did)
     }
 
     /** Find the GTK KDE (OUI 00-0f-ac, type 1) in unwrapped key data; copies the 16-byte GTK to {@code out}
@@ -1100,6 +1136,41 @@ public final class Cyw43
         readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
     }
 
+    /** Set a byte-array iovar: "&lt;name&gt;\0" + raw {@code data[0..len]}. Used for {@code wpaie} (the RSN IE). */
+    private static void iovarData(byte[] name, byte[] data, int len)
+    {
+        long b = Heap.allocData(256);
+        int p = putBytes(b, 0, name);
+        Magic.store8(b + p, 0);                          // NUL after the iovar name
+        p = p + 1;
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(b + p + i, data[i]);
+            i = i + 1;
+        }
+        p = p + len;
+        readCtrl(sendBcdc(WLC_SET_VAR, b, p, true));
+    }
+
+    /**
+     * The STA's RSN IE for WPA2-PSK/CCMP: group=CCMP, pairwise=CCMP, akm=PSK, caps=0. This exact IE is set as
+     * the firmware's association IE (`wpaie`) before the join AND placed in EAPOL msg2's key data — the AP
+     * rejects msg2 (and never sends msg3) unless its key-data RSN IE matches the one we sent at association.
+     */
+    private static byte[] rsnIe()
+    {
+        // caps = 0x000c (last two bytes, little-endian): PTKSA replay-counter field 0b11, no PMF. This MUST
+        // match the RSN capabilities the firmware puts in its association request (confirmed 0x000c via a
+        // monitor capture) -- the AP compares msg2's key-data RSN IE against the assoc RSN IE and silently
+        // drops msg2 on any mismatch. caps 0x0000 here made every (otherwise valid) msg2 rejected -> no msg3.
+        byte[] ie = {
+            (byte) 0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f,
+            (byte) 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, (byte) 0xac, 0x02, 0x0c, 0x00
+        };
+        return ie;
+    }
+
     /** Set a bsscfg-scoped integer iovar on interface 0: "bsscfg:&lt;name&gt;\0" + index(u32) + value(u32). */
     private static void bsscfgInt(byte[] name, int value)
     {
@@ -1237,7 +1308,10 @@ public final class Cyw43
      */
     static void dhcp()
     {
-        readMac();
+        if (ourMac == 0L)                                // normally read earlier (before the WPA2 4-way); open
+        {                                                // networks reach dhcp() without that step
+            readMac();
+        }
         ourIp = Heap.allocData(4);
         gwIp = Heap.allocData(4);
         snMask = Heap.allocData(4);
