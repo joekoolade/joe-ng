@@ -1318,38 +1318,56 @@ public final class Cyw43
         dnsIp = Heap.allocData(4);
         long serverId = Heap.allocData(4);
         long buf = Heap.allocData(512);
+        long buf2 = Heap.allocData(512);
         long rx = Heap.allocData(2048);
 
-        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp discover\n"));
-        txData(buf, buildDhcp(buf, 1, 0L, 0L));          // DISCOVER
-        if (!recvDhcp(rx, 2, ourIp, serverId, 0L, 0L, 0L))   // wait OFFER (type 2)
+        // Retry the handshake: right after the WPA2 4-way the first exchange can drop a packet (we saw OFFER
+        // arrive but the REQUEST draw no ACK). Resend the REQUEST a few times for a lost ACK, and re-DISCOVER
+        // if that still fails. The xid is a fixed constant, so retries stay in the same DHCP transaction.
+        int disc = 0;
+        while (disc < 4)
         {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no offer\n"));
+            disc = disc + 1;
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp discover\n"));
+            txData(buf, buildDhcp(buf, 1, 0L, 0L));      // DISCOVER
+            if (!recvDhcp(rx, 2, ourIp, serverId, 0L, 0L, 0L))   // wait OFFER (type 2)
+            {
+                board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no offer, retry\n"));
+                continue;
+            }
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp offer ip "));
+            printIp(ourIp);
+            board.bcm2711.Uart.putc(0x0A);
+
+            boolean acked = false;
+            int rq = 0;
+            while (rq < 3 && !acked)                      // REQUEST -> ACK, resending REQUEST on a lost ACK
+            {
+                rq = rq + 1;
+                board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp request\n"));
+                txData(buf2, buildDhcp(buf2, 3, ourIp, serverId));   // REQUEST (opt 50 req-ip, opt 54 server-id)
+                acked = recvDhcp(rx, 5, ourIp, serverId, snMask, gwIp, dnsIp);   // wait ACK (type 5)
+            }
+            if (!acked)
+            {
+                board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no ack, re-discover\n"));
+                continue;
+            }
+
+            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp ACK ip "));
+            printIp(ourIp);
+            board.bcm2711.Uart.write(Magic.bytes("\n  gateway "));
+            printIp(gwIp);
+            board.bcm2711.Uart.write(Magic.bytes("\n  subnet  "));
+            printIp(snMask);
+            board.bcm2711.Uart.write(Magic.bytes("\n  dns     "));
+            printIp(dnsIp);
+            board.bcm2711.Uart.putc(0x0A);
+
+            arpPing();                                    // M4: ARP the gateway, then ping it
             return;
         }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp offer ip "));
-        printIp(ourIp);
-        board.bcm2711.Uart.putc(0x0A);
-
-        long buf2 = Heap.allocData(512);
-        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp request\n"));
-        txData(buf2, buildDhcp(buf2, 3, ourIp, serverId));   // REQUEST (opt 50 req-ip, opt 54 server-id)
-        if (!recvDhcp(rx, 5, ourIp, serverId, snMask, gwIp, dnsIp))   // wait ACK (type 5)
-        {
-            board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp no ack\n"));
-            return;
-        }
-        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp ACK ip "));
-        printIp(ourIp);
-        board.bcm2711.Uart.write(Magic.bytes("\n  gateway "));
-        printIp(gwIp);
-        board.bcm2711.Uart.write(Magic.bytes("\n  subnet  "));
-        printIp(snMask);
-        board.bcm2711.Uart.write(Magic.bytes("\n  dns     "));
-        printIp(dnsIp);
-        board.bcm2711.Uart.putc(0x0A);
-
-        arpPing();                                       // M4: ARP the gateway, then ping it
+        board.bcm2711.Uart.write(Magic.bytes("wifi: dhcp FAILED after retries\n"));
     }
 
     static long gwMac;                                   // gateway MAC (6 bytes), learned via ARP
