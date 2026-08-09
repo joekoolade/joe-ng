@@ -81,10 +81,23 @@ defines the minimum the assembler must encode.
   returns 200 OK** on real hardware — the "internet device" acceptance test.
   **Real-HW-only** (QEMU `raspi4b` has no CYW43; the WiFi path is HW-gated on
   `Uart.coreHz` and skipped there) and runs as the boot finale after the full
-  demo suite. WPA2-PSK crypto (SHA-1/HMAC-SHA1/PBKDF2/PRF/AES-128/RFC-3394
-  key-unwrap, `crypto/*`, 17 vectors in `CryptoTest`) is built + reference-
-  verified but **banked** — the fullmac firmware won't relay host EAPOL (needs the
-  WLFC subsystem; proven by a monitor-mode capture). **M6 IRQ-driven RX (latest,
+  demo suite. **WPA2-PSK WORKS on real hardware (host supplicant, DONE).** The
+  all-Java 4-way handshake runs a JDK-free crypto stack (SHA-1/HMAC-SHA1/PBKDF2/
+  PRF/AES-128/RFC-3394 key-unwrap, `crypto/*`, 17 vectors in `CryptoTest`) and
+  joins a WPA2 network → HTTP 200 OK. The old "banked — firmware won't relay
+  EAPOL" conclusion was WRONG; five stacked bugs hid it, found by pairing UART
+  traces with monitor captures: (1) EAPOL sent at BDC priority 7 (AC_VO) was
+  dropped on the unauthorized port — use priority 0 (AC_BE) like brcmfmac; (2)
+  `ourMac` was read at DHCP time, after `fourWay`, so the PTK/MIC used a zero MAC;
+  (3) the authenticator address must be msg1's Ethernet source (the real BSSID),
+  not a mis-parsed `WLC_GET_BSSID` (which returned the router MAC); (4) PBKDF2 +
+  diagnostic ioctls in the msg1→msg2 path caused ~14 s latency, but the AP
+  restarts the 4-way with a fresh ANonce ~1/s and drops stale replies — precompute
+  the PMK pre-association and keep the path bare (~6 ms); (5) msg2's key-data RSN
+  IE capabilities must be `0x000c` (match the firmware's association RSN IE, not
+  `0x0000`) or the AP silently drops msg2 on the downgrade check. This firmware
+  has NO in-chip supplicant (`sup_wpa` → -23), so the `WPA2_OFFLOAD` path is kept
+  but disabled. **M6 IRQ-driven RX (latest,
   on main):** F2 receive is interrupt-driven — the SDIO card interrupt (GIC SPI
   158) is a *level* line gated at the **GIC** (`GICD_ICENABLER`/`ISENABLER`), not
   the SDHCI (masking there never de-asserts it and stormed core 0); the ISR
