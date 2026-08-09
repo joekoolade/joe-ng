@@ -441,7 +441,7 @@ public final class Cyw43
      * then read the frame, clear the SDIOD + SDHCI interrupt status (de-asserting DAT1), and re-enable the
      * GIC SPI for the next frame.
      */
-    static int waitFrameIrq(long dst, int cap, int ms)
+    public static int waitFrameIrq(long dst, int cap, int ms)
     {
         if (!vm.VM.semWaitTimeout(vm.VM.WIFI_SEM, ms))
         {
@@ -1265,7 +1265,7 @@ public final class Cyw43
     }
 
     /** Send an 802.3 frame over the SDPCM data channel (2) with a 4-byte BDC header (proto ver 2, no pad). */
-    static void txData(long frame, int flen)
+    public static void txData(long frame, int flen)
     {
         txDataP(frame, flen, 0);
     }
@@ -1363,6 +1363,10 @@ public final class Cyw43
             board.bcm2711.Uart.write(Magic.bytes("wifi: arp no reply\n"));
             return;
         }
+        // Publish the interface config to the reusable stack (net.*): net.Tcp and the M3 socket layer read it.
+        net.Ip.ourMac = ourMac;
+        net.Ip.ourIp = ourIp;
+        net.Ip.gwMac = gwMac;
         board.bcm2711.Uart.write(Magic.bytes("wifi: gateway mac "));
         int i = 0;
         while (i < 6)
@@ -1413,87 +1417,34 @@ public final class Cyw43
      */
     static void httpGet(long serverIp, byte[] host)
     {
-        long rx = Heap.allocData(2048);
-        long freq = Magic.readCNTFRQ_EL0();
-        int sport = 0xC001;
-        int isn = 0x1000;
-        int ourSeq = isn;
-        int ourAck = 0;
-
-        // --- SYN, wait for SYN-ACK ---
-        boolean synAcked = false;
-        long endT = Magic.readCNTPCT_EL0() + freq * 6L;
-        long nextSend = 0L;
-        while (Magic.readCNTPCT_EL0() < endT && !synAcked)
-        {
-            long now = Magic.readCNTPCT_EL0();
-            if (now >= nextSend)
-            {
-                sendTcp(serverIp, sport, 80, ourSeq, 0, 0x02, 0L, 0);   // SYN
-                nextSend = now + freq / 2L;
-            }
-            long tcp = findTcp(rx, serverIp, sport);
-            if (tcp == 0L)
-            {
-                continue;
-            }
-            int flags = Magic.load8(tcp + 13) & 0x3F;
-            if ((flags & 0x04) != 0)                     // RST
-            {
-                board.bcm2711.Uart.write(Magic.bytes("wifi: tcp reset\n"));
-                return;
-            }
-            if ((flags & 0x12) == 0x12)                  // SYN|ACK
-            {
-                ourAck = readBe32(tcp + 4) + 1;          // their ISN + 1
-                ourSeq = isn + 1;
-                synAcked = true;
-            }
-        }
-        if (!synAcked)
+        // The TCP state machine now lives in the reusable net.Tcp stack; this is just an HTTP client over it
+        // (and the pattern the M3 java.net.Socket path will follow through the VM socket helpers).
+        int h = net.Tcp.connect(serverIp, 80);
+        if (h < 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: tcp no synack\n"));
             return;
         }
         board.bcm2711.Uart.write(Magic.bytes("wifi: tcp connected\n"));
 
-        // --- send the GET (PSH|ACK also completes the handshake) ---
         long req = Heap.allocData(256);
         int reqLen = buildHttpReq(req, host);
-        sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x18, req, reqLen);
-        ourSeq = ourSeq + reqLen;
+        net.Tcp.write(h, req, 0, reqLen);
         board.bcm2711.Uart.write(Magic.bytes("wifi: GET sent -----\n"));
 
-        // --- receive the response ---
-        endT = Magic.readCNTPCT_EL0() + freq * 8L;
-        boolean done = false;
+        long rxbuf = Heap.allocData(2048);
         int total = 0;
-        while (Magic.readCNTPCT_EL0() < endT && !done)
+        while (true)
         {
-            long tcp = findTcp(rx, serverIp, sport);
-            if (tcp == 0L)
+            int n = net.Tcp.read(h, rxbuf, 0, 2048);
+            if (n <= 0)                                  // n<0 = peer FIN/EOF, n==0 = timeout with no data
             {
-                continue;
+                break;
             }
-            int flags = Magic.load8(tcp + 13) & 0x3F;
-            int segSeq = readBe32(tcp + 4);
-            int dataOff = ((Magic.load8(tcp + 12) >> 4) & 0x0F) * 4;
-            int payLen = lastIpTotal - lastIhl - dataOff;
-            long payload = tcp + dataOff;
-            if (payLen > 0 && segSeq == ourAck)          // in-order data
-            {
-                printText(payload, payLen);
-                ourAck = ourAck + payLen;
-                total = total + payLen;
-                sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x10, 0L, 0);   // ACK
-            }
-            if ((flags & 0x01) != 0)                     // FIN
-            {
-                ourAck = ourAck + 1;
-                sendTcp(serverIp, sport, 80, ourSeq, ourAck, 0x11, 0L, 0);   // FIN|ACK
-                done = true;
-            }
+            printText(rxbuf, n);
+            total = total + n;
         }
+        net.Tcp.close(h);
         board.bcm2711.Uart.write(Magic.bytes("\n----- http done, "));
         VM.printDec(total);
         board.bcm2711.Uart.write(Magic.bytes(" bytes\n"));

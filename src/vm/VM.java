@@ -2496,14 +2496,6 @@ public final class VM
         enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
 
-        // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,
-        // run it and stop -- the image behaves like a JVM running one application, not a demo script. Falls
-        // through to the demo suite when no manifest is present (transitional).
-        if (launchInit())
-        {
-            return;
-        }
-
         // TEMP (WiFi iteration): skip SMP + the whole demo suite and go straight to WiFi, for fast flash
         // cycles. static-final so the demos are dead-code-eliminated (smaller/faster image). Unlike the old
         // wifi-only path, IRQ-driven RX needs a scheduler, so stand up a MINIMAL one (task 0 only, no demo
@@ -2519,6 +2511,14 @@ public final class VM
             {
                 Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
             }
+            return;
+        }
+
+        // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,
+        // run it and stop -- the image behaves like a JVM running one application, not a demo script. Falls
+        // through to the demo suite when no manifest is present (transitional).
+        if (launchInit())
+        {
             return;
         }
 
