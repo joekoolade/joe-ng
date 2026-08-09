@@ -1445,6 +1445,91 @@ public final class VM
         return 0L;
     }
 
+    /** Manifest parser (like Cyw43's wifi.conf reader): find a {@code key=value} line in {@code conf} (length
+     *  {@code flen}) and copy the value (to CR/LF/NUL/end) into {@code dst}; returns its length (0 if absent). */
+    static int manifestValue(long conf, int flen, byte[] key, long dst, int max)
+    {
+        int i = 0;
+        while (i < flen)
+        {
+            int k = 0;
+            int j = i;
+            while (k < key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == (key[k] & 0xFF))
+            {
+                k += 1;
+                j += 1;
+            }
+            if (k == key.length && j < flen && (Magic.load8(conf + j) & 0xFF) == 0x3D)   // "key="
+            {
+                j += 1;
+                int n = 0;
+                while (j < flen && n < max)
+                {
+                    int c = Magic.load8(conf + j) & 0xFF;
+                    if (c == 0x0A || c == 0x0D || c == 0)
+                    {
+                        break;
+                    }
+                    Magic.store8(dst + n, c);
+                    n += 1;
+                    j += 1;
+                }
+                return n;
+            }
+            while (i < flen && (Magic.load8(conf + i) & 0xFF) != 0x0A)   // skip to the next line
+            {
+                i += 1;
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /** Copy {@code len} bytes from a raw heap address into a fresh {@code byte[]}. */
+    static byte[] heapBytes(long addr, int len)
+    {
+        byte[] b = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            b[i] = (byte) Magic.load8(addr + i);
+            i += 1;
+        }
+        return b;
+    }
+
+    /**
+     * OS-like program launch. If {@code /etc/init} (RAMFS) names a program — {@code main=<class>}, optional
+     * {@code args=<space-separated>} — run its {@code main(String[])} and return true; the image then behaves
+     * like a JVM running one application rather than a demo script. Returns false when no manifest is present
+     * (the boot falls through to the demo suite, transitional).
+     */
+    static boolean launchInit()
+    {
+        long e = fileFind(Magic.bytes("/etc/init"));
+        if (e == 0L)
+        {
+            return false;
+        }
+        long conf = Magic.load64(e + 16L);
+        int flen = (int) Magic.load64(e + 24L);
+        long nm = Heap.allocData(128);
+        int nl = manifestValue(conf, flen, Magic.bytes("main"), nm, 120);
+        if (nl == 0)
+        {
+            return false;
+        }
+        byte[] mainClass = heapBytes(nm, nl);
+        long al = Heap.allocData(256);
+        int alen = manifestValue(conf, flen, Magic.bytes("args"), al, 250);
+        byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
+        Uart.write(Magic.bytes("launch "));
+        Uart.write(mainClass);
+        Uart.putc(0x0A);
+        Loader.launch(mainClass, argsLine);
+        return true;
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
@@ -2410,6 +2495,14 @@ public final class VM
         buildPageTables();
         enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
+
+        // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,
+        // run it and stop -- the image behaves like a JVM running one application, not a demo script. Falls
+        // through to the demo suite when no manifest is present (transitional).
+        if (launchInit())
+        {
+            return;
+        }
 
         // TEMP (WiFi iteration): skip SMP + the whole demo suite and go straight to WiFi, for fast flash
         // cycles. static-final so the demos are dead-code-eliminated (smaller/faster image). Unlike the old

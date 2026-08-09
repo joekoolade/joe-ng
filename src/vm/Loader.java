@@ -742,6 +742,102 @@ public final class Loader
         }
     }
 
+    /**
+     * The OS-style program launcher: demand-load the class named by {@code className} from the embedded
+     * classDir and run its {@code main(String[])} with {@code argv} (a guest {@code String[]}). This is the
+     * one path the runtime uses to run any program — the generalization of the ~25 bespoke {@code loadX()}
+     * demos. Object is seeded first (its vtable slots are canonical and it is never auto-pulled); everything
+     * else the program reaches is demand-loaded from the classDir by {@link #loadAll}.
+     */
+    static void launch(byte[] className, byte[] argsLine)
+    {
+        resetLoader();
+        addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);        // String + System.out streams
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);      // number formatting (near-universal)
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+        long entry = pullClass(className);                  // pull the program itself from the classDir by name
+        if (entry == 0L)
+        {
+            Uart.write(Magic.bytes("launch: class not found: "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        loadAll();                                          // reachability-gated JIT of the whole closure
+        seedSystemStreams();                                // System.out/err -> UART
+        // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
+        // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
+        long argv = buildArgv(argsLine);
+        long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        if (buf == 0L)
+        {
+            Uart.write(Magic.bytes("launch: no main(String[]) in "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
+    }
+
+    /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
+     *  {@link #guestString}). Called from {@link #launch} after {@code loadAll} so String's TIB is valid. */
+    private static long buildArgv(byte[] line)
+    {
+        int len = line.length;
+        int n = 0;
+        int i = 0;
+        while (i < len)                                     // pass 1: count tokens
+        {
+            while (i < len && line[i] == 0x20) { i += 1; }
+            if (i >= len) { break; }
+            n += 1;
+            while (i < len && line[i] != 0x20) { i += 1; }
+        }
+        long argv = Heap.allocArray(n, 8);                  // String[n] (8-byte reference elements)
+        int idx = 0;
+        i = 0;
+        while (i < len)                                     // pass 2: fill
+        {
+            while (i < len && line[i] == 0x20) { i += 1; }
+            if (i >= len) { break; }
+            int start = i;
+            while (i < len && line[i] != 0x20) { i += 1; }
+            byte[] tok = new byte[i - start];
+            int k = 0;
+            while (k < tok.length)
+            {
+                tok[k] = line[start + k];
+                k += 1;
+            }
+            Magic.store64(argv + 24L + idx * 8L, guestString(tok));
+            idx += 1;
+        }
+        return argv;
+    }
+
+    /** Copy a class name into scratch and pull its raw {@code .class} bytes from the embedded classDir;
+     *  register them ({@link #addBlob}) and return the bytes address, or 0 if the class is not embedded. */
+    private static long pullClass(byte[] name)
+    {
+        long scratch = Heap.allocData(name.length + 8);
+        int i = 0;
+        while (i < name.length)
+        {
+            Magic.store8(scratch + i, name[i]);
+            i += 1;
+        }
+        long bytes = VM.dirBytes(scratch, name.length);
+        if (bytes == 0L)
+        {
+            return 0L;
+        }
+        addBlob(bytes, (int) VM.dirLen(scratch, name.length));
+        return bytes;
+    }
+
     /** The real-program milestone: {@code demo/WordCount} — ordinary stock-Java (no VM hooks) entered
      *  through a real {@code main(String[])}, with the argument array built here (a raw Object[] of guest
      *  Strings). Must print byte-identical output to the same class run on the host JDK. */
@@ -895,6 +991,11 @@ public final class Loader
     static long guestString(byte[] ascii)
     {
         long arr = Heap.allocArray(ascii.length, 1);    // a real byte[] (elem size 1, length@16, data@24)
+        long bt = byteArrayTib();                        // type value as [B so String.getBytes()'s `checkcast [B`
+        if (bt != 0L)                                    // resolves (else it spins forever -- e.g. println(arg))
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+        }
         int i = 0;
         while (i < ascii.length)
         {

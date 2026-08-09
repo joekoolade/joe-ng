@@ -290,8 +290,51 @@ public final class BuildRuntimeImage
 
     public static void main(String[] args) throws IOException
     {
-        Path classesDir = Path.of(args.length > 0 ? args[0] : "out");
-        Path out = Path.of(args.length > 1 ? args[1] : "kernel8.img");
+        Path classesDir = Path.of("out");
+        Path out = Path.of("kernel8.img");
+        String mainClass = null;             // --main <class>: the program the image runs from main(String[])
+        String mainArgs = "";                // --args "<...>": its command-line args (space-separated)
+        int pos = 0;
+        int i = 0;
+        while (i < args.length)
+        {
+            String a = args[i];
+            if (a.equals("--main") && i + 1 < args.length)
+            {
+                mainClass = args[i + 1];
+                i += 2;
+            }
+            else if (a.equals("--args") && i + 1 < args.length)
+            {
+                mainArgs = args[i + 1];
+                i += 2;
+            }
+            else
+            {
+                if (pos == 0)
+                {
+                    classesDir = Path.of(a);
+                }
+                else if (pos == 1)
+                {
+                    out = Path.of(a);
+                }
+                pos += 1;
+                i += 1;
+            }
+        }
+
+        // --main writes the /etc/init manifest that VM.boot reads to launch the image's application. Written
+        // before build() so the normal RAMFS embed picks it up (this is the "imager arg AND RAMFS manifest").
+        if (mainClass != null)
+        {
+            Path init = Path.of("ramfs/etc/init");
+            Files.createDirectories(init.getParent());
+            Files.writeString(init, "main=" + mainClass + "\n"
+                    + (mainArgs.isEmpty() ? "" : "args=" + mainArgs + "\n"));
+            System.out.println("wrote " + init + " (main=" + mainClass
+                    + (mainArgs.isEmpty() ? "" : " args=" + mainArgs) + ")");
+        }
 
         CodeBuffer code = build(classesDir);
         BootImageWriter writer = new BootImageWriter(code);
