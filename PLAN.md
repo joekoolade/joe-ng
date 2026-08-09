@@ -1168,12 +1168,31 @@ gated on `Uart.coreHz` and skipped under QEMU. **Verified end-to-end on a real P
   ARP, IPv4, ICMP (ping the gateway), UDP+DHCP (lease → ip/gw/subnet/DNS), DNS, and TCP (pseudo-header
   checksum, one in-flight segment) → **HTTP/1.0 GET** → prints `HTTP/1.1 200 OK` + the body (829 bytes from
   example.com). The "internet device" **acceptance test — passed on real hardware.**
-- **M5 — WPA2-PSK (banked).** In-chip supplicant offload didn't relay host EAPOL, so a full **JDK-free WPA2
-  supplicant** was built and reference-verified: SHA-1, HMAC-SHA1, PBKDF2 (PMK), PRF (PTK), AES-128 +
-  RFC-3394 key-unwrap (GTK) in `crypto/*` (17 vectors in `test/crypto/CryptoTest`), plus the EAPOL 4-way
-  handshake logic. Blocked only by the **fullmac firmware swallowing host EAPOL frames** (needs the WLFC
-  subsystem) — proven by a monitor-mode packet capture. The crypto is on main; the handshake is correct but
-  unexercised until WLFC lands.
+- **M5 — WPA2-PSK: WORKS on real hardware (host supplicant, DONE).** A full **JDK-free WPA2 supplicant** runs
+  the 4-way handshake in Java: SHA-1, HMAC-SHA1, PBKDF2 (PMK), PRF (PTK), AES-128 + RFC-3394 key-unwrap (GTK)
+  in `crypto/*` (17 vectors in `test/crypto/CryptoTest`), plus msg1..msg4 + `WLC_SET_KEY`. Config = `wsec=4`
+  (CCMP), `wpa_auth=0x80` (WPA2-PSK), `auth=0`, associate unkeyed, run the host 4-way, install PTK/GTK →
+  CCMP flows → DHCP → **HTTP 200 OK over WPA2**. The earlier "banked — firmware won't relay host EAPOL"
+  conclusion was **wrong**; five stacked bugs hid it, each found by pairing UART traces with monitor
+  captures of the 4-way:
+  1. EAPOL sent at BDC **priority 7** (AC_VO) was silently dropped on the unauthorized controlled port —
+     brcmfmac classifies EAPOL to **priority 0** (AC_BE); so do we now (msg2 finally leaves the chip).
+  2. `ourMac` was read at DHCP time, **after** `fourWay`, so the PTK/MIC (and msg2's Ethernet source) were
+     computed from a **zero** station MAC. Read it before the handshake.
+  3. The **authenticator address** must be msg1's Ethernet source (= the real BSSID, verified on air), not a
+     mis-parsed `WLC_GET_BSSID` (which returned the router's LAN MAC on this split-MAC ATT gateway).
+  4. PBKDF2(4096) ran **inside** `fourWay` after association, and `get_bssid`/`get_channel` ioctls sat
+     between msg1 and msg2 → **~14 s** latency. The AP restarts the 4-way with a fresh ANonce ~once a second
+     and silently drops stale replies. **Precompute the PMK pre-association** and keep the msg1→msg2 path
+     bare → **~6 ms**; the MIC was then verified bit-exact against an independent Python reference.
+  5. msg2's key-data **RSN IE capabilities** were `0x0000`, but the firmware's **association** RSN IE is
+     `0x000c` (PTKSA replay-counter field) — the AP compares the two and silently drops any mismatch (a
+     downgrade-protection check). Match it (confirmed from a beacon + association capture).
+  This firmware has **no in-chip supplicant** (`sup_wpa` → -23, `WLC_SET_WSEC_PMK` → -2), so the
+  `WPA2_OFFLOAD` path (`sup_wpa`=1 + PMK push, brcmfmac's PSK offload) is kept as a gated alternative but
+  disabled. The debugging that cracked this is a case study in "the UART can't see the air" — every capture
+  falsified one hypothesis (msg2 *is* transmitted → MIC *is* correct → it *is* timely and ACKed → RSN-IE
+  mismatch), converging on the exact cause.
 - **M6 — IRQ-driven RX (DONE, on main).** F2 receive moved off busy-polling onto the SDIO card interrupt
   (GIC SPI 158 = VC IRQ 62). The card interrupt is a **level** line, so it is gated at the **GIC**
   (`GICD_ICENABLER`/`ISENABLER`), *not* the SDHCI — masking at the SDHCI (Signal- or Status-Enable) never
