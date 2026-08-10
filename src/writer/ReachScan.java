@@ -31,7 +31,10 @@ public final class ReachScan
         "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
         "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/", "java/lang/ClassLoader",
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
-        "java/net/", "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
+        // java/net is loadable (M3 sockets); only the proxy path + www/ext stay trapped (never taken).
+        "java/net/SocksSocketImpl", "java/net/HttpConnectSocketImpl", "java/net/SocketCleanable",
+        "sun/net/www/", "sun/net/ext/",
+        "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
         "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)

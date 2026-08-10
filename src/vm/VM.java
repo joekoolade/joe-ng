@@ -1276,6 +1276,7 @@ public final class VM
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
+        if (dnsResolveAddr == 0L) { int u = dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
         if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
         if (superclassAddr == 0L) { long u = superclassOf(0L); }      // Class.superclass0() native (M4)
         if (currentThreadAddr == 0L) { long u = currentThreadObj(); } // Thread.currentThread0() native (M4)
@@ -1530,6 +1531,22 @@ public final class VM
         return true;
     }
 
+    /** True if the /etc/init manifest requests networking ({@code net=1}) -- the OS then brings the WiFi
+     *  interface up (join + DHCP) before launching, so the program's java.net finds an established link. */
+    static boolean manifestNet()
+    {
+        long e = fileFind(Magic.bytes("/etc/init"));
+        if (e == 0L)
+        {
+            return false;
+        }
+        long conf = Magic.load64(e + 16L);
+        int flen = (int) Magic.load64(e + 24L);
+        long v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
+        return n >= 1 && (Magic.load8(v) & 0xFF) == 0x31;   // "1"
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
@@ -1558,6 +1575,28 @@ public final class VM
             i += 1;
         }
         return 0L;
+    }
+
+    /**
+     * Resolve a guest {@code byte[]} hostname to an IPv4 address, returned as a big-endian int (a.b.c.d ->
+     * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs the overlay {@code java.net.InetAddress.resolve0}
+     * with the WiFi DNS resolver; the socket layer reads this int straight out of the InetAddress.
+     */
+    static int dnsResolve(long hostArrRef)
+    {
+        if (hostArrRef <= 0x1000L)                         // boot-time force-compile passes 0
+        {
+            return 0;
+        }
+        int hlen = (int) Magic.load64(hostArrRef + 16L);   // guest byte[] length
+        byte[] host = heapBytes(hostArrRef + 24L, hlen);
+        long ipOut = Heap.allocData(4);
+        if (!board.cyw43.Cyw43.dnsResolve(host, ipOut))
+        {
+            return 0;
+        }
+        return ((Magic.load8(ipOut) & 0xFF) << 24) | ((Magic.load8(ipOut + 1) & 0xFF) << 16)
+                | ((Magic.load8(ipOut + 2) & 0xFF) << 8) | (Magic.load8(ipOut + 3) & 0xFF);
     }
 
     static void printStackTrace(long self)
@@ -2299,6 +2338,7 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
+    static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
@@ -2512,6 +2552,16 @@ public final class VM
                 Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
             }
             return;
+        }
+
+        // OS networking service: if the manifest program needs the network (net=1) and we're on real HW,
+        // bring the WiFi interface UP (join + DHCP + ARP, publishing net.Ip) as an OS service BEFORE the
+        // launch -- so a program's java.net.Socket finds an established link. Connectivity only, no demo.
+        if (Uart.coreHz > 10000000 && manifestNet())
+        {
+            startWifiScheduler();                          // scheduler + IRQs (IRQ-driven RX + blocking sockets)
+            board.cyw43.Cyw43.runDemo = false;             // stop the bring-up after connectivity, no HTTP demo
+            board.bcm2711.Wifi.bringUp();
         }
 
         // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,

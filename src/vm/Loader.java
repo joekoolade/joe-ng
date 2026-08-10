@@ -1999,7 +1999,13 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/ServiceLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/"))
+                // java/net is LOADABLE now (M3: stock java.net over net.Tcp); only the proxy path +
+                // www/ext are statically present but never taken on a direct connect -- keep them trapped.
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/SocksSocketImpl"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/HttpConnectSocketImpl"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/SocketCleanable"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
@@ -3931,6 +3937,10 @@ public final class Loader
         if (utf8IsStr(classOff, Magic.bytes("java/io/FileInputStream")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/net/InetAddress")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
         {
