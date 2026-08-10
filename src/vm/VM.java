@@ -2107,6 +2107,20 @@ public final class VM
                     Loader.printClassName(Magic.load64(xt));
                 }
                 Uart.putc(0x0A);
+                // Uncaught: print the captured stack trace (method + SourceFile + line) as printStackTrace does.
+                int fi = 0;
+                while (fi < 8)
+                {
+                    long fpc = Magic.load64(exc + 16L + fi * 8L);
+                    if (fpc == 0L)
+                    {
+                        break;
+                    }
+                    Uart.write(Magic.bytes("  at "));
+                    Loader.printFrameAt(fpc);
+                    Uart.putc(0x0A);
+                    fi += 1;
+                }
                 while (true)
                 {
                     Magic.wfe();    // uncaught at the top

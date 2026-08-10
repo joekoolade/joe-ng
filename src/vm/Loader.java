@@ -30,6 +30,8 @@ public final class Loader
     private static long gp;         // parse cursor
     private static int[] gcp;       // byte offset of each constant-pool entry body
     private static byte[] gbytes;   // heap copy of the current class, for the shared ClassReader
+    private static int[] gBcToWord; // last compiled method's bci -> machine word offset (Baseline.bcToWord)
+    private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
     private static int gcodeLen;    // length of the located method's bytecode
@@ -81,6 +83,8 @@ public final class Loader
     private static int[] rgNameOff;    // method name Utf8 offset
     private static int[] rgDescOff;    // descriptor Utf8 offset
     private static long[] rgBuf;    // compiled buffer address
+    private static long[] rgLine;   // per method: address of its {u32 count, (u32 wordOff, u32 line)*} table, or 0
+    private static long[] rgSrc;    // per method: address of its class's SourceFile filename Utf8, or 0
     private static int rgCount;
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
@@ -824,6 +828,14 @@ public final class Loader
             return;
         }
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        // Force-load the exceptions the JIT's implicit checks throw without a bytecode `new` (null/bounds/div/
+        // cast/negative-array). Otherwise a program that never NAMES them leaves them unloaded, so newExc gives
+        // the thrown object a TIB of 0 -> uncatchable (instanceOf can't walk its type chain) and nameless in traces.
+        pullClass(Magic.bytes("java/lang/NullPointerException"));
+        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+        pullClass(Magic.bytes("java/lang/ArithmeticException"));
+        pullClass(Magic.bytes("java/lang/ClassCastException"));
+        pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
@@ -838,9 +850,7 @@ public final class Loader
             Uart.putc(0x0A);
             return;
         }
-        VM.unwindLog = 1;                                   // #43 diag: name the first exceptions thrown in main()
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
-        VM.unwindLog = 0;
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
@@ -1257,6 +1267,8 @@ public final class Loader
         rgNameOff = new int[MAXREG];
         rgDescOff = new int[MAXREG];
         rgBuf = new long[MAXREG];
+        rgLine = new long[MAXREG];
+        rgSrc = new long[MAXREG];
         rgCount = 0;
         sgBase = new long[MAXREG];
         sgClassOff = new int[MAXREG];
@@ -2310,6 +2322,18 @@ public final class Loader
             writeName(rgBase[bestReg] + rgClassOff[bestReg] + 2, u2(rgBase[bestReg] + rgClassOff[bestReg]));
             Uart.putc(0x2E);
             writeName(rgBase[bestReg] + rgNameOff[bestReg] + 2, u2(rgBase[bestReg] + rgNameOff[bestReg]));
+            int line = lineAtOffset(rgLine[bestReg], (int) ((addr - bestBuf) >> 2));   // (pc-base)/4 = word offset
+            if (rgSrc[bestReg] != 0L)
+            {
+                Uart.putc(0x28);                                 // '('
+                writeName(rgSrc[bestReg] + 2, u2(rgSrc[bestReg]));   // SourceFile filename
+                if (line >= 0)
+                {
+                    Uart.putc(0x3A);                             // ':'
+                    VM.printDec(line);
+                }
+                Uart.putc(0x29);                                 // ')'
+            }
         }
         else
         {
@@ -2317,8 +2341,11 @@ public final class Loader
             writeName(pdBase[pd] + pdNameOff[pd] + 2, u2(pdBase[pd] + pdNameOff[pd]));
             Uart.write(Magic.bytes(".<clinit>"));
         }
-        Uart.putc(0x2B);                                         // '+'  (printHex already prints the "0x" prefix)
+        Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method
+        VM.printHex(addr);                                       // printHex already prints the "0x" prefix
+        Uart.write(Magic.bytes(" +"));
         VM.printHex(addr - bestBuf);
+        Uart.putc(0x5D);                                         // ']'
     }
 
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
@@ -2622,7 +2649,8 @@ public final class Loader
         gcpCount = ClassReader.cpCount(gbytes);
         gcp = new int[gcpCount];
         gcpTag = new int[gcpCount];
-        gp = base + ClassReader.constantPool(gbytes, gcp, gcpTag);
+        gAfterCp = ClassReader.constantPool(gbytes, gcp, gcpTag);   // stable: gp is later reused as a walk cursor
+        gp = base + gAfterCp;
     }
 
     /** Copy an embedded blob onto the heap so the shared reader can index it. */
@@ -2941,6 +2969,8 @@ public final class Loader
     private static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
+    private static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
+    private static long[] mSrc;       // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
     private static int[] mLocals;     // ... its max_locals
     private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
     private static int[] mStatic;     // ... 1 if static
@@ -3624,6 +3654,8 @@ public final class Loader
         mCode = new long[MAXM];
         mLen = new int[MAXM];
         mBuf = new long[MAXM];
+        mLine = new long[MAXM];
+        mSrc = new long[MAXM];
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
@@ -3704,6 +3736,7 @@ public final class Loader
             gHCatchCp[h] = ec[h];
             h += 1;
         }
+        gBcToWord = b.bcToWord();                       // bci -> machine word offset, for the stack-trace line table
         return words;
     }
 
@@ -3723,6 +3756,8 @@ public final class Loader
         relocRecording = 1;                             // record unresolved cross-class sites at their real address
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
         relocRecording = 0;
+        mLine[i] = buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
+        mSrc[i] = sourceFileAddr();
         long out = mBuf[i];
         int k = 0;
         while (k < words.length)
@@ -3762,15 +3797,125 @@ public final class Loader
         return 0L;                                       // not one of this class's compiled methods
     }
 
+    /** Index into m*[] of the method whose bytecode is at {@code code}, or -1. */
+    private static int methodIndexOf(long code)
+    {
+        int i = 0;
+        while (i < mCount)
+        {
+            if (mCode[i] == code)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    // ----- stack-trace debug info: PC -> source line (SourceFile + LineNumberTable) -----
+
+    /** Address of the current class's SourceFile filename Utf8 (persists in the blob), or 0 if none. */
+    private static long sourceFileAddr()
+    {
+        int off = ClassReader.sourceFileNameOff(gbytes, gcp, gAfterCp, Magic.bytes("SourceFile"));
+        return off < 0 ? 0L : gbase + off;
+    }
+
+    /**
+     * Build method {@code i}'s persistent line table from {@code gBcToWord} (bci -> machine word offset, just
+     * compiled) and the method's LineNumberTable. Layout: {@code {u32 count, (u32 wordOffset, u32 line) * count}}
+     * -- one entry per source-line transition, in code-heap memory (persists, like the method buffer). The
+     * frame resolver finds the largest {@code wordOffset <= (pc-base)/4} and reads its line. Returns 0 if the
+     * class was compiled without line info (no {@code -g}).
+     */
+    private static long buildLineTable(int i)
+    {
+        if (gBcToWord == null)
+        {
+            return 0L;
+        }
+        int codeBodyOff = (int) (mCode[i] - gbase) - 8;   // Code attr body (max_stack) sits 8 bytes before code[]
+        int lntOff = ClassReader.lineNumberTableOff(gbytes, gcp, codeBodyOff, Magic.bytes("LineNumberTable"));
+        if (lntOff < 0)
+        {
+            return 0L;
+        }
+        int n = 0;
+        int prev = -1;
+        int bci = 0;
+        while (bci < gBcToWord.length)                    // pass 1: count line transitions
+        {
+            if (gBcToWord[bci] >= 0)
+            {
+                int line = ClassReader.lineForBci(gbytes, lntOff, bci);
+                if (line != prev)
+                {
+                    n += 1;
+                    prev = line;
+                }
+            }
+            bci += 1;
+        }
+        long tab = Heap.allocCode(4 + n * 8);
+        Magic.store32(tab, n);
+        long w = tab + 4;
+        prev = -1;
+        bci = 0;
+        while (bci < gBcToWord.length)                    // pass 2: emit (wordOffset, line) at each transition
+        {
+            if (gBcToWord[bci] >= 0)
+            {
+                int line = ClassReader.lineForBci(gbytes, lntOff, bci);
+                if (line != prev)
+                {
+                    Magic.store32(w, gBcToWord[bci]);
+                    Magic.store32(w + 4, line);
+                    w += 8;
+                    prev = line;
+                }
+            }
+            bci += 1;
+        }
+        return tab;
+    }
+
+    /** Source line for machine word offset {@code wordOff} within a method's line table, or -1. */
+    private static int lineAtOffset(long tab, int wordOff)
+    {
+        if (tab == 0L)
+        {
+            return -1;
+        }
+        int n = Magic.load32(tab);
+        long w = tab + 4;
+        int best = -1;
+        int bestOff = -1;
+        int i = 0;
+        while (i < n)
+        {
+            int off = Magic.load32(w);
+            if (off <= wordOff && off > bestOff)
+            {
+                bestOff = off;
+                best = Magic.load32(w + 4);
+            }
+            w += 8;
+            i += 1;
+        }
+        return best;
+    }
+
     // ----- cross-class linking (global method registry) --------------------
     /** Register a compiled method so other classes can link to it by class+name+descriptor. */
-    private static void register(long base, int classOff, int nameOff, int descOff, long buf)
+    private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr)
     {
         rgBase[rgCount] = base;
         rgClassOff[rgCount] = classOff;
         rgNameOff[rgCount] = nameOff;
         rgDescOff[rgCount] = descOff;
         rgBuf[rgCount] = buf;
+        rgLine[rgCount] = lineTab;
+        rgSrc[rgCount] = srcAddr;
         rgCount += 1;
     }
 
@@ -3787,10 +3932,10 @@ public final class Loader
             long code = findCode(gbase, p + 8, attrs);
             if (code != 0L)
             {
-                long buf = bufOf(code);
-                if (buf != 0L)
+                int mi = methodIndexOf(code);
+                if (mi >= 0)
                 {
-                    register(gbase, gThisNameOff, gcp[u2(p + 2)], gcp[u2(p + 4)], buf);
+                    register(gbase, gThisNameOff, gcp[u2(p + 2)], gcp[u2(p + 4)], mBuf[mi], mLine[mi], mSrc[mi]);
                 }
             }
             p = skipAttributes(p + 8, attrs);

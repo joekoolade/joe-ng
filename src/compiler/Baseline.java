@@ -2754,11 +2754,18 @@ public final class Baseline
     private int[] hEndW;
     private int[] hHandlerW;
 
+    // Bytecode-index -> machine word offset (from method start), filled by compileBody. bcToWord[bci] is the
+    // word offset of the first instruction of the bytecode at bci, or -1 for non-instruction-boundary bytes /
+    // unreached code. The stack-trace resolver inverts it: PC -> word offset -> bci -> source line (via the
+    // classfile LineNumberTable). Same array the branch fixups use; captured here for the driver.
+    private int[] lastBcToWord;
+
     public int frameSize() { return frameSize; }
     public int handlerCount() { return exCount; }
     public int handlerStartWord(int i) { return hStartW[i]; }
     public int handlerEndWord(int i) { return hEndW[i]; }
     public int handlerWord(int i) { return hHandlerW[i]; }
+    public int[] bcToWord() { return lastBcToWord; }
 
     /**
      * Compile one method body to A64 words at absolute {@code base}; {@code isEntry}
@@ -2878,6 +2885,7 @@ public final class Baseline
             hEndW[k] = exEndPc[k] < code.length ? bcToWord[exEndPc[k]] : codeWords;
             hHandlerW[k] = bcToWord[exHandlerPc[k]];
         }
+        lastBcToWord = bcToWord;                         // capture for the stack-trace resolver (PC -> bci -> line)
         return cb.toWords();
     }
 
