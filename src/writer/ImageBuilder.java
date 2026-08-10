@@ -3,6 +3,7 @@ package writer;
 import asm.A64;
 import asm.CodeBuffer;
 import classfile.ClassFile;
+import classfile.ClassReader;
 import compiler.BaselineCompiler;
 import compiler.BaselineCompiler.CompiledMethod;
 import objectmodel.ObjectModel;
@@ -100,6 +101,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int frameCount = 0;                                          // unwind-table entry counts
         int handlerCount = 0;
         Vec<String> worklist = new Vec<>();
+        StrIntTable lineTabIndex = new StrIntTable();   // stack-trace debug: method key -> position in lineTabList
+        Vec<int[]> lineTabList = new Vec<>();           // per method: {wordOffset, line}* transitions (machine-independent)
         worklist.add(entryKey);
         while (!worklist.isEmpty())
         {
@@ -110,6 +113,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
+            lineTabIndex.put(k, lineTabList.size());
+            lineTabList.add(buildLineTable(cm.bcToWord(), k));
             var _r1 = cm.relocs().callSites();
             for (int _ri1 = 0; _ri1 < _r1.size(); _ri1++)
             {
@@ -311,6 +316,44 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             fileBytesWord[i] = cur;
             cur += align8Words(files.get(i).bytes().length);
         }
+        // --- image symbol table (stack traces): per image method, in sizeWords order, an entry
+        //     {codeStart, codeEnd, nameAddr, srcAddr, lineAddr} (5 longs) + its Utf8 name/source strings +
+        //     line table {count, (wordOffset, line)*}. Loader.printFrameAt scans it to resolve a VM/driver PC. ---
+        int symCount = sizeWords.size();
+        byte[][] symName = new byte[symCount][];
+        byte[][] symSrc = new byte[symCount][];
+        int[][] symLine = new int[symCount][];
+        for (int i = 0; i < symCount; i++)
+        {
+            String k = sizeWords.keyAt(i);
+            if (k.equals(INIT_CLASSES))
+            {
+                symName[i] = utf8("vm/VM.initClasses");
+                symSrc[i] = utf8("");
+                symLine[i] = new int[0];
+            }
+            else
+            {
+                symName[i] = utf8(k.substring(0, k.indexOf('(')));   // "owner/Class.method"
+                String src = lookup(k).cf.sourceFile();
+                symSrc[i] = utf8(src == null ? "" : src);
+                symLine[i] = lineTabList.get(lineTabIndex.get(k));
+            }
+        }
+        int symTableWord = cur;
+        cur += symCount * 10;                                       // 5 longs per entry
+        int[] symNameWord = new int[symCount];
+        int[] symSrcWord = new int[symCount];
+        int[] symLineWord = new int[symCount];
+        for (int i = 0; i < symCount; i++)
+        {
+            symNameWord[i] = cur;
+            cur += align8Words(symName[i].length);
+            symSrcWord[i] = cur;
+            cur += align8Words(symSrc[i].length);
+            symLineWord[i] = cur;
+            cur += 1 + symLine[i].length;                          // {count}{(off,line) ints}
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -463,6 +506,27 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, w + 4, e[2]);
             writeLong(image, w + 6, e[3]);
         }
+        // --- image symbol table fill (stack traces) ---
+        for (int i = 0; i < symCount; i++)
+        {
+            String k = sizeWords.keyAt(i);
+            int base = wordOffset.get(k);
+            writeBytes(image, symNameWord[i], symName[i]);
+            writeBytes(image, symSrcWord[i], symSrc[i]);
+            image[symLineWord[i]] = symLine[i].length / 2;         // count = number of (offset, line) pairs
+            for (int j = 0; j < symLine[i].length; j++)
+            {
+                image[symLineWord[i] + 1 + j] = symLine[i][j];
+            }
+            int w = symTableWord + i * 10;
+            writeLong(image, w, addr(base));
+            writeLong(image, w + 2, addr(base + sizeWords.get(k)));
+            writeLong(image, w + 4, addr(symNameWord[i]));
+            writeLong(image, w + 6, addr(symSrcWord[i]));
+            writeLong(image, w + 8, addr(symLineWord[i]));
+        }
+        fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
+        fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
         fillStatic(image, staticWord, "vm/VM.frameCount",   frameEntries.size());
         fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
@@ -683,7 +747,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         w.add(A64.ret());
         int[] words = w.toArray();
         Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
-        return new CompiledMethod(words, relocs, frame, handlers);
+        return new CompiledMethod(words, relocs, frame, handlers, null);   // synthetic: no bytecode -> no line info
     }
 
     /** Image words a byte[] object for {@code b} occupies: header(16)+length(8)+bytes, 8-aligned. */
@@ -712,6 +776,60 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static int align8Words(int len)
     {
         return ((len + 7) & ~7) / 4;
+    }
+
+    /** A {@code {u2 length}{bytes}} Utf8 run (as the loader's registry stores names), so the metal
+     *  {@code writeName(addr+2, u2(addr))} formatter prints it uniformly. */
+    private static byte[] utf8(String s)
+    {
+        byte[] b = s.getBytes();
+        byte[] u = new byte[2 + b.length];
+        u[0] = (byte) (b.length >> 8);
+        u[1] = (byte) b.length;
+        System.arraycopy(b, 0, u, 2, b.length);
+        return u;
+    }
+
+    private static final byte[] LINE_NUMBER_TABLE = "LineNumberTable".getBytes();
+
+    /**
+     * Stack-trace line table for an image method: {@code {wordOffset, line}} pairs, one per source-line
+     * transition, zipping the core's bci-&gt;machine-offset map ({@code bcToWord}) with the classfile
+     * LineNumberTable. Machine offsets are placement-independent, so this is valid for the real-base layout.
+     * Empty (no debug info) if the method has no code, no Code offset, or no LineNumberTable.
+     */
+    private int[] buildLineTable(int[] bcToWord, String key)
+    {
+        if (bcToWord == null)
+        {
+            return new int[0];
+        }
+        Resolved r = lookup(key);
+        if (r.method.code == null || r.method.codeBodyOff < 0)
+        {
+            return new int[0];
+        }
+        int lntOff = ClassReader.lineNumberTableOff(r.cf.bytes(), r.cf.cpOff(), r.method.codeBodyOff, LINE_NUMBER_TABLE);
+        if (lntOff < 0)
+        {
+            return new int[0];
+        }
+        IntVec out = new IntVec();
+        int prev = -1;
+        for (int bci = 0; bci < bcToWord.length; bci++)
+        {
+            if (bcToWord[bci] >= 0)
+            {
+                int line = ClassReader.lineForBci(r.cf.bytes(), lntOff, bci);
+                if (line != prev)
+                {
+                    out.add(bcToWord[bci]);
+                    out.add(line);
+                    prev = line;
+                }
+            }
+        }
+        return out.toArray();
     }
 
     /** Whether {@code names} already holds {@code name} (small lists — linear is fine). */

@@ -2314,7 +2314,10 @@ public final class Loader
         }
         if (bestReg < 0 && bestClin < 0)
         {
-            Uart.write(Magic.bytes("<image/native>"));               // image (VM) code has no on-metal symbol map
+            if (!printImageFrameAt(addr))                            // writer-compiled VM/driver code: image symbol table
+            {
+                Uart.write(Magic.bytes("<image/native>"));
+            }
             return;
         }
         if (bestReg >= 0)
@@ -2346,6 +2349,55 @@ public final class Loader
         Uart.write(Magic.bytes(" +"));
         VM.printHex(addr - bestBuf);
         Uart.putc(0x5D);                                         // ']'
+    }
+
+    /**
+     * Resolve a writer-compiled (image) code address via the embedded image symbol table (built by
+     * ImageBuilder): entries {@code {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}} (5 longs). Prints
+     * {@code owner/Class.method(SourceFile.java:line) [pc=... +off]} like a loaded frame, or returns false
+     * if {@code addr} is in no image method. Linear scan (traces are rare).
+     */
+    private static boolean printImageFrameAt(long addr)
+    {
+        long tab = VM.imageSymTable;
+        if (tab == 0L)
+        {
+            return false;
+        }
+        long n = VM.imageSymCount;
+        long i = 0;
+        while (i < n)
+        {
+            long e = tab + i * 40L;                              // 5 longs per entry
+            long start = Magic.load64(e);
+            if (addr >= start && addr < Magic.load64(e + 8L))
+            {
+                long nameAddr = Magic.load64(e + 16L);
+                long srcAddr = Magic.load64(e + 24L);
+                writeName(nameAddr + 2, u2(nameAddr));           // "owner/Class.method"
+                int srcLen = u2(srcAddr);
+                if (srcLen > 0)
+                {
+                    Uart.putc(0x28);                             // '('
+                    writeName(srcAddr + 2, srcLen);              // SourceFile filename
+                    int line = lineAtOffset(Magic.load64(e + 32L), (int) ((addr - start) >> 2));
+                    if (line >= 0)
+                    {
+                        Uart.putc(0x3A);                         // ':'
+                        VM.printDec(line);
+                    }
+                    Uart.putc(0x29);                             // ')'
+                }
+                Uart.write(Magic.bytes(" [pc="));
+                VM.printHex(addr);
+                Uart.write(Magic.bytes(" +"));
+                VM.printHex(addr - start);
+                Uart.putc(0x5D);
+                return true;
+            }
+            i += 1;
+        }
+        return false;
     }
 
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest

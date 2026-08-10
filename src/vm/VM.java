@@ -1940,6 +1940,7 @@ public final class VM
     // Addresses/counts of the handler and frame tables, filled by the writer.
     static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
     static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
+    static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
     // A second frame table for methods JIT-compiled at runtime: their code isn't in
     // the image, so the writer can't describe them. The loader appends one entry per
