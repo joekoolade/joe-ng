@@ -44,8 +44,9 @@ public final class ClassFile
         public final boolean isStatic;
         public final byte[] code;
         public final ExceptionEntry[] exceptions;
+        public final int codeBodyOff;  // Code attribute body offset (at max_stack), for the LineNumberTable, or -1
         Method(String name, String descriptor, int descOff, boolean isStatic, int maxStack, int maxLocals,
-               byte[] code, ExceptionEntry[] exceptions)
+               byte[] code, ExceptionEntry[] exceptions, int codeBodyOff)
         {
             this.name = name;
             this.descriptor = descriptor;
@@ -55,6 +56,7 @@ public final class ClassFile
             this.maxLocals = maxLocals;
             this.code = code;
             this.exceptions = exceptions;
+            this.codeBodyOff = codeBodyOff;
         }
     }
 
@@ -85,6 +87,7 @@ public final class ClassFile
 
     private final byte[] bytes;   // the raw classfile, retained for the shared ClassReader view
     private final int[] cpOff;    // byte offset of each constant-pool entry body
+    private final int afterCp;    // offset just past the constant pool (for the class-level SourceFile attribute)
     private final int[] tag;
     private final int[] ref1;     // first index-ish operand (or int value / utf8 slot)
     private final int[] ref2;     // second index-ish operand
@@ -111,6 +114,15 @@ public final class ClassFile
     public int[] cpTag()
     {
         return tag;
+    }
+
+    private static final byte[] SOURCE_FILE = "SourceFile".getBytes();
+
+    /** The SourceFile filename (e.g. {@code "Foo.java"}), or null if the class has no SourceFile attribute. */
+    public String sourceFile()
+    {
+        int body = ClassReader.attrBodyByName(bytes, cpOff, ClassReader.classAttrsStart(bytes, afterCp), SOURCE_FILE);
+        return body < 0 ? null : utf8(ClassReader.u2(bytes, body));
     }
 
     public String thisClassName()
@@ -417,7 +429,7 @@ public final class ClassFile
         bytes = b;
         cpOff = new int[n];
         tag = new int[n];
-        int afterCp = ClassReader.constantPool(b, cpOff, tag);
+        afterCp = ClassReader.constantPool(b, cpOff, tag);
 
         ref1 = new int[n];
         ref2 = new int[n];
@@ -539,12 +551,14 @@ public final class ClassFile
             int maxStack = 0;
             int maxLocals = 0;
             byte[] code = null;
+            int codeBodyOff = -1;
             ExceptionEntry[] exceptions = new ExceptionEntry[0];
             for (int a = 0; a < attrs; a++)
             {
                 int body = p + 6;                               // name(2) + length(4)
                 if (utf8(ClassReader.u2(b, p)).equals("Code"))
                 {
+                    codeBodyOff = body;
                     maxStack = ClassReader.u2(b, body);
                     maxLocals = ClassReader.u2(b, body + 2);
                     int codeLen = ClassReader.u4(b, body + 4);
@@ -557,7 +571,7 @@ public final class ClassFile
                 }
                 p = body + ClassReader.u4(b, p + 2);            // next attribute
             }
-            ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions);
+            ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions, codeBodyOff);
         }
         return ms;
     }

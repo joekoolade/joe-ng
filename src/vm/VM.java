@@ -1940,6 +1940,7 @@ public final class VM
     // Addresses/counts of the handler and frame tables, filled by the writer.
     static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
     static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
+    static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
     // A second frame table for methods JIT-compiled at runtime: their code isn't in
     // the image, so the writer can't describe them. The loader appends one entry per
@@ -2044,6 +2045,40 @@ public final class VM
     static int unwindLog;                                  // #43: when != 0, log the first few exception throws
     static int unwindLogged;
 
+    /**
+     * Record the throw-site frame chain into {@code exc}'s inline backtrace (Throwable.bt0..bt7 @ exc+16..+72),
+     * first throw only (a re-throw / cross-method unwind won't overwrite). {@code pc} is a code address in the
+     * throwing method, {@code sp} its stack pointer. The metal JIT calls this at every {@code athrow} (via the
+     * CAPTURE_TRACE helper) so {@code printStackTrace()} has frames even for a same-method inline catch;
+     * {@link #unwind} also calls it (idempotent) for the uncaught path. Walks saved LRs with {@link #frameSizeAt}.
+     */
+    static void captureTrace(long exc, long pc, long sp)
+    {
+        if (exc <= 0x1000L || Magic.load64(exc + 16L) != 0L)   // boot force-compile passes 0; already captured -> keep
+        {
+            return;
+        }
+        long cpc = pc;
+        long csp = sp;
+        int n = 0;
+        while (n < 8 && cpc > 0x1000L)
+        {
+            Magic.store64(exc + 16L + n * 8L, cpc);
+            n += 1;
+            long cfs = frameSizeAt(cpc);
+            if (cfs == 0L)
+            {
+                break;                                         // top of the JIT/image stack
+            }
+            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            csp += cfs;
+        }
+        if (n < 8)
+        {
+            Magic.store64(exc + 16L + n * 8L, 0L);             // 0-terminate the backtrace
+        }
+    }
+
     static void unwind(long exc, long pc, long sp)
     {
         if (unwindLog != 0 && unwindLogged < 24)            // #43: name the FIRST exceptions thrown (root NPE first)
@@ -2061,31 +2096,7 @@ public final class VM
             Loader.reportMethodAt(pc);
             Uart.putc(0x0A);
         }
-        // Capture the throw-site frame chain into exc's inline backtrace (Throwable.bt0..bt7 at exc+16..+72), first
-        // throw only. Every thrown object is a guest Throwable, so exc+16 is bt0. Reuse the same frame walk the
-        // handler search below does (saved LR at [sp], frameSizeAt to pop) -> this is the printStackTrace() data.
-        if (exc > 0x1000L && Magic.load64(exc + 16L) == 0L)
-        {
-            long cpc = pc;
-            long csp = sp;
-            int n = 0;
-            while (n < 8 && cpc > 0x1000L)
-            {
-                Magic.store64(exc + 16L + n * 8L, cpc);
-                n += 1;
-                long cfs = frameSizeAt(cpc);
-                if (cfs == 0L)
-                {
-                    break;                              // top of the JIT/image stack
-                }
-                cpc = Magic.load64(csp) - 4L;           // caller's return address (the call site)
-                csp += cfs;
-            }
-            if (n < 8)
-            {
-                Magic.store64(exc + 16L + n * 8L, 0L);  // 0-terminate the backtrace
-            }
-        }
+        captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
         while (true)
         {
             long h = findHandler(pc, exc);
@@ -2107,6 +2118,20 @@ public final class VM
                     Loader.printClassName(Magic.load64(xt));
                 }
                 Uart.putc(0x0A);
+                // Uncaught: print the captured stack trace (method + SourceFile + line) as printStackTrace does.
+                int fi = 0;
+                while (fi < 8)
+                {
+                    long fpc = Magic.load64(exc + 16L + fi * 8L);
+                    if (fpc == 0L)
+                    {
+                        break;
+                    }
+                    Uart.write(Magic.bytes("  at "));
+                    Loader.printFrameAt(fpc);
+                    Uart.putc(0x0A);
+                    fi += 1;
+                }
                 while (true)
                 {
                     Magic.wfe();    // uncaught at the top
@@ -2411,6 +2436,7 @@ public final class VM
     static long instanceOfAddr;        // VM.instanceOf(JJ)I
     static long checkCastAddr;         // VM.checkCast(JJ)J
     static long unwindAddr;            // VM.unwind(JJJ)V
+    static long captureTraceAddr;      // VM.captureTrace(JJJ)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
     static long startThreadAddr;       // VM.startThread(J)V
     static long semWaitAddr;           // VM.semWait(I)V

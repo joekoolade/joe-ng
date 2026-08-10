@@ -270,4 +270,99 @@ public final class ClassReader
         }
         return true;
     }
+
+    // ----- debug attributes: SourceFile + LineNumberTable (for stack traces) -----
+    // JDK-free, so an attribute NAME to match is supplied by the caller as raw ASCII bytes
+    // (host: "SourceFile".getBytes(); metal: Magic.bytes("SourceFile")).
+
+    /** True if the Utf8 at {@code utf8Off} equals the ASCII bytes {@code name}. */
+    public static boolean utf8IsAscii(byte[] b, int utf8Off, byte[] name)
+    {
+        int len = u2(b, utf8Off);
+        if (len != name.length)
+        {
+            return false;
+        }
+        int j = 0;
+        while (j < len)
+        {
+            if (u1(b, utf8Off + 2 + j) != (name[j] & 0xFF))
+            {
+                return false;
+            }
+            j += 1;
+        }
+        return true;
+    }
+
+    /** Offset of the class-level attribute table's {@code attribute_count} (just past the methods table). */
+    public static int classAttrsStart(byte[] b, int afterCp)
+    {
+        return skipMembers(b, methodsStart(b, afterCp));
+    }
+
+    /**
+     * Body offset of the attribute named {@code name} in the attribute table whose {@code attribute_count} is
+     * at {@code attrCountPos}, or -1 if absent. {@code off} is the cp-offset table (so the name index resolves).
+     * The returned offset points just past this attribute's {@code name(2) + length(4)} header.
+     */
+    public static int attrBodyByName(byte[] b, int[] off, int attrCountPos, byte[] name)
+    {
+        int n = u2(b, attrCountPos);
+        int p = attrCountPos + 2;
+        int i = 0;
+        while (i < n)
+        {
+            if (utf8IsAscii(b, off[u2(b, p)], name))
+            {
+                return p + 6;
+            }
+            p += 6 + u4(b, p + 2);
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** Utf8 offset of the {@code SourceFile} filename, or -1 if the class has no SourceFile attribute.
+     *  {@code sourceFileName} = the ASCII bytes {@code "SourceFile"}. */
+    public static int sourceFileNameOff(byte[] b, int[] off, int afterCp, byte[] sourceFileName)
+    {
+        int body = attrBodyByName(b, off, classAttrsStart(b, afterCp), sourceFileName);
+        return body < 0 ? -1 : off[u2(b, body)];
+    }
+
+    /**
+     * Offset of the {@code LineNumberTable} body (its {@code line_number_table_length}) within a method's
+     * {@code Code} attribute, or -1. {@code codeBody} points at the Code attribute body (max_stack), i.e. just
+     * past the Code attribute's own {@code name(2)+length(4)}. {@code lineNumberTableName} = {@code "LineNumberTable"}.
+     */
+    public static int lineNumberTableOff(byte[] b, int[] off, int codeBody, byte[] lineNumberTableName)
+    {
+        int codeLen = u4(b, codeBody + 4);              // max_stack(2) + max_locals(2) + code_length(4)
+        int p = codeBody + 8 + codeLen;                 // past code[]
+        p += 2 + u2(b, p) * 8;                          // past exception_table (u2 count + count*8)
+        return attrBodyByName(b, off, p, lineNumberTableName);
+    }
+
+    /** Source line for bytecode index {@code bci} from a LineNumberTable body (largest start_pc <= bci), or -1. */
+    public static int lineForBci(byte[] b, int lntBody, int bci)
+    {
+        int n = u2(b, lntBody);
+        int p = lntBody + 2;
+        int best = -1;
+        int bestPc = -1;
+        int i = 0;
+        while (i < n)
+        {
+            int startPc = u2(b, p);
+            if (startPc <= bci && startPc > bestPc)
+            {
+                bestPc = startPc;
+                best = u2(b, p + 2);
+            }
+            p += 4;
+            i += 1;
+        }
+        return best;
+    }
 }

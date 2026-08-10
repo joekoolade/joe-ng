@@ -55,12 +55,18 @@ public interface Symbols
     int NEW_AIOOBE = 20;        // vm/VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException (bad index)
     int GET_CLASS = 21;         // vm/VM.getClassOf(J)J — Object.getClass() -> the receiver's Class mirror
     int ARRAY_CLONE = 22;       // vm/VM.arrayClone(J)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
+    int CAPTURE_TRACE = 23;     // vm/VM.captureTrace(JJJ)V — fill exc's backtrace at the throw site (all throws)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
 
     /** Emit a {@code BL} to a synthesised runtime helper (one of the ids above). */
     void callHelper(CodeBuffer cb, int helper);
+
+    /** True if {@code athrow} should record the throw-site backtrace into the exception (so
+     *  {@code printStackTrace()} has frames even for a same-method inline catch). Metal JIT only;
+     *  the image writer's exceptions are internal and its methods carry no on-metal line info. */
+    default boolean captureTraces() { return false; }
 
     /** Load into {@code reg} the TIB address of the class at {@code classCp} (for {@code new}). */
     void tib(CodeBuffer cb, int reg, int classCp);

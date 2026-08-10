@@ -48,7 +48,8 @@ public final class BaselineCompiler
     }
 
     /** A single compiled method: its words, relocation fixups, and unwind metadata. */
-    public record CompiledMethod(int[] words, Relocations relocs, int frameSize, Vec<HandlerRange> handlers) {}
+    public record CompiledMethod(int[] words, Relocations relocs, int frameSize, Vec<HandlerRange> handlers,
+                                 int[] bcToWord) {}
     /** A try/catch region as word indices, for the writer's machine-PC handler table. */
     public record HandlerRange(int startWord, int endWord, int handlerWord, String catchClass) {}
     /** A {@code BL} site: word index within the method, and the callee key. */
@@ -111,7 +112,7 @@ public final class BaselineCompiler
             handlers.add(new HandlerRange(core.handlerStartWord(i), core.handlerEndWord(i),
                                           core.handlerWord(i), catchClass));
         }
-        return new CompiledMethod(words, syms.relocations(), core.frameSize(), handlers);
+        return new CompiledMethod(words, syms.relocations(), core.frameSize(), handlers, core.bcToWord());
     }
 
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
