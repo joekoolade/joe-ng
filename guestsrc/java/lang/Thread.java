@@ -52,6 +52,17 @@ public class Thread implements Runnable
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.currentThreadObj}): the current task's Thread. */
     private static native Thread currentThread0();
 
+    /**
+     * joe-ng has no virtual threads -- every task is a platform thread. Must exist as a real method so an
+     * {@code invokevirtual isVirtual()} resolves to a proper vtable slot: {@code sun.nio.ch.NativeThread
+     * .current()} calls {@code Thread.currentThread().isVirtual()}, and a missing method would dispatch
+     * through a bogus slot into garbage code (a data-abort fault).
+     */
+    public boolean isVirtual()
+    {
+        return false;
+    }
+
     public String getName()
     {
         return name;

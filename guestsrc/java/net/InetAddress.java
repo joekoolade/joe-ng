@@ -20,7 +20,9 @@ public class InetAddress
     public static InetAddress getByName(String host) throws UnknownHostException
     {
         int dotted = parseDotted(host);
-        InetAddress a = new InetAddress();
+        // Return an Inet4Address, not a bare InetAddress: java.net.Socket.checkAddress / sun.nio.ch.Net
+        // reject anything that is not instanceof Inet4Address || Inet6Address (throws IllegalArgumentException).
+        Inet4Address a = new Inet4Address();
         if (dotted != -1)
         {
             a.addr = dotted;
@@ -37,6 +39,47 @@ public class InetAddress
 
     private static native int resolve0(byte[] host);   // -> VM.dnsResolve (WiFi DNS)
 
+    /**
+     * Address-class predicates. {@code NioSocketImpl.connect} tests {@code isAnyLocalAddress()} on the happy
+     * path (line 577) and {@code Net.connect} tests {@code isLinkLocalAddress()}; both must be false for a
+     * public routable target so the loopback / link-local-scoping branches (which reach the denied
+     * {@code InetAddress.getLocalHost}/{@code IPAddressUtil.toScopedAddress}) are never taken. The rest are
+     * provided for completeness so any stock caller resolves against this overlay, not the stock class.
+     */
+    public boolean isAnyLocalAddress()
+    {
+        return false;
+    }
+
+    public boolean isLinkLocalAddress()
+    {
+        return false;
+    }
+
+    public boolean isLoopbackAddress()
+    {
+        return false;
+    }
+
+    public boolean isMulticastAddress()
+    {
+        return false;
+    }
+
+    public boolean isSiteLocalAddress()
+    {
+        return false;
+    }
+
+    /**
+     * Stub so the never-taken {@code isAnyLocalAddress()} branch in {@code NioSocketImpl.connect} (which
+     * calls {@code InetAddress.getLocalHost()}) resolves at compile time. Never executed on the socket path.
+     */
+    public static InetAddress getLocalHost()
+    {
+        return new InetAddress();
+    }
+
     public String getHostAddress()
     {
         return ((addr >> 24) & 0xFF) + "." + ((addr >> 16) & 0xFF) + "."
@@ -51,6 +94,39 @@ public class InetAddress
         b[2] = (byte) (addr >> 8);
         b[3] = (byte) addr;
         return b;
+    }
+
+    public String getHostName()
+    {
+        return getHostAddress();
+    }
+
+    /**
+     * Build an address from raw bytes. {@code sun.nio.ch.Net.<clinit>} uses this (via {@code inet4FromInt} and
+     * for the IPv6 wildcard/loopback) to seed its ANY_LOCAL/loopback constants. A 4-byte array is a normal
+     * big-endian IPv4; a 16-byte (IPv6) array is accepted but collapsed to a plain handle (we do no IPv6, and
+     * Net only asserts on these -- asserts are disabled).
+     */
+    public static InetAddress getByAddress(byte[] a) throws UnknownHostException
+    {
+        Inet4Address r = new Inet4Address();
+        if (a != null && a.length == 4)
+        {
+            r.addr = ((a[0] & 0xFF) << 24) | ((a[1] & 0xFF) << 16) | ((a[2] & 0xFF) << 8) | (a[3] & 0xFF);
+        }
+        return r;
+    }
+
+    /**
+     * The wildcard address 0.0.0.0. {@code new InetSocketAddress(addr, port)} calls this when {@code addr}
+     * is null -- which happens on metal because {@code Net.localInetAddress} is stubbed to null, so
+     * {@code Net.localAddress(fd)} (queried after connect) builds the local endpoint from the wildcard.
+     */
+    static InetAddress anyLocalAddress()
+    {
+        Inet4Address a = new Inet4Address();
+        a.addr = 0;
+        return a;
     }
 
     /** Parse {@code "a.b.c.d"} to a big-endian int, or -1 if it is not dotted-decimal. */

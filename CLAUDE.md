@@ -73,6 +73,52 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **Phase: M4 done + M5 started + loading java.base classes on the metal.**
+- **OS-runtime M3 DONE — a stock `java.net.Socket` HTTP GET on bare metal.** The
+  image now runs like a traditional JVM-on-an-OS: `VM.boot` brings up HW + WiFi,
+  then `Loader.launch` runs the `main(String[])` named by the RAMFS `/etc/init`
+  manifest (`main=`/`args=`/`net=1`; `BuildRuntimeImage --main/--args` writes it).
+  `demo/NetDemo` does `new Socket("example.com",80)` → GET → **HTTP 200 OK + the
+  full HTML body → clean `close()`** over **UNMODIFIED** `java/net/Socket` →
+  `sun/nio/ch/{NioSocketImpl,Net,SocketDispatcher,IOUtil,NativeThread}` →
+  `java/io/FileDescriptor`, backed by the all-Java `net/{Ip,Tcp}` stack + WiFi
+  (verified on a real Pi 4). **Real-HW-only** (needs CYW43). The stock socket
+  *logic* runs as-is; only the unavoidable floor is shimmed with name-winning
+  `guestsrc/` overlays + a few loader/writer hooks:
+  - **VarHandle shim (keeps `Socket` 100% stock):** `Socket` updates its `state`/
+    `in`/`out` fields through a `VarHandle` (`STATE.getAndBitwiseOr`, `IN/OUT
+    .compareAndSet`), which needs the denied `java.lang.invoke` runtime. Overlaid
+    `java/lang/invoke/{VarHandle,MethodHandles}` + `jdk/internal/invoke/MhUtil`:
+    the handle carries the field NAME and resolves its offset from the target
+    object at call time (`VM.vhFieldOffset` via the class+field registries). Its
+    signature-polymorphic call sites (`getAndBitwiseOr:(LSocket;I)I` etc.) are
+    resolved by NAME only in `Loader.vtableSlotOf` and the ops are seeded (else a
+    0 vtable slot); narrow-allowed past the `java/lang/invoke/` deny.
+  - **Overlays:** no-op `ReentrantLock` (single-threaded → no AQS/MethodHandles),
+    transparent `SocksSocketImpl` delegator (Socket ALWAYS wraps the platform impl
+    in it — not a never-taken proxy), `Inet4Address` (+ `InetAddress.getByAddress`/
+    `anyLocalAddress`/`isXxxAddress`/`getHostName`), `ByteBuffer`/`DirectBuffer`/
+    `Util` (temp direct buffer = a heap `byte[]`, `address()`=`addrOf+24`),
+    `Cleaner`/`CleanerFactory` (synchronous), `SocketOptionRegistry`,
+    `sun/net/ext/ExtendedSocketOptions` (no-op), `Thread.isVirtual`→false.
+  - **`<clinit>` handling:** `FileDescriptor.<clinit>` runs FIRST (registers the
+    `JavaIOFileDescriptorAccess` that `NativeDispatcher`/`NioSocketImpl` read via
+    `SharedSecrets`; else `getJavaIOFileDescriptorAccess`→`MethodHandles.lookup`
+    trap). `Socket`/`NioSocketImpl`/`StandardSocketOptions.<clinit>` are allowed
+    past the tag-7 `ldc Class` gate (assertions idiom / option constants) — they
+    bind `STATE`/`nd`/`SO_LINGER`. `Inet4/6Address.<clinit>` (native `init()`) and
+    `Net.<clinit>` (native-heavy, reads `System.getProperty` whose props are null →
+    cascades to `Properties`/CHM) stay blocked; `Net.EXTENDED_OPTIONS` is instead
+    SEEDED directly (`seedNetExtendedOptions`, like `System.out`) so
+    `close()`→`Net.getSocketOption(SO_LINGER)` doesn't NPE.
+  - **Natives (`Loader.nativeBuf` → `VM.*`, all static):** `Net.{socket0,connect0,
+    available}`→`net.Tcp`, `SocketDispatcher.{read0,write0}`, `UnixDispatcher
+    .close0`, `IOUtil.{fdVal,setfdVal}`, `FileDescriptor.{initIDs,getHandle,
+    getAppend}`, `NativeThread.{current0,supportPendingSignals0,signal0}`,
+    `InetAddress.resolve0`→WiFi DNS, `VarHandle.fieldOffset0`. The `fd` int (offset
+    16) IS the `net.Tcp` handle. Narrow denials keep the closure tight (Poller/
+    Exceptions/IPAddressUtil/ExtendedSocketOption trap on never-taken branches).
+  - Full arc = the `os-runtime-m3` branch (M1 launcher → M2 `net.*` → M3 stock
+    java.net). Credentials in the gitignored `ramfs/etc/wifi.conf` (never committed).
 - **WiFi (CYW43455) DONE through M6 — an all-Java internet device.** The Pi 4's
   on-board WiFi is driven entirely in Java over SDIO (`board/cyw43/Cyw43` +
   `board/bcm2711/{Sdio,Gpio,Gic,Mailbox}`, no C): chip bring-up (firmware/NVRAM/
