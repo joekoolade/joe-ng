@@ -543,6 +543,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.unwind(JJJ)V",      "vm/VM.unwindAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.captureTrace(JJJ)V", "vm/VM.captureTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.reportFault()V",    "vm/VM.reportFaultAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.throwFromFault(J)V", "vm/VM.throwFromFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.irqHandler()V",     "vm/VM.irqHandlerAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.schedule(J)J",      "vm/VM.scheduleAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.yieldPick(J)J",     "vm/VM.yieldPickAddr");
@@ -574,6 +575,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.arraycopy(JIJII)V", "vm/VM.arraycopyAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNpe()J",         "vm/VM.newNpeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VM.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0

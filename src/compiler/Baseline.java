@@ -474,11 +474,13 @@ public final class Baseline
         }
         else if (op == 0x6C || op == 0x6D)
         {
+            divisorCheck(cb, opSlot(sp - 1), pos);              // idiv/ldiv by 0 -> ArithmeticException
             binop(cb, BIN_DIV);
             return 1;
         }
         else if (op == 0x70 || op == 0x71)
         {
+            divisorCheck(cb, opSlot(sp - 1), pos);              // irem/lrem by 0 -> ArithmeticException
             irem(cb);
             return 1;
         }  // irem/lrem
@@ -1743,6 +1745,18 @@ public final class Baseline
         {
             for (int i = 0; i < OP_MAX; i++) { regHolds[i] = savedHolds[i]; }
         }
+    }
+
+    /** Throw ArithmeticException if the divisor {@code divReg} is zero (AArch64 SDIV/UDIV return 0, don't trap). */
+    private void divisorCheck(CodeBuffer cb, int divReg, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            return;
+        }
+        int over = cb.emit(A64Enc.cbnz(divReg, 0));            // divisor != 0 -> skip the throw block
+        throwImplicit(cb, pos, Symbols.NEW_ARITH);
+        cb.set(over, A64Enc.cbnz(divReg, cb.wordCount() - over));
     }
 
     /** Throw NPE if {@code refReg} is null (a deref/receiver/arraylength of null). */

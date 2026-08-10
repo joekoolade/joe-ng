@@ -323,6 +323,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.captureTraceAddr;
         }
+        if (helper == Symbols.NEW_ARITH)
+        {
+            return VM.newArithAddr;
+        }
         return VM.unwindAddr;                       // UNWIND
     }
 
