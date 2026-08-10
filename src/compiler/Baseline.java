@@ -1670,6 +1670,19 @@ public final class Baseline
      */
     private void throwStored(CodeBuffer cb, int pos, int athrowStart)
     {
+        if (symbols.captureTraces())
+        {
+            // Record the throw-site frame chain into the exception BEFORE the (possibly same-method) handler
+            // search, so printStackTrace() has frames even when this method catches it inline. captureTrace
+            // is idempotent (first throw wins), so a later cross-method unwind won't overwrite it.
+            int te = pushReg();
+            emitLoadException(cb, te);
+            int tp = pushReg();
+            symbols.codePc(cb, tp, athrowStart);
+            int ts = pushReg();
+            cb.emit(A64Enc.movFromSp(ts));
+            emitCall(cb, 3, false, false, SYM_HELPER, Symbols.CAPTURE_TRACE);
+        }
         for (int i = 0; i < exCount; i++)
         {
             if (exStartPc[i] > pos || pos >= exEndPc[i])

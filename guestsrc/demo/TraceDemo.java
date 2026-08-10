@@ -1,10 +1,10 @@
 package demo;
 
 /**
- * Stack-trace smoke test: an uncaught null dereference deep in a call chain (c &larr; b &larr; a &larr; main).
- * The VM prints a Java-style stack trace -- exception class, then each frame as
- * {@code owner/Class.method(SourceFile.java:line) [pc=... +offset]} -- resolved on the metal from the
- * demand-compiled methods' line tables (Baseline's bci&rarr;PC map zipped with the classfile LineNumberTable).
+ * Stack-trace smoke test. c() &larr; b() &larr; a() &larr; main(); c() catches its own NullPointerException and
+ * printStackTrace()s it -- exercising the SAME-METHOD (inline) catch path, whose backtrace is now recorded at
+ * the throw site (CAPTURE_TRACE) rather than only on cross-method unwind. The trace resolves each frame to
+ * owner/Class.method(SourceFile.java:line) from the demand-compiled line tables.
  */
 public class TraceDemo
 {
@@ -25,7 +25,14 @@ public class TraceDemo
 
     static void c()
     {
-        String s = null;
-        int x = s.length();   // uncaught NullPointerException thrown here
+        try
+        {
+            String s = null;
+            int x = s.length();   // NullPointerException
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();  // same-method catch -> printStackTrace() must still show frames
+        }
     }
 }

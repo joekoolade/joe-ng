@@ -319,6 +319,17 @@ final class MetalSymbols implements Symbols
         {
             return VM.newAioobeAddr;
         }
+        if (helper == Symbols.CAPTURE_TRACE)
+        {
+            return VM.captureTraceAddr;
+        }
         return VM.unwindAddr;                       // UNWIND
+    }
+
+    /** The on-metal JIT records throw-site backtraces so printStackTrace() has frames for any throw. */
+    @Override
+    public boolean captureTraces()
+    {
+        return true;
     }
 }
