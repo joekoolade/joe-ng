@@ -1408,8 +1408,18 @@ public final class Cyw43
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: ping no reply\n"));
         }
-        dns();                                           // M4: resolve a hostname -> IP
+        // Connectivity is up and net.Ip is published. Run the built-in DNS+HTTP demo only when this is the
+        // WiFi showcase; when the OS brought the interface up for a launched program, stop here and let the
+        // program drive the sockets (M3: stock java.net over net.Tcp).
+        if (runDemo)
+        {
+            dns();                                       // M4: resolve a hostname -> IP -> HTTP GET
+        }
     }
+
+    /** true = the bring-up runs its built-in DNS+HTTP-GET showcase; false = bring up connectivity only (the
+     *  OS launches a program that owns the sockets). Set by VM.run before Wifi.bringUp. */
+    public static boolean runDemo = true;
 
     /** M4: resolve example.com via DNS and print the A record. */
     static void dns()
@@ -1644,7 +1654,7 @@ public final class Cyw43
      * Send a DNS A-query for {@code host} to {@code dnsIp} (via the gateway) and parse the first A record
      * into {@code ipOut}. Resends every 0.5 s, drains fast (the unicast-RX pattern). Returns true on answer.
      */
-    private static boolean dnsResolve(byte[] host, long ipOut)
+    public static boolean dnsResolve(byte[] host, long ipOut)
     {
         long buf = Heap.allocData(256);
         int flen = buildDnsQuery(buf, host);

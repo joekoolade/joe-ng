@@ -31,7 +31,18 @@ public final class ReachScan
         "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
         "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/", "java/lang/ClassLoader",
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
-        "java/net/", "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
+        // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
+        // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
+        // proxy impl + www/ext + the GC-auto-close SocketCleanable stay trapped (never taken).
+        "java/net/HttpConnectSocketImpl", "java/net/SocketCleanable",
+        "sun/net/www/", "sun/net/ext/",
+        // heavy socket subtrees never taken on the blocking client path (would pull streams/ForkJoin/regex).
+        "sun/nio/ch/Poller", "sun/nio/ch/ExtendedSocketOption", "java/net/NetworkInterface",
+        // Exceptions = NioSocketImpl's error-message formatter (String.format->Formatter->regex + a
+        // security-property read->Properties/stream), reached only at throw sites; IPAddressUtil =
+        // link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress()==false.
+        "jdk/internal/util/Exceptions", "sun/net/util/IPAddressUtil",
+        "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
         "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
@@ -45,7 +56,7 @@ public final class ReachScan
         "java/nio/charset/Coder", "java/nio/charset/Coding", "java/nio/charset/CharacterCoding",
         "java/nio/charset/Malformed", "java/nio/charset/Unmappable",
         "java/nio/charset/IllegalCharsetName", "java/nio/charset/UnsupportedCharset",
-        "java/nio/ByteBuffer", "java/nio/CharBuffer", "sun/nio/cs/Array",
+        "java/nio/CharBuffer", "sun/nio/cs/Array",   // ByteBuffer now loadable (overlay -> socket buffers)
     };
 
     static boolean deny = false;                       // set by the "DENY" arg
@@ -53,6 +64,16 @@ public final class ReachScan
 
     static boolean isDenied(String c)
     {
+        // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays): java.net.Socket uses a
+        // VarHandle for its state/in/out fields. These specific java/lang/invoke classes are allowed; the rest
+        // of java/lang/invoke stays denied.
+        if (c.startsWith("java/lang/invoke/VarHandle")
+                || c.startsWith("java/lang/invoke/MethodHandles")
+                || c.startsWith("jdk/internal/invoke/MhUtil")
+                || c.startsWith("sun/net/ext/ExtendedSocketOptions"))   // overlaid no-op; rest of sun/net/ext denied
+        {
+            return false;
+        }
         for (String p : DENY) { if (c.startsWith(p)) { return true; } }
         return false;
     }

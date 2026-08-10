@@ -511,6 +511,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockSocket0(JJJJ)I", "vm/VM.sockSocket0Addr");   // M3 sockets
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockConnect0(JJJJ)I","vm/VM.sockConnect0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockRead0(JJJ)I",    "vm/VM.sockRead0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockWrite0(JJJ)I",   "vm/VM.sockWrite0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockClose0(J)V",     "vm/VM.sockClose0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.fdVal(J)I",          "vm/VM.fdValAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockNoop()V",        "vm/VM.sockNoopAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.sockZero()J",        "vm/VM.sockZeroAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
         stashHelper(image, staticWord, wordOffset, "vm/VM.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
         stashHelper(image, staticWord, wordOffset, "vm/VM.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0

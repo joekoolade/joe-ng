@@ -1276,6 +1276,18 @@ public final class VM
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
+        if (dnsResolveAddr == 0L) { int u = dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
+        if (vhFieldOffsetAddr == 0L) { long u = vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
+        if (sockSocket0Addr == 0L) { int u = sockSocket0(0L, 0L, 0L, 0L); }   // M3 socket natives (dead calls,
+        if (sockConnect0Addr == 0L) { int u = sockConnect0(0L, 0L, 0L, 0L); } // never run: the writer pre-stashes
+        if (sockRead0Addr == 0L) { int u = sockRead0(0L, 0L, 0L); }           // each address, so these only force
+        if (sockWrite0Addr == 0L) { int u = sockWrite0(0L, 0L, 0L); }         // compilation of the helper)
+        if (sockClose0Addr == 0L) { sockClose0(0L); }
+        if (sockAvailableAddr == 0L) { int u = sockAvailable(0L); }
+        if (fdValAddr == 0L) { int u = fdVal(0L); }
+        if (setFdValAddr == 0L) { setFdVal(0L, 0L); }
+        if (sockNoopAddr == 0L) { sockNoop(); }
+        if (sockZeroAddr == 0L) { long u = sockZero(); }
         if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
         if (superclassAddr == 0L) { long u = superclassOf(0L); }      // Class.superclass0() native (M4)
         if (currentThreadAddr == 0L) { long u = currentThreadObj(); } // Thread.currentThread0() native (M4)
@@ -1530,6 +1542,22 @@ public final class VM
         return true;
     }
 
+    /** True if the /etc/init manifest requests networking ({@code net=1}) -- the OS then brings the WiFi
+     *  interface up (join + DHCP) before launching, so the program's java.net finds an established link. */
+    static boolean manifestNet()
+    {
+        long e = fileFind(Magic.bytes("/etc/init"));
+        if (e == 0L)
+        {
+            return false;
+        }
+        long conf = Magic.load64(e + 16L);
+        int flen = (int) Magic.load64(e + 24L);
+        long v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("net"), v, 8);
+        return n >= 1 && (Magic.load8(v) & 0xFF) == 0x31;   // "1"
+    }
+
     static long fileOpen(long nameRef)
     {
         if (nameRef <= 0x1000L || fileDir == 0L)
@@ -1557,6 +1585,115 @@ public final class VM
             }
             i += 1;
         }
+        return 0L;
+    }
+
+    /**
+     * Resolve a guest {@code byte[]} hostname to an IPv4 address, returned as a big-endian int (a.b.c.d ->
+     * (a&lt;&lt;24)|(b&lt;&lt;16)|(c&lt;&lt;8)|d), 0 on failure. Backs the overlay {@code java.net.InetAddress.resolve0}
+     * with the WiFi DNS resolver; the socket layer reads this int straight out of the InetAddress.
+     */
+    static int dnsResolve(long hostArrRef)
+    {
+        if (hostArrRef <= 0x1000L)                         // boot-time force-compile passes 0
+        {
+            return 0;
+        }
+        int hlen = (int) Magic.load64(hostArrRef + 16L);   // guest byte[] length
+        byte[] host = heapBytes(hostArrRef + 24L, hlen);
+        long ipOut = Heap.allocData(4);
+        if (!board.cyw43.Cyw43.dnsResolve(host, ipOut))
+        {
+            return 0;
+        }
+        return ((Magic.load8(ipOut) & 0xFF) << 24) | ((Magic.load8(ipOut + 1) & 0xFF) << 16)
+                | ((Magic.load8(ipOut + 2) & 0xFF) << 8) | (Magic.load8(ipOut + 3) & 0xFF);
+    }
+
+    // ----- M3 socket natives: stock java.net / sun.nio.ch over net.Tcp. A FileDescriptor's fd int (first
+    //       field, offset 16) holds the net.Tcp connection handle. Every helper is STATIC (matching the JDK
+    //       26 natives) and reached via Loader.nativeBuf with the loader arg convention (slot k = x(1+k));
+    //       args come in as raw longs (refs/ints). -----
+
+    /** The net.Tcp handle stored in a FileDescriptor's fd field (offset 16 = first instance field). */
+    private static int fdIndex(long fdRef)
+    {
+        return (int) Magic.load64(fdRef + 16L);
+    }
+
+    /** VarHandle overlay: byte offset of instance field named by the guest {@code byte[]} within {@code obj}'s
+     *  class -> {@code java/lang/invoke/VarHandle.fieldOffset0(byte[],Object)J}. */
+    static long vhFieldOffset(long fnameArrRef, long objRef)
+    {
+        if (fnameArrRef <= 0x1000L || objRef <= 0x1000L)     // boot-time force-compile passes 0
+        {
+            return -1L;
+        }
+        int fnLen = (int) Magic.load64(fnameArrRef + 16L);   // guest byte[] length
+        long fnBase = fnameArrRef + 24L;                     // guest byte[] data
+        long tib = Magic.load64(objRef);                     // obj header TIB
+        return Loader.vhFieldOffset(fnBase, fnLen, tib);
+    }
+
+    /** Net.socket0(preferIPv6, stream, reuse, fastLoopback) -> a fresh net.Tcp fd (the flags are ignored). */
+    static int sockSocket0(long a, long b, long c, long d)
+    {
+        return net.Tcp.alloc();
+    }
+
+    /** Net.connect0(preferIPv6, FileDescriptor fd, InetAddress remote, int port) -> 1 on success, 0 else. */
+    static int sockConnect0(long preferIPv6, long fdRef, long inetRef, long port)
+    {
+        int ipBe = (int) Magic.load64(inetRef + 16L);   // InetAddress.addr (first field, big-endian IPv4)
+        return net.Tcp.connect(fdIndex(fdRef), ipBe, (int) port);
+    }
+
+    /** SocketDispatcher.read0(fd, address, len) -> bytes read into {@code address}, or -1 at EOF. */
+    static int sockRead0(long fdRef, long address, long len)
+    {
+        return net.Tcp.read(fdIndex(fdRef), address, 0, (int) len);
+    }
+
+    /** SocketDispatcher.write0(fd, address, len) -> bytes written from {@code address}. */
+    static int sockWrite0(long fdRef, long address, long len)
+    {
+        return net.Tcp.write(fdIndex(fdRef), address, 0, (int) len);
+    }
+
+    /** UnixDispatcher.close0(fd). */
+    static void sockClose0(long fdRef)
+    {
+        net.Tcp.close(fdIndex(fdRef));
+    }
+
+    /** Net.available(fd) -> bytes buffered for a non-blocking read. */
+    static int sockAvailable(long fdRef)
+    {
+        return net.Tcp.available(fdIndex(fdRef));
+    }
+
+    /** IOUtil.fdVal(fd) -> the fd int (the net.Tcp handle). */
+    static int fdVal(long fdRef)
+    {
+        return (int) Magic.load64(fdRef + 16L);
+    }
+
+    /** IOUtil.setfdVal(fd, value). */
+    static void setFdVal(long fdRef, long value)
+    {
+        Magic.store64(fdRef + 16L, value);
+    }
+
+    /** Shared no-op for the void socket natives (UnixDispatcher.init/preClose0, IOUtil.initIDs,
+     *  NativeThread.init) -- never reached on the blocking happy path. */
+    static void sockNoop()
+    {
+    }
+
+    /** Shared 0 for the socket natives we stub: Net.localPort / getIntOption0 (SO_LINGER=0 -> close skips
+     *  shutdown) / localInetAddress (null wildcard), NativeThread.current0. */
+    static long sockZero()
+    {
         return 0L;
     }
 
@@ -1653,7 +1790,9 @@ public final class VM
         printDec(k);
         Uart.write(Magic.bytes(" (lr="));
         printHex(lr);
-        Uart.write(Magic.bytes(")\n"));
+        Uart.write(Magic.bytes(")\n  caller: "));
+        Loader.reportMethodAt(lr - 4L);                        // name the method that made the denied call
+        Uart.putc(0x0A);
         while (true)
         {
             Magic.wfe();
@@ -2299,6 +2438,18 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
+    static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
+    static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
+    static long sockSocket0Addr;       // M3 socket natives (stock sun.nio.ch over net.Tcp)
+    static long sockConnect0Addr;
+    static long sockRead0Addr;
+    static long sockWrite0Addr;
+    static long sockClose0Addr;
+    static long sockAvailableAddr;
+    static long fdValAddr;
+    static long setFdValAddr;
+    static long sockNoopAddr;
+    static long sockZeroAddr;
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
@@ -2512,6 +2663,16 @@ public final class VM
                 Uart.write(Magic.bytes("(wifi-only: not real hardware -> skipped)\n"));
             }
             return;
+        }
+
+        // OS networking service: if the manifest program needs the network (net=1) and we're on real HW,
+        // bring the WiFi interface UP (join + DHCP + ARP, publishing net.Ip) as an OS service BEFORE the
+        // launch -- so a program's java.net.Socket finds an established link. Connectivity only, no demo.
+        if (Uart.coreHz > 10000000 && manifestNet())
+        {
+            startWifiScheduler();                          // scheduler + IRQs (IRQ-driven RX + blocking sockets)
+            board.cyw43.Cyw43.runDemo = false;             // stop the bring-up after connectivity, no HTTP demo
+            board.bcm2711.Wifi.bringUp();
         }
 
         // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,

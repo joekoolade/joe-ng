@@ -232,6 +232,10 @@ public final class Loader
             // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
             clinitEntry[clinitN] = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
             clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
+            if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
+            {
+                clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
+            }                              // that NativeDispatcher/NioSocketImpl <clinit>s read via SharedSecrets
             clinitN += 1;
         }
     }
@@ -254,6 +258,27 @@ public final class Loader
         // Kept as a targeted allow (not a blanket tag-7 allow) because many other <clinit>s use the same idiom but
         // are intentionally skipped-and-seeded (String/ArraysSupport/Unsafe...) and hang if actually run.
         if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/regex/Pattern")))
+        {
+            return true;
+        }
+        // java/net/Socket.<clinit> ldc's InputStream.class/OutputStream.class (tag-7 Class literals, supported)
+        // to bind its STATE/IN/OUT VarHandles via the overlaid MethodHandles/MhUtil/VarHandle shim. It is
+        // runnable and MUST run -- an unbound STATE -> NullPointerException in getAndBitwiseOrState during connect.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Socket")))
+        {
+            return true;
+        }
+        // sun/nio/ch/NioSocketImpl.<clinit> ldc's NioSocketImpl.class for the desiredAssertionStatus() idiom
+        // (it uses `assert`), which the tag-7 gate rejects. It MUST run: it binds `nd = new SocketDispatcher()`
+        // (an unbound nd -> read/write dispatch on null) and disables assertions (desiredAssertionStatus()=false).
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NioSocketImpl")))
+        {
+            return true;
+        }
+        // java/net/StandardSocketOptions.<clinit> creates its option constants with Integer.class/Boolean.class
+        // (tag-7 Class literals, supported). It MUST run: close() reads SO_LINGER, and an unbound (null) option
+        // makes Net.getSocketOption(fd, null) NPE on name.type().
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/StandardSocketOptions")))
         {
             return true;
         }
@@ -292,6 +317,7 @@ public final class Loader
     private static long[] clinitEntry;
     private static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
     private static int clinitN;
+    private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
 
     /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
     private static void runClinits()
@@ -304,6 +330,22 @@ public final class Loader
         // force-running the first pending, matching the loader's own cycle handling.
         boolean[] done = new boolean[clinitN];
         int remaining = clinitN;
+        // FileDescriptor.<clinit> registers the JavaIOFileDescriptorAccess into SharedSecrets that many other
+        // <clinit>s read via getJavaIOFileDescriptorAccess() (NativeDispatcher, NioSocketImpl). If it runs late,
+        // that accessor sees a null field and falls back to MethodHandles.lookup().ensureInitialized (denied ->
+        // trap). The usage-dependency heuristic below doesn't capture the SharedSecrets-mediated edge, so run it
+        // first, unconditionally. It only WRITES a SharedSecrets field (no other class's statics read), so it is
+        // safe to run before its own deps.
+        if (clinitFdFirst >= 0 && clinitFdFirst < clinitN && !done[clinitFdFirst])
+        {
+            if (logClinit != 0)
+            {
+                Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
+            }
+            long unusedFd = Magic.call0(clinitEntry[clinitFdFirst]);
+            done[clinitFdFirst] = true;
+            remaining -= 1;
+        }
         while (remaining > 0)
         {
             int progress = 0;
@@ -391,7 +433,23 @@ public final class Loader
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Boolean"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
+                // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets/iovMax). Skipping
+                // is sound for the blocking connect/read/write/close path -- none of the skipped statics are
+                // read there (IPv4-only, no poll consts, no IOV_MAX).
+                // NOTE: java/io/FileDescriptor is NOT skipped -- its <clinit> registers the
+                // JavaIOFileDescriptorAccess that NioSocketImpl.<clinit> reads via SharedSecrets; skipping it
+                // left the access null, so getJavaIOFileDescriptorAccess() took the ensureClassInitialized ->
+                // MethodHandles.lookup branch (denied) and trapped. Its 3 natives (initIDs/getHandle/getAppend)
+                // are stubbed in nativeBuf, and runClinits() runs it before NioSocketImpl's (dependency order).
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/Net"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/IOUtil"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("sun/nio/ch/NativeThread"))
+                // Inet4/6Address.<clinit> is just `init()` -- a native that caches JNI field IDs. We never
+                // instantiate them (the InetAddress overlay returns a plain InetAddress), so their <clinit>s
+                // are inert; skip them (they'd trap on the unwired native otherwise).
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet4Address"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet6Address"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -768,6 +826,7 @@ public final class Loader
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
+        seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -779,7 +838,9 @@ public final class Loader
             Uart.putc(0x0A);
             return;
         }
+        VM.unwindLog = 1;                                   // #43 diag: name the first exceptions thrown in main()
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
+        VM.unwindLog = 0;
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
@@ -1218,6 +1279,7 @@ public final class Loader
         clinitEntry = new long[MAXBLOB];
         clinitPd = new int[MAXBLOB];
         clinitN = 0;
+        clinitFdFirst = -1;
         primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
         refArrElem = new long[64];
         refArrTib = new long[64];
@@ -1401,6 +1463,11 @@ public final class Loader
             grew = false;
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
             grew = seedAllNamed(Magic.bytes("run"), Magic.bytes("()V")) || grew;   // Runnable trampoline entries
+            // VarHandle overlay ops: their signature-polymorphic call sites (getAndBitwiseOr:(Lsome;I)I) don't
+            // match the overlay descriptor, so the normal invoke-target marking misses them and they'd compile
+            // to a 0 vtable slot. Seed them by the overlay's own descriptor so they're compiled + filled in.
+            grew = seedAllNamed(Magic.bytes("getAndBitwiseOr"), Magic.bytes("(Ljava/lang/Object;I)I")) || grew;
+            grew = seedAllNamed(Magic.bytes("compareAndSet"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z")) || grew;
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             pendN = 0;
             int b = 0;
@@ -1988,6 +2055,18 @@ public final class Loader
      */
     private static boolean isDenylisted(long base, int off)
     {
+        // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays, not the real invoke runtime):
+        // java.net.Socket uses VarHandle for its `state`/`in`/`out` fields. Allowed BEFORE the java/lang/invoke
+        // prefix deny below. Everything else in java/lang/invoke stays denied.
+        if (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandles"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
+                // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
+                // the rest of sun/net/ext stays denied.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions")))
+        {
+            return false;
+        }
         return utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/foreign/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/foreign/"))
@@ -1999,7 +2078,26 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/ServiceLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/"))
+                // java/net is LOADABLE now (M3: stock java.net over net.Tcp). SocksSocketImpl IS taken
+                // (Socket.createImpl always wraps the platform impl in it) -- overlaid as a pure delegator,
+                // NOT denied. The HTTP-CONNECT proxy impl + www/ext + GC-auto-close SocketCleanable stay trapped.
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/HttpConnectSocketImpl"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/SocketCleanable"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
+                // Heavy socket subtrees statically referenced by NioSocketImpl/Net but never TAKEN on the
+                // blocking client path -- deny so a stray call traps instead of dragging in
+                // streams/ForkJoin/regex/ConcurrentHashMap (which OOM'd the demand-load). Poller = the async
+                // poll path (our fd stays blocking); NetworkInterface/ExtendedSocketOption = bind/opts we
+                // never use. (SocketOptionRegistry IS reached by close() -> overlaid, not denied.)
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/Poller"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/ExtendedSocketOption"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/NetworkInterface"))
+                // Exceptions = the error-message formatter (String.format->Formatter->regex + a security
+                // property read->Properties/stream), reached only at NioSocketImpl throw sites; IPAddressUtil
+                // = link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress().
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/Exceptions"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/util/IPAddressUtil"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
@@ -2029,7 +2127,7 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Unmappable"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/ByteBuffer"))
+                // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/CharBuffer"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
     }
@@ -3476,6 +3574,30 @@ public final class Loader
         }
     }
 
+    /**
+     * Seed {@code sun.nio.ch.Net.EXTENDED_OPTIONS} with an {@link sun.net.ext.ExtendedSocketOptions} overlay
+     * instance. Net.<clinit> (which normally sets it) is native-heavy and reads system properties (props are
+     * null on metal -> NPE), so it stays blocked; but {@code Socket.close() -> Net.getSocketOption} derefs
+     * EXTENDED_OPTIONS on the SO_LINGER path. The overlay's {@code isOptionSupported} is always false (no
+     * jdk.net options on metal), so getSocketOption falls through to the ordinary getIntOption0 path. Same
+     * direct-static-seed trick as {@link #seedSystemStreams}. No-op if either class is absent.
+     */
+    static void seedNetExtendedOptions()
+    {
+        int ei = classIndexByName(Magic.bytes("sun/net/ext/ExtendedSocketOptions"));
+        if (ei < 0)
+        {
+            return;
+        }
+        long slot = staticSlotOf(Magic.bytes("sun/nio/ch/Net"), Magic.bytes("EXTENDED_OPTIONS"));
+        if (slot != 0L)
+        {
+            long inst = Heap.alloc(16 + clFieldCount[ei] * 8);   // field-free overlay -> just the TIB header
+            Magic.store64(inst + 0L, clTib[ei]);                 // TIB (vtable for isOptionSupported dispatch)
+            Magic.store64(slot, inst);
+        }
+    }
+
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
     private static void addMethod(long code, int len, int maxLocals, int descOff, int isStatic)
     {
@@ -3932,6 +4054,68 @@ public final class Loader
         {
             if (utf8IsStr(nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
         }
+        // VarHandle overlay: resolve an instance field's byte offset from the target object's class.
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/invoke/VarHandle")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
+        }
+        // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
+        // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
+        if (utf8IsStr(classOff, Magic.bytes("java/io/FileDescriptor")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
+            if (utf8IsStr(nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/net/InetAddress")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
+        }
+        // M3 socket natives: stock sun.nio.ch backed by net.Tcp (fd int = the net.Tcp handle).
+        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/Net")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
+            if (utf8IsStr(nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
+            if (utf8IsStr(nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
+            if (utf8IsStr(nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
+            if (utf8IsStr(nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
+            // Net.<clinit> capability probes: no poll, IPv4-only, no reuse-port on metal -> all 0/false.
+            if (utf8IsStr(nameOff, Magic.bytes("pollinValue")))       { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("polloutValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("pollerrValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("pollhupValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("pollnvalValue")))     { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("pollconnValue")))     { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.sockZeroAddr; }  // -> 0
+        }
+        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("read0")))             { return VM.sockRead0Addr; }
+            if (utf8IsStr(nameOff, Magic.bytes("write0")))            { return VM.sockWrite0Addr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/UnixDispatcher")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("close0")))            { return VM.sockClose0Addr; }
+            if (utf8IsStr(nameOff, Magic.bytes("preClose0")))         { return VM.sockNoopAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/IOUtil")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+        }
+        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/NativeThread")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("current0")))          { return VM.sockZeroAddr; }     // -> 0
+            if (utf8IsStr(nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (utf8IsStr(nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
+            if (utf8IsStr(nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
+        }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
@@ -4184,8 +4368,8 @@ public final class Loader
      * while a single loaded class implements it.
      */
     static int logVtable;                               // #43 diagnostic: when != 0, log high-slot vtable resolutions
-    static int logClinit;                               // #43 diagnostic: when != 0, name each <clinit> as it runs
-    static int logTrapWire;                             // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
+    static int logClinit;                                     // #43 diagnostic: when != 0, name each <clinit> as it runs
+    static int logTrapWire;                                  // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
 
     private static int globalVtableSlot(int idx)
     {
@@ -4216,6 +4400,68 @@ public final class Loader
             i += 1;
         }
         return 0;
+    }
+
+    /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
+     *  signature-polymorphic call-site descriptor. Returns -1 if the VarHandle overlay isn't registered yet. */
+    private static int varHandleSlotByName(int nameOff)
+    {
+        int i = 0;
+        while (i < vtCount)
+        {
+            if (utf8IsAtBase(vtClassBase[i], vtClassOff[i], Magic.bytes("java/lang/invoke/VarHandle"))
+                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i]))
+            {
+                return vtSlot[i];
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** VarHandle shim: byte offset of instance field {@code fname} (raw bytes at {@code fnBase..+fnLen}) within
+     *  the class whose TIB is {@code tib}. Uses the class registry (TIB->class) + field registry (class+name->
+     *  slot). Returns -1 if unresolved. */
+    static long vhFieldOffset(long fnBase, int fnLen, long tib)
+    {
+        int ci = 0;
+        while (ci < clCount)
+        {
+            if (clTib[ci] == tib)
+            {
+                int j = 0;
+                while (j < fldCount)
+                {
+                    if (utf8EqAt(clBase[ci], clNameOff[ci], fldBase[j], fldClassOff[j])
+                            && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
+                    {
+                        return 16L + fldSlot[j] * 8L;
+                    }
+                    j += 1;
+                }
+            }
+            ci += 1;
+        }
+        return -1L;
+    }
+
+    /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */
+    private static boolean rawEqUtf8(long rawBase, int rawLen, long utBase, int utOff)
+    {
+        if (u2(utBase + utOff) != rawLen)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < rawLen)
+        {
+            if ((Magic.load8(rawBase + k) & 0xFF) != u1(utBase + utOff + 2 + k))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
     }
 
     /** #43: print a high-slot vtable resolution (class.name slot [Q|F]) so a garbage-slot wild-branch is traceable. */
@@ -4477,6 +4723,18 @@ public final class Loader
      */
     static int vtableSlotOf(int idx)
     {
+        // VarHandle ops are signature-polymorphic: the call-site descriptor is the actual arg types
+        // (e.g. getAndBitwiseOr:(Ljava/net/Socket;I)I), NOT the overlay method's (Ljava/lang/Object;I)I, so
+        // the normal name+descriptor match misses. VarHandle's op names are unique, so resolve by name only
+        // against the VarHandle overlay's vtable.
+        if (utf8IsStr(refClassNameOff(idx), Magic.bytes("java/lang/invoke/VarHandle")))
+        {
+            int vs = varHandleSlotByName(mrefNameOff(idx));
+            if (vs >= 0)
+            {
+                return vs;
+            }
+        }
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
             int s = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));   // this class's flattened vtable

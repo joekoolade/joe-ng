@@ -22,6 +22,7 @@ public final class Tcp
     private static final int FREE = 0;
     private static final int CONNECTED = 1;
     private static final int CLOSED = 2;
+    private static final int RESERVED = 3;   // alloc()'d (a socket fd exists) but not yet connected
 
     private static final int RX_WAIT_MS = 200;
 
@@ -36,32 +37,42 @@ public final class Tcp
     private static int[]  plen  = new int[MAXCONN];   // pending unread byte count
 
     /**
-     * Open a connection to {@code ip}:{@code port} (blocking SYN/SYN-ACK). Returns a connection handle
-     * (0..MAXCONN-1) or -1 on no free slot / reset / timeout.
+     * Allocate a socket slot (like {@code Net.socket()}): reserve a connection handle without connecting.
+     * Returns the handle (0..MAXCONN-1) or -1 if none free. The socket layer's {@code fd} int is this handle.
      */
-    public static int connect(long ip, int port)
+    public static int alloc()
     {
-        int h = -1;
         int i = 0;
         while (i < MAXCONN)
         {
             if (st[i] == FREE)
             {
-                h = i;
-                break;
+                if (rxb[i] == 0L)
+                {
+                    rxb[i] = Heap.allocData(2048);
+                    rip[i] = Heap.allocData(4);
+                }
+                st[i] = RESERVED;
+                plen[i] = 0;
+                return i;
             }
             i = i + 1;
         }
-        if (h < 0)
+        return -1;
+    }
+
+    /** Connect an alloc()'d handle to {@code ipBe}:{@code port} (blocking SYN/SYN-ACK; ipBe = big-endian IPv4
+     *  int). Returns 1 on success, 0 on reset/timeout. */
+    public static int connect(int h, int ipBe, int port)
+    {
+        if (h < 0 || h >= MAXCONN || st[h] == FREE)
         {
-            return -1;
+            return 0;
         }
-        if (rxb[h] == 0L)
-        {
-            rxb[h] = Heap.allocData(2048);
-            rip[h] = Heap.allocData(4);
-        }
-        Ip.copy4(ip, rip[h]);
+        Magic.store8(rip[h] + 0, (ipBe >> 24) & 0xFF);
+        Magic.store8(rip[h] + 1, (ipBe >> 16) & 0xFF);
+        Magic.store8(rip[h] + 2, (ipBe >> 8) & 0xFF);
+        Magic.store8(rip[h] + 3, ipBe & 0xFF);
         rport[h] = port;
         lport[h] = 0xC001 + h;                          // a distinct ephemeral port per slot
         int isn = 0x1000;
@@ -88,17 +99,34 @@ public final class Tcp
             int flags = Magic.load8(tcp + 13) & 0x3F;
             if ((flags & 0x04) != 0)                     // RST
             {
-                return -1;
+                return 0;
             }
             if ((flags & 0x12) == 0x12)                  // SYN|ACK
             {
                 rcv[h] = Ip.readBe32(tcp + 4) + 1;       // their ISN + 1
                 snd[h] = isn + 1;
                 st[h] = CONNECTED;
-                return h;
+                return 1;
             }
         }
-        return -1;
+        return 0;
+    }
+
+    /** Convenience for driver code (e.g. the WiFi HTTP demo): allocate + connect to a 4-byte IPv4 at
+     *  {@code ipAddr}. Returns a connection handle, or -1 on failure. */
+    public static int connect(long ipAddr, int port)
+    {
+        int h = alloc();
+        if (h < 0)
+        {
+            return -1;
+        }
+        if (connect(h, Ip.readBe32(ipAddr), port) == 0)
+        {
+            close(h);
+            return -1;
+        }
+        return h;
     }
 
     /** Send {@code len} bytes from {@code buf+off} as one PSH|ACK segment; returns {@code len}. */
