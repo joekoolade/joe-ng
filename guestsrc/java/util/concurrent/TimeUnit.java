@@ -24,4 +24,10 @@ public class TimeUnit
     {
         return sourceDuration * sourceUnit.nanosPerUnit / this.nanosPerUnit;
     }
+
+    /** Convert {@code duration} (in THIS unit) to milliseconds. */
+    public long toMillis(long duration)
+    {
+        return MILLISECONDS.convert(duration, this);
+    }
 }
