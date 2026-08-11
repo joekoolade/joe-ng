@@ -558,6 +558,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.objWait(JJ)V",      "vm/VM.objWaitAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.objNotify(J)V",     "vm/VM.objNotifyAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.objNotifyAll(J)V",  "vm/VM.objNotifyAllAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.monEnter(J)V",      "vm/VM.monEnterAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.monExit(J)V",       "vm/VM.monExitAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.holdsLock(J)I",     "vm/VM.holdsLockAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.threadJoin(J)V",    "vm/VM.threadJoinAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.threadStackTrace(JJJ)J", "vm/VM.threadStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.allThreads()J",         "vm/VM.allThreadsAddr");

@@ -748,11 +748,10 @@ public final class Baseline
         }  // instanceof
         else if (op == 0xC2 || op == 0xC3)
         {
-            // monitorenter/monitorexit: no-op lock (single-owner on the JIT core; the metal scheduler is
-            // cooperative for demand-loaded code). Just consume the objectref the bytecode pops. A real
-            // lock is future work; stock java.base uses `synchronized` on cold init/cache paths that run
-            // uncontended here (e.g. Pattern/regex lazy singletons).
-            nullCheck(cb, popReg(), pos);                    // monitorenter/exit on null -> NPE (JVM semantics)
+            // monitorenter/monitorexit: a real ownership-tracking, recursive, blocking monitor (VM.monEnter/
+            // monExit). Needed for Thread.holdsLock + a contested lock; uncontested locks just acquire+release.
+            nullCheck(cb, opSlot(sp - 1), pos);              // objectref on top; NPE if null (JVM semantics)
+            emitCall(cb, 1, false, false, SYM_HELPER, op == 0xC2 ? Symbols.MON_ENTER : Symbols.MON_EXIT);
             return 1;
         }  // monitorenter / monitorexit
 
@@ -2341,6 +2340,10 @@ public final class Baseline
         else if (id == Intrinsics.ALL_THREADS)
         {
             emitCall(cb, 0, true, false, SYM_HELPER, Symbols.ALL_THREADS);  // () -> Thread[]
+        }
+        else if (id == Intrinsics.HOLDS_LOCK)
+        {
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.HOLDS_LOCK);   // (obj) -> int (1 = held by us)
         }
         else if (id == Intrinsics.LOAD64)
         {

@@ -206,6 +206,11 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code Thread.holdsLock(o)} -> VM.holdsLock: true if the current task owns {@code o}'s monitor. */
+    public static boolean hldlock(Object o)
+    {
+        throw intrinsic();
+    }
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
     public static int newSem(int initial)

@@ -567,9 +567,18 @@ public final class VM
     static long[] taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
     static int[]  taskDone;                 // 1 once a task ran taskExit() (its run() returned) — Thread.join() polls this
     static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
+    static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
     static int    curTask;                  // the task currently running
+
+    // Object monitors (real, ownership-tracking + recursive). A side table indexed by locked object; a slot is
+    // live while its object is held (monCount >= 1) and freed on the final monitorExit, so it holds only the
+    // currently-held monitors. monitorenter/exit and Object.wait/notify + Thread.holdsLock all go through it.
+    static final int MAX_MON = 64;
+    static long[] monObj;                   // the locked object (0 = free slot)
+    static int[]  monOwner;                 // owning task id
+    static int[]  monCount;                 // recursion depth
 
 
     /**
@@ -765,11 +774,140 @@ public final class VM
     // parks the caller on the object (TASK_BLOCKED, taskWaitOn=-1 so no semPost wakes it) until another task
     // notify()s the SAME object; masking IRQs across the test-and-block avoids a lost wakeup like semWait.
 
-    /** {@code obj.wait(ms)} (ms<=0 = wait forever): block the current task until another task notifies {@code obj}. */
+    /** Index of {@code obj}'s live monitor slot, or -1. */
+    private static int monSlotOf(long obj)
+    {
+        int i = 0;
+        while (i < MAX_MON)
+        {
+            if (monObj[i] == obj)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** Claim a free monitor slot for {@code obj} (halts if more than MAX_MON are held at once). */
+    private static int monAlloc(long obj)
+    {
+        int i = 0;
+        while (i < MAX_MON)
+        {
+            if (monObj[i] == 0L)
+            {
+                monObj[i] = obj;
+                return i;
+            }
+            i += 1;
+        }
+        Uart.write(Magic.bytes("\nMONITOR TABLE FULL\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
+    /** Wake ONE task blocked in monitorenter for {@code obj}. */
+    private static void wakeMonWaiter(long obj)
+    {
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskState[i] == TASK_BLOCKED && taskMonWait[i] == obj)
+            {
+                taskState[i] = TASK_READY;
+                i = taskCount;                             // just one
+            }
+            else
+            {
+                i = i + 1;
+            }
+        }
+    }
+
+    /** monitorenter {@code obj}: acquire its monitor -- recursive for the owner, blocking while another task holds it. */
+    static void monEnter(long obj)
+    {
+        if (obj == 0L)
+        {
+            return;                                        // the JIT null-checked before the call
+        }
+        Magic.disableIrq();
+        int s = monSlotOf(obj);
+        while (s >= 0 && monOwner[s] != curTask)           // held by another task: block until it is released
+        {
+            taskMonWait[curTask] = obj;
+            taskWaitOn[curTask] = -2;                       // a monitor-acquire waiter
+            taskState[curTask] = TASK_BLOCKED;
+            Magic.enableIrq();
+            taskYield();
+            Magic.disableIrq();
+            s = monSlotOf(obj);
+        }
+        taskMonWait[curTask] = 0L;
+        if (s < 0)                                         // unowned: take a fresh slot
+        {
+            s = monAlloc(obj);
+            monOwner[s] = curTask;
+            monCount[s] = 0;
+        }
+        monCount[s] += 1;                                  // acquire / recurse
+        Magic.enableIrq();
+    }
+
+    /** monitorexit {@code obj}: release one level; on the final release free the slot and wake one acquire-waiter. */
+    static void monExit(long obj)
+    {
+        if (obj == 0L)
+        {
+            return;
+        }
+        Magic.disableIrq();
+        int s = monSlotOf(obj);
+        if (s >= 0)
+        {
+            monCount[s] -= 1;
+            if (monCount[s] <= 0)
+            {
+                monObj[s] = 0L;
+                monOwner[s] = -1;
+                monCount[s] = 0;
+                wakeMonWaiter(obj);
+            }
+        }
+        Magic.enableIrq();
+    }
+
+    /** {@code Thread.holdsLock(obj)}: 1 if the current task owns {@code obj}'s monitor, else 0. */
+    static int holdsLock(long obj)
+    {
+        Magic.disableIrq();
+        int s = monSlotOf(obj);
+        int r = (s >= 0 && monOwner[s] == curTask) ? 1 : 0;
+        Magic.enableIrq();
+        return r;
+    }
+
+    /**
+     * {@code obj.wait(ms)} (ms<=0 = wait forever): block the current task until another task notifies {@code obj}.
+     * Per Java rules the caller holds {@code obj}'s monitor; wait RELEASES it (remembering the recursion depth) so
+     * a notifier can enter the same monitor, then REACQUIRES it before returning.
+     */
     static void objWait(long obj, long ms)
     {
         Magic.disableIrq();
         int me = curTask;
+        int s = monSlotOf(obj);                            // release the monitor we hold (if any)
+        int saved = (s >= 0 && monOwner[s] == me) ? monCount[s] : 0;
+        if (saved > 0)
+        {
+            monObj[s] = 0L;
+            monOwner[s] = -1;
+            monCount[s] = 0;
+            wakeMonWaiter(obj);
+        }
         taskWaitObj[me] = obj;
         taskWaitOn[me] = -1;                               // an object monitor, not a semaphore
         if (ms > 0L)
@@ -780,11 +918,16 @@ public final class VM
         {
             taskWake[me] = 0L;                             // no deadline: only notify wakes us
         }
-taskState[me] = TASK_BLOCKED;
+        taskState[me] = TASK_BLOCKED;
         Magic.enableIrq();
         taskYield();                                       // parked until objNotify/objNotifyAll flips us READY
         taskWaitObj[me] = 0L;
         taskWake[me] = 0L;
+        if (saved > 0)                                     // reacquire the monitor (blocks if the notifier still holds it)
+        {
+            monEnter(obj);
+            monCount[monSlotOf(obj)] = saved;              // restore the recursion depth
+        }
     }
 
     /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. */
@@ -1439,6 +1582,9 @@ taskState[me] = TASK_BLOCKED;
         if (objWaitAddr == 0L) { objWait(0L, 0L); }                  // Object.wait/notify/notifyAll + Thread.join
         if (objNotifyAddr == 0L) { objNotify(0L); }                  // (JIT'd guest reaches these via stashed addrs)
         if (objNotifyAllAddr == 0L) { objNotifyAll(0L); }
+        if (monEnterAddr == 0L) { monEnter(0L); }                    // monitorenter/exit + Thread.holdsLock
+        if (monExitAddr == 0L) { monExit(0L); }
+        if (holdsLockAddr == 0L) { int u = holdsLock(0L); }
         if (threadJoinAddr == 0L) { threadJoin(0L); }
         if (threadStackTraceAddr == 0L) { long u = threadStackTrace(0L, 0L, 0L); }   // Thread.getStackTrace()
         if (allThreadsAddr == 0L) { long u = allThreads(); }                         // Thread.getAllStackTraces()
@@ -1489,6 +1635,10 @@ taskState[me] = TASK_BLOCKED;
         taskWaitOn = new int[MAX_TASKS];
         taskWaitObj = new long[MAX_TASKS];
         taskDone = new int[MAX_TASKS];
+        taskMonWait = new long[MAX_TASKS];
+        monObj = new long[MAX_MON];
+        monOwner = new int[MAX_MON];
+        monCount = new int[MAX_MON];
         semCount = new int[NUM_SEM];
         taskState[0] = TASK_READY;                          // task 0 = the boot flow (SP saved on tick 1)
         taskCount = 1;
@@ -1525,6 +1675,10 @@ taskState[me] = TASK_BLOCKED;
         taskWaitOn = new int[MAX_TASKS];
         taskWaitObj = new long[MAX_TASKS];
         taskDone = new int[MAX_TASKS];
+        taskMonWait = new long[MAX_TASKS];
+        monObj = new long[MAX_MON];
+        monOwner = new int[MAX_MON];
+        monCount = new int[MAX_MON];
         semCount = new int[NUM_SEM];
         taskState[0] = TASK_READY;                          // task 0 = the WiFi boot flow
         taskCount = 1;
@@ -2676,6 +2830,9 @@ taskState[me] = TASK_BLOCKED;
     static long objWaitAddr;           // VM.objWait(JJ)V     — Object.wait
     static long objNotifyAddr;         // VM.objNotify(J)V    — Object.notify
     static long objNotifyAllAddr;      // VM.objNotifyAll(J)V — Object.notifyAll
+    static long monEnterAddr;          // VM.monEnter(J)V     — monitorenter
+    static long monExitAddr;           // VM.monExit(J)V      — monitorexit
+    static long holdsLockAddr;         // VM.holdsLock(J)I    — Thread.holdsLock
     static long threadJoinAddr;        // VM.threadJoin(J)V   — Thread.join
     static long semWaitAddr;           // VM.semWait(I)V
     static long semPostAddr;           // VM.semPost(I)V
@@ -5717,6 +5874,9 @@ taskState[me] = TASK_BLOCKED;
         if (bytesEqual(nm, Magic.bytes("objWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objWait"), Magic.bytes("(JJ)V")); }
         if (bytesEqual(nm, Magic.bytes("objNotifyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotify"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("objNotifyAllAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotifyAll"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("monEnterAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monEnter"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("monExitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monExit"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("holdsLockAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("holdsLock"), Magic.bytes("(J)I")); }
         if (bytesEqual(nm, Magic.bytes("threadJoinAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadJoin"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("threadStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadStackTrace"), Magic.bytes("(JJJ)J")); }
         if (bytesEqual(nm, Magic.bytes("allThreadsAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("allThreads"), Magic.bytes("()J")); }

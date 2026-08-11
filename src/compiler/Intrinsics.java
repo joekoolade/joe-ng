@@ -58,12 +58,14 @@ public final class Intrinsics
     public static final int PRINT_STR = 57;         // magic.printStr(Object) -> VM.printStr (mini String)
     public static final int ADDR_OF = 58;            // magic.addrOf(Object) -> the object's raw address (reinterpret, no-op)
     // Object monitors + Thread.join (the mini java.base runtime's wait/notify/join lower to VM scheduler helpers).
-    public static final int MON_WAIT = 59;           // magic.mwait(Object,long)  -> VM.objWait
-    public static final int MON_NOTIFY = 60;         // magic.mnotify(Object)     -> VM.objNotify
-    public static final int MON_NOTALL = 61;         // magic.mnotall(Object)     -> VM.objNotifyAll
+    // NB: 59/60/61 are taken (READ_LR/READ_X0/DC_CIVAC below), so these continue at 66.
     public static final int THREAD_JOIN = 62;        // magic.tjoin(Object)       -> VM.threadJoin
     public static final int STACK_TRACE = 63;        // magic.stacktr(Object)     -> VM.threadStackTrace (pc,sp appended)
     public static final int ALL_THREADS = 64;        // magic.allthr()            -> VM.allThreads (Thread[] of live tasks)
+    public static final int HOLDS_LOCK = 65;         // magic.hldlock(Object)     -> VM.holdsLock
+    public static final int MON_WAIT = 66;           // magic.mwait(Object,long)  -> VM.objWait (dead: wait() uses monitorOp)
+    public static final int MON_NOTIFY = 67;         // magic.mnotify(Object)     -> VM.objNotify (dead)
+    public static final int MON_NOTALL = 68;         // magic.mnotall(Object)     -> VM.objNotifyAll (dead)
     public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
     public static final int READ_CNTFRQ_EL0 = 33;   // generic-timer frequency
     public static final int READ_CNTPCT_EL0 = 34;   // generic-timer physical count

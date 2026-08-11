@@ -96,6 +96,16 @@ public class Thread implements Runnable
         return Magic.stacktr(this);
     }
 
+    /** True if the current thread holds the monitor lock on {@code obj}. Throws NPE if {@code obj} is null. */
+    public static boolean holdsLock(Object obj)
+    {
+        if (obj == null)
+        {
+            throw new NullPointerException();
+        }
+        return Magic.hldlock(obj);
+    }
+
     /** A map of every live thread to its current stack trace. */
     public static java.util.Map<Thread, StackTraceElement[]> getAllStackTraces()
     {
