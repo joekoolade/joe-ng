@@ -61,10 +61,10 @@ public class Thread implements Runnable
         }
     }
 
-    /** No thread groups on joe-ng. */
+    /** Every thread belongs to the one flat group (no hierarchy on joe-ng). */
     public ThreadGroup getThreadGroup()
     {
-        return null;
+        return ThreadGroup.SYSTEM;
     }
 
     // ----- thread-local map (used by java.lang.ThreadLocal; package-private) -----
