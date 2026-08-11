@@ -16,6 +16,9 @@ public class Thread implements Runnable
 {
     private Runnable target;    // @16 — what run() delegates to
     private String name;        // @24
+    Object[] tlKeys;            // @32 — ThreadLocal keys for this thread's thread-local map (null until first put)
+    Object[] tlVals;            // @40 — parallel values
+    int tlN;                    // @48 — number of entries
 
     /** No-arg ctor: a Thread subclass overrides run() (its own body is the task); there is no separate target. */
     public Thread()
@@ -31,6 +34,89 @@ public class Thread implements Runnable
     {
         target = r;
         name = threadName;
+    }
+
+    /**
+     * Full constructor. {@code group} and {@code stackSize} are ignored (no thread groups; stacks are fixed).
+     * If {@code inheritThreadLocals}, copy the creating thread's INHERITABLE thread-locals into this new thread,
+     * each transformed by {@link ThreadLocal#childValue} -- so an {@link InheritableThreadLocal} flows to children.
+     */
+    public Thread(ThreadGroup group, Runnable r, String threadName, long stackSize, boolean inheritThreadLocals)
+    {
+        target = r;
+        name = threadName;
+        if (inheritThreadLocals)
+        {
+            Thread parent = currentThread();
+            int i = 0;
+            while (i < parent.tlN)
+            {
+                ThreadLocal key = (ThreadLocal) parent.tlKeys[i];
+                if (key.inheritable())
+                {
+                    tlPut(key, key.childValue(parent.tlVals[i]));
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /** No thread groups on joe-ng. */
+    public ThreadGroup getThreadGroup()
+    {
+        return null;
+    }
+
+    // ----- thread-local map (used by java.lang.ThreadLocal; package-private) -----
+
+    int tlIndex(Object key)
+    {
+        int i = 0;
+        while (i < tlN)
+        {
+            if (tlKeys[i] == key)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    Object tlValueAt(int i)
+    {
+        return tlVals[i];
+    }
+
+    void tlPut(Object key, Object val)
+    {
+        int i = tlIndex(key);
+        if (i >= 0)
+        {
+            tlVals[i] = val;
+            return;
+        }
+        if (tlKeys == null)
+        {
+            tlKeys = new Object[16];
+            tlVals = new Object[16];
+        }
+        tlKeys[tlN] = key;
+        tlVals[tlN] = val;
+        tlN += 1;
+    }
+
+    void tlRemove(Object key)
+    {
+        int i = tlIndex(key);
+        if (i >= 0)
+        {
+            tlN -= 1;
+            tlKeys[i] = tlKeys[tlN];
+            tlVals[i] = tlVals[tlN];
+            tlKeys[tlN] = null;
+            tlVals[tlN] = null;
+        }
     }
 
     /** The spawned task's body: the run-trampoline invokeinterface-dispatches this, which runs the target. */

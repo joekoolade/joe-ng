@@ -11,4 +11,14 @@ public class RuntimeException extends Exception
     {
         super(message);
     }
+
+    public RuntimeException(String message, Throwable cause)
+    {
+        super(message, cause);
+    }
+
+    public RuntimeException(Throwable cause)
+    {
+        super(cause);
+    }
 }

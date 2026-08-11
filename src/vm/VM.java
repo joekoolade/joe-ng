@@ -547,7 +547,7 @@ public final class VM
     // stack swap. sleep(ms) marks a task SLEEPING so the scheduler skips it until its deadline.
 
     static final long SCHED_FRAME = 272L;   // 31 GP regs + ELR + SPSR, 16-byte aligned (34 * 8)
-    static final int  MAX_TASKS = 16;       // boot + M7 demo tasks (0..4) + up to 11 philosophers
+    static final int  MAX_TASKS = 40;       // boot + demo/philosopher tasks + nested-thread tests (slots aren't reused)
     static final int  NUM_SEM = 16;         // reserved 0..4 (M7/console/wifi) + dynamically-allocated forks
     public static final int  WIFI_SEM = 4;  // posted by the SDIO RX ISR when a WiFi frame arrives
     static final int  SEM_RESERVED = 5;     // dynamic semaphores (forks) allocate at/after this index
