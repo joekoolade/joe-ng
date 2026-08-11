@@ -67,6 +67,10 @@ public interface Symbols
     int MON_ENTER = 31;         // vm/VM.monEnter(J)V           — monitorenter (real, blocking, recursive)
     int MON_EXIT = 32;          // vm/VM.monExit(J)V            — monitorexit
     int HOLDS_LOCK = 33;        // vm/VM.holdsLock(J)I          — Thread.holdsLock
+    int INTERRUPT = 34;         // vm/VM.interrupt(J)V          — Thread.interrupt
+    int IS_INTERRUPTED = 35;    // vm/VM.isInterrupted(J)I      — Thread.isInterrupted
+    int CHECK_INTR = 36;        // vm/VM.checkClearInterrupt()I — Thread.sleep interruption check (clears)
+    int IS_ALIVE = 37;          // vm/VM.isAlive(J)I            — Thread.isAlive
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);

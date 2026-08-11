@@ -15,7 +15,7 @@ public class ReflectDemo
 {
     static int spawnedOk;                                // set by the worker task: currentThread() == self
 
-    public static void main()
+    public static void main() throws InterruptedException
     {
         Class sc = "hi".getClass();
         Magic.printStr("String.getName=" + sc.getName() + "\n");                    // java.lang.String

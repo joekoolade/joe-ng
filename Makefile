@@ -17,7 +17,9 @@ JAVAC   ?= javac
 JAVA    ?= java
 OUT     := out
 IMG     := kernel8.img
-SOURCES := $(shell find src test -name '*.java')
+# Host tools + host-side unit tests. JDK test programs under test/jdk are GUEST programs (compiled against the
+# java.base overlay by the `jdktests` target), not host code, so exclude them here.
+SOURCES := $(shell find src test -name '*.java' -not -path 'test/jdk/*')
 # Guest sources (the mini java.base + the demand-loaded demo). Compiled as a java.base
 # patch so java/lang/* carry their real names; embedded raw and loaded on the metal (M4).
 # --add-reads lets the patched java.base see magic.Magic (the scheduler intrinsics).
@@ -56,11 +58,11 @@ test: build
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
-JDKTESTS ?= test/jdk/java/lang/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java
+JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java
 
 .PHONY: jdktests
 jdktests: guest
-	$(JAVAC) --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(JDKTESTS)
+	$(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(JDKTESTS)
 
 image: build jdktests
 	$(JAVA) -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)

@@ -2345,6 +2345,22 @@ public final class Baseline
         {
             emitCall(cb, 1, true, false, SYM_HELPER, Symbols.HOLDS_LOCK);   // (obj) -> int (1 = held by us)
         }
+        else if (id == Intrinsics.INTR)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.INTERRUPT);   // (thread) -> void
+        }
+        else if (id == Intrinsics.IS_INTR)
+        {
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.IS_INTERRUPTED);  // (thread) -> int
+        }
+        else if (id == Intrinsics.WAS_INTR)
+        {
+            emitCall(cb, 0, true, false, SYM_HELPER, Symbols.CHECK_INTR);   // () -> int (reads + clears)
+        }
+        else if (id == Intrinsics.IS_ALIVE)
+        {
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.IS_ALIVE);     // (thread) -> int
+        }
         else if (id == Intrinsics.LOAD64)
         {
             int addr = popReg();

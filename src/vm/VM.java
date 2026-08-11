@@ -567,6 +567,7 @@ public final class VM
     static long[] taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
     static int[]  taskDone;                 // 1 once a task ran taskExit() (its run() returned) — Thread.join() polls this
     static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
+    static int[]  taskInterrupted;          // Thread.interrupt() flag per task (1 = interrupted; sleep/join observe it)
     static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
@@ -684,8 +685,52 @@ public final class VM
         taskState[me] = TASK_SLEEPING;
         while (taskState[me] == TASK_SLEEPING)
         {
+            if (taskInterrupted[me] != 0)                  // Thread.interrupt(): wake early (Thread.sleep then throws)
+            {
+                taskState[me] = TASK_READY;
+                return;
+            }
             taskYield();
         }
+    }
+
+    /** {@code Thread.interrupt()}: set the interrupt flag and wake the task if it is sleeping or blocked. */
+    static void interrupt(long threadObj)
+    {
+        int tid = threadTaskOf(threadObj);
+        if (tid < 0)
+        {
+            return;
+        }
+        Magic.disableIrq();
+        taskInterrupted[tid] = 1;
+        if (taskState[tid] == TASK_SLEEPING || taskState[tid] == TASK_BLOCKED)
+        {
+            taskState[tid] = TASK_READY;                   // let it observe the interrupt (sleep returns / wait wakes)
+        }
+        Magic.enableIrq();
+    }
+
+    /** {@code Thread.isInterrupted()}: the interrupt flag of {@code threadObj} (does NOT clear it). */
+    static int isInterrupted(long threadObj)
+    {
+        int tid = threadTaskOf(threadObj);
+        return (tid >= 0 && taskInterrupted[tid] != 0) ? 1 : 0;
+    }
+
+    /** Read + CLEAR the current task's interrupt flag — Thread.sleep uses this to throw InterruptedException once. */
+    static int checkClearInterrupt()
+    {
+        int r = taskInterrupted[curTask];
+        taskInterrupted[curTask] = 0;
+        return r;
+    }
+
+    /** {@code Thread.isAlive()}: 1 if {@code threadObj} has been started and its run() has not yet returned. */
+    static int isAlive(long threadObj)
+    {
+        int tid = threadTaskOf(threadObj);
+        return (tid >= 0 && taskDone[tid] == 0) ? 1 : 0;
     }
 
     /**
@@ -1585,6 +1630,10 @@ public final class VM
         if (monEnterAddr == 0L) { monEnter(0L); }                    // monitorenter/exit + Thread.holdsLock
         if (monExitAddr == 0L) { monExit(0L); }
         if (holdsLockAddr == 0L) { int u = holdsLock(0L); }
+        if (interruptAddr == 0L) { interrupt(0L); }                  // Thread.interrupt/isInterrupted/isAlive
+        if (isInterruptedAddr == 0L) { int u = isInterrupted(0L); }
+        if (checkIntrAddr == 0L) { int u = checkClearInterrupt(); }
+        if (isAliveAddr == 0L) { int u = isAlive(0L); }
         if (threadJoinAddr == 0L) { threadJoin(0L); }
         if (threadStackTraceAddr == 0L) { long u = threadStackTrace(0L, 0L, 0L); }   // Thread.getStackTrace()
         if (allThreadsAddr == 0L) { long u = allThreads(); }                         // Thread.getAllStackTraces()
@@ -1636,6 +1685,7 @@ public final class VM
         taskWaitObj = new long[MAX_TASKS];
         taskDone = new int[MAX_TASKS];
         taskMonWait = new long[MAX_TASKS];
+        taskInterrupted = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -1676,6 +1726,7 @@ public final class VM
         taskWaitObj = new long[MAX_TASKS];
         taskDone = new int[MAX_TASKS];
         taskMonWait = new long[MAX_TASKS];
+        taskInterrupted = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -2833,6 +2884,10 @@ public final class VM
     static long monEnterAddr;          // VM.monEnter(J)V     — monitorenter
     static long monExitAddr;           // VM.monExit(J)V      — monitorexit
     static long holdsLockAddr;         // VM.holdsLock(J)I    — Thread.holdsLock
+    static long interruptAddr;         // VM.interrupt(J)V    — Thread.interrupt
+    static long isInterruptedAddr;     // VM.isInterrupted(J)I— Thread.isInterrupted
+    static long checkIntrAddr;         // VM.checkClearInterrupt()I — Thread.sleep interruption check
+    static long isAliveAddr;           // VM.isAlive(J)I      — Thread.isAlive
     static long threadJoinAddr;        // VM.threadJoin(J)V   — Thread.join
     static long semWaitAddr;           // VM.semWait(I)V
     static long semPostAddr;           // VM.semPost(I)V
@@ -5877,6 +5932,10 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("monEnterAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monEnter"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("monExitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("monExit"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("holdsLockAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("holdsLock"), Magic.bytes("(J)I")); }
+        if (bytesEqual(nm, Magic.bytes("interruptAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("interrupt"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("isInterruptedAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("isInterrupted"), Magic.bytes("(J)I")); }
+        if (bytesEqual(nm, Magic.bytes("checkIntrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkClearInterrupt"), Magic.bytes("()I")); }
+        if (bytesEqual(nm, Magic.bytes("isAliveAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("isAlive"), Magic.bytes("(J)I")); }
         if (bytesEqual(nm, Magic.bytes("threadJoinAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadJoin"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("threadStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadStackTrace"), Magic.bytes("(JJJ)J")); }
         if (bytesEqual(nm, Magic.bytes("allThreadsAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("allThreads"), Magic.bytes("()J")); }

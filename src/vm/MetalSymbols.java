@@ -152,7 +152,8 @@ final class MetalSymbols implements Symbols
             || id == Intrinsics.MON_WAIT || id == Intrinsics.MON_NOTIFY
             || id == Intrinsics.MON_NOTALL || id == Intrinsics.THREAD_JOIN
             || id == Intrinsics.STACK_TRACE || id == Intrinsics.ALL_THREADS
-            || id == Intrinsics.HOLDS_LOCK;
+            || id == Intrinsics.HOLDS_LOCK || id == Intrinsics.INTR || id == Intrinsics.IS_INTR
+            || id == Intrinsics.WAS_INTR || id == Intrinsics.IS_ALIVE;
     }
     public int intrinsicId(int methodCp)
     {
@@ -290,6 +291,22 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.HOLDS_LOCK)
         {
             return VM.holdsLockAddr;
+        }
+        if (helper == Symbols.INTERRUPT)
+        {
+            return VM.interruptAddr;
+        }
+        if (helper == Symbols.IS_INTERRUPTED)
+        {
+            return VM.isInterruptedAddr;
+        }
+        if (helper == Symbols.CHECK_INTR)
+        {
+            return VM.checkIntrAddr;
+        }
+        if (helper == Symbols.IS_ALIVE)
+        {
+            return VM.isAliveAddr;
         }
         if (helper == Symbols.STACK_TRACE)
         {

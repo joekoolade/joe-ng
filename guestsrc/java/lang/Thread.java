@@ -78,10 +78,37 @@ public class Thread implements Runnable
         name = threadName;
     }
 
-    /** Sleep the current task at least {@code ms} milliseconds (yields; never busy-waits). */
-    public static void sleep(long ms)
+    /** Sleep the current task at least {@code ms} milliseconds (yields; never busy-waits). Interruptible. */
+    public static void sleep(long ms) throws InterruptedException
     {
         Magic.sleepMs(ms);
+        if (Magic.wasintr())                               // Thread.interrupt() fired during/before the sleep
+        {
+            throw new InterruptedException();
+        }
+    }
+
+    /** True if this thread has been started and its run() has not yet returned. */
+    public boolean isAlive()
+    {
+        return Magic.isalive(this);
+    }
+
+    /** Set this thread's interrupt flag (and wake it if it is sleeping/blocked). */
+    public void interrupt()
+    {
+        Magic.intr(this);
+    }
+
+    /** This thread's interrupt flag (does not clear it). */
+    public boolean isInterrupted()
+    {
+        return Magic.isintr(this);
+    }
+
+    /** No-op: joe-ng has no daemon/non-daemon distinction (the boot task keeps the VM alive). */
+    public void setDaemon(boolean on)
+    {
     }
 
     /** Block the calling task until THIS thread's run() has returned. */
