@@ -58,7 +58,7 @@ test: build
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
-JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java
+JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java test/jdk/java/lang/Thread/ITLConstructor.java
 
 .PHONY: jdktests
 jdktests: guest

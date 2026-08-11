@@ -1550,11 +1550,11 @@ public final class Baseline
     /** A string concatenation ({@code StringConcatFactory}). */
     private void lowerConcat(int cpIndex, CodeBuffer cb)
     {
-        if (deepStack) { symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 4); return; }   // args via OP_BASE+slot vs circular window: TODO
         int nargs = paramCount(cpIndex);                         // args occupy the top nargs operand slots
         int argBase = sp - nargs;                                // operand-slot index of the first arg
         emitCall(cb, 0, true, false, SYM_HELPER, Symbols.SC_START);   // scStart -> builder on top
-        int sbSlot = OP_BASE + sp - 1;                           // register holding the builder
+        int sbIdx = sp - 1;                                      // operand-SLOT of the builder (opSlot maps it to a reg;
+                                                                 // in a deep method that's a circular-window register)
         int recipeOff = symbols.concatRecipeOff(cpIndex);        // Utf8 body: [u2 len][chars]
         int len = u2(classBytes, recipeOff);
         int p = recipeOff + 2;
@@ -1565,7 +1565,7 @@ public final class Baseline
             int c = classBytes[p + i] & 0xFF;
             if (c == 0x01)                                       //  -> the next dynamic arg
             {
-                appendArg(cb, sbSlot, OP_BASE + argBase + argIdx, cpIndex, argIdx);
+                appendArg(cb, sbIdx, argBase + argIdx, cpIndex, argIdx);
                 argIdx = argIdx + 1;
             }
             else if (c == 0x02)                                  //  -> a constant operand (slice 1b)
@@ -1574,11 +1574,11 @@ public final class Baseline
             }
             else
             {
-                appendChar(cb, sbSlot, c);                       // a literal recipe byte
+                appendChar(cb, sbIdx, c);                        // a literal recipe byte
             }
             i = i + 1;
         }
-        cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder
+        cb.emit(A64Enc.movReg(0, opSlot(sbIdx)));                // x0 = builder
         sp = argBase;                                            // drop the builder + the nargs args (keep the rest)
         spillLive(cb);                                           // the operand stack is x9.. (caller-saved): preserve any
         symbols.callHelper(cb, Symbols.SC_END);                  // live operand BELOW the args (e.g. a receiver pushed
@@ -1587,18 +1587,18 @@ public final class Baseline
         cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the result String (at slot argBase)
     }
 
-    /** Append one literal recipe byte {@code c} to the builder in {@code sbSlot}. */
-    private void appendChar(CodeBuffer cb, int sbSlot, int c)
+    /** Append one literal recipe byte {@code c} to the builder at operand-slot {@code sbIdx}. */
+    private void appendChar(CodeBuffer cb, int sbIdx, int c)
     {
-        cb.emit(A64Enc.movReg(0, sbSlot));
+        cb.emit(A64Enc.movReg(0, opSlot(sbIdx)));
         cb.emitAll(A64Enc.loadImm64(1, c));
         spillLive(cb);                                           // the append helper clobbers x9.. (operand slots)
         symbols.callHelper(cb, Symbols.SC_CHAR);
         reloadLive(cb);
     }
 
-    /** Append the arg in register {@code argReg} (call-site arg {@code argIdx}) to the builder, by its kind. */
-    private void appendArg(CodeBuffer cb, int sbSlot, int argReg, int cpIndex, int argIdx)
+    /** Append the arg at operand-slot {@code argSlot} (call-site arg {@code argIdx}) to the builder, by its kind. */
+    private void appendArg(CodeBuffer cb, int sbIdx, int argSlot, int cpIndex, int argIdx)
     {
         int k = paramKind(cpIndex, argIdx);
         int helper;
@@ -1623,8 +1623,8 @@ public final class Baseline
             symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 2);          // unsupported concat arg type (D/F: later)
             return;
         }
-        cb.emit(A64Enc.movReg(0, sbSlot));                       // x0 = builder
-        cb.emit(A64Enc.movReg(1, argReg));                       // x1 = arg
+        cb.emit(A64Enc.movReg(0, opSlot(sbIdx)));                // x0 = builder (fetched first, so a shared window
+        cb.emit(A64Enc.movReg(1, opSlot(argSlot)));              // register can't clobber it) ; x1 = arg
         spillLive(cb);
         symbols.callHelper(cb, helper);
         reloadLive(cb);
