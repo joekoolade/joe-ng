@@ -64,6 +64,9 @@ public interface Symbols
     int THREAD_JOIN = 28;       // vm/VM.threadJoin(J)V    — block until a Thread's task has exited
     int STACK_TRACE = 29;       // vm/VM.threadStackTrace(JJJ)J — a StackTraceElement[] for a Thread's stack
     int ALL_THREADS = 30;       // vm/VM.allThreads()J          — a Thread[] of every live task's Thread object
+    int MON_ENTER = 31;         // vm/VM.monEnter(J)V           — monitorenter (real, blocking, recursive)
+    int MON_EXIT = 32;          // vm/VM.monExit(J)V            — monitorexit
+    int HOLDS_LOCK = 33;        // vm/VM.holdsLock(J)I          — Thread.holdsLock
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
