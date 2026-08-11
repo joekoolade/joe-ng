@@ -57,6 +57,13 @@ public interface Symbols
     int ARRAY_CLONE = 22;       // vm/VM.arrayClone(J)J — [T.clone() -> a shallow array copy (no vtable on array TIBs)
     int CAPTURE_TRACE = 23;     // vm/VM.captureTrace(JJJ)V — fill exc's backtrace at the throw site (all throws)
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
+    // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
+    int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
+    int MON_NOTIFY = 26;        // vm/VM.objNotify(J)V     — wake one waiter on an object
+    int MON_NOTALL = 27;        // vm/VM.objNotifyAll(J)V  — wake every waiter on an object
+    int THREAD_JOIN = 28;       // vm/VM.threadJoin(J)V    — block until a Thread's task has exited
+    int STACK_TRACE = 29;       // vm/VM.threadStackTrace(JJJ)J — a StackTraceElement[] for a Thread's stack
+    int ALL_THREADS = 30;       // vm/VM.allThreads()J          — a Thread[] of every live task's Thread object
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -86,6 +93,14 @@ public interface Symbols
 
     /** True if the method ref at {@code methodCp} is an ARRAY {@code clone()} (owner starts '[') — intrinsified to ARRAY_CLONE. */
     default boolean isArrayClone(int methodCp) { return false; }
+
+    /**
+     * Object-monitor op for an invokevirtual to {@code java/lang/Object}: 0 = none, 1 = {@code wait()V},
+     * 2 = {@code wait(J)V}, 3 = {@code notify()V}, 4 = {@code notifyAll()V}. Lowered DIRECTLY to a VM helper
+     * (like getClass) rather than dispatched through the vtable — wait/notify are final (never overridden),
+     * and the mini Object's bodies aren't compiled, so a vtable dispatch would hit a no-op slot.
+     */
+    default int monitorOp(int methodCp) { return 0; }
 
     /**
      * Tag a freshly-allocated array (in {@code arrReg}) with its array Type, so checkcast/instanceof against an

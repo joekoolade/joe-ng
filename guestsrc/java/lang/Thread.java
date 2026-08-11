@@ -17,6 +17,11 @@ public class Thread implements Runnable
     private Runnable target;    // @16 — what run() delegates to
     private String name;        // @24
 
+    /** No-arg ctor: a Thread subclass overrides run() (its own body is the task); there is no separate target. */
+    public Thread()
+    {
+    }
+
     public Thread(Runnable r)
     {
         target = r;
@@ -77,5 +82,32 @@ public class Thread implements Runnable
     public static void sleep(long ms)
     {
         Magic.sleepMs(ms);
+    }
+
+    /** Block the calling task until THIS thread's run() has returned. */
+    public final void join() throws InterruptedException
+    {
+        Magic.tjoin(this);
+    }
+
+    /** A snapshot of this thread's stack (this thread if it is the caller, else its saved/blocked context). */
+    public StackTraceElement[] getStackTrace()
+    {
+        return Magic.stacktr(this);
+    }
+
+    /** A map of every live thread to its current stack trace. */
+    public static java.util.Map<Thread, StackTraceElement[]> getAllStackTraces()
+    {
+        Thread[] ts = Magic.allthr();
+        java.util.HashMap<Thread, StackTraceElement[]> m = new java.util.HashMap<Thread, StackTraceElement[]>();
+        int i = 0;
+        while (i < ts.length)
+        {
+            Thread t = ts[i];
+            m.put(t, t.getStackTrace());
+            i += 1;
+        }
+        return m;
     }
 }

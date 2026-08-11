@@ -563,7 +563,9 @@ public final class VM
     static long[] taskStackBase;            // its heap stack's object base (a GC root keeps the stack alive)
     static int[]  taskState;                // TASK_READY / TASK_SLEEPING / TASK_BLOCKED / TASK_EMPTY
     static long[] taskWake;                 // CNTPCT deadline at which a sleeping task becomes ready again
-    static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on
+    static int[]  taskWaitOn;               // for a BLOCKED task: the semaphore index it is waiting on (-1 = an object monitor)
+    static long[] taskWaitObj;              // for a BLOCKED object-monitor waiter: the object it Object.wait()s on (0 = none)
+    static int[]  taskDone;                 // 1 once a task ran taskExit() (its run() returned) — Thread.join() polls this
     static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
@@ -758,6 +760,155 @@ public final class VM
         Magic.enableIrq();
     }
 
+    // ----- Object monitors: java.lang.Object.wait/notify/notifyAll. The monitor itself is a no-op lock on this
+    // mostly-cooperative scheduler (monitorenter/exit are no-ops); wait/notify give the task hand-off. wait()
+    // parks the caller on the object (TASK_BLOCKED, taskWaitOn=-1 so no semPost wakes it) until another task
+    // notify()s the SAME object; masking IRQs across the test-and-block avoids a lost wakeup like semWait.
+
+    /** {@code obj.wait(ms)} (ms<=0 = wait forever): block the current task until another task notifies {@code obj}. */
+    static void objWait(long obj, long ms)
+    {
+        Magic.disableIrq();
+        int me = curTask;
+        taskWaitObj[me] = obj;
+        taskWaitOn[me] = -1;                               // an object monitor, not a semaphore
+        if (ms > 0L)
+        {
+            taskWake[me] = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;   // also wake at the deadline
+        }
+        else
+        {
+            taskWake[me] = 0L;                             // no deadline: only notify wakes us
+        }
+taskState[me] = TASK_BLOCKED;
+        Magic.enableIrq();
+        taskYield();                                       // parked until objNotify/objNotifyAll flips us READY
+        taskWaitObj[me] = 0L;
+        taskWake[me] = 0L;
+    }
+
+    /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. */
+    static void objNotify(long obj)
+    {
+        Magic.disableIrq();
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj)
+            {
+                taskState[i] = TASK_READY;
+                i = taskCount;                             // just one
+            }
+            else
+            {
+                i = i + 1;
+            }
+        }
+        Magic.enableIrq();
+    }
+
+    /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. */
+    static void objNotifyAll(long obj)
+    {
+        Magic.disableIrq();
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj)
+            {
+                taskState[i] = TASK_READY;
+            }
+            i = i + 1;
+        }
+        Magic.enableIrq();
+    }
+
+    /** The task id whose java/lang/Thread object is {@code threadObj}, or -1 if none is live. */
+    static int threadTaskOf(long threadObj)
+    {
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskThreadObj[i] == threadObj)
+            {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    /** {@code thread.join()}: block until the task running {@code threadObj}'s run() has returned (taskExit). */
+    static void threadJoin(long threadObj)
+    {
+        int tid = threadTaskOf(threadObj);
+        if (tid < 0)
+        {
+            return;                                        // not a live spawned thread: nothing to wait for
+        }
+        while (taskDone[tid] == 0)
+        {
+            taskYield();                                   // yield-poll: each yield also drives pickNext's wakeups
+        }
+    }
+
+    /**
+     * {@code thread.getStackTrace()} -> a {@code StackTraceElement[]} for {@code threadObj}'s stack. If it is the
+     * CALLING thread, walk from the call-site {@code pc}/{@code sp} the JIT captured (the top frame is well-formed).
+     * Otherwise the thread is parked in {@link #taskYield}: its context is the saved switch frame -- start from the
+     * saved ELR/SP, handing {@link Loader#buildTrace} the saved x30 so it can step over the leaf {@code taskYield}
+     * frame. Returns 0-length if the thread isn't a live task.
+     */
+    static long threadStackTrace(long threadObj, long pc, long sp)
+    {
+        int tid = threadTaskOf(threadObj);
+        if (tid == curTask || tid < 0)                     // the calling thread (or unknown): walk from here
+        {
+            return Loader.buildTrace(pc, sp, 0L);
+        }
+        if (taskDone[tid] == 1)                            // a terminated thread has no stack (matches the JDK: a
+        {                                                  // getStackTrace() on a finished thread returns length 0)
+            return Loader.buildTrace(0L, 0L, 0L);
+        }
+        long elr = Magic.load64(taskSp[tid] + 248L);       // saved ELR: the yielded PC (inside taskYield)
+        long ssp = taskSp[tid] + SCHED_FRAME;              // SP at the yield
+        long x30 = Magic.load64(taskSp[tid] + 240L);       // saved x30: caller-of-taskYield (steps over the leaf)
+        return Loader.buildTrace(elr, ssp, x30);
+    }
+
+    static long threadStackTraceAddr;  // VM.threadStackTrace(JJJ)J — a StackTraceElement[] for a Thread's stack
+
+    /** Thread.getAllStackTraces() helper: a {@code Thread[]} of every live task's java/lang/Thread object (skips
+     *  tasks with no Thread object and exited tasks). The guest overlay pairs each with its getStackTrace(). */
+    static long allThreads()
+    {
+        int count = 0;
+        int i = 0;
+        while (i < taskCount)
+        {
+            if (taskThreadObj[i] != 0L && taskDone[i] == 0)
+            {
+                count += 1;
+            }
+            i += 1;
+        }
+        long arr = Heap.allocArray(count, 8);              // Thread[count] (null TIB: iterated by index)
+        int j = 0;
+        i = 0;
+        while (i < taskCount)
+        {
+            if (taskThreadObj[i] != 0L && taskDone[i] == 0)
+            {
+                Magic.store64(arr + 24L + j * 8L, taskThreadObj[i]);
+                j += 1;
+            }
+            i += 1;
+        }
+        return arr;
+    }
+
+    static long allThreadsAddr;        // VM.allThreads()J — a Thread[] of every live task's Thread object
+
     /** Demo task 1: print 'A', then voluntarily yield() the CPU (cooperative — works without the timer). */
     static void taskA()
     {
@@ -871,6 +1022,7 @@ public final class VM
     static void taskExit()
     {
         Magic.disableIrq();
+        taskDone[curTask] = 1;                             // Thread.join() waiters observe this
         taskState[curTask] = TASK_BLOCKED;
         taskWaitOn[curTask] = 3;                           // the dead park semaphore (never posted)
         Magic.enableIrq();
@@ -1284,6 +1436,12 @@ public final class VM
         // JIT'd guest code), so force the writer to compile them. Guarded on their stashed addr, so they
         // never actually run on metal (the addr is non-zero there).
         if (startThreadAddr == 0L) { startThread(0L); }
+        if (objWaitAddr == 0L) { objWait(0L, 0L); }                  // Object.wait/notify/notifyAll + Thread.join
+        if (objNotifyAddr == 0L) { objNotify(0L); }                  // (JIT'd guest reaches these via stashed addrs)
+        if (objNotifyAllAddr == 0L) { objNotifyAll(0L); }
+        if (threadJoinAddr == 0L) { threadJoin(0L); }
+        if (threadStackTraceAddr == 0L) { long u = threadStackTrace(0L, 0L, 0L); }   // Thread.getStackTrace()
+        if (allThreadsAddr == 0L) { long u = allThreads(); }                         // Thread.getAllStackTraces()
         if (newSemAddr == 0L) { int u = newSem(0); }
         if (philReportAddr == 0L) { philReport(0, 0); }
         if (taskExitAddr == 0L) { taskExit(); }
@@ -1329,6 +1487,8 @@ public final class VM
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
         taskWaitOn = new int[MAX_TASKS];
+        taskWaitObj = new long[MAX_TASKS];
+        taskDone = new int[MAX_TASKS];
         semCount = new int[NUM_SEM];
         taskState[0] = TASK_READY;                          // task 0 = the boot flow (SP saved on tick 1)
         taskCount = 1;
@@ -1363,6 +1523,8 @@ public final class VM
         taskState = new int[MAX_TASKS];
         taskWake = new long[MAX_TASKS];
         taskWaitOn = new int[MAX_TASKS];
+        taskWaitObj = new long[MAX_TASKS];
+        taskDone = new int[MAX_TASKS];
         semCount = new int[NUM_SEM];
         taskState[0] = TASK_READY;                          // task 0 = the WiFi boot flow
         taskCount = 1;
@@ -2511,6 +2673,10 @@ public final class VM
     static long captureTraceAddr;      // VM.captureTrace(JJJ)V — throw-site backtrace for printStackTrace()
     // Scheduler helpers the JIT-loaded mini java.base runtime BLs (Symbols ids 6..11).
     static long startThreadAddr;       // VM.startThread(J)V
+    static long objWaitAddr;           // VM.objWait(JJ)V     — Object.wait
+    static long objNotifyAddr;         // VM.objNotify(J)V    — Object.notify
+    static long objNotifyAllAddr;      // VM.objNotifyAll(J)V — Object.notifyAll
+    static long threadJoinAddr;        // VM.threadJoin(J)V   — Thread.join
     static long semWaitAddr;           // VM.semWait(I)V
     static long semPostAddr;           // VM.semPost(I)V
     static long sleepAddr;             // VM.sleep(J)V
@@ -2772,6 +2938,14 @@ public final class VM
             startWifiScheduler();                          // scheduler + IRQs (IRQ-driven RX + blocking sockets)
             board.cyw43.Cyw43.runDemo = false;             // stop the bring-up after connectivity, no HTTP demo
             board.bcm2711.Wifi.bringUp();
+        }
+
+        // A launched program may spawn threads (Thread.start / Object.wait / Thread.join), which need the
+        // switch machinery + timer. The WiFi path already started it; otherwise stand up the minimal
+        // scheduler (task 0 + vectors + timer, no demo tasks) before the launch so threaded mains work.
+        if (taskSp == null)
+        {
+            startWifiScheduler();
         }
 
         // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,
@@ -5540,6 +5714,12 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("pcScheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcSchedule"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("pcTask1Addr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("pcTask1"), Magic.bytes("(I)V")); }
         if (bytesEqual(nm, Magic.bytes("startThreadAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("startThread"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("objWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objWait"), Magic.bytes("(JJ)V")); }
+        if (bytesEqual(nm, Magic.bytes("objNotifyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotify"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("objNotifyAllAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("objNotifyAll"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("threadJoinAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadJoin"), Magic.bytes("(J)V")); }
+        if (bytesEqual(nm, Magic.bytes("threadStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadStackTrace"), Magic.bytes("(JJJ)J")); }
+        if (bytesEqual(nm, Magic.bytes("allThreadsAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("allThreads"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("semWaitAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("semWait"), Magic.bytes("(I)V")); }
         if (bytesEqual(nm, Magic.bytes("semPostAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("semPost"), Magic.bytes("(I)V")); }
         if (bytesEqual(nm, Magic.bytes("sleepAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("sleep"), Magic.bytes("(J)V")); }

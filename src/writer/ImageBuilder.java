@@ -555,6 +555,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.pcSchedule(J)J",    "vm/VM.pcScheduleAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.pcTask1(I)V",       "vm/VM.pcTask1Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.startThread(J)V",   "vm/VM.startThreadAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.objWait(JJ)V",      "vm/VM.objWaitAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.objNotify(J)V",     "vm/VM.objNotifyAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.objNotifyAll(J)V",  "vm/VM.objNotifyAllAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.threadJoin(J)V",    "vm/VM.threadJoinAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.threadStackTrace(JJJ)J", "vm/VM.threadStackTraceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.allThreads()J",         "vm/VM.allThreadsAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.semWait(I)V",       "vm/VM.semWaitAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.semPost(I)V",       "vm/VM.semPostAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.sleep(J)V",         "vm/VM.sleepAddr");
@@ -861,7 +867,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int i = 0; i < names.size(); i++)
         {
             String n = names.get(i);
-            if (n.startsWith("java/") || n.startsWith("jdk/") || n.startsWith("sun/") || n.startsWith("demo/"))
+            // Unnamed-package (top-level, no '/') classes are demand-loadable too, so an UNMODIFIED JDK test
+            // (e.g. GenerifyStackTraces) runs as the manifest main. All VM-internal classes carry a package.
+            if (n.startsWith("java/") || n.startsWith("jdk/") || n.startsWith("sun/") || n.startsWith("demo/")
+                    || !n.contains("/"))
             {
                 out.add(n);
             }

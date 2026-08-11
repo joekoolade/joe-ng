@@ -67,6 +67,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isDesiredAssertionStatus(methodCp);
     }
+    public int monitorOp(int methodCp)
+    {
+        return Loader.monitorOp(methodCp);
+    }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
         long tib = isRef ? Loader.refArrayTibForClass(operand) : Loader.primArrayTib(operand);
@@ -144,7 +148,10 @@ final class MetalSymbols implements Symbols
         int id = Loader.magicId(methodCp);
         return id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
             || id == Intrinsics.SLEEP_MS || id == Intrinsics.NEW_SEM || id == Intrinsics.REPORT
-            || id == Intrinsics.PRINT_STR;
+            || id == Intrinsics.PRINT_STR
+            || id == Intrinsics.MON_WAIT || id == Intrinsics.MON_NOTIFY
+            || id == Intrinsics.MON_NOTALL || id == Intrinsics.THREAD_JOIN
+            || id == Intrinsics.STACK_TRACE || id == Intrinsics.ALL_THREADS;
     }
     public int intrinsicId(int methodCp)
     {
@@ -254,6 +261,30 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.SPAWN)
         {
             return VM.startThreadAddr;
+        }
+        if (helper == Symbols.MON_WAIT)
+        {
+            return VM.objWaitAddr;
+        }
+        if (helper == Symbols.MON_NOTIFY)
+        {
+            return VM.objNotifyAddr;
+        }
+        if (helper == Symbols.MON_NOTALL)
+        {
+            return VM.objNotifyAllAddr;
+        }
+        if (helper == Symbols.THREAD_JOIN)
+        {
+            return VM.threadJoinAddr;
+        }
+        if (helper == Symbols.STACK_TRACE)
+        {
+            return VM.threadStackTraceAddr;
+        }
+        if (helper == Symbols.ALL_THREADS)
+        {
+            return VM.allThreadsAddr;
         }
         if (helper == Symbols.SEM_WAIT)
         {
