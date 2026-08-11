@@ -6124,6 +6124,10 @@ public final class Loader
         if (isName(gbase, n, 0x737461636B7472L, 7))  { return Intrinsics.STACK_TRACE; } // "stacktr"
         if (isName(gbase, n, 0x616C6C746872L, 6))    { return Intrinsics.ALL_THREADS; } // "allthr"
         if (isName(gbase, n, 0x686C646C6F636BL, 7))  { return Intrinsics.HOLDS_LOCK; }  // "hldlock"
+        if (isName(gbase, n, 0x696E7472L, 4))        { return Intrinsics.INTR; }        // "intr"
+        if (isName(gbase, n, 0x6973696E7472L, 6))    { return Intrinsics.IS_INTR; }     // "isintr"
+        if (isName(gbase, n, 0x776173696E7472L, 7))  { return Intrinsics.WAS_INTR; }    // "wasintr"
+        if (isName(gbase, n, 0x6973616C697665L, 7))  { return Intrinsics.IS_ALIVE; }    // "isalive"
         return -1;
     }
 

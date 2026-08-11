@@ -211,6 +211,26 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code Thread.interrupt()} -> VM.interrupt: set {@code t}'s interrupt flag + wake it if sleeping/blocked. */
+    public static void intr(Object t)
+    {
+        throw intrinsic();
+    }
+    /** {@code Thread.isInterrupted()} -> VM.isInterrupted: {@code t}'s interrupt flag (does not clear it). */
+    public static boolean isintr(Object t)
+    {
+        throw intrinsic();
+    }
+    /** Read + clear the current task's interrupt flag (Thread.sleep uses this to throw InterruptedException once). */
+    public static boolean wasintr()
+    {
+        throw intrinsic();
+    }
+    /** {@code Thread.isAlive()} -> VM.isAlive: true if {@code t} has started and not yet terminated. */
+    public static boolean isalive(Object t)
+    {
+        throw intrinsic();
+    }
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
     public static int newSem(int initial)
