@@ -840,6 +840,9 @@ public final class Loader
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
+        buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
+                                                            //   trampoline (needs Runnable loaded by loadAll;
+                                                            //   harmless if the program spawns no threads)
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -852,6 +855,7 @@ public final class Loader
             return;
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
+        Uart.write(Magic.bytes("\n[main returned normally]\n"));
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
@@ -1078,6 +1082,170 @@ public final class Loader
         Magic.store64(obj + 0L, stringTib());           // wrap it as a guest java/lang/String
         Magic.store64(obj + 16L, arr);                  // value field (offset 16); coder@24 stays 0 = LATIN1
         return obj;
+    }
+
+    // ----- M-B: Thread.getStackTrace() -> StackTraceElement[] (walk the frame chain, materialise elements) -----
+
+    /** A guest java/lang/String from a length-prefixed Utf8 at {@code base+off} (u2 length, then bytes); 0 if base 0. */
+    static long guestStringUtf8(long base, int off)
+    {
+        if (base == 0L)
+        {
+            return 0L;
+        }
+        int len = u2(base + off);
+        long arr = Heap.allocArray(len, 1);
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+        }
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(arr + 24L + i, (byte) u1(base + off + 2L + i));
+            i += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);
+        return obj;
+    }
+
+    /** TIB of {@code java/lang/StackTraceElement} (0 if not loaded). */
+    private static long steTib()
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
+        return i >= 0 ? clTib[i] : 0L;
+    }
+
+    /**
+     * Build one {@code StackTraceElement} for machine PC {@code pc}: resolve its method (a JIT'd method, a
+     * {@code <clinit>}, or a writer-compiled image method) to declaringClass / methodName / fileName / line and
+     * write those four fields at their slot offsets. Mirrors {@link #printFrameAt}'s lookup, but materialises an
+     * object instead of printing. Image frames carry the combined {@code owner/Class.method} as the method name
+     * (they sit above the guest frames the caller inspects, so their exact split doesn't matter).
+     */
+    private static long frameToElement(long pc, long steTib)
+    {
+        long bestBuf = 0L;
+        int bestReg = -1;
+        int bestClin = -1;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgBuf[i] != 0L && rgBuf[i] <= pc && rgBuf[i] > bestBuf) { bestBuf = rgBuf[i]; bestReg = i; bestClin = -1; }
+            i += 1;
+        }
+        int c = 0;
+        while (c < clinitN)
+        {
+            if (clinitEntry[c] != 0L && clinitEntry[c] <= pc && clinitEntry[c] > bestBuf) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            c += 1;
+        }
+        long clsStr = 0L;
+        long methStr = 0L;
+        long fileStr = 0L;
+        long line = 0L;
+        if (bestReg >= 0)
+        {
+            clsStr = guestStringUtf8(rgBase[bestReg], rgClassOff[bestReg]);
+            methStr = guestStringUtf8(rgBase[bestReg], rgNameOff[bestReg]);
+            fileStr = guestStringUtf8(rgSrc[bestReg], 0);
+            line = lineAtOffset(rgLine[bestReg], (int) ((pc - bestBuf) >> 2));
+        }
+        else if (bestClin >= 0)
+        {
+            int pd = clinitPd[bestClin];
+            clsStr = guestStringUtf8(pdBase[pd], pdNameOff[pd]);
+            methStr = guestString(Magic.bytes("<clinit>"));
+        }
+        else
+        {
+            long tab = VM.imageSymTable;                    // writer-compiled VM/board method: image symbol table
+            long n = VM.imageSymCount;
+            long k = 0;
+            while (k < n)
+            {
+                long e = tab + k * 40L;
+                long start = Magic.load64(e);
+                if (pc >= start && pc < Magic.load64(e + 8L))
+                {
+                    methStr = guestStringUtf8(Magic.load64(e + 16L), 0);   // "owner/Class.method" (combined)
+                    fileStr = guestStringUtf8(Magic.load64(e + 24L), 0);
+                    line = lineAtOffset(Magic.load64(e + 32L), (int) ((pc - start) >> 2));
+                    k = n;
+                }
+                else
+                {
+                    k += 1;
+                }
+            }
+        }
+        long ste = Heap.alloc(48);                          // header(16) + 4 field slots
+        Magic.store64(ste + 0L, steTib);
+        Magic.store64(ste + 16L, clsStr);
+        Magic.store64(ste + 24L, methStr);
+        Magic.store64(ste + 32L, fileStr);
+        Magic.store64(ste + 40L, line);
+        return ste;
+    }
+
+    /**
+     * Walk the frame chain from ({@code pc},{@code sp}) with {@link VM#frameSizeAt}: record each frame's PC into
+     * {@code arr} (a StackTraceElement[]) if non-0, else just count. Stops at the run-trampoline (so a spawned
+     * thread's bottom frame is run(), not the trampoline). {@code savedX30} (non-0 only for a parked thread) lets
+     * the FIRST frame step over a leaf {@code taskYield} whose caller return is in x30, not on the stack.
+     */
+    private static int traceWalk(long pc, long sp, long savedX30, long arr, long steTib)
+    {
+        long cpc = pc;
+        long csp = sp;
+        boolean first = true;
+        int n = 0;
+        while (n < 64 && cpc > 0x1000L)
+        {
+            if (VM.runTrampAddr != 0L && cpc >= VM.runTrampAddr && cpc < VM.runTrampAddr + 64L)
+            {
+                break;                                     // run-trampoline: end the trace at run()
+            }
+            if (arr != 0L)
+            {
+                Magic.store64(arr + 24L + n * 8L, frameToElement(cpc, steTib));
+            }
+            n += 1;
+            long cfs = VM.frameSizeAt(cpc);
+            if (cfs == 0L)
+            {
+                if (first && savedX30 > 0x1000L)
+                {
+                    cpc = savedX30 - 4L;                   // leaf top frame (taskYield): caller return is x30, SP unchanged
+                    first = false;
+                    continue;
+                }
+                break;                                     // top of the resolvable stack
+            }
+            cpc = Magic.load64(csp) - 4L;                  // caller's return address (the call site)
+            csp += cfs;
+            first = false;
+        }
+        return n;
+    }
+
+    /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
+    static long buildTrace(long pc, long sp, long savedX30)
+    {
+        long tib = steTib();
+        int count = traceWalk(pc, sp, savedX30, 0L, tib);  // pass 1: count
+        long arr = Heap.allocArray(count, 8);              // StackTraceElement[count]
+        if (tib != 0L)
+        {
+            // Give the array the [LStackTraceElement; TIB (element Type = TIB[0]) so a `checkcast
+            // [LStackTraceElement;` on a Map.Entry.getValue() result passes instead of walking a null Type.
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(Magic.load64(tib)));
+        }
+        traceWalk(pc, sp, savedX30, arr, tib);             // pass 2: fill
+        return arr;
     }
 
     /** Copy an ASCII {@code byte[]} into a fresh mini String and run the compiled real {@code Integer.parseInt(s, 10)}. */
@@ -1481,6 +1649,9 @@ public final class Loader
             // to a 0 vtable slot. Seed them by the overlay's own descriptor so they're compiled + filled in.
             grew = seedAllNamed(Magic.bytes("getAndBitwiseOr"), Magic.bytes("(Ljava/lang/Object;I)I")) || grew;
             grew = seedAllNamed(Magic.bytes("compareAndSet"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z")) || grew;
+            // StackTraceElement is instantiated NATIVELY (Loader.frameToElement), which RTA can't see, so its
+            // getters would compile to 0 vtable slots. Seed them by name+descriptor (no-op if STE isn't loaded).
+            grew = seedAllNamed(Magic.bytes("getMethodName"), Magic.bytes("()Ljava/lang/String;")) || grew;
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             pendN = 0;
             int b = 0;
@@ -5779,6 +5950,37 @@ public final class Loader
                 && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Z"));
     }
 
+    /**
+     * Object-monitor op for an {@code invokevirtual} on {@code java/lang/Object}: 0 none, 1 {@code wait()V},
+     * 2 {@code wait(J)V}, 3 {@code notify()V}, 4 {@code notifyAll()V}. Recognised by name+descriptor so the
+     * compiler can lower it DIRECTLY to a VM helper (like getClass) instead of through the vtable -- wait/notify
+     * are final and the mini Object's bodies are never compiled, so a vtable dispatch would hit a no-op slot.
+     */
+    static int monitorOp(int idx)
+    {
+        if (!utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/Object")))
+        {
+            return 0;
+        }
+        int n = mrefNameOff(idx);
+        int d = mrefDescOff(idx);
+        if (utf8IsAtBase(gbase, n, Magic.bytes("wait")))
+        {
+            if (utf8IsAtBase(gbase, d, Magic.bytes("()V")))  { return 1; }
+            if (utf8IsAtBase(gbase, d, Magic.bytes("(J)V"))) { return 2; }
+            return 0;                                        // wait(JI)V etc.: unused, fall back to vtable
+        }
+        if (utf8IsAtBase(gbase, n, Magic.bytes("notify")) && utf8IsAtBase(gbase, d, Magic.bytes("()V")))
+        {
+            return 3;
+        }
+        if (utf8IsAtBase(gbase, n, Magic.bytes("notifyAll")) && utf8IsAtBase(gbase, d, Magic.bytes("()V")))
+        {
+            return 4;
+        }
+        return 0;
+    }
+
     // ----- resolvers the on-metal MetalSymbols shares with emit* (M5.4.c) -----
 
     /** TIB of the class at {@code Class} entry {@code classIdx} (its own if not yet registered). */
@@ -5915,6 +6117,12 @@ public final class Loader
         if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
         if (isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
         if (isName(gbase, n, 0x616464724F66L, 6))    { return Intrinsics.ADDR_OF; }   // "addrOf"
+        if (isName(gbase, n, 0x6D77616974L, 5))      { return Intrinsics.MON_WAIT; }    // "mwait"
+        if (isName(gbase, n, 0x6D6E6F74696679L, 7))  { return Intrinsics.MON_NOTIFY; }  // "mnotify"
+        if (isName(gbase, n, 0x6D6E6F74616C6CL, 7))  { return Intrinsics.MON_NOTALL; }  // "mnotall"
+        if (isName(gbase, n, 0x746A6F696EL, 5))      { return Intrinsics.THREAD_JOIN; } // "tjoin"
+        if (isName(gbase, n, 0x737461636B7472L, 7))  { return Intrinsics.STACK_TRACE; } // "stacktr"
+        if (isName(gbase, n, 0x616C6C746872L, 6))    { return Intrinsics.ALL_THREADS; } // "allthr"
         return -1;
     }
 

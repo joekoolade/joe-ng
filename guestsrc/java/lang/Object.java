@@ -1,5 +1,7 @@
 package java.lang;
 
+import magic.Magic;
+
 /**
  * A JDK-free, minimal {@code java/lang/Object}: the root class. It exists so {@code hashCode()},
  * {@code equals(Object)} AND {@code toString()} get canonical vtable slots that subclasses ({@link String})
@@ -34,5 +36,29 @@ public class Object
     public String toString()
     {
         return "object";
+    }
+
+    // ----- Object monitors. Appended AFTER hashCode/equals/toString so their canonical vtable slots don't
+    // shift. wait/notify are final (no subclass overrides), so every object's slot points here; each lowers
+    // to a Magic intrinsic -> a VM scheduler helper. The monitor lock itself is a no-op on this scheduler.
+
+    public final void wait() throws InterruptedException
+    {
+        Magic.mwait(this, 0L);
+    }
+
+    public final void wait(long ms) throws InterruptedException
+    {
+        Magic.mwait(this, ms);
+    }
+
+    public final void notify()
+    {
+        Magic.mnotify(this);
+    }
+
+    public final void notifyAll()
+    {
+        Magic.mnotall(this);
     }
 }

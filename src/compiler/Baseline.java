@@ -1352,6 +1352,32 @@ public final class Baseline
             cb.emit(A64Enc.movReg(pushReg(), 31));              // result = XZR = 0 = false
             return;
         }
+        int mop = symbols.monitorOp(cpIndex);                   // Object.wait/notify/notifyAll: lower to a VM helper
+        if (mop != 0)                                           // directly (final methods; the vtable slot is a no-op)
+        {
+            if (mop == 1)                                       // wait()V -> objWait(recv, 0)
+            {
+                nullCheck(cb, opSlot(sp - 1), pos);
+                cb.emit(A64Enc.movReg(pushReg(), 31));          // push ms = 0 (XZR) as the 2nd arg
+                emitCall(cb, 2, false, false, SYM_HELPER, Symbols.MON_WAIT);
+            }
+            else if (mop == 2)                                  // wait(J)V -> objWait(recv, ms)
+            {
+                nullCheck(cb, opSlot(sp - 2), pos);             // receiver is below the ms operand
+                emitCall(cb, 2, false, false, SYM_HELPER, Symbols.MON_WAIT);
+            }
+            else if (mop == 3)                                  // notify()V -> objNotify(recv)
+            {
+                nullCheck(cb, opSlot(sp - 1), pos);
+                emitCall(cb, 1, false, false, SYM_HELPER, Symbols.MON_NOTIFY);
+            }
+            else                                                // notifyAll()V -> objNotifyAll(recv)
+            {
+                nullCheck(cb, opSlot(sp - 1), pos);
+                emitCall(cb, 1, false, false, SYM_HELPER, Symbols.MON_NOTALL);
+            }
+            return;
+        }
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
         if (deepStack)
@@ -2286,6 +2312,35 @@ public final class Baseline
             {
                 cb.emit(A64Enc.movReg(d, a));   // reinterpret in place (pop/push land on the same slot)
             }
+        }
+        else if (id == Intrinsics.MON_WAIT)
+        {
+            emitCall(cb, 2, false, false, SYM_HELPER, Symbols.MON_WAIT);    // (obj, ms) -> void
+        }
+        else if (id == Intrinsics.MON_NOTIFY)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.MON_NOTIFY);  // (obj) -> void
+        }
+        else if (id == Intrinsics.MON_NOTALL)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.MON_NOTALL);  // (obj) -> void
+        }
+        else if (id == Intrinsics.THREAD_JOIN)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.THREAD_JOIN); // (threadObj) -> void
+        }
+        else if (id == Intrinsics.STACK_TRACE)
+        {
+            // thread receiver is on top; append this call site's PC + SP so a self-trace walks from here
+            int tp = pushReg();
+            symbols.codePc(cb, tp, cb.wordCount());
+            int ts = pushReg();
+            cb.emit(A64Enc.movFromSp(ts));
+            emitCall(cb, 3, true, false, SYM_HELPER, Symbols.STACK_TRACE);  // (thread, pc, sp) -> StackTraceElement[]
+        }
+        else if (id == Intrinsics.ALL_THREADS)
+        {
+            emitCall(cb, 0, true, false, SYM_HELPER, Symbols.ALL_THREADS);  // () -> Thread[]
         }
         else if (id == Intrinsics.LOAD64)
         {

@@ -175,6 +175,37 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code o.wait(ms)} (ms<=0 = forever) -> VM.objWait: park the current task on {@code o} until notified. */
+    public static void mwait(Object o, long ms)
+    {
+        throw intrinsic();
+    }
+    /** {@code o.notify()} -> VM.objNotify: wake one task waiting on {@code o}. */
+    public static void mnotify(Object o)
+    {
+        throw intrinsic();
+    }
+    /** {@code o.notifyAll()} -> VM.objNotifyAll: wake every task waiting on {@code o}. */
+    public static void mnotall(Object o)
+    {
+        throw intrinsic();
+    }
+    /** {@code t.join()} -> VM.threadJoin: block until the task running Thread {@code t} has exited. */
+    public static void tjoin(Object t)
+    {
+        throw intrinsic();
+    }
+    /** {@code t.getStackTrace()} -> VM.threadStackTrace: a StackTraceElement[] for Thread {@code t}'s stack.
+     *  Lowered with the caller's PC+SP appended so a self-trace can walk from the call site. */
+    public static StackTraceElement[] stacktr(Object t)
+    {
+        throw intrinsic();
+    }
+    /** {@code Thread.getAllStackTraces()} helper -> VM.allThreads: every live task's java/lang/Thread object. */
+    public static Thread[] allthr()
+    {
+        throw intrinsic();
+    }
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
     public static int newSem(int initial)

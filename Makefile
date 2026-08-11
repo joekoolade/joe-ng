@@ -53,7 +53,16 @@ test: build
 	$(JAVA) -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
 
-image: build
+# Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
+# They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
+# Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
+JDKTESTS ?= test/jdk/java/lang/GenerifyStackTraces.java
+
+.PHONY: jdktests
+jdktests: guest
+	$(JAVAC) --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(JDKTESTS)
+
+image: build jdktests
 	$(JAVA) -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 
