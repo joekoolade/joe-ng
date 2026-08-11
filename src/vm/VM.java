@@ -568,6 +568,7 @@ public final class VM
     static int[]  taskDone;                 // 1 once a task ran taskExit() (its run() returned) — Thread.join() polls this
     static long[] taskThreadObj;            // M4: the guest java/lang/Thread of each task (0 until known/lazily wrapped)
     static int[]  taskInterrupted;          // Thread.interrupt() flag per task (1 = interrupted; sleep/join observe it)
+    static int[]  taskPermit;               // LockSupport permit per task (1 = a pending unpark; park consumes it)
     static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
@@ -731,6 +732,77 @@ public final class VM
     {
         int tid = threadTaskOf(threadObj);
         return (tid >= 0 && taskDone[tid] == 0) ? 1 : 0;
+    }
+
+    /**
+     * {@code Thread.join(Duration)} core: wait up to {@code millis} for {@code threadObj} to terminate. Returns
+     * 3 = not started (NEW -> IllegalThreadStateException), 1 = terminated (true), 2 = interrupted (clears the
+     * flag -> InterruptedException), 0 = timed out (false). {@code millis<=0} does not wait.
+     */
+    static int joinTimed(long threadObj, long millis)
+    {
+        int tid = threadTaskOf(threadObj);
+        if (tid < 0)
+        {
+            return 3;                                      // NEW / never started
+        }
+        if (taskDone[tid] != 0)
+        {
+            return 1;                                      // already TERMINATED
+        }
+        if (millis <= 0L)
+        {
+            return 0;                                      // no wait, not done
+        }
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * millis / 1000L;
+        while (Magic.readCNTPCT_EL0() < deadline)
+        {
+            if (taskInterrupted[curTask] != 0)
+            {
+                taskInterrupted[curTask] = 0;              // join clears the interrupt status when it throws
+                return 2;
+            }
+            if (taskDone[tid] != 0)
+            {
+                return 1;
+            }
+            taskYield();
+        }
+        return (taskDone[tid] != 0) ? 1 : 0;               // final check at the deadline
+    }
+
+    /** {@code LockSupport.park()}: block the current task until a permit is available (an {@link #unpark}). */
+    static void park()
+    {
+        Magic.disableIrq();
+        int me = curTask;
+        while (taskPermit[me] == 0)
+        {
+            taskWaitOn[me] = -3;                           // a park waiter
+            taskState[me] = TASK_BLOCKED;
+            Magic.enableIrq();
+            taskYield();
+            Magic.disableIrq();
+        }
+        taskPermit[me] = 0;                                // consume the permit
+        Magic.enableIrq();
+    }
+
+    /** {@code LockSupport.unpark(t)}: make a permit available for {@code threadObj} and wake it if parked. */
+    static void unpark(long threadObj)
+    {
+        int tid = threadTaskOf(threadObj);
+        if (tid < 0)
+        {
+            return;
+        }
+        Magic.disableIrq();
+        taskPermit[tid] = 1;
+        if (taskState[tid] == TASK_BLOCKED && taskWaitOn[tid] == -3)
+        {
+            taskState[tid] = TASK_READY;
+        }
+        Magic.enableIrq();
     }
 
     /**
@@ -1634,6 +1706,9 @@ public final class VM
         if (isInterruptedAddr == 0L) { int u = isInterrupted(0L); }
         if (checkIntrAddr == 0L) { int u = checkClearInterrupt(); }
         if (isAliveAddr == 0L) { int u = isAlive(0L); }
+        if (joinTimedAddr == 0L) { int u = joinTimed(0L, 0L); }      // Thread.join(Duration) + LockSupport
+        if (parkAddr == 0L) { park(); }
+        if (unparkAddr == 0L) { unpark(0L); }
         if (threadJoinAddr == 0L) { threadJoin(0L); }
         if (threadStackTraceAddr == 0L) { long u = threadStackTrace(0L, 0L, 0L); }   // Thread.getStackTrace()
         if (allThreadsAddr == 0L) { long u = allThreads(); }                         // Thread.getAllStackTraces()
@@ -1686,6 +1761,7 @@ public final class VM
         taskDone = new int[MAX_TASKS];
         taskMonWait = new long[MAX_TASKS];
         taskInterrupted = new int[MAX_TASKS];
+        taskPermit = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -1727,6 +1803,7 @@ public final class VM
         taskDone = new int[MAX_TASKS];
         taskMonWait = new long[MAX_TASKS];
         taskInterrupted = new int[MAX_TASKS];
+        taskPermit = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -2387,13 +2464,17 @@ public final class VM
     // layout as frameTable; frameSizeAt consults both, so unwinding can pop a JIT'd
     // frame just like a compiled one.
     static long jitFrameTable, jitFrameCount;
+    static long jitLocalTable, jitLocalCount;   // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
+    static long unwindLocBuf;                   // 16-slot scratch: reconstructs the handler's callee-saved locals during unwind
 
-    /** Record a JIT'd method's machine-PC range and frame size, so unwind can pop it. */
-    static void addJitFrame(long codeStart, long codeEnd, long frameSize)
+    /** Record a JIT'd method's machine-PC range, frame size, and callee-saved local count, so unwind can pop it
+     *  and restore its handler's pre-try locals (x19..x(19+regLocals-1), saved at [SP+8..]). */
+    static void addJitFrame(long codeStart, long codeEnd, long frameSize, long regLocals)
     {
         if (jitFrameTable == 0L)
         {
             jitFrameTable = Heap.allocData(JIT_FRAME_MAX * 24);      // JIT_FRAME_MAX * 24 bytes
+            jitLocalTable = Heap.allocData(JIT_FRAME_MAX * 24);
         }
         if (jitFrameCount < JIT_FRAME_MAX)
         {
@@ -2401,8 +2482,19 @@ public final class VM
             Magic.store64(e, codeStart);
             Magic.store64(e + 8L, codeEnd);
             Magic.store64(e + 16L, frameSize);
+            long le = jitLocalTable + jitLocalCount * 24L;           // same pc-range, parallel table (frameSizeIn reads it)
+            Magic.store64(le, codeStart);
+            Magic.store64(le + 8L, codeEnd);
+            Magic.store64(le + 16L, regLocals);
             jitFrameCount = jitFrameCount + 1L;
+            jitLocalCount = jitLocalCount + 1L;
         }
+    }
+
+    /** Callee-saved local count of the JIT'd method covering machine PC {@code pc} (0 = none / image method). */
+    static long jitRegLocalsAt(long pc)
+    {
+        return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // 3rd word = regLocals
     }
     static final int JIT_FRAME_MAX = 4096;     // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
@@ -2418,6 +2510,7 @@ public final class VM
     static void dropJitTablesAbove(long codeMark)
     {
         jitFrameCount = compactTable(jitFrameTable, jitFrameCount, 24L, codeMark);
+        jitLocalCount = compactTable(jitLocalTable, jitLocalCount, 24L, codeMark);
         jitHandlerCount = compactTable(jitHandlerTable, jitHandlerCount, 32L, codeMark);
     }
 
@@ -2536,12 +2629,37 @@ public final class VM
             Uart.putc(0x0A);
         }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
+        if (unwindLocBuf == 0L)
+        {
+            unwindLocBuf = Heap.allocData(16 * 8);     // 16 callee-saved local slots, reused across unwinds
+        }
+        // Seed with the register snapshot AT THE THROW: this method's OWN prologue saved the throwing frame's
+        // x19..x28 (10 slots) at [our_sp + 8 + k*8]. That captures every handler local a shallow-regLocals callee
+        // preserved but never re-saved (its value flowed through untouched into our prologue's save). Slots that
+        // an intervening frame DID save get overwritten below as we pop that frame.
+        long mysp = Magic.readSP();
+        long ls = 0L;
+        while (ls < 16L)
+        {
+            if (ls < 10L)
+            {
+                Magic.store64(unwindLocBuf + ls * 8L, Magic.load64(mysp + 8L + ls * 8L));
+            }
+            else
+            {
+                Magic.store64(unwindLocBuf + ls * 8L, 0L);
+            }
+            ls += 1L;
+        }
         while (true)
         {
             long h = findHandler(pc, exc);
             if (h != 0L)
             {
-                Magic.resume(h, sp, exc);          // never returns
+                // unwindLocBuf now holds the handler's live locals: each frame we popped saved its CALLER's
+                // x19.. registers, and the last frame popped (the one the handler called into) saved the handler's
+                // own locals -- so a catch/finally that reads a local set before the try sees the live value.
+                Magic.resume(h, sp, exc, jitRegLocalsAt(pc), unwindLocBuf);   // never returns
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -2575,6 +2693,16 @@ public final class VM
                 {
                     Magic.wfe();    // uncaught at the top
                 }
+            }
+            // Overwrite ONLY the slots this frame saved (its caller's x19.. at [sp+8+k*8]); leave higher slots to
+            // the seed / deeper frames. When the caller turns out to be the handler, these ARE its pre-try locals;
+            // the frame the handler called into is popped last, so it wins for the slots it saved.
+            long nrl = jitRegLocalsAt(pc);
+            long k2 = 0L;
+            while (k2 < nrl && k2 < 16L)
+            {
+                Magic.store64(unwindLocBuf + k2 * 8L, Magic.load64(sp + 8L + k2 * 8L));
+                k2 += 1L;
             }
             pc = Magic.load64(sp) - 4L;             // the call site (return address - one instruction)
             sp = sp + fs;                           // pop this frame
@@ -2888,6 +3016,9 @@ public final class VM
     static long isInterruptedAddr;     // VM.isInterrupted(J)I— Thread.isInterrupted
     static long checkIntrAddr;         // VM.checkClearInterrupt()I — Thread.sleep interruption check
     static long isAliveAddr;           // VM.isAlive(J)I      — Thread.isAlive
+    static long joinTimedAddr;         // VM.joinTimed(JJ)I   — Thread.join(Duration)
+    static long parkAddr;              // VM.park()V          — LockSupport.park
+    static long unparkAddr;            // VM.unpark(J)V       — LockSupport.unpark
     static long threadJoinAddr;        // VM.threadJoin(J)V   — Thread.join
     static long semWaitAddr;           // VM.semWait(I)V
     static long semPostAddr;           // VM.semPost(I)V
@@ -5936,6 +6067,9 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("isInterruptedAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("isInterrupted"), Magic.bytes("(J)I")); }
         if (bytesEqual(nm, Magic.bytes("checkIntrAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkClearInterrupt"), Magic.bytes("()I")); }
         if (bytesEqual(nm, Magic.bytes("isAliveAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("isAlive"), Magic.bytes("(J)I")); }
+        if (bytesEqual(nm, Magic.bytes("joinTimedAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("joinTimed"), Magic.bytes("(JJ)I")); }
+        if (bytesEqual(nm, Magic.bytes("parkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("park"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("unparkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unpark"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("threadJoinAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadJoin"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("threadStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("threadStackTrace"), Magic.bytes("(JJJ)J")); }
         if (bytesEqual(nm, Magic.bytes("allThreadsAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("allThreads"), Magic.bytes("()J")); }
@@ -6413,7 +6547,7 @@ public final class VM
         {
             long base = codeBuf + gmWordOff[m] * 4L;
             long end = base + gmSize[m] * 4L;
-            addJitFrame(base, end, gmFrameSize[m]);
+            addJitFrame(base, end, gmFrameSize[m], 0);     // metal-writer path: no pre-try local restore (0)
             setClassContext(gmClsIdx[m]);                  // resolve catch-type cp in this method's class
             int h = 0;
             while (h < gmHN[m])

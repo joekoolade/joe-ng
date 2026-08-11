@@ -565,6 +565,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.isInterrupted(J)I", "vm/VM.isInterruptedAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkClearInterrupt()I", "vm/VM.checkIntrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.isAlive(J)I",       "vm/VM.isAliveAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.joinTimed(JJ)I",    "vm/VM.joinTimedAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.park()V",           "vm/VM.parkAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.unpark(J)V",        "vm/VM.unparkAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.threadJoin(J)V",    "vm/VM.threadJoinAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.threadStackTrace(JJJ)J", "vm/VM.threadStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.allThreads()J",         "vm/VM.allThreadsAddr");
@@ -877,6 +880,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             // Unnamed-package (top-level, no '/') classes are demand-loadable too, so an UNMODIFIED JDK test
             // (e.g. GenerifyStackTraces) runs as the manifest main. All VM-internal classes carry a package.
             if (n.startsWith("java/") || n.startsWith("jdk/") || n.startsWith("sun/") || n.startsWith("demo/")
+                    || n.startsWith("org/")               // JUnit-lite shims (org/junit/...) for the JDK tests
                     || !n.contains("/"))
             {
                 out.add(n);

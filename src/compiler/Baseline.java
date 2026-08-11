@@ -2262,14 +2262,28 @@ public final class Baseline
             cb.emit(A64Enc.movReg(pushReg(), 0));              // x0 = the faulting call's receiver (trap diagnostic)
         }
         else if (id == Intrinsics.RESUME)
-        // exc->x9, SP=sp, br pc (no return)
+        // restore the handler's callee-saved locals, exc->x9, SP=sp, br pc (no return)
         {
+            int locBuf = popReg();                              // base of the reconstructed-locals buffer
+            int nloc = popReg();                                // regLocals of the handler's method
             int exc = popReg();
             int spv = popReg();
             int pc = popReg();
-            cb.emit(A64Enc.movReg(16, pc));                     // target -> scratch (x9 gets clobbered next)
-            cb.emit(A64Enc.movReg(9, exc));                     // exception -> handler's stack slot
-            cb.emit(A64Enc.movToSp(spv));
+            cb.emit(A64Enc.movReg(16, pc));                     // x16 = target (x9 gets clobbered below)
+            cb.emit(A64Enc.movReg(17, spv));                    // x17 = handler frame SP (installed as the new SP)
+            cb.emit(A64Enc.movReg(18, locBuf));                 // x18 = reconstructed-locals buffer base
+            // Restore x19..x(19+nloc-1) from [x18 + k*8] (the unwinder rebuilt the handler's live locals there,
+            // from the frame it called into), so a catch/finally that reads a pre-try local sees the live value.
+            int k = 0;
+            while (k < LOC_MAX)
+            {
+                cb.emit(A64Enc.cmpImm(nloc, k + 1));            // if nloc < k+1 (i.e. nloc <= k) skip this reload
+                cb.emit(A64Enc.bcond(11, 2));                   // b.lt +2  (11 = LT)
+                cb.emit(A64Enc.ldrx(LOC_BASE + k, 18, k * 8));
+                k += 1;
+            }
+            cb.emit(A64Enc.movReg(9, exc));                     // exception -> handler's stack slot (x9)
+            cb.emit(A64Enc.movToSp(17));
             cb.emit(A64Enc.br(16));
         }
 
@@ -2360,6 +2374,18 @@ public final class Baseline
         else if (id == Intrinsics.IS_ALIVE)
         {
             emitCall(cb, 1, true, false, SYM_HELPER, Symbols.IS_ALIVE);     // (thread) -> int
+        }
+        else if (id == Intrinsics.JOIN_TIMED)
+        {
+            emitCall(cb, 2, true, false, SYM_HELPER, Symbols.JOIN_TIMED);   // (thread, millis) -> int status
+        }
+        else if (id == Intrinsics.PARK)
+        {
+            emitCall(cb, 0, false, false, SYM_HELPER, Symbols.PARK);        // () -> void
+        }
+        else if (id == Intrinsics.UNPARK)
+        {
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.UNPARK);      // (thread) -> void
         }
         else if (id == Intrinsics.LOAD64)
         {
@@ -2862,6 +2888,9 @@ public final class Baseline
     private int[] lastBcToWord;
 
     public int frameSize() { return frameSize; }
+
+    /** Number of locals held in callee-saved x19.. (so unwind can restore a handler's pre-try locals). */
+    public int regLocals() { return regLocals; }
     public int handlerCount() { return exCount; }
     public int handlerStartWord(int i) { return hStartW[i]; }
     public int handlerEndWord(int i) { return hEndW[i]; }
