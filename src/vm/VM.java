@@ -682,7 +682,15 @@ public final class VM
     static void sleep(long ms)
     {
         int me = curTask;
-        taskWake[me] = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
+        long freq = Magic.readCNTFRQ_EL0();
+        if (ms > 9223372036854775807L / freq)              // freq*ms would overflow: never time out, only interrupt
+        {                                                  //   (Thread.sleep(Long.MAX_VALUE) waits until interrupted)
+            taskWake[me] = 9223372036854775807L;
+        }
+        else
+        {
+            taskWake[me] = Magic.readCNTPCT_EL0() + freq * ms / 1000L;
+        }
         taskState[me] = TASK_SLEEPING;
         while (taskState[me] == TASK_SLEEPING)
         {
@@ -1510,10 +1518,17 @@ public final class VM
 
     // ----- provided java.base natives (called by loaded guest code via Loader.nativeBuf) -----
 
-    /** {@code java/lang/System.nanoTime()} — a monotonic clock in ns, from the ARM generic timer. */
+    /**
+     * {@code java/lang/System.nanoTime()} — a monotonic clock in ns, from the ARM generic timer. Scaled
+     * multiply-FIRST (via a seconds/remainder split so {@code ticks*1e9} can't overflow): dividing
+     * {@code 1e9/freq} first truncates badly at non-power-of-two frequencies (e.g. a real Pi 4's 54 MHz ->
+     * 18 instead of 18.52, ~2.8% slow, so a 1 ms sleep mis-measures as 0 ms).
+     */
     static long nanoTime()
     {
-        return Magic.readCNTPCT_EL0() * (1000000000L / Magic.readCNTFRQ_EL0());
+        long ticks = Magic.readCNTPCT_EL0();
+        long freq = Magic.readCNTFRQ_EL0();
+        return ticks / freq * 1000000000L + ticks % freq * 1000000000L / freq;
     }
 
     /**

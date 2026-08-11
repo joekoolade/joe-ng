@@ -42,6 +42,11 @@ public class Assertions
         throw new AssertionError("fail");
     }
 
+    public static void fail(String message)
+    {
+        throw new AssertionError(message);
+    }
+
     public static void assertThrows(Class expectedType, Executable executable)
     {
         try

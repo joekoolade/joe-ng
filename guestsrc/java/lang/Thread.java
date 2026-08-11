@@ -167,11 +167,33 @@ public class Thread implements Runnable
     /** Sleep the current task at least {@code ms} milliseconds (yields; never busy-waits). Interruptible. */
     public static void sleep(long ms) throws InterruptedException
     {
+        if (ms < 0)
+        {
+            throw new IllegalArgumentException("timeout value is negative");
+        }
         Magic.sleepMs(ms);
         if (Magic.wasintr())                               // Thread.interrupt() fired during/before the sleep
         {
             throw new InterruptedException();
         }
+    }
+
+    /** Sleep {@code millis} ms + {@code nanos} ns (rounded up to a whole ms). Interruptible. */
+    public static void sleep(long millis, int nanos) throws InterruptedException
+    {
+        if (millis < 0)
+        {
+            throw new IllegalArgumentException("timeout value is negative");
+        }
+        if (nanos < 0 || nanos > 999999)
+        {
+            throw new IllegalArgumentException("nanosecond timeout value out of range");
+        }
+        if (nanos > 0 && millis < 9223372036854775807L)
+        {
+            millis += 1;
+        }
+        sleep(millis);
     }
 
     /** True if this thread has been started and its run() has not yet returned. */
