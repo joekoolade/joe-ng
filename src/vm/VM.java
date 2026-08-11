@@ -82,6 +82,10 @@ public final class VM
         {
             denylistTrap();
         }
+        if (throwFromFaultAddr == 0L)                      // force throwFromFault compiled (fault -> exception)
+        {
+            throwFromFault(0L);
+        }
         // The table MUST live outside the demand-load data heap: the Loader's between-batch reclaim rewinds
         // core 0's arena back to BASE, and a later allocation would overwrite a heap-resident vector table --
         // then the next timer IRQ vectors into clobbered/zeroed memory and the CPU spins on undefined
@@ -93,8 +97,15 @@ public final class VM
         while (i < 16)
         {
             long entry = table + i * 0x80L;                // 16 entries, 0x80 bytes apart
-            long rel = (reportFaultAddr - entry) / 4L;      // B takes a word offset
-            Magic.store32(entry, A64Enc.b((int) rel));
+            if (i == 0 || i == 4)                          // synchronous exception (Current EL SP0 / SPx): the sync
+            {                                              // faults (data/instruction abort) -> a Java exception.
+                Magic.store32(entry, A64Enc.movFromSp(0)); // mov x0, sp (the faulting SP -- raw, no frame here)
+                Magic.store32(entry + 4L, A64Enc.bl((int) ((throwFromFaultAddr - (entry + 4L)) / 4L)));  // throwFromFault(sp)
+            }
+            else
+            {
+                Magic.store32(entry, A64Enc.b((int) ((reportFaultAddr - entry) / 4L)));   // IRQ/FIQ/SError -> report+halt
+            }
             i += 1;
         }
         Heap.publishCode(table, table + 0x800L);
@@ -1142,6 +1153,19 @@ public final class VM
         return Loader.newAioobe();
     }
 
+    /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT calls this on an integer / or % by zero
+     *  (AArch64 SDIV/UDIV don't trap, so the compiler emits an explicit divisor-zero check). */
+    static long newArith()
+    {
+        return Loader.newArith();
+    }
+
+    /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
+    static long newInternalError()
+    {
+        return Loader.newInternalError();
+    }
+
     /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
     static long getClassOf(long obj)
     {
@@ -1195,9 +1219,13 @@ public final class VM
             Magic.store32(stub + w * 4L, A64Enc.mrs(9, A64Enc.ESR_EL1)); w += 1;
             Magic.store32(stub + w * 4L, A64Enc.lsrImm(9, 9, 26));       w += 1; // x9 = ESR.EC
             Magic.store32(stub + w * 4L, A64Enc.cmpImm(9, 0x15));        w += 1; // SVC from AArch64?
-            Magic.store32(stub + w * 4L, A64Enc.bcond(0, 2));           w += 1;  // b.eq +2: SVC -> switch body
-            long faultAt = stub + w * 4L;                                        // else fall through:
-            Magic.store32(faultAt, A64Enc.b((int) ((reportFaultAddr - faultAt) / 4L))); w += 1;   // b reportFault
+            Magic.store32(stub + w * 4L, A64Enc.bcond(0, 3));           w += 1;  // b.eq +3: SVC -> skip the 2-insn fault path
+            // else (a real fault): hand it to throwFromFault(faultingSp) -> a Java exception at the faulting PC.
+            // The stub already did `sub sp, #SCHED_FRAME` + saved the regs, so undo that to recover the faulting SP.
+            long faultAt = stub + w * 4L;
+            Magic.store32(faultAt, A64Enc.addImm(0, 31, (int) SCHED_FRAME));   w += 1;   // x0 = faulting SP
+            long blFault = stub + w * 4L;
+            Magic.store32(blFault, A64Enc.bl((int) ((throwFromFaultAddr - blFault) / 4L))); w += 1;   // throwFromFault(sp)
         }
         Magic.store32(stub + w * 4L, A64Enc.movFromSp(0));            w += 1;    // mov x0, sp (curSp)
         long blAddr = stub + w * 4L;
@@ -1272,6 +1300,7 @@ public final class VM
         if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
+        if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
@@ -1774,6 +1803,49 @@ public final class VM
             Magic.wfe();
         }
     }
+
+    /**
+     * Turn a hardware fault into a Java exception thrown at the faulting instruction. Reached from the EL1
+     * synchronous vector's non-SVC path with {@code sp} = the FAULTING stack pointer (the vector stub undoes
+     * its own frame). Reads ESR/ELR (still holding the fault); an address trap (data/instruction abort)
+     * becomes a {@link Loader#newNpe NullPointerException}; any other unexpected trap (alignment, undefined
+     * instruction, MSR trap, ...) becomes a {@link Loader#newInternalError InternalError} after logging the raw
+     * EC/ELR/FAR. {@link #unwind} then throws it at ELR -- so a catch (or an uncaught stack trace) sees it like
+     * any thrown exception. The one fault we can't convert is an unloaded exception class (a TIB of 0 would just
+     * re-fault inside unwind); that falls back to the raw {@link #reportFault} print + halt. A taken exception
+     * masks IRQs; since we resume by branch (not ERET), unmask them first so the scheduler/WiFi keep ticking if
+     * the exception is caught.
+     */
+    static void throwFromFault(long sp)
+    {
+        long esr = Magic.readESR_EL1();
+        long elr = Magic.readELR_EL1();
+        long ec = (esr >> 26) & 0x3FL;
+        long exc = 0L;
+        if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
+        {
+            exc = newNpe();
+        }
+        else                                                           // any other unexpected trap (alignment,
+        {                                                              // undefined instruction, MSR trap, ...):
+            Uart.write(Magic.bytes("TRAP ec="));                       // an InternalError (a VirtualMachineError).
+            printHex(ec);                                              // print the raw fault first so the EC/FAR
+            Uart.write(Magic.bytes(" elr="));                          // aren't lost even though we now throw.
+            printHex(elr);
+            Uart.write(Magic.bytes(" far="));
+            printHex(Magic.readFAR_EL1());
+            Uart.putc(0x0A);
+            exc = newInternalError();
+        }
+        if (exc <= 0x1000L || Magic.load64(exc) == 0L)                  // exception class not loaded (TIB 0): can't
+        {                                                              // throw without re-faulting inside unwind ->
+            reportFault();                                             // print the raw fault + halt (never returns)
+        }
+        Magic.enableIrq();                                             // resumed via branch, not ERET: re-unmask IRQs
+        unwind(exc, elr, sp);                                          // throw at the faulting instruction (never returns)
+    }
+
+    static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
 
     /**
      * Trap for a call into a DENYLISTED (pruned, never-loaded) class — see {@code Loader.isDenylisted}.
@@ -2462,6 +2534,7 @@ public final class VM
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
+    static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
@@ -5455,6 +5528,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("checkCastAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("checkCast"), Magic.bytes("(JJ)J")); }
         if (bytesEqual(nm, Magic.bytes("unwindAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("unwind"), Magic.bytes("(JJJ)V")); }
         if (bytesEqual(nm, Magic.bytes("reportFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("reportFault"), Magic.bytes("()V")); }
+        if (bytesEqual(nm, Magic.bytes("throwFromFaultAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("throwFromFault"), Magic.bytes("(J)V")); }
         if (bytesEqual(nm, Magic.bytes("irqHandlerAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("irqHandler"), Magic.bytes("()V")); }
         if (bytesEqual(nm, Magic.bytes("scheduleAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("schedule"), Magic.bytes("(J)J")); }
         if (bytesEqual(nm, Magic.bytes("yieldPickAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("yieldPick"), Magic.bytes("(J)J")); }
@@ -5485,6 +5559,7 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("arraycopyAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arraycopy"), Magic.bytes("(JIJII)V")); }
         if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("newArithAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newArith"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("printStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStackTrace"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
         return blobV;

@@ -836,6 +836,7 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/ArithmeticException"));
         pullClass(Magic.bytes("java/lang/ClassCastException"));
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
+        pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
@@ -5143,6 +5144,18 @@ public final class Loader
     static long newAioobe()
     {
         return newExc(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+    }
+
+    /** Allocate a mini {@code java/lang/ArithmeticException} — the JIT's divide-by-zero helper. */
+    static long newArith()
+    {
+        return newExc(Magic.bytes("java/lang/ArithmeticException"));
+    }
+
+    /** Allocate a mini {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected trap. */
+    static long newInternalError()
+    {
+        return newExc(Magic.bytes("java/lang/InternalError"));
     }
 
     /**
