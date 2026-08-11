@@ -1228,11 +1228,50 @@ public final class VM
     }
 
     /** Create a READY task running {@code entry} on a fresh 32 KiB stack; returns its task id. */
+    /** A terminated task slot (ran taskExit -> taskDone) whose stack + slot can be recycled, or -1 if none. */
+    static int reuseSlot()
+    {
+        int s = 0;
+        while (s < taskCount)
+        {
+            if (taskDone[s] == 1)                          // taskExit ran: never scheduled again, slot is free
+            {
+                return s;
+            }
+            s += 1;
+        }
+        return -1;
+    }
+
     static int spawn(long entry)
     {
-        int id = taskCount;
-        long stk = Heap.alloc(0x8000);
-        taskStackBase[id] = stk;                           // object base: keeps the stack GC-reachable
+        int id;
+        Magic.disableIrq();
+        if (taskCount < MAX_TASKS)
+        {
+            id = taskCount;                                // fast path: a fresh slot (unchanged for <=MAX_TASKS threads)
+            taskCount = id + 1;
+        }
+        else
+        {
+            id = reuseSlot();                              // table full: recycle a terminated task's slot + stack
+            while (id < 0)
+            {
+                Magic.enableIrq();                         // nothing done yet: let a task run to taskExit, then retry
+                taskYield();
+                Magic.disableIrq();
+                id = reuseSlot();
+            }
+        }
+        taskDone[id] = 0;                                  // claim: no longer reusable, and
+        taskState[id] = TASK_BLOCKED;                      //   not runnable until fully set up below
+        Magic.enableIrq();
+        long stk = taskStackBase[id];
+        if (stk == 0L)
+        {
+            stk = Heap.alloc(0x8000);
+            taskStackBase[id] = stk;                       // object base: keeps the stack GC-reachable
+        }
         long top = (stk + 0x8000L) & ~0xFL;                // 16-byte aligned top; stack grows down
         long frame = top - SCHED_FRAME;                    // synthetic initial context frame
         int r = 0;
@@ -1244,8 +1283,14 @@ public final class VM
         Magic.store64(frame + 248L, entry);                // ELR_EL1 = task entry PC
         Magic.store64(frame + 256L, 0x5L);                 // SPSR_EL1 = EL1h (M=0b0101), DAIF clear -> IRQs on
         taskSp[id] = frame;
-        taskState[id] = TASK_READY;
-        taskCount = id + 1;
+        taskWake[id] = 0L;                                 // reset per-task state (matters when recycling a slot)
+        taskWaitOn[id] = 0;
+        taskWaitObj[id] = 0L;
+        taskThreadObj[id] = 0L;
+        taskInterrupted[id] = 0;
+        taskPermit[id] = 0;
+        taskMonWait[id] = 0L;
+        taskState[id] = TASK_READY;                        // now runnable
         return id;
     }
 
