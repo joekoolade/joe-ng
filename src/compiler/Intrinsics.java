@@ -70,6 +70,9 @@ public final class Intrinsics
     public static final int IS_INTR = 70;            // magic.isintr(Object)      -> VM.isInterrupted
     public static final int WAS_INTR = 71;           // magic.wasintr()           -> VM.checkClearInterrupt
     public static final int IS_ALIVE = 72;           // magic.isalive(Object)     -> VM.isAlive
+    public static final int JOIN_TIMED = 73;         // magic.joinms(Object,long) -> VM.joinTimed
+    public static final int PARK = 74;               // magic.park()              -> VM.park
+    public static final int UNPARK = 75;             // magic.unpark(Object)      -> VM.unpark
     public static final int READ_CURRENT_EL = 32;   // which exception level we are running at
     public static final int READ_CNTFRQ_EL0 = 33;   // generic-timer frequency
     public static final int READ_CNTPCT_EL0 = 34;   // generic-timer physical count

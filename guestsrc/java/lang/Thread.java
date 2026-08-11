@@ -192,6 +192,12 @@ public class Thread implements Runnable
         return Magic.isintr(this);
     }
 
+    /** Tests + CLEARS the current thread's interrupt status (static). */
+    public static boolean interrupted()
+    {
+        return Magic.wasintr();
+    }
+
     /** No-op: joe-ng has no daemon/non-daemon distinction (the boot task keeps the VM alive). */
     public void setDaemon(boolean on)
     {
@@ -201,6 +207,29 @@ public class Thread implements Runnable
     public final void join() throws InterruptedException
     {
         Magic.tjoin(this);
+    }
+
+    /**
+     * Wait at most {@code duration} for this thread to terminate. Returns true if it terminated. Throws NPE if
+     * {@code duration} is null, IllegalThreadStateException if this thread has not been started, and
+     * InterruptedException (clearing the interrupt status) if the caller is interrupted while waiting.
+     */
+    public final boolean join(java.time.Duration duration) throws InterruptedException
+    {
+        if (duration == null)
+        {
+            throw new NullPointerException();
+        }
+        int r = Magic.joinms(this, duration.toMillis());
+        if (r == 3)
+        {
+            throw new IllegalThreadStateException("thread not started");
+        }
+        if (r == 2)
+        {
+            throw new InterruptedException();
+        }
+        return r == 1;
     }
 
     /** A snapshot of this thread's stack (this thread if it is the caller, else its saved/blocked context). */

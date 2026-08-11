@@ -71,6 +71,9 @@ public interface Symbols
     int IS_INTERRUPTED = 35;    // vm/VM.isInterrupted(J)I      — Thread.isInterrupted
     int CHECK_INTR = 36;        // vm/VM.checkClearInterrupt()I — Thread.sleep interruption check (clears)
     int IS_ALIVE = 37;          // vm/VM.isAlive(J)I            — Thread.isAlive
+    int JOIN_TIMED = 38;        // vm/VM.joinTimed(JJ)I         — Thread.join(Duration)
+    int PARK = 39;              // vm/VM.park()V                — LockSupport.park
+    int UNPARK = 40;            // vm/VM.unpark(J)V             — LockSupport.unpark
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);

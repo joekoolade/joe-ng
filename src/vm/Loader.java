@@ -39,6 +39,7 @@ public final class Loader
     private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
     private static int gFoundStatic;   // 1 if that method is static
     private static int gFrameSize;     // frame size of the last method the core compiled
+    private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
     // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
     // captured for emitMethod to register into VM's jit handler table (cross-method unwind).
     private static int gHN;
@@ -1447,6 +1448,7 @@ public final class Loader
         relocRecording = 0;
         rcAddr = new long[MAXRELOC];
         rcBase = new long[MAXRELOC];
+        rcTail = new int[MAXRELOC];
         rcClass = new int[MAXRELOC];
         rcName = new int[MAXRELOC];
         rcDesc = new int[MAXRELOC];
@@ -3946,6 +3948,7 @@ public final class Loader
         b.setExceptionTable(es, ee, eh, ec, n);
         int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mLocals[i], base, false);
         gFrameSize = b.frameSize();
+        gRegLocals = b.regLocals();                    // for unwind's pre-try local restore
         gHN = b.handlerCount();                        // capture the machine-code handler ranges for emitMethod
         gHStartW = new int[gHN];
         gHEndW = new int[gHN];
@@ -3992,7 +3995,7 @@ public final class Loader
         }
         if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
         {
-            VM.addJitFrame(mBuf[i], out, gFrameSize);
+            VM.addJitFrame(mBuf[i], out, gFrameSize, gRegLocals);
         }
         int h = 0;                                      // register try/catch ranges: a throw in another JIT'd
         while (h < gHN)                                 // method can unwind into this method's catch (cross-method)
@@ -4225,6 +4228,7 @@ public final class Loader
     private static int relocRecording;                  // 1 only during emitMethod (the real-base emit pass)
     private static long[] rcAddr, rcBase;               // call sites: bl address, ref blob base,
     private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
+    private static int[] rcTail;                        //   1 = a tail branch (b), not a call (bl) -- lambda thunks
     private static int rcCount;
     private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
@@ -4247,6 +4251,24 @@ public final class Loader
         rcClass[rcCount] = refClassNameOff(idx);
         rcName[rcCount] = mrefNameOff(idx);
         rcDesc[rcCount] = mrefDescOff(idx);
+        rcTail[rcCount] = 0;
+        rcCount += 1;
+    }
+
+    /** Record an unresolved TAIL branch ({@code b}, not {@code bl}) at {@code bAddr} to Methodref {@code idx} --
+     *  used by a lambda/method-ref thunk whose cross-class impl isn't registered yet at thunk-build time. */
+    static void recordTailReloc(long bAddr, int idx)
+    {
+        if (relocRecording == 0 || rcCount >= MAXRELOC)
+        {
+            return;
+        }
+        rcAddr[rcCount] = bAddr;
+        rcBase[rcCount] = gbase;
+        rcClass[rcCount] = refClassNameOff(idx);
+        rcName[rcCount] = mrefNameOff(idx);
+        rcDesc[rcCount] = mrefDescOff(idx);
+        rcTail[rcCount] = 1;
         rcCount += 1;
     }
 
@@ -4325,7 +4347,14 @@ public final class Loader
                     for (;;) { }
                 }
                 int off = (int) (d >> 2);
-                Magic.store32(rcAddr[i], A64Enc.bl(off));      // rewrite bl 0 -> bl target
+                if (rcTail[i] != 0)
+                {
+                    Magic.store32(rcAddr[i], A64Enc.b(off));   // lambda/method-ref thunk: tail branch, not a call
+                }
+                else
+                {
+                    Magic.store32(rcAddr[i], A64Enc.bl(off));  // rewrite bl 0 -> bl target
+                }
             }
             i += 1;
         }
@@ -5576,7 +5605,17 @@ public final class Loader
             c -= 1;
         }
         long bAt = thunk + w * 4L;
-        Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));         // b implBuf (tail call)
+        if (implBuf != 0L)
+        {
+            Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));     // b implBuf (tail call)
+        }
+        else
+        {
+            // A method ref whose cross-class impl isn't registered yet: emit `b 0` and record a tail reloc so
+            // patchRelocs rewrites it once every class is compiled (same late-binding as a normal bl call site).
+            Magic.store32(bAt, A64Enc.b(0));
+            recordTailReloc(bAt, lambdaImplMref(idx));
+        }
         w += 1;
         Heap.publishCode(thunk, thunk + w * 4L);
         return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
@@ -6128,6 +6167,9 @@ public final class Loader
         if (isName(gbase, n, 0x6973696E7472L, 6))    { return Intrinsics.IS_INTR; }     // "isintr"
         if (isName(gbase, n, 0x776173696E7472L, 7))  { return Intrinsics.WAS_INTR; }    // "wasintr"
         if (isName(gbase, n, 0x6973616C697665L, 7))  { return Intrinsics.IS_ALIVE; }    // "isalive"
+        if (isName(gbase, n, 0x6A6F696E6D73L, 6))    { return Intrinsics.JOIN_TIMED; }  // "joinms"
+        if (isName(gbase, n, 0x7061726BL, 4))        { return Intrinsics.PARK; }        // "park"
+        if (isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
         return -1;
     }
 

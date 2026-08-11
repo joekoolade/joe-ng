@@ -231,6 +231,21 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /** {@code Thread.join(Duration)} -> VM.joinTimed: wait up to {@code millis}; 3=not started 1=done 2=intr 0=timeout. */
+    public static int joinms(Object t, long millis)
+    {
+        throw intrinsic();
+    }
+    /** {@code LockSupport.park()} -> VM.park: block the current task until a permit (unpark) is available. */
+    public static void park()
+    {
+        throw intrinsic();
+    }
+    /** {@code LockSupport.unpark(t)} -> VM.unpark: make a permit available for {@code t} and wake it if parked. */
+    public static void unpark(Object t)
+    {
+        throw intrinsic();
+    }
 
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
     public static int newSem(int initial)
@@ -374,8 +389,10 @@ public final class Magic
      * Resume execution at a handler: set SP, place {@code exc} in the handler's
      * operand-stack slot (x9), and branch to {@code pc}. Never returns — used by
      * the exception unwinder to transfer control to a catch block in a caller.
+     * {@code locBuf} points at a 16-slot buffer holding the handler's reconstructed
+     * callee-saved locals (x19..); the first {@code regLocals} are reloaded from it.
      */
-    public static void resume(long pc, long sp, long exc)
+    public static void resume(long pc, long sp, long exc, long regLocals, long locBuf)
     {
         throw intrinsic();
     }
