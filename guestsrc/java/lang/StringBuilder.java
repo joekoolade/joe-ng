@@ -88,6 +88,22 @@ public final class StringBuilder
         return count;
     }
 
+    /** Reverse the characters in place (bytes are Latin1 units; the demos build ASCII, so byte swap suffices). */
+    public StringBuilder reverse()
+    {
+        int lo = 0;
+        int hi = count - 1;
+        while (lo < hi)
+        {
+            byte t = value[lo];
+            value[lo] = value[hi];
+            value[hi] = t;
+            lo = lo + 1;
+            hi = hi - 1;
+        }
+        return this;
+    }
+
     public String toString()
     {
         byte[] t = new byte[count];
