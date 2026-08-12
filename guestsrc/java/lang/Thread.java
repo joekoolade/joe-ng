@@ -196,6 +196,19 @@ public class Thread implements Runnable
         sleep(millis);
     }
 
+    /** Sleep for {@code duration}. A negative duration returns immediately; null throws NPE. Interruptible. */
+    public static void sleep(java.time.Duration duration) throws InterruptedException
+    {
+        long nanos = duration.toNanos();                   // NPE if duration is null
+        if (nanos < 0)
+        {
+            return;                                        // negative duration: no sleep (matches the JDK)
+        }
+        long millis = nanos / 1000000L;
+        int nanoRem = (int) (nanos - millis * 1000000L);
+        sleep(millis, nanoRem);
+    }
+
     /** True if this thread has been started and its run() has not yet returned. */
     public boolean isAlive()
     {
