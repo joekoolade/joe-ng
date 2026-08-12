@@ -1,7 +1,7 @@
 package java.util.function;
 
-/** Mini functional interface: a boolean test, the target of a {@code filter} lambda. */
-public interface Predicate
+/** Minimal generic {@code Predicate} (erased at runtime; raw usage still compiles). */
+public interface Predicate<T>
 {
-    boolean test(Object o);
+    boolean test(T o);
 }
