@@ -4488,6 +4488,14 @@ public final class Loader
         {
             if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
         }
+        // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle.
+        if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0"))
+                && (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
+                 || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
+                 || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater"))))
+        {
+            return VM.vhFieldOffsetAddr;                                                                // (byte[],Object)J
+        }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
         if (utf8IsStr(classOff, Magic.bytes("java/io/FileDescriptor")))
