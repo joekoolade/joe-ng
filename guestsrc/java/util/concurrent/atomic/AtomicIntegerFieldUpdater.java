@@ -20,6 +20,8 @@ public class AtomicIntegerFieldUpdater<T>
 
     public static <U> AtomicIntegerFieldUpdater<U> newUpdater(Class tclass, String fieldName)
     {
+        long callerPc = Magic.readLR();                    // FIRST: return address into the caller (getCallerClass)
+        FieldUpdaterCheck.validate(tclass, fieldName, callerPc, 'I');
         return new AtomicIntegerFieldUpdater<U>(fieldName);
     }
 

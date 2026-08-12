@@ -62,6 +62,12 @@ public class Throwable
         printStackTrace0(this);
     }
 
+    /** {@code printStackTrace(PrintStream)}: the metal has one sink (the UART), so the stream is ignored. */
+    public void printStackTrace(java.io.PrintStream s)
+    {
+        printStackTrace0(this);
+    }
+
     /** VM native (wired in {@code Loader.nativeBuf}): formats the captured backtrace of {@code t}. STATIC so the
      *  call is an {@code invokestatic} resolved via nativeBuf -- a private INSTANCE native would be dispatched
      *  through an (empty) vtable slot and trip the metal's null-vtable guard. */

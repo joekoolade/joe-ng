@@ -12,7 +12,7 @@ import magic.Magic;
  * ({@code getName}/{@code getComponentType}/{@code isInstance}/...) are added on demand as the code that runs
  * on metal reaches them. The VM allocates the object directly (bypassing this ctor).
  */
-public final class Class
+public final class Class<T>
 {
     private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
 
@@ -75,4 +75,37 @@ public final class Class
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.superclassOf}): super Type -> its (cached) mirror. */
     private static native Class superclass0(Class c);
+
+    /**
+     * Declared instance/static field named {@code name} (any access), or throws {@code NoSuchFieldException}.
+     * Modifiers + type descriptor come from the loader re-walking this class's classfile ({@code fieldMeta0}).
+     */
+    public java.lang.reflect.Field getDeclaredField(String name) throws NoSuchFieldException
+    {
+        byte[] nb = name.getBytes();
+        int mods = fieldMods0(this, nb);
+        if (mods < 0)
+        {
+            throw new NoSuchFieldException(name);
+        }
+        return new java.lang.reflect.Field(this, name, mods, fieldTypeChar0(this, nb));
+    }
+
+    /** Access flags of the named own instance field, or -1 if absent (reflection helper for the field updaters). */
+    public int fieldModifiers(String name)
+    {
+        return fieldMods0(this, name.getBytes());
+    }
+
+    /** First char of the named own instance field's JVM type descriptor ('I','J','Z','L','['), or -1. */
+    public int fieldTypeChar(String name)
+    {
+        return fieldTypeChar0(this, name.getBytes());
+    }
+
+    /** VM native -> {@code VM.fieldMods}: this class's own instance field {@code name}'s access flags, or -1. */
+    static native int fieldMods0(Class c, byte[] name);
+
+    /** VM native -> {@code VM.fieldTypeChar}: first char of that field's JVM type descriptor ('I','J','L',...). */
+    static native int fieldTypeChar0(Class c, byte[] name);
 }

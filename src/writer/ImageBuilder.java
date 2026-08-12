@@ -596,6 +596,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VM.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
         stashHelper(image, staticWord, wordOffset, "vm/VM.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.fieldMods(JJ)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.fieldTypeChar(JJ)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.classAtPc(J)J", "vm/VM.classAtPcAddr");           // getCallerClass (updater access check)
         stashHelper(image, staticWord, wordOffset, "vm/VM.sockSocket0(JJJJ)I", "vm/VM.sockSocket0Addr");   // M3 sockets
         stashHelper(image, staticWord, wordOffset, "vm/VM.sockConnect0(JJJJ)I","vm/VM.sockConnect0Addr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.sockRead0(JJJ)I",    "vm/VM.sockRead0Addr");

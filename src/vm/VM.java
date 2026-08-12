@@ -1795,6 +1795,9 @@ public final class VM
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
         if (vhFieldOffsetAddr == 0L) { long u = vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
+        if (fieldModsAddr == 0L) { int u = fieldMods(0L, 0L); }               // Class.fieldMods0 native (reflection)
+        if (fieldTypeCharAddr == 0L) { int u = fieldTypeChar(0L, 0L); }       // Class.fieldTypeChar0 native
+        if (classAtPcAddr == 0L) { long u = classAtPc(0L); }                  // getCallerClass native
         if (sockSocket0Addr == 0L) { int u = sockSocket0(0L, 0L, 0L, 0L); }   // M3 socket natives (dead calls,
         if (sockConnect0Addr == 0L) { int u = sockConnect0(0L, 0L, 0L, 0L); } // never run: the writer pre-stashes
         if (sockRead0Addr == 0L) { int u = sockRead0(0L, 0L, 0L); }           // each address, so these only force
@@ -2166,6 +2169,42 @@ public final class VM
         long fnBase = fnameArrRef + 24L;                     // guest byte[] data
         long tib = Magic.load64(objRef);                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
+    }
+
+    /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
+    static int fieldMods(long mirrorRef, long nameArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;
+        }
+        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
+        int fnLen = (int) Magic.load64(nameArrRef + 16L);
+        long fnBase = nameArrRef + 24L;
+        return Loader.fieldMods(typeAddr, fnBase, fnLen);
+    }
+
+    /** Reflection: {@code Class.fieldTypeChar0(Class,byte[])} -> the field's descriptor first char, or -1. */
+    static int fieldTypeChar(long mirrorRef, long nameArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;
+        }
+        long typeAddr = Magic.load64(mirrorRef + 16L);
+        int fnLen = (int) Magic.load64(nameArrRef + 16L);
+        long fnBase = nameArrRef + 24L;
+        return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
+    }
+
+    /** getCallerClass: the Class mirror of the JIT'd method containing machine PC {@code pc} (a saved LR). */
+    static long classAtPc(long pc)
+    {
+        if (pc <= 0x1000L)
+        {
+            return 0L;
+        }
+        return Loader.classMirrorAtPc(pc);
     }
 
     /** Net.socket0(preferIPv6, stream, reuse, fastLoopback) -> a fresh net.Tcp fd (the flags are ignored). */
@@ -3108,6 +3147,9 @@ public final class VM
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
     static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
+    static long fieldModsAddr;         // VM.fieldMods(JJ)I — Class.fieldMods0 (reflection)
+    static long fieldTypeCharAddr;     // VM.fieldTypeChar(JJ)I — Class.fieldTypeChar0 (reflection)
+    static long classAtPcAddr;         // VM.classAtPc(J)J — getCallerClass for the field-updater access check
     static long sockSocket0Addr;       // M3 socket natives (stock sun.nio.ch over net.Tcp)
     static long sockConnect0Addr;
     static long sockRead0Addr;
