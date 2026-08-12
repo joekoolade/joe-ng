@@ -1,7 +1,7 @@
 package java.util.function;
 
-/** Mini functional interface: a value transform, the target of a {@code map} lambda. */
-public interface Function
+/** Minimal generic {@code Function}. */
+public interface Function<T, R>
 {
-    Object apply(Object o);
+    R apply(T o);
 }

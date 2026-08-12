@@ -1,7 +1,7 @@
 package java.util.function;
 
-/** Mini functional interface: combine two values into one -- the accumulator of a {@code reduce} fold. */
-public interface BinaryOperator
+/** Minimal generic {@code BinaryOperator}. */
+public interface BinaryOperator<T>
 {
-    Object apply(Object a, Object b);
+    T apply(T a, T b);
 }
