@@ -436,7 +436,8 @@ public final class Loader
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Float"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Double"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Boolean"))
+                // NOTE: java/lang/Boolean is NOT blocked -- the metal OVERLAY replaces the stock class, and its
+                // <clinit> only sets TRUE/FALSE (no native primitive TYPE), so it is safe (and needed) to run.
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
                 // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets/iovMax). Skipping
@@ -3445,6 +3446,7 @@ public final class Loader
                                                         //   0 -- indexes the NULL cache array -> NPE (bit the
                                                         //   Lisp interpreter's boxed booleans); no-op if
                                                         //   Integer isn't in this batch
+        seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
@@ -3795,6 +3797,35 @@ public final class Loader
         }
         Magic.store64(cacheSlot, arr);
         Magic.store64(highSlot, 127L);
+    }
+
+    /**
+     * Seed {@code Long$LongCache} like {@link #seedIntegerCache}: a {@code Long[256]} for -128..127 (each a
+     * boxed Long with its {@code value} at offset 16). LongCache is fixed-range (no {@code high} field), and
+     * its {@code <clinit>} is skipped with the wrapper's (native TYPE), so {@code Long.valueOf} in that range
+     * would index a null cache. No-op if Long isn't in this batch.
+     */
+    static void seedLongCache()
+    {
+        long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Long$LongCache"), Magic.bytes("cache"));
+        int li = classIndexByName(Magic.bytes("java/lang/Long"));
+        if (cacheSlot == 0L || li < 0)
+        {
+            return;
+        }
+        long ltib = clTib[li];
+        int lsize = 16 + clFieldCount[li] * 8;          // Long: header + its instance field (value)
+        long arr = Heap.allocArray(256, 8);             // Long[256] (8-byte reference elements)
+        int k = 0;
+        while (k < 256)
+        {
+            long box = Heap.alloc(lsize);
+            Magic.store64(box + 0L, ltib);              // TIB
+            Magic.store64(box + 16L, (long) (k - 128)); // value (Long's first/only instance field, offset 16)
+            Magic.store64(arr + 24L + k * 8L, box);
+            k += 1;
+        }
+        Magic.store64(cacheSlot, arr);
     }
 
     /**

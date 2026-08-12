@@ -111,4 +111,62 @@ public class PrintStream
     public void flush()
     {
     }
+
+    public PrintStream printf(String fmt, Object... args)
+    {
+        return format(fmt, args);
+    }
+
+    /**
+     * A minimal {@code format}: enough of the conversion syntax the reached paths use ({@code %n} newline,
+     * {@code %d} decimal, {@code %s} string, {@code %%} literal). No width/precision/flags -- stock
+     * {@code java.util.Formatter} pulls the deep nio/locale closure that is stubbed out on metal.
+     */
+    public PrintStream format(String fmt, Object... args)
+    {
+        StringBuilder sb = new StringBuilder();
+        int ai = 0;
+        int i = 0;
+        int n = fmt.length();
+        while (i < n)
+        {
+            char c = fmt.charAt(i);
+            if (c == '%' && i + 1 < n)
+            {
+                char spec = fmt.charAt(i + 1);
+                i += 2;
+                if (spec == 'n')
+                {
+                    sb.append('\n');
+                }
+                else if (spec == '%')
+                {
+                    sb.append('%');
+                }
+                else if (spec == 'd')
+                {
+                    sb.append(((Integer) args[ai]).intValue());
+                    ai += 1;
+                }
+                else if (spec == 's')
+                {
+                    Object a = args[ai];
+                    sb.append(a == null ? "null" : a.toString());
+                    ai += 1;
+                }
+                else
+                {
+                    sb.append('%');
+                    sb.append(spec);
+                }
+            }
+            else
+            {
+                sb.append(c);
+                i += 1;
+            }
+        }
+        print(sb.toString());
+        return this;
+    }
 }

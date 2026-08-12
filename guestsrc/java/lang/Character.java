@@ -8,11 +8,53 @@ package java.lang;
  * <p>{@code digit(char,int)} is the ASCII/Latin1 path real {@code Integer.parseInt} needs. The surrogate /
  * code-point cluster below is what {@code java.util.regex} (Pattern/Matcher) calls while scanning input for a
  * LITERAL {@code String.split} -- all pure bit arithmetic (the stock bodies route case/type queries through the
- * big {@code CharacterData} tables, which stay cold for a literal ASCII match). Values inlined as literals so the
- * overlay needs no {@code <clinit>} / static fields on metal.
+ * big {@code CharacterData} tables, which stay cold for a literal ASCII match). The boxing members
+ * ({@code valueOf}/{@code compareTo}/{@code compare}/{@code MIN_VALUE}/{@code MAX_VALUE}) back {@code Compare}.
+ * Values inlined as literals/constant casts so the overlay needs no {@code <clinit>} / static fields on metal.
  */
-public final class Character
+public final class Character implements Comparable<Character>
 {
+    public static final char MIN_VALUE = (char) 0x0000;
+    public static final char MAX_VALUE = (char) 0xFFFF;
+
+    private final char value;
+
+    public Character(char v)
+    {
+        this.value = v;
+    }
+
+    public static Character valueOf(char c)
+    {
+        return new Character(c);
+    }
+
+    public char charValue()
+    {
+        return value;
+    }
+
+    /** Numeric comparison of two chars (both are unsigned 16-bit, so the difference is signed-correct). */
+    public static int compare(char x, char y)
+    {
+        return x - y;
+    }
+
+    public int compareTo(Character other)
+    {
+        return compare(this.value, other.value);
+    }
+
+    public boolean equals(Object o)
+    {
+        return o instanceof Character && ((Character) o).value == value;
+    }
+
+    public int hashCode()
+    {
+        return value;
+    }
+
     public static int digit(char ch, int radix)
     {
         int d = -1;

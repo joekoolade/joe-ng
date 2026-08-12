@@ -238,6 +238,12 @@ public class Thread implements Runnable
     {
     }
 
+    /** Print the current thread's stack trace (matches the JDK: a throwaway exception's trace). */
+    public static void dumpStack()
+    {
+        new Exception("Stack trace").printStackTrace();
+    }
+
     /** Block the calling task until THIS thread's run() has returned. */
     public final void join() throws InterruptedException
     {
