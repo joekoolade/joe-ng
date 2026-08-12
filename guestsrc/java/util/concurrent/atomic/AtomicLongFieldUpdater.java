@@ -14,6 +14,8 @@ public class AtomicLongFieldUpdater<T>
 
     public static <U> AtomicLongFieldUpdater<U> newUpdater(Class tclass, String fieldName)
     {
+        long callerPc = Magic.readLR();                    // FIRST: return address into the caller (getCallerClass)
+        FieldUpdaterCheck.validate(tclass, fieldName, callerPc, 'J');
         return new AtomicLongFieldUpdater<U>(fieldName);
     }
 

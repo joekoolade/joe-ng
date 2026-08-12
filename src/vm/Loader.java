@@ -54,6 +54,8 @@ public final class Loader
     private static int[] gsfName;   // Utf8 offset of each static field's name (index = slot)
     private static int gsfCount;
     private static int[] gifName;   // Utf8 offset of each instance field's name (index = slot)
+    private static int[] gifAccess; // access_flags of each own instance field (index = slot; 0 for inherited)
+    private static int[] gifDescOff;// Utf8 offset of each own instance field's type descriptor (index = slot)
     private static int gifCount;
     private static int gThisNameOff;     // Utf8 offset of this class's own name
     private static long gMethodsStart;   // address of the methods_count (for callee lookup)
@@ -141,6 +143,8 @@ public final class Loader
     private static int[] fldClassOff;
     private static int[] fldNameOff;
     private static int[] fldSlot;
+    private static int[] fldAccess;   // access_flags of each registered instance field (reflection: getModifiers)
+    private static int[] fldDescOff;   // Utf8 offset of each registered instance field's type descriptor
     private static int fldCount;
 
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
@@ -839,6 +843,12 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/ClassCastException"));
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
+        // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
+        // field registry (for getDeclaredField/newUpdater access checks) exist even when nothing instantiates them.
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicLong"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
@@ -1489,6 +1499,8 @@ public final class Loader
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
         fldSlot = new int[MAXFIELD];
+        fldAccess = new int[MAXFIELD];
+        fldDescOff = new int[MAXFIELD];
         fldCount = 0;
         vtClassBase = new long[MAXVT];
         vtClassOff = new int[MAXVT];
@@ -2916,12 +2928,15 @@ public final class Loader
         p += 2;
         gsfName = new int[fcount + 1];
         gifName = new int[fcount + islot + 1];
+        gifAccess = new int[fcount + islot + 1];
+        gifDescOff = new int[fcount + islot + 1];
         int slot = 0;
         int f = 0;
         while (f < fcount)
         {
             int access = u2(p);
             int nameIdx = u2(p + 2);
+            int descIdx = u2(p + 4);
             p += 6;                                     // access, name, descriptor
             if ((access & 0x0008) != 0)
             {
@@ -2931,6 +2946,8 @@ public final class Loader
             else
             {
                 gifName[islot] = gcp[nameIdx];   // instance field at the next inherited+own slot
+                gifAccess[islot] = access;       // reflection: getModifiers / access checks
+                gifDescOff[islot] = gcp[descIdx];// reflection: field type descriptor
                 islot += 1;
             }
             int attrs = u2(p);
@@ -4488,13 +4505,17 @@ public final class Loader
         {
             if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
         }
-        // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle.
-        if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0"))
-                && (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
-                 || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
-                 || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater"))))
+        // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle, and
+        // resolve their caller's class (getCallerClass) for the field-access check.
+        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
+                || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
+                || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater")))
         {
-            return VM.vhFieldOffsetAddr;                                                                // (byte[],Object)J
+            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
         }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
@@ -4558,6 +4579,8 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
             if (utf8IsStr(nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
             if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
+            if (utf8IsStr(nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
+            if (utf8IsStr(nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Thread")))
         {
@@ -4648,6 +4671,8 @@ public final class Loader
                 fldClassOff[fldCount] = gThisNameOff;
                 fldNameOff[fldCount] = gifName[s];
                 fldSlot[fldCount] = s;
+                fldAccess[fldCount] = gifAccess[s];
+                fldDescOff[fldCount] = gifDescOff[s];
                 fldCount += 1;
             }
             s += 1;
@@ -4880,6 +4905,45 @@ public final class Loader
             ci += 1;
         }
         return -1L;
+    }
+
+    /** Field-registry index of instance field {@code fname} (raw bytes) declared by the class whose Type is
+     *  {@code typeAddr}, or -1. Used by the reflection field-metadata natives. */
+    private static int fieldRegIndex(long typeAddr, long fnBase, int fnLen)
+    {
+        int ci = 0;
+        while (ci < clCount)
+        {
+            if (clType[ci] == typeAddr)
+            {
+                int j = 0;
+                while (j < fldCount)
+                {
+                    if (utf8EqAt(clBase[ci], clNameOff[ci], fldBase[j], fldClassOff[j])
+                            && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
+                    {
+                        return j;
+                    }
+                    j += 1;
+                }
+            }
+            ci += 1;
+        }
+        return -1;
+    }
+
+    /** Reflection: access_flags of the instance field, or -1 if the class declares no such own field. */
+    static int fieldMods(long typeAddr, long fnBase, int fnLen)
+    {
+        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
+        return j < 0 ? -1 : fldAccess[j];
+    }
+
+    /** Reflection: first char of the field's JVM type descriptor (the byte after the u2 Utf8 length), or -1. */
+    static int fieldTypeChar(long typeAddr, long fnBase, int fnLen)
+    {
+        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
+        return j < 0 ? -1 : u1(fldBase[j] + fldDescOff[j] + 2L);
     }
 
     /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */
@@ -5989,6 +6053,37 @@ public final class Loader
         return classMirror(typeOfClass(classCp));
     }
 
+    /** The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0. */
+    static long classMirrorAtPc(long pc)
+    {
+        long bestBuf = 0L;
+        int bestReg = -1;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgBuf[i] != 0L && rgBuf[i] <= pc && rgBuf[i] > bestBuf)
+            {
+                bestBuf = rgBuf[i];
+                bestReg = i;
+            }
+            i += 1;
+        }
+        if (bestReg < 0)
+        {
+            return 0L;
+        }
+        int ci = 0;
+        while (ci < clCount)
+        {
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[bestReg], rgClassOff[bestReg]))
+            {
+                return classMirror(clType[ci]);
+            }
+            ci += 1;
+        }
+        return 0L;
+    }
+
     /** {@code Object.getClass()}: object header -> TIB -> Type -> its Class mirror. */
     static long getClassOf(long obj)
     {
@@ -6209,6 +6304,7 @@ public final class Loader
         if (isName(gbase, n, 0x6A6F696E6D73L, 6))    { return Intrinsics.JOIN_TIMED; }  // "joinms"
         if (isName(gbase, n, 0x7061726BL, 4))        { return Intrinsics.PARK; }        // "park"
         if (isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
+        if (isName(gbase, n, 0x726561644C52L, 6))    { return Intrinsics.READ_LR; }     // "readLR" (getCallerClass)
         return -1;
     }
 

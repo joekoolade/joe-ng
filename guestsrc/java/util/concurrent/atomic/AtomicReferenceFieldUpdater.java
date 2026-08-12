@@ -18,6 +18,8 @@ public class AtomicReferenceFieldUpdater<T, V>
 
     public static <U, W> AtomicReferenceFieldUpdater<U, W> newUpdater(Class tclass, Class vclass, String fieldName)
     {
+        long callerPc = Magic.readLR();                    // FIRST: return address into the caller (getCallerClass)
+        FieldUpdaterCheck.validate(tclass, fieldName, callerPc, 'L');
         return new AtomicReferenceFieldUpdater<U, W>(fieldName);
     }
 
