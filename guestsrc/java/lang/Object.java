@@ -61,4 +61,16 @@ public class Object
     {
         Magic.mnotall(this);
     }
+
+    /** Shallow copy: a fresh same-size block with this object's TIB + fields copied (the VM reads the block
+     *  size from the status word). Appended after the finals so the canonical hashCode/equals/toString slots
+     *  don't shift. Cloneable collections (LinkedList/ArrayList/HashMap) call {@code super.clone()} to get this
+     *  shallow copy, then fix up their own links. Array clone uses the {@code [T.clone()} intrinsic instead. */
+    protected Object clone() throws CloneNotSupportedException
+    {
+        return clone0(this);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.objectClone}). */
+    private static native Object clone0(Object o);
 }
