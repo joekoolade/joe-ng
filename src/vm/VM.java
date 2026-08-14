@@ -2482,14 +2482,33 @@ public final class VM
     static void denylistTrap()
     {
         long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
+        long mysp = Magic.readSP();                            // denylistTrap's own frame base (SP is stable post-prologue)
         Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
         int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
         Uart.write(Magic.bytes("  fired TRAPWIRE index="));
         printDec(k);
         Uart.write(Magic.bytes(" (lr="));
         printHex(lr);
-        Uart.write(Magic.bytes(")\n  caller: "));
-        Loader.reportMethodAt(lr - 4L);                        // name the method that made the denied call
+        Uart.write(Magic.bytes(")"));
+        // Real call-stack backtrace (was: reportMethodAt's 5 nearest-in-memory methods, which only line 1 -- the
+        // caller -- was right; the rest were unrelated methods laid out nearby). Recover the caller's SP as
+        // denylistTrap's SP + its own frame size, then walk saved LRs like captureTrace/VM.unwind.
+        long cpc = lr - 4L;                                    // the denied bl site in the caller
+        long csp = mysp + frameSizeAt(denylistTrapAddr);       // caller's SP (denylistTrap's SP + its frame)
+        int depth = 0;
+        while (depth < 12 && cpc > 0x1000L)
+        {
+            Uart.write(Magic.bytes("\n    at "));
+            Loader.printFrameAt(cpc);
+            long fs = frameSizeAt(cpc);
+            if (fs == 0L)
+            {
+                break;                                         // top of the JIT/image stack
+            }
+            cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
+            csp += fs;
+            depth += 1;
+        }
         Uart.putc(0x0A);
         while (true)
         {
