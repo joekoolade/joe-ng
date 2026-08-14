@@ -64,7 +64,15 @@ JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lan
 jdktests: guest
 	$(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(JDKTESTS)
 
-image: build jdktests
+# M4: external "plugin" classes compiled into ramfs/plugins/ (a generated, gitignored subtree) -- NOT into the
+# classDir (out/). On the metal they exist ONLY as files the guest reads + defineClass'es at runtime, never
+# reachable by name via forName. Compiled with plain javac (seed JDK) since they're dependency-free.
+PLUGINSRC := $(shell find plugins-src -name '*.java' 2>/dev/null)
+.PHONY: plugins
+plugins:
+	@if [ -n "$(PLUGINSRC)" ]; then mkdir -p ramfs/plugins && $(JAVAC) -d ramfs/plugins $(PLUGINSRC); fi
+
+image: build jdktests plugins
 	$(JAVA) -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 

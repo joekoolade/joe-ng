@@ -1431,6 +1431,24 @@ Two halves of "access-check enforcement", both required:
   .readAllBytes`), `ClassLoader.defineClass`, then reflectively `getDeclaredConstructor().newInstance()` +
   invoke an instance method (and/or `getMethod("main",String[].class).invoke(null,args)`), printing over UART.
   Verify on QEMU + a real Pi 4. Also lands `IsEnum` + `getEnumConstants/BadEnumTest` (enum reflection).
+- **STATUS — M4a (file->defineClass->run) DONE (QEMU-verified; Pi 4 flash staged).** `demo/ReflectLoad` reads
+  `/plugins/plugin/FilePlugin.class` off the embedded RAMFS (`FileInputStream.readAllBytes`), `defineClass`es
+  it (M3), and drives the never-before-seen class through M2 reflection: QEMU prints `read 306 bytes...`,
+  `defined plugin.FilePlugin`, `scale(7)=121` (`<init>` sets `seed=100`, `scale(7)`=`100+7*3`), all compiled on
+  demand. The plugin is compiled into `ramfs/plugins/` (a generated, gitignored subtree) from `plugins-src/`
+  via a `make plugins` step — **NOT** into the classDir, so it exists ONLY as a file the guest reads +
+  `defineClass`es, never reachable by `forName`. File bytes -> Class -> instance -> method, for a class the VM
+  never saw at image-build time.
+- **STATUS — M4b (enum reflection) DONE (QEMU-verified).** `Class.isEnum()` = the `ACC_ENUM` bit via the
+  existing `getModifiers` native (nested enums carry it in the enclosing `InnerClasses` entry).
+  `Class.getEnumConstants()` returns the enum's compiler-synthesised `values()` array, reached through M2
+  reflection (`getDeclaredMethod("values").invoke(null)`) rather than the stock `getEnumConstantsShared`
+  cache — sidestepping the broken `Enum.valueOf`/`enumConstantDirectory` HashMap path (which AIOOBEs; the enum
+  **base** — `Enum` superclass, enum `<clinit>` constructing the constants, `values()`/`name()`/`ordinal()` —
+  all work). `demo/EnumReflectDemo`: `isEnum=1`, `constants=3` (`MERCURY=0`/`VENUS=1`/`EARTH=2`), and the
+  negative case (`String.isEnum()==false`, `getEnumConstants()==null`). The `(Object[]) values.invoke(null)`
+  array-covariance checkcast is handled. **Remaining:** `Enum.valueOf(Class,String)` (the map path) still
+  AIOOBEs — a separate fix, not needed for `isEnum`/`getEnumConstants`.
 
 **Scope / RED (skip):** modules (`GetModuleTest`, `forName/modules`, getResource/modules), SecurityManager/
 protection-domain (`ProtectionDomainRace`), jars/URLClassLoader (`GetSystemPackage`, `forNameLeak`,
