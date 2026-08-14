@@ -52,6 +52,20 @@ public final class Byte extends Number implements Comparable<Byte>
         return x - y;
     }
 
+    /** Zero-extend a byte to an int (0..255). Reached by {@code String.hashCode} of a length>=2 string via
+     *  {@code ArraysSupport.unsignedHashCode} (the vectorized-hash leaf) — stock {@code Byte} has it, so the
+     *  JDK-free overlay must too or that path traps. */
+    public static int toUnsignedInt(byte x)
+    {
+        return ((int) x) & 0xff;
+    }
+
+    /** Zero-extend a byte to a long (0..255). */
+    public static long toUnsignedLong(byte x)
+    {
+        return ((long) x) & 0xffL;
+    }
+
     public int compareTo(Byte other)
     {
         return compare(this.value, other.value);
