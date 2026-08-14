@@ -95,13 +95,16 @@ public final class Class<T>
         return false;
     }
 
-    /** The element type of an array class, else null. Array Types aren't modelled on metal, so this returns
-     *  null; the only reached use ({@code Array.newInstance(a.getClass().getComponentType(), n)} in TimSort/
-     *  Arrays.copyOf) creates an untyped reference array that ignores the component type. */
+    /** The element type of an array class (from the array Type's element slot), else null. Feeds
+     *  {@code Array.newInstance(a.getClass().getComponentType(), n)} (TimSort/Arrays.copyOf/toArray) the right
+     *  element Type so the created array is typed {@code [L<component>;} (and {@code instanceof T[]} matches). */
     public Class<?> getComponentType()
     {
-        return null;
+        return getComponentType0(this);
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.componentTypeOf}): array Class -> element-type mirror. */
+    private static native Class<?> getComponentType0(Class c);
 
     /** True if this Class is a primitive type. (Primitive mirrors are not yet modelled on metal — see arc M1.) */
     public boolean isPrimitive()

@@ -5,13 +5,11 @@ package java.lang.reflect;
  * is a native over the JVM's typed-array creation. On metal we provide the 1-D {@code newInstance(Class, int)}
  * used by the collection/sort machinery ({@code TimSort}/{@code ComparableTimSort} temp arrays,
  * {@code Arrays.copyOf}, {@code AbstractCollection.toArray(T[])}): the VM native allocates an 8-byte-element
- * (reference) array of the given length.
- *
- * <p><b>Untyped:</b> the returned array carries the raw reference-array header, not a {@code [L<component>;}
- * type — so it works for the fill-and-return / temp-work uses (element access is untyped on metal), but a
- * caller that {@code instanceof}-checks the result against a specific {@code T[]} (e.g. some
- * {@code toArray(T[])} tests) will see it fail. Full typed reflective arrays need runtime array-Type
- * construction; deferred.
+ * (reference) array of the given length, TYPED as {@code [L<component>;} — the VM tags it with the interned
+ * per-element array-TIB ({@code Loader.refArrayTib}), the same one {@code new component[]} /
+ * {@code instanceof component[]} use, so {@code instanceof}-checking the result (e.g. {@code toArray(T[])})
+ * matches. Element access is 8-byte references. Primitive-element arrays fall back to an untyped raw array
+ * (the collection/sort callers only pass reference component types).
  */
 public final class Array
 {
