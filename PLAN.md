@@ -1355,10 +1355,15 @@ Two halves of "access-check enforcement", both required:
     leaked code address → spurious AIOOBE/NPE, layout-sensitively. Fix: `RESUME` now restores ALL `x19..x28`
     from the reconstructed `unwindLocBuf`. This was the SAME bug behind the M1 "incremental-load corruption"
     (ForNameDemo fields-LAST now runs clean) AND the M2 access-enforcement crash. Details in [[reflection-arc-m1]].
-  - **ON-DEMAND COMPILATION GAP (now unblocked — do next for M4):** a method invoked ONLY reflectively is never
-    RTA-reached, so it isn't compiled/registered → `getDeclaredMethod` throws `NoSuchMethodException` (validated
-    invoke via a warm-up). Compiling a method on demand IS an incremental `loadAll` — now that the exception bug
-    is fixed, wire `getDeclaredMethod`→incremental compile of the target method + closure.
+  - **ON-DEMAND COMPILATION DONE.** A method invoked ONLY reflectively is never RTA-reached, so it isn't
+    compiled. `methodResolve` now falls back to `compileMethodOnDemand`: it re-establishes the (already
+    structure-loaded) class's compile state — `parseConstPool`/`parseFields`/`parseVtable` + reuse
+    `clStatics[reg]`/`clTib[reg]` — finds the method by name, compiles JUST it (`compileReuseTib=true`, so the
+    class's already-filled TIB is untouched since invoke dispatches to the buffer directly), `registerAll` +
+    `patchRelocs`. Verified: MethodReflectDemo + AccessDemo run with NO warm-up (add/scale/getMsg/noop and
+    public/private Sum are invoked purely reflectively and compile on demand). Limitation: the method's
+    cross-class callees must already be compiled (no dependency pull here); a same-class callee is compiled
+    alongside it.
   - **Remaining:** overload resolution by parameter types (needs primitive `int.class` mirrors); virtual
     override dispatch (currently direct-buffer); `Constructor.newInstance`; `getMethod`/`getMethods`/
     `getConstructors` public-only filtering. `String.valueOf(Object)` CP-fix still pending (demos avoid

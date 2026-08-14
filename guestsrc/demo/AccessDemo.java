@@ -17,9 +17,6 @@ public class AccessDemo
     {
         Class<?> c = Secret.class;
         Secret s = new Secret();
-        // warm-up so the private method compiles (on-demand compile is an M2 follow-up).
-        int warm = s.publicSum(1) + demoPrivateWarm(s);
-        Magic.printStr("warm=" + warm + "\n");
 
         Field open = c.getDeclaredField("open");     // public int
         Field secret = c.getDeclaredField("secret"); // private int
@@ -36,12 +33,6 @@ public class AccessDemo
         Magic.printStr("private method invoke (cross-class)=" + tryInvoke(prv, s) + "\n"); // IAE
         prv.setAccessible(true);
         Magic.printStr("private method invoke (setAccessible)=" + tryInvoke(prv, s) + "\n"); // OK
-    }
-
-    /** Force the private method to compile (it's referenced here directly so RTA reaches it). */
-    static int demoPrivateWarm(Secret s)
-    {
-        return s.callPrivate(5);
     }
 
     static String tryGet(Field f, Object o)
@@ -89,11 +80,5 @@ class Secret
     private int privateSum(int x)
     {
         return x + secret;
-    }
-
-    /** Lets AccessDemo warm-compile privateSum (private methods are callable within Secret). */
-    int callPrivate(int x)
-    {
-        return privateSum(x);
     }
 }

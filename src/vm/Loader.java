@@ -5086,6 +5086,18 @@ public final class Loader
         {
             return -1;
         }
+        int idx = methodResolveRegistry(type, nameArr);
+        if (idx >= 0)
+        {
+            return idx;                                    // already compiled + registered
+        }
+        return compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
+    }
+
+    /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
+     *  (class name + method name match), or -1 if it is not currently compiled/registered. */
+    private static int methodResolveRegistry(long type, long nameArr)
+    {
         int ci = 0;
         while (ci < clCount && clType[ci] != type)
         {
@@ -5108,6 +5120,78 @@ public final class Loader
             i += 1;
         }
         return -1;
+    }
+
+    /**
+     * On-demand compile: a method invoked ONLY reflectively was never RTA-reached, so it isn't compiled. Compile
+     * JUST that method (its declaring class is already structure-loaded) into the code arena and register it, so
+     * {@code Method.invoke} can call its buffer. Uses {@code compileReuseTib} so the class's already-filled TIB is
+     * left alone (invoke dispatches to the buffer directly, not through the vtable). Returns the new registry
+     * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
+     * same-class callee it needs is compiled alongside it (they share this compile batch).
+     */
+    private static int compileMethodOnDemand(long type, long nameArr)
+    {
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return -1;
+        }
+        long blob = clBase[ci];
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
+        parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
+        int reg = classRegByName(gThisNameOff);
+        if (reg < 0)
+        {
+            return -1;
+        }
+        gStatics = clStatics[reg];                         // reuse the phase-A statics (cross-class getstatic keys on it)
+        findBootstrapMethods();
+        parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
+        gType = clType[reg];
+        gTib = clTib[reg];
+        parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        long code = 0L;
+        int descOff = 0;
+        int isStatic = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p + 2)]))
+            {
+                long c = findCode(blob, p + 8, attrs);     // sets gcodeLen + gMaxLocals for this method
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = gcp[u2(p + 4)];
+                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return -1;                                     // no such method, or abstract/native (no Code)
+        }
+        compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
+        compile(code, gcodeLen, descOff, isStatic);
+        compileReuseTib = false;
+        registerAll();                                     // register the just-compiled method(s) -> globalBuf
+        patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
+        return methodResolveRegistry(type, nameArr);
     }
 
     /**

@@ -21,14 +21,8 @@ public class MethodReflectDemo
         t.msg = tag;
         Class<?> c = Target.class;
 
-        // Warm-up: call each target method non-reflectively so RTA compiles + registers it. (Reflectively-only
-        // invoked methods are not yet compiled on demand — tracked as an M2 follow-up; this validates the
-        // invoke marshalling/call/boxing machinery independently.)
-        int warm = Target.add(1, 1) + t.scale(1);
-        Object wm = t.getMsg();
-        t.noop();
-        Magic.printStr("warmup=" + (warm + (wm == tag ? 0 : 100)) + "\n");   // 12
-
+        // No warm-up: the target methods are invoked ONLY reflectively, so they are compiled ON DEMAND when
+        // getDeclaredMethod resolves them.
         Method add = c.getDeclaredMethod("add");                 // static int add(int,int)
         Object r1 = add.invoke(null, Integer.valueOf(3), Integer.valueOf(4));
         Magic.printStr("add(3,4)=" + ((Integer) r1).intValue() + "\n");                 // 7
