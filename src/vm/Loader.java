@@ -34,6 +34,7 @@ public final class Loader
     private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
+    private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
     private static int gcodeLen;    // length of the located method's bytecode
     private static int gMaxLocals;  // ... and its max_locals (frame sizing)
     private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
@@ -88,6 +89,7 @@ public final class Loader
     private static long[] rgBuf;    // compiled buffer address
     private static long[] rgLine;   // per method: address of its {u32 count, (u32 wordOff, u32 line)*} table, or 0
     private static long[] rgSrc;    // per method: address of its class's SourceFile filename Utf8, or 0
+    private static int[] rgAccess;  // per method: access_flags (ACC_STATIC etc.) -- reflective invoke + getModifiers
     private static int rgCount;
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
@@ -114,6 +116,8 @@ public final class Loader
     private static long[] clStatics;     // each class's static block base (gStatics), reused between the two phases
     private static int[]  clVtStart;     // start index of this class's slots in the vt registry (phase B fills bufs)
     private static boolean[] clIsIface;  // interface? (phase B compiles only its default/static bodies, no TIB fill)
+    private static int[] clModifiers;    // Class.getModifiers() value, computed at LOAD time (ACC_SUPER stripped,
+                                         // InnerClasses-overridden for nested) — read at runtime WITHOUT re-parsing
     private static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
@@ -327,6 +331,7 @@ public final class Loader
     private static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
     private static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
+    private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
 
     /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
     private static void runClinits()
@@ -339,6 +344,17 @@ public final class Loader
         // force-running the first pending, matching the loader's own cycle handling.
         boolean[] done = new boolean[clinitN];
         int remaining = clinitN;
+        // Incremental load (Class.forName after launch): clinits [0,clinitRunFrom) ran in an earlier batch. Mark
+        // them done so this pass runs ONLY the newly-enqueued initializers (they may still depend on the earlier
+        // ones, which count as satisfied). Without this watermark a second loadAll would re-run every prior
+        // <clinit>, double-initialising the whole running program.
+        int w = 0;
+        while (w < clinitRunFrom && w < clinitN)
+        {
+            done[w] = true;
+            remaining -= 1;
+            w += 1;
+        }
         // FileDescriptor.<clinit> registers the JavaIOFileDescriptorAccess into SharedSecrets that many other
         // <clinit>s read via getJavaIOFileDescriptorAccess() (NativeDispatcher, NioSocketImpl). If it runs late,
         // that accessor sees a null field and falls back to MethodHandles.lookup().ensureInitialized (denied ->
@@ -396,6 +412,7 @@ public final class Loader
                 }
             }
         }
+        clinitRunFrom = clinitN;                         // these have run; a later incremental batch starts past here
     }
 
     /** True if clinit {@code i} references a class whose own (still-unrun) {@code <clinit>} must run first. */
@@ -1450,6 +1467,7 @@ public final class Loader
         rgBuf = new long[MAXREG];
         rgLine = new long[MAXREG];
         rgSrc = new long[MAXREG];
+        rgAccess = new int[MAXREG];
         rgCount = 0;
         sgBase = new long[MAXREG];
         sgClassOff = new int[MAXREG];
@@ -1474,6 +1492,7 @@ public final class Loader
         clinitPd = new int[MAXBLOB];
         clinitN = 0;
         clinitFdFirst = -1;
+        clinitRunFrom = 0;
         primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
         refArrElem = new long[64];
         refArrTib = new long[64];
@@ -1491,6 +1510,7 @@ public final class Loader
         clStatics = new long[MAXCLASS];
         clVtStart = new int[MAXCLASS];
         clIsIface = new boolean[MAXCLASS];
+        clModifiers = new int[MAXCLASS];
         clCount = 0;
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
         clIfaceRegN = new int[MAXCLASS];
@@ -1809,6 +1829,14 @@ public final class Loader
                 {
                     addInst(base, cnOff);
                 }
+            }
+            else if (op == 0x12 && gcpTag[u1(code + pc + 1)] == 7)           // ldc of a CONSTANT_Class (X.class
+            {                                                               // literal): pull the class so its Type/
+                addPend(base, classCpNameOff(u1(code + pc + 1)), 0, 0, PEND_PULL);   // mirror exists for reflection
+            }
+            else if (op == 0x13 && gcpTag[u2(code + pc + 1)] == 7)           // ldc_w of a CONSTANT_Class literal
+            {
+                addPend(base, classCpNameOff(u2(code + pc + 1)), 0, 0, PEND_PULL);
             }
             else if (op == 0xba && isLambdaIndy(u2(code + pc + 1)))          // lambda/method-ref: mark its impl body
             {
@@ -2260,6 +2288,14 @@ public final class Loader
         if (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandles"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
+                // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
+                // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
+                // stays denied below.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Modifier"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Field"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Method"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
                 // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
                 // the rest of sun/net/ext stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions")))
@@ -2464,6 +2500,64 @@ public final class Loader
             i += 1;
         }
         return 0L;
+    }
+
+    /**
+     * {@code Class.forName0(byte[])} native: resolve a binary class name (raw ASCII bytes, dots) to its Class
+     * mirror, loading the class incrementally into the LIVE program if it is not already loaded. Returns 0 (=>
+     * the guest throws {@code ClassNotFoundException}) if the name contains '/' (not a valid binary name), is
+     * not embedded in the classDir, or resolves to no loaded Type.
+     */
+    static long forNameMirror(long nameArr)
+    {
+        if (nameArr <= 0x1000L)
+        {
+            return 0L;                                  // boot force-compile guard passes 0
+        }
+        int len = (int) Magic.load64(nameArr + 16L);    // byte[] length @16
+        long src = nameArr + 24L;                        // byte[] elements @24
+        byte[] slash = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            int c = u1(src + i);
+            if (c == 0x2F)                              // '/' is not a valid binary-name char -> not found
+            {
+                return 0L;
+            }
+            slash[i] = (byte) (c == 0x2E ? 0x2F : c);   // '.' -> '/' (classDir keys are internal names)
+            i += 1;
+        }
+        int ci = classIndexByName(slash);
+        if (ci >= 0)
+        {
+            return classMirror(clType[ci]);             // already loaded: cached mirror (identity-stable)
+        }
+        long type = loadClassIncremental(slash);
+        return type == 0L ? 0L : classMirror(type);
+    }
+
+    /**
+     * Pull class {@code slash} (an internal '/'-separated name) and its dependency closure into the running
+     * program WITHOUT {@link #resetLoader} — the registries are append-only and prior blobs are skipped
+     * ({@code pdDone}/{@code pdDoneB}), so the live program's compiled code + heap survive. Every method of the
+     * pulled class is seeded reachable (reflection may invoke any). Returns its Type, or 0 if not embedded.
+     */
+    private static long loadClassIncremental(byte[] slash)
+    {
+        long blob = pullClass(slash);
+        if (blob == 0L)
+        {
+            return 0L;                                  // not embedded in the classDir
+        }
+        // Seed the class's <clinit> as the reachability root: it (and everything it transitively calls) gets
+        // compiled + run, and the class's structure/Type/mirror is registered by loadStructure regardless. The
+        // class's OTHER methods are compiled LAZILY when reflectively invoked (M2) — eagerly seeding them all
+        // pulled a huge closure into the 2nd (incremental) batch and corrupted the heap.
+        entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // may be absent (addReach(0) is a no-op)
+        loadAll();
+        int ci = classIndexByName(slash);
+        return ci < 0 ? 0L : clType[ci];
     }
 
     /** M4 {@code Thread.currentThread()}: a bare guest {@code java/lang/Thread} (no ctor run; fields null)
@@ -3643,6 +3737,10 @@ public final class Loader
     private static void loadStructure(long bytes, int len)
     {
         parseConstPool(bytes, len);
+        gClassModifiers = u2(gp) & ~0x0020;             // class access_flags (gp is here, post-cp), ACC_SUPER stripped;
+                                                        //   cached for Class.getModifiers() with NO extra parse (an
+                                                        //   extra runtime/load re-parse corrupted the heap). Nested
+                                                        //   classes report raw flags — InnerClasses override is TODO.
         parseFields();                                  // hierarchy-aware field layout (allocates gStatics)
         findBootstrapMethods();                         // locate BootstrapMethods (for invokedynamic), if any
         if (gIsInterface)
@@ -3665,12 +3763,14 @@ public final class Loader
             clVtStart[clCount] = vtCount;               // no vtable entries appended for an interface
             clIsIface[clCount] = true;
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
+            clModifiers[clCount] = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
             clCount += 1;
             return;                                     // bodies (default/static methods) compiled in phase B
         }
         parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
         allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
+        clModifiers[clCount - 1] = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
     }
 
     /**
@@ -4182,7 +4282,7 @@ public final class Loader
 
     // ----- cross-class linking (global method registry) --------------------
     /** Register a compiled method so other classes can link to it by class+name+descriptor. */
-    private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr)
+    private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr, int access)
     {
         rgBase[rgCount] = base;
         rgClassOff[rgCount] = classOff;
@@ -4191,6 +4291,7 @@ public final class Loader
         rgBuf[rgCount] = buf;
         rgLine[rgCount] = lineTab;
         rgSrc[rgCount] = srcAddr;
+        rgAccess[rgCount] = access;
         rgCount += 1;
     }
 
@@ -4210,7 +4311,7 @@ public final class Loader
                 int mi = methodIndexOf(code);
                 if (mi >= 0)
                 {
-                    register(gbase, gThisNameOff, gcp[u2(p + 2)], gcp[u2(p + 4)], mBuf[mi], mLine[mi], mSrc[mi]);
+                    register(gbase, gThisNameOff, gcp[u2(p + 2)], gcp[u2(p + 4)], mBuf[mi], mLine[mi], mSrc[mi], u2(p));
                 }
             }
             p = skipAttributes(p + 8, attrs);
@@ -4513,9 +4614,30 @@ public final class Loader
         {
             if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck")))
+        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
+                || utf8IsStr(classOff, Magic.bytes("java/lang/reflect/AccessibleObject")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
+        }
+        // Reflective Field.get/set: resolve the field's byte offset from the target object's class (same
+        // loader field registry as the VarHandle/atomic-updater shims).
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Field")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+        }
+        // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Method")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
+            if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
+        }
+        // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
+        // and allocate the instance.
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Constructor")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
+            if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
+            if (utf8IsStr(nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
         }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
@@ -4577,6 +4699,8 @@ public final class Loader
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
+            if (utf8IsStr(nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
+            if (utf8IsStr(nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsStr(nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
             if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsStr(nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
@@ -4937,6 +5061,376 @@ public final class Loader
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
         return j < 0 ? -1 : fldAccess[j];
+    }
+
+    /**
+     * {@code Class.getModifiers()}: the loaded class's Java modifiers. For a nested class the real flags live
+     * in the enclosing class's {@code InnerClasses} attribute (this class's own {@code access_flags} lack the
+     * {@code private}/{@code protected}/{@code static} distinction), so prefer the {@code InnerClasses} entry
+     * whose {@code inner_class_info} is this class. The VM-only {@code ACC_SUPER} (0x20) bit is stripped.
+     */
+    static int classModifiersOf(long type)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clType[i] == type)
+            {
+                return clModifiers[i];                     // cached at load time (see computeModifiersAtLoad)
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Reflection ({@code Class.getDeclaredMethod}): the method-registry index of the first method named
+     * {@code nameArr} (a raw {@code byte[]}) declared by the class whose Type is {@code type}, or -1. Matches
+     * class name + method name (no overload/param-type resolution yet — first match wins).
+     */
+    static int methodResolve(long type, long nameArr)
+    {
+        if (type == 0L || nameArr <= 0x1000L)
+        {
+            return -1;
+        }
+        int idx = methodResolveRegistry(type, nameArr);
+        if (idx >= 0)
+        {
+            return idx;                                    // already compiled + registered
+        }
+        return compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
+    }
+
+    /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
+     *  (class name + method name match), or -1 if it is not currently compiled/registered. */
+    private static int methodResolveRegistry(long type, long nameArr)
+    {
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount)
+        {
+            return -1;
+        }
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[i], rgClassOff[i])
+                    && rawEqUtf8(nbase, nlen, rgBase[i], rgNameOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * On-demand compile: a method invoked ONLY reflectively was never RTA-reached, so it isn't compiled. Compile
+     * JUST that method (its declaring class is already structure-loaded) into the code arena and register it, so
+     * {@code Method.invoke} can call its buffer. Uses {@code compileReuseTib} so the class's already-filled TIB is
+     * left alone (invoke dispatches to the buffer directly, not through the vtable). Returns the new registry
+     * index, or -1. Limitation: the method's cross-class callees must already be compiled (no dep pull here); a
+     * same-class callee it needs is compiled alongside it (they share this compile batch).
+     */
+    private static int compileMethodOnDemand(long type, long nameArr)
+    {
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return -1;
+        }
+        long blob = clBase[ci];
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
+        parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
+        int reg = classRegByName(gThisNameOff);
+        if (reg < 0)
+        {
+            return -1;
+        }
+        gStatics = clStatics[reg];                         // reuse the phase-A statics (cross-class getstatic keys on it)
+        findBootstrapMethods();
+        parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
+        gType = clType[reg];
+        gTib = clTib[reg];
+        parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        long code = 0L;
+        int descOff = 0;
+        int isStatic = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p + 2)]))
+            {
+                long c = findCode(blob, p + 8, attrs);     // sets gcodeLen + gMaxLocals for this method
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = gcp[u2(p + 4)];
+                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return -1;                                     // no such method, or abstract/native (no Code)
+        }
+        compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
+        compile(code, gcodeLen, descOff, isStatic);
+        compileReuseTib = false;
+        registerAll();                                     // register the just-compiled method(s) -> globalBuf
+        patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
+        return methodResolveRegistry(type, nameArr);
+    }
+
+    /** Parameter count of a raw method descriptor Utf8 ("(...)ret") at {@code descAddr} (array params fold once). */
+    private static int descParamCountRaw(long descAddr)
+    {
+        long p = descAddr + 2 + 1;                          // past u2 length and '('
+        int n = 0;
+        while (u1(p) != 0x29)                               // ')'
+        {
+            int c = u1(p);
+            if (c == 0x4C)                                  // 'L' reference
+            {
+                while (u1(p) != 0x3B) { p += 1; }
+                p += 1;
+                n += 1;
+            }
+            else if (c == 0x5B)                             // '[' array prefix: folds into its element
+            {
+                p += 1;
+            }
+            else                                            // primitive
+            {
+                p += 1;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    /** Method-registry index of the class's {@code <init>} with {@code paramCount} parameters, or -1. */
+    private static int ctorResolveRegistry(int ci, int paramCount)
+    {
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[i], rgClassOff[i])
+                    && utf8IsAtBase(rgBase[i], rgNameOff[i], Magic.bytes("<init>"))
+                    && descParamCountRaw(rgBase[i] + rgDescOff[i]) == paramCount)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Reflection ({@code Class.getDeclaredConstructor}): registry index of the {@code <init>} of the class whose
+     * Type is {@code type} taking {@code paramCount} parameters (matched by ARITY — no param-type resolution yet),
+     * compiling it on demand if it was never RTA-reached. Returns -1 if none.
+     */
+    static int constructorResolve(long type, int paramCount)
+    {
+        if (type == 0L)
+        {
+            return -1;
+        }
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return -1;
+        }
+        int idx = ctorResolveRegistry(ci, paramCount);
+        if (idx >= 0)
+        {
+            return idx;
+        }
+        // on-demand: compile the matching <init> (its declaring class is already structure-loaded)
+        long blob = clBase[ci];
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);
+        parseFields();
+        int reg = classRegByName(gThisNameOff);
+        if (reg < 0)
+        {
+            return -1;
+        }
+        gStatics = clStatics[reg];
+        findBootstrapMethods();
+        parseVtable(blob);
+        gType = clType[reg];
+        gTib = clTib[reg];
+        parseForMethods(blob, len);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        long code = 0L;
+        int descOff = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int dOff = gcp[u2(p + 4)];
+            if (utf8IsAtBase(blob, gcp[u2(p + 2)], Magic.bytes("<init>")) && descParamCountRaw(blob + dOff) == paramCount)
+            {
+                long c = findCode(blob, p + 8, attrs);
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = dOff;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return -1;
+        }
+        compileReuseTib = true;
+        compile(code, gcodeLen, descOff, 0);               // <init> is an instance method (receiver = the new object)
+        compileReuseTib = false;
+        registerAll();
+        patchRelocs();
+        return ctorResolveRegistry(ci, paramCount);
+    }
+
+    /** Reflection ({@code Constructor.newInstance}): allocate an instance of the class whose Type is {@code type}
+     *  (zeroed fields + its TIB in the header), or 0. The caller runs the {@code <init>} on it. */
+    static long allocInstance(long type)
+    {
+        if (type == 0L)
+        {
+            return 0L;
+        }
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return 0L;
+        }
+        long obj = Heap.alloc(16 + clFieldCount[ci] * 8);  // header(16) + instance fields (incl. inherited)
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, clTib[ci]);
+        return obj;
+    }
+
+    /**
+     * Reflection: fill {@code paramCharsArr} (a guest {@code byte[]}) with the first descriptor char of each of
+     * method {@code rgIndex}'s parameters (primitives 'I'/'J'/'Z'/... verbatim; a reference or array param as
+     * 'L'/'['), and write {@code out} (a guest {@code long[3]}): {@code [buffer, access_flags, returnChar]}.
+     * Returns the parameter count. Float/double params are marshalled as their raw bits (no v-register support).
+     */
+    static int methodInfo(int rgIndex, long paramCharsArr, long outArr)
+    {
+        long descAddr = rgBase[rgIndex] + rgDescOff[rgIndex];   // "(...)ret" Utf8 (u2 length, then bytes)
+        long p = descAddr + 2 + 1;                              // past u2 length and '('
+        long pc = paramCharsArr + 24L;                          // byte[] elements
+        int n = 0;
+        while (u1(p) != 0x29)                                   // ')'
+        {
+            int c = u1(p);
+            if (c == 0x4C)                                      // 'L' reference: skip to ';'
+            {
+                Magic.store8(pc + n, (byte) 0x4C);
+                while (u1(p) != 0x3B) { p += 1; }               // ';'
+                p += 1;
+            }
+            else if (c == 0x5B)                                // '[' array: reference; skip prefixes + element
+            {
+                Magic.store8(pc + n, (byte) 0x5B);
+                while (u1(p) == 0x5B) { p += 1; }
+                if (u1(p) == 0x4C) { while (u1(p) != 0x3B) { p += 1; } }
+                p += 1;
+            }
+            else                                               // primitive: one char, one slot
+            {
+                Magic.store8(pc + n, (byte) c);
+                p += 1;
+            }
+            n += 1;
+        }
+        Magic.store64(outArr + 24L + 0L, rgBuf[rgIndex]);      // out[0] = compiled buffer
+        Magic.store64(outArr + 24L + 8L, (long) rgAccess[rgIndex]);   // out[1] = access flags
+        Magic.store64(outArr + 24L + 16L, (long) u1(p + 1));   // out[2] = return-type char (after ')')
+        return n;
+    }
+
+
+    /**
+     * Scan the class-level {@code InnerClasses} attribute for the entry whose {@code inner_class_info_index}
+     * equals {@code thisClass}; return its {@code inner_class_access_flags}, or -1 if this class is not listed
+     * (a top-level class). Assumes {@code gMethodsStart}/{@code gcp} are current (post {@code parseForMethods}).
+     */
+    private static int innerAccessOf(int thisClass)
+    {
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)                                // skip the methods table
+        {
+            p = skipAttributes(p + 8, u2(p + 6));
+            m += 1;
+        }
+        int cacount = u2(p);                              // class attributes_count
+        p += 2;
+        byte[] want = Magic.bytes("InnerClasses");
+        int a = 0;
+        while (a < cacount)
+        {
+            int nameIdx = u2(p);
+            int alen = u4(p + 2);
+            if (utf8IsStr(gcp[nameIdx], want))
+            {
+                long q = p + 6;                           // attribute body: number_of_classes
+                int nc = u2(q);
+                q += 2;
+                int e = 0;
+                while (e < nc)
+                {
+                    if (u2(q) == thisClass)               // inner_class_info_index == this_class
+                    {
+                        return u2(q + 6);                 // inner_class_access_flags
+                    }
+                    q += 8;                               // inner(2) outer(2) name(2) flags(2)
+                    e += 1;
+                }
+                return -1;
+            }
+            p += 6 + alen;
+            a += 1;
+        }
+        return -1;
     }
 
     /** Reflection: first char of the field's JVM type descriptor (the byte after the u2 Utf8 length), or -1. */
@@ -6290,6 +6784,8 @@ public final class Loader
         if (isName(gbase, n, 0x7265706F7274L, 6))    { return Intrinsics.REPORT; }   // "report"
         if (isName(gbase, n, 0x7072696E74537472L, 8)) { return Intrinsics.PRINT_STR; } // "printStr"
         if (isName(gbase, n, 0x616464724F66L, 6))    { return Intrinsics.ADDR_OF; }   // "addrOf"
+        if (isName(gbase, n, 0x66726F6D41646472L, 8)) { return Intrinsics.FROM_ADDR; } // "fromAddr"
+        if (isName(gbase, n, 0x63616C6C4EL, 5))      { return Intrinsics.CALL_N; }    // "callN"
         if (isName(gbase, n, 0x6D77616974L, 5))      { return Intrinsics.MON_WAIT; }    // "mwait"
         if (isName(gbase, n, 0x6D6E6F74696679L, 7))  { return Intrinsics.MON_NOTIFY; }  // "mnotify"
         if (isName(gbase, n, 0x6D6E6F74616C6CL, 7))  { return Intrinsics.MON_NOTALL; }  // "mnotall"

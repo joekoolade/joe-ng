@@ -21,6 +21,35 @@ public final class Class<T>
     }
 
     /**
+     * Load (if needed) and return the {@code Class} for the binary name {@code name} (dots), initializing it.
+     * On metal this pulls the class + its dependency closure into the live program on demand (the VM's
+     * incremental loader), then runs its {@code <clinit>}. Throws {@code ClassNotFoundException} if the class
+     * is not embedded or the name is not a valid binary name.
+     */
+    public static Class<?> forName(String name) throws ClassNotFoundException
+    {
+        return forName(name, true, null);
+    }
+
+    /**
+     * As {@link #forName(String)}, with an explicit {@code initialize} flag and class loader. On metal the
+     * class is always initialized when loaded (the loader runs {@code <clinit>} as part of the batch); the
+     * {@code initialize} flag and {@code loader} are accepted for source compatibility.
+     */
+    public static Class<?> forName(String name, boolean initialize, ClassLoader loader) throws ClassNotFoundException
+    {
+        Class<?> c = (name == null) ? null : forName0(name.getBytes());
+        if (c == null)
+        {
+            throw new ClassNotFoundException(name);
+        }
+        return c;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.forName}): raw binary-name bytes -> Class mirror, or null. */
+    private static native Class forName0(byte[] name);
+
+    /**
      * Assertions are off on metal (no -ea). Stock {@code <clinit>}s read this into their {@code $assertionsDisabled}
      * flag (e.g. {@code java.util.regex.Pattern.<clinit>} does {@code ldc X.class; desiredAssertionStatus()}); with
      * this it can run to completion and initialise its static nodes instead of being skipped.
@@ -38,6 +67,70 @@ public final class Class<T>
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classNameOf}): mirror -> a fresh name String. */
     private static native String getName0(Class c);
+
+    /**
+     * The Java language modifiers of this class/interface ({@code public}/{@code private}/{@code abstract}/...).
+     * For a nested class these come from the enclosing class's {@code InnerClasses} attribute; the VM-internal
+     * {@code ACC_SUPER} bit is stripped by the VM.
+     */
+    public int getModifiers()
+    {
+        return (int) classModifiers0(this);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.classModifiers}): mirror -> class access flags. Returns
+     *  {@code long} (not {@code int}) deliberately: a 1-arg {@code int}-returning native mis-compiled in the JIT
+     *  (register-clobber corruption); the {@code (J)J} shape matches the working {@code getName0}/{@code superclass0}. */
+    private static native long classModifiers0(Class c);
+
+    /** True if this Class represents an interface (the {@code ACC_INTERFACE} bit). */
+    public boolean isInterface()
+    {
+        return (classModifiers0(this) & 0x0200) != 0;
+    }
+
+    /** True if this Class is an array type. (Loaded array classes are not yet modelled on metal — see arc M1.) */
+    public boolean isArray()
+    {
+        return false;
+    }
+
+    /** True if this Class is a primitive type. (Primitive mirrors are not yet modelled on metal — see arc M1.) */
+    public boolean isPrimitive()
+    {
+        return false;
+    }
+
+    /** True if this class was synthesised by the compiler ({@code ACC_SYNTHETIC}). */
+    public boolean isSynthetic()
+    {
+        return (classModifiers0(this) & 0x1000) != 0;
+    }
+
+    /** The package name (the binary name up to, but excluding, the last '.'), or "" for the default package. */
+    public String getPackageName()
+    {
+        String n = getName();
+        int dot = n.lastIndexOf('.');
+        return dot < 0 ? "" : n.substring(0, dot);
+    }
+
+    /** The simple (unqualified) class name: the binary name after the last '.' or '$', whichever is later. */
+    public String getSimpleName()
+    {
+        String n = getName();
+        int dot = n.lastIndexOf('.');
+        int dollar = n.lastIndexOf('$');
+        int cut = dot > dollar ? dot : dollar;
+        return cut < 0 ? n : n.substring(cut + 1);
+    }
+
+    /** The canonical name (dotted binary name with nested '$' turned into '.'). Local/anonymous classes (no
+     *  canonical name in the JLS) are not distinguished yet — see arc M1. */
+    public String getCanonicalName()
+    {
+        return getName().replace('$', '.');
+    }
 
     /** True if {@code obj} is non-null and assignable to this type (the {@code instanceof} walk). */
     public boolean isInstance(Object obj)
@@ -89,6 +182,49 @@ public final class Class<T>
             throw new NoSuchFieldException(name);
         }
         return new java.lang.reflect.Field(this, name, mods, fieldTypeChar0(this, nb));
+    }
+
+    /**
+     * The PUBLIC field named {@code name} declared by this class or inherited from a superclass, or throws
+     * {@code NoSuchFieldException} if none is accessible. Unlike {@link #getDeclaredField} (which returns any
+     * field of this class regardless of access), {@code getField} enforces public visibility and walks the
+     * superclass chain — the reflection access-control rule these tests probe. (Interface-constant fields and
+     * static fields are not yet enumerated on metal — see reflection arc M1/M2.)
+     */
+    public java.lang.reflect.Field getField(String name) throws NoSuchFieldException
+    {
+        if (name == null)
+        {
+            throw new NullPointerException();
+        }
+        int mods = fieldModifiers(name);                // this class's own instance field flags, or -1 if absent
+        if (mods >= 0 && (mods & 0x0001) != 0)          // ACC_PUBLIC
+        {
+            return new java.lang.reflect.Field(this, name, mods, fieldTypeChar(name));
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    /**
+     * The declared method named {@code name} (first match — overload resolution by parameter types is not yet
+     * implemented), or throws {@code NoSuchMethodException}. Returns a {@code Method} that can be reflectively
+     * {@code invoke}d. The {@code parameterTypes} are accepted for signature compatibility but not yet matched.
+     */
+    public java.lang.reflect.Method getDeclaredMethod(String name, Class<?>... parameterTypes)
+            throws NoSuchMethodException
+    {
+        return java.lang.reflect.Method.resolve(this, name);
+    }
+
+    /**
+     * The declared constructor taking {@code parameterTypes}, matched by <em>arity</em> only for now (first
+     * {@code <init>} with that parameter count), or throws {@code NoSuchMethodException}. Returns a
+     * {@code Constructor} that can reflectively {@code newInstance}.
+     */
+    public java.lang.reflect.Constructor<T> getDeclaredConstructor(Class<?>... parameterTypes)
+            throws NoSuchMethodException
+    {
+        return java.lang.reflect.Constructor.resolve(this, parameterTypes == null ? 0 : parameterTypes.length);
     }
 
     /** Access flags of the named own instance field, or -1 if absent (reflection helper for the field updaters). */

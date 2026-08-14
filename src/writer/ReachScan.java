@@ -70,6 +70,11 @@ public final class ReachScan
         if (c.startsWith("java/lang/invoke/VarHandle")
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("jdk/internal/invoke/MhUtil")
+                || c.startsWith("java/lang/reflect/Modifier")           // reflection arc: JDK-free overlays that run
+                || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied
+                || c.startsWith("java/lang/reflect/Method")
+                || c.startsWith("java/lang/reflect/Constructor")
+                || c.startsWith("java/lang/reflect/AccessibleObject")
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions"))   // overlaid no-op; rest of sun/net/ext denied
         {
             return false;

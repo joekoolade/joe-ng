@@ -119,6 +119,18 @@ public final class Magic
     }
 
     /**
+     * Call JIT'd code at {@code addr} with up to 8 register arguments loaded from {@code argsPtr}: x0 &lt;-
+     * [argsPtr+0], x1 &lt;- [argsPtr+8], ... x7 &lt;- [argsPtr+56]; return x0. The callee reads only the args
+     * its arity uses (extra loaded registers are ignored). The general N-arg call behind reflective
+     * {@code Method.invoke}/{@code Constructor.newInstance}; the caller lays out the 8-long buffer per the
+     * target's descriptor (receiver + marshalled args, zero-padded).
+     */
+    public static long callN(long addr, long argsPtr)
+    {
+        throw intrinsic();
+    }
+
+    /**
      * Run a garbage collection. Lowered to a sequence that spills the callee-saved
      * registers (so live references held there become scannable on the stack) and
      * calls the conservative collector, then restores them.
@@ -430,6 +442,16 @@ public final class Magic
      * as a {@code long} for {@code load*}/{@code store*} at a field/element offset.
      */
     public static long addrOf(Object o)
+    {
+        throw intrinsic();
+    }
+
+    /**
+     * Reinterpret a raw heap address as an object reference — the inverse of {@link #addrOf}. Since a reference
+     * IS the object's address in joe-ng, this lowers to nothing; it lets Java source (e.g. reflective
+     * {@code Field.get} of a reference field) turn a {@code load64}'d field slot back into an {@code Object}.
+     */
+    public static Object fromAddr(long a)
     {
         throw intrinsic();
     }
