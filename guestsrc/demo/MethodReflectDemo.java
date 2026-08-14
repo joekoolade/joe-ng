@@ -8,8 +8,9 @@ import magic.Magic;
  * Reflection arc M2 — reflective {@code Method.invoke}. Resolves methods via {@code Class.getDeclaredMethod}
  * (by name; overload resolution by parameter types is not yet implemented) and invokes them: a STATIC method
  * with two int args, an INSTANCE method with one int arg reading an instance field, an instance method
- * returning a reference, and a {@code void} method. Verifies via unboxing/identity (avoids {@code String +
- * Object} concat, which lowers to the still-unfixed {@code String.valueOf(Object)} JIT bug).
+ * returning a reference, and a {@code void} method. The reference-returning invoke's result is printed with
+ * {@code String + Object} concat (javac lowers it via {@code String.valueOf(Object)}) — exercised directly in
+ * the reflection closure now that that path works.
  */
 public class MethodReflectDemo
 {
@@ -33,7 +34,7 @@ public class MethodReflectDemo
 
         Method getMsg = c.getDeclaredMethod("getMsg");           // Object getMsg() instance -> t.msg
         Object r3 = getMsg.invoke(t);
-        Magic.printStr("getMsg identity=" + (r3 == tag ? 1 : 0) + "\n");                // 1
+        Magic.printStr("getMsg=" + r3 + " (identity " + (r3 == tag ? 1 : 0) + ")\n");   // the-message, 1
 
         Method noop = c.getDeclaredMethod("noop");               // void noop()
         Object r4 = noop.invoke(t);

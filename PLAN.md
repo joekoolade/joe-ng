@@ -1326,8 +1326,8 @@ Two halves of "access-check enforcement", both required:
   `java/lang/reflect/` for the **`IllegalAccessException`-on-invoke security gate**.
 - Touchpoints: new `reflect/{Method,Constructor,AccessibleObject}` overlays + `Field` get/set, `VM.invoke*`/
   `VM.newInstance0` marshalling natives, one new `Magic` object-reinterpret intrinsic, primitive `TYPE`
-  handling (`int.class` … for `getMethod(name, Class...)`). **Fold in the `String.valueOf(Object)` CP-resolution
-  fix first** (the reflection closure will hit it).
+  handling (`int.class` … for `getMethod(name, Class...)`). (`String.valueOf(Object)` / `String + Object`
+  concat is confirmed working — see STATUS below.)
 - **STATUS — Field + Method + Constructor invoke, access enforcement, and on-demand compile ALL DONE
   (QEMU-verified).** Delivered:
   - **`Magic.fromAddr(long)→Object`** long→Object reinterpret intrinsic (inverse of `addrOf`, same no-op
@@ -1378,9 +1378,19 @@ Two halves of "access-check enforcement", both required:
     `allocInstance0`→`VM.allocInstance(J)J`. QEMU: no-arg `<init>` (`size=1`), two-arg `<init>` (int+ref →
     `size=42`, ref identity preserved), param counts `0`/`2` — all run to completion. New overlay
     `reflect/Constructor` + `java/lang/InstantiationException`.
+  - **`String.valueOf(Object)` / `String + Object` concat DONE** — was already fixed (turned out to be the
+    SAME layout-sensitive corruption cured by the RESUME register-restore fix), just never re-verified.
+    Confirmed on metal (QEMU): every `String.valueOf` overload resolves to the RIGHT one by descriptor
+    (`valueOf(int/char/boolean/long/Object)` all correct), and `String + <ref>` concat works for a custom
+    `toString`, `null`, a boxed value typed as `Object`, and the default `Object.toString`. javac pre-lowers
+    `"x=" + obj` to `invokestatic String.valueOf(Object)` before the `StringConcatFactory` indy, so the indy
+    only ever sees a real `String` arg (which `scStr` already handled). **Folded in:** the reflection demos
+    (`FieldReflectDemo`/`MethodReflectDemo`/`CtorReflectDemo`) now print reference results/fields via natural
+    `+ obj` concat (`ref=hi`/`getMsg=the-message`/`label=widget-label`) instead of the old identity/unbox
+    workarounds — exercising `valueOf(Object)` directly inside the reflection closure.
   - **Remaining:** overload resolution by parameter types (needs primitive `int.class` mirrors); virtual
     override dispatch (currently direct-buffer); `getMethod`/`getMethods`/`getConstructors` public-only
-    filtering. `String.valueOf(Object)` CP-fix still pending (demos avoid `String+Object` concat).
+    filtering.
 
 **M3 — `ClassLoader` + `defineClass(byte[])` (route runtime bytes into the loader).**
 - Narrow-ALLOW `java/lang/ClassLoader` (top of `Loader.isDenylisted` + `ReachScan.isDenied`, like VarHandle);
