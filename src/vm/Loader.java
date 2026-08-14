@@ -2296,6 +2296,9 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Method"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // M3: java/lang/ClassLoader is overlaid (JDK-free) -- loadClass -> forName, defineClass(byte[]).
+                // Allowed here; jdk/internal/loader + java/security stay denied below (no delegation/unloading).
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
                 // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
                 // the rest of sun/net/ext stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions")))
@@ -2308,7 +2311,6 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/fs/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/file/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/ServiceLoader"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
@@ -2558,6 +2560,47 @@ public final class Loader
         loadAll();
         int ci = classIndexByName(slash);
         return ci < 0 ? 0L : clType[ci];
+    }
+
+    /**
+     * {@code ClassLoader.defineClass(name, byte[], off, len)} native: materialize a class from SUPPLIED
+     * classfile bytes (not the embedded classDir) into the LIVE program. The caller's {@code byte[]} bytes are
+     * copied into a fresh heap blob (a clean offset-0 base the loader can read raw), registered, and loaded
+     * incrementally — the same seed-{@code <clinit>} + {@code loadAll} path as {@link #loadClassIncremental},
+     * so the class's not-yet-loaded dependency closure is demand-pulled from the classDir. Returns the new
+     * class's Type (the caller wraps it in a Class mirror), or 0 on empty/malformed input.
+     *
+     * <p>The class's own name comes from the classfile (this_class), so the {@code name} argument is advisory
+     * and unused; the just-defined class is located after load by its unique blob base ({@code clBase}). No
+     * duplicate-definition check, no delegation hierarchy (single application loader).
+     */
+    static long defineFromBytes(long byteArr, int off, int len)
+    {
+        if (byteArr <= 0x1000L || len <= 0)
+        {
+            return 0L;                                  // boot force-compile guard / empty input
+        }
+        long blob = Heap.allocData(len);                // raw offset-0 base: classfile byte 0 lives at blob+0
+        long srcAddr = byteArr + 24L + off;             // byte[] elements @24, plus the caller's offset
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(blob + i, (byte) Magic.load8(srcAddr + i));
+            i += 1;
+        }
+        addBlob(blob, len);
+        entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // seed reachability root (may be absent)
+        loadAll();
+        int ci = 0;                                     // find the class we just added by its unique blob base
+        while (ci < clCount)
+        {
+            if (clBase[ci] == blob)
+            {
+                return clType[ci];
+            }
+            ci += 1;
+        }
+        return 0L;
     }
 
     /** M4 {@code Thread.currentThread()}: a bare guest {@code java/lang/Thread} (no ctor run; fields null)
@@ -4705,6 +4748,10 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsStr(nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
             if (utf8IsStr(nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/ClassLoader")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Thread")))
         {

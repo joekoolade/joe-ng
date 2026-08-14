@@ -1402,6 +1402,29 @@ Two halves of "access-check enforcement", both required:
   `ClassLoader.findClass`), `findSystemClass/Loader`.
 - Touchpoints: `guestsrc/java/lang/ClassLoader.java`, `VM.defineClass0` native, `Loader.defineFromBytes`,
   denylist narrow-ALLOW in both sites.
+- **STATUS — DONE (QEMU-verified).** `ClassLoader.defineClass(byte[])` materializes a class from SUPPLIED
+  classfile bytes on the metal and runs it. `demo/DefineClassDemo` embeds the raw 293-byte `plugin/Plugin
+  .class` (compiled offline, **not in the loader's classDir** — so `forName` can't reach it; the byte[] is the
+  only source), hands it to an `AppLoader extends ClassLoader`'s `defineClass`, then drives it purely through
+  M2 reflection: `getName()` → `plugin.Plugin`, `getDeclaredConstructor().newInstance()` builds an instance
+  (its `<init>` sets `base=40`), `getDeclaredMethod("answer").invoke(p, 2)` → **42** (`base + 2`). The class's
+  methods (`<init>`/`answer`) compile ON DEMAND (M2) when reflectively resolved — `defineFromBytes` seeds only
+  `<clinit>` reachable, like an incremental `forName`. Mechanism:
+  - **`Loader.defineFromBytes(byteArr, off, len)`**: copy the guest `byte[]` payload into a fresh
+    `Heap.allocData(len)` blob (a clean offset-0 base the loader reads raw), `addBlob`, seed `<clinit>` as the
+    reachability root, `loadAll()` (demand-pulls the class's not-yet-loaded dependency closure from the
+    classDir), then find the just-defined class by its unique `clBase` and return its Type. The classfile's own
+    `this_class` names the class, so the `name` arg is advisory; no duplicate-definition check, no delegation.
+  - **`VM.defineClass(JJJJ)J`** wraps it and returns the `Class` mirror (`classMirror`); `defineClassAddr`
+    stashed by `ImageBuilder`, boot force-compile guard, `Loader.nativeBuf` arm for
+    `java/lang/ClassLoader.defineClass0`.
+  - **Overlay `java/lang/ClassLoader`** (JDK-free, single application loader): `loadClass`→`Class.forName`,
+    `findClass` (subclass hook, default throws), `protected final defineClass(name,byte[],off,len)`→
+    `defineClass0` native (throws `ClassFormatError` on 0), `getSystemClassLoader` singleton. Narrow-ALLOWed in
+    both denylist sites (`Loader.isDenylisted` + `ReachScan`); `jdk/internal/loader` + `java/security` stay
+    denied (no delegation/unloading/protection-domains).
+  - **Remaining for the full acceptance set:** custom-`findClass` loader test shape (`ExceptionHidingLoader`)
+    and a duplicate-definition guard are not yet exercised; M4 wires the file-read + enum-reflection end-to-end.
 
 **M4 — end-to-end: read a `.class` from a file and run it (with access checks live).**
 - `demo/ReflectLoad`: `ramfs/plugins/Plugin.class` embedded; boot reads its bytes (`FileInputStream

@@ -29,7 +29,7 @@ public final class ReachScan
      *  the loader's denylist (Loader.isDenylisted). */
     static final String[] DENY = {
         "java/lang/invoke/", "java/lang/foreign/", "jdk/internal/foreign/",
-        "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/", "java/lang/ClassLoader",
+        "sun/nio/fs/", "java/nio/file/", "jdk/internal/loader/",
         "java/security/", "java/util/ServiceLoader", "java/util/spi/", "sun/util/",
         // java/net is loadable (M3 sockets). SocksSocketImpl IS on the taken path (Socket.createImpl always
         // wraps the platform impl in it) -- overlaid as a pure delegator, so NOT denied. The HTTP-CONNECT
@@ -75,6 +75,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/Method")
                 || c.startsWith("java/lang/reflect/Constructor")
                 || c.startsWith("java/lang/reflect/AccessibleObject")
+                || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions"))   // overlaid no-op; rest of sun/net/ext denied
         {
             return false;
