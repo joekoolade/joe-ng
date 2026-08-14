@@ -1792,6 +1792,7 @@ public final class VM
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = newReflectArray(0L, 0L); } // reflect/Array.newInstance0
+        if (componentTypeAddr == 0L) { long u = componentTypeOf(0L); }       // Class.getComponentType0
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -1922,10 +1923,12 @@ public final class VM
     }
 
     /**
-     * {@code java.lang.reflect.Array.newInstance0(Class, int)} native: a raw {@code length}-element reference
-     * array (8-byte elements), UNTYPED (elem-size TIB, no {@code [L<component>;} array-Type). Backs the temp/
-     * work arrays TimSort/ComparableTimSort/Arrays.copyOf allocate reflectively. The component mirror is
-     * ignored (typed reflective arrays need runtime array-Type construction; deferred).
+     * {@code java.lang.reflect.Array.newInstance0(Class, int)} native: a {@code length}-element reference array
+     * (8-byte elements) TYPED as {@code [L<component>;} — its TIB is {@code Loader.refArrayTib(componentType)},
+     * the SAME interned array-TIB that {@code new component[]} / {@code instanceof component[]} use, so a caller
+     * that {@code instanceof}-checks the result (e.g. {@code toArray(T[])} tests) matches. Backs the temp/work
+     * arrays TimSort/ComparableTimSort/Arrays.copyOf allocate reflectively. Falls back to an untyped raw array
+     * if the component's Type isn't resolvable (still fine for fill-and-return uses).
      */
     static long newReflectArray(long componentMirror, long length)
     {
@@ -1933,7 +1936,41 @@ public final class VM
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        return Heap.allocArray((int) length, 8);           // 8-byte reference elements (raw array header)
+        long arr = Heap.allocArray((int) length, 8);       // 8-byte reference elements (raw header first)
+        if (componentMirror > 0x1000L)
+        {
+            long compType = Magic.load64(componentMirror + 16L);   // Class mirror -> its Type (@16)
+            if (compType != 0L)
+            {
+                Magic.store64(arr, Loader.refArrayTib(compType));  // typed [L<component>; TIB (interned per element)
+            }
+        }
+        return arr;
+    }
+
+    /**
+     * {@code Class.getComponentType0(Class)} native: for an array Class, the Class mirror of its element type
+     * (read from the array Type's element slot); for a non-array Class, 0. Lets
+     * {@code a.getClass().getComponentType()} feed {@link #newReflectArray} the right element Type.
+     */
+    static long componentTypeOf(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(mirror + 16L);            // mirror -> Type (@16)
+        if (type == 0L)
+        {
+            return 0L;
+        }
+        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        if ((instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return 0L;                                     // not an array Type
+        }
+        long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        return elemType == 0L ? 0L : Loader.classMirror(elemType);   // primitive-element arrays have 0 elem Type
     }
 
     /**
@@ -3304,7 +3341,8 @@ public final class VM
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
-    static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (untyped ref array)
+    static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)
+    static long componentTypeAddr;     // VM.componentTypeOf(J)J — Class.getComponentType0 (array element mirror)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

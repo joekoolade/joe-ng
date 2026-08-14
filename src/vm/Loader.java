@@ -4772,6 +4772,7 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsStr(nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
             if (utf8IsStr(nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
+            if (utf8IsStr(nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/ClassLoader")))
         {
