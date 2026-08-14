@@ -485,7 +485,11 @@ public final class Loader
                 // jdk/internal/misc/VM.<clinit> = initialize() (a native setting savedProps/direct-memory/page
                 // state). Metal has no such native; the reachable collection/reference paths don't read VM's
                 // statics, so skip it (defaults are inert). Pulled transitively by reference/buffer machinery.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/misc/VM"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/misc/VM"))
+                // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
+                // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
+                // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
