@@ -614,6 +614,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
         stashHelper(image, staticWord, wordOffset, "vm/VM.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
         stashHelper(image, staticWord, wordOffset, "vm/VM.methodInfo(JJJ)I",   "vm/VM.methodInfoAddr");     // reflection M2: Method.methodInfo0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.constructorResolve(JJ)I", "vm/VM.constructorResolveAddr"); // M2: Constructor.ctorResolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.allocInstance(J)J",  "vm/VM.allocInstanceAddr");  // reflection M2: Constructor.allocInstance0
         stashHelper(image, staticWord, wordOffset, "vm/VM.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
         stashHelper(image, staticWord, wordOffset, "vm/VM.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic

@@ -1328,8 +1328,8 @@ Two halves of "access-check enforcement", both required:
   `VM.newInstance0` marshalling natives, one new `Magic` object-reinterpret intrinsic, primitive `TYPE`
   handling (`int.class` … for `getMethod(name, Class...)`). **Fold in the `String.valueOf(Object)` CP-resolution
   fix first** (the reflection closure will hit it).
-- **STATUS — Field + Method invoke DONE (QEMU-verified); access enforcement + Constructor + on-demand compile
-  remain.** Delivered:
+- **STATUS — Field + Method + Constructor invoke, access enforcement, and on-demand compile ALL DONE
+  (QEMU-verified).** Delivered:
   - **`Magic.fromAddr(long)→Object`** long→Object reinterpret intrinsic (inverse of `addrOf`, same no-op
     lowering; `Intrinsics.FROM_ADDR`, `Baseline`, `Loader.magicId`). **`Magic.callN(buf,argsPtr)`** general
     N-arg call (loads x0..x7 from an 8-long buffer, `blr`; callee ignores extra regs) — the invoke call path.
@@ -1364,10 +1364,23 @@ Two halves of "access-check enforcement", both required:
     public/private Sum are invoked purely reflectively and compile on demand). Limitation: the method's
     cross-class callees must already be compiled (no dependency pull here); a same-class callee is compiled
     alongside it.
+  - **`Constructor.newInstance` DONE** (`demo/CtorReflectDemo`): `Class.getDeclaredConstructor(Class...)` →
+    `Constructor.resolve(this, paramTypes.length)` matches an `<init>` by **arity only** (no param-type
+    matching yet, so `int.class` primitive mirrors aren't needed — the placeholder Class literals are
+    ignored). `newInstance(Object...)` allocates a fresh instance via `allocInstance0`→`VM.allocInstance`
+    (`Heap.alloc(16 + clFieldCount*8)` + store the class's `clTib` in the header — same shape as `emitNew`),
+    marshals the new object into slot 0 as the `<init>` receiver then the args per the resolved descriptor's
+    param chars, and `Magic.callN`s the `<init>` buffer (void return). The `<init>` compiles ON DEMAND
+    (`constructorResolve` → `ctorResolveRegistry`, else the same re-establish-state + compile path as
+    `compileMethodOnDemand`, using `descParamCountRaw` to arity-match the raw descriptor). Access enforcement
+    reuses `AccessibleObject.checkAccess`. Natives (all in the `java/lang/reflect/Constructor` `nativeBuf`
+    arm): `ctorResolve0`→`VM.constructorResolve(JJ)I`, `methodInfo0`→`VM.methodInfo` (shared with `Method`),
+    `allocInstance0`→`VM.allocInstance(J)J`. QEMU: no-arg `<init>` (`size=1`), two-arg `<init>` (int+ref →
+    `size=42`, ref identity preserved), param counts `0`/`2` — all run to completion. New overlay
+    `reflect/Constructor` + `java/lang/InstantiationException`.
   - **Remaining:** overload resolution by parameter types (needs primitive `int.class` mirrors); virtual
-    override dispatch (currently direct-buffer); `Constructor.newInstance`; `getMethod`/`getMethods`/
-    `getConstructors` public-only filtering. `String.valueOf(Object)` CP-fix still pending (demos avoid
-    `String+Object` concat).
+    override dispatch (currently direct-buffer); `getMethod`/`getMethods`/`getConstructors` public-only
+    filtering. `String.valueOf(Object)` CP-fix still pending (demos avoid `String+Object` concat).
 
 **M3 — `ClassLoader` + `defineClass(byte[])` (route runtime bytes into the loader).**
 - Narrow-ALLOW `java/lang/ClassLoader` (top of `Loader.isDenylisted` + `ReachScan.isDenied`, like VarHandle);

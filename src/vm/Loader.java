@@ -4631,6 +4631,14 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
             if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
         }
+        // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
+        // and allocate the instance.
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Constructor")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
+            if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
+            if (utf8IsStr(nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
+        }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
         if (utf8IsStr(classOff, Magic.bytes("java/io/FileDescriptor")))
@@ -5192,6 +5200,148 @@ public final class Loader
         registerAll();                                     // register the just-compiled method(s) -> globalBuf
         patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         return methodResolveRegistry(type, nameArr);
+    }
+
+    /** Parameter count of a raw method descriptor Utf8 ("(...)ret") at {@code descAddr} (array params fold once). */
+    private static int descParamCountRaw(long descAddr)
+    {
+        long p = descAddr + 2 + 1;                          // past u2 length and '('
+        int n = 0;
+        while (u1(p) != 0x29)                               // ')'
+        {
+            int c = u1(p);
+            if (c == 0x4C)                                  // 'L' reference
+            {
+                while (u1(p) != 0x3B) { p += 1; }
+                p += 1;
+                n += 1;
+            }
+            else if (c == 0x5B)                             // '[' array prefix: folds into its element
+            {
+                p += 1;
+            }
+            else                                            // primitive
+            {
+                p += 1;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    /** Method-registry index of the class's {@code <init>} with {@code paramCount} parameters, or -1. */
+    private static int ctorResolveRegistry(int ci, int paramCount)
+    {
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[i], rgClassOff[i])
+                    && utf8IsAtBase(rgBase[i], rgNameOff[i], Magic.bytes("<init>"))
+                    && descParamCountRaw(rgBase[i] + rgDescOff[i]) == paramCount)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Reflection ({@code Class.getDeclaredConstructor}): registry index of the {@code <init>} of the class whose
+     * Type is {@code type} taking {@code paramCount} parameters (matched by ARITY — no param-type resolution yet),
+     * compiling it on demand if it was never RTA-reached. Returns -1 if none.
+     */
+    static int constructorResolve(long type, int paramCount)
+    {
+        if (type == 0L)
+        {
+            return -1;
+        }
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return -1;
+        }
+        int idx = ctorResolveRegistry(ci, paramCount);
+        if (idx >= 0)
+        {
+            return idx;
+        }
+        // on-demand: compile the matching <init> (its declaring class is already structure-loaded)
+        long blob = clBase[ci];
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);
+        parseFields();
+        int reg = classRegByName(gThisNameOff);
+        if (reg < 0)
+        {
+            return -1;
+        }
+        gStatics = clStatics[reg];
+        findBootstrapMethods();
+        parseVtable(blob);
+        gType = clType[reg];
+        gTib = clTib[reg];
+        parseForMethods(blob, len);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        long code = 0L;
+        int descOff = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int dOff = gcp[u2(p + 4)];
+            if (utf8IsAtBase(blob, gcp[u2(p + 2)], Magic.bytes("<init>")) && descParamCountRaw(blob + dOff) == paramCount)
+            {
+                long c = findCode(blob, p + 8, attrs);
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = dOff;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return -1;
+        }
+        compileReuseTib = true;
+        compile(code, gcodeLen, descOff, 0);               // <init> is an instance method (receiver = the new object)
+        compileReuseTib = false;
+        registerAll();
+        patchRelocs();
+        return ctorResolveRegistry(ci, paramCount);
+    }
+
+    /** Reflection ({@code Constructor.newInstance}): allocate an instance of the class whose Type is {@code type}
+     *  (zeroed fields + its TIB in the header), or 0. The caller runs the {@code <init>} on it. */
+    static long allocInstance(long type)
+    {
+        if (type == 0L)
+        {
+            return 0L;
+        }
+        int ci = 0;
+        while (ci < clCount && clType[ci] != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount || clIsIface[ci])
+        {
+            return 0L;
+        }
+        long obj = Heap.alloc(16 + clFieldCount[ci] * 8);  // header(16) + instance fields (incl. inherited)
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, clTib[ci]);
+        return obj;
     }
 
     /**

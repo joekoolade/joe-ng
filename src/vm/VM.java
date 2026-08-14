@@ -1813,6 +1813,8 @@ public final class VM
         if (classModifiersAddr == 0L) { long u = classModifiers(0L); } // Class.getModifiers() native (reflection M1)
         if (methodResolveAddr == 0L) { int u = methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
         if (methodInfoAddr == 0L) { int u = methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
+        if (constructorResolveAddr == 0L) { int u = constructorResolve(0L, 0L); } // Constructor.ctorResolve0 (M2)
+        if (allocInstanceAddr == 0L) { long u = allocInstance(0L); }    // Constructor.allocInstance0 native (M2)
         if (superclassAddr == 0L) { long u = superclassOf(0L); }      // Class.superclass0() native (M4)
         if (currentThreadAddr == 0L) { long u = currentThreadObj(); } // Thread.currentThread0() native (M4)
 
@@ -1972,6 +1974,26 @@ public final class VM
             return 0;                                      // boot force-compile passes 0
         }
         return Loader.methodInfo((int) rgIndex, paramCharsRef, outRef);
+    }
+
+    /** Reflection: {@code Constructor.ctorResolve0(Class,int)} -> registry index of the <init> with that arity, or -1. */
+    static int constructorResolve(long mirrorRef, long paramCount)
+    {
+        if (mirrorRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.constructorResolve(Magic.load64(mirrorRef + 16L), (int) paramCount);
+    }
+
+    /** Reflection: {@code Constructor.allocInstance0(Class)} -> a fresh zeroed instance (TIB set), or 0. */
+    static long allocInstance(long mirrorRef)
+    {
+        if (mirrorRef <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        return Loader.allocInstance(Magic.load64(mirrorRef + 16L));
     }
 
     /**
@@ -3213,6 +3235,8 @@ public final class VM
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
+    static long constructorResolveAddr;// VM.constructorResolve(JJ)I — Constructor.ctorResolve0 (reflection M2)
+    static long allocInstanceAddr;     // VM.allocInstance(J)J — Constructor.allocInstance0 (reflection M2)
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic

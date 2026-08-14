@@ -216,6 +216,17 @@ public final class Class<T>
         return java.lang.reflect.Method.resolve(this, name);
     }
 
+    /**
+     * The declared constructor taking {@code parameterTypes}, matched by <em>arity</em> only for now (first
+     * {@code <init>} with that parameter count), or throws {@code NoSuchMethodException}. Returns a
+     * {@code Constructor} that can reflectively {@code newInstance}.
+     */
+    public java.lang.reflect.Constructor<T> getDeclaredConstructor(Class<?>... parameterTypes)
+            throws NoSuchMethodException
+    {
+        return java.lang.reflect.Constructor.resolve(this, parameterTypes == null ? 0 : parameterTypes.length);
+    }
+
     /** Access flags of the named own instance field, or -1 if absent (reflection helper for the field updaters). */
     public int fieldModifiers(String name)
     {
