@@ -1791,6 +1791,7 @@ public final class VM
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
+        if (newReflectArrayAddr == 0L) { long u = newReflectArray(0L, 0L); } // reflect/Array.newInstance0
         if (printStackTraceAddr == 0L) { printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -1918,6 +1919,21 @@ public final class VM
             i += 8L;
         }
         return copy;
+    }
+
+    /**
+     * {@code java.lang.reflect.Array.newInstance0(Class, int)} native: a raw {@code length}-element reference
+     * array (8-byte elements), UNTYPED (elem-size TIB, no {@code [L<component>;} array-Type). Backs the temp/
+     * work arrays TimSort/ComparableTimSort/Arrays.copyOf allocate reflectively. The component mirror is
+     * ignored (typed reflective arrays need runtime array-Type construction; deferred).
+     */
+    static long newReflectArray(long componentMirror, long length)
+    {
+        if (length < 0L)
+        {
+            return 0L;                                     // boot force-compile passes 0; guest checks negative first
+        }
+        return Heap.allocArray((int) length, 8);           // 8-byte reference elements (raw array header)
     }
 
     /**
@@ -3288,6 +3304,7 @@ public final class VM
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
+    static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (untyped ref array)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

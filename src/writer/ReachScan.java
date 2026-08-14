@@ -74,6 +74,7 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/Field")              //   on metal; rest of java/lang/reflect denied
                 || c.startsWith("java/lang/reflect/Method")
                 || c.startsWith("java/lang/reflect/Constructor")
+                || c.startsWith("java/lang/reflect/Array")
                 || c.startsWith("java/lang/reflect/AccessibleObject")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
                 || c.startsWith("sun/net/ext/ExtendedSocketOptions"))   // overlaid no-op; rest of sun/net/ext denied

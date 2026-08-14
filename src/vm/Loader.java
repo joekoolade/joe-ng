@@ -2308,6 +2308,7 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Field"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Method"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Array"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
                 // M3: java/lang/ClassLoader is overlaid (JDK-free) -- loadClass -> forName, defineClass(byte[]).
                 // Allowed here; jdk/internal/loader + java/security stay denied below (no delegation/unloading).
@@ -4757,6 +4758,10 @@ public final class Loader
             // Object.clone() shallow copy: same block-copy as the [T.clone() intrinsic (TIB + body from the
             // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
             if (utf8IsStr(nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
+        }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Array")))
+        {
+            if (utf8IsStr(nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
         }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
         {
