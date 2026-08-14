@@ -37,6 +37,10 @@ public final class StringBuilder
 
     public StringBuilder append(String s)
     {
+        if (s == null)
+        {
+            s = "null";
+        }
         int n = s.length();
         int i = 0;
         while (i < n)
@@ -45,6 +49,24 @@ public final class StringBuilder
             i = i + 1;
         }
         return this;
+    }
+
+    /** Append any object's string form. Reached by stock code that appends a K/V/Object -- e.g.
+     *  {@code AbstractMap.toString} does {@code sb.append(key)}; without this overload the call hit a
+     *  mismatched vtable slot and appended nothing (Map.toString printed "{=}"). */
+    public StringBuilder append(Object o)
+    {
+        return append(String.valueOf(o));
+    }
+
+    public StringBuilder append(CharSequence cs)
+    {
+        return append(cs == null ? "null" : cs.toString());
+    }
+
+    public StringBuilder append(long v)
+    {
+        return append(Long.toString(v));
     }
 
     public StringBuilder append(int v)
