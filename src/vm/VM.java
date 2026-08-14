@@ -1809,6 +1809,10 @@ public final class VM
         if (sockNoopAddr == 0L) { sockNoop(); }
         if (sockZeroAddr == 0L) { long u = sockZero(); }
         if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
+        if (forNameAddr == 0L) { long u = forName(0L); }              // Class.forName0() native (reflection M1)
+        if (classModifiersAddr == 0L) { long u = classModifiers(0L); } // Class.getModifiers() native (reflection M1)
+        if (methodResolveAddr == 0L) { int u = methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
+        if (methodInfoAddr == 0L) { int u = methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
         if (superclassAddr == 0L) { long u = superclassOf(0L); }      // Class.superclass0() native (M4)
         if (currentThreadAddr == 0L) { long u = currentThreadObj(); } // Thread.currentThread0() native (M4)
 
@@ -1924,6 +1928,50 @@ public final class VM
             return 0L;                                     // boot-time force-compile passes 0; no-op
         }
         return Loader.classNameString(Magic.load64(mirror + 16L));
+    }
+
+    /**
+     * Reflection: {@code Class.forName0(byte[])} native — resolve a binary class name (raw ASCII, dots) to its
+     * Class mirror, incrementally loading the class into the live program if needed. 0 => guest throws
+     * {@code ClassNotFoundException}. Boot force-compile passes a 0 array (guarded in {@code forNameMirror}).
+     */
+    static long forName(long nameArr)
+    {
+        return Loader.forNameMirror(nameArr);
+    }
+
+    /**
+     * Reflection: {@code Class.getModifiers()} native — the class's Java language modifiers. For a nested class
+     * these come from the enclosing class's {@code InnerClasses} attribute (so a {@code private} inner reports
+     * {@code private}); the VM-internal {@code ACC_SUPER} (0x20) bit is stripped either way.
+     */
+    static long classModifiers(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                     // boot force-compile passes 0
+        }
+        return (long) Loader.classModifiersOf(Magic.load64(mirror + 16L));
+    }
+
+    /** Reflection: {@code Method.methodResolve0(Class,byte[])} -> method-registry index of the named method, or -1. */
+    static int methodResolve(long mirrorRef, long nameArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.methodResolve(Magic.load64(mirrorRef + 16L), nameArrRef);
+    }
+
+    /** Reflection: {@code Method.methodInfo0(int,byte[],long[])} -> fills param chars + {buf,access,retChar}; count. */
+    static int methodInfo(long rgIndex, long paramCharsRef, long outRef)
+    {
+        if (paramCharsRef <= 0x1000L || outRef <= 0x1000L)
+        {
+            return 0;                                      // boot force-compile passes 0
+        }
+        return Loader.methodInfo((int) rgIndex, paramCharsRef, outRef);
     }
 
     /**
@@ -3161,6 +3209,10 @@ public final class VM
     static long sockNoopAddr;
     static long sockZeroAddr;
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
+    static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
+    static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
+    static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
+    static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic

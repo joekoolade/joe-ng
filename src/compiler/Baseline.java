@@ -2204,6 +2204,20 @@ public final class Baseline
             cb.emit(A64Enc.blr(16));
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }
+        else if (id == Intrinsics.CALL_N)
+        // (addr, argsPtr): x0..x7 <- [argsPtr..+56], blr addr, result x0. argsPtr/addr live in operand-stack
+        // registers (x9..x15), so loading the argument registers x0..x7 cannot clobber them.
+        {
+            int argsPtr = popReg();
+            int addr = popReg();
+            cb.emit(A64Enc.movReg(16, addr));               // stash target in x16 before x0..x7 are loaded
+            for (int r = 0; r < 8; r++)
+            {
+                cb.emit(A64Enc.ldrx(r, argsPtr, r * 8));    // xr <- [argsPtr + r*8]
+            }
+            cb.emit(A64Enc.blr(16));
+            cb.emit(A64Enc.movReg(pushReg(), 0));           // result x0
+        }
         else if (id == Intrinsics.ERET)
         {
             cb.emit(A64Enc.eret());
@@ -2272,13 +2286,16 @@ public final class Baseline
             cb.emit(A64Enc.movReg(16, pc));                     // x16 = target (x9 gets clobbered below)
             cb.emit(A64Enc.movReg(17, spv));                    // x17 = handler frame SP (installed as the new SP)
             cb.emit(A64Enc.movReg(18, locBuf));                 // x18 = reconstructed-locals buffer base
-            // Restore x19..x(19+nloc-1) from [x18 + k*8] (the unwinder rebuilt the handler's live locals there,
-            // from the frame it called into), so a catch/finally that reads a pre-try local sees the live value.
+            // Restore ALL callee-saved registers x19..x28 from [x18 + k*8]. The unwinder rebuilt the full
+            // callee-saved state at the handler-frame level: slots [0..handler.regLocals-1] are the handler's
+            // own pre-try locals (so a catch reads the live value), and the HIGHER slots hold the handler's
+            // CALLER's live registers that the popped frames clobbered but neither the handler nor the popped
+            // frames' (skipped) epilogues restored -- restoring only the handler's `nloc` left those clobbered,
+            // so a caller local held in x(19+nloc.. ) came back garbage (a leaked code address). `nloc` is now
+            // unused but still consumed (a 0 for a handler with no reg-locals is harmless: every slot is seeded).
             int k = 0;
             while (k < LOC_MAX)
             {
-                cb.emit(A64Enc.cmpImm(nloc, k + 1));            // if nloc < k+1 (i.e. nloc <= k) skip this reload
-                cb.emit(A64Enc.bcond(11, 2));                   // b.lt +2  (11 = LT)
                 cb.emit(A64Enc.ldrx(LOC_BASE + k, 18, k * 8));
                 k += 1;
             }
@@ -2317,9 +2334,9 @@ public final class Baseline
             int r = pushReg();
             cb.emit(A64Enc.ldrb(r, addr, 0));
         }
-        else if (id == Intrinsics.ADDR_OF)
+        else if (id == Intrinsics.ADDR_OF || id == Intrinsics.FROM_ADDR)
         {
-            int a = popReg();                   // a reference already IS its heap address
+            int a = popReg();                   // reference<->address are the same value (no handles/compressed oops)
             int d = pushReg();
             if (d != a)
             {

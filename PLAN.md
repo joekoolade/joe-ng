@@ -1217,6 +1217,180 @@ Files: `board/cyw43/Cyw43` (driver + full stack + supplicant), `board/bcm2711/{S
 
 ---
 
+### Reflection arc — `Class`, `ClassLoader`, and access-checked reflection (load a class from a file and run it)
+
+Goal: expose joe-ng's existing metacircular loader through the **standard `java.lang.Class` / `ClassLoader` /
+`java.lang.reflect.*` APIs**, add reflective method/constructor invocation, and **enforce Java access control
+on reflection** — the headline user goal being *load a `.class` from a file and run it*. Access enforcement is
+not an add-on: joe-ng's protection is **language type-safety + verification, not hardware rings** (§3), so
+reflection — the main way to *bypass* language access control — MUST be access-checked, or private state and
+methods become freely reachable and the language-level security boundary collapses. Test-driven acceptance is
+the JDK suites in `test/jdk/java/lang/Class` and `test/jdk/java/lang/ClassLoader` (triaged: ~22 GREEN, ~29
+YELLOW, ~38 RED — RED = modules / SecurityManager / jars / native libs / annotation+generic-signature
+reflection / resource loading, all out of scope).
+
+**The substrate already exists** (do not rebuild it): `Loader.launch`/`pullClass`/`entryPoint`/`markReachable`
+(RTA)/`loadAll` (two phases: `loadStructure` → `loadBodies`/`compileClass`)/`globalMethodBuf` + `Magic.call*`
+already load a class by NAME from the embedded classDir (`VM.findClass` binary search), JIT-compile its
+closure, and run `main`. One `java.lang.Class` mirror is materialised+cached per VM Type (`Loader.classMirror`,
+`X.class == obj.getClass()`). **Field** reflection exists: the instance-field registry keeps access_flags +
+type descriptor (`fldAccess`/`fldDescOff`), surfaced via `VM.fieldMods`/`fieldTypeChar` and
+`Class.getDeclaredField`. Caller-class resolution exists: `Magic.readLR()` → `VM.classAtPc` →
+`Loader.classMirrorAtPc`. `FieldUpdaterCheck` already does real caller-based **private-field** access
+enforcement — reflection generalises exactly that. RAMFS files are readable today (`FileInputStream` →
+`VM.fileFind`, read-only). Gaps: (a) no way to load a class from *runtime-provided bytes* (all pull paths go
+by name through the classDir); (b) `java/lang/ClassLoader` + `java/lang/reflect/*` + `jdk/internal/reflect/`
+are **denylisted** (need overlays + narrow-ALLOW, exactly like the VarHandle shim); (c) **zero** Method /
+Constructor reflection — only Field.
+
+Two halves of "access-check enforcement", both required:
+1. **Visibility filtering at lookup** — `getField`/`getFields`/`getMethods`/`getConstructors`/`getClasses`
+   return **public-only** (incl. inherited); `getDeclared*` return **all** members (no filtering). Validated
+   by these two dirs (`getField/Exceptions`, `getFields/Sanity`, `getMethod/Exceptions`, `getClasses/Sanity`).
+2. **Invoke-time access checks** — a non-public `Method`/`Field`/`Constructor` used without `setAccessible`
+   from an unrelated caller throws `IllegalAccessException`; `setAccessible(true)` (when permitted) skips the
+   check. The *reflective-invoke* enforcement tests live under `java/lang/reflect/` (NOT these two dirs), so
+   pull a couple from there (`Field`/`Method` setAccessible+invoke) as M2's security gate; these dirs cover
+   the `setAccessible`+field-hiding half via `getDeclaredField/ClassDeclaredFieldsTest`.
+
+**M1 — `Class.forName` + the Class query surface + field-lookup visibility filtering.**
+- *First task, gating everything: prove incremental load* — load a class AFTER `launch` without wiping the
+  running program (the persistent global registries `rg*`/`cl*`/`globalBuf` must survive `resetLoader`; the new
+  class's cross-refs resolve against them). If this holds the arc is unblocked.
+- `Class.forName(String[, boolean, ClassLoader])` → `VM.forName` (dots→slashes, `pullClass`/incremental
+  `loadAll`, return mirror; `ClassNotFoundException`). `Class.getModifiers`/`getSimpleName`/`getCanonicalName`/
+  `getPackageName`/`isArray`/`isPrimitive`/`isInterface`/`isSynthetic`/`getComponentType`/`arrayType`,
+  `Class.forPrimitiveName`. `getField`/`getFields`/`getDeclaredFields` over the field registry with
+  **public-only filtering** for the non-`Declared` forms (array `length` pseudo-field handled).
+- **Acceptance:** `getModifiers/{ResolveFrom,ForInnerClass,ForStaticInnerClass,StripACC_SUPER}`,
+  `forName/{InvalidNameWithSlash,InitArg,ForNameNames→runner}`, `ForPrimitiveName`, `NameTest`,
+  `attributes/ClassAttributesTest`, `IsSynthetic`, `getPackageName/Basic→runner`, and the visibility-filtering
+  field lookups `getField/{Exceptions,ArrayLength}`, `getFields/Sanity→runner`, `getDeclaredField/Exceptions`.
+- Touchpoints: `guestsrc/java/lang/Class.java`, new `VM.forName`/`VM.classFields*` natives + 4-touchpoint
+  wiring, `Loader` field/registry accessors, `ClassNotFoundException`/`NoSuchFieldException` overlays.
+- **STATUS — core DONE (verified on QEMU, `demo/ForNameDemo`).** Delivered:
+  - **Incremental load (gating) DONE.** The registries are append-only, so `pullClass`+`entryPoint`+`loadAll`
+    re-invoked WITHOUT `resetLoader` extends the live program (prior blobs skipped via `pdDone`/`pdDoneB`; the
+    running code + heap survive). Two enablers: (a) `runClinits` gained a **`clinitRunFrom` watermark** so a
+    2nd `loadAll` runs only the newly-queued `<clinit>`s (else it double-inits the whole program); (b)
+    `markReachable` gained **`gEntrySeedAll`** + `seedAllMethodsOf` so a forName'd class compiles ALL its
+    methods (reflection may invoke any), not just the RTA closure of a `main`.
+  - **`Class.forName(String[,boolean,ClassLoader])` DONE.** Guest overlay → `VM.forName`(byte[]) →
+    `Loader.forNameMirror`: rejects `/` (→ CNFE), `.`→`/`, returns the cached mirror if loaded else
+    `loadClassIncremental`. `ClassNotFoundException`/`ReflectiveOperationException` overlays added. (Limitation:
+    always initializes — the `initialize=false` deferred-init of `forName/InitArg` is NOT yet honoured; needs
+    load-without-clinit + M3 `ClassLoader.getClassLoader()`.)
+  - **Query surface DONE:** `getModifiers` (new `VM.classModifiers` native; strips `ACC_SUPER`; reads a nested
+    class's `InnerClasses` attribute — so `Inner`→private, `Protected`→protected), `isInterface`, `isSynthetic`,
+    `getSimpleName`/`getPackageName`/`getCanonicalName` (pure-Java on `getName()`), + a `java/lang/reflect/
+    Modifier` overlay. `isArray`/`isPrimitive` return false (array/primitive mirrors not yet modelled).
+  - **Field-lookup filtering DONE:** `getField` = public-only (`ACC_PUBLIC` + `NoSuchFieldException`),
+    `getDeclaredField` = any-access (already existed). `NoSuchFieldException` overlay added.
+  - **General fix (not reflection-specific):** `collectRefs` now pulls a class used ONLY as a `ldc`
+    class-literal (`X.class`) — previously such a class was never demand-loaded, so its Type/mirror was null.
+  - **Narrow-ALLOW** added for `java/lang/reflect/Modifier` + `java/lang/reflect/Field` (both `Loader
+    .isDenylisted` and `writer/ReachScan`), past the `java/lang/reflect/` deny (VarHandle-shim precedent).
+  - **Deferred (need later work):** inherited-public-field `getField` superclass walk; `getFields`/
+    `getDeclaredFields` returning a `Field[]` (needs a field-enumeration native — folds into M2); array-class +
+    primitive mirrors (blocks `getField/ArrayLength`, `ForPrimitiveName`, `NameTest` array/primitive cases);
+    deferred-init (`forName/InitArg`); wiring the exact JDK test files as manifest mains (need HashMap/Map.of/
+    TestNG runners — the demo exercises the same API).
+  - **✅ "INCREMENTAL-LOAD" BUG FIXED — it was the exception unwind, not heap corruption.** For a long time this
+    looked like a layout-sensitive heap corruption in the 2nd `loadAll` (spurious NPE/AIOOBE at a later
+    `getField`/throw). It was actually the `RESUME` intrinsic restoring only the exception HANDLER's own
+    callee-saved locals (`nloc`) on a cross-method unwind, leaving the caller's registers (clobbered by the popped
+    frames) un-restored → a caller local came back a leaked code address. The incremental load only mattered
+    because it produced a deep-enough cross-method unwind. **Fix: `RESUME` restores all `x19..x28` from the
+    reconstructed `unwindLocBuf`** (M2 session). `ForNameDemo` now runs in the natural fields-LAST order. Along the
+    way, `seedAllMethodsOf` was removed (forName seeds only `<clinit>`; other methods compile lazily) and
+    `getModifiers` moved to a load-time cache (`clModifiers`) — both kept. Separate still-open cosmetic issue: the
+    garbage stack-trace backtraces (wrong athrow-site `sp` passed to `captureTrace`).
+
+**M2 — `Method` / `Constructor` / `Field` invoke + ACCESS ENFORCEMENT (the core milestone).**
+- `Method`/`Constructor` objects from the method registry (`rg*` holds class/name/desc/**compiled buffer**/
+  static-flag). **`Method.invoke(recv, Object[])`**: marshal+unbox args per descriptor into the `Magic.callN`
+  register convention (slot k → x(1+k); category-2 widths), virtual-dispatch via the receiver TIB vtable slot
+  (reuse `invokevirtual` lowering) or static → buffer, then **box** the return. **`Constructor.newInstance`** =
+  `Heap.alloc(instanceSize)` + store TIB + invoke `<init>` (what MapCheck/ConcurrentRemoveIf needed).
+  **`Field.get/set/getInt/…`** via `VM.vhFieldOffset` + `Magic.load*/store*`; reference `get` needs a small new
+  `Magic` **long→Object reinterpret** intrinsic (the one gap `AtomicReferenceFieldUpdater.get` hit — full
+  8-touchpoint Magic-intrinsic wiring).
+- **Access enforcement:** `AccessibleObject` base with `setAccessible(boolean)`+`override` flag; a
+  `Reflection.verifyMemberAccess` equivalent generalising `FieldUpdaterCheck`'s private-only check to all four
+  levels (public→always; private→same top-level/nestmates; protected→same package **or** subclass;
+  package-private→same package), package derived from the binary name, caller via `classAtPc`. `getMethod`/
+  `getMethods`/`getConstructors`/`getClasses` **public-only filtering**; `Class.asSubclass`/`cast`.
+- **Acceptance:** `getDeclaredMethod/Exceptions`, `getMethod/Exceptions` (public-only), `ArrayMethods`,
+  `NullBehaviorTest→runner`, `getClasses/Sanity` (public-only member classes), `getDeclaredField/
+  ClassDeclaredFieldsTest` (**setAccessible + `classLoader` field-hidden**), plus 1–2 pulled from
+  `java/lang/reflect/` for the **`IllegalAccessException`-on-invoke security gate**.
+- Touchpoints: new `reflect/{Method,Constructor,AccessibleObject}` overlays + `Field` get/set, `VM.invoke*`/
+  `VM.newInstance0` marshalling natives, one new `Magic` object-reinterpret intrinsic, primitive `TYPE`
+  handling (`int.class` … for `getMethod(name, Class...)`). **Fold in the `String.valueOf(Object)` CP-resolution
+  fix first** (the reflection closure will hit it).
+- **STATUS — Field + Method invoke DONE (QEMU-verified); access enforcement + Constructor + on-demand compile
+  remain.** Delivered:
+  - **`Magic.fromAddr(long)→Object`** long→Object reinterpret intrinsic (inverse of `addrOf`, same no-op
+    lowering; `Intrinsics.FROM_ADDR`, `Baseline`, `Loader.magicId`). **`Magic.callN(buf,argsPtr)`** general
+    N-arg call (loads x0..x7 from an 8-long buffer, `blr`; callee ignores extra regs) — the invoke call path.
+  - **`Field.get/set` + typed `getInt/setInt/getLong/getBoolean` DONE** (`demo/FieldReflectDemo`): offset via
+    `VM.vhFieldOffset`, primitives boxed/unboxed per typeChar, reference `get` via `fromAddr`. `Field` now
+    extends a new `AccessibleObject` (setAccessible flag stored, rules TBD). Overlays: `IllegalAccessException`.
+  - **`Method` + `Class.getDeclaredMethod` + `Method.invoke` DONE** (`demo/MethodReflectDemo`): static (2 int
+    args), instance (reads a field), reference-returning, and void methods all invoke correctly. Method registry
+    gained **`rgAccess`** (per-method access_flags). Natives `Method.methodResolve0`/`methodInfo0` →
+    `VM.methodResolve`/`methodInfo` (registry lookup by class+name, descriptor param-chars + return-char + buffer
+    + access). Marshalling/call/boxing is guest-side in the `Method` overlay. Overlays added: `Method`,
+    `Constructor`(narrow-allowed, TBD), `NoSuchMethodException`, `InvocationTargetException`. Narrow-ALLOW for
+    `java/lang/reflect/{Method,Constructor,AccessibleObject}` in both denylist sites.
+  - **Access enforcement DONE (fully works) — `demo/AccessDemo`.** `AccessibleObject.checkAccess` enforces all
+    four levels (public / same-class / private / protected = same-package-or-subclass / package-private =
+    same-package; package from the binary name; caller via `readLR`→`classAtPc`); `setAccessible(true)` bypasses.
+    Wired into `Field.get/set` + `Method.invoke`. QEMU: public field/method → OK, a private member accessed
+    cross-class → `IllegalAccessException`, then `setAccessible(true)` → OK, for BOTH fields and methods; runs to
+    completion.
+  - **✅ EXCEPTION-UNWIND BUG FIXED (the blocker for M1 incremental load + M2 + M4).** Root cause was the
+    `RESUME` intrinsic restoring only the handler's own callee-saved locals (`nloc`) on a cross-method unwind,
+    leaving the caller's registers (clobbered by the popped frames) un-restored → a caller local came back a
+    leaked code address → spurious AIOOBE/NPE, layout-sensitively. Fix: `RESUME` now restores ALL `x19..x28`
+    from the reconstructed `unwindLocBuf`. This was the SAME bug behind the M1 "incremental-load corruption"
+    (ForNameDemo fields-LAST now runs clean) AND the M2 access-enforcement crash. Details in [[reflection-arc-m1]].
+  - **ON-DEMAND COMPILATION GAP (now unblocked — do next for M4):** a method invoked ONLY reflectively is never
+    RTA-reached, so it isn't compiled/registered → `getDeclaredMethod` throws `NoSuchMethodException` (validated
+    invoke via a warm-up). Compiling a method on demand IS an incremental `loadAll` — now that the exception bug
+    is fixed, wire `getDeclaredMethod`→incremental compile of the target method + closure.
+  - **Remaining:** overload resolution by parameter types (needs primitive `int.class` mirrors); virtual
+    override dispatch (currently direct-buffer); `Constructor.newInstance`; `getMethod`/`getMethods`/
+    `getConstructors` public-only filtering. `String.valueOf(Object)` CP-fix still pending (demos avoid
+    `String+Object` concat).
+
+**M3 — `ClassLoader` + `defineClass(byte[])` (route runtime bytes into the loader).**
+- Narrow-ALLOW `java/lang/ClassLoader` (top of `Loader.isDenylisted` + `ReachScan.isDenied`, like VarHandle);
+  overlay minimal `ClassLoader` with `loadClass`(→ M1 `forName`) + **`defineClass(name, byte[], off, len)`**:
+  copy the guest `byte[]` to a heap blob (`toBytes`), `addBlob` + `loadStructure`/`loadBodies` for the one
+  class + demand-pull of not-yet-loaded deps, return the mirror. Single application loader, **no delegation
+  hierarchy / unloading**.
+- **Acceptance:** `defineClass/DefineClassByteBuffer` (bytes, no jars), `ExceptionHidingLoader` (custom
+  `ClassLoader.findClass`), `findSystemClass/Loader`.
+- Touchpoints: `guestsrc/java/lang/ClassLoader.java`, `VM.defineClass0` native, `Loader.defineFromBytes`,
+  denylist narrow-ALLOW in both sites.
+
+**M4 — end-to-end: read a `.class` from a file and run it (with access checks live).**
+- `demo/ReflectLoad`: `ramfs/plugins/Plugin.class` embedded; boot reads its bytes (`FileInputStream
+  .readAllBytes`), `ClassLoader.defineClass`, then reflectively `getDeclaredConstructor().newInstance()` +
+  invoke an instance method (and/or `getMethod("main",String[].class).invoke(null,args)`), printing over UART.
+  Verify on QEMU + a real Pi 4. Also lands `IsEnum` + `getEnumConstants/BadEnumTest` (enum reflection).
+
+**Scope / RED (skip):** modules (`GetModuleTest`, `forName/modules`, getResource/modules), SecurityManager/
+protection-domain (`ProtectionDomainRace`), jars/URLClassLoader (`GetSystemPackage`, `forNameLeak`,
+`LoadNullClass`), native/JNI (`loadLibrary*`, `nativeLibrary`, `LibraryPathProperty`), system-loader
+(`CustomSystemLoader`, `RecursiveSystemLoader`), parallel-capable/deadlock, annotation+generic-signature
+reflection (`GenericStringTest`, `TestPrimitiveAndArrayModifiers`), classfile-generation tests
+(`GetSimpleNameTest`, `NonJavaNames`). Build order: M1 → M2 (unlocks everything) → M3 → M4; each independently
+QEMU-verifiable, M4 also on the Pi 4.
+
+---
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
