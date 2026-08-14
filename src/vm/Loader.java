@@ -476,7 +476,16 @@ public final class Loader
                 // instantiate them (the InetAddress overlay returns a plain InetAddress), so their <clinit>s
                 // are inert; skip them (they'd trap on the unwired native otherwise).
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet4Address"))
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet6Address"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet6Address"))
+                // ContinuationSupport.<clinit> sets SUPPORTED = isSupported0() (a native). Metal has no
+                // continuations, so skipping it leaves SUPPORTED=false -- which is correct, and makes
+                // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
+                // (Reached via collection iterators / Thread.isVirtual checks in several java.util closures.)
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/vm/ContinuationSupport"))
+                // jdk/internal/misc/VM.<clinit> = initialize() (a native setting savedProps/direct-memory/page
+                // state). Metal has no such native; the reachable collection/reference paths don't read VM's
+                // statics, so skip it (defaults are inert). Pulled transitively by reference/buffer machinery.
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("jdk/internal/misc/VM"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
