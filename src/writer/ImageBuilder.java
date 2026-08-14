@@ -592,6 +592,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNpe()J",         "vm/VM.newNpeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newAse()J",          "vm/VM.newAseAddr");     // ArrayStoreException
+        stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(JJ)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VM.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0

@@ -74,6 +74,8 @@ public interface Symbols
     int JOIN_TIMED = 38;        // vm/VM.joinTimed(JJ)I         — Thread.join(Duration)
     int PARK = 39;              // vm/VM.park()V                — LockSupport.park
     int UNPARK = 40;            // vm/VM.unpark(J)V             — LockSupport.unpark
+    int NEW_ASE = 41;           // vm/VM.newAse()J    — a java/lang/ArrayStoreException (aastore type mismatch)
+    int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(JJ)I — 1 if a value may be aastore'd into an array, else 0
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
