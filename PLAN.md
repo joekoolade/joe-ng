@@ -1431,14 +1431,15 @@ Two halves of "access-check enforcement", both required:
   .readAllBytes`), `ClassLoader.defineClass`, then reflectively `getDeclaredConstructor().newInstance()` +
   invoke an instance method (and/or `getMethod("main",String[].class).invoke(null,args)`), printing over UART.
   Verify on QEMU + a real Pi 4. Also lands `IsEnum` + `getEnumConstants/BadEnumTest` (enum reflection).
-- **STATUS — M4a (file->defineClass->run) DONE (QEMU-verified; Pi 4 flash staged).** `demo/ReflectLoad` reads
+- **STATUS — M4a (file->defineClass->run) DONE (QEMU + real Pi 4 confirmed).** `demo/ReflectLoad` reads
   `/plugins/plugin/FilePlugin.class` off the embedded RAMFS (`FileInputStream.readAllBytes`), `defineClass`es
   it (M3), and drives the never-before-seen class through M2 reflection: QEMU prints `read 306 bytes...`,
   `defined plugin.FilePlugin`, `scale(7)=121` (`<init>` sets `seed=100`, `scale(7)`=`100+7*3`), all compiled on
   demand. The plugin is compiled into `ramfs/plugins/` (a generated, gitignored subtree) from `plugins-src/`
   via a `make plugins` step — **NOT** into the classDir, so it exists ONLY as a file the guest reads +
   `defineClass`es, never reachable by `forName`. File bytes -> Class -> instance -> method, for a class the VM
-  never saw at image-build time.
+  never saw at image-build time. **Verified on a real Pi 4** (`core 166MHz`, clean UART trace ending in
+  `scale(7)=121` / `[main returned normally]`) — not just QEMU.
 - **STATUS — M4b (enum reflection) DONE (QEMU-verified).** `Class.isEnum()` = the `ACC_ENUM` bit via the
   existing `getModifiers` native (nested enums carry it in the enclosing `InnerClasses` entry).
   `Class.getEnumConstants()` returns the enum's compiler-synthesised `values()` array, reached through M2
