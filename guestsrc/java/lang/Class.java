@@ -95,6 +95,14 @@ public final class Class<T>
         return false;
     }
 
+    /** The element type of an array class, else null. Array Types aren't modelled on metal, so this returns
+     *  null; the only reached use ({@code Array.newInstance(a.getClass().getComponentType(), n)} in TimSort/
+     *  Arrays.copyOf) creates an untyped reference array that ignores the component type. */
+    public Class<?> getComponentType()
+    {
+        return null;
+    }
+
     /** True if this Class is a primitive type. (Primitive mirrors are not yet modelled on metal — see arc M1.) */
     public boolean isPrimitive()
     {

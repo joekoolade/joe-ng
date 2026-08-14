@@ -620,6 +620,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
         stashHelper(image, staticWord, wordOffset, "vm/VM.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int b = 0; b < blobs.size(); b++)
         {
