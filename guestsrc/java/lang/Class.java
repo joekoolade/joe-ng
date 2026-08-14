@@ -107,6 +107,36 @@ public final class Class<T>
         return (classModifiers0(this) & 0x1000) != 0;
     }
 
+    /** True if this Class represents an enum type (the {@code ACC_ENUM} bit; nested enums carry it in the
+     *  enclosing class's {@code InnerClasses} entry, which {@code getModifiers} already reads). */
+    public boolean isEnum()
+    {
+        return (getModifiers() & 0x4000) != 0;
+    }
+
+    /**
+     * The enum constants of this enum type (in declaration order), or {@code null} if this is not an enum.
+     * Implemented via the enum's compiler-synthesised {@code values()} (reached through M2 reflection) — the
+     * same array the language exposes — rather than the stock {@code getEnumConstantsShared} cache. Not cloned
+     * (single-threaded, read-only use), so the caller must not mutate the returned array.
+     */
+    public Object[] getEnumConstants()
+    {
+        if (!isEnum())
+        {
+            return null;
+        }
+        try
+        {
+            java.lang.reflect.Method values = getDeclaredMethod("values");
+            return (Object[]) values.invoke(null);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
     /** The package name (the binary name up to, but excluding, the last '.'), or "" for the default package. */
     public String getPackageName()
     {
