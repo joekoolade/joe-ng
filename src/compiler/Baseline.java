@@ -2581,6 +2581,25 @@ public final class Baseline
             int after = d + stackDeltaW(op, code, pc, tw);
             long am = maskAfter(op, code, pc, d, m, tw);
             if (after > peak) { peak = after; }
+            // Some lowerings transiently hold a value ABOVE the not-yet-consumed operands, reaching a higher sp
+            // than the net delta shows: string-concat pushes a builder over its args, instanceof/checkcast pushes
+            // the target Type over the objref, and an explicit athrow's trace/unwind pushes a few temporaries.
+            // computeDepths must count those toward maxActualDepth, or a method that fits in OP_MAX by net depth
+            // but overflows mid-lowering stays wrongly classified shallow (FAIL_STACK_OVERFLOW at emit).
+            int trans = 0;
+            if (op == 0xC0 || op == 0xC1)                              // checkcast / instanceof: +1 (target Type)
+            {
+                trans = d + 1;
+            }
+            else if (op == 0xBA && symbols.isConcatIndy(((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF)))
+            {
+                trans = d + 1;                                        // string-concat builder over the args
+            }
+            else if (op == 0xBF && symbols.captureTraces())
+            {
+                trans = d + 2;                                        // athrow: throwStored trace/unwind temporaries
+            }
+            if (trans > peak) { peak = trans; }
             int len = opLen(op, code, pc);
             if (op == 0xC8 || op == 0xC9) { len = 5; }
             boolean fall = fallsThrough(op);
