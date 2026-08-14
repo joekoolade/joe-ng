@@ -1810,6 +1810,7 @@ public final class VM
         if (sockZeroAddr == 0L) { long u = sockZero(); }
         if (classNameAddr == 0L) { long u = classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = forName(0L); }              // Class.forName0() native (reflection M1)
+        if (defineClassAddr == 0L) { long u = defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = classModifiers(0L); } // Class.getModifiers() native (reflection M1)
         if (methodResolveAddr == 0L) { int u = methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
         if (methodInfoAddr == 0L) { int u = methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
@@ -1940,6 +1941,18 @@ public final class VM
     static long forName(long nameArr)
     {
         return Loader.forNameMirror(nameArr);
+    }
+
+    /**
+     * Reflection M3: {@code ClassLoader.defineClass0(name, byte[], off, len)} native — materialize a class from
+     * the SUPPLIED classfile bytes into the live program and return its Class mirror. 0 => the guest throws
+     * {@code ClassFormatError}/returns null. The {@code name} arg is advisory (the loader uses the classfile's
+     * own this_class); boot force-compile passes a 0 array (guarded in {@code defineFromBytes}).
+     */
+    static long defineClass(long nameArr, long byteArr, long off, long len)
+    {
+        long type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
+        return type == 0L ? 0L : Loader.classMirror(type);
     }
 
     /**
@@ -3232,6 +3245,7 @@ public final class VM
     static long sockZeroAddr;
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
+    static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)

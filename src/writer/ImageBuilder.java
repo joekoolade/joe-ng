@@ -611,6 +611,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.sockZero()J",        "vm/VM.sockZeroAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
         stashHelper(image, staticWord, wordOffset, "vm/VM.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
+        stashHelper(image, staticWord, wordOffset, "vm/VM.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
         stashHelper(image, staticWord, wordOffset, "vm/VM.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
         stashHelper(image, staticWord, wordOffset, "vm/VM.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
         stashHelper(image, staticWord, wordOffset, "vm/VM.methodInfo(JJJ)I",   "vm/VM.methodInfoAddr");     // reflection M2: Method.methodInfo0
