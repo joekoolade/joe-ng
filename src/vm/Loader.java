@@ -4748,6 +4748,12 @@ public final class Loader
             if (utf8IsStr(nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
             if (utf8IsStr(nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
         }
+        if (utf8IsStr(classOff, Magic.bytes("java/lang/Object")))
+        {
+            // Object.clone() shallow copy: same block-copy as the [T.clone() intrinsic (TIB + body from the
+            // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
+            if (utf8IsStr(nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
+        }
         if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
         {
             if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
