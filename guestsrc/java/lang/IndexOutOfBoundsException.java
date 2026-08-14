@@ -6,4 +6,14 @@ public class IndexOutOfBoundsException extends RuntimeException
     public IndexOutOfBoundsException()
     {
     }
+
+    public IndexOutOfBoundsException(String s)
+    {
+        super(s);
+    }
+
+    public IndexOutOfBoundsException(int index)
+    {
+        super("Index out of range: " + index);
+    }
 }
