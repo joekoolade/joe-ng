@@ -46,6 +46,25 @@ public final class VM
      */
     public static void boot()
     {
+        // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
+        // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
+        // vtable-or-itable slot resolving to 0x80000). Silently re-running boot then looks like an endless reboot
+        // loop with no diagnostic. Catch it: reset SP (the wild branch may have trashed it), name the branch
+        // source from x30, and halt. The UART is already up from the first boot, so the message renders.
+        if (Magic.readCurrentEL() != 0x8L)
+        {
+            long src = Magic.readLR();
+            Magic.writeSP(0x80000L);
+            Uart.write(Magic.bytes("\n*** BOOT RE-ENTERED at EL1: wild branch to the image entry (not a reset). x30=0x"));
+            printHex(src);
+            Uart.write(Magic.bytes("\n    branch source: "));
+            Loader.reportMethodAt(src);
+            Uart.write(Magic.bytes("\n    Halting (was an endless silent reboot loop). ***\n"));
+            while (true)
+            {
+                Magic.wfe();
+            }
+        }
         Magic.dropToEL1();
         Magic.writeCPACR_EL1(0x300000L);   // CPACR_EL1.FPEN = 0b11 (no FP trap)
         Magic.isb();
@@ -2532,6 +2551,14 @@ public final class VM
     {
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
+        if (faultDepth != 0)                                            // a fault DURING the unwind of a prior fault:
+        {                                                              // turning THIS one into an exception + unwinding
+            reportNestedFault(esr, elr, Magic.readFAR_EL1());          // would re-fault forever (the silent reboot loop
+        }                                                              // seen on QEMU) -- report both faults + halt.
+        faultDepth = 1;                                                // cleared in unwind once a handler is resumed
+        fault0Esr = esr;
+        fault0Elr = elr;
+        fault0Far = Magic.readFAR_EL1();
         long ec = (esr >> 26) & 0x3FL;
         long exc = 0L;
         if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
@@ -2558,6 +2585,37 @@ public final class VM
     }
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
+    static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
+    static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
+
+    /** A second CPU fault fired while {@link #throwFromFault} was still turning the FIRST one into a Java
+     *  exception (the unwind itself re-faulted -- a bad frame-table entry, a wild handler PC, an unmapped
+     *  address). Continuing would loop the fault vector forever and the board silently resets. Report BOTH
+     *  faults (the original is the real bug; the nested one shows where the unwind broke) and halt. */
+    static void reportNestedFault(long esr, long elr, long far)
+    {
+        Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: esr="));
+        printHex(fault0Esr);
+        Uart.write(Magic.bytes(" elr="));
+        printHex(fault0Elr);
+        Uart.write(Magic.bytes(" far="));
+        printHex(fault0Far);
+        Uart.write(Magic.bytes("\n    at "));
+        Loader.reportMethodAt(fault0Elr);
+        Uart.write(Magic.bytes("\n  nested:   esr="));
+        printHex(esr);
+        Uart.write(Magic.bytes(" elr="));
+        printHex(elr);
+        Uart.write(Magic.bytes(" far="));
+        printHex(far);
+        Uart.write(Magic.bytes("\n    at "));
+        Loader.reportMethodAt(elr);
+        Uart.putc(0x0A);
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
 
     /**
      * Trap for a call into a DENYLISTED (pruned, never-loaded) class — see {@code Loader.isDenylisted}.
@@ -2957,6 +3015,9 @@ public final class VM
                 // unwindLocBuf now holds the handler's live locals: each frame we popped saved its CALLER's
                 // x19.. registers, and the last frame popped (the one the handler called into) saved the handler's
                 // own locals -- so a catch/finally that reads a local set before the try sees the live value.
+                faultDepth = 0;                                            // fault resolved by a handler: a later fault
+                                                                           //   (incl. one inside the handler) is FRESH,
+                                                                           //   not a nested unwind fault
                 Magic.resume(h, sp, exc, jitRegLocalsAt(pc), unwindLocBuf);   // never returns
             }
             long fs = frameSizeAt(pc);
