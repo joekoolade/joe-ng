@@ -43,6 +43,15 @@ public final class Heap
     public static final long CODE_LIMIT    = 0x0300_0000L;   // 48 MiB (= VM.SEC_STUB) — overflow guard
     public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
 
+    /** Fixed scratch base for the JIT unwind tables (frame/local/handler). They must live OUTSIDE the managed
+     *  heap [BASE, PTR): they are held only by VM static pointers for the whole run, but the mark-sweep GC
+     *  reclaims dead blocks onto the free list and the demand-loader rewinds the bump pointer per batch -- either
+     *  way a table allocated in the heap gets its memory reused by a later `new byte[]` (e.g. a loaded classfile
+     *  copy) while addJitFrame keeps writing to it via the stale pointer, scribbling the live object. Sits in the
+     *  free scratch window between {@code MARK_BITMAP}'s end (0x03E0_0000) and the heap cells (0x03FF_0000);
+     *  needs 2*JIT_FRAME_MAX*24 + JIT_HANDLER_MAX*32 = 0x50000 bytes, well under the ~2 MiB window. */
+    public static final long JIT_TABLES = 0x03E0_0000L;
+
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
     static int  gcPressure;            // collections triggered by allocation pressure (Heap.alloc slow path)
 

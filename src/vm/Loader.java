@@ -1570,6 +1570,10 @@ public final class Loader
         reachCode = new long[MAXREACH];
         reachN = 0;
         VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
+        VM.jitLocalCount = 0L;                           // reset the local table IN LOCKSTEP with the frame table (parallel
+                                                         // {codeStart,codeEnd,regLocals}); addJitFrame guards only on
+                                                         // jitFrameCount, so a stale jitLocalCount would keep growing past
+                                                         // JIT_FRAME_MAX and overrun jitLocalTable into adjacent heap.
         VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
     }
 

@@ -2754,15 +2754,29 @@ public final class VM
     static long jitLocalTable, jitLocalCount;   // parallel {codeStart, codeEnd, regLocals} — unwind's pre-try local restore
     static long unwindLocBuf;                   // 16-slot scratch: reconstructs the handler's callee-saved locals during unwind
 
+    /** Point the JIT unwind tables (frame/local/handler) at their fixed scratch region if not yet set. These
+     *  tables persist for the whole run behind these static pointers, but every JIT frame keeps writing to them,
+     *  so they must NOT live in the managed heap: the mark-sweep GC reclaims dead blocks onto the free list and
+     *  the demand-loader rewinds the bump pointer per batch, either of which lets a later large allocation (e.g.
+     *  a loaded classfile's byte[] copy) reuse the memory while addJitFrame scribbles it through the stale
+     *  pointer -- which corrupted loaded classfiles (a big class's cp bytes) mid-compile. See Heap.JIT_TABLES. */
+    static void ensureJitTables()
+    {
+        if (jitFrameTable == 0L)
+        {
+            // Fixed scratch addresses OUTSIDE the managed heap -- see Heap.JIT_TABLES for why these can't be
+            // Heap.allocData'd (GC free-list / per-batch rewind would reuse the memory under the live pointer).
+            jitFrameTable = Heap.JIT_TABLES;                        // JIT_FRAME_MAX*24 = 0x18000
+            jitLocalTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 24L;  // +0x18000
+            jitHandlerTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 48L; // +0x30000 ; handler = JIT_HANDLER_MAX*32 = 0x20000
+        }
+    }
+
     /** Record a JIT'd method's machine-PC range, frame size, and callee-saved local count, so unwind can pop it
      *  and restore its handler's pre-try locals (x19..x(19+regLocals-1), saved at [SP+8..]). */
     static void addJitFrame(long codeStart, long codeEnd, long frameSize, long regLocals)
     {
-        if (jitFrameTable == 0L)
-        {
-            jitFrameTable = Heap.allocData(JIT_FRAME_MAX * 24);      // JIT_FRAME_MAX * 24 bytes
-            jitLocalTable = Heap.allocData(JIT_FRAME_MAX * 24);
-        }
+        ensureJitTables();
         if (jitFrameCount < JIT_FRAME_MAX)
         {
             long e = jitFrameTable + jitFrameCount * 24L;
@@ -2838,10 +2852,7 @@ public final class VM
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
     static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
     {
-        if (jitHandlerTable == 0L)
-        {
-            jitHandlerTable = Heap.allocData(JIT_HANDLER_MAX * 32);
-        }
+        ensureJitTables();
         if (jitHandlerCount < JIT_HANDLER_MAX)
         {
             long e = jitHandlerTable + jitHandlerCount * 32L;
