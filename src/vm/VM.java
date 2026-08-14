@@ -1632,6 +1632,37 @@ public final class VM
         return Loader.newArith();
     }
 
+    /** Allocate a mini {@code java/lang/ArrayStoreException} — the JIT calls this when an {@code aastore}
+     *  stores a value not assignable to the array's element type. */
+    static long newAse()
+    {
+        return Loader.newArrayStoreException();
+    }
+
+    /**
+     * {@code aastore} type check: may {@code value} be stored into reference {@code array}? 1 = yes (null, an
+     * untyped/raw array, a primitive-element array, or {@code value} is an instance of the array's element
+     * type), 0 = no (the JIT then throws {@link #newAse}). Mirrors the JVM's covariant array-store check.
+     */
+    static int arrayStoreOk(long array, long value)
+    {
+        if (value == 0L)
+        {
+            return 1;                                      // null stores are always allowed
+        }
+        long tib = Magic.load64(array);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return 1;                                      // untyped/raw array (no element Type to check against)
+        }
+        long elemType = Magic.load64(Magic.load64(tib) + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        if (elemType == 0L)
+        {
+            return 1;                                      // primitive-element array (shouldn't reach aastore) / unknown
+        }
+        return instanceOf(value, elemType);                // 1 if value's Type <: element Type, else 0
+    }
+
     /** {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected hardware trap. */
     static long newInternalError()
     {
@@ -1788,6 +1819,8 @@ public final class VM
         if (arraycopyAddr == 0L) { arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
+        if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
+        if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = arrayClone(0L); }        // [T.clone() intrinsic
@@ -3312,6 +3345,8 @@ public final class VM
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
+    static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
+    static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
@@ -6373,6 +6408,8 @@ public final class VM
         if (bytesEqual(nm, Magic.bytes("newNpeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newNpe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newAioobeAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAioobe"), Magic.bytes("()J")); }
         if (bytesEqual(nm, Magic.bytes("newArithAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newArith"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("newAseAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("newAse"), Magic.bytes("()J")); }
+        if (bytesEqual(nm, Magic.bytes("arrayStoreOkAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("arrayStoreOk"), Magic.bytes("(JJ)I")); }
         if (bytesEqual(nm, Magic.bytes("printStackTraceAddr"))) { return imAddrOf(Magic.bytes("vm/VM"), Magic.bytes("printStackTrace"), Magic.bytes("(J)V")); }
         long blobV = blobStatic(nm);
         return blobV;

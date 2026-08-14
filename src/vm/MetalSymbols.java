@@ -401,6 +401,14 @@ final class MetalSymbols implements Symbols
         {
             return VM.newArithAddr;
         }
+        if (helper == Symbols.NEW_ASE)
+        {
+            return VM.newAseAddr;
+        }
+        if (helper == Symbols.ARRAY_STORE_OK)
+        {
+            return VM.arrayStoreOkAddr;
+        }
         return VM.unwindAddr;                       // UNWIND
     }
 

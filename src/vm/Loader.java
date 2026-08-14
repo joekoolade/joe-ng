@@ -872,6 +872,7 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/ArithmeticException"));
         pullClass(Magic.bytes("java/lang/ClassCastException"));
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
+        pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
         // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
         // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
@@ -6019,6 +6020,12 @@ public final class Loader
     static long newArith()
     {
         return newExc(Magic.bytes("java/lang/ArithmeticException"));
+    }
+
+    /** Allocate a mini {@code java/lang/ArrayStoreException} — the JIT's aastore type-mismatch helper. */
+    static long newArrayStoreException()
+    {
+        return newExc(Magic.bytes("java/lang/ArrayStoreException"));
     }
 
     /** Allocate a mini {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected trap. */

@@ -438,7 +438,7 @@ public final class Baseline
         }  // lastore
         else if (op == 0x53)
         {
-            arrayStore(cb, 3, pos);
+            arrayStore(cb, 3, pos, true);                       // aastore: covariant store type check
             return 1;
         }  // aastore
         else if (op == 0x51)
@@ -1760,10 +1760,14 @@ public final class Baseline
         {
             for (int i = 0; i < OP_MAX; i++) { savedHolds[i] = regHolds[i]; }   // (throwImplicit is not re-entrant)
         }
+        sp = 0;                                                 // the JVM clears the operand stack when throwing;
+        // reset BEFORE the exception alloc so it (and the handler search) run at empty depth -- otherwise a
+        // check emitted MID-expression (the aastore covariant check runs before its operands are popped, sp high)
+        // would push the exception past OP_MAX. The fall-through operands are discarded on throw, so not spilling
+        // them here is correct; sp is restored below for the code after the (skipped) throw block.
         int athrowStart = cb.wordCount();
-        emitCall(cb, 0, true, false, SYM_HELPER, newHelper);    // -> exception object pushed
+        emitCall(cb, 0, true, false, SYM_HELPER, newHelper);    // -> exception object pushed (at sp=0)
         emitStoreException(cb, popReg());                       // $exception = it
-        sp = 0;                                                 // the JVM clears the operand stack when throwing
         throwStored(cb, pos, athrowStart);                      // handler search + unwind — never falls through
         sp = savedSp;                                           // restore the model for the code after the check
         if (deepStack)
@@ -1973,6 +1977,16 @@ public final class Baseline
 
     private void arrayStore(CodeBuffer cb, int scale, int pos)
     {
+        arrayStore(cb, scale, pos, false);
+    }
+
+    private void arrayStore(CodeBuffer cb, int scale, int pos, boolean isRef)
+    {
+        if (isRef && symbols.implicitChecks())
+        {
+            // aastore covariant check BEFORE popping: operands are [.., arr(sp-3), index(sp-2), val(sp-1)].
+            arrayStoreCheck(cb, opSlot(sp - 3), opSlot(sp - 1), pos);
+        }
         int val = popReg();
         int index = popReg();
         int arr = popReg();
@@ -1983,6 +1997,23 @@ public final class Baseline
                 : scale == 1 ? A64Enc.strh(val, arr, 0)             // char/short
                 : scale == 2 ? A64Enc.strw(val, arr, 0)
                 : A64Enc.strx(val, arr, 0));
+    }
+
+    /**
+     * {@code aastore} covariant store check: call {@code VM.arrayStoreOk(arr, val)} -> 1 if the value may be
+     * stored (null / raw or Object[] array / assignable), else 0 -> throw ArrayStoreException at {@code pos}.
+     * The operands stay on the stack (spillLive/reloadLive bracket the call), so the store proceeds after.
+     */
+    private void arrayStoreCheck(CodeBuffer cb, int arrReg, int valReg, int pos)
+    {
+        cb.emit(A64Enc.movReg(0, arrReg));                       // x0 = array
+        cb.emit(A64Enc.movReg(1, valReg));                       // x1 = value
+        spillLive(cb);                                           // preserve the operand stack across the call
+        symbols.callHelper(cb, Symbols.ARRAY_STORE_OK);          // x0 = 1 (ok) / 0 (throw)
+        reloadLive(cb);
+        int skip = cb.emit(A64Enc.cbnz(0, 0));                   // ok -> skip the throw
+        throwImplicit(cb, pos, Symbols.NEW_ASE);                 // not assignable -> ArrayStoreException
+        cb.set(skip, A64Enc.cbnz(0, cb.wordCount() - skip));
     }
 
     /** newarray atype -> element size in bytes (JVMS Table 6.5.newarray-A). */
