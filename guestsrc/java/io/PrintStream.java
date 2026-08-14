@@ -118,9 +118,13 @@ public class PrintStream
     }
 
     /**
-     * A minimal {@code format}: enough of the conversion syntax the reached paths use ({@code %n} newline,
-     * {@code %d} decimal, {@code %s} string, {@code %%} literal). No width/precision/flags -- stock
-     * {@code java.util.Formatter} pulls the deep nio/locale closure that is stubbed out on metal.
+     * A self-contained mini-{@code Formatter} covering the conversion syntax the JDK test suite's summary +
+     * diagnostic prints use — {@code %[flags][width][.precision]conv} for conv in {@code n % d x X o b c s S} —
+     * over any boxed {@code Number} (so {@code %d} with a {@code long} works, not just {@code int}). Flags
+     * {@code -} (left-justify) and {@code 0} (zero-pad) + width padding are applied; other flags
+     * ({@code + # , ( space}) are parsed and ignored; precision truncates {@code %s}. This deliberately avoids
+     * stock {@code java.util.Formatter} (deep nio/locale closure) and {@code String.toUpperCase} (locale
+     * closure) — uppercasing is ASCII-only here. Positional args ({@code %1$s}) are not supported.
      */
     public PrintStream format(String fmt, Object... args)
     {
@@ -131,42 +135,198 @@ public class PrintStream
         while (i < n)
         {
             char c = fmt.charAt(i);
-            if (c == '%' && i + 1 < n)
+            if (c != '%')
             {
-                char spec = fmt.charAt(i + 1);
-                i += 2;
-                if (spec == 'n')
+                sb.append(c);
+                i += 1;
+                continue;
+            }
+            int j = i + 1;                                  // parse flags
+            boolean left = false;
+            boolean zero = false;
+            while (j < n)
+            {
+                char f = fmt.charAt(j);
+                if (f == '-')
                 {
-                    sb.append('\n');
+                    left = true;
                 }
-                else if (spec == '%')
+                else if (f == '0')
                 {
-                    sb.append('%');
+                    zero = true;
                 }
-                else if (spec == 'd')
+                else if (f == '+' || f == ' ' || f == '#' || f == ',' || f == '(')
                 {
-                    sb.append(((Integer) args[ai]).intValue());
-                    ai += 1;
-                }
-                else if (spec == 's')
-                {
-                    Object a = args[ai];
-                    sb.append(a == null ? "null" : a.toString());
-                    ai += 1;
+                    // parsed and ignored
                 }
                 else
                 {
-                    sb.append('%');
-                    sb.append(spec);
+                    break;
+                }
+                j += 1;
+            }
+            int width = 0;                                  // parse width
+            while (j < n && fmt.charAt(j) >= '0' && fmt.charAt(j) <= '9')
+            {
+                width = width * 10 + (fmt.charAt(j) - '0');
+                j += 1;
+            }
+            int prec = -1;                                  // parse precision
+            if (j < n && fmt.charAt(j) == '.')
+            {
+                j += 1;
+                prec = 0;
+                while (j < n && fmt.charAt(j) >= '0' && fmt.charAt(j) <= '9')
+                {
+                    prec = prec * 10 + (fmt.charAt(j) - '0');
+                    j += 1;
+                }
+            }
+            if (j >= n)
+            {
+                sb.append('%');
+                break;
+            }
+            char conv = fmt.charAt(j);
+            i = j + 1;
+            if (conv == 'n')
+            {
+                sb.append('\n');
+                continue;
+            }
+            if (conv == '%')
+            {
+                sb.append('%');
+                continue;
+            }
+            String out;
+            if (conv == 'd')
+            {
+                out = Long.toString(numLong(args[ai]));
+                ai += 1;
+            }
+            else if (conv == 'x')
+            {
+                out = Long.toHexString(numLong(args[ai]));
+                ai += 1;
+            }
+            else if (conv == 'X')
+            {
+                out = upper(Long.toHexString(numLong(args[ai])));
+                ai += 1;
+            }
+            else if (conv == 'o')
+            {
+                out = Long.toOctalString(numLong(args[ai]));
+                ai += 1;
+            }
+            else if (conv == 'b')
+            {
+                Object a = args[ai];
+                ai += 1;
+                out = a == null ? "false" : (a instanceof Boolean ? a.toString() : "true");
+            }
+            else if (conv == 'c')
+            {
+                Object a = args[ai];
+                ai += 1;
+                char ch = a instanceof Character ? ((Character) a).charValue() : (char) numLong(a);
+                out = String.valueOf(ch);
+            }
+            else if (conv == 's' || conv == 'S')
+            {
+                Object a = args[ai];
+                ai += 1;
+                out = a == null ? "null" : a.toString();
+                if (prec >= 0 && out.length() > prec)
+                {
+                    out = out.substring(0, prec);
+                }
+                if (conv == 'S')
+                {
+                    out = upper(out);
                 }
             }
             else
             {
-                sb.append(c);
-                i += 1;
+                sb.append('%');
+                sb.append(conv);
+                continue;
             }
+            pad(sb, out, width, left, zero && conv != 's' && conv != 'S');
         }
         print(sb.toString());
         return this;
+    }
+
+    /** Append {@code out} padded to {@code width} — left-justified, or right-justified with spaces (or '0'). */
+    private static void pad(StringBuilder sb, String out, int width, boolean left, boolean zero)
+    {
+        int gap = width - out.length();
+        if (gap <= 0)
+        {
+            sb.append(out);
+            return;
+        }
+        if (left)
+        {
+            sb.append(out);
+            while (gap > 0)
+            {
+                sb.append(' ');
+                gap -= 1;
+            }
+            return;
+        }
+        char pc = zero ? '0' : ' ';
+        while (gap > 0)
+        {
+            sb.append(pc);
+            gap -= 1;
+        }
+        sb.append(out);
+    }
+
+    /** The 64-bit value of a boxed integral/char arg (the overlay {@code Number} has no {@code longValue}, so
+     *  dispatch on the concrete boxed type instead). */
+    private static long numLong(Object a)
+    {
+        if (a instanceof Integer)
+        {
+            return ((Integer) a).intValue();
+        }
+        if (a instanceof Long)
+        {
+            return ((Long) a).longValue();
+        }
+        if (a instanceof Short)
+        {
+            return ((Short) a).shortValue();
+        }
+        if (a instanceof Byte)
+        {
+            return ((Byte) a).byteValue();
+        }
+        if (a instanceof Character)
+        {
+            return ((Character) a).charValue();
+        }
+        return 0L;
+    }
+
+    /** ASCII-only uppercase (avoids {@code String.toUpperCase}'s locale/special-casing closure). */
+    private static String upper(String s)
+    {
+        char[] cs = s.toCharArray();
+        int i = 0;
+        while (i < cs.length)
+        {
+            if (cs[i] >= 'a' && cs[i] <= 'z')
+            {
+                cs[i] = (char) (cs[i] - 32);
+            }
+            i += 1;
+        }
+        return new String(cs);
     }
 }

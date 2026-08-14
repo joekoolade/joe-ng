@@ -2846,18 +2846,32 @@ public final class VM
             long fs = frameSizeAt(pc);
             if (fs == 0L)
             {
-                Uart.write(Magic.bytes("\nUNWIND LOST pc="));   // no frame entry for this pc: either an
-                printHex(pc);                                    //   uncaught-at-top throw or a frame-table gap
-                Uart.write(Magic.bytes(" exc="));                //   (overflowed/unregistered method) -- say so
-                printHex(exc);                                   //   instead of halting silently
+                // No frame entry for this pc: the exception reached the TOP uncaught (past main/boot). A valid
+                // Throwable here is an EXPECTED uncaught exception (e.g. a JDK test throwing to signal failure) --
+                // report it like a JVM ("Exception in thread \"main\" <class>: <message>"), not a VM error. Only
+                // an absent/invalid exception object means a real frame-table gap (overflowed/unregistered method).
                 long xt = Magic.load64(exc);
                 if (xt > 0x1000L)
                 {
-                    Uart.putc(0x20);
+                    Uart.write(Magic.bytes("\nException in thread \"main\" "));
                     Loader.printClassName(Magic.load64(xt));
+                    long msg = Magic.load64(exc + 80L);          // Throwable.detailMessage (after the 8-slot backtrace)
+                    if (msg > 0x1000L)
+                    {
+                        Uart.write(Magic.bytes(": "));
+                        printStr(msg);
+                    }
+                    Uart.putc(0x0A);
                 }
-                Uart.putc(0x0A);
-                // Uncaught: print the captured stack trace (method + SourceFile + line) as printStackTrace does.
+                else
+                {
+                    Uart.write(Magic.bytes("\nUNWIND LOST pc="));   // no valid exception object -> a genuine
+                    printHex(pc);                                    //   frame-table gap, not an uncaught throw
+                    Uart.write(Magic.bytes(" exc="));
+                    printHex(exc);
+                    Uart.putc(0x0A);
+                }
+                // print the captured stack trace (method + SourceFile + line) as printStackTrace does.
                 int fi = 0;
                 while (fi < 8)
                 {
