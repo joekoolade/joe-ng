@@ -9,8 +9,9 @@ import magic.Magic;
  * {@code Class.getDeclaredConstructor} (matched by ARITY — parameter-type resolution is not yet implemented)
  * and instantiates: the NO-ARG constructor, and a two-arg constructor (int + reference). The {@code <init>}s
  * are run ONLY reflectively (no direct {@code new Widget(...)} warm-up), so they are compiled ON DEMAND when
- * {@code getDeclaredConstructor} resolves them. Verifies via field reads / identity (avoids {@code String +
- * Object} concat, which lowers to the still-unfixed {@code String.valueOf(Object)} JIT bug).
+ * {@code getDeclaredConstructor} resolves them. The reference field is printed with {@code String + Object}
+ * concat (javac lowers it via {@code String.valueOf(Object)}) — exercised directly in the reflection closure
+ * now that that path works.
  */
 public class CtorReflectDemo
 {
@@ -27,7 +28,8 @@ public class CtorReflectDemo
         // newInstance marshals each arg per the resolved <init>'s actual descriptor ('I' then 'L').
         Constructor<Widget> argc = c.getDeclaredConstructor(Object.class, Object.class); // Widget(int,Object)
         Widget w1 = argc.newInstance(Integer.valueOf(41), tag);
-        Magic.printStr("two-arg size=" + w1.size + " label identity=" + (w1.label == tag ? 1 : 0) + "\n"); // 42, 1
+        Magic.printStr("two-arg size=" + w1.size + " label=" + w1.label
+                + " (identity " + (w1.label == tag ? 1 : 0) + ")\n");             // 42, widget-label, 1
 
         Magic.printStr("ctor param counts=" + defc.getParameterCount()
                 + " " + argc.getParameterCount() + "\n");                         // 0 2
