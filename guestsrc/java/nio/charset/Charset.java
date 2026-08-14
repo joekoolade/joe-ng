@@ -25,6 +25,54 @@ public abstract class Charset
         return sun.nio.cs.UTF_8.INSTANCE;
     }
 
+    /**
+     * Resolve a charset by name to one of the three overlay singletons, WITHOUT the stock provider/
+     * {@code StandardCharsets}/ServiceLoader lookup (denylisted on metal). Reached by
+     * {@code String.getBytes(String)}/{@code new String(byte[], String)} -> {@code String.lookupCharset}.
+     * The returned object is the exact singleton {@code String}'s fast paths compare against by identity, so
+     * encode/decode stays pure-Java. An unrecognized name throws (the cold branch; no test uses it).
+     */
+    public static Charset forName(String csn)
+    {
+        if (eq(csn, "UTF-8") || eq(csn, "UTF8") || eq(csn, "unicode-1-1-utf-8"))
+        {
+            return sun.nio.cs.UTF_8.INSTANCE;
+        }
+        if (eq(csn, "ISO-8859-1") || eq(csn, "ISO8859-1") || eq(csn, "8859_1") || eq(csn, "latin1")
+                || eq(csn, "ISO_8859_1") || eq(csn, "l1") || eq(csn, "cp1252"))
+        {
+            return sun.nio.cs.ISO_8859_1.INSTANCE;
+        }
+        if (eq(csn, "US-ASCII") || eq(csn, "ASCII") || eq(csn, "ANSI_X3.4-1968") || eq(csn, "646"))
+        {
+            return sun.nio.cs.US_ASCII.INSTANCE;
+        }
+        throw new IllegalArgumentException(csn);          // UnsupportedCharsetException is denylisted on metal
+    }
+
+    /** Case-insensitive ASCII name match (avoids String.toUpperCase's locale closure). */
+    private static boolean eq(String a, String b)
+    {
+        if (a.length() != b.length())
+        {
+            return false;
+        }
+        int i = 0;
+        while (i < a.length())
+        {
+            char x = a.charAt(i);
+            char y = b.charAt(i);
+            if (x >= 'A' && x <= 'Z') { x = (char) (x + 32); }
+            if (y >= 'A' && y <= 'Z') { y = (char) (y + 32); }
+            if (x != y)
+            {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
+
     public final String name()
     {
         return name;
