@@ -6443,9 +6443,36 @@ public final class Loader
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // arr instanceof Object
         Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);            // Cloneable/Serializable: later
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
-        long tib = Heap.allocData(8);
+        // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
+        // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
+        // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
+        // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
+        int oi = objectClassIndex();
+        int nv = oi >= 0 ? clVtCount[oi] : 0;
+        long tib = Heap.allocData(8 + nv * 8);
         Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
+        int k = 0;
+        while (k < nv)                                                           // TIB[1..] = Object's vtable slots
+        {
+            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTib[oi] + 8L + (long) k * 8L));
+            k += 1;
+        }
         return tib;
+    }
+
+    /** Class-registry index of {@code java/lang/Object}, or -1 if it isn't loaded yet. */
+    private static int objectClassIndex()
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Object")))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
     }
 
     /** newarray atype (4=bool..11=long) -> element size in bytes. */
