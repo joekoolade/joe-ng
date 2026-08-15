@@ -3044,6 +3044,7 @@ public final class Loader
         gcpCount = ClassReader.cpCount(gbytes);
         gcp = new int[gcpCount];
         gcpTag = new int[gcpCount];
+        litObjByCp = new long[gcpCount];                // per-blob ldc-String intern cache (one object per cp entry)
         gAfterCp = ClassReader.constantPool(gbytes, gcp, gcpTag);   // stable: gp is later reused as a walk cursor
         gp = base + gAfterCp;
     }
@@ -6868,16 +6869,33 @@ public final class Loader
      */
     static long internStringObj(int stringCp)
     {
+        // Intern per (blob, cp entry): the SAME String literal must yield the SAME object, so `ldc "x"` at two
+        // sites compares == (JLS string interning). Without this each ldc site allocated a distinct object, so
+        // e.g. Objects.requireNonNull("pants") == "pants" was false (BasicObjectsTest.testRequireNonNull). Keyed
+        // by cp index in the current blob's cache (reset per parseConstPool); cross-blob interning is not modelled.
+        if (litObjByCp != null && stringCp < litObjByCp.length && litObjByCp[stringCp] != 0L)
+        {
+            return litObjByCp[stringCp];
+        }
         long bytes = internString(stringCp);
         long tib = stringTib();
+        long result;
         if (tib == 0L)
         {
-            return anchorLiteral(bytes);                // String not loaded: a raw byte[]
+            result = anchorLiteral(bytes);              // String not loaded: a raw byte[]
         }
-        long obj = Heap.alloc(stringSize());
-        Magic.store64(obj + 0L, tib);                   // TIB
-        Magic.store64(obj + 16L, bytes);                // value field (offset 16)
-        return anchorLiteral(obj);
+        else
+        {
+            long obj = Heap.alloc(stringSize());
+            Magic.store64(obj + 0L, tib);               // TIB
+            Magic.store64(obj + 16L, bytes);            // value field (offset 16)
+            result = anchorLiteral(obj);
+        }
+        if (litObjByCp != null && stringCp < litObjByCp.length)
+        {
+            litObjByCp[stringCp] = result;
+        }
+        return result;
     }
 
     // GC ROOT for interned literals: a JIT'd `ldc "..."` bakes the literal's heap address into code
@@ -6888,6 +6906,10 @@ public final class Loader
     // traced -> the literals stay marked. Literals live until the next batch rewind reclaims them wholesale.
     private static long[] litAnchor;
     private static int litAnchorN;
+    // Per-blob ldc-String intern cache: litObjByCp[cpIndex] = the one interned object for that String cp entry
+    // (so all ldc sites of the same literal in a class share one object). Reallocated each parseConstPool, so it
+    // always matches the blob currently compiling; entries are anchored (litAnchor) like any interned literal.
+    private static long[] litObjByCp;
 
     /** Record {@code obj} (a literal the JIT bakes into code) as a GC root; returns it for chaining. */
     private static long anchorLiteral(long obj)
