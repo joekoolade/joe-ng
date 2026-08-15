@@ -23,9 +23,11 @@ public class Object
         return null;
     }
 
+    /** Identity hash: a reference IS the object's heap address (non-moving GC), so the low 32 bits are a stable
+     *  per-object hash -- the same value {@code System.identityHashCode} returns. Subclasses that care override. */
     public int hashCode()
     {
-        return 0;
+        return (int) Magic.addrOf(this);
     }
 
     public boolean equals(Object o)
@@ -33,9 +35,11 @@ public class Object
         return this == o;
     }
 
+    /** {@code getClass().getName() + "@" + Integer.toHexString(hashCode())}, matching stock Object.toString (and
+     *  Objects.toIdentityString). getClass() is intrinsified; the concat lowers to the metal's makeConcatWithConstants. */
     public String toString()
     {
-        return "object";
+        return getClass().getName() + "@" + Integer.toHexString(hashCode());
     }
 
     // ----- Object monitors. Appended AFTER hashCode/equals/toString so their canonical vtable slots don't
