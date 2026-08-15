@@ -364,6 +364,16 @@ public final class Baseline
             dup2(cb);
             return 1;
         }  // dup2 (category-1 form: duplicate the top two slots)
+        else if (op == 0x5D)
+        {
+            dup2X1(cb);
+            return 1;
+        }  // dup2_x1
+        else if (op == 0x5F)
+        {
+            swap(cb);
+            return 1;
+        }  // swap
         else if (op == 0x84)
         {
             iinc(cb, code[pos + 1] & 0xFF, (byte) (code[pos + 2] & 0xFF));   // mask+cast: explicit sxtb (see bipush)
@@ -1036,6 +1046,44 @@ public final class Baseline
         int hi = opSlot(sp - 1);      // v1 (top)
         cb.emit(A64Enc.movReg(pushReg(), lo));
         cb.emit(A64Enc.movReg(pushReg(), hi));
+    }
+
+    /**
+     * dup2_x1, category-1 form: {@code ..., v3, v2, v1 -> ..., v2, v1, v3, v2, v1} (insert the top pair below
+     * v3). Category-2 form (the top is one long/double over a category-1 value) is {@code ..., v2, v1 -> ...,
+     * v1, v2, v1} -- exactly {@link #dupX1} since joe-ng keeps a long/double in one slot. x16/x17 hold the two
+     * saved values across the shift; the five slots (sp-3..sp+1) span &lt; OP_MAX registers, so deep-safe like
+     * {@link #dupX2}.
+     */
+    private void dup2X1(CodeBuffer cb)
+    {
+        if (wideTop[curPos])          // category-2: one wide value inserted below one -> dup_x1
+        {
+            dupX1(cb);
+            return;
+        }
+        int v1 = opSlot(sp - 1);
+        int v2 = opSlot(sp - 2);
+        int v3 = opSlot(sp - 3);
+        cb.emit(A64Enc.movReg(16, v1));      // save v1
+        cb.emit(A64Enc.movReg(17, v2));      // save v2
+        int t1 = pushReg();
+        int t2 = pushReg();
+        cb.emit(A64Enc.movReg(t2, 16));      // new top = v1
+        cb.emit(A64Enc.movReg(t1, 17));      // next = v2
+        cb.emit(A64Enc.movReg(v1, v3));      // shift v3 up (into the old v1 slot)
+        cb.emit(A64Enc.movReg(v2, 16));      // insert v1
+        cb.emit(A64Enc.movReg(v3, 17));      // insert v2 at the bottom
+    }
+
+    /** swap: {@code ..., v2, v1 -> ..., v1, v2}. Both are category-1 (the JVM forbids swap of category-2). */
+    private void swap(CodeBuffer cb)
+    {
+        int v1 = opSlot(sp - 1);
+        int v2 = opSlot(sp - 2);
+        cb.emit(A64Enc.movReg(16, v1));
+        cb.emit(A64Enc.movReg(v1, v2));
+        cb.emit(A64Enc.movReg(v2, 16));
     }
 
     /** lcmp: push -1/0/1 for a&lt;b / a==b / a&gt;b (usually consumed by a following if). */
