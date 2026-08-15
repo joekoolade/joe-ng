@@ -3611,6 +3611,8 @@ public final class Loader
 
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
+        refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
+                                                        // was created (e.g. by an early string-literal byte[]) before it
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
@@ -6447,17 +6449,66 @@ public final class Loader
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
-        int oi = objectClassIndex();
-        int nv = oi >= 0 ? clVtCount[oi] : 0;
+        int nv = arrayVtableCount();
         long tib = Heap.allocData(8 + nv * 8);
         Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
+        fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
+        return tib;
+    }
+
+    /** Number of vtable slots an array TIB reserves (= java/lang/Object's flattened vtable count), or 0. */
+    private static int arrayVtableCount()
+    {
+        int oi = objectClassIndex();
+        return oi >= 0 ? clVtCount[oi] : 0;
+    }
+
+    /** Copy java/lang/Object's vtable slots into the array TIB {@code tib} (after its Type slot). Object's slots
+     *  are only FILLED when Object's body is compiled (fillTib), which can happen AFTER an array TIB is first
+     *  created (e.g. a string literal interns a byte[] before Object compiles) -- so a freshly-made array TIB may
+     *  copy zeros. {@link #refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
+    private static void fillObjectVtable(long tib)
+    {
+        int oi = objectClassIndex();
+        if (oi < 0)
+        {
+            return;
+        }
+        int nv = clVtCount[oi];
         int k = 0;
-        while (k < nv)                                                           // TIB[1..] = Object's vtable slots
+        while (k < nv)
         {
             Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTib[oi] + 8L + (long) k * 8L));
             k += 1;
         }
-        return tib;
+    }
+
+    /** Re-copy Object's (now-filled) vtable into every cached array TIB. Called at the end of {@link #loadAll},
+     *  after Object's body is compiled, to repair any array TIB that was created with a still-empty Object vtable
+     *  (else an invokevirtual on that array reads a 0 slot and the null-vtable guard throws AIOOBE). */
+    private static void refillArrayTibVtables()
+    {
+        if (primArrTib != null)
+        {
+            int a = 0;
+            while (a < primArrTib.length)
+            {
+                if (primArrTib[a] != 0L)
+                {
+                    fillObjectVtable(primArrTib[a]);
+                }
+                a += 1;
+            }
+        }
+        int r = 0;
+        while (r < refArrCount)
+        {
+            if (refArrTib[r] != 0L)
+            {
+                fillObjectVtable(refArrTib[r]);
+            }
+            r += 1;
+        }
     }
 
     /** Class-registry index of {@code java/lang/Object}, or -1 if it isn't loaded yet. */
