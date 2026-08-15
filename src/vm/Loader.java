@@ -883,6 +883,10 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
+        // works (System.<clinit> which normally registers the JLA is skipped). Pulled always -- tiny, and only
+        // reached when something builds an EnumMap (e.g. java.util.stream's StreamOpFlag).
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
         // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
         // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
         // field registry (for getDeclaredField/newUpdater access checks) exist even when nothing instantiates them.
@@ -2022,6 +2026,10 @@ public final class Loader
         // VM-alloc'd too -> flag them so getName/isInstance/... and getName/run compile + their vtables fill.
         grew = flagInstByName(Magic.bytes("java/lang/Class")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/Thread")) || grew;
+        // The metal JavaLangAccess (seeded into SharedSecrets by seedJavaLangAccess, Heap.alloc, no bytecode
+        // `new`) -> flag it so its getEnumConstantsShared interface method compiles + its itable fills (else
+        // EnumMap.getKeyUniverse's invokeinterface hits an empty imap slot).
+        grew = flagInstByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess")) || grew;
         return grew;
     }
 
@@ -3623,15 +3631,17 @@ public final class Loader
                                                         // CALLs left unresolved while their target compiled later
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
+        // Seed BEFORE runClinits: a <clinit> can call these (StreamOpFlag.<clinit> builds an EnumMap -- needs the
+        // JLA -- and boxes flag values via Integer.valueOf -- needs the IntegerCache). The seeds are independent
+        // of any <clinit> (they build the JLA object / boxed caches directly), so running them first is sound.
+        seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
+        seedIntegerCache();                             // the [-128,127] Integer cache valueOf uses (clinit skipped:
+                                                        //   low=high=0 would index the NULL cache -> NPE); no-op if
+                                                        //   Integer isn't in this batch
+        seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
-        seedIntegerCache();                             // EVERY batch: with IntegerCache.<clinit> skipped its
-                                                        //   statics read low=high=0, so valueOf(0) -- and only
-                                                        //   0 -- indexes the NULL cache array -> NPE (bit the
-                                                        //   Lisp interpreter's boxed booleans); no-op if
-                                                        //   Integer isn't in this batch
-        seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
@@ -4060,6 +4070,29 @@ public final class Loader
      * jdk.net options on metal), so getSocketOption falls through to the ordinary getIntOption0 path. Same
      * direct-static-seed trick as {@link #seedSystemStreams}. No-op if either class is absent.
      */
+    /**
+     * Seed a {@code MetalJavaLangAccess} instance into {@code SharedSecrets.javaLangAccess} so
+     * {@code EnumMap.getKeyUniverse} (-&gt; {@code getJavaLangAccess().getEnumConstantsShared()}) works. On stock
+     * the JLA is registered by {@code System.<clinit>}, which the metal skips, leaving the field null. Runs inside
+     * {@code loadAll} BEFORE {@code runClinits}, since {@code StreamOpFlag.<clinit>} builds an EnumMap. No-op when
+     * neither class is in the batch (non-EnumMap programs). Field-free overlay -> just the TIB (itable dispatch).
+     */
+    static void seedJavaLangAccess()
+    {
+        int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
+        if (mi < 0)
+        {
+            return;
+        }
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
+        if (slot != 0L)
+        {
+            long inst = Heap.alloc(16 + clFieldCount[mi] * 8);   // field-free -> header only
+            Magic.store64(inst + 0L, clTib[mi]);                 // TIB (itable dir for getEnumConstantsShared dispatch)
+            Magic.store64(slot, inst);
+        }
+    }
+
     static void seedNetExtendedOptions()
     {
         int ei = classIndexByName(Magic.bytes("sun/net/ext/ExtendedSocketOptions"));
