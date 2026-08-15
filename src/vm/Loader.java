@@ -489,7 +489,16 @@ public final class Loader
                 // Arrays$LegacyMergeSort.<clinit> reads the java.util.Arrays.useLegacyMergeSort property via
                 // AccessController/GetBooleanAction (denied). Skipping leaves userRequested=false -- correct,
                 // so Arrays.sort takes the modern TimSort path (reached by any object Arrays.sort/Collections.sort).
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Arrays$LegacyMergeSort"))
+                // java/util/stream/AbstractTask.<clinit> sets LEAF_TARGET = ForkJoinPool.getCommonPoolParallelism()
+                // << 2. The common pool is never set up on metal (no ForkJoin), so getCommonPoolParallelism NPEs.
+                // LEAF_TARGET is read ONLY by parallel task splitting (AbstractTask.compute/getLeafTarget), which a
+                // SEQUENTIAL stream never reaches -- so skipping the <clinit> (LEAF_TARGET=0, never read) is sound.
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/AbstractTask"))
+                // java/util/stream/Tripwire.<clinit> sets ENABLED = Boolean.getBoolean(<debug property>) (reads
+                // System props -> denied on metal). ENABLED is a debug-only assert flag, read solely in
+                // `if (Tripwire.ENABLED) trip(...)`; skipping leaves it false (correct), never taken.
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
