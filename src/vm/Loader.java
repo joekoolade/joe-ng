@@ -498,7 +498,10 @@ public final class Loader
                 // java/util/stream/Tripwire.<clinit> sets ENABLED = Boolean.getBoolean(<debug property>) (reads
                 // System props -> denied on metal). ENABLED is a debug-only assert flag, read solely in
                 // `if (Tripwire.ENABLED) trip(...)`; skipping leaves it false (correct), never taken.
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
+                // java/util/Tripwire is the same debug-flag class as the stream one (ENABLED = Boolean.getBoolean),
+                // pulled by the java.util.stream spliterator machinery. Same safe skip (ENABLED false, never taken).
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Tripwire"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -1750,8 +1753,49 @@ public final class Loader
                 b += 1;
             }
             grew = resolveVirtuals() || grew;           // RTA: virtual/interface targets, in instantiated types only
-        }
+            grew = markDefaults() || grew;              // RTA: interface DEFAULT methods (resolveVirtuals only walks
+        }                                               //   class hierarchies, so an unoverridden default is missed)
         markActive = 1;
+    }
+
+    /**
+     * RTA for interface DEFAULT methods: {@link #resolveVirtuals} only marks targets found by walking an
+     * instantiated class's SUPERCLASS chain, so a called interface method that no class overrides (it uses the
+     * interface's own default body, e.g. {@code EnumMap} inheriting {@code Map.putIfAbsent}) is never compiled --
+     * its imap slot then stays 0 and the invokeinterface wild-branches. Mark any concrete (default) method in a
+     * loaded interface whose name+descriptor matches a pending interface-call (kind 1). Over-marking is harmless
+     * (only compiles a bit more); pends only hold actually-called signatures, so this is targeted. Marking a
+     * default reachable triggers another round that pulls its own callees (putIfAbsent -> get/put), so the
+     * default's transitive closure compiles too.
+     */
+    private static boolean markDefaults()
+    {
+        boolean grew = false;
+        int b = 0;
+        while (b < pdCount)
+        {
+            parseConstPool(pdBase[b], pdLen[b]);
+            boolean iface = (u2(gp) & 0x0200) != 0;      // ACC_INTERFACE (access_flags right after the constant pool)
+            if (iface)
+            {
+                parseForMethods(pdBase[b], pdLen[b]);    // sets gMethodsStart/gp for findMethodByRef
+                int p = 0;
+                while (p < pendN)
+                {
+                    if (pendKind[p] == 1)
+                    {
+                        long code = findMethodByRef(pendBase[p], pendName[p], pendDesc[p]);
+                        if (code != 0L)
+                        {
+                            grew = addReach(code) || grew;
+                        }
+                    }
+                    p += 1;
+                }
+            }
+            b += 1;
+        }
+        return grew;
     }
 
     /** Pull {@code base}'s superclass + interfaces from the dir (needed for its TIB/itable), if not loaded. */
@@ -5027,11 +5071,39 @@ public final class Loader
                 {
                     buf = slotBuf(s);
                 }
+                else
+                {
+                    buf = defaultImplOf(g);        // class doesn't override -> the interface's own DEFAULT method
+                }                                  // (0 if the method is abstract / its default wasn't compiled)
             }
             Magic.store64(imap + g * 8, buf);
             g += 1;
         }
         return imap;
+    }
+
+    /**
+     * The compiled buffer of the DEFAULT method for global interface-method index {@code g}, or 0. A default
+     * method is defined (with a body) IN its interface, so it was compiled + registered when the interface's blob
+     * ({@code ifBase[g]}) was loaded (loadBodies' interface branch compiles concrete + default methods). Match a
+     * registered method in that SAME blob by name+descriptor; abstract interface methods have no such body -> 0
+     * (unchanged from before). This lets an implementing class that doesn't override a default method still
+     * dispatch it (e.g. EnumMap inherits Map.putIfAbsent) instead of hitting an empty imap slot (blr 0).
+     */
+    private static long defaultImplOf(int g)
+    {
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgBase[i] == ifBase[g]
+                    && utf8EqAt(ifBase[g], ifNameOff[g], rgBase[i], rgNameOff[i])
+                    && utf8EqAt(ifBase[g], ifDescOff[g], rgBase[i], rgDescOff[i]))
+            {
+                return rgBuf[i];
+            }
+            i += 1;
+        }
+        return 0L;
     }
 
     /** Like {@link #findVtSlot} but for a name+descriptor living in another blob. */
