@@ -3916,6 +3916,11 @@ public final class Loader
         findBootstrapMethods();
         if (clIsIface[reg])
         {
+            gType = clType[reg];                        // restore the interface's phase-A Type so a default method's
+                                                        // self-reference (typeOfClass -> gType, e.g. Map.putIfAbsent
+                                                        // calling this.get()) bakes the REAL interface Type -- else
+                                                        // it bakes a stale gType and the implementor's itable-dir
+                                                        // walk never matches (invokeinterface sentinel NPE).
             compileClass(bytes);                        // interface CONCRETE methods (static like List.of + defaults)
             registerAll();
             return;
