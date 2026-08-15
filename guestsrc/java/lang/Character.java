@@ -173,4 +173,56 @@ public final class Character implements Comparable<Character>
         result[0] = highSurrogate(codePoint);
         return result;
     }
+
+    // Case folding for Latin-1 (code points < 0x100), the same pure-arithmetic path as CharacterDataLatin1. Stock
+    // Character.toLowerCase/toUpperCase route through CharacterData.of(ch).toXxxCase(ch), which drags in
+    // jdk/internal/lang/CaseFolding (denied on metal) -> a trapwire. StringLatin1.compareToCI (String
+    // .CASE_INSENSITIVE_ORDER) only ever passes Latin-1 chars, so this overlay covers the reached path; code
+    // points >= 0x100 fall through unchanged (their non-Latin-1 mappings are out of scope, not a native away).
+
+    public static char toLowerCase(char ch)
+    {
+        return (char) toLowerCase((int) ch);
+    }
+
+    public static int toLowerCase(int ch)
+    {
+        if (ch < 'A')
+        {
+            return ch;
+        }
+        int lower = ch | 0x20;
+        if (lower <= 'z' || (lower >= 0xE0 && lower <= 0xFE && lower != 0xF7))
+        {
+            return lower;
+        }
+        return ch;
+    }
+
+    public static char toUpperCase(char ch)
+    {
+        return (char) toUpperCase((int) ch);
+    }
+
+    public static int toUpperCase(int ch)
+    {
+        if (ch < 'a')
+        {
+            return ch;
+        }
+        int upper = ch & 0xDF;
+        if (upper <= 'Z' || (upper >= 0xC0 && upper <= 0xDE && upper != 0xD7))
+        {
+            return upper;
+        }
+        if (ch == 0xFF)
+        {
+            return 0x178;                               // y-diaeresis uppercases out of Latin-1
+        }
+        if (ch == 0xB5)
+        {
+            return 0x39C;                               // micro sign -> Greek capital Mu
+        }
+        return ch;
+    }
 }
