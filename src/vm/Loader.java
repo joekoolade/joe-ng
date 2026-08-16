@@ -140,6 +140,13 @@ public final class Loader
     private static int[] clIfaceReg;
     private static int[] clIfaceRegN;
     private static int[] ifClosureBuf;   // scratch: registry indices in the current class's transitive iface closure
+    // Every instantiated class's imap (the shared itable), captured at fillTib so refillImaps can repair
+    // default-method slots that were 0 because the interface holding the default hadn't been EMITTED yet when
+    // this class's buildImap ran (phase B is superclass-first, not super-interface-first).
+    private static final int MAXIMAP = 2048;
+    private static long[] instImaps;
+    private static int[] instImapReg;    // the class registry index each imap belongs to (for its iface closure)
+    private static int instImapN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
@@ -1599,6 +1606,9 @@ public final class Loader
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
         clIfaceRegN = new int[MAXCLASS];
         ifClosureBuf = new int[MAXIFM];
+        instImaps = new long[MAXIMAP];
+        instImapReg = new int[MAXIMAP];
+        instImapN = 0;
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
@@ -3727,6 +3737,7 @@ public final class Loader
 
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
+        refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
         // Seed BEFORE runClinits: a <clinit> can call these (StreamOpFlag.<clinit> builds an EnumMap -- needs the
@@ -5860,7 +5871,119 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
-        Magic.store64(gType + 16, buildItableDir(buildImap()));   // TYPE_ITABLE_DIR_OFFSET
+        long imap = buildImap();
+        if (instImaps != null && instImapN < instImaps.length)    // capture for the post-phase-B default refill
+        {
+            instImaps[instImapN] = imap;
+            instImapReg[instImapN] = classRegByName(gThisNameOff);
+            instImapN += 1;
+        }
+        Magic.store64(gType + 16, buildItableDir(imap));          // TYPE_ITABLE_DIR_OFFSET
+    }
+
+    /**
+     * Repair default-method imap slots left 0 during phase B. {@link #buildImap} fills an unoverridden interface
+     * method's slot with {@link #defaultImplOf} = the interface default's COMPILED buffer, but phase B is
+     * superclass-first (not super-interface-first), so the interface holding the default may be emitted AFTER an
+     * implementor -- leaving its rgBuf (hence the slot) 0 at buildImap time (e.g. Streams$RangeIntSpliterator's
+     * slot for Spliterator.getExactSizeIfKnown -> copyInto blr'd a 0 slot). Now that every body is emitted, re-run
+     * defaultImplOf for each still-0 slot. Safe: defaultImplOf is context-free (persistent ifBase/rgBuf), returns
+     * 0 for abstract methods, and a filled slot for an interface a class doesn't implement is never dispatched
+     * (its dir lacks that interface). Mirrors fillClassVtBuf for the vtable.
+     */
+    private static void refillImaps()
+    {
+        int m = 0;
+        while (m < instImapN)
+        {
+            long imap = instImaps[m];
+            int reg = instImapReg[m];
+            if (reg >= 0)
+            {
+                int n = ifaceClosureOf(reg);        // the class's full interface set (persistent registries)
+                int g = 0;
+                while (g < ifCount)
+                {
+                    if (Magic.load64(imap + g * 8L) == 0L)
+                    {
+                        long b = defaultInClosure(n, g);   // a concrete default of method g in one of those interfaces
+                        if (b != 0L)
+                        {
+                            Magic.store64(imap + g * 8L, b);
+                        }
+                    }
+                    g += 1;
+                }
+            }
+            m += 1;
+        }
+    }
+
+    /** {@link #ifaceClosure} but for an already-registered class {@code reg}, from the PERSISTENT registries
+     *  ({@code clIfaceReg}/{@code clSuperReg}) rather than the transient current-compile state -- so refillImaps
+     *  can recompute a class's interface set after phase B. Fills {@link #ifClosureBuf}; returns the count. */
+    private static int ifaceClosureOf(int reg)
+    {
+        int n = 0;
+        int j = 0;
+        while (j < clIfaceRegN[reg])                    // reg's own directly-declared interfaces
+        {
+            n = addIfaceUnique(n, clIfaceReg[reg * MAX_DIRECT_IF + j]);
+            j += 1;
+        }
+        int sr = clSuperReg[reg];                       // the whole superclass chain's direct interfaces
+        int guard = 0;
+        while (sr >= 0 && guard < 64)
+        {
+            j = 0;
+            while (j < clIfaceRegN[sr])
+            {
+                n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
+                j += 1;
+            }
+            sr = clSuperReg[sr];
+            guard += 1;
+        }
+        int i = 0;
+        while (i < n)                                   // fold in each collected interface's extended interfaces
+        {
+            int r = ifClosureBuf[i];
+            j = 0;
+            while (j < clIfaceRegN[r])
+            {
+                n = addIfaceUnique(n, clIfaceReg[r * MAX_DIRECT_IF + j]);
+                j += 1;
+            }
+            i += 1;
+        }
+        return n;
+    }
+
+    /** A concrete (default) impl of interface-method global-index {@code g} declared in one of the {@code n}
+     *  interfaces in {@link #ifClosureBuf}, or 0. Unlike {@link #defaultImplOf} (which only checks the interface
+     *  the method was FIRST registered in), this finds a default an implementing SUB-interface provides for a
+     *  method declared abstract in a super-interface -- e.g. {@code Spliterator.OfInt}'s
+     *  {@code tryAdvance(Consumer)} for the abstract {@code Spliterator.tryAdvance(Consumer)}. */
+    private static long defaultInClosure(int n, int g)
+    {
+        int i = 0;
+        while (i < n)
+        {
+            long ibase = clBase[ifClosureBuf[i]];       // a closure interface's blob; its own methods registered under it
+            int k = 0;
+            while (k < rgCount)
+            {
+                if (rgBase[k] == ibase && rgBuf[k] != 0L
+                        && utf8EqAt(ifBase[g], ifNameOff[g], rgBase[k], rgNameOff[k])
+                        && utf8EqAt(ifBase[g], ifDescOff[g], rgBase[k], rgDescOff[k]))
+                {
+                    return rgBuf[k];
+                }
+                k += 1;
+            }
+            i += 1;
+        }
+        return 0L;
     }
 
     /**
