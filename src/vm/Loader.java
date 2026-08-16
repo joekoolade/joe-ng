@@ -248,6 +248,11 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L && clinitCompilable(code, gcodeLen))
         {
+            // Record the initializer's PRECISE dependencies (from its bytecode) BEFORE compile — compile uses the
+            // same gcp/gbase, but scanning first keeps the cp-parse state pristine for the walk.
+            clDepStart[clinitN] = clDepTop;
+            scanClinitDeps(code, gcodeLen);
+            clDepN[clinitN] = clDepTop - clDepStart[clinitN];
             // Compile now (with this class's statics block live and cross-class calls recorded as relocs), but
             // ENQUEUE the entry — a <clinit> that calls another class (e.g. ArraysSupport -> SharedSecrets) would
             // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
@@ -258,6 +263,72 @@ public final class Loader
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
             }                              // that NativeDispatcher/NioSocketImpl <clinit>s read via SharedSecrets
             clinitN += 1;
+        }
+    }
+
+    /**
+     * Walk the {@code <clinit>} bytecode and record the classes whose initialization it needs — the JVM's own
+     * init triggers ({@code getstatic}/{@code putstatic}/{@code invokestatic} owner, {@code new}/{@code anewarray}
+     * class) plus {@code ldc} of a Class literal (a class literal in a {@code <clinit>} typically feeds reflective
+     * access — {@code getEnumConstants} reads the enum's {@code $VALUES}, which only its own {@code <clinit>} sets).
+     * Self-references are skipped. These are the exact edges clinit ordering needs, without the spurious ones the
+     * whole constant pool carries (field types, signatures, an inner class naming its outer, ...).
+     */
+    private static void scanClinitDeps(long code, int len)
+    {
+        int pc = 0;
+        while (pc < len)
+        {
+            int op = u1(code + pc);
+            int cnOff = -1;
+            if (op == 0xB2 || op == 0xB3 || op == 0xB8)        // getstatic / putstatic / invokestatic: owner init
+            {
+                cnOff = refClassNameOff(u2(code + pc + 1));
+            }
+            else if (op == 0xBB || op == 0xBD)                 // new / anewarray: the class is initialized
+            {
+                cnOff = classCpNameOff(u2(code + pc + 1));
+            }
+            else if (op == 0x12)                               // ldc: a Class literal feeds reflective init
+            {
+                int ci = u1(code + pc + 1);
+                if (gcpTag[ci] == 7)
+                {
+                    cnOff = classCpNameOff(ci);
+                }
+            }
+            else if (op == 0x13)                               // ldc_w
+            {
+                int ci = u2(code + pc + 1);
+                if (gcpTag[ci] == 7)
+                {
+                    cnOff = classCpNameOff(ci);
+                }
+            }
+            if (cnOff >= 0 && cnOff != gThisNameOff)            // skip self-references
+            {
+                addClDep(cnOff);
+            }
+            pc += insnLen(code, pc);
+        }
+    }
+
+    /** Append a precise clinit dependency (name Utf8 offset in the current blob), deduped within this <clinit>. */
+    private static void addClDep(int nameOff)
+    {
+        int k = clDepStart[clinitN];
+        while (k < clDepTop)
+        {
+            if (clDepOff[k] == nameOff)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (clDepTop < clDepOff.length)
+        {
+            clDepOff[clDepTop] = nameOff;
+            clDepTop += 1;
         }
     }
 
@@ -392,6 +463,16 @@ public final class Loader
     private static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
+    // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
+    // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
+    // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
+    // signature / enclosing-class refs create spurious cycles (e.g. an inner enum's cp names its outer class, so
+    // the outer's <clinit> and the inner's appear mutually dependent). The <clinit> bytecode names exactly the
+    // classes whose initialization it needs.
+    private static int[] clDepOff;       // flat: dependency class name Utf8 offsets
+    private static int[] clDepStart;     // per enqueued <clinit>: start index into clDepOff
+    private static int[] clDepN;         // per enqueued <clinit>: dependency count
+    private static int clDepTop;         // running top of clDepOff
 
     /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
     private static void runClinits()
@@ -483,23 +564,21 @@ public final class Loader
         {
             return false;
         }
-        int d = 0;
-        while (d < dpCount)
+        int e = clDepStart[i] + clDepN[i];
+        int d = clDepStart[i];
+        while (d < e)                                   // the initializer's PRECISE (bytecode) deps, not the whole cp
         {
-            if (dpOwner[d] == pd)
+            int jpd = findPdByName(pdBase[pd], clDepOff[d]);   // the referenced class's blob
+            if (jpd >= 0 && jpd != pd)
             {
-                int jpd = findPdByName(pdBase[pd], dpOff[d]);   // the referenced class's blob
-                if (jpd >= 0 && jpd != pd)
+                int k = 0;
+                while (k < clinitN)                     // does that blob have a not-yet-run <clinit>?
                 {
-                    int k = 0;
-                    while (k < clinitN)                 // does that blob have a not-yet-run <clinit>?
+                    if (clinitPd[k] == jpd && !done[k])
                     {
-                        if (clinitPd[k] == jpd && !done[k])
-                        {
-                            return true;
-                        }
-                        k += 1;
+                        return true;
                     }
+                    k += 1;
                 }
             }
             d += 1;
@@ -1580,6 +1659,10 @@ public final class Loader
         rsCount = 0;
         clinitEntry = new long[MAXBLOB];
         clinitPd = new int[MAXBLOB];
+        clDepOff = new int[MAXDEP];
+        clDepStart = new int[MAXBLOB];
+        clDepN = new int[MAXBLOB];
+        clDepTop = 0;
         clinitN = 0;
         clinitFdFirst = -1;
         clinitRunFrom = 0;
