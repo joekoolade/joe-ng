@@ -248,6 +248,7 @@ public final class Loader
         long code = findMethod(bytes);
         if (code != 0L && clinitCompilable(code, gcodeLen))
         {
+            if (clinitN >= MAXBLOB) { capHalt(Magic.bytes("MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             // Record the initializer's PRECISE dependencies (from its bytecode) BEFORE compile — compile uses the
             // same gcp/gbase, but scanning first keeps the cp-parse state pristine for the walk.
             clDepStart[clinitN] = clDepTop;
@@ -325,11 +326,9 @@ public final class Loader
             }
             k += 1;
         }
-        if (clDepTop < clDepOff.length)
-        {
-            clDepOff[clDepTop] = nameOff;
-            clDepTop += 1;
-        }
+        if (clDepTop >= clDepOff.length) { capHalt(Magic.bytes("MAXDEP-clinit"), clDepTop); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        clDepOff[clDepTop] = nameOff;
+        clDepTop += 1;
     }
 
     /**
@@ -3365,6 +3364,7 @@ public final class Loader
                 int slot = findVtSlot(gcp[u2(p + 2)], gcp[u2(p + 4)]);   // override an inherited slot?
                 if (slot < 0)
                 {
+                    if (gvCount >= MAXMV) { capHalt(Magic.bytes("MAXMV-vt"), gvCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
                     slot = gvCount;                     // else append a new slot
                     gvCount += 1;
                 }
@@ -3964,6 +3964,7 @@ public final class Loader
 
     private static void addDep(int owner, int nameOff)
     {
+        if (dpCount >= MAXDEP) { capHalt(Magic.bytes("MAXDEP"), dpCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         dpOwner[dpCount] = owner;
         dpOff[dpCount] = nameOff;
         dpCount += 1;
@@ -4323,6 +4324,7 @@ public final class Loader
             }
             i += 1;
         }
+        if (mCount >= MAXM) { capHalt(Magic.bytes("MAXM"), mCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         mCode[mCount] = code;
         mLen[mCount] = len;
         mLocals[mCount] = maxLocals;
@@ -4593,6 +4595,7 @@ public final class Loader
     /** Register a compiled method so other classes can link to it by class+name+descriptor. */
     private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr, int access)
     {
+        if (rgCount >= MAXREG) { capHalt(Magic.bytes("MAXREG-method"), rgCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         rgBase[rgCount] = base;
         rgClassOff[rgCount] = classOff;
         rgNameOff[rgCount] = nameOff;
