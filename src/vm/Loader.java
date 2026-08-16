@@ -116,6 +116,7 @@ public final class Loader
     private static long[] clStatics;     // each class's static block base (gStatics), reused between the two phases
     private static int[]  clVtStart;     // start index of this class's slots in the vt registry (phase B fills bufs)
     private static boolean[] clIsIface;  // interface? (phase B compiles only its default/static bodies, no TIB fill)
+    private static int[] clSuperReg;     // each class's superclass registry index (-1 = none), for full-chain itable closure
     private static int[] clModifiers;    // Class.getModifiers() value, computed at LOAD time (ACC_SUPER stripped,
                                          // InnerClasses-overridden for nested) — read at runtime WITHOUT re-parsing
     private static int clCount;
@@ -1592,6 +1593,7 @@ public final class Loader
         clStatics = new long[MAXCLASS];
         clVtStart = new int[MAXCLASS];
         clIsIface = new boolean[MAXCLASS];
+        clSuperReg = new int[MAXCLASS];
         clModifiers = new int[MAXCLASS];
         clCount = 0;
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
@@ -3942,6 +3944,7 @@ public final class Loader
             clStatics[clCount] = gStatics;              // interface constants block (reused by its phase-B bodies)
             clVtStart[clCount] = vtCount;               // no vtable entries appended for an interface
             clIsIface[clCount] = true;
+            clSuperReg[clCount] = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clModifiers[clCount] = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
             clCount += 1;
@@ -4990,6 +4993,9 @@ public final class Loader
         clStatics[clCount] = gStatics;
         clVtStart[clCount] = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
         clIsIface[clCount] = false;
+        clSuperReg[clCount] = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
+                                                        //   FULL-chain itable closure (an interface implemented N levels
+                                                        //   up the superclass chain must still land in this class's dir)
         if (logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
         {
             Uart.write(Magic.bytes("  C "));
@@ -5907,15 +5913,18 @@ public final class Loader
             }
             k += 1;
         }
-        int sr = classRegByName(gSuperNameOff);          // interfaces inherited from the superclass
-        if (sr >= 0)
-        {
-            int j = 0;
+        int sr = classRegByName(gSuperNameOff);          // interfaces inherited from the ENTIRE superclass chain --
+        int guard = 0;                                   // an interface implemented several levels up (e.g. IntPipeline$1
+        while (sr >= 0 && guard < 64)                    // -> StatelessOp -> ReferencePipeline implements Stream) must
+        {                                                // still be in this class's dir, else invokeinterface misses it
+            int j = 0;                                   // (walking only the immediate super dropped Stream 2 levels up).
             while (j < clIfaceRegN[sr])
             {
                 n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
                 j += 1;
             }
+            sr = clSuperReg[sr];
+            guard += 1;
         }
         int i = 0;
         while (i < n)                                    // fold in each collected interface's extended interfaces
