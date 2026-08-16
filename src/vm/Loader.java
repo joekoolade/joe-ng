@@ -295,6 +295,16 @@ public final class Loader
         {
             return true;
         }
+        // A pervasive idiom is a <clinit> that ONLY disables assertions: `ldc X.class; invokevirtual
+        // desiredAssertionStatus; ...; putstatic $assertionsDisabled` (many java.util.stream classes). Its lone
+        // tag-7 ldc trips the gate below, so those <clinit>s were skipped -> $assertionsDisabled stayed false ->
+        // assertions ENABLED -> an `assert` evaluates an uncompiled method and the null-vtable guard throws
+        // AIOOBE. Allow it, but ONLY when the <clinit> is PURELY the assertion idiom: its sole tag-7 use is the
+        // idiom AND it has no side-effecting op (new/newarray/invoke* other than desiredAssertionStatus). A
+        // <clinit> that does the idiom PLUS real init (String/ArraysSupport/Unsafe...) is NOT let through here
+        // (those are clinitBlocked/seeded anyway) -- running its extra init out of order regresses other classes.
+        boolean sawAssertIdiom = false;
+        boolean risky = false;
         int pc = 0;
         while (pc < len)
         {
@@ -311,14 +321,56 @@ public final class Loader
             if (cpi >= 0)
             {
                 int tag = gcpTag[cpi];
-                if (tag != 3 && tag != 4 && tag != 8)    // not Integer / Float / String
+                if (tag == 7)                            // Class literal: OK only as the assertion idiom
+                {
+                    if (!isAssertionIdiom(code, pc))
+                    {
+                        return false;
+                    }
+                    sawAssertIdiom = true;
+                }
+                else if (tag != 3 && tag != 4 && tag != 8)   // not Integer / Float / String
                 {
                     return false;
                 }
             }
+            else if (op == 0xbb || op == 0xbc || op == 0xbd || op == 0xc5     // new / newarray / anewarray / multianew
+                    || op == 0xb8 || op == 0xb7 || op == 0xb9 || op == 0xba)  // invoke static/special/interface/dynamic
+            {
+                risky = true;
+            }
+            else if (op == 0xb6 && !isDesiredAssertionStatusCall(code, pc))   // invokevirtual != desiredAssertionStatus
+            {
+                risky = true;
+            }
             pc += insnLen(code, pc);
         }
+        // The idiom-allow is only safe if that's ALL the <clinit> does; if it also has side effects, running it
+        // here (out of the normal init order) is what broke other classes -- reject so it stays skipped/seeded.
+        if (sawAssertIdiom && risky)
+        {
+            return false;
+        }
         return true;
+    }
+
+    /** True if the {@code ldc} at {@code pc} is immediately followed by {@code invokevirtual Class
+     *  .desiredAssertionStatus} -- the javac assertions idiom. */
+    private static boolean isAssertionIdiom(long code, int pc)
+    {
+        int nx = pc + insnLen(code, pc);
+        return isDesiredAssertionStatusCall(code, nx);
+    }
+
+    /** True if the op at {@code pc} is {@code invokevirtual Class.desiredAssertionStatus}. */
+    private static boolean isDesiredAssertionStatusCall(long code, int pc)
+    {
+        if (u1(code + pc) != 0xb6)                       // invokevirtual
+        {
+            return false;
+        }
+        int idx = u2(code + pc + 1);
+        return utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("desiredAssertionStatus"));
     }
 
     /**
