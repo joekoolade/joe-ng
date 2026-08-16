@@ -147,6 +147,16 @@ public final class Loader
     private static long[] instImaps;
     private static int[] instImapReg;    // the class registry index each imap belongs to (for its iface closure)
     private static int instImapN;
+    // GC ROOTS for synthesised lambda classes. A lambda's TIB/Type/itableDir/imap are built by finishLambdaClass
+    // in the GC heap [BASE,PTR) and are referenced ONLY by (a) baked immediates in JIT code (not scanned) and
+    // (b) its runtime instances' object headers (word 0, which the collector does not trace). Unlike loaded
+    // CLASSES (rooted via clTib[]), array types (refArrTib[]) and string literals (litAnchor[]), lambda metadata
+    // sat in no scanned root — so once a large closure (java.util.stream) fills the arena and GC runs during load
+    // (before any instance exists), the lambda TIB was swept and a reused block scribbled its Type to garbage,
+    // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
+    private static final int MAXLAMBDATIB = 8192;
+    private static long[] lambdaTibRoots;
+    private static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
@@ -1691,6 +1701,8 @@ public final class Loader
         instImaps = new long[MAXIMAP];
         instImapReg = new int[MAXIMAP];
         instImapN = 0;
+        lambdaTibRoots = new long[MAXLAMBDATIB];
+        lambdaTibRootN = 0;
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
@@ -6757,6 +6769,11 @@ public final class Loader
         // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
         long tib = Heap.allocData(8);
         Magic.store64(tib + 0L, type);
+        if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
+        {
+            lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/imap) a GC root
+            lambdaTibRootN += 1;
+        }
         return tib;
     }
 
