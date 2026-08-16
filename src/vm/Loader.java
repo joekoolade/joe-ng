@@ -6551,7 +6551,20 @@ public final class Loader
                 k += 1;
             }
             long h2 = thunk + w * 4L;
-            Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                   w += 1;  // <init>(obj, args)
+            if (initBuf != 0L)
+            {
+                Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
+            }
+            else
+            {
+                // The constructed class's <init> isn't compiled yet (its body is a later PHASE-B batch): emit
+                // `bl 0` and record a call site so patchRelocs rewrites it to the real <init> — same late-binding
+                // the normal lambda-body path (recordTailReloc) uses. Without this the `bl` with initBuf==0
+                // overflows imm26 and wild-branches (a constructor method-ref, Box::new, would jump to junk).
+                Magic.store32(h2, A64Enc.bl(0));
+                recordCallReloc(h2, lambdaImplMref(idx));
+            }
+            w += 1;
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 31, 8));                        w += 1;  // x0 = obj (return)
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(30, 31, 0));                       w += 1;  // restore LR
             Magic.store32(thunk + w * 4L, A64Enc.addImm(31, 31, frame));                 w += 1;  // add sp, #frame
