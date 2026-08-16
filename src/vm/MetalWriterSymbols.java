@@ -298,6 +298,8 @@ final class MetalWriterSymbols implements Symbols
     public int lambdaSize(int idx) { return 0; }
     public int lambdaSamArgc(int idx) { return 0; }
     public void lambdaTib(CodeBuffer cb, int reg, int idx) { failed = true; }
+    public boolean isRecordIndy(int idx) { return false; }
+    public void recordTrap(CodeBuffer cb) { failed = true; }
 
     // ----- accessors for the marker / (later) the layout driver -----
 

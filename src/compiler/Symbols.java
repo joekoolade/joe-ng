@@ -243,4 +243,12 @@ public interface Symbols
 
     /** Load into {@code reg} the synthetic lambda class's TIB address (building the class on the metal). */
     void lambdaTib(CodeBuffer cb, int reg, int idx);
+
+    // ----- invokedynamic (record ObjectMethods) -----
+
+    /** Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code ObjectMethods.bootstrap} (record). */
+    boolean isRecordIndy(int idx);
+
+    /** Emit a runtime trap for an unsupported record {@code equals}/{@code hashCode}/{@code toString}; never returns. */
+    void recordTrap(CodeBuffer cb);
 }

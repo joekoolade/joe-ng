@@ -199,6 +199,14 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.buildLambdaTib(idx));      // synthesise the lambda class now; bake its TIB
     }
+    public boolean isRecordIndy(int idx)
+    {
+        return Loader.isRecordIndy(idx);
+    }
+    public void recordTrap(CodeBuffer cb)
+    {
+        emitBl(cb, VM.denylistTrapAddr);   // unsupported record ObjectMethods method — halt loudly if ever called
+    }
 
     /** Wrap the byte[] in x0 as a java/lang/String: alloc, set TIB, store into the sole `value` field. */
     public void newStringFromBytes(CodeBuffer cb)

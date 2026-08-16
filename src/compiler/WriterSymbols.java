@@ -207,6 +207,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public int lambdaSize(int idx) { return 0; }
     public int lambdaSamArgc(int idx) { return 0; }
     public void lambdaTib(CodeBuffer cb, int reg, int idx) { throw new IllegalStateException("no invokedynamic in image code"); }
+    public boolean isRecordIndy(int idx) { return false; }
+    public void recordTrap(CodeBuffer cb) { throw new IllegalStateException("no invokedynamic in image code"); }
 
     // ----- fatal diagnostics: the writer-side rendering of the core's fail() seam -----
     // The exception *types* matter: an unsupported opcode/atype/etc. is an
