@@ -1538,6 +1538,27 @@ public final class Baseline
         cb.set(beq, A64Enc.bcond(A64Enc.EQ, found - beq));
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.ITABLE_ENTRY_TABLE_OFFSET));          // x17 = itable
         cb.emit(A64Enc.ldrx(16, 17, slot * ObjectModel.WORD));                        // x16 = code addr
+        // Same guard as invokevirtual: the resolved imap slot (x16) must be a plausible code address (4-aligned,
+        // below the ceiling, non-zero). An empty/garbage slot -- e.g. an interface method whose default wasn't
+        // compiled, or a slot past a short imap -- otherwise `blr`s into arbitrary memory (a silent-reboot wild
+        // branch). x17 is free here (the itable was already dereferenced into x16). Throw AIOOBE at this PC so it
+        // is reported with the call's source line, not a reboot. Metal JIT only (trusted image code is check-free).
+        if (symbols.implicitChecks())
+        {
+            int b0 = cb.emit(A64Enc.tbnz(16, 0, 0));    // misaligned (bit 0)
+            int b1 = cb.emit(A64Enc.tbnz(16, 1, 0));    // misaligned (bit 1)
+            cb.emit(A64Enc.lsrImm(17, 16, 28));         // x17 = x16 >> 28  (nonzero => >= 0x1000_0000)
+            int b2 = cb.emit(A64Enc.cbnz(17, 0));       // above the code ceiling
+            int b3 = cb.emit(A64Enc.cbz(16, 0));        // null slot (unresolved / uncompiled)
+            int ok = cb.emit(A64Enc.b(0));
+            int throwAt = cb.wordCount();
+            cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
+            cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
+            cb.set(b2, A64Enc.cbnz(17, throwAt - b2));
+            cb.set(b3, A64Enc.cbz(16, throwAt - b3));
+            throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
+            cb.set(ok, A64Enc.b(cb.wordCount() - ok));
+        }
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
