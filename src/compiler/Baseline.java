@@ -1584,10 +1584,30 @@ public final class Baseline
         {
             lowerLambda(cpIndex, cb);
         }
+        else if (symbols.isRecordIndy(cpIndex))
+        {
+            lowerRecordTrap(cpIndex, cb);
+        }
         else
         {
             symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 0);          // unsupported bootstrap
         }
+    }
+
+    /**
+     * A record's ObjectMethods-synthesised {@code equals}/{@code hashCode}/{@code toString}
+     * ({@code java.lang.runtime.ObjectMethods.bootstrap}). We don't synthesise record semantics yet — RTA pulls
+     * these in for any instantiated record (e.g. {@code Collectors$CollectorImpl}), but they are effectively
+     * never invoked in the paths we run. Consume the call-site args, emit a runtime trap (never returns), then
+     * push a dummy result so the method's trailing {@code Xreturn} still type-checks. If one is ever really
+     * called it halts loudly (with a backtrace) rather than returning a wrong value.
+     */
+    private void lowerRecordTrap(int cpIndex, CodeBuffer cb)
+    {
+        int nargs = paramCount(cpIndex);                         // the indy's call-site args, on the operand stack
+        sp = sp - nargs;                                         // consume them
+        symbols.recordTrap(cb);                                  // BL a trap helper — does not return
+        cb.emit(A64Enc.movz(pushReg(), 0, 0));                   // dummy result (null / 0 / false)
     }
 
     /**

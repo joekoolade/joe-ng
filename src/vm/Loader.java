@@ -6403,6 +6403,26 @@ public final class Loader
             && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("metafactory"));
     }
 
+    /**
+     * True if the invokedynamic at {@code idx} bootstraps via {@code java/lang/runtime/ObjectMethods.bootstrap}
+     * — a record's synthesised {@code equals}/{@code hashCode}/{@code toString}. We don't synthesise record
+     * semantics yet; RTA pulls these in for any instantiated record (e.g. {@code Collectors$CollectorImpl}),
+     * but they are essentially never actually invoked in the paths we run (a Collector is never compared,
+     * hashed or printed during {@code collect()}). The JIT lowers such an indy to a runtime trap so the record
+     * still compiles; see {@code Baseline.lowerRecordTrap}.
+     */
+    static boolean isRecordIndy(int idx)
+    {
+        if (gBsmOff == 0L)
+        {
+            return false;
+        }
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mhIdx = u2(e);
+        int mrefIdx = u2(gbase + gcp[mhIdx] + 1);
+        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/runtime/ObjectMethods"));
+    }
+
     /** JIT buffer of the lambda body (bootstrap_arguments[1] MethodHandle -> its Methodref, same class). */
     private static long lambdaImplBuf(int idx)
     {

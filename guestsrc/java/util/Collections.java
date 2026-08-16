@@ -32,6 +32,23 @@ public final class Collections
         }
     }
 
+    /**
+     * Wrap {@code s} as an "unmodifiable" set. In the paths we run (a {@link java.util.stream.Collector}'s
+     * {@code characteristics()} set, built in {@code Collectors.<clinit>}) the result is only ever read
+     * ({@code contains}/{@code iterator}/{@code isEmpty}) and never mutated, so returning the backing set
+     * directly is behaviourally exact here — we simply don't enforce immutability yet.
+     */
+    public static Set unmodifiableSet(Set s)
+    {
+        return s;
+    }
+
+    /** An empty set ({@code Collections.emptySet()}) — mutable, but used read-only in the paths we run. */
+    public static Set emptySet()
+    {
+        return new HashSet();
+    }
+
     /** As {@link #sort(List)}, but ordered by a caller-supplied {@link Comparator} (typically a lambda). */
     public static void sort(List list, Comparator cmp)
     {
