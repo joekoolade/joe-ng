@@ -1984,6 +1984,10 @@ public final class Loader
                 int mk = lambdaImplKind(idx);
                 addPend(base, refClassNameOff(mref), mrefNameOff(mref), mrefDescOff(mref),
                         (mk == 5 || mk == 9) ? 1 : 0);   // invokeVirtual/Interface -> name+desc; else class-qualified
+                if (mk == 8)                             // constructor ref (X::new) instantiates X, like `new X`:
+                {                                        // mark it a receiver type so RTA pulls its overridden
+                    addInst(base, refClassNameOff(mref));//   virtual methods (hashCode/equals/...) and fills its vtable
+                }
             }
             pc += insnLen(code, pc);
         }
