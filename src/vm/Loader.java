@@ -96,14 +96,7 @@ public final class Loader
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
     private static final int MAXREG = 6144;
-    private static long[] rgBase;   // declaring class blob base (holds its Utf8 strings)
-    private static int[] rgClassOff;   // class name Utf8 offset
-    private static int[] rgNameOff;    // method name Utf8 offset
-    private static int[] rgDescOff;    // descriptor Utf8 offset
-    private static long[] rgBuf;    // compiled buffer address
-    private static long[] rgLine;   // per method: address of its {u32 count, (u32 wordOff, u32 line)*} table, or 0
-    private static long[] rgSrc;    // per method: address of its class's SourceFile filename Utf8, or 0
-    private static int[] rgAccess;  // per method: access_flags (ACC_STATIC etc.) -- reflective invoke + getModifiers
+    private static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
     private static int rgCount;
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
@@ -767,11 +760,11 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8IsAtBase(rgBase[i], rgClassOff[i], cls)
-                    && utf8IsAtBase(rgBase[i], rgNameOff[i], name)
-                    && utf8IsAtBase(rgBase[i], rgDescOff[i], desc))
+            if (utf8IsAtBase(rgTab[i].base, rgTab[i].classOff, cls)
+                    && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, name)
+                    && utf8IsAtBase(rgTab[i].base, rgTab[i].descOff, desc))
             {
-                return rgBuf[i];
+                return rgTab[i].buf;
             }
             i += 1;
         }
@@ -1359,7 +1352,7 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgBuf[i] != 0L && rgBuf[i] <= pc && rgBuf[i] > bestBuf) { bestBuf = rgBuf[i]; bestReg = i; bestClin = -1; }
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
@@ -1374,10 +1367,10 @@ public final class Loader
         long line = 0L;
         if (bestReg >= 0)
         {
-            clsStr = guestStringUtf8(rgBase[bestReg], rgClassOff[bestReg]);
-            methStr = guestStringUtf8(rgBase[bestReg], rgNameOff[bestReg]);
-            fileStr = guestStringUtf8(rgSrc[bestReg], 0);
-            line = lineAtOffset(rgLine[bestReg], (int) ((pc - bestBuf) >> 2));
+            clsStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].classOff);
+            methStr = guestStringUtf8(rgTab[bestReg].base, rgTab[bestReg].nameOff);
+            fileStr = guestStringUtf8(rgTab[bestReg].src, 0);
+            line = lineAtOffset(rgTab[bestReg].line, (int) ((pc - bestBuf) >> 2));
         }
         else if (bestClin >= 0)
         {
@@ -1656,14 +1649,7 @@ public final class Loader
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
-        rgBase = new long[MAXREG];
-        rgClassOff = new int[MAXREG];
-        rgNameOff = new int[MAXREG];
-        rgDescOff = new int[MAXREG];
-        rgBuf = new long[MAXREG];
-        rgLine = new long[MAXREG];
-        rgSrc = new long[MAXREG];
-        rgAccess = new int[MAXREG];
+        rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
         sgBase = new long[MAXREG];
         sgClassOff = new int[MAXREG];
@@ -2895,7 +2881,7 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgBuf[i] != 0L && rgBuf[i] <= addr && rgBuf[i] > bestBuf) { bestBuf = rgBuf[i]; bestReg = i; bestClin = -1; }
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > bestBuf) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
@@ -2914,14 +2900,14 @@ public final class Loader
         }
         if (bestReg >= 0)
         {
-            writeName(rgBase[bestReg] + rgClassOff[bestReg] + 2, u2(rgBase[bestReg] + rgClassOff[bestReg]));
+            writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
             Uart.putc(0x2E);
-            writeName(rgBase[bestReg] + rgNameOff[bestReg] + 2, u2(rgBase[bestReg] + rgNameOff[bestReg]));
-            int line = lineAtOffset(rgLine[bestReg], (int) ((addr - bestBuf) >> 2));   // (pc-base)/4 = word offset
-            if (rgSrc[bestReg] != 0L)
+            writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+            int line = lineAtOffset(rgTab[bestReg].line, (int) ((addr - bestBuf) >> 2));   // (pc-base)/4 = word offset
+            if (rgTab[bestReg].src != 0L)
             {
                 Uart.putc(0x28);                                 // '('
-                writeName(rgSrc[bestReg] + 2, u2(rgSrc[bestReg]));   // SourceFile filename
+                writeName(rgTab[bestReg].src + 2, u2(rgTab[bestReg].src));   // SourceFile filename
                 if (line >= 0)
                 {
                     Uart.putc(0x3A);                             // ':'
@@ -3009,9 +2995,9 @@ public final class Loader
             int i = 0;
             while (i < rgCount)                            // registered cross-class methods
             {
-                if (rgBuf[i] != 0L && rgBuf[i] < ceil && rgBuf[i] > bestBuf)
+                if (rgTab[i].buf != 0L && rgTab[i].buf < ceil && rgTab[i].buf > bestBuf)
                 {
-                    bestBuf = rgBuf[i]; bestReg = i; bestClin = -1;
+                    bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1;
                 }
                 i += 1;
             }
@@ -3032,9 +3018,9 @@ public final class Loader
             Uart.write(Magic.bytes(") "));
             if (bestReg >= 0)
             {
-                writeName(rgBase[bestReg] + rgClassOff[bestReg] + 2, u2(rgBase[bestReg] + rgClassOff[bestReg]));
+                writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
                 Uart.putc(0x2E);
-                writeName(rgBase[bestReg] + rgNameOff[bestReg] + 2, u2(rgBase[bestReg] + rgNameOff[bestReg]));
+                writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
             }
             else
             {
@@ -4748,14 +4734,15 @@ public final class Loader
     private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr, int access)
     {
         if (rgCount >= MAXREG) { capHalt(Magic.bytes("MAXREG-method"), rgCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        rgBase[rgCount] = base;
-        rgClassOff[rgCount] = classOff;
-        rgNameOff[rgCount] = nameOff;
-        rgDescOff[rgCount] = descOff;
-        rgBuf[rgCount] = buf;
-        rgLine[rgCount] = lineTab;
-        rgSrc[rgCount] = srcAddr;
-        rgAccess[rgCount] = access;
+        rgTab[rgCount] = new RVMMethod();
+        rgTab[rgCount].base = base;
+        rgTab[rgCount].classOff = classOff;
+        rgTab[rgCount].nameOff = nameOff;
+        rgTab[rgCount].descOff = descOff;
+        rgTab[rgCount].buf = buf;
+        rgTab[rgCount].line = lineTab;
+        rgTab[rgCount].src = srcAddr;
+        rgTab[rgCount].access = access;
         rgCount += 1;
     }
 
@@ -4792,11 +4779,11 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(gbase, classOff, rgBase[i], rgClassOff[i])
-                    && utf8EqAt(gbase, nameOff, rgBase[i], rgNameOff[i])
-                    && utf8EqAt(gbase, descOff, rgBase[i], rgDescOff[i]))
+            if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
+                    && utf8EqAt(gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
+                    && utf8EqAt(gbase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
-                return rgBuf[i];
+                return rgTab[i].buf;
             }
             i += 1;
         }
@@ -4991,11 +4978,11 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(refBase, classOff, rgBase[i], rgClassOff[i])
-                    && utf8EqAt(refBase, nameOff, rgBase[i], rgNameOff[i])
-                    && utf8EqAt(refBase, descOff, rgBase[i], rgDescOff[i]))
+            if (utf8EqAt(refBase, classOff, rgTab[i].base, rgTab[i].classOff)
+                    && utf8EqAt(refBase, nameOff, rgTab[i].base, rgTab[i].nameOff)
+                    && utf8EqAt(refBase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
-                return rgBuf[i];
+                return rgTab[i].buf;
             }
             i += 1;
         }
@@ -5013,11 +5000,11 @@ public final class Loader
             int j = 0;
             while (j < rgCount)
             {
-                if (utf8EqAt(pdBase[spd], pdNameOff[spd], rgBase[j], rgClassOff[j])
-                        && utf8EqAt(refBase, nameOff, rgBase[j], rgNameOff[j])
-                        && utf8EqAt(refBase, descOff, rgBase[j], rgDescOff[j]))
+                if (utf8EqAt(pdBase[spd], pdNameOff[spd], rgTab[j].base, rgTab[j].classOff)
+                        && utf8EqAt(refBase, nameOff, rgTab[j].base, rgTab[j].nameOff)
+                        && utf8EqAt(refBase, descOff, rgTab[j].base, rgTab[j].descOff))
                 {
-                    return rgBuf[j];
+                    return rgTab[j].buf;
                 }
                 j += 1;
             }
@@ -5425,11 +5412,11 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgBase[i] == ifBase[g]
-                    && utf8EqAt(ifBase[g], ifNameOff[g], rgBase[i], rgNameOff[i])
-                    && utf8EqAt(ifBase[g], ifDescOff[g], rgBase[i], rgDescOff[i]))
+            if (rgTab[i].base == ifBase[g]
+                    && utf8EqAt(ifBase[g], ifNameOff[g], rgTab[i].base, rgTab[i].nameOff)
+                    && utf8EqAt(ifBase[g], ifDescOff[g], rgTab[i].base, rgTab[i].descOff))
             {
-                return rgBuf[i];
+                return rgTab[i].buf;
             }
             i += 1;
         }
@@ -5645,8 +5632,8 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[i], rgClassOff[i])
-                    && rawEqUtf8(nbase, nlen, rgBase[i], rgNameOff[i]))
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[i].base, rgTab[i].classOff)
+                    && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
             {
                 return i;
             }
@@ -5760,9 +5747,9 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[i], rgClassOff[i])
-                    && utf8IsAtBase(rgBase[i], rgNameOff[i], Magic.bytes("<init>"))
-                    && descParamCountRaw(rgBase[i] + rgDescOff[i]) == paramCount)
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[i].base, rgTab[i].classOff)
+                    && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
+                    && descParamCountRaw(rgTab[i].base + rgTab[i].descOff) == paramCount)
             {
                 return i;
             }
@@ -5877,7 +5864,7 @@ public final class Loader
      */
     static int methodInfo(int rgIndex, long paramCharsArr, long outArr)
     {
-        long descAddr = rgBase[rgIndex] + rgDescOff[rgIndex];   // "(...)ret" Utf8 (u2 length, then bytes)
+        long descAddr = rgTab[rgIndex].base + rgTab[rgIndex].descOff;   // "(...)ret" Utf8 (u2 length, then bytes)
         long p = descAddr + 2 + 1;                              // past u2 length and '('
         long pc = paramCharsArr + 24L;                          // byte[] elements
         int n = 0;
@@ -5904,8 +5891,8 @@ public final class Loader
             }
             n += 1;
         }
-        Magic.store64(outArr + 24L + 0L, rgBuf[rgIndex]);      // out[0] = compiled buffer
-        Magic.store64(outArr + 24L + 8L, (long) rgAccess[rgIndex]);   // out[1] = access flags
+        Magic.store64(outArr + 24L + 0L, rgTab[rgIndex].buf);      // out[0] = compiled buffer
+        Magic.store64(outArr + 24L + 8L, (long) rgTab[rgIndex].access);   // out[1] = access flags
         Magic.store64(outArr + 24L + 16L, (long) u1(p + 1));   // out[2] = return-type char (after ')')
         return n;
     }
@@ -6494,9 +6481,9 @@ public final class Loader
         int i = 0;
         while (i < rgCount)                             // 1c fallback: locate the target in the method registry
         {
-            if (utf8EqAt(gbase, classOff, rgBase[i], rgClassOff[i])
-                    && utf8EqAt(gbase, nameOff, rgBase[i], rgNameOff[i])
-                    && utf8EqAt(gbase, descOff, rgBase[i], rgDescOff[i]))
+            if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
+                    && utf8EqAt(gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
+                    && utf8EqAt(gbase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
                 return lazyCellFor(i);
             }
@@ -6654,7 +6641,7 @@ public final class Loader
         int k = 0;
         while (k < lzN)                                 // dedup: one cell per target method (many call sites)
         {
-            if (lzTab[k].blob == rgBase[i] && lzTab[k].nameOff == rgNameOff[i] && lzTab[k].descOff == rgDescOff[i])
+            if (lzTab[k].blob == rgTab[i].base && lzTab[k].nameOff == rgTab[i].nameOff && lzTab[k].descOff == rgTab[i].descOff)
             {
                 return lzTab[k].slot;
             }
@@ -6664,23 +6651,23 @@ public final class Loader
         {
             return 0L;                                  // table full -> normal path (safe fallback)
         }
-        int reg = classRegByNameAt(rgBase[i], rgClassOff[i]);
+        int reg = classRegByNameAt(rgTab[i].base, rgTab[i].classOff);
         if (reg < 0)
         {
             return 0L;
         }
-        int pd = findPdByName(rgBase[i], rgClassOff[i]);
+        int pd = findPdByName(rgTab[i].base, rgTab[i].classOff);
         long cell = Heap.allocData(8);
-        lzTab[lzN].blob = rgBase[i];
+        lzTab[lzN].blob = rgTab[i].base;
         lzTab[lzN].len = pdLen[pd];
         lzTab[lzN].reg = reg;
-        lzTab[lzN].nameOff = rgNameOff[i];
-        lzTab[lzN].descOff = rgDescOff[i];
+        lzTab[lzN].nameOff = rgTab[i].nameOff;
+        lzTab[lzN].descOff = rgTab[i].descOff;
         lzTab[lzN].slot = cell;                             // lazyCompile patches this word with the fresh buffer
         Magic.store64(cell, buildLazyCompileStub(lzN)); // cell starts -> the shared lazy stub
         lzN += 1;
         Uart.write(Magic.bytes("  lazy-static: cell for java/util/Objects."));
-        printNameAt(rgBase[i], rgNameOff[i]);
+        printNameAt(rgTab[i].base, rgTab[i].nameOff);
         Uart.putc(0x0A);
         return cell;
     }
@@ -6806,11 +6793,11 @@ public final class Loader
             int k = 0;
             while (k < rgCount)
             {
-                if (rgBase[k] == ibase && rgBuf[k] != 0L
-                        && utf8EqAt(ifBase[g], ifNameOff[g], rgBase[k], rgNameOff[k])
-                        && utf8EqAt(ifBase[g], ifDescOff[g], rgBase[k], rgDescOff[k]))
+                if (rgTab[k].base == ibase && rgTab[k].buf != 0L
+                        && utf8EqAt(ifBase[g], ifNameOff[g], rgTab[k].base, rgTab[k].nameOff)
+                        && utf8EqAt(ifBase[g], ifDescOff[g], rgTab[k].base, rgTab[k].descOff))
                 {
-                    return rgBuf[k];
+                    return rgTab[k].buf;
                 }
                 k += 1;
             }
@@ -7922,9 +7909,9 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgBuf[i] != 0L && rgBuf[i] <= pc && rgBuf[i] > bestBuf)
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf)
             {
-                bestBuf = rgBuf[i];
+                bestBuf = rgTab[i].buf;
                 bestReg = i;
             }
             i += 1;
@@ -7936,7 +7923,7 @@ public final class Loader
         int ci = 0;
         while (ci < clCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgBase[bestReg], rgClassOff[bestReg]))
+            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[bestReg].base, rgTab[bestReg].classOff))
             {
                 return classMirror(clType[ci]);
             }
