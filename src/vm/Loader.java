@@ -4597,17 +4597,18 @@ public final class Loader
         int idx = lzN;
         int reg = classRegByName(gThisNameOff);
         int pd = findPdByName(gbase, gThisNameOff);
-        lzBlob[idx] = gbase;
-        lzLen[idx] = pdLen[pd];
-        lzReg[idx] = reg;
-        lzNameOff[idx] = 0;
-        lzDescOff[idx] = mDescOff[i];
-        lzSlot[idx] = 0L;                               // no single slot to patch: the stub buffer is shared
-        lzCode[idx] = mCode[i];                         // compile straight from the captured bytecode
-        lzCodeLen[idx] = mLen[i];
-        lzStatic[idx] = mStatic[i];
-        lzMaxLocals[idx] = mLocals[i];
-        lzCache[idx] = 0L;
+        lzTab[idx] = new LazyMethod();
+        lzTab[idx].blob = gbase;
+        lzTab[idx].len = pdLen[pd];
+        lzTab[idx].reg = reg;
+        lzTab[idx].nameOff = 0;
+        lzTab[idx].descOff = mDescOff[i];
+        lzTab[idx].slot = 0L;                               // no single slot to patch: the stub buffer is shared
+        lzTab[idx].code = mCode[i];                         // compile straight from the captured bytecode
+        lzTab[idx].codeLen = mLen[i];
+        lzTab[idx].isStatic = mStatic[i];
+        lzTab[idx].maxLocals = mLocals[i];
+        lzTab[idx].cache = 0L;
         lzN += 1;
         long buf = mBuf[i];                             // stub-sized buffer allocated by sizeMethod
         int w = 0;
@@ -6225,17 +6226,7 @@ public final class Loader
     // but nothing arms it, so behaviour is unchanged -- verified by QEMU off == main.)
     private static final boolean LAZY_COMPILE = false;
     private static final int MAXLAZY = 1024;
-    private static long[] lzBlob;      // deferred method's class blob base
-    private static int[]  lzLen;       // ... blob length (for parseConstPool)
-    private static int[]  lzReg;       // ... class registry index (clStatics/clTib/clType restore)
-    private static int[]  lzNameOff;   // ... method name Utf8 offset (to re-find it)
-    private static int[]  lzDescOff;   // ... descriptor Utf8 offset
-    private static long[] lzSlot;      // ... &TIB[slot] / offset cell to patch with the fresh buffer (0 = memoize only)
-    private static long[] lzCode;      // M8 defer: captured bytecode address (0 => re-find by name/desc offsets)
-    private static int[]  lzCodeLen;   // ... its length
-    private static int[]  lzStatic;    // ... 1 if static
-    private static int[]  lzMaxLocals; // ... its max_locals
-    private static long[] lzCache;     // ... memoized compiled buffer (0 = not yet compiled)
+    private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
 
@@ -6279,13 +6270,13 @@ public final class Loader
         {
             if (gvImplCode[s] != 0L && lzN < MAXLAZY)   // own method only (inherited slots have no source here)
             {
-                lzBlob[lzN] = gbase;
-                lzLen[lzN] = len;
-                lzReg[lzN] = reg;
-                lzNameOff[lzN] = gvName[s];
-                lzDescOff[lzN] = gvDesc[s];
-                lzSlot[lzN] = gTib + 8 + s * 8;
-                Magic.store64(lzSlot[lzN], buildLazyCompileStub(lzN));
+                lzTab[lzN].blob = gbase;
+                lzTab[lzN].len = len;
+                lzTab[lzN].reg = reg;
+                lzTab[lzN].nameOff = gvName[s];
+                lzTab[lzN].descOff = gvDesc[s];
+                lzTab[lzN].slot = gTib + 8 + s * 8;
+                Magic.store64(lzTab[lzN].slot, buildLazyCompileStub(lzN));
                 lzN += 1;
                 armed += 1;
             }
@@ -6359,30 +6350,30 @@ public final class Loader
      */
     static long lazyCompile(int idx)
     {
-        if (idx < 0 || lzBlob == null || idx >= lzN)
+        if (idx < 0 || lzTab == null || idx >= lzN)
         {
             return 0L;                                  // dead force-reference (writer) / bad index
         }
-        if (lzCache[idx] != 0L)
+        if (lzTab[idx].cache != 0L)
         {
-            return lzCache[idx];                         // memoized: compile once, however many callers hit the stub
+            return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
-        restoreCtxForCompile(lzBlob[idx], lzLen[idx], lzReg[idx]);
+        restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);
         long code;
         int len;
         int descOff;
         int isStatic;
-        if (lzCode[idx] != 0L)                           // genuine deferral: the body was captured, compile it
+        if (lzTab[idx].code != 0L)                           // genuine deferral: the body was captured, compile it
         {
-            code = lzCode[idx];
-            len = lzCodeLen[idx];
-            descOff = lzDescOff[idx];
-            isStatic = lzStatic[idx];
-            gMaxLocals = lzMaxLocals[idx];
+            code = lzTab[idx].code;
+            len = lzTab[idx].codeLen;
+            descOff = lzTab[idx].descOff;
+            isStatic = lzTab[idx].isStatic;
+            gMaxLocals = lzTab[idx].maxLocals;
         }
         else                                            // 1b/1c: re-find the method by name+descriptor
         {
-            code = findMethodByOffsets(lzNameOff[idx], lzDescOff[idx]);
+            code = findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
             if (code == 0L)
             {
                 return 0L;
@@ -6396,16 +6387,16 @@ public final class Loader
             Uart.write(Magic.bytes("  jitc "));
             printNameAt(gbase, gThisNameOff);
             Uart.putc(0x2E);
-            printNameAt(lzBlob[idx], lzCode[idx] != 0L ? lzDescOff[idx] : lzNameOff[idx]);
+            printNameAt(lzTab[idx].blob, lzTab[idx].code != 0L ? lzTab[idx].descOff : lzTab[idx].nameOff);
             Uart.putc(0x0A);
         }
         compileReuseTib = true;                         // keep this class's TIB (already filled)
         long buf = compile(code, len, descOff, isStatic);
         compileReuseTib = false;
-        lzCache[idx] = buf;
-        if (lzSlot[idx] != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
+        lzTab[idx].cache = buf;
+        if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
         {
-            Magic.store64(lzSlot[idx], buf);
+            Magic.store64(lzTab[idx].slot, buf);
         }
         return buf;
     }
@@ -6549,18 +6540,19 @@ public final class Loader
                     && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
             {
                 int idx = lzN;
-                lzBlob[idx] = gbase;
-                lzLen[idx] = blobLen;
-                lzReg[idx] = reg;
-                lzNameOff[idx] = nameOff;
-                lzDescOff[idx] = descOff;
-                lzCode[idx] = code;
-                lzCodeLen[idx] = gcodeLen;
-                lzStatic[idx] = 1;
-                lzMaxLocals[idx] = gMaxLocals;
-                lzCache[idx] = 0L;
+                lzTab[idx] = new LazyMethod();
+                lzTab[idx].blob = gbase;
+                lzTab[idx].len = blobLen;
+                lzTab[idx].reg = reg;
+                lzTab[idx].nameOff = nameOff;
+                lzTab[idx].descOff = descOff;
+                lzTab[idx].code = code;
+                lzTab[idx].codeLen = gcodeLen;
+                lzTab[idx].isStatic = 1;
+                lzTab[idx].maxLocals = gMaxLocals;
+                lzTab[idx].cache = 0L;
                 long cell = Heap.allocData(8);
-                lzSlot[idx] = cell;                     // first call data-patches the cell -> later calls dispatch direct
+                lzTab[idx].slot = cell;                     // first call data-patches the cell -> later calls dispatch direct
                 Magic.store64(cell, buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
@@ -6662,9 +6654,9 @@ public final class Loader
         int k = 0;
         while (k < lzN)                                 // dedup: one cell per target method (many call sites)
         {
-            if (lzBlob[k] == rgBase[i] && lzNameOff[k] == rgNameOff[i] && lzDescOff[k] == rgDescOff[i])
+            if (lzTab[k].blob == rgBase[i] && lzTab[k].nameOff == rgNameOff[i] && lzTab[k].descOff == rgDescOff[i])
             {
-                return lzSlot[k];
+                return lzTab[k].slot;
             }
             k += 1;
         }
@@ -6679,12 +6671,12 @@ public final class Loader
         }
         int pd = findPdByName(rgBase[i], rgClassOff[i]);
         long cell = Heap.allocData(8);
-        lzBlob[lzN] = rgBase[i];
-        lzLen[lzN] = pdLen[pd];
-        lzReg[lzN] = reg;
-        lzNameOff[lzN] = rgNameOff[i];
-        lzDescOff[lzN] = rgDescOff[i];
-        lzSlot[lzN] = cell;                             // lazyCompile patches this word with the fresh buffer
+        lzTab[lzN].blob = rgBase[i];
+        lzTab[lzN].len = pdLen[pd];
+        lzTab[lzN].reg = reg;
+        lzTab[lzN].nameOff = rgNameOff[i];
+        lzTab[lzN].descOff = rgDescOff[i];
+        lzTab[lzN].slot = cell;                             // lazyCompile patches this word with the fresh buffer
         Magic.store64(cell, buildLazyCompileStub(lzN)); // cell starts -> the shared lazy stub
         lzN += 1;
         Uart.write(Magic.bytes("  lazy-static: cell for java/util/Objects."));
@@ -6696,19 +6688,9 @@ public final class Loader
     /** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
     private static void lazyEnsureTables()
     {
-        if (lzBlob == null)
+        if (lzTab == null)
         {
-            lzBlob = new long[MAXLAZY];
-            lzLen = new int[MAXLAZY];
-            lzReg = new int[MAXLAZY];
-            lzNameOff = new int[MAXLAZY];
-            lzDescOff = new int[MAXLAZY];
-            lzSlot = new long[MAXLAZY];
-            lzCode = new long[MAXLAZY];
-            lzCodeLen = new int[MAXLAZY];
-            lzStatic = new int[MAXLAZY];
-            lzMaxLocals = new int[MAXLAZY];
-            lzCache = new long[MAXLAZY];
+            lzTab = new LazyMethod[MAXLAZY];
             lzN = 0;
         }
         if (lazyTrampAddr == 0L)
