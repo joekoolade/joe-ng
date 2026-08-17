@@ -6254,9 +6254,11 @@ public final class Loader
     // indirect through them, order-independent) PLUS its bodies are never eagerly compiled (skipped in
     // compileClass's seed loop). Every body compiles purely on demand, on first call, through its cell. This
     // is the shape the whole M8 redirect was built toward: the boot image ships class metadata + cells/stubs,
-    // not compiled bodies. Gated to java/util/Objects (all-static -> every call is direct -> cells cover it).
-    // Default OFF -> the seed-loop skip + armPhaseACells trigger are dead branches.
-    private static final boolean LAZY_STAGE2 = false;
+    // not compiled bodies. Gated to the stage2Gated() class set (Objects/Preconditions/ArraysSupport/String).
+    // NOW ON BY DEFAULT: those java.base classes are lazy (metadata + cells at load, bodies on first call) in
+    // the shipped image -- the first classes joe-ng compiles purely on demand, no eager whole-closure compile.
+    private static final boolean LAZY_STAGE2 = true;
+    private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
     private static long[] dlBase;      // phase-A dynamic-linking table: method's blob,
     private static int[]  dlClassOff;  //   class name Utf8 offset,
     private static int[]  dlNameOff;   //   method name Utf8 offset,
@@ -6393,11 +6395,14 @@ public final class Loader
             descOff = gFoundDescOff;
             isStatic = gFoundStatic;
         }
-        Uart.write(Magic.bytes("  jitc "));              // proof: runtime compile firing (class.name/desc)
-        printNameAt(gbase, gThisNameOff);
-        Uart.putc(0x2E);
-        printNameAt(lzBlob[idx], lzCode[idx] != 0L ? lzDescOff[idx] : lzNameOff[idx]);
-        Uart.putc(0x0A);
+        if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
+        {
+            Uart.write(Magic.bytes("  jitc "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.putc(0x2E);
+            printNameAt(lzBlob[idx], lzCode[idx] != 0L ? lzDescOff[idx] : lzNameOff[idx]);
+            Uart.putc(0x0A);
+        }
         compileReuseTib = true;                         // keep this class's TIB (already filled)
         long buf = compile(code, len, descOff, isStatic);
         compileReuseTib = false;
