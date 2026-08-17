@@ -443,7 +443,7 @@ public final class Cyw43
      */
     public static int waitFrameIrq(long dst, int cap, int ms)
     {
-        if (!vm.VM.semWaitTimeout(vm.VM.WIFI_SEM, ms))
+        if (!vm.VMScheduler.semWaitTimeout(vm.VM.WIFI_SEM, ms))
         {
             return 0;                                    // no frame within the timeout (GIC SPI still armed)
         }
