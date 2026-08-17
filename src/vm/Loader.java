@@ -6605,7 +6605,15 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Character"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Boolean"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Byte"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Arrays"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Arrays"))
+                // widen batch 3: core java.lang + java.util collections (incl. inheritance/interfaces):
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Number"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringBuilder"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashSet"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractMap"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractCollection"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractSet"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
