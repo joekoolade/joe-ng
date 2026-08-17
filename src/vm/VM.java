@@ -1665,6 +1665,23 @@ public final class VM
     // boot (demos + scheduler + SMP), with WiFi run at the end on real hardware (WIFI_ENABLED gate).
     static final boolean WIFI_ONLY = false;
 
+    // M8 full bootstrap (first probe): does the writer bake a STOCK java.base class INTO the boot image
+    // (compiled, callable directly) rather than only demand-loading it as a raw blob? When on, VM.run reaches
+    // bootstrapProbe -> java/lang/Math.max, so ImageBuilder's reachable-closure BFS should compile Math.max
+    // into the image (resolved via the ClassRegistry, which already holds Math). Default OFF -> the call is a
+    // compile-time dead branch, bootstrapProbe is unreachable, Math is not compile-reached, image unchanged.
+    static final boolean BOOTSTRAP_PROBE = false;
+
+    /** First step toward the full bootstrap (loader-uses-java.base): call a pure stock java.base method
+     *  (java/lang/Math.max) that the WRITER compiled into the image, and print the result -- proving stock
+     *  java.base can be baked into the boot image and called directly (not demand-loaded). */
+    static void bootstrapProbe()
+    {
+        Uart.write(Magic.bytes("bootstrap: java/lang/Math.max(0x4D,0x21)="));
+        Uart.putc(Math.max(0x4D, 0x21));                  // 'M' (0x4D) iff the writer baked stock Math into the image
+        Uart.putc(0x0A);
+    }
+
     static void run()
     {
         Uart.write(Magic.bytes("hello from joe-ng\n"));     // putc turns \n into \r\n
@@ -1678,6 +1695,11 @@ public final class VM
         VMScheduler.buildPageTables();
         VMScheduler.enableMmuThisCore();
         Uart.write(Magic.bytes("mmu on\n"));
+
+        if (BOOTSTRAP_PROBE)                              // M8 full-bootstrap probe (off by default)
+        {
+            bootstrapProbe();
+        }
 
         // TEMP (WiFi iteration): skip SMP + the whole demo suite and go straight to WiFi, for fast flash
         // cycles. static-final so the demos are dead-code-eliminated (smaller/faster image). Unlike the old

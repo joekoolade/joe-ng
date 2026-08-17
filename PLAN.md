@@ -1574,6 +1574,34 @@ model. It has **two halves**:
 Migration is incremental and behavior-preserving: reify one registry at a time, QEMU + Pi
 validate each, keep the flat-static and reified forms from coexisting (replace, don't dual-write).
 
+#### Full bootstrap — first probe (2026-08-17)
+
+Reification half done (7 objects). Started the **full-Java-over-`java.base`** half with a
+gated probe (`VM.BOOTSTRAP_PROBE`, default off): make `VM.run` reach `bootstrapProbe()` →
+`java/lang/Math.max`, forcing the writer's reachable-closure BFS to compile stock `Math`
+**into the image** (resolved via `ClassRegistry`, which already holds it).
+
+**Result — the mechanism works, and the first blocker is precise:** the writer *did* reach
+`Math` and began compiling it into the image (so the compile-into-image path is real). It
+failed on `compiling java/lang/Math.<clinit>()V: ldc class-literal not compiled by the host
+writer`. Two facts fall out:
+- The writer forces a **used class's `<clinit>`** to compile at build time.
+- The **host (writer-side) compiler has gaps** the *runtime* loader doesn't — here `ldc`
+  class-literal — so a `<clinit>` the runtime loader handles fine (it demand-loads `Math`
+  today) can't be built into the image.
+
+**Two viable paths (decide next):**
+1. **Writer bakes `java.base`** — close the host-compiler gaps (`ldc` class-literal, …) AND
+   stop forcing `<clinit>` at build time (compile the class's *methods*, defer/skip `<clinit>`
+   to a runtime init pass, exactly as the runtime loader already does for native/complex
+   `<clinit>`s). More writer work, but keeps one build-time image.
+2. **Two-loader bootstrap (JikesRVM-style)** — a minimal JDK-free bootstrap loader (what we
+   have) loads + resolves a `java.base` core at boot; then a full-Java loader (using that
+   core) takes over. Avoids extending the host writer; matches JikesRVM's boot sequence.
+
+The probe stays committed (off) as the reproducer. This is the genuine hard remainder —
+each subsequent step is its own investigation + increment.
+
 ---
 
 ## 5. Design decisions to lock day one
