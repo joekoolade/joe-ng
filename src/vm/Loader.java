@@ -1023,6 +1023,10 @@ public final class Loader
      */
     static void launch(byte[] className, byte[] argsLine)
     {
+        if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
+        {                                                  //   makes lazyCompile reachable so the writer
+            long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
+        }
         resetLoader();
         addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
         addBlob(VM.stringBytes, (int) VM.stringLen);        // String + System.out streams
@@ -6036,6 +6040,10 @@ public final class Loader
         {                                              //   compile-eager / install-on-first-call stubs
             lazyArmTib();
         }
+        if (LAZY_COMPILE)                               // M8 increment 1b: compile-on-first-call
+        {
+            lazyArmCompile();
+        }
         long imap = buildImap();
         if (instImaps != null && instImapN < instImaps.length)    // capture for the post-phase-B default refill
         {
@@ -6114,6 +6122,198 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.br(17));                                          w += 1;  // tail-call real
         Heap.publishCode(buf, buf + w * 4L);
         return buf;
+    }
+
+    // ----- M8 increment 1b: compile-on-first-call (runtime single-method compile) -----
+    // 1a proved the self-modifying dispatch with an EAGER buffer. 1b proves the harder half: compiling a
+    // method AT CALL TIME with its compile context restored. Safe variant (no static-call offset table yet,
+    // that is 1c): the eager buffer stays -- so direct invokestatic/invokespecial refs still resolve -- but
+    // the gated class's TIB vtable slots hold a trampoline that, on the FIRST virtual call, restores the
+    // class's g* context (mirroring loadBodies' preamble) and compiles the method FRESH, installing the new
+    // buffer. If the program still runs with methods compiled at call time, the runtime-compile path works.
+    // Default OFF. (Unlike 1a this is not byte-identical off: lazyCompile is force-compiled for its stash,
+    // but nothing arms it, so behaviour is unchanged -- verified by QEMU off == main.)
+    private static final boolean LAZY_COMPILE = false;
+    private static final int MAXLAZY = 1024;
+    private static long[] lzBlob;      // deferred method's class blob base
+    private static int[]  lzLen;       // ... blob length (for parseConstPool)
+    private static int[]  lzReg;       // ... class registry index (clStatics/clTib/clType restore)
+    private static int[]  lzNameOff;   // ... method name Utf8 offset (to re-find it)
+    private static int[]  lzDescOff;   // ... descriptor Utf8 offset
+    private static long[] lzSlot;      // ... &TIB[slot] to patch with the fresh buffer
+    private static int    lzN;
+    private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
+
+    /** Arm the gated class's OWN virtual methods (those with source bytecode) for compile-on-first-call. */
+    private static void lazyArmCompile()
+    {
+        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))   // one class first
+        {
+            return;
+        }
+        if (lzBlob == null)
+        {
+            lzBlob = new long[MAXLAZY];
+            lzLen = new int[MAXLAZY];
+            lzReg = new int[MAXLAZY];
+            lzNameOff = new int[MAXLAZY];
+            lzDescOff = new int[MAXLAZY];
+            lzSlot = new long[MAXLAZY];
+            lzN = 0;
+        }
+        if (lazyTrampAddr == 0L)
+        {
+            buildLazyTramp();
+        }
+        int reg = classRegByName(gThisNameOff);
+        int pd = findPdByName(gbase, gThisNameOff);
+        int len = pdLen[pd];
+        int armed = 0;
+        int s = 0;
+        while (s < gvCount)
+        {
+            if (gvImplCode[s] != 0L && lzN < MAXLAZY)   // own method only (inherited slots have no source here)
+            {
+                lzBlob[lzN] = gbase;
+                lzLen[lzN] = len;
+                lzReg[lzN] = reg;
+                lzNameOff[lzN] = gvName[s];
+                lzDescOff[lzN] = gvDesc[s];
+                lzSlot[lzN] = gTib + 8 + s * 8;
+                Magic.store64(lzSlot[lzN], buildLazyCompileStub(lzN));
+                lzN += 1;
+                armed += 1;
+            }
+            s += 1;
+        }
+        Uart.write(Magic.bytes("  lazy-compile: armed "));
+        VM.printDec(armed);
+        Uart.write(Magic.bytes(" java/lang/String methods (compile-on-first-call)\n"));
+    }
+
+    /** Per-method stub: x9 = deferred index, then branch to the shared trampoline. */
+    private static long buildLazyCompileStub(int idx)
+    {
+        long buf = Heap.allocCode(32);
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
+        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(10));                                              w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
+        return buf;
+    }
+
+    /**
+     * The shared arg-preserving trampoline. Entered with x9 = deferred index, x0..x7 = the call's args, x30 =
+     * caller return. Saves the arg registers + LR, calls {@code lazyCompile(idx)} (via the writer-stashed
+     * {@code VM.lazyCompileAddr}) which returns the freshly-compiled buffer, restores the args + LR, and
+     * tail-branches into the method so it sees the exact original call state.
+     */
+    private static void buildLazyTramp()
+    {
+        long buf = Heap.allocCode(128);
+        long ca = VM.lazyCompileAddr;
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 80));  w += 1;   // sub sp,sp,#80
+        Magic.store32(buf + w * 4L, A64Enc.strx(0, 31, 0));      w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(1, 31, 8));      w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(2, 31, 16));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(3, 31, 24));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(4, 31, 32));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(5, 31, 40));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(6, 31, 48));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(7, 31, 56));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 64));    w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.addImm(0, 9, 0));     w += 1;   // x0 = idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ca & 0xFFFF), 0));         w += 1;  // x16 = lazyCompile
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = fresh buffer
+        Magic.store32(buf + w * 4L, A64Enc.addImm(16, 0, 0));    w += 1;   // x16 = x0
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(0, 31, 0));      w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(1, 31, 8));      w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(2, 31, 16));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(3, 31, 24));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(4, 31, 32));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(5, 31, 40));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(6, 31, 48));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(7, 31, 56));     w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 64));    w += 1;   // restore LR
+        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 80));  w += 1;   // add sp,sp,#80
+        Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the fresh method
+        Heap.publishCode(buf, buf + w * 4L);
+        lazyTrampAddr = buf;
+    }
+
+    /**
+     * Compile deferred method {@code idx} at call time: restore its class's compile context, re-find the
+     * method, compile just it, install the fresh buffer into the TIB slot, and return it. Called only from
+     * the trampoline (via the stashed address). Guarded so the writer's dead force-reference is a no-op.
+     */
+    static long lazyCompile(int idx)
+    {
+        if (idx < 0 || lzBlob == null || idx >= lzN)
+        {
+            return 0L;                                  // dead force-reference (writer) / bad index
+        }
+        restoreCtxForCompile(lzBlob[idx], lzLen[idx], lzReg[idx]);
+        long code = findMethodByOffsets(lzNameOff[idx], lzDescOff[idx]);
+        if (code == 0L)
+        {
+            return 0L;
+        }
+        Uart.write(Magic.bytes("  jitc String."));      // proof: runtime compile firing (gated by LAZY_COMPILE)
+        printNameAt(lzBlob[idx], lzNameOff[idx]);
+        Uart.putc(0x0A);
+        compileReuseTib = true;                         // keep this class's TIB (already filled); patch one slot
+        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+        compileReuseTib = false;
+        Magic.store64(lzSlot[idx], buf);                // future virtual calls dispatch directly
+        return buf;
+    }
+
+    /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
+    private static void restoreCtxForCompile(long bytes, int len, int reg)
+    {
+        parseConstPool(bytes, len);
+        parseFields();
+        gStatics = clStatics[reg];
+        findBootstrapMethods();
+        parseVtable(bytes);
+        gType = clType[reg];
+        gTib = clTib[reg];
+        provideKnownStatics();
+    }
+
+    /** Find a method in the current blob by its (name, descriptor) Utf8 offsets; sets gcodeLen/gFoundDescOff/
+     *  gFoundStatic like {@link #findMethod}. Returns its Code address, or 0. */
+    private static long findMethodByOffsets(int nameOff, int descOff)
+    {
+        long p = gp;
+        gMethodsStart = p;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int access = u2(p);
+            int attrs = u2(p + 6);
+            if (gcp[u2(p + 2)] == nameOff && gcp[u2(p + 4)] == descOff)
+            {
+                long code = findCode(gbase, p + 8, attrs);
+                if (code != 0L)
+                {
+                    gFoundDescOff = gcp[u2(p + 4)];
+                    gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
+                    return code;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0L;
     }
 
     /**
