@@ -1005,6 +1005,7 @@ public final class VM
     }
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
+    static long lazyCompileAddr;       // Loader.lazyCompile(I)J — M8 1b compile-on-first-call trampoline target
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
 
