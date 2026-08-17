@@ -1677,8 +1677,20 @@ public final class VM
      *  java.base can be baked into the boot image and called directly (not demand-loaded). */
     static void bootstrapProbe()
     {
-        Uart.write(Magic.bytes("bootstrap: java/lang/Math.max(0x4D,0x21)="));
-        Uart.putc(Math.max(0x4D, 0x21));                  // 'M' (0x4D) iff the writer baked stock Math into the image
+        Uart.write(Magic.bytes("bootstrap (stock java.base baked into the image, called directly):\n"));
+        Uart.write(Magic.bytes("  Math.max(0x4D,0x21)="));
+        Uart.putc(Math.max(0x4D, 0x21));                  // 'M'
+        Uart.write(Magic.bytes("  Math.min(0x5A,0x42)="));
+        Uart.putc(Math.min(0x5A, 0x42));                  // 'B'
+        Uart.write(Magic.bytes("  Math.abs(-0x21)="));
+        Uart.putc(Math.abs(-0x21));                       // '!'
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  Integer.bitCount(0xFF)="));
+        printDec(Integer.bitCount(0xFF));                 // 8
+        Uart.write(Magic.bytes(" numberOfLeadingZeros(1)="));
+        printDec(Integer.numberOfLeadingZeros(1));        // 31
+        Uart.write(Magic.bytes(" reverse(1)>>>24="));
+        printDec(Integer.reverse(1) >>> 24);              // 0x80 = 128
         Uart.putc(0x0A);
     }
 
