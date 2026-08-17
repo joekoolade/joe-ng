@@ -3733,10 +3733,18 @@ public final class Loader
             if (code != 0L && (markActive == 0 || isReach(code)))   // reachability-pruned when a mark ran
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
-                if (LAZY_DEFER && mCount > 0 && mCode[mCount - 1] == code && deferrable(gcp[u2(p + 2)]))
+                if (LAZY_STAGE2 && phaseACelled(gcp[u2(p + 2)], gcp[u2(p + 4)]))
                 {
-                    mDefer[mCount - 1] = 1;             // compile this method on first call, not now
+                    // Stage 2: metadata-only -- this method already has a structure-time cell (armPhaseACells),
+                    // so skip its eager compile entirely; it compiles on first call through that cell.
+                }
+                else
+                {
+                    addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
+                    if (LAZY_DEFER && mCount > 0 && mCode[mCount - 1] == code && deferrable(gcp[u2(p + 2)]))
+                    {
+                        mDefer[mCount - 1] = 1;         // compile this method on first call, not now
+                    }
                 }
             }
             p = skipAttributes(p + 8, attrs);
@@ -5238,7 +5246,7 @@ public final class Loader
         }
         captureDirectIfaces();
         clCount += 1;
-        if (LAZY_PHASEA)                                // M8 phase-A: allocate this class's method cells now
+        if (LAZY_PHASEA || LAZY_STAGE2)                 // M8 phase-A / Stage 2: allocate this class's method cells now
         {
             armPhaseACells();
         }
@@ -6229,6 +6237,14 @@ public final class Loader
     // already be registered" limitation. Reuses the 1c indirect emit + the lz/trampoline engine (the cell is
     // the lz entry's lzSlot, data-patched to the compiled buffer on first call). Gated to java/util/Objects.
     private static final boolean LAZY_PHASEA = false;
+
+    // M8 Stage 2: a gated class becomes METADATA-ONLY -- phase-A cells for every method (so all direct calls
+    // indirect through them, order-independent) PLUS its bodies are never eagerly compiled (skipped in
+    // compileClass's seed loop). Every body compiles purely on demand, on first call, through its cell. This
+    // is the shape the whole M8 redirect was built toward: the boot image ships class metadata + cells/stubs,
+    // not compiled bodies. Gated to java/util/Objects (all-static -> every call is direct -> cells cover it).
+    // Default OFF -> the seed-loop skip + armPhaseACells trigger are dead branches.
+    private static final boolean LAZY_STAGE2 = false;
     private static long[] dlBase;      // phase-A dynamic-linking table: method's blob,
     private static int[]  dlClassOff;  //   class name Utf8 offset,
     private static int[]  dlNameOff;   //   method name Utf8 offset,
@@ -6444,7 +6460,7 @@ public final class Loader
      */
     static long lazyStaticCell(int methodCp)
     {
-        if (!LAZY_STATIC && !LAZY_PHASEA)
+        if (!LAZY_STATIC && !LAZY_PHASEA && !LAZY_STAGE2)
         {
             return 0L;                                  // constant-folded off: normal BL path, unchanged
         }
@@ -6455,7 +6471,7 @@ public final class Loader
         }
         int nameOff = mrefNameOff(methodCp);
         int descOff = mrefDescOff(methodCp);
-        if (LAZY_PHASEA && dlBase != null)              // phase-A cells: order-independent (allocated at structure time)
+        if ((LAZY_PHASEA || LAZY_STAGE2) && dlBase != null)   // phase-A cells: order-independent (structure-time)
         {
             int k = 0;
             while (k < dlN)
@@ -6551,6 +6567,26 @@ public final class Loader
         Uart.write(Magic.bytes("  phaseA: "));
         VM.printDec(armed);
         Uart.write(Magic.bytes(" java/util/Objects method cells at structure time\n"));
+    }
+
+    /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
+     *  so compileClass can skip its eager compile (it will compile on first call through the cell). */
+    private static boolean phaseACelled(int nameOff, int descOff)
+    {
+        if (dlBase == null)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < dlN)
+        {
+            if (dlBase[k] == gbase && dlNameOff[k] == nameOff && dlDescOff[k] == descOff)
+            {
+                return true;
+            }
+            k += 1;
+        }
+        return false;
     }
 
     /** Allocate (or reuse) the offset-table cell for registry method {@code i}, plus its lazy stub + lz entry. */
