@@ -763,7 +763,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
      *  such a class is actually reached by the compile closure (e.g. under VM.BOOTSTRAP_PROBE). */
     private static boolean bakeNoClinit(String cls)
     {
-        return cls.equals("java/lang/Math");
+        return cls.equals("java/lang/Math")
+                || cls.equals("java/lang/Integer");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
