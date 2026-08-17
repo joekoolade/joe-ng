@@ -5284,6 +5284,7 @@ public final class Loader
      */
     private static long buildImap()
     {
+        int n = ifaceClosure();                    // THIS class's interface closure (fills ifClosureBuf)
         long imap = Heap.allocData(MAXIFM * 8);
         int g = 0;
         while (g < MAXIFM)
@@ -5298,8 +5299,17 @@ public final class Loader
                 }
                 else
                 {
-                    buf = defaultImplOf(g);        // class doesn't override -> the interface's own DEFAULT method
-                }                                  // (0 if the method is abstract / its default wasn't compiled)
+                    // Class doesn't override method g -> its DEFAULT. Resolve it from an interface THIS class
+                    // actually implements (its closure), NOT ifBase[g] (the arbitrary FIRST interface to register
+                    // this name+desc). Two unrelated interfaces share a global slot when they declare the same
+                    // signature -- e.g. Iterator.forEachRemaining and Spliterator.forEachRemaining both are
+                    // forEachRemaining:(Consumer)V -- so defaultImplOf(ifBase[g]) could hand a Spliterator's imap
+                    // Iterator's default (a bug that appears only once both interfaces are loaded). defaultInClosure
+                    // picks the default declared by an interface in this class's own closure. 0 (no closure match)
+                    // is correct: the class doesn't provide method g -- and defaultImplOf(ifBase[g]) would fill an
+                    // UNRELATED interface's default (over-fill + the collision above), so it is deliberately NOT used.
+                    buf = defaultInClosure(n, g);
+                }
             }
             Magic.store64(imap + g * 8, buf);
             g += 1;
