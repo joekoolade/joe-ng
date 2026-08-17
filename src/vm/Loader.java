@@ -6465,7 +6465,7 @@ public final class Loader
             return 0L;                                  // constant-folded off: normal BL path, unchanged
         }
         int classOff = refClassNameOff(methodCp);
-        if (!utf8IsAtBase(gbase, classOff, Magic.bytes("java/util/Objects")))
+        if (!stage2Gated(gbase, classOff))
         {
             return 0L;                                  // only the gated class
         }
@@ -6506,7 +6506,7 @@ public final class Loader
      *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
     private static void armPhaseACells()
     {
-        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Objects")))
+        if (!stage2Gated(gbase, gThisNameOff))
         {
             return;
         }
@@ -6566,7 +6566,18 @@ public final class Loader
         }
         Uart.write(Magic.bytes("  phaseA: "));
         VM.printDec(armed);
-        Uart.write(Magic.bytes(" java/util/Objects method cells at structure time\n"));
+        Uart.write(Magic.bytes(" cells at structure time for "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x0A);
+    }
+
+    /** The set of classes made metadata-only (phase-A cells + no eager compile). All-static utilities called
+     *  in NetDemo, whose methods are pure integer arithmetic (compile cleanly on the metal). */
+    private static boolean stage2Gated(long base, int off)
+    {
+        return utf8IsAtBase(base, off, Magic.bytes("java/util/Objects"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/Preconditions"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
