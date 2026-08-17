@@ -540,8 +540,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMGc.gcCollect(J)V",   "vm/VM.gcCollect");
         stashHelper(image, staticWord, wordOffset, "vm/VM.instanceOf(JJ)I",   "vm/VM.instanceOfAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.unwind(JJJ)V",      "vm/VM.unwindAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.captureTrace(JJJ)V", "vm/VM.captureTraceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.unwind(JJJ)V", "vm/VM.unwindAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMUnwind.captureTrace(JJJ)V", "vm/VM.captureTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.reportFault()V",    "vm/VM.reportFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.throwFromFault(J)V", "vm/VM.throwFromFaultAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.irqHandler()V",     "vm/VM.irqHandlerAddr");
