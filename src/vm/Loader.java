@@ -6613,7 +6613,23 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/util/HashSet"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractMap"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractCollection"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractSet"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractSet"))
+                // widen batch 4: the HashMap family (nodes/iterators) + character data + numerics:
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$Node"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$TreeNode"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$KeySet"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$EntrySet"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$HashIterator"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$KeyIterator"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$EntryIterator"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/LinkedHashMap$Entry"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterDataLatin1"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterData"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Enum"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Double"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Math"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StrictMath"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
