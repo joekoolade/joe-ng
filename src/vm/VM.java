@@ -1670,7 +1670,7 @@ public final class VM
     // bootstrapProbe -> java/lang/Math.max, so ImageBuilder's reachable-closure BFS should compile Math.max
     // into the image (resolved via the ClassRegistry, which already holds Math). Default OFF -> the call is a
     // compile-time dead branch, bootstrapProbe is unreachable, Math is not compile-reached, image unchanged.
-    static final boolean BOOTSTRAP_PROBE = false;
+    static final boolean BOOTSTRAP_PROBE = true;
 
     /** First step toward the full bootstrap (loader-uses-java.base): call a pure stock java.base method
      *  (java/lang/Math.max) that the WRITER compiled into the image, and print the result -- proving stock

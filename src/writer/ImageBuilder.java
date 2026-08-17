@@ -744,15 +744,26 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return out;
     }
 
-    /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init). */
+    /** Mark {@code cls} used; on first use, schedule its {@code <clinit>} (eager init) unless it's a stock
+     *  java.base class we bake methods-only (its {@code <clinit>} is deferred -- M8 full bootstrap, path 1). */
     private void use(String cls, StrSet used, Vec<String> clinitOrder, Vec<String> worklist)
     {
-        if (used.add(cls) && model.hasClinit(cls))
+        if (used.add(cls) && model.hasClinit(cls) && !bakeNoClinit(cls))
         {
             String ck = cls + ".<clinit>()V";
             clinitOrder.add(ck);
             worklist.add(ck);
         }
+    }
+
+    /** M8 full bootstrap (path 1): stock java.base classes the writer bakes into the image METHODS-ONLY --
+     *  their {@code <clinit>} is NOT compiled/run at build time (the host writer can't compile some java.base
+     *  {@code <clinit>}s -- e.g. Math's uses {@code ldc} class-literal -- and the baked methods here don't read
+     *  the class's statics). Deferring class init to a runtime pass is the follow-on step. Only consulted when
+     *  such a class is actually reached by the compile closure (e.g. under VM.BOOTSTRAP_PROBE). */
+    private static boolean bakeNoClinit(String cls)
+    {
+        return cls.equals("java/lang/Math");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
