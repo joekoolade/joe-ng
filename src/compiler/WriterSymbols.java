@@ -128,7 +128,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public boolean intrinsicEmitsCall(int methodCp)
     {
         String n = cf.memberRef(methodCp).name();
-        return n.equals("gc") || n.equals("call0") || n.equals("call2");
+        return n.equals("gc") || n.equals("call0") || n.equals("call2") || n.equals("callN");
     }
     public int intrinsicId(int methodCp)
     {
@@ -168,6 +168,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "gc()V" -> Intrinsics.GC;
         case "call0(J)J" -> Intrinsics.CALL0;
         case "call2(JJJ)J" -> Intrinsics.CALL2;
+        case "callN(JJ)J" -> Intrinsics.CALL_N;
+        case "addrOf(Ljava/lang/Object;)J" -> Intrinsics.ADDR_OF;
         case "eret()V" -> Intrinsics.ERET;
         case "dropToEL1()V" -> Intrinsics.DROP_TO_EL1;
         case "writeHCR_EL2(J)V" -> Intrinsics.WRITE_HCR_EL2;

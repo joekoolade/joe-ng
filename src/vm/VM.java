@@ -1006,6 +1006,7 @@ public final class VM
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
     static long lazyCompileAddr;       // Loader.lazyCompile(I)J — M8 1b compile-on-first-call trampoline target
+    static long utf16GetBytesAddr;     // baked stock java/lang/StringUTF16.getBytes([BII[BI)V — M8 static-state probe target
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
 
@@ -1692,6 +1693,32 @@ public final class VM
         Uart.write(Magic.bytes(" reverse(1)>>>24="));
         printDec(Integer.reverse(1) >>> 24);              // 0x80 = 128
         Uart.putc(0x0A);
+
+        // Static state (seed-JVM <clinit> snapshot): stock StringUTF16.getBytes starts its copy loop at
+        // srcBegin + (1 >> LO_BYTE_SHIFT) -- and LO_BYTE_SHIFT is set only by StringUTF16.<clinit>, which
+        // the writer can't run (it calls the native isBigEndian()). The writer instead snapshots the seed
+        // JVM's value (8, little-endian) into the image statics. Un-snapshotted the slot reads 0, the loop
+        // starts one byte high, and it copies the (zero) high bytes -- so four correct characters here
+        // prove the baked method read the snapshotted static. Called via the writer-stashed address
+        // (Magic.callN) because javac can't name the package-private java/lang/StringUTF16.
+        Uart.write(Magic.bytes("  StringUTF16.getBytes(\"JOE!\" as UTF-16)="));
+        byte[] u16 = new byte[8];                         // "JOE!", UTF-16LE, written by hand
+        u16[0] = (byte) 'J';
+        u16[2] = (byte) 'O';
+        u16[4] = (byte) 'E';
+        u16[6] = (byte) '!';
+        byte[] ch = new byte[4];
+        long[] slots = new long[8];
+        long argBase = Magic.addrOf(slots) + 24L;         // array elements (header 16 + length 8)
+        Magic.store64(argBase,       Magic.addrOf(u16));  // value
+        Magic.store64(argBase + 8L,  0L);                 // srcBegin
+        Magic.store64(argBase + 16L, 4L);                 // srcEnd
+        Magic.store64(argBase + 24L, Magic.addrOf(ch));   // dst
+        Magic.store64(argBase + 32L, 0L);                 // dstBegin
+        Magic.callN(utf16GetBytesAddr, argBase);
+        Uart.write(ch);
+        boolean snapOk = ch[0] == 'J' && ch[1] == 'O' && ch[2] == 'E' && ch[3] == '!';
+        Uart.write(snapOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (static not snapshotted?)\n"));
     }
 
     static void run()
