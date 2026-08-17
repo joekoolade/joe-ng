@@ -1381,96 +1381,11 @@ public final class VM
     // scStart, then scChar/scInt per recipe literal/arg, then scEnd -> a trimmed byte[] (wrapped in a
     // java/lang/String by the JIT). Kept image-side so the intrinsic bottoms out in one place.
 
-    /** Begin a concat: a fresh builder over a 64-byte byte[]. */
-    static long scStart()
-    {
-        long buf = Heap.allocArray(64, 1);
-        long sb = Heap.alloc(32);
-        Magic.store64(sb + 16L, buf);
-        Magic.store64(sb + 24L, 0L);
-        return sb;
-    }
-
-    /** Grow a builder's backing byte[] to twice {@code cap}, copying {@code count} bytes; returns the new buf. */
-    static long scGrow(long sb, long buf, long count, long cap)
-    {
-        long nbuf = Heap.allocArray((int) (cap * 2L), 1);
-        long i = 0L;
-        while (i < count)
-        {
-            Magic.store8(nbuf + 24L + i, (byte) Magic.load8(buf + 24L + i));
-            i = i + 1L;
-        }
-        Magic.store64(sb + 16L, nbuf);
-        return nbuf;
-    }
-
-    /** Append one byte {@code c} to the builder. */
-    static void scChar(long sb, int c)
-    {
-        long buf = Magic.load64(sb + 16L);
-        long count = Magic.load64(sb + 24L);
-        long cap = Magic.load64(buf + 16L);                // byte[] length (ARRAY_LENGTH_OFFSET)
-        if (count >= cap)
-        {
-            buf = scGrow(sb, buf, count, cap);
-        }
-        Magic.store8(buf + 24L + count, (byte) c);         // ARRAY_BASE_OFFSET = 24
-        Magic.store64(sb + 24L, count + 1L);
-    }
-
-    /** Append {@code v} in decimal to the builder. */
-    static void scInt(long sb, int v)
-    {
-        if (v == 0)
-        {
-            scChar(sb, 0x30);
-            return;
-        }
-        if (v < 0)
-        {
-            scChar(sb, 0x2D);                              // '-' (Integer.MIN_VALUE not special-cased)
-            v = -v;
-        }
-        byte[] tmp = new byte[12];
-        int n = 0;
-        while (v > 0)
-        {
-            tmp[n] = (byte) (0x30 + v % 10);
-            n = n + 1;
-            v = v / 10;
-        }
-        while (n > 0)
-        {
-            n = n - 1;
-            scChar(sb, tmp[n]);
-        }
-    }
-
-    /** Finish a concat: a fresh byte[] trimmed to the builder's length. */
-    // The current batch's [B array TIB (Loader-set after each loadAll; 0 between batches). scEnd types its
-    // result with it so a concat-built String's value is a REAL typed byte[] -- stock code checkcasts/clones
-    // String.value (Arrays.copyOf -> "[B".clone -> checkcast "[B" inside getBytes), and VM.checkCast rejects
-    // raw (elem-size-header) arrays, which used to halt the first System.out print of a concat string.
+    // The current batch's [B array TIB (Loader-set after each loadAll; 0 between batches). VMConcat.scEnd types
+    // its result with it so a concat-built String's value is a REAL typed byte[] -- stock code checkcasts/clones
+    // String.value (Arrays.copyOf -> "[B".clone -> checkcast "[B" inside getBytes), and VM.checkCast rejects raw
+    // (elem-size-header) arrays, which used to halt the first System.out print of a concat string.
     static long byteArrayTibCache;
-
-    static long scEnd(long sb)
-    {
-        long buf = Magic.load64(sb + 16L);
-        long count = Magic.load64(sb + 24L);
-        long out = Heap.allocArray((int) count, 1);
-        if (byteArrayTibCache != 0L)
-        {
-            Magic.store64(out, byteArrayTibCache);
-        }
-        long i = 0L;
-        while (i < count)
-        {
-            Magic.store8(out + 24L + i, (byte) Magic.load8(buf + 24L + i));
-            i = i + 1L;
-        }
-        return out;
-    }
 
     /**
      * The byte[] behind a "string" ref: a raw byte[] (array TIB = 0) is itself; a mini java/lang/String
@@ -1492,47 +1407,6 @@ public final class VM
             return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
         }
         return Magic.load64(ref + 16L);                 // a String object -> value field
-    }
-
-    /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
-    static void scStr(long sb, long ref)
-    {
-        long arr = strBytes(ref);
-        long len = Magic.load64(arr + 16L);
-        long i = 0L;
-        while (i < len)
-        {
-            scChar(sb, Magic.load8(arr + 24L + i));
-            i = i + 1L;
-        }
-    }
-
-    /** Append {@code v} in decimal to the concat builder. */
-    static void scLong(long sb, long v)
-    {
-        if (v == 0L)
-        {
-            scChar(sb, 0x30);
-            return;
-        }
-        if (v < 0L)
-        {
-            scChar(sb, 0x2D);                              // '-' (Long.MIN_VALUE not special-cased)
-            v = -v;
-        }
-        byte[] tmp = new byte[24];
-        int n = 0;
-        while (v > 0L)
-        {
-            tmp[n] = (byte) (0x30 + (int) (v % 10L));
-            n = n + 1;
-            v = v / 10L;
-        }
-        while (n > 0)
-        {
-            n = n - 1;
-            scChar(sb, tmp[n]);
-        }
     }
 
     // ----- provided java.base natives (called by loaded guest code via Loader.nativeBuf) -----
@@ -1759,12 +1633,12 @@ public final class VM
         if (newSemAddr == 0L) { int u = newSem(0); }
         if (philReportAddr == 0L) { philReport(0, 0); }
         if (taskExitAddr == 0L) { taskExit(); }
-        if (scStartAddr == 0L) { long u = scStart(); }        // string-concat helpers (JIT'd concat only)
-        if (scCharAddr == 0L) { scChar(0L, 0); }
-        if (scIntAddr == 0L) { scInt(0L, 0); }
-        if (scEndAddr == 0L) { long u = scEnd(0L); }
-        if (scStrAddr == 0L) { scStr(0L, 0L); }
-        if (scLongAddr == 0L) { scLong(0L, 0L); }
+        if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
+        if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
+        if (scIntAddr == 0L) { VMConcat.scInt(0L, 0); }
+        if (scEndAddr == 0L) { long u = VMConcat.scEnd(0L); }
+        if (scStrAddr == 0L) { VMConcat.scStr(0L, 0L); }
+        if (scLongAddr == 0L) { VMConcat.scLong(0L, 0L); }
         if (printStrAddr == 0L) { printStr(0L); }
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
