@@ -153,12 +153,7 @@ public final class Loader
     // Field registry: per instance field of each class, its class/name (base+offset)
     // and slot, so a cross-class get/putfield can find the offset.
     private static final int MAXFIELD = 4096;
-    private static long[] fldBase;
-    private static int[] fldClassOff;
-    private static int[] fldNameOff;
-    private static int[] fldSlot;
-    private static int[] fldAccess;   // access_flags of each registered instance field (reflection: getModifiers)
-    private static int[] fldDescOff;   // Utf8 offset of each registered instance field's type descriptor
+    private static RVMField[] fldTab;   // global instance-field registry (reified: reuses RVMField; slot/access/descOff)
     private static int fldCount;
 
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
@@ -1687,12 +1682,7 @@ public final class Loader
         pcCpCount = new int[MAXPARSECACHE];
         pcAfterCp = new int[MAXPARSECACHE];
         pcN = 0;
-        fldBase = new long[MAXFIELD];
-        fldClassOff = new int[MAXFIELD];
-        fldNameOff = new int[MAXFIELD];
-        fldSlot = new int[MAXFIELD];
-        fldAccess = new int[MAXFIELD];
-        fldDescOff = new int[MAXFIELD];
+        fldTab = new RVMField[MAXFIELD];
         fldCount = 0;
         vtClassBase = new long[MAXVT];
         vtClassOff = new int[MAXVT];
@@ -5242,12 +5232,13 @@ public final class Loader
         {
             if (gifName[s] != 0)                        // skip inherited slots (registered by the super)
             {
-                fldBase[fldCount] = gbase;
-                fldClassOff[fldCount] = gThisNameOff;
-                fldNameOff[fldCount] = gifName[s];
-                fldSlot[fldCount] = s;
-                fldAccess[fldCount] = gifAccess[s];
-                fldDescOff[fldCount] = gifDescOff[s];
+                fldTab[fldCount] = new RVMField();
+                fldTab[fldCount].base = gbase;
+                fldTab[fldCount].classOff = gThisNameOff;
+                fldTab[fldCount].nameOff = gifName[s];
+                fldTab[fldCount].slot = s;
+                fldTab[fldCount].access = gifAccess[s];
+                fldTab[fldCount].descOff = gifDescOff[s];
                 fldCount += 1;
             }
             s += 1;
@@ -5507,10 +5498,10 @@ public final class Loader
                 int j = 0;
                 while (j < fldCount)
                 {
-                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldBase[j], fldClassOff[j])
-                            && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
+                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldTab[j].base, fldTab[j].classOff)
+                            && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
                     {
-                        return 16L + fldSlot[j] * 8L;
+                        return 16L + fldTab[j].slot * 8L;
                     }
                     j += 1;
                 }
@@ -5532,8 +5523,8 @@ public final class Loader
                 int j = 0;
                 while (j < fldCount)
                 {
-                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldBase[j], fldClassOff[j])
-                            && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
+                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldTab[j].base, fldTab[j].classOff)
+                            && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
                     {
                         return j;
                     }
@@ -5549,7 +5540,7 @@ public final class Loader
     static int fieldMods(long typeAddr, long fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        return j < 0 ? -1 : fldAccess[j];
+        return j < 0 ? -1 : fldTab[j].access;
     }
 
     /**
@@ -5926,7 +5917,7 @@ public final class Loader
     static int fieldTypeChar(long typeAddr, long fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        return j < 0 ? -1 : u1(fldBase[j] + fldDescOff[j] + 2L);
+        return j < 0 ? -1 : u1(fldTab[j].base + fldTab[j].descOff + 2L);
     }
 
     /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */
@@ -6014,10 +6005,10 @@ public final class Loader
         int i = 0;
         while (i < fldCount)                            // class-qualified
         {
-            if (utf8EqAt(gbase, classOff, fldBase[i], fldClassOff[i])
-                    && utf8EqAt(gbase, nameOff, fldBase[i], fldNameOff[i]))
+            if (utf8EqAt(gbase, classOff, fldTab[i].base, fldTab[i].classOff)
+                    && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
             {
-                return 16 + fldSlot[i] * 8;
+                return 16 + fldTab[i].slot * 8;
             }
             i += 1;
         }
@@ -6032,10 +6023,10 @@ public final class Loader
             int i2 = 0;
             while (i2 < fldCount)
             {
-                if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldBase[i2], fldClassOff[i2])   // declared by THIS ancestor
-                        && utf8EqAt(gbase, nameOff, fldBase[i2], fldNameOff[i2]))
+                if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldTab[i2].base, fldTab[i2].classOff)   // declared by THIS ancestor
+                        && utf8EqAt(gbase, nameOff, fldTab[i2].base, fldTab[i2].nameOff))
                 {
-                    return 16 + fldSlot[i2] * 8;
+                    return 16 + fldTab[i2].slot * 8;
                 }
                 i2 += 1;
             }
