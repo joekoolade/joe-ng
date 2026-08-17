@@ -6595,7 +6595,17 @@ public final class Loader
         return utf8IsAtBase(base, off, Magic.bytes("java/util/Objects"))
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/Preconditions"))
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/String"));   // a class WITH virtual methods
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/String"))     // a class WITH virtual methods
+                // widen (safe: lazy only compiles CALLED methods, a subset of what eager compiled):
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringLatin1"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringUTF16"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringCoding"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Integer"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Long"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Character"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Boolean"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Byte"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Arrays"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
