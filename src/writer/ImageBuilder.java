@@ -577,12 +577,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newSem(I)I",        "vm/VM.newSemAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.philReport(II)V",   "vm/VM.philReportAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.taskExit()V",       "vm/VM.taskExitAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scStart()J",        "vm/VM.scStartAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scChar(JI)V",       "vm/VM.scCharAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scInt(JI)V",        "vm/VM.scIntAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scEnd(J)J",         "vm/VM.scEndAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scStr(JJ)V",        "vm/VM.scStrAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.scLong(JJ)V",       "vm/VM.scLongAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scStart()J",        "vm/VM.scStartAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scChar(JI)V",       "vm/VM.scCharAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scInt(JI)V",        "vm/VM.scIntAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scEnd(J)J",         "vm/VM.scEndAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scStr(JJ)V",        "vm/VM.scStrAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scLong(JJ)V",       "vm/VM.scLongAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStr(J)V",      "vm/VM.printStrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.denylistTrap()V",   "vm/VM.denylistTrapAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
