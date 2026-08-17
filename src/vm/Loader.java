@@ -6259,11 +6259,7 @@ public final class Loader
     // the shipped image -- the first classes joe-ng compiles purely on demand, no eager whole-closure compile.
     private static final boolean LAZY_STAGE2 = true;
     private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
-    private static long[] dlBase;      // phase-A dynamic-linking table: method's blob,
-    private static int[]  dlClassOff;  //   class name Utf8 offset,
-    private static int[]  dlNameOff;   //   method name Utf8 offset,
-    private static int[]  dlDescOff;   //   descriptor Utf8 offset,
-    private static long[] dlCell;      //   its offset cell (holds the stub, then the buffer)
+    private static DynLink[] dlTab;    // phase-A dynamic-linking table (reified: one DynLink per method cell)
     private static int    dlN;
 
     /** Arm the gated class's OWN virtual methods (those with source bytecode) for compile-on-first-call. */
@@ -6488,16 +6484,17 @@ public final class Loader
         }
         int nameOff = mrefNameOff(methodCp);
         int descOff = mrefDescOff(methodCp);
-        if ((LAZY_PHASEA || LAZY_STAGE2) && dlBase != null)   // phase-A cells: order-independent (structure-time)
+        if ((LAZY_PHASEA || LAZY_STAGE2) && dlTab != null)   // phase-A cells: order-independent (structure-time)
         {
             int k = 0;
             while (k < dlN)
             {
-                if (utf8EqAt(gbase, classOff, dlBase[k], dlClassOff[k])
-                        && utf8EqAt(gbase, nameOff, dlBase[k], dlNameOff[k])
-                        && utf8EqAt(gbase, descOff, dlBase[k], dlDescOff[k]))
+                DynLink d = dlTab[k];
+                if (utf8EqAt(gbase, classOff, d.blob, d.classOff)
+                        && utf8EqAt(gbase, nameOff, d.blob, d.nameOff)
+                        && utf8EqAt(gbase, descOff, d.blob, d.descOff))
                 {
-                    return dlCell[k];
+                    return d.cell;
                 }
                 k += 1;
             }
@@ -6528,13 +6525,9 @@ public final class Loader
             return;
         }
         lazyEnsureTables();
-        if (dlBase == null)
+        if (dlTab == null)
         {
-            dlBase = new long[MAXLAZY];
-            dlClassOff = new int[MAXLAZY];
-            dlNameOff = new int[MAXLAZY];
-            dlDescOff = new int[MAXLAZY];
-            dlCell = new long[MAXLAZY];
+            dlTab = new DynLink[MAXLAZY];
             dlN = 0;
         }
         int reg = clCount - 1;                          // this class's registry index (registerClassStructure did clCount++)
@@ -6570,11 +6563,13 @@ public final class Loader
                 lzSlot[idx] = cell;                     // first call data-patches the cell -> later calls dispatch direct
                 Magic.store64(cell, buildLazyCompileStub(idx));
                 lzN += 1;
-                dlBase[dlN] = gbase;
-                dlClassOff[dlN] = gThisNameOff;
-                dlNameOff[dlN] = nameOff;
-                dlDescOff[dlN] = descOff;
-                dlCell[dlN] = cell;
+                DynLink d = new DynLink();
+                d.blob = gbase;
+                d.classOff = gThisNameOff;
+                d.nameOff = nameOff;
+                d.descOff = descOff;
+                d.cell = cell;
+                dlTab[dlN] = d;
                 dlN += 1;
                 armed += 1;
             }
@@ -6643,14 +6638,15 @@ public final class Loader
      *  so compileClass can skip its eager compile (it will compile on first call through the cell). */
     private static boolean phaseACelled(int nameOff, int descOff)
     {
-        if (dlBase == null)
+        if (dlTab == null)
         {
             return false;
         }
         int k = 0;
         while (k < dlN)
         {
-            if (dlBase[k] == gbase && dlNameOff[k] == nameOff && dlDescOff[k] == descOff)
+            DynLink d = dlTab[k];
+            if (d.blob == gbase && d.nameOff == nameOff && d.descOff == descOff)
             {
                 return true;
             }
