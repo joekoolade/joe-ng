@@ -101,7 +101,7 @@ public final class Console
     {
         while (rxTail == rxHead)
         {
-            VM.semWait(RX_SEM);                            // park until the RX ISR posts
+            VMScheduler.semWait(RX_SEM);                            // park until the RX ISR posts
         }
         byte b = rxBuf[rxTail];
         rxTail = (rxTail + 1) & (N - 1);
