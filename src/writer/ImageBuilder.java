@@ -537,7 +537,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
         stashHelper(image, staticWord, wordOffset, "vm/Heap.allocArray(II)J", "vm/VM.allocArray");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.gcCollect(J)V",     "vm/VM.gcCollect");
+        stashHelper(image, staticWord, wordOffset, "vm/VMGc.gcCollect(J)V",   "vm/VM.gcCollect");
         stashHelper(image, staticWord, wordOffset, "vm/VM.instanceOf(JJ)I",   "vm/VM.instanceOfAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.checkCast(JJ)J",    "vm/VM.checkCastAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.unwind(JJJ)V",      "vm/VM.unwindAddr");
