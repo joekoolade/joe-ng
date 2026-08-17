@@ -1547,6 +1547,33 @@ time; **Pi-validate each flip**)
 | lifecycle | load+compile fused | load → resolve → instantiate → initialize |
 | memory | per-batch heap reclaim | GC-traced permanent metadata |
 
+### Stage 3 — the reified loader (STARTED 2026-08-17)
+
+The lazy engine (1a–1c, deferral, phase-A cells, metadata-only classes) is done and lazy
+loading is the shipped default for 40 `java.base` classes. Stage 3 is the last major piece:
+replace the loader's **493 flat statics / parallel-array registries** with **reified objects**
+(`RVMClass`/`RVMMethod`/`RVMField`-style), moving `src/vm/Loader.java` toward the JikesRVM
+model. It has **two halves**:
+
+1. **Reification (achievable now, JDK-free):** turn each parallel-array registry into an array
+   of small objects. The loader is JDK-free but not *object*-free — our own compiler supports
+   `new`/`getfield`/`putfield` on image classes, so the loader can allocate small reified
+   holders (primitive fields only) on the metal. Keep each class small ([[keep-classes-simple]]).
+   - **First increment DONE:** `vm/DynLink` reifies the phase-A dynamic-linking table (the five
+     `dl*` arrays → one `DynLink[]`). Proves the loader allocates + uses reified objects on
+     metal (40 metadata-only classes still arm; HTTP 200). Next: `LazyMethod` (the 11 `lz*`
+     arrays), then the big registries (`rg*` method / `cl*` class / `sg*` static-field / `g*`
+     current-compile context) → `RVMMethod`/`RVMClass`/`RVMField`.
+2. **Full-Java-over-`java.base` (bootstrap-blocked, later):** for the loader to use *stock*
+   `String`/`HashMap`/exceptions (not just our own holders), that `java.base` core must be
+   compiled into the **boot image**, pre-resolved, and usable *before* the loader runs — the
+   loader is what boots `java.base`, so it can't demand-load its own dependencies. This is the
+   classic metacircular bootstrap and the hard part (JikesRVM's boot-image writer is exactly
+   this). Deferred until the reification (half 1) is well advanced.
+
+Migration is incremental and behavior-preserving: reify one registry at a time, QEMU + Pi
+validate each, keep the flat-static and reified forms from coexisting (replace, don't dual-write).
+
 ---
 
 ## 5. Design decisions to lock day one
