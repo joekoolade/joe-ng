@@ -6629,7 +6629,14 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Double"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Math"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/StrictMath"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"))
+                // widen batch 5: java.io output/input + a couple more java.lang:
+                || utf8IsAtBase(base, off, Magic.bytes("java/io/PrintStream"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/io/OutputStream"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/io/InputStream"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/io/ObjectStreamField"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Comparator"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
