@@ -5238,6 +5238,10 @@ public final class Loader
         }
         captureDirectIfaces();
         clCount += 1;
+        if (LAZY_PHASEA)                                // M8 phase-A: allocate this class's method cells now
+        {
+            armPhaseACells();
+        }
         int st = 0;
         while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
         {
@@ -6220,6 +6224,18 @@ public final class Loader
     // Default OFF -> every `if (LAZY_DEFER ...)` is a compile-time dead branch (core emit path byte-identical).
     private static final boolean LAZY_DEFER = false;
 
+    // M8 phase-A cells: allocate a per-method offset cell + stub at STRUCTURE registration (before any body
+    // compiles), so a direct caller indirects through it regardless of load order -- lifting 1c's "callee must
+    // already be registered" limitation. Reuses the 1c indirect emit + the lz/trampoline engine (the cell is
+    // the lz entry's lzSlot, data-patched to the compiled buffer on first call). Gated to java/util/Objects.
+    private static final boolean LAZY_PHASEA = false;
+    private static long[] dlBase;      // phase-A dynamic-linking table: method's blob,
+    private static int[]  dlClassOff;  //   class name Utf8 offset,
+    private static int[]  dlNameOff;   //   method name Utf8 offset,
+    private static int[]  dlDescOff;   //   descriptor Utf8 offset,
+    private static long[] dlCell;      //   its offset cell (holds the stub, then the buffer)
+    private static int    dlN;
+
     /** Arm the gated class's OWN virtual methods (those with source bytecode) for compile-on-first-call. */
     private static void lazyArmCompile()
     {
@@ -6428,7 +6444,7 @@ public final class Loader
      */
     static long lazyStaticCell(int methodCp)
     {
-        if (!LAZY_STATIC)
+        if (!LAZY_STATIC && !LAZY_PHASEA)
         {
             return 0L;                                  // constant-folded off: normal BL path, unchanged
         }
@@ -6439,8 +6455,23 @@ public final class Loader
         }
         int nameOff = mrefNameOff(methodCp);
         int descOff = mrefDescOff(methodCp);
+        if (LAZY_PHASEA && dlBase != null)              // phase-A cells: order-independent (allocated at structure time)
+        {
+            int k = 0;
+            while (k < dlN)
+            {
+                if (utf8EqAt(gbase, classOff, dlBase[k], dlClassOff[k])
+                        && utf8EqAt(gbase, nameOff, dlBase[k], dlNameOff[k])
+                        && utf8EqAt(gbase, descOff, dlBase[k], dlDescOff[k]))
+                {
+                    return dlCell[k];
+                }
+                k += 1;
+            }
+            return 0L;
+        }
         int i = 0;
-        while (i < rgCount)                             // locate the target in the method registry
+        while (i < rgCount)                             // 1c fallback: locate the target in the method registry
         {
             if (utf8EqAt(gbase, classOff, rgBase[i], rgClassOff[i])
                     && utf8EqAt(gbase, nameOff, rgBase[i], rgNameOff[i])
@@ -6451,6 +6482,75 @@ public final class Loader
             i += 1;
         }
         return 0L;                                      // not registered yet -> normal (eager, reloc) path
+    }
+
+    /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
+     *  of its (static) methods, captured straight from the classfile method table (available at phase A via
+     *  gMethodsStart). The cells live in the {@code dl*} table so a later caller finds them regardless of load
+     *  order; each carries an lz entry that compiles the body on first call and data-patches the cell. */
+    private static void armPhaseACells()
+    {
+        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Objects")))
+        {
+            return;
+        }
+        lazyEnsureTables();
+        if (dlBase == null)
+        {
+            dlBase = new long[MAXLAZY];
+            dlClassOff = new int[MAXLAZY];
+            dlNameOff = new int[MAXLAZY];
+            dlDescOff = new int[MAXLAZY];
+            dlCell = new long[MAXLAZY];
+            dlN = 0;
+        }
+        int reg = clCount - 1;                          // this class's registry index (registerClassStructure did clCount++)
+        int pd = findPdByName(gbase, gThisNameOff);
+        int blobLen = pdLen[pd];
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        int armed = 0;
+        while (m < mcount)
+        {
+            int access = u2(p);
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            int descOff = gcp[u2(p + 4)];
+            long code = findCode(gbase, p + 8, attrs);  // sets gcodeLen + gMaxLocals
+            if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
+                    && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
+            {
+                int idx = lzN;
+                lzBlob[idx] = gbase;
+                lzLen[idx] = blobLen;
+                lzReg[idx] = reg;
+                lzNameOff[idx] = nameOff;
+                lzDescOff[idx] = descOff;
+                lzCode[idx] = code;
+                lzCodeLen[idx] = gcodeLen;
+                lzStatic[idx] = 1;
+                lzMaxLocals[idx] = gMaxLocals;
+                lzCache[idx] = 0L;
+                long cell = Heap.allocData(8);
+                lzSlot[idx] = cell;                     // first call data-patches the cell -> later calls dispatch direct
+                Magic.store64(cell, buildLazyCompileStub(idx));
+                lzN += 1;
+                dlBase[dlN] = gbase;
+                dlClassOff[dlN] = gThisNameOff;
+                dlNameOff[dlN] = nameOff;
+                dlDescOff[dlN] = descOff;
+                dlCell[dlN] = cell;
+                dlN += 1;
+                armed += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        Uart.write(Magic.bytes("  phaseA: "));
+        VM.printDec(armed);
+        Uart.write(Magic.bytes(" java/util/Objects method cells at structure time\n"));
     }
 
     /** Allocate (or reuse) the offset-table cell for registry method {@code i}, plus its lazy stub + lz entry. */
