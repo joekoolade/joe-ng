@@ -6264,7 +6264,9 @@ public final class Loader
         {
             return 0L;
         }
-        Uart.write(Magic.bytes("  jitc String."));      // proof: runtime compile firing (gated by LAZY_COMPILE)
+        Uart.write(Magic.bytes("  jitc "));              // proof: runtime compile firing (class.method)
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x2E);
         printNameAt(lzBlob[idx], lzNameOff[idx]);
         Uart.putc(0x0A);
         compileReuseTib = true;                         // keep this class's TIB (already filled); patch one slot
@@ -6314,6 +6316,124 @@ public final class Loader
             m += 1;
         }
         return 0L;
+    }
+
+    // ----- M8 increment 1c: static/special calls via an offset table (lazy direct calls) -----
+    // 1b routed VIRTUAL dispatch (TIB slot) through the lazy trampoline. Direct invokestatic calls compile to
+    // a `BL <buffer>`, so they cannot be deferred. 1c adds the JikesRVM offset-table indirection: a call to a
+    // gated method compiles to `ldr x16,[cell]; blr x16` through a per-method DATA cell (no code-patch). The
+    // cell starts pointing at the same lazy stub as 1b; on the first call it is patched (data) to the freshly
+    // compiled buffer, so later calls dispatch directly. Reuses the whole 1b engine (trampoline / lazyCompile
+    // / findMethodByOffsets), with the cell as lzSlot and the target-class context taken from the method
+    // registry (rgBase/rgNameOff/rgDescOff -- the offsets are in the TARGET blob, which is what compile needs).
+    // Gated to java/util/Objects (an all-static utility called in NetDemo). Default OFF -> lazyStaticCell folds
+    // to `return 0`, so MetalSymbols.call takes the normal BL path unchanged.
+    private static final boolean LAZY_STATIC = false;
+
+    /**
+     * If direct call {@code methodCp} targets a gated, already-registered method, return its offset-table cell
+     * (allocating one on first request) so the caller emits an indirect `ldr;blr` through it; else 0 (the
+     * caller emits a normal BL). Runs at compile time -- in both the size and emit passes -- so it dedups by
+     * target method: the size pass allocates the cell, the emit pass reuses it (the indirect sequence is a
+     * fixed 5 words either way, base-independent, so sizing stays consistent).
+     */
+    static long lazyStaticCell(int methodCp)
+    {
+        if (!LAZY_STATIC)
+        {
+            return 0L;                                  // constant-folded off: normal BL path, unchanged
+        }
+        int classOff = refClassNameOff(methodCp);
+        if (!utf8IsAtBase(gbase, classOff, Magic.bytes("java/util/Objects")))
+        {
+            return 0L;                                  // only the gated class
+        }
+        int nameOff = mrefNameOff(methodCp);
+        int descOff = mrefDescOff(methodCp);
+        int i = 0;
+        while (i < rgCount)                             // locate the target in the method registry
+        {
+            if (utf8EqAt(gbase, classOff, rgBase[i], rgClassOff[i])
+                    && utf8EqAt(gbase, nameOff, rgBase[i], rgNameOff[i])
+                    && utf8EqAt(gbase, descOff, rgBase[i], rgDescOff[i]))
+            {
+                return lazyCellFor(i);
+            }
+            i += 1;
+        }
+        return 0L;                                      // not registered yet -> normal (eager, reloc) path
+    }
+
+    /** Allocate (or reuse) the offset-table cell for registry method {@code i}, plus its lazy stub + lz entry. */
+    private static long lazyCellFor(int i)
+    {
+        lazyEnsureTables();
+        int k = 0;
+        while (k < lzN)                                 // dedup: one cell per target method (many call sites)
+        {
+            if (lzBlob[k] == rgBase[i] && lzNameOff[k] == rgNameOff[i] && lzDescOff[k] == rgDescOff[i])
+            {
+                return lzSlot[k];
+            }
+            k += 1;
+        }
+        if (lzN >= MAXLAZY)
+        {
+            return 0L;                                  // table full -> normal path (safe fallback)
+        }
+        int reg = classRegByNameAt(rgBase[i], rgClassOff[i]);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        int pd = findPdByName(rgBase[i], rgClassOff[i]);
+        long cell = Heap.allocData(8);
+        lzBlob[lzN] = rgBase[i];
+        lzLen[lzN] = pdLen[pd];
+        lzReg[lzN] = reg;
+        lzNameOff[lzN] = rgNameOff[i];
+        lzDescOff[lzN] = rgDescOff[i];
+        lzSlot[lzN] = cell;                             // lazyCompile patches this word with the fresh buffer
+        Magic.store64(cell, buildLazyCompileStub(lzN)); // cell starts -> the shared lazy stub
+        lzN += 1;
+        Uart.write(Magic.bytes("  lazy-static: cell for java/util/Objects."));
+        printNameAt(rgBase[i], rgNameOff[i]);
+        Uart.putc(0x0A);
+        return cell;
+    }
+
+    /** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
+    private static void lazyEnsureTables()
+    {
+        if (lzBlob == null)
+        {
+            lzBlob = new long[MAXLAZY];
+            lzLen = new int[MAXLAZY];
+            lzReg = new int[MAXLAZY];
+            lzNameOff = new int[MAXLAZY];
+            lzDescOff = new int[MAXLAZY];
+            lzSlot = new long[MAXLAZY];
+            lzN = 0;
+        }
+        if (lazyTrampAddr == 0L)
+        {
+            buildLazyTramp();
+        }
+    }
+
+    /** {@link #classRegByName} but matching a name in an arbitrary blob {@code (base, off)}. */
+    private static int classRegByNameAt(long base, int off)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8EqAt(base, off, clBase[i], clNameOff[i]))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
     }
 
     /**

@@ -23,12 +23,29 @@ final class MetalSymbols implements Symbols
     // ----- calls: emit a BL/BLR-free BL straight to the resolved code address -----
     public void call(CodeBuffer cb, int methodCp)
     {
+        long cell = Loader.lazyStaticCell(methodCp);    // M8 1c: 0 unless LAZY_STATIC && gated && registered
+        if (cell != 0L)
+        {
+            emitIndirectCall(cb, cell);                 // ldr x16,[cell]; blr x16 -> lazy on first call
+            return;
+        }
         long target = Loader.resolveCallBuf(methodCp);
         if (target == 0L)                               // callee's class not loaded yet (dependency cycle):
         {                                               // record the bl for patchRelocs to fix after loadAll
             Loader.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
         }
         emitBl(cb, target);
+    }
+
+    /** M8 1c: an indirect call through the offset-table {@code cell} (a data word holding the stub, then the
+     *  compiled buffer after first call). x0..x7 args untouched; blr sets x30 -- same ABI as a direct bl. */
+    private static void emitIndirectCall(CodeBuffer cb, long cell)
+    {
+        cb.emit(A64Enc.movz(17, (int) (cell & 0xFFFF), 0));
+        cb.emit(A64Enc.movk(17, (int) ((cell >> 16) & 0xFFFF), 1));
+        cb.emit(A64Enc.movk(17, (int) ((cell >> 32) & 0xFFFF), 2));
+        cb.emit(A64Enc.ldrx(16, 17, 0));                // x16 = *cell (stub, or the buffer after first call)
+        cb.emit(A64Enc.blr(16));
     }
     public void callHelper(CodeBuffer cb, int helper)
     {
