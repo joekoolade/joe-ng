@@ -30,7 +30,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     /** Runtime-helper method keys, indexed by the ids in {@link Symbols}. */
     private static final String[] HELPER_KEY =
     {
-        "vm/Heap.alloc(I)J", "vm/Heap.allocArray(II)J", "vm/VM.gcCollect(J)V",
+        "vm/Heap.alloc(I)J", "vm/Heap.allocArray(II)J", "vm/VMGc.gcCollect(J)V",
         "vm/VM.instanceOf(JJ)I", "vm/VM.checkCast(JJ)J", "vm/VM.unwind(JJJ)V",
     };
 
