@@ -101,10 +101,7 @@ public final class Loader
 
     // Static-field registry: per loaded class, each static field's {class, name, slot address} so a
     // cross-class getstatic/putstatic (e.g. Long.formatUnsignedLong0 reading Integer.digits) resolves.
-    private static long[] sgBase;   // declaring class blob base
-    private static int[] sgClassOff;// class name Utf8 offset
-    private static int[] sgNameOff; // field name Utf8 offset
-    private static long[] sgAddr;   // the field's static-slot address
+    private static RVMField[] sgTab;   // global static-field registry (reified: one RVMField per static field)
     private static int sgCount;
 
     // Class registry: per loaded class, what another class needs to `new` it and
@@ -1643,10 +1640,7 @@ public final class Loader
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
         rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
-        sgBase = new long[MAXREG];
-        sgClassOff = new int[MAXREG];
-        sgNameOff = new int[MAXREG];
-        sgAddr = new long[MAXREG];
+        sgTab = new RVMField[MAXREG];
         sgCount = 0;
         relocRecording = 0;
         rcAddr = new long[MAXRELOC];
@@ -3503,10 +3497,10 @@ public final class Loader
         int i = 0;
         while (i < sgCount)
         {
-            if (utf8EqAt(gbase, classOff, sgBase[i], sgClassOff[i])
-                    && utf8EqAt(gbase, nameOff, sgBase[i], sgNameOff[i]))
+            if (utf8EqAt(gbase, classOff, sgTab[i].base, sgTab[i].classOff)
+                    && utf8EqAt(gbase, nameOff, sgTab[i].base, sgTab[i].nameOff))
             {
-                return sgAddr[i];
+                return sgTab[i].addr;
             }
             i += 1;
         }
@@ -4216,9 +4210,9 @@ public final class Loader
         int i = 0;
         while (i < sgCount)
         {
-            if (utf8IsAtBase(sgBase[i], sgClassOff[i], cls) && utf8IsAtBase(sgBase[i], sgNameOff[i], name))
+            if (utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
             {
-                return sgAddr[i];
+                return sgTab[i].addr;
             }
             i += 1;
         }
@@ -5002,10 +4996,10 @@ public final class Loader
         int i = 0;
         while (i < sgCount)
         {
-            if (utf8EqAt(refBase, classOff, sgBase[i], sgClassOff[i])
-                    && utf8EqAt(refBase, nameOff, sgBase[i], sgNameOff[i]))
+            if (utf8EqAt(refBase, classOff, sgTab[i].base, sgTab[i].classOff)
+                    && utf8EqAt(refBase, nameOff, sgTab[i].base, sgTab[i].nameOff))
             {
-                return sgAddr[i];
+                return sgTab[i].addr;
             }
             i += 1;
         }
@@ -5237,10 +5231,11 @@ public final class Loader
         int st = 0;
         while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
         {
-            sgBase[sgCount] = gbase;
-            sgClassOff[sgCount] = gThisNameOff;
-            sgNameOff[sgCount] = gsfName[st];
-            sgAddr[sgCount] = gStatics + st * 8L;
+            sgTab[sgCount] = new RVMField();
+            sgTab[sgCount].base = gbase;
+            sgTab[sgCount].classOff = gThisNameOff;
+            sgTab[sgCount].nameOff = gsfName[st];
+            sgTab[sgCount].addr = gStatics + st * 8L;
             sgCount += 1;
             st += 1;
         }
