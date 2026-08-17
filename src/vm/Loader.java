@@ -80,11 +80,7 @@ public final class Loader
     // superclass's blob (gvBase), and its implementation is either an inherited
     // compiled buffer (gvImplBuf) or one of this class's own methods (gvImplCode).
     private static final int MAXMV = 512;
-    private static long[] gvBase;   // blob holding this slot's name/descriptor
-    private static int[] gvName;    // method name Utf8 offset (in gvBase)
-    private static int[] gvDesc;    // descriptor Utf8 offset (in gvBase)
-    private static long[] gvImplBuf;   // inherited impl buffer (0 => this class's own)
-    private static long[] gvImplCode;  // this class's own method bytecode (0 => inherited)
+    private static VtSlot[] gvTab;  // the building class's flattened vtable (reified; reused per class)
     private static int gvCount;     // flattened vtable size
     private static long gTib;       // this class's TIB { Type, vtable... }, built before emit
     private static long gType;      // this class's Type { superType } — a metal instanceof chain node
@@ -1706,11 +1702,13 @@ public final class Loader
         vtSlot = new int[MAXVT];
         vtBuf = new long[MAXVT];
         vtCount = 0;
-        gvBase = new long[MAXMV];
-        gvName = new int[MAXMV];
-        gvDesc = new int[MAXMV];
-        gvImplBuf = new long[MAXMV];
-        gvImplCode = new long[MAXMV];
+        gvTab = new VtSlot[MAXMV];
+        int gvi = 0;
+        while (gvi < MAXMV)                             // pre-fill: slots are overwritten (reused) per class
+        {
+            gvTab[gvi] = new VtSlot();
+            gvi += 1;
+        }
         ifBase = new long[MAXIFM];
         ifNameOff = new int[MAXIFM];
         ifDescOff = new int[MAXIFM];
@@ -3395,11 +3393,11 @@ public final class Loader
                     slot = gvCount;                     // else append a new slot
                     gvCount += 1;
                 }
-                gvBase[slot] = gbase;
-                gvName[slot] = gcp[u2(p + 2)];
-                gvDesc[slot] = gcp[u2(p + 4)];
-                gvImplCode[slot] = findCode(bytes, p + 8, attrs);   // this class's own impl
-                gvImplBuf[slot] = 0L;
+                gvTab[slot].base = gbase;
+                gvTab[slot].name = gcp[u2(p + 2)];
+                gvTab[slot].desc = gcp[u2(p + 4)];
+                gvTab[slot].implCode = findCode(bytes, p + 8, attrs);   // this class's own impl
+                gvTab[slot].implBuf = 0L;
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -3415,11 +3413,11 @@ public final class Loader
             if (utf8EqAt(gbase, superOff, vtClassBase[i], vtClassOff[i]))
             {
                 int slot = vtSlot[i];
-                gvBase[slot] = vtNameBase[i];
-                gvName[slot] = vtNameOff[i];
-                gvDesc[slot] = vtDescOff[i];
-                gvImplBuf[slot] = vtBuf[i];             // inherited (already-compiled) impl
-                gvImplCode[slot] = 0L;
+                gvTab[slot].base = vtNameBase[i];
+                gvTab[slot].name = vtNameOff[i];
+                gvTab[slot].desc = vtDescOff[i];
+                gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
+                gvTab[slot].implCode = 0L;
                 if (slot + 1 > gvCount)
                 {
                     gvCount = slot + 1;
@@ -3435,8 +3433,8 @@ public final class Loader
         int s = 0;
         while (s < gvCount)
         {
-            if (utf8EqAt(gbase, nameOff, gvBase[s], gvName[s])
-                    && utf8EqAt(gbase, descOff, gvBase[s], gvDesc[s]))
+            if (utf8EqAt(gbase, nameOff, gvTab[s].base, gvTab[s].name)
+                    && utf8EqAt(gbase, descOff, gvTab[s].base, gvTab[s].desc))
             {
                 return s;
             }
@@ -5259,9 +5257,9 @@ public final class Loader
         {
             vtClassBase[vtCount] = gbase;
             vtClassOff[vtCount] = gThisNameOff;
-            vtNameBase[vtCount] = gvBase[v];           // signature blob (a super's, for inherited slots)
-            vtNameOff[vtCount] = gvName[v];
-            vtDescOff[vtCount] = gvDesc[v];
+            vtNameBase[vtCount] = gvTab[v].base;           // signature blob (a super's, for inherited slots)
+            vtNameOff[vtCount] = gvTab[v].name;
+            vtDescOff[vtCount] = gvTab[v].desc;
             vtSlot[vtCount] = v;
             vtBuf[vtCount] = 0L;                        // filled by fillClassVtBuf once the bodies are compiled
             vtCount += 1;
@@ -5408,8 +5406,8 @@ public final class Loader
         int s = 0;
         while (s < gvCount)
         {
-            if (utf8EqAt(base, nameOff, gvBase[s], gvName[s])
-                    && utf8EqAt(base, descOff, gvBase[s], gvDesc[s]))
+            if (utf8EqAt(base, nameOff, gvTab[s].base, gvTab[s].name)
+                    && utf8EqAt(base, descOff, gvTab[s].base, gvTab[s].desc))
             {
                 return s;
             }
@@ -6234,13 +6232,13 @@ public final class Loader
         int s = 0;
         while (s < gvCount)
         {
-            if (gvImplCode[s] != 0L && lzN < MAXLAZY)   // own method only (inherited slots have no source here)
+            if (gvTab[s].implCode != 0L && lzN < MAXLAZY)   // own method only (inherited slots have no source here)
             {
                 lzTab[lzN].blob = gbase;
                 lzTab[lzN].len = len;
                 lzTab[lzN].reg = reg;
-                lzTab[lzN].nameOff = gvName[s];
-                lzTab[lzN].descOff = gvDesc[s];
+                lzTab[lzN].nameOff = gvTab[s].name;
+                lzTab[lzN].descOff = gvTab[s].desc;
                 lzTab[lzN].slot = gTib + 8 + s * 8;
                 Magic.store64(lzTab[lzN].slot, buildLazyCompileStub(lzN));
                 lzN += 1;
@@ -6886,11 +6884,11 @@ public final class Loader
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
     private static long slotBuf(int s)
     {
-        if (gvImplBuf[s] != 0L)
+        if (gvTab[s].implBuf != 0L)
         {
-            return gvImplBuf[s];                         // inherited from a superclass
+            return gvTab[s].implBuf;                         // inherited from a superclass
         }
-        return bufOf(gvImplCode[s]);                     // this class's own method
+        return bufOf(gvTab[s].implCode);                     // this class's own method
     }
 
     /**
