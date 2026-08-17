@@ -3652,6 +3652,7 @@ public final class Loader
     private static int[] mLocals;     // ... its max_locals
     private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
     private static int[] mStatic;     // ... 1 if static
+    private static int[] mDefer;      // M8 defer: 1 if this method's compile is deferred to first call (gated)
     private static int mCount;
 
     /** The on-metal symbol seam: resolves the shared Baseline core's references to addresses. */
@@ -3733,6 +3734,10 @@ public final class Loader
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                 addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
+                if (LAZY_DEFER && mCount > 0 && mCode[mCount - 1] == code && deferrable(gcp[u2(p + 2)]))
+                {
+                    mDefer[mCount - 1] = 1;             // compile this method on first call, not now
+                }
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
@@ -4409,6 +4414,10 @@ public final class Loader
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
+        if (LAZY_DEFER)
+        {
+            mDefer = new int[MAXM];                      // only allocated when deferral is enabled
+        }
         mCount = 0;
     }
 
@@ -4498,12 +4507,22 @@ public final class Loader
      */
     private static void sizeMethod(int i)
     {
+        if (LAZY_DEFER && mDefer[i] != 0)
+        {
+            mBuf[i] = Heap.allocCode(32);               // just the stub -> no dry-run compile at load (genuine defer)
+            return;
+        }
         mBuf[i] = Heap.allocCode(compileMethod(i, 0L).length * 4);
     }
 
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
+        if (LAZY_DEFER && mDefer[i] != 0)               // deferred: install a stub; the body compiles on first call
+        {
+            emitDeferredStub(i);
+            return;
+        }
         relocRecording = 1;                             // record unresolved cross-class sites at their real address
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
         relocRecording = 0;
@@ -4531,6 +4550,53 @@ public final class Loader
             VM.addJitHandler(ms, me, hh, ct);
             h += 1;
         }
+    }
+
+    /** True if the current class + method name is one we defer (gated to java/lang/String, excluding the
+     *  initializers which must run at load). */
+    private static boolean deferrable(int nameOff)
+    {
+        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
+        {
+            return false;
+        }
+        return !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>"))
+                && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
+    }
+
+    /**
+     * Install method {@code i}'s deferral stub into its (stub-sized) buffer instead of compiling the body:
+     * capture everything {@code compile()} needs (blob/context/bytecode) into an lz entry, then emit a stub
+     * that routes the first call through the shared trampoline. Because the buffer IS the method's registered
+     * address AND its TIB vtable slot, every caller -- direct BL or virtual blr -- hits the stub, so the body
+     * is compiled exactly once, on first use (memoized in {@link #lazyCompile}).
+     */
+    private static void emitDeferredStub(int i)
+    {
+        lazyEnsureTables();
+        int idx = lzN;
+        int reg = classRegByName(gThisNameOff);
+        int pd = findPdByName(gbase, gThisNameOff);
+        lzBlob[idx] = gbase;
+        lzLen[idx] = pdLen[pd];
+        lzReg[idx] = reg;
+        lzNameOff[idx] = 0;
+        lzDescOff[idx] = mDescOff[i];
+        lzSlot[idx] = 0L;                               // no single slot to patch: the stub buffer is shared
+        lzCode[idx] = mCode[i];                         // compile straight from the captured bytecode
+        lzCodeLen[idx] = mLen[i];
+        lzStatic[idx] = mStatic[i];
+        lzMaxLocals[idx] = mLocals[i];
+        lzCache[idx] = 0L;
+        lzN += 1;
+        long buf = mBuf[i];                             // stub-sized buffer allocated by sizeMethod
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
+        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(10));                                              w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
     }
 
     /** Buffer assigned to the method whose bytecode is at {@code code}. */
@@ -6140,9 +6206,19 @@ public final class Loader
     private static int[]  lzReg;       // ... class registry index (clStatics/clTib/clType restore)
     private static int[]  lzNameOff;   // ... method name Utf8 offset (to re-find it)
     private static int[]  lzDescOff;   // ... descriptor Utf8 offset
-    private static long[] lzSlot;      // ... &TIB[slot] to patch with the fresh buffer
+    private static long[] lzSlot;      // ... &TIB[slot] / offset cell to patch with the fresh buffer (0 = memoize only)
+    private static long[] lzCode;      // M8 defer: captured bytecode address (0 => re-find by name/desc offsets)
+    private static int[]  lzCodeLen;   // ... its length
+    private static int[]  lzStatic;    // ... 1 if static
+    private static int[]  lzMaxLocals; // ... its max_locals
+    private static long[] lzCache;     // ... memoized compiled buffer (0 = not yet compiled)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
+
+    // M8 genuine deferral: a gated class's methods are NOT compiled at load -- sizeMethod/emitMethod install a
+    // stub, and the body compiles on first call (any path: virtual TIB slot or direct BL both hit the stub).
+    // Default OFF -> every `if (LAZY_DEFER ...)` is a compile-time dead branch (core emit path byte-identical).
+    private static final boolean LAZY_DEFER = false;
 
     /** Arm the gated class's OWN virtual methods (those with source bytecode) for compile-on-first-call. */
     private static void lazyArmCompile()
@@ -6151,20 +6227,7 @@ public final class Loader
         {
             return;
         }
-        if (lzBlob == null)
-        {
-            lzBlob = new long[MAXLAZY];
-            lzLen = new int[MAXLAZY];
-            lzReg = new int[MAXLAZY];
-            lzNameOff = new int[MAXLAZY];
-            lzDescOff = new int[MAXLAZY];
-            lzSlot = new long[MAXLAZY];
-            lzN = 0;
-        }
-        if (lazyTrampAddr == 0L)
-        {
-            buildLazyTramp();
-        }
+        lazyEnsureTables();
         int reg = classRegByName(gThisNameOff);
         int pd = findPdByName(gbase, gThisNameOff);
         int len = pdLen[pd];
@@ -6258,21 +6321,47 @@ public final class Loader
         {
             return 0L;                                  // dead force-reference (writer) / bad index
         }
-        restoreCtxForCompile(lzBlob[idx], lzLen[idx], lzReg[idx]);
-        long code = findMethodByOffsets(lzNameOff[idx], lzDescOff[idx]);
-        if (code == 0L)
+        if (lzCache[idx] != 0L)
         {
-            return 0L;
+            return lzCache[idx];                         // memoized: compile once, however many callers hit the stub
         }
-        Uart.write(Magic.bytes("  jitc "));              // proof: runtime compile firing (class.method)
+        restoreCtxForCompile(lzBlob[idx], lzLen[idx], lzReg[idx]);
+        long code;
+        int len;
+        int descOff;
+        int isStatic;
+        if (lzCode[idx] != 0L)                           // genuine deferral: the body was captured, compile it
+        {
+            code = lzCode[idx];
+            len = lzCodeLen[idx];
+            descOff = lzDescOff[idx];
+            isStatic = lzStatic[idx];
+            gMaxLocals = lzMaxLocals[idx];
+        }
+        else                                            // 1b/1c: re-find the method by name+descriptor
+        {
+            code = findMethodByOffsets(lzNameOff[idx], lzDescOff[idx]);
+            if (code == 0L)
+            {
+                return 0L;
+            }
+            len = gcodeLen;
+            descOff = gFoundDescOff;
+            isStatic = gFoundStatic;
+        }
+        Uart.write(Magic.bytes("  jitc "));              // proof: runtime compile firing (class.name/desc)
         printNameAt(gbase, gThisNameOff);
         Uart.putc(0x2E);
-        printNameAt(lzBlob[idx], lzNameOff[idx]);
+        printNameAt(lzBlob[idx], lzCode[idx] != 0L ? lzDescOff[idx] : lzNameOff[idx]);
         Uart.putc(0x0A);
-        compileReuseTib = true;                         // keep this class's TIB (already filled); patch one slot
-        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+        compileReuseTib = true;                         // keep this class's TIB (already filled)
+        long buf = compile(code, len, descOff, isStatic);
         compileReuseTib = false;
-        Magic.store64(lzSlot[idx], buf);                // future virtual calls dispatch directly
+        lzCache[idx] = buf;
+        if (lzSlot[idx] != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
+        {
+            Magic.store64(lzSlot[idx], buf);
+        }
         return buf;
     }
 
@@ -6413,6 +6502,11 @@ public final class Loader
             lzNameOff = new int[MAXLAZY];
             lzDescOff = new int[MAXLAZY];
             lzSlot = new long[MAXLAZY];
+            lzCode = new long[MAXLAZY];
+            lzCodeLen = new int[MAXLAZY];
+            lzStatic = new int[MAXLAZY];
+            lzMaxLocals = new int[MAXLAZY];
+            lzCache = new long[MAXLAZY];
             lzN = 0;
         }
         if (lazyTrampAddr == 0L)
