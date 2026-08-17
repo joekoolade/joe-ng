@@ -585,45 +585,45 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.scLong(JJ)V",       "vm/VM.scLongAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.printStr(J)V",      "vm/VM.printStrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.denylistTrap()V",   "vm/VM.denylistTrapAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.nanoTime()J",       "vm/VM.nanoTimeAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.identity(J)J",      "vm/VM.identityAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.arraycopy(JIJII)V", "vm/VM.arraycopyAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arraycopy(JIJII)V", "vm/VM.arraycopyAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNpe()J",         "vm/VM.newNpeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAioobe()J",      "vm/VM.newAioobeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAse()J",          "vm/VM.newAseAddr");     // ArrayStoreException
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(JJ)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
-        stashHelper(image, staticWord, wordOffset, "vm/VM.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.fieldMods(JJ)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.fieldTypeChar(JJ)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.classAtPc(J)J", "vm/VM.classAtPcAddr");           // getCallerClass (updater access check)
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockSocket0(JJJJ)I", "vm/VM.sockSocket0Addr");   // M3 sockets
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockConnect0(JJJJ)I","vm/VM.sockConnect0Addr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockRead0(JJJ)I",    "vm/VM.sockRead0Addr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockWrite0(JJJ)I",   "vm/VM.sockWrite0Addr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockClose0(J)V",     "vm/VM.sockClose0Addr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.fdVal(J)I",          "vm/VM.fdValAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockNoop()V",        "vm/VM.sockNoopAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.sockZero()J",        "vm/VM.sockZeroAddr");
-        stashHelper(image, staticWord, wordOffset, "vm/VM.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
-        stashHelper(image, staticWord, wordOffset, "vm/VM.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.methodInfo(JJJ)I",   "vm/VM.methodInfoAddr");     // reflection M2: Method.methodInfo0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.constructorResolve(JJ)I", "vm/VM.constructorResolveAddr"); // M2: Constructor.ctorResolve0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.allocInstance(J)J",  "vm/VM.allocInstanceAddr");  // reflection M2: Constructor.allocInstance0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic
-        stashHelper(image, staticWord, wordOffset, "vm/VM.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
-        stashHelper(image, staticWord, wordOffset, "vm/VM.componentTypeOf(J)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.vhFieldOffset(JJ)J", "vm/VM.vhFieldOffsetAddr"); // M3: VarHandle.fieldOffset0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldMods(JJ)I", "vm/VM.fieldModsAddr");         // reflection: Class.fieldMods0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldTypeChar(JJ)I", "vm/VM.fieldTypeCharAddr"); // reflection: Class.fieldTypeChar0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAtPc(J)J", "vm/VM.classAtPcAddr");           // getCallerClass (updater access check)
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockSocket0(JJJJ)I", "vm/VM.sockSocket0Addr");   // M3 sockets
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockConnect0(JJJJ)I","vm/VM.sockConnect0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockRead0(JJJ)I",    "vm/VM.sockRead0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockWrite0(JJJ)I",   "vm/VM.sockWrite0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockClose0(J)V",     "vm/VM.sockClose0Addr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockAvailable(J)I",  "vm/VM.sockAvailableAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fdVal(J)I",          "vm/VM.fdValAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setFdVal(JJ)V",      "vm/VM.setFdValAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockNoop()V",        "vm/VM.sockNoopAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.sockZero()J",        "vm/VM.sockZeroAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classNameOf(J)J",    "vm/VM.classNameAddr");  // M4: Class.getName0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodInfo(JJJ)I",   "vm/VM.methodInfoAddr");     // reflection M2: Method.methodInfo0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.constructorResolve(JJ)I", "vm/VM.constructorResolveAddr"); // M2: Constructor.ctorResolve0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.allocInstance(J)J",  "vm/VM.allocInstanceAddr");  // reflection M2: Constructor.allocInstance0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.superclassOf(J)J",   "vm/VM.superclassAddr"); // M4: Class.superclass0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentThreadObj()J","vm/VM.currentThreadAddr"); // M4: Thread.currentThread0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.componentTypeOf(J)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int b = 0; b < blobs.size(); b++)
         {
