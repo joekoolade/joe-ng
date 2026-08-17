@@ -44,6 +44,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static final String[][] BAKE_ROOTS = {
         { "java/lang/StringUTF16.getBytes([BII[BI)V",     "vm/VM.utf16GetBytesAddr" },
         { "java/lang/Integer.formatUnsignedInt(II[BI)V",  "vm/VM.formatUnsignedIntAddr" },
+        { "java/lang/Integer.intValue()I",                "vm/VM.integerIntValueAddr" },
+    };
+
+    // M8 static state: statics force-added to the referenced set so they get a slot and a deep
+    // snapshot even though no compiled method names them yet, with the SLOT's address stashed in a
+    // VM static so the probe can reach the baked value. (Stock Integer.valueOf would reference
+    // IntegerCache.cache naturally, but its never-taken `new Integer` branch would pull every
+    // Integer virtual -- toString and its String/Unsafe closure -- into the host compile; rooting
+    // the static directly keeps the closure tiny until the writer can stub natives.)
+    private static final String[][] BAKE_STATICS = {
+        { "java/lang/Integer$IntegerCache.cache", "vm/VM.integerCacheSlotAddr" },
     };
 
     private final ClassRegistry registry;
@@ -116,6 +127,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {
             worklist.add(BAKE_ROOTS[br][0]);
+        }
+        for (int bs = 0; bs < BAKE_STATICS.length; bs++)
+        {
+            statics.add(BAKE_STATICS[bs][0]);
+            use(ownerOf(BAKE_STATICS[bs][0]), usedClasses, clinitOrder, worklist);
         }
         while (!worklist.isEmpty())
         {
@@ -248,12 +264,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             cur += stringWords(s);
         }
         // M8 static state, object statics: a bakeNoClinit class's reference-typed static is DEEP
-        // snapshotted -- the seed JVM's array value is baked into the image as an array object
-        // (null TIB, like interned strings) and the static slot will point at it. Primitive arrays
-        // only so far; any other non-null reference fails the build loudly (arrayScale).
+        // snapshotted -- the seed JVM's whole reachable object graph (primitive arrays, reference
+        // arrays, scalar objects with their fields) is baked into the image and the static slot
+        // points at the root. A scalar gets its class's TIB when the image lays one out
+        // (instantiated classes); otherwise a null TIB like interned strings -- fine until
+        // something virtually dispatches on it. Scalar field layout comes from the SAME registered
+        // classfile the compiler resolves getfield against, so offsets agree by construction.
         Vec<String> bakedKeys = new Vec<>();
-        Vec<Object> bakedVals = new Vec<>();
-        StrIntTable bakedWord = new StrIntTable();
+        Vec<Object> bakedRoots = new Vec<>();
+        Vec<Object> bakedObjs = new Vec<>();
         for (int _s14 = 0; _s14 < statics.size(); _s14++)
         {
             String key = statics.at(_s14);
@@ -263,11 +282,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 if (v != null)
                 {
                     bakedKeys.add(key);
-                    bakedVals.add(v);
-                    bakedWord.put(key, cur);
-                    cur += arrayWords(v);
+                    bakedRoots.add(v);
+                    bakeDiscover(v, bakedObjs);
                 }
             }
+        }
+        int[] bakedObjWord = new int[bakedObjs.size()];
+        for (int _s15 = 0; _s15 < bakedObjs.size(); _s15++)
+        {
+            bakedObjWord[_s15] = cur;
+            cur += bakedWords(bakedObjs.get(_s15));
         }
         StrIntTable staticWord = new StrIntTable();          // one 8-byte slot per static field, zero-init
         int staticsRegionStart = cur;
@@ -665,6 +689,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             stashHelper(image, staticWord, wordOffset, BAKE_ROOTS[br][0], BAKE_ROOTS[br][1]);
         }
+        for (int bs = 0; bs < BAKE_STATICS.length; bs++)
+        {
+            fillStatic(image, staticWord, BAKE_STATICS[bs][1], addr(staticWord.get(BAKE_STATICS[bs][0])));
+        }
         // M8 static state: a bakeNoClinit class's <clinit> never runs (not at build time, not on the
         // metal), so any of its statics referenced by baked code would read 0. Snapshot the seed JVM's
         // initialized PRIMITIVE values into their slots instead.
@@ -680,14 +708,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 }
             }
         }
-        // M8 static state, object statics: write each deep-snapshotted array object and point its
-        // static slot at it.
-        for (int bi = 0; bi < bakedKeys.size(); bi++)
+        // M8 static state, object statics: write every deep-snapshotted object, then point each
+        // static slot at its root.
+        for (int bi = 0; bi < bakedObjs.size(); bi++)
         {
-            String key = bakedKeys.get(bi);
-            int w = bakedWord.get(key);
-            writeArrayObject(image, w, bakedVals.get(bi));
-            fillStatic(image, staticWord, key, addr(w));
+            writeBakedObject(image, bakedObjWord[bi], bakedObjs.get(bi), bakedObjs, bakedObjWord, tibWord);
+        }
+        for (int bk = 0; bk < bakedKeys.size(); bk++)
+        {
+            int root = bakedIndexOf(bakedObjs, bakedRoots.get(bk));
+            fillStatic(image, staticWord, bakedKeys.get(bk), addr(bakedObjWord[root]));
         }
         for (int b = 0; b < blobs.size(); b++)
         {
@@ -829,7 +859,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     {
         return cls.equals("java/lang/Math")
                 || cls.equals("java/lang/Integer")
-                || cls.equals("java/lang/StringUTF16");
+                || cls.equals("java/lang/StringUTF16")
+                || cls.equals("java/lang/Integer$IntegerCache");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
@@ -880,6 +911,140 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             int shift = (i % 4) * 8;
             image[word] |= (b[i] & 0xFF) << shift;
         }
+    }
+
+    /** BFS-discover the object graph reachable from {@code root} into {@code objs}, identity-deduped
+     *  (so shared/aliased objects bake once and cycles terminate). */
+    private void bakeDiscover(Object root, Vec<Object> objs)
+    {
+        Vec<Object> work = new Vec<>();
+        work.add(root);
+        while (!work.isEmpty())
+        {
+            Object o = work.removeFirst();
+            if (bakedIndexOf(objs, o) >= 0)
+            {
+                continue;
+            }
+            objs.add(o);
+            if (o.getClass().isArray())
+            {
+                if (!o.getClass().getComponentType().isPrimitive())
+                {
+                    Object[] a = (Object[]) o;
+                    for (Object e : a)
+                    {
+                        if (e != null)
+                        {
+                            work.add(e);
+                        }
+                    }
+                }
+                continue;
+            }
+            ClassFile cf = registry.resolve(bakedClassName(o));
+            for (ClassFile.FieldInfo f : cf.fields())
+            {
+                if (!f.isStatic() && isRefDescriptor(f.descriptor()))
+                {
+                    Object child = StaticSnapshot.instanceRef(o, f.name());
+                    if (child != null)
+                    {
+                        work.add(child);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Image words the baked object {@code o} occupies. */
+    private int bakedWords(Object o)
+    {
+        if (o.getClass().isArray())
+        {
+            if (o.getClass().getComponentType().isPrimitive())
+            {
+                return arrayWords(o);
+            }
+            int n = java.lang.reflect.Array.getLength(o);
+            return (ObjectModel.ARRAY_BASE_OFFSET + n * ObjectModel.WORD) / 4;
+        }
+        return ObjectModel.scalarSize(registry.resolve(bakedClassName(o)).instanceFieldCount()) / 4;
+    }
+
+    /** Write baked object {@code o} at image word {@code w}; references resolve through the graph. */
+    private void writeBakedObject(int[] image, int w, Object o, Vec<Object> objs, int[] objWord,
+                                  StrIntTable tibWord)
+    {
+        if (o.getClass().isArray())
+        {
+            if (o.getClass().getComponentType().isPrimitive())
+            {
+                writeArrayObject(image, w, o);
+                return;
+            }
+            Object[] a = (Object[]) o;
+            writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);          // null TIB (as arrays)
+            writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
+            writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, a.length);
+            int base = w + ObjectModel.ARRAY_BASE_OFFSET / 4;
+            for (int i = 0; i < a.length; i++)
+            {
+                long ref = a[i] == null ? 0 : addr(objWord[bakedIndexOf(objs, a[i])]);
+                writeLong(image, base + i * WORDS_PER_SLOT, ref);
+            }
+            return;
+        }
+        String cls = bakedClassName(o);
+        int tw = tibWord.get(cls);
+        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, tw >= 0 ? addr(tw) : 0);
+        writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
+        ClassFile cf = registry.resolve(cls);
+        int slot = 0;
+        for (ClassFile.FieldInfo f : cf.fields())
+        {
+            if (f.isStatic())
+            {
+                continue;
+            }
+            long bits;
+            if (isRefDescriptor(f.descriptor()))
+            {
+                Object child = StaticSnapshot.instanceRef(o, f.name());
+                bits = child == null ? 0 : addr(objWord[bakedIndexOf(objs, child)]);
+            }
+            else
+            {
+                bits = StaticSnapshot.instanceBits(o, f.name());
+            }
+            writeLong(image, w + ObjectModel.fieldOffset(slot) / 4, bits);
+            slot++;
+        }
+    }
+
+    /** Index of {@code o} in {@code objs} by identity, or -1. */
+    private static int bakedIndexOf(Vec<Object> objs, Object o)
+    {
+        for (int i = 0; i < objs.size(); i++)
+        {
+            if (objs.get(i) == o)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** The internal-form class name of the baked scalar {@code o} (must be registered). */
+    private static String bakedClassName(Object o)
+    {
+        return o.getClass().getName().replace('.', '/');
+    }
+
+    /** Whether field descriptor {@code d} is reference-typed (class or array). */
+    private static boolean isRefDescriptor(String d)
+    {
+        return d.startsWith("L") || d.startsWith("[");
     }
 
     /** Image words the baked array object for {@code v} occupies: header(16)+length(8)+elements, 8-aligned. */

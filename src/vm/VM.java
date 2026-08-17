@@ -1008,6 +1008,8 @@ public final class VM
     static long lazyCompileAddr;       // Loader.lazyCompile(I)J — M8 1b compile-on-first-call trampoline target
     static long utf16GetBytesAddr;     // baked stock java/lang/StringUTF16.getBytes([BII[BI)V — M8 static-state probe target
     static long formatUnsignedIntAddr; // baked stock java/lang/Integer.formatUnsignedInt(II[BI)V — M8 object-statics probe target
+    static long integerIntValueAddr;   // baked stock java/lang/Integer.intValue()I — reads a baked object's field directly
+    static long integerCacheSlotAddr;  // address OF the java/lang/Integer$IntegerCache.cache static slot (M8 scalar-objects probe)
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
 
@@ -1737,6 +1739,22 @@ public final class VM
         Uart.write(hex);
         boolean objOk = hex[0] == 'c' && hex[1] == 'a' && hex[2] == 'f' && hex[3] == 'e';
         Uart.write(objOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (object static not baked?)\n"));
+
+        // SCALAR objects (deep object graph): Integer$IntegerCache.cache is a 256-entry Integer[]
+        // built only by <clinit> (which reads system properties -- hopeless at build time). The
+        // writer force-bakes it (BAKE_STATICS): the reference ARRAY plus 256 Integer OBJECTS, each
+        // with its value field at the model's slot, all pointer-linked in the image. The probe
+        // walks it raw -- slot -> array -> element 170 (the Integer for 170-128 = 42) -- and hands
+        // the object to stock Integer.intValue(), a baked getfield accessor called directly. '*'
+        // proves array elements point at real baked objects whose fields hold the seed's values.
+        Uart.write(Magic.bytes("  IntegerCache.cache[170].intValue()="));
+        long cacheArr = Magic.load64(integerCacheSlotAddr);   // the static slot -> baked Integer[]
+        long obj170 = cacheArr == 0 ? 0 : Magic.load64(cacheArr + 24L + 170L * 8L);  // elements at +24
+        Magic.store64(argBase, obj170);                   // receiver
+        long iv = obj170 == 0 ? 0 : Magic.callN(integerIntValueAddr, argBase);
+        Uart.putc((int) iv);                              // '*'
+        boolean scalarOk = cacheArr != 0 && obj170 != 0 && iv == 42;
+        Uart.write(scalarOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (scalar objects not baked?)\n"));
     }
 
     static void run()
