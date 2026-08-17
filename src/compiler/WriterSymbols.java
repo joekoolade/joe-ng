@@ -31,7 +31,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     private static final String[] HELPER_KEY =
     {
         "vm/Heap.alloc(I)J", "vm/Heap.allocArray(II)J", "vm/VMGc.gcCollect(J)V",
-        "vm/VM.instanceOf(JJ)I", "vm/VM.checkCast(JJ)J", "vm/VM.unwind(JJJ)V",
+        "vm/VM.instanceOf(JJ)I", "vm/VM.checkCast(JJ)J", "vm/VMUnwind.unwind(JJJ)V",
     };
 
     private final ClassFile cf;
