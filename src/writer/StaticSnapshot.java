@@ -25,19 +25,15 @@ final class StaticSnapshot
     /**
      * The seed JVM's value of the static field {@code fieldKey} ("owner/Class.name") as raw 64-bit
      * slot bits (booleans as 0/1, floats/doubles as their IEEE bits), or {@code null} for a
-     * reference-typed field (not yet snapshottable — left zero). Loading the owner triggers its
-     * {@code <clinit>} on the seed JVM. Any reflection failure fails the build: a silently missing
-     * snapshot would surface on the metal as an invisibly wrong static value.
+     * reference-typed field (baked separately — see {@link #reference}). Loading the owner triggers
+     * its {@code <clinit>} on the seed JVM. Any reflection failure fails the build: a silently
+     * missing snapshot would surface on the metal as an invisibly wrong static value.
      */
     static Long primitiveBits(String fieldKey)
     {
-        int dot = fieldKey.lastIndexOf('.');
-        String owner = fieldKey.substring(0, dot).replace('/', '.');
-        String name = fieldKey.substring(dot + 1);
         try
         {
-            Field f = Class.forName(owner).getDeclaredField(name);
-            f.setAccessible(true);
+            Field f = field(fieldKey);
             Class<?> t = f.getType();
             if (t == int.class)
             {
@@ -78,5 +74,39 @@ final class StaticSnapshot
             throw new RuntimeException("static snapshot failed for " + fieldKey
                     + " (writer needs --add-opens java.base/java.lang=ALL-UNNAMED)", e);
         }
+    }
+
+    /**
+     * The seed JVM's value of the REFERENCE-typed static field {@code fieldKey} — the host object the
+     * writer bakes into the image — or {@code null} when the field is primitive-typed (that's
+     * {@link #primitiveBits}'s half) or actually holds null (slot 0 IS the null reference).
+     */
+    static Object reference(String fieldKey)
+    {
+        try
+        {
+            Field f = field(fieldKey);
+            if (f.getType().isPrimitive())
+            {
+                return null;
+            }
+            return f.get(null);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new RuntimeException("static snapshot failed for " + fieldKey
+                    + " (writer needs --add-opens java.base/java.lang=ALL-UNNAMED)", e);
+        }
+    }
+
+    /** Resolve "owner/Class.name" to its accessible {@link Field}, initializing the owner. */
+    private static Field field(String fieldKey) throws ReflectiveOperationException
+    {
+        int dot = fieldKey.lastIndexOf('.');
+        String owner = fieldKey.substring(0, dot).replace('/', '.');
+        String name = fieldKey.substring(dot + 1);
+        Field f = Class.forName(owner).getDeclaredField(name);
+        f.setAccessible(true);
+        return f;
     }
 }

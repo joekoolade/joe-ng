@@ -1007,6 +1007,7 @@ public final class VM
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
     static long lazyCompileAddr;       // Loader.lazyCompile(I)J — M8 1b compile-on-first-call trampoline target
     static long utf16GetBytesAddr;     // baked stock java/lang/StringUTF16.getBytes([BII[BI)V — M8 static-state probe target
+    static long formatUnsignedIntAddr; // baked stock java/lang/Integer.formatUnsignedInt(II[BI)V — M8 object-statics probe target
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
 
@@ -1719,6 +1720,23 @@ public final class VM
         Uart.write(ch);
         boolean snapOk = ch[0] == 'J' && ch[1] == 'O' && ch[2] == 'E' && ch[3] == '!';
         Uart.write(snapOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (static not snapshotted?)\n"));
+
+        // OBJECT statics (deep snapshot): stock Integer.formatUnsignedInt indexes Integer.digits --
+        // a byte[] static that exists only after <clinit> builds it. The writer bakes the seed JVM's
+        // array into the image as an array object and points the slot at it. Un-baked the slot is 0
+        // (null), and since this VM emits no null checks the baload reads low RAM instead of the
+        // digit table -- so four correct hex digits (with letters, i.e. entries past '9') prove the
+        // baked ARRAY was read, not just a primitive slot.
+        Uart.write(Magic.bytes("  Integer.formatUnsignedInt(0xCAFE)="));
+        byte[] hex = new byte[4];
+        Magic.store64(argBase,       0xCAFEL);            // val
+        Magic.store64(argBase + 8L,  4L);                 // shift (hex)
+        Magic.store64(argBase + 16L, Magic.addrOf(hex));  // buf
+        Magic.store64(argBase + 24L, 4L);                 // len
+        Magic.callN(formatUnsignedIntAddr, argBase);
+        Uart.write(hex);
+        boolean objOk = hex[0] == 'c' && hex[1] == 'a' && hex[2] == 'f' && hex[3] == 'e';
+        Uart.write(objOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (object static not baked?)\n"));
     }
 
     static void run()

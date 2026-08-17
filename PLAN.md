@@ -1626,6 +1626,18 @@ The runtime demand-load path for the same class is untouched (87 phase-A cells a
 image heap, deep snapshot: e.g. `Integer$IntegerCache.cache`, `Integer.digits`), then widen
 the baked set, then have `vm/Loader` itself call baked `java.base` (step 4).
 
+**Increment 2 DONE — object statics (primitive arrays deep-snapshotted).** A `bakeNoClinit`
+class's reference-typed static is now baked as a real object: `StaticSnapshot.reference`
+reflects the seed JVM's value, the writer lays out an array object in a new baked-objects
+image region (null TIB + status + length + little-endian elements, `writeArrayObject` — the
+same shape as interned strings, generalized over element size), and the static slot points
+at it. Primitive arrays only; any other non-null reference fails the build loudly. Proof:
+stock `Integer.formatUnsignedInt` indexes `Integer.digits` (a `<clinit>`-built `byte[]`) —
+baked, the probe prints `cafe PASS` from `0xCAFE`; with the slot left null (negative
+control) the un-null-checked `baload` reads low RAM → garbage + FAIL. Next: scalar objects
+with fields + TIBs (`Integer$IntegerCache.cache` needs baked `Integer` objects), reference
+arrays, Strings.
+
 ---
 
 ## 5. Design decisions to lock day one

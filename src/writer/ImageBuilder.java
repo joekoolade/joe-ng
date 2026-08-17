@@ -42,7 +42,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     // The indirection exists because javac cannot name a package-private java.base member (StringUTF16
     // is package-private in java.lang) from the vm/ tree -- the writer links by key instead.
     private static final String[][] BAKE_ROOTS = {
-        { "java/lang/StringUTF16.getBytes([BII[BI)V", "vm/VM.utf16GetBytesAddr" },
+        { "java/lang/StringUTF16.getBytes([BII[BI)V",     "vm/VM.utf16GetBytesAddr" },
+        { "java/lang/Integer.formatUnsignedInt(II[BI)V",  "vm/VM.formatUnsignedIntAddr" },
     };
 
     private final ClassRegistry registry;
@@ -245,6 +246,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             byte[] s = strings.at(_s5);
             strWord.put(s, cur);
             cur += stringWords(s);
+        }
+        // M8 static state, object statics: a bakeNoClinit class's reference-typed static is DEEP
+        // snapshotted -- the seed JVM's array value is baked into the image as an array object
+        // (null TIB, like interned strings) and the static slot will point at it. Primitive arrays
+        // only so far; any other non-null reference fails the build loudly (arrayScale).
+        Vec<String> bakedKeys = new Vec<>();
+        Vec<Object> bakedVals = new Vec<>();
+        StrIntTable bakedWord = new StrIntTable();
+        for (int _s14 = 0; _s14 < statics.size(); _s14++)
+        {
+            String key = statics.at(_s14);
+            if (bakeNoClinit(ownerOf(key)))
+            {
+                Object v = StaticSnapshot.reference(key);
+                if (v != null)
+                {
+                    bakedKeys.add(key);
+                    bakedVals.add(v);
+                    bakedWord.put(key, cur);
+                    cur += arrayWords(v);
+                }
+            }
         }
         StrIntTable staticWord = new StrIntTable();          // one 8-byte slot per static field, zero-init
         int staticsRegionStart = cur;
@@ -644,7 +667,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         // M8 static state: a bakeNoClinit class's <clinit> never runs (not at build time, not on the
         // metal), so any of its statics referenced by baked code would read 0. Snapshot the seed JVM's
-        // initialized PRIMITIVE values into their slots instead (object statics stay zero for now).
+        // initialized PRIMITIVE values into their slots instead.
         for (int si = 0; si < statics.size(); si++)
         {
             String key = statics.at(si);
@@ -656,6 +679,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     fillStatic(image, staticWord, key, bits);
                 }
             }
+        }
+        // M8 static state, object statics: write each deep-snapshotted array object and point its
+        // static slot at it.
+        for (int bi = 0; bi < bakedKeys.size(); bi++)
+        {
+            String key = bakedKeys.get(bi);
+            int w = bakedWord.get(key);
+            writeArrayObject(image, w, bakedVals.get(bi));
+            fillStatic(image, staticWord, key, addr(w));
         }
         for (int b = 0; b < blobs.size(); b++)
         {
@@ -847,6 +879,76 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             int word = base + i / 4;
             int shift = (i % 4) * 8;
             image[word] |= (b[i] & 0xFF) << shift;
+        }
+    }
+
+    /** Image words the baked array object for {@code v} occupies: header(16)+length(8)+elements, 8-aligned. */
+    private static int arrayWords(Object v)
+    {
+        int n = java.lang.reflect.Array.getLength(v);
+        return (ObjectModel.ARRAY_BASE_OFFSET + ((n * arrayScale(v) + 7) & ~7)) / 4;
+    }
+
+    /** Element size in bytes of the primitive array {@code v}; any other object is not yet bakeable. */
+    private static int arrayScale(Object v)
+    {
+        Class<?> ct = v.getClass().getComponentType();
+        if (ct == null || !ct.isPrimitive())
+        {
+            throw new IllegalStateException("unsupported baked object static (only primitive arrays): "
+                    + v.getClass().getName());
+        }
+        if (ct == byte.class || ct == boolean.class)
+        {
+            return 1;
+        }
+        if (ct == char.class || ct == short.class)
+        {
+            return 2;
+        }
+        if (ct == int.class || ct == float.class)
+        {
+            return 4;
+        }
+        return 8;                                                   // long, double
+    }
+
+    /** Element {@code i} of the primitive array {@code v} as raw little-endian bits. */
+    private static long elementBits(Object v, int i)
+    {
+        if (v instanceof boolean[] a)
+        {
+            return a[i] ? 1L : 0L;
+        }
+        if (v instanceof float[] a)
+        {
+            return Float.floatToRawIntBits(a[i]) & 0xFFFFFFFFL;
+        }
+        if (v instanceof double[] a)
+        {
+            return Double.doubleToRawLongBits(a[i]);
+        }
+        return java.lang.reflect.Array.getLong(v, i);               // byte/char/short/int/long widen
+    }
+
+    /** Write a baked primitive-array object holding {@code v}'s elements at image word {@code w} —
+     *  the same shape as {@link #writeStringObject} (null TIB), generalized over element size. */
+    private static void writeArrayObject(int[] image, int w, Object v)
+    {
+        int scale = arrayScale(v);
+        int n = java.lang.reflect.Array.getLength(v);
+        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);
+        writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
+        writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, n);
+        int base = w * 4 + ObjectModel.ARRAY_BASE_OFFSET;           // byte offset within the image
+        for (int i = 0; i < n; i++)
+        {
+            long bits = elementBits(v, i);
+            for (int b = 0; b < scale; b++)
+            {
+                int off = base + i * scale + b;
+                image[off / 4] |= (int) ((bits >>> (8 * b)) & 0xFF) << ((off % 4) * 8);
+            }
         }
     }
 
