@@ -1602,6 +1602,30 @@ writer`. Two facts fall out:
 The probe stays committed (off) as the reproducer. This is the genuine hard remainder —
 each subsequent step is its own investigation + increment.
 
+#### Full bootstrap, path 1 — static-state snapshot (2026-08-17)
+
+Path 1 chosen and running. After methods-only baking (`ImageBuilder.bakeNoClinit` defers a
+stock class's `<clinit>`; 6 pure-leaf Math/Integer methods baked + probed), the next ceiling
+was **statics**: a baked method that *reads* a static needs the value its `<clinit>` would
+have produced, and that `<clinit>` can't be host-compiled (class literals, natives).
+
+**Increment 1 DONE — primitive statics snapshotted from the seed JVM.** The writer runs on a
+seed JVM where those classes are already initialized, so `writer/StaticSnapshot` reflects the
+initialized value (`Class.forName` + `Field.get`, needs `--add-opens java.base/java.lang`)
+and the writer writes it into the class's image static slot (`fillStatic`) — the JikesRVM
+boot-image-writer move. Proof: stock `java/lang/StringUTF16.getBytes` computes its copy-loop
+start as `srcBegin + (1 >> LO_BYTE_SHIFT)`, and `LO_BYTE_SHIFT` is set only by a `<clinit>`
+that calls the native `isBigEndian()`. The writer force-roots `getBytes` into the closure
+(`BAKE_ROOTS`, address stashed in `VM.utf16GetBytesAddr` since javac can't name the
+package-private class; called via `Magic.callN` — `callN`/`addrOf` added to WriterSymbols)
+and `bootstrapProbe` extracts "JOE!" from a hand-built UTF-16 array. Snapshot on → `JOE!
+PASS`; snapshot disabled (negative control) → the loop reads the zero high bytes → `FAIL`.
+The runtime demand-load path for the same class is untouched (87 phase-A cells as before).
+
+**Next increments:** object statics (arrays/Strings — bake the referenced object into the
+image heap, deep snapshot: e.g. `Integer$IntegerCache.cache`, `Integer.digits`), then widen
+the baked set, then have `vm/Loader` itself call baked `java.base` (step 4).
+
 ---
 
 ## 5. Design decisions to lock day one

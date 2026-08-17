@@ -37,6 +37,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
 
+    // M8 full bootstrap (path 1), static state: stock java.base methods force-rooted into the compile
+    // closure, each compiled address stashed in a VM static so VM.bootstrapProbe can Magic.callN it.
+    // The indirection exists because javac cannot name a package-private java.base member (StringUTF16
+    // is package-private in java.lang) from the vm/ tree -- the writer links by key instead.
+    private static final String[][] BAKE_ROOTS = {
+        { "java/lang/StringUTF16.getBytes([BII[BI)V", "vm/VM.utf16GetBytesAddr" },
+    };
+
     private final ClassRegistry registry;
     private final Vec<Blob> blobs = new Vec<>();
     private final Vec<RFile> files = new Vec<>();     // M3: embedded RAMFS files
@@ -104,6 +112,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         StrIntTable lineTabIndex = new StrIntTable();   // stack-trace debug: method key -> position in lineTabList
         Vec<int[]> lineTabList = new Vec<>();           // per method: {wordOffset, line}* transitions (machine-independent)
         worklist.add(entryKey);
+        for (int br = 0; br < BAKE_ROOTS.length; br++)
+        {
+            worklist.add(BAKE_ROOTS[br][0]);
+        }
         while (!worklist.isEmpty())
         {
             String k = worklist.removeFirst();
@@ -626,6 +638,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.componentTypeOf(J)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
+        for (int br = 0; br < BAKE_ROOTS.length; br++)
+        {
+            stashHelper(image, staticWord, wordOffset, BAKE_ROOTS[br][0], BAKE_ROOTS[br][1]);
+        }
+        // M8 static state: a bakeNoClinit class's <clinit> never runs (not at build time, not on the
+        // metal), so any of its statics referenced by baked code would read 0. Snapshot the seed JVM's
+        // initialized PRIMITIVE values into their slots instead (object statics stay zero for now).
+        for (int si = 0; si < statics.size(); si++)
+        {
+            String key = statics.at(si);
+            if (bakeNoClinit(ownerOf(key)))
+            {
+                Long bits = StaticSnapshot.primitiveBits(key);
+                if (bits != null)
+                {
+                    fillStatic(image, staticWord, key, bits);
+                }
+            }
+        }
         for (int b = 0; b < blobs.size(); b++)
         {
             Blob blob = blobs.get(b);
@@ -758,13 +789,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     /** M8 full bootstrap (path 1): stock java.base classes the writer bakes into the image METHODS-ONLY --
      *  their {@code <clinit>} is NOT compiled/run at build time (the host writer can't compile some java.base
-     *  {@code <clinit>}s -- e.g. Math's uses {@code ldc} class-literal -- and the baked methods here don't read
-     *  the class's statics). Deferring class init to a runtime pass is the follow-on step. Only consulted when
-     *  such a class is actually reached by the compile closure (e.g. under VM.BOOTSTRAP_PROBE). */
+     *  {@code <clinit>}s -- e.g. Math's uses {@code ldc} class-literal, StringUTF16's calls a native). A baked
+     *  method that reads such a class's statics gets the SEED JVM's initialized values instead: the writer
+     *  snapshots them into the image statics ({@link StaticSnapshot} -- primitives only so far). Only
+     *  consulted when such a class is actually reached by the compile closure (e.g. under VM.BOOTSTRAP_PROBE). */
     private static boolean bakeNoClinit(String cls)
     {
         return cls.equals("java/lang/Math")
-                || cls.equals("java/lang/Integer");
+                || cls.equals("java/lang/Integer")
+                || cls.equals("java/lang/StringUTF16");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */

@@ -52,7 +52,7 @@ test: build
 	$(JAVA) -cp $(OUT) asm.A64Test
 	$(JAVA) -cp $(OUT) objectmodel.ObjectModelTest
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
-	$(JAVA) -cp $(OUT) compiler.CompilerTest $(OUT)
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
 
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
@@ -73,7 +73,7 @@ plugins:
 	@if [ -n "$(PLUGINSRC)" ]; then mkdir -p ramfs/plugins && $(JAVAC) -d ramfs/plugins $(PLUGINSRC); fi
 
 image: build jdktests plugins
-	$(JAVA) -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 
 qemu: image
