@@ -1461,6 +1461,94 @@ QEMU-verifiable, M4 also on the Pi 4.
 
 ---
 
+## M8 — Dynamic lazy loading (the JikesRVM model) — NEW DIRECTION (2026-08-17)
+
+A deliberate re-architecture of class loading, adopting the JikesRVM
+(`joekoolade/JOE` `rvm/src`) design. Replaces the eager, closed-world,
+reachability-driven, per-batch loader with **dynamic, lazy, compile-on-first-use**
+loading and a **full-featured Java loader** over a **self-hosted `java.base`**.
+
+### The reconciliation: "JDK-free core" and "full-Java loader" are LAYERS
+
+JikesRVM's loader uses `String`/collections/exceptions/reified `RVMClass` objects
+not because a JDK sits under it, but because the VM provides its own `java.base` on
+the metal. "JDK-free" therefore means *free of the external **seed** JDK at
+runtime* (self-hosted) — **not** "no rich library." Three layers:
+
+- **Layer 0 — JDK-free base:** `magic`/`asm`/`objectmodel`/`vm` core (GC, scheduler,
+  boot), **the compiler**, and the boot-image writer. Primitives + custom structures
+  only — no `String`/collections/exceptions. Runs before/under the class library.
+- **Layer 1 — `java.base` on metal:** the **stock OpenJDK** classes, self-hosted.
+  Class *metadata* is baked into the boot image; method *bodies compile lazily on
+  first use*.
+- **Layer 2 — loader:** ordinary **full-featured Java** (reified
+  `RVMClass`/`RVMMethod`/`RVMField`, `HashMap`s, exceptions, reflection) on top of
+  Layer 1. Hosts the 4-phase lifecycle.
+
+The Layer-0 compiler stays JDK-free yet compiles Layer-1 bytecode (a compiler needs
+no `HashMap` to *emit* code for one); the loader (Layer 2) drives it across a
+primitive-typed seam.
+
+### Locked decisions (2026-08-17)
+
+1. **`java.base` = stock OpenJDK** compiled in (not a hand-written minimal library).
+2. **Laziness = compile each method on first call** (per-method granularity), not
+   eager whole-closure AOT.
+3. **Self-hosted** with joe-ng's own `java.base` on metal.
+
+Key consequence of (2): the boot image needs only java.base **metadata** (structure
++ TIBs with lazy stubs), not eagerly-compiled bodies — so the lazy engine comes
+FIRST and makes self-hosting stock `java.base` tractable.
+
+### Staged order (strangler — eager loader stays behind a flag; flip demos one at a
+time; **Pi-validate each flip**)
+
+1. **Lazy method-compile engine** — compile-on-first-call.
+   - **1a — the lazy-dispatch trampoline:** compile eagerly but **install into the
+     TIB slot on first call** via a per-method stub → proves the self-modifying
+     dispatch, I-cache maintenance, and ABI on metal *without* the context-restore
+     problem. Flagged, default off (image byte-identical when off).
+   - **1b — defer the compile itself:** restore a method's compile context at
+     call time from the parse cache (`pc*` keyed by blob base) + the persistent
+     `cl*`/`rg*`/field registries, then `compile()` the one method. This is
+     genuine compile-on-first-use.
+   - **1c — static/special path:** a member entrypoint/offset table (JikesRVM
+     `memberOffsets`, seeded `NEEDS_DYNAMIC_LINK`, **data-patched**, not
+     code-patched → no I-cache maintenance on the call site).
+2. **Boot core stock `java.base` metadata + lazy bodies.**
+3. **Reified full-Java loader** — replace the 493 flat statics / `rg*`/`cl*`/`g*`
+   registries in `src/vm/Loader.java` with `RVMClass`/`RVMMethod`/`RVMField`
+   objects + `HashMap` dedup + interned `Atom` names.
+4. **4-phase lifecycle** (load → resolve → instantiate → initialize) as explicit
+   states, advanced on demand by (1); optionally O(1) type checks (superclass
+   display + `doesImplement` bitmap, replacing the linear `Type`-chain walk).
+5. **Retire the eager loader** (`markReachable`/`resetLoader`/`patchRelocs`/`MAX*`
+   caps) once the dynamic path runs the demo suite + NetDemo on real Pi.
+
+### Hard problems (named up front)
+
+- **Bootstrap closure:** the loader uses `HashMap`, so `HashMap` must be resolved
+  *before* the loader runs — by the offline writer. Getting the boot-image
+  pre-resolved closure exactly right is the delicate heart (it is what makes
+  JikesRVM's boot-image writer complex).
+- **GC of live metadata:** reified `RVMClass`/`HashMap`/atoms become permanent heap
+  roots the collector must trace and never reclaim — replaces the per-batch reset.
+- **Layer-0/Layer-2 seam:** the JDK-free compiler must never call loader
+  collections; define the primitive-typed ABI early or the layering leaks.
+
+### Contrast with the current (eager) loader
+
+| | current joe-ng | M8 target |
+|---|---|---|
+| when | eager, whole reachable closure per batch | lazy, per method on first call |
+| linking | `patchRelocs` at batch end (direct `BL`) | offset table / TIB stub, resolve on first use |
+| loader state | 493 flat statics, primitive-array registries | reified `RVMClass`/`RVMMethod`, `HashMap`s |
+| loader language | JDK-free (10-local ceiling) | full-featured Java over Layer 1 |
+| lifecycle | load+compile fused | load → resolve → instantiate → initialize |
+| memory | per-batch heap reclaim | GC-traced permanent metadata |
+
+---
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

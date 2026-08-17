@@ -6032,6 +6032,10 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
+        if (LAZY_TIB)                                   // M8 increment 1a: re-arm this class's vtable with
+        {                                              //   compile-eager / install-on-first-call stubs
+            lazyArmTib();
+        }
         long imap = buildImap();
         if (instImaps != null && instImapN < instImaps.length)    // capture for the post-phase-B default refill
         {
@@ -6040,6 +6044,76 @@ public final class Loader
             instImapN += 1;
         }
         Magic.store64(gType + 16, buildItableDir(imap));          // TYPE_ITABLE_DIR_OFFSET
+    }
+
+    // ----- M8 increment 1a: lazy-dispatch trampoline (compile-eager, install-on-first-call) -----
+    // First step of the JikesRVM-model redirect (see PLAN.md "M8"). Proves the self-modifying vtable
+    // dispatch + ABI on metal without the harder context-restore of a real deferred compile (1b).
+    // Default OFF -> the `if (LAZY_TIB)` branch is a compile-time-constant dead branch, so lazyArmTib /
+    // buildLazyStub are unreachable and the emitted image is byte-identical to the eager path.
+    private static final boolean LAZY_TIB = false;
+
+    /** Re-arm the just-filled vtable of the gated class: replace each real code buffer in the TIB with a
+     *  self-contained stub that, on the FIRST virtual call through that slot, patches the slot back to the
+     *  real buffer and tail-branches into it. Every later call dispatches directly. */
+    private static void lazyArmTib()
+    {
+        if (gvCount <= 0)                              // no vtable (interface / no virtual methods) -> nothing to arm
+        {
+            return;
+        }
+        int armed = 0;
+        int s = 0;
+        while (s < gvCount)
+        {
+            long slotAddr = gTib + 8 + s * 8;
+            long real = Magic.load64(slotAddr);
+            if (real != 0L)
+            {
+                Magic.store64(slotAddr, buildLazyStub(real, slotAddr));
+                armed += 1;
+            }
+            s += 1;
+        }
+        Uart.write(Magic.bytes("  lazy: armed "));
+        VM.printDec(armed);
+        Uart.write(Magic.bytes(" slots for "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x0A);
+    }
+
+    /** Print the Utf8 class name at (base, off) over the UART (diagnostic for lazy arming). */
+    private static void printNameAt(long base, int off)
+    {
+        int len = u2(base + off);
+        int i = 0;
+        while (i < len)
+        {
+            Uart.putc(u1(base + off + 2 + i));
+            i += 1;
+        }
+    }
+
+    /**
+     * Emit a Java-free lazy-dispatch stub for one vtable slot. Entered via {@code blr} with the call's
+     * x0..x7 args and x30 return address untouched; it patches {@code slotAddr} (a TIB word — DATA, so no
+     * I-cache maintenance) to {@code realBuf} and tail-branches there, so the tail-called method sees the
+     * exact original call state. {@code realBuf}'s code was already published by the eager compile.
+     */
+    private static long buildLazyStub(long realBuf, long slotAddr)
+    {
+        long buf = Heap.allocCode(32);
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (slotAddr & 0xFFFF), 0));          w += 1;  // x16 = &TIB[slot]
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((slotAddr >> 16) & 0xFFFF), 1));  w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((slotAddr >> 32) & 0xFFFF), 2));  w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, (int) (realBuf & 0xFFFF), 0));           w += 1;  // x17 = real code
+        Magic.store32(buf + w * 4L, A64Enc.movk(17, (int) ((realBuf >> 16) & 0xFFFF), 1));   w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(17, (int) ((realBuf >> 32) & 0xFFFF), 2));   w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.strx(17, 16, 0));                                 w += 1;  // *slot = real
+        Magic.store32(buf + w * 4L, A64Enc.br(17));                                          w += 1;  // tail-call real
+        Heap.publishCode(buf, buf + w * 4L);
+        return buf;
     }
 
     /**
