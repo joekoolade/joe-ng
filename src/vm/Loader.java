@@ -110,22 +110,14 @@ public final class Loader
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
     private static final int MAXCLASS = 1024;
-    private static long[] clBase;
-    private static int[] clNameOff;
-    private static long[] clTib;
-    private static int[] clFieldCount;
-    private static int[] clVtCount;      // flattened vtable size (so a subclass can copy it)
-    private static long[] clType;        // each class's Type node (for instanceof/checkcast)
+    // The class registry, reified: one RVMClass per loaded class (base/nameOff/tib/type/statics/fieldCount/
+    // vtCount/vtStart/superReg/modifiers/isIface). The direct-interface list (clIfaceReg/clIfaceRegN) and the
+    // <clinit> dependency arrays (clDep*) stay separate.
     // Two-phase load (structure then bodies): phase A registers every class's structure (Type, TIB, fields,
     // vtable SLOT numbering, interface slots) in super/interface-first order (acyclic); phase B compiles all
     // method bodies + builds the TIBs, by which point every cross-class new/field/vtable/itable/cast target is
     // registered -> load order no longer matters (only method-CALL cycles remain, handled by patchRelocs).
-    private static long[] clStatics;     // each class's static block base (gStatics), reused between the two phases
-    private static int[]  clVtStart;     // start index of this class's slots in the vt registry (phase B fills bufs)
-    private static boolean[] clIsIface;  // interface? (phase B compiles only its default/static bodies, no TIB fill)
-    private static int[] clSuperReg;     // each class's superclass registry index (-1 = none), for full-chain itable closure
-    private static int[] clModifiers;    // Class.getModifiers() value, computed at LOAD time (ACC_SUPER stripped,
-                                         // InnerClasses-overridden for nested) — read at runtime WITHOUT re-parsing
+    private static RVMClass[] clTab;
     private static int clCount;
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
@@ -1334,7 +1326,7 @@ public final class Loader
     private static long steTib()
     {
         int i = classIndexByName(Magic.bytes("java/lang/StackTraceElement"));
-        return i >= 0 ? clTib[i] : 0L;
+        return i >= 0 ? clTab[i].tib : 0L;
     }
 
     /**
@@ -1687,17 +1679,7 @@ public final class Loader
         mirObj = new long[256];
         mirN = 0;
         classTibCache = 0L;
-        clBase = new long[MAXCLASS];
-        clNameOff = new int[MAXCLASS];
-        clTib = new long[MAXCLASS];
-        clFieldCount = new int[MAXCLASS];
-        clVtCount = new int[MAXCLASS];
-        clType = new long[MAXCLASS];
-        clStatics = new long[MAXCLASS];
-        clVtStart = new int[MAXCLASS];
-        clIsIface = new boolean[MAXCLASS];
-        clSuperReg = new int[MAXCLASS];
-        clModifiers = new int[MAXCLASS];
+        clTab = new RVMClass[MAXCLASS];
         clCount = 0;
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
         clIfaceRegN = new int[MAXCLASS];
@@ -2699,12 +2681,12 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clType[i] == type)
+            if (clTab[i].type == type)
             {
                 Uart.write(Magic.bytes(" class="));
-                writeName(clBase[i] + clNameOff[i] + 2, u2(clBase[i] + clNameOff[i]));
+                writeName(clTab[i].base + clTab[i].nameOff + 2, u2(clTab[i].base + clTab[i].nameOff));
                 Uart.write(Magic.bytes(" gvCount="));
-                VM.printDec(clVtCount[i]);
+                VM.printDec(clTab[i].vtCount);
                 return;
             }
             i += 1;
@@ -2719,9 +2701,9 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clType[i] == type)
+            if (clTab[i].type == type)
             {
-                writeName(clBase[i] + clNameOff[i] + 2, u2(clBase[i] + clNameOff[i]));
+                writeName(clTab[i].base + clTab[i].nameOff + 2, u2(clTab[i].base + clTab[i].nameOff));
                 return;
             }
             i += 1;
@@ -2736,10 +2718,10 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clType[i] == type)
+            if (clTab[i].type == type)
             {
-                int len = u2(clBase[i] + clNameOff[i]);
-                long src = clBase[i] + clNameOff[i] + 2;
+                int len = u2(clTab[i].base + clTab[i].nameOff);
+                long src = clTab[i].base + clTab[i].nameOff + 2;
                 long arr = Heap.allocArray(len, 1);
                 int k = 0;
                 while (k < len)
@@ -2787,7 +2769,7 @@ public final class Loader
         int ci = classIndexByName(slash);
         if (ci >= 0)
         {
-            return classMirror(clType[ci]);             // already loaded: cached mirror (identity-stable)
+            return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
         }
         long type = loadClassIncremental(slash);
         return type == 0L ? 0L : classMirror(type);
@@ -2813,7 +2795,7 @@ public final class Loader
         entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // may be absent (addReach(0) is a no-op)
         loadAll();
         int ci = classIndexByName(slash);
-        return ci < 0 ? 0L : clType[ci];
+        return ci < 0 ? 0L : clTab[ci].type;
     }
 
     /**
@@ -2848,9 +2830,9 @@ public final class Loader
         int ci = 0;                                     // find the class we just added by its unique blob base
         while (ci < clCount)
         {
-            if (clBase[ci] == blob)
+            if (clTab[ci].base == blob)
             {
-                return clType[ci];
+                return clTab[ci].type;
             }
             ci += 1;
         }
@@ -2866,8 +2848,8 @@ public final class Loader
         {
             return 0L;
         }
-        long obj = Heap.alloc(16 + clFieldCount[i] * 8);
-        Magic.store64(obj + 0L, clTib[i]);
+        long obj = Heap.alloc(16 + clTab[i].fieldCount * 8);
+        Magic.store64(obj + 0L, clTab[i].tib);
         return obj;
     }
 
@@ -3473,7 +3455,7 @@ public final class Loader
     private static int superFieldCount()
     {
         int r = classRegByName(gSuperNameOff);
-        return r >= 0 ? clFieldCount[r] : 0;
+        return r >= 0 ? clTab[r].fieldCount : 0;
     }
 
     /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
@@ -3682,7 +3664,7 @@ public final class Loader
             sizeMethod(i);
             i += 1;
         }
-        if (!compileReuseTib)                           // two-phase clinit: the class's TIB already exists (clTib[reg],
+        if (!compileReuseTib)                           // two-phase clinit: the class's TIB already exists (clTab[reg].tib,
         {                                               // pinned in phase A) and gets filled by loadBodies' compileClass
             buildTib();                                 // -- rebuilding here would allocate a THROWAWAY TIB and leave
         }                                               // gTib pointing at it, so compileClass fills the wrong TIB.
@@ -4104,25 +4086,26 @@ public final class Loader
             Magic.store64(gType + 0, 0L);               // instanceSize (not instantiated)
             Magic.store64(gType + 8, 0L);               // superType
             Magic.store64(gType + 16, 0L);              // no itableDir
-            clBase[clCount] = gbase;
-            clNameOff[clCount] = gThisNameOff;
-            clTib[clCount] = 0L;
-            clType[clCount] = gType;
-            clFieldCount[clCount] = 0;
-            clVtCount[clCount] = 0;
-            clStatics[clCount] = gStatics;              // interface constants block (reused by its phase-B bodies)
-            clVtStart[clCount] = vtCount;               // no vtable entries appended for an interface
-            clIsIface[clCount] = true;
-            clSuperReg[clCount] = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
+            clTab[clCount] = new RVMClass();
+            clTab[clCount].base = gbase;
+            clTab[clCount].nameOff = gThisNameOff;
+            clTab[clCount].tib = 0L;
+            clTab[clCount].type = gType;
+            clTab[clCount].fieldCount = 0;
+            clTab[clCount].vtCount = 0;
+            clTab[clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
+            clTab[clCount].vtStart = vtCount;               // no vtable entries appended for an interface
+            clTab[clCount].isIface = true;
+            clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
-            clModifiers[clCount] = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+            clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
             clCount += 1;
             return;                                     // bodies (default/static methods) compiled in phase B
         }
         parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
         allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
-        clModifiers[clCount - 1] = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+        clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
     }
 
     /**
@@ -4136,11 +4119,11 @@ public final class Loader
         parseConstPool(bytes, len);
         parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
         int reg = classRegByName(gThisNameOff);
-        gStatics = clStatics[reg];                      // REUSE the phase-A static block (cross-class getstatic keys on it)
+        gStatics = clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
         findBootstrapMethods();
-        if (clIsIface[reg])
+        if (clTab[reg].isIface)
         {
-            gType = clType[reg];                        // restore the interface's phase-A Type so a default method's
+            gType = clTab[reg].type;                        // restore the interface's phase-A Type so a default method's
                                                         // self-reference (typeOfClass -> gType, e.g. Map.putIfAbsent
                                                         // calling this.get()) bakes the REAL interface Type -- else
                                                         // it bakes a stale gType and the implementor's itable-dir
@@ -4150,13 +4133,13 @@ public final class Loader
             return;
         }
         parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
-        gType = clType[reg];                            // restore this class's Type + TIB (allocated in phase A)
-        gTib = clTib[reg];
+        gType = clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
+        gTib = clTab[reg].tib;
         compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
-        runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTib[reg])
+        runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTab[reg].tib)
         compileReuseTib = false;
-        gType = clType[reg];                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
-        gTib = clTib[reg];
+        gType = clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
+        gTib = clTab[reg].tib;
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
         compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
         registerAll();                                  // methods -> globalBuf
@@ -4257,8 +4240,8 @@ public final class Loader
         {
             return;
         }
-        long itib = clTib[ii];
-        int isize = 16 + clFieldCount[ii] * 8;          // Integer: header + its instance fields (value)
+        long itib = clTab[ii].tib;
+        int isize = 16 + clTab[ii].fieldCount * 8;          // Integer: header + its instance fields (value)
         long arr = Heap.allocArray(256, 8);             // Integer[256] (8-byte reference elements)
         int k = 0;
         while (k < 256)
@@ -4287,8 +4270,8 @@ public final class Loader
         {
             return;
         }
-        long ltib = clTib[li];
-        int lsize = 16 + clFieldCount[li] * 8;          // Long: header + its instance field (value)
+        long ltib = clTab[li].tib;
+        int lsize = 16 + clTab[li].fieldCount * 8;          // Long: header + its instance field (value)
         long arr = Heap.allocArray(256, 8);             // Long[256] (8-byte reference elements)
         int k = 0;
         while (k < 256)
@@ -4317,8 +4300,8 @@ public final class Loader
         {
             return;
         }
-        long ptib = clTib[pi];
-        int psize = 16 + clFieldCount[pi] * 8;          // field-free overlay -> 16, but honor any fields it declares
+        long ptib = clTab[pi].tib;
+        int psize = 16 + clTab[pi].fieldCount * 8;          // field-free overlay -> 16, but honor any fields it declares
         long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
         if (outSlot != 0L)
         {
@@ -4360,8 +4343,8 @@ public final class Loader
         long slot = staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaLangAccess"));
         if (slot != 0L)
         {
-            long inst = Heap.alloc(16 + clFieldCount[mi] * 8);   // field-free -> header only
-            Magic.store64(inst + 0L, clTib[mi]);                 // TIB (itable dir for getEnumConstantsShared dispatch)
+            long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
+            Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Magic.store64(slot, inst);
         }
     }
@@ -4376,8 +4359,8 @@ public final class Loader
         long slot = staticSlotOf(Magic.bytes("sun/nio/ch/Net"), Magic.bytes("EXTENDED_OPTIONS"));
         if (slot != 0L)
         {
-            long inst = Heap.alloc(16 + clFieldCount[ei] * 8);   // field-free overlay -> just the TIB header
-            Magic.store64(inst + 0L, clTib[ei]);                 // TIB (vtable for isOptionSupported dispatch)
+            long inst = Heap.alloc(16 + clTab[ei].fieldCount * 8);   // field-free overlay -> just the TIB header
+            Magic.store64(inst + 0L, clTab[ei].tib);                 // TIB (vtable for isOptionSupported dispatch)
             Magic.store64(slot, inst);
         }
     }
@@ -5224,16 +5207,17 @@ public final class Loader
         if (sgCount + gsfCount >= MAXREG) { capHalt(Magic.bytes("MAXREG"), sgCount); }       // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (fldCount + gifCount >= MAXFIELD) { capHalt(Magic.bytes("MAXFIELD"), fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (vtCount + gvCount >= MAXVT) { capHalt(Magic.bytes("MAXVT"), vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-        clBase[clCount] = gbase;
-        clNameOff[clCount] = gThisNameOff;
-        clTib[clCount] = gTib;
-        clType[clCount] = gType;
-        clFieldCount[clCount] = gifCount;
-        clVtCount[clCount] = gvCount;
-        clStatics[clCount] = gStatics;
-        clVtStart[clCount] = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
-        clIsIface[clCount] = false;
-        clSuperReg[clCount] = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
+        clTab[clCount] = new RVMClass();
+        clTab[clCount].base = gbase;
+        clTab[clCount].nameOff = gThisNameOff;
+        clTab[clCount].tib = gTib;
+        clTab[clCount].type = gType;
+        clTab[clCount].fieldCount = gifCount;
+        clTab[clCount].vtCount = gvCount;
+        clTab[clCount].statics = gStatics;
+        clTab[clCount].vtStart = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
+        clTab[clCount].isIface = false;
+        clTab[clCount].superReg = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
                                                         //   FULL-chain itable closure (an interface implemented N levels
                                                         //   up the superclass chain must still land in this class's dir)
         if (logVtable != 0)                             // #43: class -> vtable slot count (spot too-short vtables)
@@ -5297,8 +5281,8 @@ public final class Loader
      */
     private static void fillClassVtBuf(int reg)
     {
-        int start = clVtStart[reg];
-        int cnt = clVtCount[reg];
+        int start = clTab[reg].vtStart;
+        int cnt = clTab[reg].vtCount;
         int v = 0;
         while (v < cnt)
         {
@@ -5449,7 +5433,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8EqAt(gbase, nameOff, clBase[i], clNameOff[i]))
+            if (utf8EqAt(gbase, nameOff, clTab[i].base, clTab[i].nameOff))
             {
                 return i;
             }
@@ -5525,12 +5509,12 @@ public final class Loader
         int ci = 0;
         while (ci < clCount)
         {
-            if (clTib[ci] == tib)
+            if (clTab[ci].tib == tib)
             {
                 int j = 0;
                 while (j < fldCount)
                 {
-                    if (utf8EqAt(clBase[ci], clNameOff[ci], fldBase[j], fldClassOff[j])
+                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldBase[j], fldClassOff[j])
                             && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
                     {
                         return 16L + fldSlot[j] * 8L;
@@ -5550,12 +5534,12 @@ public final class Loader
         int ci = 0;
         while (ci < clCount)
         {
-            if (clType[ci] == typeAddr)
+            if (clTab[ci].type == typeAddr)
             {
                 int j = 0;
                 while (j < fldCount)
                 {
-                    if (utf8EqAt(clBase[ci], clNameOff[ci], fldBase[j], fldClassOff[j])
+                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldBase[j], fldClassOff[j])
                             && rawEqUtf8(fnBase, fnLen, fldBase[j], fldNameOff[j]))
                     {
                         return j;
@@ -5586,9 +5570,9 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clType[i] == type)
+            if (clTab[i].type == type)
             {
-                return clModifiers[i];                     // cached at load time (see computeModifiersAtLoad)
+                return clTab[i].modifiers;                     // cached at load time (see computeModifiersAtLoad)
             }
             i += 1;
         }
@@ -5619,7 +5603,7 @@ public final class Loader
     private static int methodResolveRegistry(long type, long nameArr)
     {
         int ci = 0;
-        while (ci < clCount && clType[ci] != type)
+        while (ci < clCount && clTab[ci].type != type)
         {
             ci += 1;
         }
@@ -5632,7 +5616,7 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[i].base, rgTab[i].classOff)
+            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
                     && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff))
             {
                 return i;
@@ -5653,15 +5637,15 @@ public final class Loader
     private static int compileMethodOnDemand(long type, long nameArr)
     {
         int ci = 0;
-        while (ci < clCount && clType[ci] != type)
+        while (ci < clCount && clTab[ci].type != type)
         {
             ci += 1;
         }
-        if (ci >= clCount || clIsIface[ci])
+        if (ci >= clCount || clTab[ci].isIface)
         {
             return -1;
         }
-        long blob = clBase[ci];
+        long blob = clTab[ci].base;
         int len = blobLenOf(blob);
         parseConstPool(blob, len);                         // set up the class's compile state (as loadBodies does,
         parseFields();                                     //   minus the TIB fill): statics block + vtable scratch
@@ -5670,11 +5654,11 @@ public final class Loader
         {
             return -1;
         }
-        gStatics = clStatics[reg];                         // reuse the phase-A statics (cross-class getstatic keys on it)
+        gStatics = clTab[reg].statics;                         // reuse the phase-A statics (cross-class getstatic keys on it)
         findBootstrapMethods();
         parseVtable(blob);                                 // gvImplBuf/gvImplCode (for any invokevirtual in the body)
-        gType = clType[reg];
-        gTib = clTib[reg];
+        gType = clTab[reg].type;
+        gTib = clTab[reg].tib;
         parseForMethods(blob, len);                        // fresh gMethodsStart for the by-name method walk
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -5747,7 +5731,7 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[i].base, rgTab[i].classOff)
+            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
                     && utf8IsAtBase(rgTab[i].base, rgTab[i].nameOff, Magic.bytes("<init>"))
                     && descParamCountRaw(rgTab[i].base + rgTab[i].descOff) == paramCount)
             {
@@ -5770,11 +5754,11 @@ public final class Loader
             return -1;
         }
         int ci = 0;
-        while (ci < clCount && clType[ci] != type)
+        while (ci < clCount && clTab[ci].type != type)
         {
             ci += 1;
         }
-        if (ci >= clCount || clIsIface[ci])
+        if (ci >= clCount || clTab[ci].isIface)
         {
             return -1;
         }
@@ -5784,7 +5768,7 @@ public final class Loader
             return idx;
         }
         // on-demand: compile the matching <init> (its declaring class is already structure-loaded)
-        long blob = clBase[ci];
+        long blob = clTab[ci].base;
         int len = blobLenOf(blob);
         parseConstPool(blob, len);
         parseFields();
@@ -5793,11 +5777,11 @@ public final class Loader
         {
             return -1;
         }
-        gStatics = clStatics[reg];
+        gStatics = clTab[reg].statics;
         findBootstrapMethods();
         parseVtable(blob);
-        gType = clType[reg];
-        gTib = clTib[reg];
+        gType = clTab[reg].type;
+        gTib = clTab[reg].tib;
         parseForMethods(blob, len);
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -5843,16 +5827,16 @@ public final class Loader
             return 0L;
         }
         int ci = 0;
-        while (ci < clCount && clType[ci] != type)
+        while (ci < clCount && clTab[ci].type != type)
         {
             ci += 1;
         }
-        if (ci >= clCount || clIsIface[ci])
+        if (ci >= clCount || clTab[ci].isIface)
         {
             return 0L;
         }
-        long obj = Heap.alloc(16 + clFieldCount[ci] * 8);  // header(16) + instance fields (incl. inherited)
-        Magic.store64(obj + ObjectModel.TIB_OFFSET, clTib[ci]);
+        long obj = Heap.alloc(16 + clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, clTab[ci].tib);
         return obj;
     }
 
@@ -5993,7 +5977,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8EqAt(gbase, nameOff, clBase[i], clNameOff[i]))
+            if (utf8EqAt(gbase, nameOff, clTab[i].base, clTab[i].nameOff))
             {
                 return i;
             }
@@ -6009,7 +5993,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8EqAt(gbase, classOff, clBase[i], clNameOff[i]))
+            if (utf8EqAt(gbase, classOff, clTab[i].base, clTab[i].nameOff))
             {
                 return true;
             }
@@ -6100,7 +6084,7 @@ public final class Loader
         // the flat imap; step 2 replaces it with a proper itable directory.
         gType = Heap.allocData(24);
         Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
-        Magic.store64(gType + 8, sr >= 0 ? clType[sr] : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
+        Magic.store64(gType + 8, sr >= 0 ? clTab[sr].type : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
         gTib = Heap.allocData((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type (slots filled by fillTib)
     }
@@ -6393,11 +6377,11 @@ public final class Loader
     {
         parseConstPool(bytes, len);
         parseFields();
-        gStatics = clStatics[reg];
+        gStatics = clTab[reg].statics;
         findBootstrapMethods();
         parseVtable(bytes);
-        gType = clType[reg];
-        gTib = clTib[reg];
+        gType = clTab[reg].type;
+        gTib = clTab[reg].tib;
         provideKnownStatics();
     }
 
@@ -6692,7 +6676,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8EqAt(base, off, clBase[i], clNameOff[i]))
+            if (utf8EqAt(base, off, clTab[i].base, clTab[i].nameOff))
             {
                 return i;
             }
@@ -6751,7 +6735,7 @@ public final class Loader
             n = addIfaceUnique(n, clIfaceReg[reg * MAX_DIRECT_IF + j]);
             j += 1;
         }
-        int sr = clSuperReg[reg];                       // the whole superclass chain's direct interfaces
+        int sr = clTab[reg].superReg;                       // the whole superclass chain's direct interfaces
         int guard = 0;
         while (sr >= 0 && guard < 64)
         {
@@ -6761,7 +6745,7 @@ public final class Loader
                 n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
                 j += 1;
             }
-            sr = clSuperReg[sr];
+            sr = clTab[sr].superReg;
             guard += 1;
         }
         int i = 0;
@@ -6789,7 +6773,7 @@ public final class Loader
         int i = 0;
         while (i < n)
         {
-            long ibase = clBase[ifClosureBuf[i]];       // a closure interface's blob; its own methods registered under it
+            long ibase = clTab[ifClosureBuf[i]].base;       // a closure interface's blob; its own methods registered under it
             int k = 0;
             while (k < rgCount)
             {
@@ -6828,7 +6812,7 @@ public final class Loader
         int k = 0;
         while (k < n)
         {
-            Magic.store64(dir + k * 16 + 0, clType[ifClosureBuf[k]]);   // interfaceType
+            Magic.store64(dir + k * 16 + 0, clTab[ifClosureBuf[k]].type);   // interfaceType
             Magic.store64(dir + k * 16 + 8, imap);                      // itable (the shared imap)
             k += 1;
         }
@@ -6866,7 +6850,7 @@ public final class Loader
                 n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
                 j += 1;
             }
-            sr = clSuperReg[sr];
+            sr = clTab[sr].superReg;
             guard += 1;
         }
         int i = 0;
@@ -7120,7 +7104,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clBase[i], clNameOff[i], want))
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, want))
             {
                 return i;
             }
@@ -7173,8 +7157,8 @@ public final class Loader
     private static long newExc(byte[] name)
     {
         int i = classIndexByName(name);
-        long tib = i >= 0 ? clTib[i] : 0L;
-        long obj = Heap.alloc(i >= 0 ? (16 + clFieldCount[i] * 8) : 16);
+        long tib = i >= 0 ? clTab[i].tib : 0L;
+        long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
         Magic.store64(obj + 0L, tib);
         return obj;
     }
@@ -7183,14 +7167,14 @@ public final class Loader
     static long stringTib()
     {
         int i = stringClassIndex();
-        return i >= 0 ? clTib[i] : 0L;
+        return i >= 0 ? clTab[i].tib : 0L;
     }
 
     /** Instance size (bytes) of the loaded mini {@code java/lang/String} (header + fields). */
     static int stringSize()
     {
         int i = stringClassIndex();
-        return i >= 0 ? (16 + clFieldCount[i] * 8) : 24;
+        return i >= 0 ? (16 + clTab[i].fieldCount * 8) : 24;
     }
 
     // ----- invokedynamic: lambda synthesis (LambdaMetafactory), M-B slice 1c -----
@@ -7286,9 +7270,9 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (rawNameEq(clBase[i], clNameOff[i], nameStart, nameLen))
+            if (rawNameEq(clTab[i].base, clTab[i].nameOff, nameStart, nameLen))
             {
-                return clType[i];
+                return clTab[i].type;
             }
             i += 1;
         }
@@ -7365,8 +7349,8 @@ public final class Loader
             // the object. Unlike the other thunks this makes two CALLS (Heap.alloc, <init>), so it needs a frame
             // to preserve LR and the SAM args across them. (No captures: the ctor args are all SAM args.)
             int cr = classRegByName(refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
-            int size = 16 + clFieldCount[cr] * 8;
-            long ctib = clTib[cr];
+            int size = 16 + clTab[cr].fieldCount * 8;
+            long ctib = clTab[cr].tib;
             long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
             Magic.store32(thunk + w * 4L, A64Enc.subImm(31, 31, frame));                 w += 1;  // sub sp, #frame
@@ -7467,7 +7451,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (clType[i] == type)
+            if (clTab[i].type == type)
             {
                 return i;
             }
@@ -7502,7 +7486,7 @@ public final class Loader
         int di = 0;
         while (di < n)
         {
-            Magic.store64(dir + e * 16L + 0L, clType[ifClosureBuf[di]]);
+            Magic.store64(dir + e * 16L + 0L, clTab[ifClosureBuf[di]].type);
             Magic.store64(dir + e * 16L + 8L, imap);
             e += 1;
             di += 1;
@@ -7605,7 +7589,7 @@ public final class Loader
             return gType;
         }
         int r = classRegOf(classIdx);
-        return r >= 0 ? clType[r] : 0L;
+        return r >= 0 ? clTab[r].type : 0L;
     }
 
     // ----- array Types -----------------------------------------------------
@@ -7621,9 +7605,9 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Object")))
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
-                return clType[i];
+                return clTab[i].type;
             }
             i += 1;
         }
@@ -7653,7 +7637,7 @@ public final class Loader
     private static int arrayVtableCount()
     {
         int oi = objectClassIndex();
-        return oi >= 0 ? clVtCount[oi] : 0;
+        return oi >= 0 ? clTab[oi].vtCount : 0;
     }
 
     /** Copy java/lang/Object's vtable slots into the array TIB {@code tib} (after its Type slot). Object's slots
@@ -7667,11 +7651,11 @@ public final class Loader
         {
             return;
         }
-        int nv = clVtCount[oi];
+        int nv = clTab[oi].vtCount;
         int k = 0;
         while (k < nv)
         {
-            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTib[oi] + 8L + (long) k * 8L));
+            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTab[oi].tib + 8L + (long) k * 8L));
             k += 1;
         }
     }
@@ -7710,7 +7694,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Object")))
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return i;
             }
@@ -7785,9 +7769,9 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
-            if (utf8SliceEq(base, nameOff + 4, len - 3, clBase[i], clNameOff[i]))
+            if (utf8SliceEq(base, nameOff + 4, len - 3, clTab[i].base, clTab[i].nameOff))
             {
-                return clType[i];
+                return clTab[i].type;
             }
             i += 1;
         }
@@ -7856,9 +7840,9 @@ public final class Loader
             int i = 0;
             while (i < clCount)
             {
-                if (utf8IsAtBase(clBase[i], clNameOff[i], Magic.bytes("java/lang/Class")))
+                if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Class")))
                 {
-                    classTibCache = clTib[i];
+                    classTibCache = clTab[i].tib;
                     break;
                 }
                 i += 1;
@@ -7923,9 +7907,9 @@ public final class Loader
         int ci = 0;
         while (ci < clCount)
         {
-            if (utf8EqAt(clBase[ci], clNameOff[ci], rgTab[bestReg].base, rgTab[bestReg].classOff))
+            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[bestReg].base, rgTab[bestReg].classOff))
             {
-                return classMirror(clType[ci]);
+                return classMirror(clTab[ci].type);
             }
             ci += 1;
         }
@@ -8008,14 +7992,14 @@ public final class Loader
     static long tibOfClass(int classIdx)
     {
         int r = classRegOf(classIdx);
-        return r >= 0 ? clTib[r] : gTib;
+        return r >= 0 ? clTab[r].tib : gTib;
     }
 
     /** Scalar instance size (header + one 8-byte slot per field) of class {@code classIdx}. */
     static int objectSizeOf(int classIdx)
     {
         int r = classRegOf(classIdx);
-        int fields = r >= 0 ? clFieldCount[r] : gifCount;
+        int fields = r >= 0 ? clTab[r].fieldCount : gifCount;
         return 16 + fields * 8;
     }
 
