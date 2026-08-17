@@ -6792,6 +6792,21 @@ public final class Loader
         return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
     }
 
+    /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
+    private static int regOfType(long type)
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clType[i] == type)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
     /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
     private static long finishLambdaClass(long thunk, long ifaceType, int ifaceSlot, int nc)
     {
@@ -6804,12 +6819,27 @@ public final class Loader
             j += 1;
         }
         Magic.store64(imap + ifaceSlot * 8L, thunk);
-        // itable directory: { interfaceType, imap } + a zero sentinel.
-        long dir = Heap.allocData(2 * 16);
-        Magic.store64(dir + 0L, ifaceType);
+        // itable directory: one { interfaceType, imap } entry for the functional interface AND every interface it
+        // transitively extends, then a 0 sentinel. invokeinterface walks this dir for the TARGET interface's Type,
+        // so a lambda invoked through a SUPER-interface (e.g. a BinaryOperator accumulator called as BiFunction by
+        // Stream.reduce/ReduceOps) must carry that super-interface's Type here too, else the walk hits the sentinel
+        // and NPEs. All entries point at the same (global-slot-indexed) imap.
+        int fnReg = regOfType(ifaceType);
+        int n = fnReg >= 0 ? ifaceClosureOf(fnReg) : 0;
+        long dir = Heap.allocData((n + 2) * 16);
+        Magic.store64(dir + 0L, ifaceType);              // the functional interface itself
         Magic.store64(dir + 8L, imap);
-        Magic.store64(dir + 16L, 0L);
-        Magic.store64(dir + 24L, 0L);
+        int e = 1;
+        int di = 0;
+        while (di < n)
+        {
+            Magic.store64(dir + e * 16L + 0L, clType[ifClosureBuf[di]]);
+            Magic.store64(dir + e * 16L + 8L, imap);
+            e += 1;
+            di += 1;
+        }
+        Magic.store64(dir + e * 16L + 0L, 0L);           // sentinel: interfaceType 0 ends the directory
+        Magic.store64(dir + e * 16L + 8L, 0L);
         // Type { instanceSize, superType=Object(0), itableDir }.
         long type = Heap.allocData(24);
         Magic.store64(type + 0L, 16 + nc * 8);
