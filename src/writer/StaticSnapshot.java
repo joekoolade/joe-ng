@@ -34,40 +34,11 @@ final class StaticSnapshot
         try
         {
             Field f = field(fieldKey);
-            Class<?> t = f.getType();
-            if (t == int.class)
+            if (!f.getType().isPrimitive())
             {
-                return (long) f.getInt(null);
+                return null;
             }
-            if (t == long.class)
-            {
-                return f.getLong(null);
-            }
-            if (t == boolean.class)
-            {
-                return f.getBoolean(null) ? 1L : 0L;
-            }
-            if (t == byte.class)
-            {
-                return (long) f.getByte(null);
-            }
-            if (t == char.class)
-            {
-                return (long) f.getChar(null);
-            }
-            if (t == short.class)
-            {
-                return (long) f.getShort(null);
-            }
-            if (t == float.class)
-            {
-                return (long) Float.floatToRawIntBits(f.getFloat(null));
-            }
-            if (t == double.class)
-            {
-                return Double.doubleToRawLongBits(f.getDouble(null));
-            }
-            return null;
+            return valueBits(f, null);
         }
         catch (ReflectiveOperationException e)
         {
@@ -99,6 +70,71 @@ final class StaticSnapshot
         }
     }
 
+    /** The seed JVM's value of {@code o}'s PRIMITIVE instance field {@code name} as raw 64-bit slot
+     *  bits — the shape a compiled putfield would have stored into the 8-byte field slot. */
+    static long instanceBits(Object o, String name)
+    {
+        try
+        {
+            return valueBits(findField(o.getClass(), name), o);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new RuntimeException("instance snapshot failed for "
+                    + o.getClass().getName() + "." + name, e);
+        }
+    }
+
+    /** The seed JVM's value of {@code o}'s REFERENCE-typed instance field {@code name}. */
+    static Object instanceRef(Object o, String name)
+    {
+        try
+        {
+            return findField(o.getClass(), name).get(o);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new RuntimeException("instance snapshot failed for "
+                    + o.getClass().getName() + "." + name, e);
+        }
+    }
+
+    /** {@code target}'s value of the primitive field {@code f} as raw 64-bit slot bits (booleans as
+     *  0/1, chars zero-extended, other integrals sign-extended, floats/doubles as their IEEE bits). */
+    private static long valueBits(Field f, Object target) throws ReflectiveOperationException
+    {
+        Class<?> t = f.getType();
+        if (t == int.class)
+        {
+            return (long) f.getInt(target);
+        }
+        if (t == long.class)
+        {
+            return f.getLong(target);
+        }
+        if (t == boolean.class)
+        {
+            return f.getBoolean(target) ? 1L : 0L;
+        }
+        if (t == byte.class)
+        {
+            return (long) f.getByte(target);
+        }
+        if (t == char.class)
+        {
+            return (long) f.getChar(target);
+        }
+        if (t == short.class)
+        {
+            return (long) f.getShort(target);
+        }
+        if (t == float.class)
+        {
+            return (long) Float.floatToRawIntBits(f.getFloat(target));
+        }
+        return Double.doubleToRawLongBits(f.getDouble(target));
+    }
+
     /** Resolve "owner/Class.name" to its accessible {@link Field}, initializing the owner. */
     private static Field field(String fieldKey) throws ReflectiveOperationException
     {
@@ -108,5 +144,24 @@ final class StaticSnapshot
         Field f = Class.forName(owner).getDeclaredField(name);
         f.setAccessible(true);
         return f;
+    }
+
+    /** Find instance field {@code name} on {@code c} or a superclass, made accessible. */
+    private static Field findField(Class<?> c, String name) throws ReflectiveOperationException
+    {
+        for (Class<?> k = c; k != null; k = k.getSuperclass())
+        {
+            try
+            {
+                Field f = k.getDeclaredField(name);
+                f.setAccessible(true);
+                return f;
+            }
+            catch (NoSuchFieldException e)
+            {
+                continue;
+            }
+        }
+        throw new NoSuchFieldException(c.getName() + "." + name);
     }
 }

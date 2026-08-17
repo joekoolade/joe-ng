@@ -1638,6 +1638,24 @@ control) the un-null-checked `baload` reads low RAM → garbage + FAIL. Next: sc
 with fields + TIBs (`Integer$IntegerCache.cache` needs baked `Integer` objects), reference
 arrays, Strings.
 
+**Increment 3 DONE — scalar objects + reference arrays (whole object graphs).**
+`bakeDiscover` BFS-walks the seed JVM's object graph from each baked static (identity-deduped,
+so aliasing and cycles are safe); `bakedWords`/`writeBakedObject` lay out and write all three
+shapes — primitive arrays, reference arrays (8-byte pointer elements resolved through the
+graph), and scalar objects (fields at the model's slots via the SAME registered classfile the
+compiler resolves `getfield` against, so offsets agree by construction; TIB filled when the
+image lays one out for the class, else null like interned strings). A new `BAKE_STATICS`
+mechanism force-adds a static to the referenced set and stashes the SLOT's address in a VM
+static — used for `Integer$IntegerCache.cache` because stock `valueOf`'s never-taken
+`new Integer` branch would drag every Integer virtual (toString → String/Unsafe closure) into
+the host compile. Probe: slot → baked `Integer[]` → element 170 → stock `Integer.intValue()`
+prints `*` (42). Two lessons: `java/lang/Byte` (first attempt) resolves to the GUEST overlay
+in the registry, whose mini code explodes the closure — only overlay-free stock classes
+(Integer, Long, Math, StringUTF16) are cleanly bakeable; and any stock `valueOf` needs
+writer-side native stubbing before it can compile. Next: bake `valueOf` itself (native stubs
+or pruned branches), Strings, TIBs for baked-only classes, then `vm/Loader` uses baked
+`java.base`.
+
 ---
 
 ## 5. Design decisions to lock day one
