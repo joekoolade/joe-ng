@@ -3741,7 +3741,13 @@ public final class Loader
                 else
                 {
                     addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
-                    if (LAZY_DEFER && mCount > 0 && mCode[mCount - 1] == code && deferrable(gcp[u2(p + 2)]))
+                    // Defer this method (compile on first call) if: it's the LAZY_DEFER-gated class, OR it's a
+                    // Stage-2 class's non-static method (statics take the phase-A cell path above; virtuals/others
+                    // take the TIB/registry stub path here) -- so a Stage-2 class with virtual methods is fully
+                    // metadata-only, not just the all-static utilities.
+                    boolean defer = (LAZY_DEFER && deferrable(gcp[u2(p + 2)]))
+                            || (LAZY_STAGE2 && stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]));
+                    if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
                     }
@@ -4422,7 +4428,7 @@ public final class Loader
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
-        if (LAZY_DEFER)
+        if (LAZY_DEFER || LAZY_STAGE2)
         {
             mDefer = new int[MAXM];                      // only allocated when deferral is enabled
         }
@@ -4515,7 +4521,7 @@ public final class Loader
      */
     private static void sizeMethod(int i)
     {
-        if (LAZY_DEFER && mDefer[i] != 0)
+        if ((LAZY_DEFER || LAZY_STAGE2) && mDefer[i] != 0)
         {
             mBuf[i] = Heap.allocCode(32);               // just the stub -> no dry-run compile at load (genuine defer)
             return;
@@ -4526,7 +4532,7 @@ public final class Loader
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
-        if (LAZY_DEFER && mDefer[i] != 0)               // deferred: install a stub; the body compiles on first call
+        if ((LAZY_DEFER || LAZY_STAGE2) && mDefer[i] != 0)               // deferred: install a stub; the body compiles on first call
         {
             emitDeferredStub(i);
             return;
@@ -4568,6 +4574,12 @@ public final class Loader
         {
             return false;
         }
+        return notInit(nameOff);
+    }
+
+    /** True if {@code nameOff} is neither {@code <clinit>} nor {@code <init>} (the initializers must run at load). */
+    private static boolean notInit(int nameOff)
+    {
         return !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>"))
                 && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
     }
@@ -6577,7 +6589,8 @@ public final class Loader
     {
         return utf8IsAtBase(base, off, Magic.bytes("java/util/Objects"))
                 || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/Preconditions"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"));
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/String"));   // a class WITH virtual methods
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
