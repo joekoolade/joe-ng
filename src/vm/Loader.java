@@ -34,6 +34,20 @@ public final class Loader
     private static int gAfterCp;    // offset just past the constant pool (stable; gp gets reused as a cursor)
     private static int[] gcpTag;    // tag of each entry (7 = Class — used for dependencies)
     private static int gcpCount;
+    // Per-blob constant-pool PARSE CACHE. parseConstPool used to copy the whole blob (toBytes) + allocate
+    // gcp/gcpTag/litObjByCp EVERY call; RTA (resolveVirtuals) re-parses each instantiated class's superclass
+    // chain once per fixpoint iteration -> thousands of parses -> ~190 MiB of garbage byte[]/int[] copies that
+    // fill the demand-load arena (blocker (e)). Cache the parse keyed by blob base so each blob is copied+parsed
+    // ONCE; later calls reuse it. The cache arrays are scanned loader statics, so the byte[]/int[] survive GC.
+    private static final int MAXPARSECACHE = 2048;
+    private static long[] pcBase;    // cached blob base address (0 = empty slot)
+    private static byte[][] pcBytes; // the toBytes copy
+    private static int[][] pcCp;     // cp entry offsets
+    private static int[][] pcCpTag;  // cp entry tags
+    private static long[][] pcLitObj;// per-entry ldc-String intern cache
+    private static int[] pcCpCount;  // cp entry count
+    private static int[] pcAfterCp;  // offset past the constant pool
+    private static int pcN;
     private static int gClassModifiers;   // current class's access_flags (ACC_SUPER stripped) — cached into clModifiers
     private static int gcodeLen;    // length of the located method's bytecode
     private static int gMaxLocals;  // ... and its max_locals (frame sizing)
@@ -1703,6 +1717,14 @@ public final class Loader
         instImapN = 0;
         lambdaTibRoots = new long[MAXLAMBDATIB];
         lambdaTibRootN = 0;
+        pcBase = new long[MAXPARSECACHE];
+        pcBytes = new byte[MAXPARSECACHE][];
+        pcCp = new int[MAXPARSECACHE][];
+        pcCpTag = new int[MAXPARSECACHE][];
+        pcLitObj = new long[MAXPARSECACHE][];
+        pcCpCount = new int[MAXPARSECACHE];
+        pcAfterCp = new int[MAXPARSECACHE];
+        pcN = 0;
         fldBase = new long[MAXFIELD];
         fldClassOff = new int[MAXFIELD];
         fldNameOff = new int[MAXFIELD];
@@ -3263,6 +3285,22 @@ public final class Loader
     private static void parseConstPool(long base, int len)
     {
         gbase = base;
+        int ci = 0;
+        while (ci < pcN && pcBase[ci] != base)
+        {
+            ci += 1;
+        }
+        if (ci < pcN)                                   // cache HIT: reuse the one-time copy + parse for this blob
+        {
+            gbytes = pcBytes[ci];
+            gcp = pcCp[ci];
+            gcpTag = pcCpTag[ci];
+            litObjByCp = pcLitObj[ci];
+            gcpCount = pcCpCount[ci];
+            gAfterCp = pcAfterCp[ci];
+            gp = base + gAfterCp;
+            return;
+        }
         gbytes = toBytes(base, len);
         gcpCount = ClassReader.cpCount(gbytes);
         gcp = new int[gcpCount];
@@ -3270,6 +3308,17 @@ public final class Loader
         litObjByCp = new long[gcpCount];                // per-blob ldc-String intern cache (one object per cp entry)
         gAfterCp = ClassReader.constantPool(gbytes, gcp, gcpTag);   // stable: gp is later reused as a walk cursor
         gp = base + gAfterCp;
+        if (pcN < MAXPARSECACHE)                         // remember it: RTA/phase-A/phase-B all re-parse this blob
+        {
+            pcBase[pcN] = base;
+            pcBytes[pcN] = gbytes;
+            pcCp[pcN] = gcp;
+            pcCpTag[pcN] = gcpTag;
+            pcLitObj[pcN] = litObjByCp;
+            pcCpCount[pcN] = gcpCount;
+            pcAfterCp[pcN] = gAfterCp;
+            pcN += 1;
+        }
     }
 
     /** Copy an embedded blob onto the heap so the shared reader can index it. */
