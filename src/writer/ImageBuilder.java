@@ -59,6 +59,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/Integer.equals(Ljava/lang/Object;)Z", "vm/VM.integerEqualsAddr" },
         { "java/lang/Long.equals(Ljava/lang/Object;)Z",   "vm/VM.longEqualsAddr" },
         { "java/lang/Long.longValue()J",                  "vm/VM.longLongValueAddr" },
+        // M8 Strings: valueOf(Z) returns an interned literal -- the ldc-String-object path.
+        // length()/charAt() read a baked String back out; coder()/isLatin1() are their
+        // invokevirtual targets (must be rooted or their slots stay trap stubs).
+        { "java/lang/String.valueOf(Z)Ljava/lang/String;", "vm/VM.stringValueOfBoolAddr" },
+        { "java/lang/String.length()I",                   "vm/VM.stringLengthAddr" },
+        { "java/lang/String.charAt(I)C",                  "vm/VM.stringCharAtAddr" },
+        { "java/lang/String.coder()B",                    "vm/VM.stringCoderAddr" },
+        { "java/lang/String.isLatin1()Z",                 "vm/VM.stringIsLatin1Addr" },
     };
 
     // M8 static state: statics force-added to the referenced set so they get a slot and a deep
@@ -160,6 +168,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Vec<Object> bakedRoots = new Vec<>();
         Vec<Object> bakedObjs = new Vec<>();
         StrSet bakedStaticsDone = new StrSet();
+        Vec<Object> strObjs = new Vec<>();                // interned host Strings for bake-domain ldc sites
+        ByteKeyIntTable strObjIndex = new ByteKeyIntTable();   // literal bytes -> strObjs index (JLS interning)
+        int strObjsDone = 0;                              // strObjs prefix already graph-discovered
         while (true)
         {
         while (!worklist.isEmpty() || !pendingVtable.isEmpty())
@@ -200,6 +211,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 var s = _r2.get(_ri2);
                 strings.add(s.text());
+            }
+            var _r2b = cm.relocs().stringObjs();
+            for (int _ri2b = 0; _ri2b < _r2b.size(); _ri2b++)
+            {
+                var s = _r2b.get(_ri2b);
+                if (strObjIndex.get(s.text()) < 0)
+                {
+                    strObjIndex.put(s.text(), strObjs.size());
+                    strObjs.add(new String(s.text(), java.nio.charset.StandardCharsets.US_ASCII));
+                }
             }
             var _r3 = cm.relocs().typeRefs();
             for (int _ri3 = 0; _ri3 < _r3.size(); _ri3++)
@@ -290,6 +311,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             bakedKeys.add(key);
             bakedRoots.add(v);
             bakeDiscover(v, bakedObjs);
+            more = true;
+        }
+        // Interned ldc Strings from bake-domain methods bake exactly like any other scalar graph
+        // (String object -> its value byte[]); java/lang/String joins tibClasses via the scalar rule.
+        while (strObjsDone < strObjs.size())
+        {
+            bakeDiscover(strObjs.get(strObjsDone), bakedObjs);
+            strObjsDone++;
             more = true;
         }
         for (int _s17 = 0; _s17 < bakedObjs.size(); _s17++)
@@ -484,6 +513,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 symSrc[i] = utf8("");
                 symLine[i] = new int[0];
             }
+            else if (stubbedKeys.contains(k))
+            {
+                // A bake stub has no bytecode -- and its method may not even exist in the registered
+                // classfile (e.g. a stock ref into a guest overlay), so don't lookup() it.
+                symName[i] = utf8(k.substring(0, k.indexOf('(')));
+                symSrc[i] = utf8("");
+                symLine[i] = lineTabList.get(lineTabIndex.get(k));
+            }
             else
             {
                 symName[i] = utf8(k.substring(0, k.indexOf('(')));   // "owner/Class.method"
@@ -513,6 +550,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Vec<GlobalCall> calls = new Vec<>();
         Vec<GlobalTib> tibs = new Vec<>();
         Vec<GlobalStr> strs = new Vec<>();
+        Vec<GlobalStr> strObjSites = new Vec<>();   // bake-domain ldc sites -> baked String objects
         Vec<GlobalStatic> stats = new Vec<>();
         Vec<GlobalType> types = new Vec<>();
         Vec<long[]> frameEntries = new Vec<>();       // {codeStart, codeEnd, frameSize}
@@ -545,6 +583,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 var s = _r7.get(_ri7);
                 strs.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text()));
+            }
+            var _r7b = cm.relocs().stringObjs();
+            for (int _ri7b = 0; _ri7b < _r7b.size(); _ri7b++)
+            {
+                var s = _r7b.get(_ri7b);
+                strObjSites.add(new GlobalStr(base + s.wordIndex(), s.reg(), s.text()));
             }
             var _r8 = cm.relocs().staticRefs();
             for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
@@ -887,6 +931,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             GlobalStr s = strs.get(_v5);
             cb.patchAddr(s.siteWord(), s.reg(), addr(strWord.get(s.text())));   // store byte[] address
         }
+        for (int _v5b = 0; _v5b < strObjSites.size(); _v5b++)
+        {
+            GlobalStr s = strObjSites.get(_v5b);
+            Object str = strObjs.get(strObjIndex.get(s.text()));
+            cb.patchAddr(s.siteWord(), s.reg(), addr(bakedObjWord[bakedIndexOf(bakedObjs, str)]));
+        }
         for (int _v6 = 0; _v6 < stats.size(); _v6++)
         {
             GlobalStatic s = stats.get(_v6);
@@ -955,7 +1005,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 || cls.equals("java/lang/StringUTF16")
                 || cls.equals("java/lang/Integer$IntegerCache")
                 || cls.equals("java/lang/Long")
-                || cls.equals("java/lang/Long$LongCache");
+                || cls.equals("java/lang/Long$LongCache")
+                || cls.equals("java/lang/String");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */

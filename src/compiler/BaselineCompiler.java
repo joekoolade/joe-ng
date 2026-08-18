@@ -29,6 +29,7 @@ public final class BaselineCompiler
         private final Vec<CallSite> callSites = new Vec<>();
         private final Vec<TibRef> tibRefs = new Vec<>();
         private final Vec<StrRef> strRefs = new Vec<>();
+        private final Vec<StrRef> stringObjs = new Vec<>();       // ldc String -> baked String OBJECT (M8 bake)
         private final Vec<StaticRef> staticRefs = new Vec<>();
         private final Vec<TypeRef> typeRefs = new Vec<>();
         private final Vec<TypeRef> interfaceRefs = new Vec<>();   // interface Type address loads
@@ -36,13 +37,14 @@ public final class BaselineCompiler
         public Vec<CallSite> callSites() { return callSites; }
         public Vec<TibRef> tibRefs() { return tibRefs; }
         public Vec<StrRef> strRefs() { return strRefs; }
+        public Vec<StrRef> stringObjs() { return stringObjs; }
         public Vec<StaticRef> staticRefs() { return staticRefs; }
         public Vec<TypeRef> typeRefs() { return typeRefs; }
         public Vec<TypeRef> interfaceRefs() { return interfaceRefs; }
 
         public boolean isEmpty()
         {
-            return callSites.isEmpty() && tibRefs.isEmpty() && strRefs.isEmpty()
+            return callSites.isEmpty() && tibRefs.isEmpty() && strRefs.isEmpty() && stringObjs.isEmpty()
                    && staticRefs.isEmpty() && typeRefs.isEmpty() && interfaceRefs.isEmpty();
         }
     }

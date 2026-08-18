@@ -1695,6 +1695,26 @@ dispatches `longValue()` through it → `1`. Negative control: un-rooting `Long.
 that dispatch land in its stub → live `BAKE TRAP (lr=...)` halt — the trap semantics proven
 on the metal. Next: Strings, widen the baked set, then `vm/Loader` uses baked `java.base`.
 
+**Increment 6 DONE — baked Strings: `ldc` in stock code makes real String objects.**
+Two discoveries set the shape: the runtime `java/lang/String` IS stock (no guest overlay — the
+lazy arc runs stock String on-metal), so there is no layout question — the baker's
+field-by-name read (value/coder/hash/hashIsZero) aligns with the registered classfile by
+construction. And the vm-side `ldc "..."` contract (raw byte[] through `Magic.bytes`) is
+WRONG for stock code, which needs a real object. So `WriterSymbols.string` now splits by
+caller: a bake-domain method's `ldc` records into a new `stringObjs` reloc list; the writer
+interns the host String by literal bytes (JLS-style, one object per text), bakes it through
+the existing deep-snapshot graph (a String is just a scalar whose `value` field is a baked
+byte[]; `java/lang/String` joins tibClasses via the scalar rule — its ~100-slot vtable parks
+and stubs), and patches each site with the baked object's address. vm code keeps the byte[]
+path untouched. Also: the emit pass's symbol table no longer `lookup()`s stubbed keys (a
+stub's method may not exist in the registered classfile — e.g. stock AssertionError.<init>
+(Object) vs the guest overlay). Probe: stock `String.valueOf(boolean)` (pure ldc) returns
+the interned literal; `length()`/`charAt()` — with virtual targets `coder()`/`isLatin1()`
+rooted and `COMPACT_STRINGS` snapshotted off the auto-deferred `<clinit>` — print `true`
+back char by char. Negative control (byte[] literal instead of object): `length()`'s
+dispatch wild-branches through the null TIB → caught by the boot re-entry guard. Next:
+widen the baked set (String utilities now unblocked), then `vm/Loader` uses baked `java.base`.
+
 ---
 
 ## 5. Design decisions to lock day one

@@ -101,6 +101,16 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // (the writer's identities are byte content, not String — §M5.5b). Decoding here
         // is fine: WriterSymbols is the seed-side Symbols; only the record is metal-bound.
         byte[] text = cf.stringAt(stringCp).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        // M8 bake: vm-side code takes its literal as a raw byte[] (the Magic.bytes contract), but a
+        // STOCK java.base method's ldc must produce a real java/lang/String OBJECT -- the writer
+        // interns the host String and bakes it (stock layout: value byte[] + coder) via the
+        // deep-snapshot graph, and this site is patched with that object's address.
+        String caller = cf.thisClassName();
+        if (caller.startsWith("java/") || caller.startsWith("jdk/") || caller.startsWith("sun/"))
+        {
+            relocs.stringObjs().add(new StrRef(cb.reserveAddr(reg), reg, text));
+            return;
+        }
         relocs.strRefs().add(new StrRef(cb.reserveAddr(reg), reg, text));
     }
     public void exceptionSlot(CodeBuffer cb, int reg)
