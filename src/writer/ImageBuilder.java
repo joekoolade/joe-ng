@@ -444,11 +444,47 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         StrIntTable staticWord = new StrIntTable();          // one 8-byte slot per static field, zero-init
         int staticsRegionStart = cur;
+        // M8 statics unification: baked (vtSig) classes get DENSE per-class static blocks -- one
+        // slot per DECLARED static field, in declaration order = the loader's slot numbering -- so
+        // the loader ADOPTS the block as clTab[].statics: ONE home per field across both worlds
+        // (the loader's clinit run then initializes the shared slots; the snapshot pre-fills the
+        // deferred ones). Every declared field keys into staticWord, so getstatic patches, writer
+        // fills, and the snapshot all resolve into the block. Blocks live inside the statics
+        // region, so the GC's staticsStart/End root scan covers loader-written heap pointers.
+        Vec<String> vtSigClasses = new Vec<>();
+        for (int i = 0; i < typeClasses.size(); i++)
+        {
+            String c = typeClasses.at(i);
+            if (bakeDomain(c))
+            {
+                vtSigClasses.add(c);
+            }
+        }
+        int[] bakedStaticsWord = new int[vtSigClasses.size()];
+        int[] bakedStaticCount = new int[vtSigClasses.size()];
+        for (int i = 0; i < vtSigClasses.size(); i++)
+        {
+            bakedStaticsWord[i] = cur;
+            int n = 0;
+            for (ClassFile.FieldInfo fld : registry.resolve(vtSigClasses.get(i)).fields())
+            {
+                if (fld.isStatic())
+                {
+                    staticWord.put(vtSigClasses.get(i) + "." + fld.name(), cur);
+                    cur += WORDS_PER_SLOT;
+                    n++;
+                }
+            }
+            bakedStaticCount[i] = n;
+        }
         for (int _s6 = 0; _s6 < statics.size(); _s6++)
         {
             String s = statics.at(_s6);
-            staticWord.put(s, cur);
-            cur += WORDS_PER_SLOT;
+            if (!staticWord.containsKey(s))              // baked classes' fields already have block slots
+            {
+                staticWord.put(s, cur);
+                cur += WORDS_PER_SLOT;
+            }
         }
         int staticsRegionEnd = cur;
         // itables: per instantiated class, a directory of {interfaceType, itable} plus the itables.
@@ -630,17 +666,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // the itable slot numbering -- so the loader can itparity-check its own flattened capture
         // exactly like classes vtparity-check their vtable flattening. (The loader tells the two
         // kinds apart by its own ACC_INTERFACE; both adopt the writer Type from the 4th slot.)
-        Vec<String> vtSigClasses = new Vec<>();
-        for (int i = 0; i < typeClasses.size(); i++)
-        {
-            String c = typeClasses.at(i);
-            if (bakeDomain(c))
-            {
-                vtSigClasses.add(c);
-            }
-        }
+        // (vtSigClasses hoisted above the statics layout -- the dense blocks need it.)
         int vtSigDirWord = cur;
-        cur += vtSigClasses.size() * 8;                             // {classUtf8, slotsAddr, count, typeAddr}
+        cur += vtSigClasses.size() * 12;                            // {classUtf8, slotsAddr, count, typeAddr, staticsAddr, staticCount}
         int[] vtSigClsWord = new int[vtSigClasses.size()];
         int[] vtSigSlotsWord = new int[vtSigClasses.size()];
         int[][] vtSigNameWord = new int[vtSigClasses.size()][];
@@ -877,11 +905,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 writeLong(image, vtSigSlotsWord[i] + s * 4,     addr(vtSigNameWord[i][s]));
                 writeLong(image, vtSigSlotsWord[i] + s * 4 + 2, addr(vtSigDescWord[i][s]));
             }
-            int w = vtSigDirWord + i * 8;
-            writeLong(image, w,     addr(vtSigClsWord[i]));
-            writeLong(image, w + 2, addr(vtSigSlotsWord[i]));
-            writeLong(image, w + 4, vt.size());
-            writeLong(image, w + 6, addr(typeWord.get(vtSigClasses.get(i))));   // the ONE Type node
+            int w = vtSigDirWord + i * 12;
+            writeLong(image, w,      addr(vtSigClsWord[i]));
+            writeLong(image, w + 2,  addr(vtSigSlotsWord[i]));
+            writeLong(image, w + 4,  vt.size());
+            writeLong(image, w + 6,  addr(typeWord.get(vtSigClasses.get(i))));  // the ONE Type node
+            writeLong(image, w + 8,  addr(bakedStaticsWord[i]));                // the ONE statics block
+            writeLong(image, w + 10, bakedStaticCount[i]);
         }
         fillStatic(image, staticWord, "vm/VM.vtSigTable", addr(vtSigDirWord));
         fillStatic(image, staticWord, "vm/VM.vtSigCount", vtSigClasses.size());
@@ -986,9 +1016,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             fillStatic(image, staticWord, BAKE_STATICS[bs][1], addr(staticWord.get(BAKE_STATICS[bs][0])));
         }
-        // M8 static state: a bakeNoClinit class's <clinit> never runs (not at build time, not on the
-        // metal), so any of its statics referenced by baked code would read 0. Snapshot the seed JVM's
-        // initialized PRIMITIVE values into their slots instead.
+        // M8 static state: a deferred-<clinit> class's statics would read 0, so snapshot the seed
+        // JVM's initialized PRIMITIVE values. With statics unification the loader ADOPTS a baked
+        // class's block, so snapshot EVERY declared primitive of a deferred baked class (loader-
+        // compiled readers see the block too, not just the writer-referenced fields); the sparse
+        // referenced set still covers non-block classes. Unreferenced OBJECT statics stay null
+        // until a runtime <clinit> fills the shared slot.
         for (int si = 0; si < statics.size(); si++)
         {
             String key = statics.at(si);
@@ -998,6 +1031,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 if (bits != null)
                 {
                     fillStatic(image, staticWord, key, bits);
+                }
+            }
+        }
+        for (int vi = 0; vi < vtSigClasses.size(); vi++)
+        {
+            String cls = vtSigClasses.get(vi);
+            if (!clinitDeferred(cls))
+            {
+                continue;
+            }
+            for (ClassFile.FieldInfo fld : registry.resolve(cls).fields())
+            {
+                if (fld.isStatic())
+                {
+                    Long bits = StaticSnapshot.primitiveBits(cls + "." + fld.name());
+                    if (bits != null)
+                    {
+                        fillStatic(image, staticWord, cls + "." + fld.name(), bits);
+                    }
                 }
             }
         }

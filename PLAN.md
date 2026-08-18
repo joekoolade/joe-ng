@@ -1885,6 +1885,24 @@ SortProbe (comparator dispatch), LispDemo (lambda itables: `(twice inc 40) = 42`
 WordCount (LinkedHashMap iterators + a live `String.equals` bake-link mid-demo) — all clean
 returns, zero DIFFs, zero traps.
 
+**Increment 9 DONE — statics unification: ONE home per static field.** Baked (vtSig) classes
+now get **dense per-class static blocks** in the writer's statics region — one slot per
+DECLARED static, in declaration order, which IS the loader's slot numbering — keyed through
+`staticWord` so every existing mechanism (getstatic patches, writer fills, the seed-JVM
+snapshot, `BAKE_STATICS` stashes) resolves into the block untouched. The vtSig entry widened
+to 6 longs (`{classUtf8, slotsAddr, count, typeAddr, staticsAddr, staticCount}`), and the
+loader **adopts the block** as `clTab[].statics` right after `findVtSig` (before
+`registerClassStructure` captures per-field addresses into `sgTab`) — with a count guard
+that degrades to the loader's own block and prints `staticadopt DIFF` on mismatch (none
+fire). Consequences: the loader's `<clinit>` runs now initialize the SHARED slots (both
+worlds see one value — the point); deferred classes carry the snapshot, which now covers
+EVERY declared primitive of a deferred baked class (loader-compiled readers see the block
+too), not just writer-referenced fields; blocks sit inside `staticsStart/End` so the GC root
+scan covers loader-written heap pointers. Validation: NetDemo boot (all 9 probes PASS, no
+DIFFs) + the four-demo battery (ThreadDemo/SortProbe/LispDemo/WordCount) all clean.
+Remaining: object-returning links — now gated only on TIB-slot content (a writer-TIB object
+in loader hands can dispatch into bake stubs), the arc's last rung.
+
 ---
 
 ## 5. Design decisions to lock day one
