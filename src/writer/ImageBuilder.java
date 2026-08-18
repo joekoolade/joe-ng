@@ -160,7 +160,6 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int handlerCount = 0;
         Vec<String> worklist = new Vec<>();
         Vec<String> pendingVtable = new Vec<>();   // bake-domain vtable slots: stub unless really called
-        StrSet noLinkKeys = new StrSet();          // baked methods the LOADER must not link (world-crossing unsafe)
         StrIntTable lineTabIndex = new StrIntTable();   // stack-trace debug: method key -> position in lineTabList
         Vec<int[]> lineTabList = new Vec<>();           // per method: {wordOffset, line}* transitions (machine-independent)
         worklist.add(entryKey);
@@ -214,21 +213,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
-            // M8 world unification: a baked method is loader-LINKABLE unless it still crosses
-            // worlds by writer-side identity. invokevirtual links (slot-numbering parity, vtparity-
-            // checked at boot). instanceof/checkcast link for BOTH class and interface targets:
-            // Type adoption makes the writer's node the ONE runtime Type -- classes match on the
-            // super-chain walk, interfaces match on the itableDir KEY compare (the loader's dir
-            // entries hold the adopted interface Type). The one remaining exclusion is
-            // invokeinterface: the two worlds index itables differently (the loader by a GLOBAL
-            // interface-method index deduped by name+descriptor across all loaded interfaces, the
-            // writer by per-interface declaration slot), so a writer-compiled itable lookup on a
-            // loader receiver would index the wrong entry. Field offsets and BL targets are
-            // world-independent.
-            if (cm.relocs().interfaceRefs().size() > 0)
-            {
-                noLinkKeys.add(k);
-            }
+            // M8 world unification COMPLETE for dispatch and type checks: invokevirtual links
+            // (vtparity), instanceof/checkcast link for classes and interfaces (Type adoption),
+            // and invokeinterface links too -- both worlds now index itables by the SAME flattened
+            // per-interface slot (itparity-checked at boot). Field offsets and BL targets are
+            // world-independent. The remaining link gate is the primitive-return filter below
+            // (writer-TIB objects must not leak until statics/allocation unify).
             var _r1 = cm.relocs().callSites();
             for (int _ri1 = 0; _ri1 < _r1.size(); _ri1++)
             {
@@ -595,7 +585,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 continue;
             }
-            if (stubbedKeys.contains(k) || noLinkKeys.contains(k))
+            if (stubbedKeys.contains(k))
             {
                 continue;
             }
@@ -636,11 +626,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         //     Covers every bake-domain class with a writer Type (typeClasses: instantiated classes,
         //     type-check targets, and their full super chains); interfaces are skipped (the loader
         //     never runs the class phase-A path for them, and itables stay per-world for now). ---
-        // M8 itables: INTERFACES join the table too, for Type adoption alone -- they carry no
-        // vtable signatures (slotsAddr 0 = the no-parity marker; interfaces have no vtable).
-        // A shared interface Type makes cross-world interface instanceof/checkcast sound:
-        // VM.instanceOf answers those by comparing the ifaceType KEYS in a Type's itableDir,
-        // and the loader's dir entries hold the (now adopted) interface Type.
+        // M8 itables: INTERFACE entries carry their FLATTENED per-interface method signatures --
+        // the itable slot numbering -- so the loader can itparity-check its own flattened capture
+        // exactly like classes vtparity-check their vtable flattening. (The loader tells the two
+        // kinds apart by its own ACC_INTERFACE; both adopt the writer Type from the 4th slot.)
         Vec<String> vtSigClasses = new Vec<>();
         for (int i = 0; i < typeClasses.size(); i++)
         {
@@ -658,20 +647,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int[][] vtSigDescWord = new int[vtSigClasses.size()][];
         for (int i = 0; i < vtSigClasses.size(); i++)
         {
-            boolean iface = registry.resolve(vtSigClasses.get(i)).isInterface();
-            Vec<ClassModel.VSlot> vt = iface ? new Vec<>() : model.vtable(vtSigClasses.get(i));
+            Vec<String[]> vt = sigPairsFor(vtSigClasses.get(i));
             vtSigClsWord[i] = cur;
             cur += align8Words(2 + vtSigClasses.get(i).length());
-            vtSigSlotsWord[i] = iface ? 0 : cur;
+            vtSigSlotsWord[i] = cur;
             cur += vt.size() * 4;                                   // {nameAddr, descAddr} per slot
             vtSigNameWord[i] = new int[vt.size()];
             vtSigDescWord[i] = new int[vt.size()];
             for (int s = 0; s < vt.size(); s++)
             {
                 vtSigNameWord[i][s] = cur;
-                cur += align8Words(2 + vt.get(s).name().length());
+                cur += align8Words(2 + vt.get(s)[0].length());
                 vtSigDescWord[i][s] = cur;
-                cur += align8Words(2 + vt.get(s).descriptor().length());
+                cur += align8Words(2 + vt.get(s)[1].length());
             }
         }
         int totalWords = cur;
@@ -880,19 +868,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.bakedCount", bakedLink.size());
         for (int i = 0; i < vtSigClasses.size(); i++)
         {
-            boolean iface = registry.resolve(vtSigClasses.get(i)).isInterface();
-            Vec<ClassModel.VSlot> vt = iface ? new Vec<>() : model.vtable(vtSigClasses.get(i));
+            Vec<String[]> vt = sigPairsFor(vtSigClasses.get(i));
             writeBytes(image, vtSigClsWord[i], utf8(vtSigClasses.get(i)));
             for (int s = 0; s < vt.size(); s++)
             {
-                writeBytes(image, vtSigNameWord[i][s], utf8(vt.get(s).name()));
-                writeBytes(image, vtSigDescWord[i][s], utf8(vt.get(s).descriptor()));
+                writeBytes(image, vtSigNameWord[i][s], utf8(vt.get(s)[0]));
+                writeBytes(image, vtSigDescWord[i][s], utf8(vt.get(s)[1]));
                 writeLong(image, vtSigSlotsWord[i] + s * 4,     addr(vtSigNameWord[i][s]));
                 writeLong(image, vtSigSlotsWord[i] + s * 4 + 2, addr(vtSigDescWord[i][s]));
             }
             int w = vtSigDirWord + i * 8;
             writeLong(image, w,     addr(vtSigClsWord[i]));
-            writeLong(image, w + 2, iface ? 0 : addr(vtSigSlotsWord[i]));       // 0 = no parity data
+            writeLong(image, w + 2, addr(vtSigSlotsWord[i]));
             writeLong(image, w + 4, vt.size());
             writeLong(image, w + 6, addr(typeWord.get(vtSigClasses.get(i))));   // the ONE Type node
         }
@@ -1134,6 +1121,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private int vtableLength(String cls)
     {
         return model.vtable(cls).size();
+    }
+
+    /** The vtSig {name, descriptor} slot pairs for {@code cls}: a class's flattened vtable, or an
+     *  interface's flattened per-interface method list (its itable slot numbering). */
+    private Vec<String[]> sigPairsFor(String cls)
+    {
+        Vec<String[]> out = new Vec<>();
+        if (registry.resolve(cls).isInterface())
+        {
+            Vec<ClassFile.Method> ms = ClassFile.interfaceMethods(cls, this);
+            for (int i = 0; i < ms.size(); i++)
+            {
+                out.add(new String[] {ms.get(i).name, ms.get(i).descriptor});
+            }
+            return out;
+        }
+        Vec<ClassModel.VSlot> vt = model.vtable(cls);
+        for (int i = 0; i < vt.size(); i++)
+        {
+            out.add(new String[] {vt.get(i).name(), vt.get(i).descriptor()});
+        }
+        return out;
     }
 
     /** The invokeinterface-target interfaces that {@code cls} implements, in use order. */

@@ -49,7 +49,7 @@ final class SeedClassModel implements ClassModel
     }
     public Vec<ClassModel.Method> interfaceMethods(String cls)
     {
-        Vec<ClassFile.Method> ms = resolver.resolve(cls).interfaceMethods();
+        Vec<ClassFile.Method> ms = ClassFile.interfaceMethods(cls, resolver);
         Vec<ClassModel.Method> out = new Vec<>();
         for (int i = 0; i < ms.size(); i++)
         {

@@ -175,7 +175,7 @@ public final class Loader
     // call site from where the method happens to sit in a given class's vtable, so
     // two classes implementing the same interface at different vtable slots both
     // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 512;
+    private static final int MAXIFM = 2048;   // flattened per-interface runs duplicate inherited signatures
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
@@ -3000,18 +3000,30 @@ public final class Loader
 
     /**
      * Build the shared run-trampoline (stored in {@link VM#runTrampAddr}): entered with x0 = a Runnable,
-     * it invokeinterface-dispatches {@code run()} on the receiver, then calls {@link VM#taskExit}. All the
-     * class's itable-directory entries share one imap, so the first entry's table is it — no directory scan.
+     * it invokeinterface-dispatches {@code run()} on the receiver, then calls {@link VM#taskExit}.
+     * M8 itables: the directory now holds PER-interface itables, so the tramp scans the receiver's
+     * directory for Runnable's (one, adopted-or-loader) Type and indexes that entry's itable at
+     * run()'s per-interface slot. Unguarded past the sentinel, like the old dir[0] shortcut: the
+     * tramp is only ever entered with real Runnables, whose dir always carries the entry.
      */
     static void buildRunTramp()
     {
-        int slot = runInterfaceSlot();
-        long buf = Heap.allocCode(64);
+        long rt = runnableTypeAddr();
+        int slot = runnableRunSlot();
+        long buf = Heap.allocCode(96);
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 0, 0));         w += 1;  // x17 = receiver.tib
         Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 0));        w += 1;  // x17 = Type
         Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 16));       w += 1;  // x17 = itable dir
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 8));        w += 1;  // x16 = imap (shared table)
+        Magic.store32(buf + w * 4L, A64Enc.movz(15, (int) (rt & 0xFFFFL), 0));          w += 1;  // x15 = Runnable Type
+        Magic.store32(buf + w * 4L, A64Enc.movk(15, (int) ((rt >> 16) & 0xFFFFL), 1));  w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(15, (int) ((rt >> 32) & 0xFFFFL), 2));  w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 0));        w += 1;  // loop: x16 = entry.interfaceType
+        Magic.store32(buf + w * 4L, A64Enc.cmpReg(16, 15));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.bcond(0, 3));            w += 1;  // b.eq found
+        Magic.store32(buf + w * 4L, A64Enc.addImm(17, 17, 16));     w += 1;  // next entry
+        Magic.store32(buf + w * 4L, A64Enc.b(-4));                  w += 1;  // back to loop
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 8));        w += 1;  // found: x16 = Runnable's itable
         Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 16, slot * 8)); w += 1;  // x16 = run() buffer
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // run() with x0 = receiver
         long te = VM.taskExitAddr;
@@ -3022,16 +3034,40 @@ public final class Loader
         VM.runTrampAddr = buf;
     }
 
-    /** Global interface-method index of {@code run()} ("run"/"()V"), or 0 if not registered. */
-    private static int runInterfaceSlot()
+    /** java/lang/Runnable's ONE Type (0 if not loaded: no Runnables can exist yet). */
+    private static long runnableTypeAddr()
     {
         int i = 0;
-        while (i < ifCount)
+        while (i < clCount)
         {
-            if (isName(ifBase[i], ifNameOff[i], 0x72756EL, 3)
-                    && isName(ifBase[i], ifDescOff[i], 0x282956L, 3))
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
             {
-                return i;
+                return clTab[i].type;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** run()V's slot in Runnable's flattened per-interface run (0 if Runnable isn't loaded). */
+    private static int runnableRunSlot()
+    {
+        int i = 0;
+        while (i < clCount)
+        {
+            if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Runnable")))
+            {
+                int s = 0;
+                while (s < clTab[i].ifmCount)
+                {
+                    int k = clTab[i].ifmStart + s;
+                    if (isName(ifBase[k], ifNameOff[k], 0x72756EL, 3)
+                            && isName(ifBase[k], ifDescOff[k], 0x282956L, 3))
+                    {
+                        return s;
+                    }
+                    s += 1;
+                }
             }
             i += 1;
         }
@@ -4068,7 +4104,7 @@ public final class Loader
             // dir entries then key on the shared node, so interface instanceof/checkcast in linked
             // baked code matches loader receivers. The adopted node's fields stand as written
             // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
-            checkVtParity();                            // interface entries carry no vtable: adoption only
+            findVtSig();                                // adoption entry (itparity compares later, post-fill)
             if (gAdoptType != 0L)
             {
                 gType = gAdoptType;
@@ -4093,9 +4129,12 @@ public final class Loader
             clTab[clCount].statics = gStatics;              // interface constants block (reused by its phase-B bodies)
             clTab[clCount].vtStart = vtCount;               // no vtable entries appended for an interface
             clTab[clCount].isIface = true;
+            clTab[clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
+            clTab[clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
             clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+            checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
             clCount += 1;
             return;                                     // bodies (default/static methods) compiled in phase B
         }
@@ -5296,115 +5335,134 @@ public final class Loader
      * index (deduped by name+descriptor). Implementors later build an imap indexed
      * by it, and {@code invokeinterface} resolves a call site to the same index.
      */
+    // M8 itables: the current interface's flattened-run bounds, left by registerInterface for the
+    // RVMClass fill (registerInterface runs before the clTab entry exists).
+    private static int gIfmStart;
+    private static int gIfmCount;
+
+    /**
+     * Capture this interface's FLATTENED method list as a contiguous run in the ifm registry
+     * (ifBase/ifNameOff/ifDescOff): each super-interface's flattened run first, in interfaces[]
+     * declaration order, then this interface's own virtual methods -- deduped by name+descriptor so
+     * a redeclaration keeps the inherited position. This IS the per-interface itable slot numbering,
+     * identical to the writer's {@code ClassFile.interfaceMethods} (itparity-checked at load).
+     * Flattening (not own-only lists) is what lets a call typed to a super-interface (a
+     * BinaryOperator lambda invoked as BiFunction) index the right slot.
+     */
     private static void registerInterface()
     {
-        long p = gMethodsStart;
+        gIfmStart = ifCount;
+        int k = 0;
+        while (k < gImplIfCount)                        // super-interfaces' flattened runs first
+        {
+            int r = classRegByName(gImplIfName[k]);
+            if (r >= 0)
+            {
+                int s = 0;
+                while (s < clTab[r].ifmCount)
+                {
+                    int src = clTab[r].ifmStart + s;
+                    ifmAppendUnique(ifBase[src], ifNameOff[src], ifDescOff[src]);
+                    s += 1;
+                }
+            }
+            k += 1;
+        }
+        long p = gMethodsStart;                         // then this interface's own declarations
         int mcount = u2(p);
         p += 2;
         int m = 0;
         while (m < mcount)
         {
             int attrs = u2(p + 6);
-            if (isVirtual(u2(p), gcp[u2(p + 2)])
-                    && ifIndexOf(gbase, gcp[u2(p + 2)], gcp[u2(p + 4)]) < 0)
+            if (isVirtual(u2(p), gcp[u2(p + 2)]))
             {
-                if (ifCount >= MAXIFM) { capHalt(Magic.bytes("MAXIFM"), ifCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
-                ifBase[ifCount] = gbase;
-                ifNameOff[ifCount] = gcp[u2(p + 2)];
-                ifDescOff[ifCount] = gcp[u2(p + 4)];
-                ifCount += 1;
+                ifmAppendUnique(gbase, gcp[u2(p + 2)], gcp[u2(p + 4)]);
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
+        gIfmCount = ifCount - gIfmStart;
     }
 
-    /** Global interface-method index for an InterfaceMethodref call site (0 if unknown). */
-    static int ifSlotOf(int idx)
+    /** Append (base, name, desc) to the current interface's run unless the signature is in it. */
+    private static void ifmAppendUnique(long base, int nameOff, int descOff)
     {
-        int g = ifIndexOf(gbase, mrefNameOff(idx), mrefDescOff(idx));
-        return g >= 0 ? g : 0;
-    }
-
-    /** Global interface-method index for a name+descriptor in {@code base}, or -1. */
-    private static int ifIndexOf(long base, int nameOff, int descOff)
-    {
-        int i = 0;
+        int i = gIfmStart;
         while (i < ifCount)
         {
             if (utf8EqAt(base, nameOff, ifBase[i], ifNameOff[i])
                     && utf8EqAt(base, descOff, ifBase[i], ifDescOff[i]))
             {
-                return i;
+                return;
             }
             i += 1;
+        }
+        if (ifCount >= MAXIFM) { capHalt(Magic.bytes("MAXIFM"), ifCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
+        ifBase[ifCount] = base;
+        ifNameOff[ifCount] = nameOff;
+        ifDescOff[ifCount] = descOff;
+        ifCount += 1;
+    }
+
+    /** Per-interface itable slot for an InterfaceMethodref call site: the signature's position in
+     *  the ref'd interface's flattened run -- the writer's numbering (0 if the interface isn't
+     *  registered or lacks the signature: a denylist-fringe site whose entry is never taken). */
+    static int ifSlotOf(int idx)
+    {
+        int r = classRegByName(refClassNameOff(idx));
+        if (r < 0)
+        {
+            return 0;
+        }
+        int s = ifmSlotIn(r, gbase, mrefNameOff(idx), mrefDescOff(idx));
+        return s >= 0 ? s : 0;
+    }
+
+    /** Slot of (name, desc in {@code base}) within registered interface {@code r}'s run, or -1. */
+    private static int ifmSlotIn(int r, long base, int nameOff, int descOff)
+    {
+        int s = 0;
+        while (s < clTab[r].ifmCount)
+        {
+            int i = clTab[r].ifmStart + s;
+            if (utf8EqAt(base, nameOff, ifBase[i], ifNameOff[i])
+                    && utf8EqAt(base, descOff, ifBase[i], ifDescOff[i]))
+            {
+                return s;
+            }
+            s += 1;
         }
         return -1;
     }
 
-    /**
-     * Build this class's imap: for each known interface method, the buffer of this
-     * class's implementation (matched against the flattened vtable by name+
-     * descriptor), or 0 if it does not implement it. Fixed size so an interface
-     * loaded later cannot leave an earlier class's imap short.
-     */
-    private static long buildImap()
+    /** Per-interface itable for interface {@code ir} on the CURRENT class: slot s = the class's
+     *  impl of the interface's s-th flattened method (vtable match), else a DEFAULT declared by an
+     *  interface in this class's own closure ({@code n} entries of {@link #ifClosureBuf} -- not the
+     *  arbitrary declaring interface: two unrelated interfaces can share a signature), else 0
+     *  (refilled after phase B compiles late defaults). */
+    private static long buildItableFor(int ir, int n)
     {
-        int n = ifaceClosure();                    // THIS class's interface closure (fills ifClosureBuf)
-        long imap = Heap.allocData(MAXIFM * 8);
-        int g = 0;
-        while (g < MAXIFM)
+        int count = clTab[ir].ifmCount;
+        long it = Heap.allocData(count > 0 ? count * 8 : 8);
+        int s = 0;
+        while (s < count)
         {
+            int i = clTab[ir].ifmStart + s;
             long buf = 0L;
-            if (g < ifCount)
+            int vs = findVtSlotAt(ifBase[i], ifNameOff[i], ifDescOff[i]);
+            if (vs >= 0)
             {
-                int s = findVtSlotAt(ifBase[g], ifNameOff[g], ifDescOff[g]);
-                if (s >= 0)
-                {
-                    buf = slotBuf(s);
-                }
-                else
-                {
-                    // Class doesn't override method g -> its DEFAULT. Resolve it from an interface THIS class
-                    // actually implements (its closure), NOT ifBase[g] (the arbitrary FIRST interface to register
-                    // this name+desc). Two unrelated interfaces share a global slot when they declare the same
-                    // signature -- e.g. Iterator.forEachRemaining and Spliterator.forEachRemaining both are
-                    // forEachRemaining:(Consumer)V -- so defaultImplOf(ifBase[g]) could hand a Spliterator's imap
-                    // Iterator's default (a bug that appears only once both interfaces are loaded). defaultInClosure
-                    // picks the default declared by an interface in this class's own closure. 0 (no closure match)
-                    // is correct: the class doesn't provide method g -- and defaultImplOf(ifBase[g]) would fill an
-                    // UNRELATED interface's default (over-fill + the collision above), so it is deliberately NOT used.
-                    buf = defaultInClosure(n, g);
-                }
+                buf = slotBuf(vs);
             }
-            Magic.store64(imap + g * 8, buf);
-            g += 1;
-        }
-        return imap;
-    }
-
-    /**
-     * The compiled buffer of the DEFAULT method for global interface-method index {@code g}, or 0. A default
-     * method is defined (with a body) IN its interface, so it was compiled + registered when the interface's blob
-     * ({@code ifBase[g]}) was loaded (loadBodies' interface branch compiles concrete + default methods). Match a
-     * registered method in that SAME blob by name+descriptor; abstract interface methods have no such body -> 0
-     * (unchanged from before). This lets an implementing class that doesn't override a default method still
-     * dispatch it (e.g. EnumMap inherits Map.putIfAbsent) instead of hitting an empty imap slot (blr 0).
-     */
-    private static long defaultImplOf(int g)
-    {
-        int i = 0;
-        while (i < rgCount)
-        {
-            if (rgTab[i].base == ifBase[g]
-                    && utf8EqAt(ifBase[g], ifNameOff[g], rgTab[i].base, rgTab[i].nameOff)
-                    && utf8EqAt(ifBase[g], ifDescOff[g], rgTab[i].base, rgTab[i].descOff))
+            else
             {
-                return rgTab[i].buf;
+                buf = defaultBySig(n, ifBase[i], ifNameOff[i], ifDescOff[i]);
             }
-            i += 1;
+            Magic.store64(it + s * 8, buf);
+            s += 1;
         }
-        return 0L;
+        return it;
     }
 
     /** Like {@link #findVtSlot} but for a name+descriptor living in another blob. */
@@ -6121,14 +6179,14 @@ public final class Loader
         {
             lazyArmCompile();
         }
-        long imap = buildImap();
-        if (instImaps != null && instImapN < instImaps.length)    // capture for the post-phase-B default refill
+        long dir = buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
+        if (dir != 0L && instImaps != null && instImapN < instImaps.length)
         {
-            instImaps[instImapN] = imap;
+            instImaps[instImapN] = dir;                 // capture the DIR for the post-phase-B default refill
             instImapReg[instImapN] = classRegByName(gThisNameOff);
             instImapN += 1;
         }
-        Magic.store64(gType + 16, buildItableDir(imap));          // TYPE_ITABLE_DIR_OFFSET
+        Magic.store64(gType + 16, dir);                 // TYPE_ITABLE_DIR_OFFSET
     }
 
     // ----- M8 increment 1a: lazy-dispatch trampoline (compile-eager, install-on-first-call) -----
@@ -6442,9 +6500,15 @@ public final class Loader
     // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
     private static long gAdoptType;
 
-    private static void checkVtParity()
+    private static long gVtSigSlots;   // matched vtSig entry's slot-pair table (0 = class not baked)
+    private static int gVtSigCount;    // ... its slot count
+
+    /** Find the current class's vtSig/adoption entry: sets gAdoptType + gVtSigSlots/gVtSigCount. */
+    private static void findVtSig()
     {
         gAdoptType = 0L;
+        gVtSigSlots = 0L;
+        gVtSigCount = 0;
         int n = (int) VM.vtSigCount;
         int i = 0;
         while (i < n)
@@ -6452,16 +6516,63 @@ public final class Loader
             long e = VM.vtSigTable + (long) i * 32L;
             if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0))
             {
+                gVtSigSlots = Magic.load64(e + 8L);
+                gVtSigCount = (int) Magic.load64(e + 16L);
                 gAdoptType = Magic.load64(e + 24L);
-                long slots = Magic.load64(e + 8L);
-                if (slots != 0L)                        // 0 = interface entry: Type adoption only, no vtable
-                {
-                    vtParityAt(slots, (int) Magic.load64(e + 16L));
-                }
                 return;
             }
             i += 1;
         }
+    }
+
+    private static void checkVtParity()
+    {
+        findVtSig();
+        if (gVtSigSlots != 0L)
+        {
+            vtParityAt(gVtSigSlots, gVtSigCount);
+        }
+    }
+
+    /** M8 itables: verify interface {@code reg}'s flattened per-interface slot numbering against
+     *  the writer's (the vtSig entry carries its flattened interfaceMethods list) -- checked at
+     *  registration, before any implementor builds an itable from the run. Uses the entry found by
+     *  the branch's earlier {@link #findVtSig} call. */
+    private static void checkIfParity(int reg)
+    {
+        if (gVtSigSlots == 0L)
+        {
+            return;                                     // not a baked interface: nothing to compare
+        }
+        Uart.write(Magic.bytes("  itparity "));
+        printNameAt(gbase, gThisNameOff);
+        if (gVtSigCount != clTab[reg].ifmCount)
+        {
+            Uart.write(Magic.bytes(" DIFF count "));
+            VM.printDec(gVtSigCount);
+            Uart.putc(0x2F);
+            VM.printDec(clTab[reg].ifmCount);
+            Uart.putc(0x0A);
+            return;
+        }
+        int s = 0;
+        while (s < gVtSigCount)
+        {
+            long p = gVtSigSlots + (long) s * 16L;
+            int i = clTab[reg].ifmStart + s;
+            if (!utf8EqAt(ifBase[i], ifNameOff[i], Magic.load64(p), 0)
+                    || !utf8EqAt(ifBase[i], ifDescOff[i], Magic.load64(p + 8L), 0))
+            {
+                Uart.write(Magic.bytes(" DIFF slot "));
+                VM.printDec(s);
+                Uart.putc(0x0A);
+                return;
+            }
+            s += 1;
+        }
+        Uart.write(Magic.bytes(" OK "));
+        VM.printDec(gVtSigCount);
+        Uart.putc(0x0A);
     }
 
     /** Compare the current class's gv flattening against writer slot signatures at {@code slots}. */
@@ -6863,26 +6974,44 @@ public final class Loader
         int m = 0;
         while (m < instImapN)
         {
-            long imap = instImaps[m];
+            long dir = instImaps[m];                    // the class's itable DIRECTORY (per-interface tables)
             int reg = instImapReg[m];
-            if (reg >= 0)
+            if (reg >= 0 && dir != 0L)
             {
-                int n = ifaceClosureOf(reg);        // the class's full interface set (persistent registries)
-                int g = 0;
-                while (g < ifCount)
+                int n = ifaceClosureOf(reg);            // the class's full interface set (persistent registries)
+                int k = 0;
+                long t = Magic.load64(dir);
+                while (t != 0L)                         // walk entries by their TYPE key (order-independent)
                 {
-                    if (Magic.load64(imap + g * 8L) == 0L)
+                    int ir = regOfType(t);
+                    if (ir >= 0)
                     {
-                        long b = defaultInClosure(n, g);   // a concrete default of method g in one of those interfaces
-                        if (b != 0L)
-                        {
-                            Magic.store64(imap + g * 8L, b);
-                        }
+                        refillItable(n, ir, Magic.load64(dir + k * 16 + 8));
                     }
-                    g += 1;
+                    k += 1;
+                    t = Magic.load64(dir + k * 16);
                 }
             }
             m += 1;
+        }
+    }
+
+    /** Refill still-0 slots of interface {@code ir}'s itable {@code it} with late-compiled defaults. */
+    private static void refillItable(int n, int ir, long it)
+    {
+        int s = 0;
+        while (s < clTab[ir].ifmCount)
+        {
+            if (Magic.load64(it + s * 8L) == 0L)
+            {
+                int i = clTab[ir].ifmStart + s;
+                long b = defaultBySig(n, ifBase[i], ifNameOff[i], ifDescOff[i]);
+                if (b != 0L)
+                {
+                    Magic.store64(it + s * 8L, b);
+                }
+            }
+            s += 1;
         }
     }
 
@@ -6931,7 +7060,7 @@ public final class Loader
      *  the method was FIRST registered in), this finds a default an implementing SUB-interface provides for a
      *  method declared abstract in a super-interface -- e.g. {@code Spliterator.OfInt}'s
      *  {@code tryAdvance(Consumer)} for the abstract {@code Spliterator.tryAdvance(Consumer)}. */
-    private static long defaultInClosure(int n, int g)
+    private static long defaultBySig(int n, long base, int nameOff, int descOff)
     {
         int i = 0;
         while (i < n)
@@ -6941,8 +7070,8 @@ public final class Loader
             while (k < rgCount)
             {
                 if (rgTab[k].base == ibase && rgTab[k].buf != 0L
-                        && utf8EqAt(ifBase[g], ifNameOff[g], rgTab[k].base, rgTab[k].nameOff)
-                        && utf8EqAt(ifBase[g], ifDescOff[g], rgTab[k].base, rgTab[k].descOff))
+                        && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
+                        && utf8EqAt(base, descOff, rgTab[k].base, rgTab[k].descOff))
                 {
                     return rgTab[k].buf;
                 }
@@ -6964,7 +7093,7 @@ public final class Loader
      * (e.g. {@code Iterable.iterator} on an {@code ArrayList implements List extends Iterable})
      * would miss and the search would run past the sentinel.
      */
-    private static long buildItableDir(long imap)
+    private static long buildItableDir()
     {
         int n = ifaceClosure();
         if (n == 0)
@@ -6976,7 +7105,7 @@ public final class Loader
         while (k < n)
         {
             Magic.store64(dir + k * 16 + 0, clTab[ifClosureBuf[k]].type);   // interfaceType
-            Magic.store64(dir + k * 16 + 8, imap);                      // itable (the shared imap)
+            Magic.store64(dir + k * 16 + 8, buildItableFor(ifClosureBuf[k], n));   // PER-interface itable
             k += 1;
         }
         Magic.store64(dir + k * 16 + 0, 0L);             // sentinel: interfaceType 0 ends the directory
@@ -7442,14 +7571,12 @@ public final class Loader
         return 0L;
     }
 
-    /** Global itable slot of the SAM: name = the indy's name, descriptor = bootstrap_arguments[0] MethodType. */
-    private static int lambdaIfaceSlot(int idx)
+    /** The SAM's descriptor Utf8 offset: bootstrap_arguments[0] MethodType (its name is the indy's name). */
+    private static int lambdaSamDescOff(int idx)
     {
-        int nameOff = mrefNameOff(idx);
         long e = bsmEntryOff(indyBsmIndex(idx));
         int mtIdx = u2(e + 4);                          // bootstrap_arguments[0] = MethodType (SAM signature)
-        int descOff = gcp[u2(gbase + gcp[mtIdx])];      // MethodType.descriptor_index -> Utf8 offset
-        return ifIndexOf(gbase, nameOff, descOff);
+        return gcp[u2(gbase + gcp[mtIdx])];             // MethodType.descriptor_index -> Utf8 offset
     }
 
     /** SAM parameter count (bootstrap_arguments[0] MethodType) — slice 1c supports only 0. */
@@ -7471,7 +7598,6 @@ public final class Loader
     static long buildLambdaTib(int idx)
     {
         long ifaceType = lambdaIfaceType(idx);
-        int ifaceSlot = lambdaIfaceSlot(idx);
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
         int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
         int kind = lambdaImplKind(idx);
@@ -7504,7 +7630,7 @@ public final class Loader
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 16, 8 + slot * 8));            w += 1;  // x16 = vtable[slot]
             Magic.store32(thunk + w * 4L, A64Enc.br(16));                                w += 1;  // tail-call
             Heap.publishCode(thunk, thunk + w * 4L);
-            return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+            return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
         if (kind == 8)
         {
@@ -7557,7 +7683,7 @@ public final class Loader
             Magic.store32(thunk + w * 4L, A64Enc.addImm(31, 31, frame));                 w += 1;  // add sp, #frame
             Magic.store32(thunk + w * 4L, A64Enc.ret());                                 w += 1;
             Heap.publishCode(thunk, thunk + w * 4L);
-            return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+            return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
         long implBuf = lambdaImplBuf(idx);
         // The body is lambda$xxx(captures..., samArgs...). On entry x0 = lambda obj, x1..x(ia) = SAM args.
@@ -7605,7 +7731,7 @@ public final class Loader
         }
         w += 1;
         Heap.publishCode(thunk, thunk + w * 4L);
-        return finishLambdaClass(thunk, ifaceType, ifaceSlot, nc);
+        return finishLambdaClass(thunk, ifaceType, idx, nc);
     }
 
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
@@ -7624,33 +7750,25 @@ public final class Loader
     }
 
     /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
-    private static long finishLambdaClass(long thunk, long ifaceType, int ifaceSlot, int nc)
+    private static long finishLambdaClass(long thunk, long ifaceType, int idx, int nc)
     {
-        // imap: the flat interface-method table, indexed by global SAM slot -> the thunk.
-        long imap = Heap.allocData(MAXIFM * 8);
-        int j = 0;
-        while (j < MAXIFM)
-        {
-            Magic.store64(imap + j * 8L, 0L);
-            j += 1;
-        }
-        Magic.store64(imap + ifaceSlot * 8L, thunk);
-        // itable directory: one { interfaceType, imap } entry for the functional interface AND every interface it
-        // transitively extends, then a 0 sentinel. invokeinterface walks this dir for the TARGET interface's Type,
-        // so a lambda invoked through a SUPER-interface (e.g. a BinaryOperator accumulator called as BiFunction by
-        // Stream.reduce/ReduceOps) must carry that super-interface's Type here too, else the walk hits the sentinel
-        // and NPEs. All entries point at the same (global-slot-indexed) imap.
+        // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
+        // each directory entry -- the functional interface AND every interface it transitively
+        // extends (a BinaryOperator accumulator is invoked as BiFunction by Stream.reduce) --
+        // gets its OWN itable with the thunk at that interface's flattened slot of the SAM.
+        int samName = mrefNameOff(idx);
+        int samDesc = lambdaSamDescOff(idx);
         int fnReg = regOfType(ifaceType);
         int n = fnReg >= 0 ? ifaceClosureOf(fnReg) : 0;
         long dir = Heap.allocData((n + 2) * 16);
         Magic.store64(dir + 0L, ifaceType);              // the functional interface itself
-        Magic.store64(dir + 8L, imap);
+        Magic.store64(dir + 8L, lambdaItableFor(fnReg, samName, samDesc, thunk));
         int e = 1;
         int di = 0;
         while (di < n)
         {
             Magic.store64(dir + e * 16L + 0L, clTab[ifClosureBuf[di]].type);
-            Magic.store64(dir + e * 16L + 8L, imap);
+            Magic.store64(dir + e * 16L + 8L, lambdaItableFor(ifClosureBuf[di], samName, samDesc, thunk));
             e += 1;
             di += 1;
         }
@@ -7666,10 +7784,34 @@ public final class Loader
         Magic.store64(tib + 0L, type);
         if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
         {
-            lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/imap) a GC root
+            lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             lambdaTibRootN += 1;
         }
         return tib;
+    }
+
+    /** A lambda's itable for interface {@code ir}: zeroes except the thunk at the interface's
+     *  flattened slot of the SAM (name/desc offsets in the CURRENT blob). {@code ir < 0} (the
+     *  functional interface isn't registered) degrades to a one-slot table holding the thunk. */
+    private static long lambdaItableFor(int ir, int samName, int samDesc, long thunk)
+    {
+        if (ir < 0)
+        {
+            long one = Heap.allocData(8);
+            Magic.store64(one, thunk);
+            return one;
+        }
+        int count = clTab[ir].ifmCount;
+        long it = Heap.allocData(count > 0 ? count * 8 : 8);
+        int s = 0;
+        while (s < count)
+        {
+            Magic.store64(it + s * 8L, 0L);
+            s += 1;
+        }
+        int slot = ifmSlotIn(ir, gbase, samName, samDesc);
+        Magic.store64(it + (slot >= 0 ? slot : 0) * 8L, thunk);
+        return it;
     }
 
     /** True if the Utf8 at {@code off} in {@code base} equals the {@code len} raw bytes at {@code raw}. */

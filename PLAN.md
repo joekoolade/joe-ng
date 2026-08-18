@@ -1863,6 +1863,28 @@ synthesis, and EnumMap seeding, and much of that is Pi-only-verifiable. Per the 
 lesson (PR #71), that refactor is its own future increment; the `interfaceRefs` link
 exclusion stays until then.
 
+**Increment 8 DONE — the loader itable refactor: per-interface slots everywhere, the LAST
+link exclusion lifted.** Both worlds now index itables identically: FLATTENED per-interface
+method lists (each super-interface's flattened run first, in `interfaces[]` order, then own
+declarations; dedup keeps the inherited position — flattening, not own-only lists, is what
+lets a call typed to a super-interface, e.g. a BinaryOperator lambda invoked as BiFunction,
+index the right slot). Writer: `ClassFile.interfaceMethods`/`interfaceSlot` are now static,
+resolver-based, flattened; the vtSig table carries interface signature lists (itparity).
+Loader: `registerInterface` captures the flattened run into the ifm registry
+(`RVMClass.ifmStart/ifmCount`, `ifmAppendUnique`; MAXIFM 512→2048); `ifSlotOf` resolves
+per-interface; `buildItableFor` replaces the flat MAXIFM imap with per-interface tables
+(defaults via `defaultBySig`); `refillImaps` repairs by walking dir entries keyed by TYPE
+(order-independent); the run-trampoline scans the directory for Runnable's (shared) Type
+instead of assuming dir[0]; lambdas build per-entry itables slotted by the SAM's signature
+per interface; `checkIfParity` verifies each baked interface's numbering at registration
+(`itparity <iface> OK n`). The `interfaceRefs` link exclusion is GONE — the only remaining
+link gate is the primitive-return filter (object leaks await statics/allocation unification).
+Validated beyond the NetDemo boot (9 probes PASS, itparity Comparable OK) with manifest-
+swapped QEMU runs of the itable-heavy demos: ThreadDemo (the reworked run-tramp: `joined`),
+SortProbe (comparator dispatch), LispDemo (lambda itables: `(twice inc 40) = 42`), and
+WordCount (LinkedHashMap iterators + a live `String.equals` bake-link mid-demo) — all clean
+returns, zero DIFFs, zero traps.
+
 ---
 
 ## 5. Design decisions to lock day one
