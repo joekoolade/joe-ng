@@ -297,24 +297,53 @@ public final class ClassFile
     }
 
     // ----- interfaces ------------------------------------------------------
-    /** An interface's methods (its abstract members), in declaration order = itable slots. */
-    public Vec<Method> interfaceMethods()
+    /**
+     * An interface's itable-slot method list, FLATTENED over its super-interfaces: each
+     * super-interface's flattened run first (in {@code interfaces[]} declaration order), then this
+     * interface's own virtual methods, deduped by name+descriptor so a redeclaration keeps the
+     * inherited position. M8 world unification: the per-interface slot numbering the on-metal
+     * loader mirrors — flattening (not own-only lists) is what lets a call typed to a
+     * super-interface (a BinaryOperator lambda invoked as BiFunction) index the right slot.
+     */
+    public static Vec<Method> interfaceMethods(String cls, Resolver resolve)
     {
-        Vec<Method> ms = new Vec<>();
-        for (Method m : methods)
+        ClassFile cf = resolve.resolve(cls);
+        Vec<Method> out = new Vec<>();
+        for (String j : cf.interfaces)
+        {
+            Vec<Method> sup = interfaceMethods(j, resolve);
+            for (int i = 0; i < sup.size(); i++)
+            {
+                addIfaceMethod(out, sup.get(i));
+            }
+        }
+        for (Method m : cf.methods)
         {
             if (!m.isStatic && !m.name.equals("<init>") && !m.name.equals("<clinit>"))
             {
-                ms.add(m);
+                addIfaceMethod(out, m);
             }
         }
-        return ms;
+        return out;
     }
 
-    /** itable slot of interface method {@code name+descriptor}. */
-    public int interfaceSlot(String name, String descriptor)
+    /** Append {@code m} to {@code out} unless an entry with its name+descriptor is already there. */
+    private static void addIfaceMethod(Vec<Method> out, Method m)
     {
-        Vec<Method> ms = interfaceMethods();
+        for (int i = 0; i < out.size(); i++)
+        {
+            if (out.get(i).name.equals(m.name) && out.get(i).descriptor.equals(m.descriptor))
+            {
+                return;
+            }
+        }
+        out.add(m);
+    }
+
+    /** itable slot of interface method {@code name+descriptor} in {@code cls}'s flattened list. */
+    public static int interfaceSlot(String cls, String name, String descriptor, Resolver resolve)
+    {
+        Vec<Method> ms = interfaceMethods(cls, resolve);
         for (int i = 0; i < ms.size(); i++)
         {
             if (ms.get(i).name.equals(name) && ms.get(i).descriptor.equals(descriptor))
@@ -322,7 +351,7 @@ public final class ClassFile
                 return i;
             }
         }
-        throw new IllegalArgumentException("no interface method " + name + descriptor + " in " + thisClass);
+        throw new IllegalArgumentException("no interface method " + name + descriptor + " in " + cls);
     }
 
     /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet).

@@ -296,7 +296,7 @@ public final class CompilerTest
 
         // ---- interfaces: implements set, itable slot, resolved implementation ----
         T.eq("Robot implements Speaker", 1, ClassFile.allInterfaces("vm/Robot", res).contains("vm/Speaker") ? 1 : 0);
-        T.eq("Speaker.speak itable slot", 0, res.resolve("vm/Speaker").interfaceSlot("speak", "()I"));
+        T.eq("Speaker.speak itable slot", 0, ClassFile.interfaceSlot("vm/Speaker", "speak", "()I", res));
         T.eq("Phone.speak impl is Phone", 1, ClassFile.findImpl("vm/Phone", "speak", "()I", res).equals("vm/Phone") ? 1 : 0);
 
         // ---- exceptions: the try/catch table is parsed with its catch type ----

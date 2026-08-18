@@ -150,7 +150,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public int interfaceSlot(int ifaceMethodCp)
     {
         ClassFile.MemberRef ref = cf.memberRef(ifaceMethodCp);
-        return resolve(ref.owner()).interfaceSlot(ref.name(), ref.descriptor());
+        return ClassFile.interfaceSlot(ref.owner(), ref.name(), ref.descriptor(), this);
     }
     public boolean isIntrinsicCall(int methodCp)
     {

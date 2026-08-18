@@ -20,4 +20,6 @@ final class RVMClass
     int     superReg;    // superclass registry index (-1 = none), for the full-chain itable closure
     int     modifiers;   // Class.getModifiers() value, computed at load (ACC_SUPER stripped)
     boolean isIface;     // interface? (phase B compiles only its default/static bodies, no TIB fill)
+    int     ifmStart;    // interfaces only: start of the FLATTENED per-interface method run in ifBase/ifNameOff/ifDescOff
+    int     ifmCount;    // ... its length = this interface's itable slot count (0 for classes)
 }
