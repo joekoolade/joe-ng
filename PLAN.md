@@ -1748,6 +1748,26 @@ objects flowing through writer-compiled stock code, then the normal endpoint;
 linkable set (object returns, virtual dispatch) needs ONE String/Integer class across both
 worlds — unified Types + vtable numbering — the natural next arc.
 
+#### World unification (arc started 2026-08-18)
+
+**Increment 1 DONE — the vtparity boot invariant, and a corrected diagnosis.** The writer now
+emits a **vtable-signature table** for every bake-domain class it lays a TIB for, and the
+loader verifies its own freshly-built flattening against it slot-for-slot at structure time —
+`vtparity <class> OK n` / `DIFF count a/b` / `DIFF slot s` — so writer/loader slot-numbering
+parity (the precondition for cross-world virtual dispatch in linked baked code) is checked at
+every boot, before any dispatch can land wrong. **What the probe found immediately:** the
+endgame's private-method theory was WRONG (the loader has included private methods since the
+nestmates change — the doc comment was stale); the real divergence is the **inherited
+prefix**: the loader flattens the loaded `java/*` super chain — Object's ~6 slots prefix every
+vtable, Object+Throwable's 12 prefix the throwables — while the writer's `isRoot` stop
+discards those supers entirely, shifting every writer index (`String 86/92`, `Integer/Long
+14/20`, throwables `0/12`). A trial relaxation of the link filter's `virtualDispatch`
+exclusion confirmed it live: linked `String.length` dispatched `coder()` at the writer's slot
+into a loader TIB → wild branch → caught by the boot re-entry guard. The exclusion is
+restored (with the corrected rationale); the linked set stays at 31. **Increment 2:** the
+writer adopts chain flattening over registered `java/*` supers (and inherited-first field
+layout, the same own-only assumption) so vtparity reads OK — then the relaxation is sound.
+
 ---
 
 ## 5. Design decisions to lock day one

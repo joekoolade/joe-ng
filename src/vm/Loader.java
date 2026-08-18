@@ -4085,6 +4085,7 @@ public final class Loader
             return;                                     // bodies (default/static methods) compiled in phase B
         }
         parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
+        checkVtParity();                                // M8 unification: writer/loader slot numbering must agree
         allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
         clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
@@ -6398,6 +6399,62 @@ public final class Loader
 
     // M8 endgame: consult the writer's baked-method link table before lazy-compiling (default ON).
     private static final boolean BAKED_LINK = true;
+
+    /**
+     * M8 world unification: linked baked code dispatches invokevirtual by WRITER vtable-slot number
+     * on whatever receiver it is handed -- usually a LOADER-built object. That is sound only if both
+     * worlds flatten a class's vtable identically, so for every baked class (the writer emits its
+     * slot signatures) verify OUR freshly-built flattening slot-for-slot at structure time. A
+     * divergence prints loudly BEFORE any cross-world dispatch can land on the wrong slot.
+     */
+    private static void checkVtParity()
+    {
+        int n = (int) VM.vtSigCount;
+        int i = 0;
+        while (i < n)
+        {
+            long e = VM.vtSigTable + (long) i * 32L;
+            if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0))
+            {
+                vtParityAt(Magic.load64(e + 8L), (int) Magic.load64(e + 16L));
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    /** Compare the current class's gv flattening against writer slot signatures at {@code slots}. */
+    private static void vtParityAt(long slots, int count)
+    {
+        Uart.write(Magic.bytes("  vtparity "));
+        printNameAt(gbase, gThisNameOff);
+        if (count != gvCount)
+        {
+            Uart.write(Magic.bytes(" DIFF count "));
+            VM.printDec(count);
+            Uart.putc(0x2F);
+            VM.printDec(gvCount);
+            Uart.putc(0x0A);
+            return;
+        }
+        int s = 0;
+        while (s < count)
+        {
+            long p = slots + (long) s * 16L;
+            if (!utf8EqAt(gvTab[s].base, gvTab[s].name, Magic.load64(p), 0)
+                    || !utf8EqAt(gvTab[s].base, gvTab[s].desc, Magic.load64(p + 8L), 0))
+            {
+                Uart.write(Magic.bytes(" DIFF slot "));
+                VM.printDec(s);
+                Uart.putc(0x0A);
+                return;
+            }
+            s += 1;
+        }
+        Uart.write(Magic.bytes(" OK "));
+        VM.printDec(count);
+        Uart.putc(0x0A);
+    }
 
     /**
      * The writer-baked, loader-linkable compiled buffer for the CURRENT class's method with the given

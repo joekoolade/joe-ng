@@ -1026,6 +1026,8 @@ public final class VM
     static long stringEqualsAddr;      // baked stock String.equals(Object) — content compare
     static long bakedTable;            // M8 endgame: baked-method LINK table {classUtf8, nameUtf8, descUtf8, code}*
     static long bakedCount;            // ... its entry count (Loader.bakedBuf scans it at lazy-compile time)
+    static long vtSigTable;            // M8 unification: per-baked-class writer vtable signatures {classUtf8, slots, count, 0}*
+    static long vtSigCount;            // ... its entry count (Loader.checkVtParity verifies slot parity at load)
 
     /** Print a java/lang/String (baked or metal-heap) via the baked stock length()/charAt(). */
     private static void printJavaString(long str)

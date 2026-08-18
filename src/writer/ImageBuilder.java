@@ -208,11 +208,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
-            // M8 endgame: a baked method is loader-LINKABLE only if it never crosses worlds by
-            // writer-side identity -- no instanceof/checkcast (writer Types), no invokevirtual/
-            // invokeinterface (writer vtable slot numbers, which diverge from the loader's:
-            // the loader's flattening excludes private methods). Field offsets and BL targets
-            // are world-independent, so everything else links.
+            // M8 world unification: a baked method is loader-LINKABLE only if it never crosses
+            // worlds by writer-side identity -- no instanceof/checkcast/invokeinterface (writer
+            // Types and itables are distinct nodes), and no invokevirtual: the vtparity boot check
+            // measures the slot-numbering divergence (the loader flattens the loaded java/* super
+            // chain -- Object's slots prefix every vtable -- where the writer's isRoot stop
+            // discards it, shifting every writer index). Once the writer adopts chain flattening
+            // and vtparity reads OK, the virtualDispatch exclusion can lift. Field offsets and BL
+            // targets are world-independent, so everything else links.
             if (cm.relocs().typeRefs().size() > 0 || cm.relocs().interfaceRefs().size() > 0
                     || cm.relocs().virtualDispatch())
             {
@@ -609,6 +612,43 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             bakedDescWord[i] = cur;
             cur += align8Words(2 + (k.length() - k.indexOf('(')));
         }
+        // --- M8 world unification: vtable-SIGNATURE table for bake-domain classes with writer TIBs.
+        //     Per class {classUtf8Addr, slotsAddr, count, 0} (4 longs), slots as {nameUtf8Addr,
+        //     descUtf8Addr} pairs. The loader compares its own flattening against this at structure
+        //     time (vtparity) -- writer/loader slot-numbering parity, the precondition for linked
+        //     baked code dispatching on loader receivers, becomes an invariant checked every boot. ---
+        Vec<String> vtSigClasses = new Vec<>();
+        for (int i = 0; i < tibClasses.size(); i++)
+        {
+            String c = tibClasses.at(i);
+            if (bakeDomain(c))
+            {
+                vtSigClasses.add(c);
+            }
+        }
+        int vtSigDirWord = cur;
+        cur += vtSigClasses.size() * 8;                             // {classUtf8, slotsAddr, count, 0}
+        int[] vtSigClsWord = new int[vtSigClasses.size()];
+        int[] vtSigSlotsWord = new int[vtSigClasses.size()];
+        int[][] vtSigNameWord = new int[vtSigClasses.size()][];
+        int[][] vtSigDescWord = new int[vtSigClasses.size()][];
+        for (int i = 0; i < vtSigClasses.size(); i++)
+        {
+            Vec<ClassModel.VSlot> vt = model.vtable(vtSigClasses.get(i));
+            vtSigClsWord[i] = cur;
+            cur += align8Words(2 + vtSigClasses.get(i).length());
+            vtSigSlotsWord[i] = cur;
+            cur += vt.size() * 4;                                   // {nameAddr, descAddr} per slot
+            vtSigNameWord[i] = new int[vt.size()];
+            vtSigDescWord[i] = new int[vt.size()];
+            for (int s = 0; s < vt.size(); s++)
+            {
+                vtSigNameWord[i][s] = cur;
+                cur += align8Words(2 + vt.get(s).name().length());
+                vtSigDescWord[i][s] = cur;
+                cur += align8Words(2 + vt.get(s).descriptor().length());
+            }
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -812,6 +852,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         fillStatic(image, staticWord, "vm/VM.bakedTable", addr(bakedTableWord));
         fillStatic(image, staticWord, "vm/VM.bakedCount", bakedLink.size());
+        for (int i = 0; i < vtSigClasses.size(); i++)
+        {
+            Vec<ClassModel.VSlot> vt = model.vtable(vtSigClasses.get(i));
+            writeBytes(image, vtSigClsWord[i], utf8(vtSigClasses.get(i)));
+            for (int s = 0; s < vt.size(); s++)
+            {
+                writeBytes(image, vtSigNameWord[i][s], utf8(vt.get(s).name()));
+                writeBytes(image, vtSigDescWord[i][s], utf8(vt.get(s).descriptor()));
+                writeLong(image, vtSigSlotsWord[i] + s * 4,     addr(vtSigNameWord[i][s]));
+                writeLong(image, vtSigSlotsWord[i] + s * 4 + 2, addr(vtSigDescWord[i][s]));
+            }
+            int w = vtSigDirWord + i * 8;
+            writeLong(image, w,     addr(vtSigClsWord[i]));
+            writeLong(image, w + 2, addr(vtSigSlotsWord[i]));
+            writeLong(image, w + 4, vt.size());
+            writeLong(image, w + 6, 0);
+        }
+        fillStatic(image, staticWord, "vm/VM.vtSigTable", addr(vtSigDirWord));
+        fillStatic(image, staticWord, "vm/VM.vtSigCount", vtSigClasses.size());
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
