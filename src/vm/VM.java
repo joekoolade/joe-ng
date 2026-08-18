@@ -1015,6 +1015,11 @@ public final class VM
     static long longEqualsAddr;        // baked stock Long.equals(Object) — ditto via longValue() on a baked-only-class TIB
     static long longLongValueAddr;     // baked stock Long.longValue()J — the rooted virtual-dispatch target
     static long longCacheSlotAddr;     // address OF the java/lang/Long$LongCache.cache static slot
+    static long stringValueOfBoolAddr; // baked stock String.valueOf(Z) — returns an interned baked String object
+    static long stringLengthAddr;      // baked stock String.length()I
+    static long stringCharAtAddr;      // baked stock String.charAt(I)C
+    static long stringCoderAddr;       // baked stock String.coder()B — length()'s invokevirtual target
+    static long stringIsLatin1Addr;    // baked stock String.isLatin1()Z — charAt()'s invokevirtual target
 
     /** M8 bake stubs: a stock java.base method the host writer could NOT compile (native, abstract,
      *  unsupported opcode) was baked as a stub that lands here. A well-formed image never calls one —
@@ -1820,6 +1825,27 @@ public final class VM
         printDec((int) leq);
         boolean vtOk = eqSame == 1 && eqDiff == 0 && lobj170 != 0 && leq == 1;
         Uart.write(vtOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked vtables?)\n"));
+
+        // STRINGS: stock String.valueOf(boolean) returns the interned "true"/"false" literal. An
+        // `ldc` String in a bake-domain method now lowers to a real baked java/lang/String OBJECT
+        // (stock layout -- value byte[] + coder, itself a baked graph), not the vm-side raw byte[].
+        // length() and charAt() (virtual targets coder()/isLatin1() rooted; COMPACT_STRINGS
+        // snapshotted from the auto-deferred String.<clinit>) read the chars back on the metal.
+        Uart.write(Magic.bytes("  String.valueOf(true)="));
+        Magic.store64(argBase, 1L);
+        long strTrue = Magic.callN(stringValueOfBoolAddr, argBase);
+        Magic.store64(argBase, strTrue);
+        long strLen = Magic.callN(stringLengthAddr, argBase);
+        for (int sp = 0; sp < (int) strLen; sp++)
+        {
+            Magic.store64(argBase, strTrue);
+            Magic.store64(argBase + 8L, sp);
+            Uart.putc((int) Magic.callN(stringCharAtAddr, argBase));
+        }
+        Magic.store64(argBase, 0L);
+        long strFalse = Magic.callN(stringValueOfBoolAddr, argBase);
+        boolean strOk = strTrue != 0 && strLen == 4 && strFalse != 0 && strFalse != strTrue;
+        Uart.write(strOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked strings?)\n"));
     }
 
     static void run()
