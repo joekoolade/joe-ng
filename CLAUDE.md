@@ -72,7 +72,72 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **Phase: M4 done + M5 started + loading java.base classes on the metal.**
+- **Phase: M8 metacircular bootstrap — the writer-baked stock java.base and the
+  on-metal demand loader are ONE VM** (shared vtable numbering, Types, statics,
+  and a lazy cross-world link bridge). Earlier: M4 done, M5 started (shared
+  JDK-free `ClassReader`/`A64Enc`), OS-runtime M3 (stock `Socket` HTTP GET).
+- **World-unification arc DONE (PRs #85–#94, all Pi-validated).** The two
+  parallel java.base worlds — writer-baked (image TIBs/Types/statics) vs
+  loader-demand-loaded (metal-built) — are collapsed into ONE class identity per
+  class, so baked code and loaded code exchange objects freely:
+  - **One vtable numbering:** the writer flattens full registered super chains
+    like the loader (Object's 9 virtuals prefix every vtable; the `isRoot` stop
+    that discarded inherited slots is gone — a whole family of `isRoot` bugs in
+    `vtable`/`allInterfaces`/`findImpl`/`addTypeClass`/field layout was fixed).
+    Field layout is chain-aware to match (`ClassFile.chainFieldBase`, inherited
+    fields FIRST). Boot asserts it: `vtparity <cls> OK n` per baked class.
+  - **One Type node per class:** the writer emits a vtable-signature table
+    (`vtSig`, stride-48 entries `{classUtf8, slotsAddr, count, typeAddr,
+    staticsAddr, staticCount}`); the loader ADOPTS the writer's Type in phase A
+    (`typeadopt` lines) instead of building its own → cross-world
+    `instanceof`/`checkcast` compare the same node. Interfaces adopt too
+    (slotsAddr=0 marker).
+  - **One itable shape:** both worlds index itables by FLATTENED per-interface
+    method lists (super-interface runs first, dedup keeps inherited position);
+    loader global-ifm-index scheme replaced (per-interface `buildItableFor`,
+    lambdas get per-entry itables by SAM sig). Boot asserts `itparity`.
+  - **One static home:** baked classes get DENSE per-class static blocks in the
+    writer statics region (declaration order = loader slot numbering); the
+    loader adopts them (`adoptStatics` before structure registration) so loader
+    clinits initialize the SHARED slots. Boot asserts `staticadopt`.
+  - **Object-returning links (the finale):** every link-filter gate is lifted —
+    the loader links lazy compiles straight to baked bodies (56 methods incl.
+    `valueOf`/`toString`/`String.valueOf`). Unlinkable fringe methods become
+    arg-preserving **resolution trampolines** (save x0..x7+LR, `movz stubIdx`,
+    `BL VM.bakeResolve`, tail-branch): first call resolves via
+    `Loader.resolveBakeStub` (demand-load the class into the RUNNING program +
+    3-tier buffer lookup), memoized. Boot shows both directions live: `baked
+    Integer.valueOf` (direct link) and `bakeresolve Integer.hashCode`/
+    `String.getBytes` (lazy resolve).
+  - **Cross-world gotcha fixed:** writer/boot arrays are RAW (element size in
+    the header word, no Type node) while loader arrays carry real array Types.
+    `checkCast` of a raw array to an array class now trusts the verifier
+    (mirror of `instanceOf`'s conservative 0) instead of halting — a baked
+    `Integer.toString`'s String value hit this inside `getBytes` and froze the
+    Pi. `demo/PrintIntDemo` is the regression demo. Writer-array Types remain
+    un-unified (array `instanceof` on writer arrays answers false) — future
+    increment if it bites. Debug trick that found it: QEMU `-monitor unix:` +
+    `info registers`; a constant PC = a `checkCast`/`capHalt` spin.
+- **Bootstrap static-snapshot arc DONE (PRs #77–#84, all Pi-validated).** Baked
+  stock classes get REAL static state without running their (native-heavy)
+  `<clinit>`s on metal: the writer runs/defers them on the SEED JVM and
+  snapshots the results into the image.
+  - `BAKE_ROOTS` force-compiles stock methods into the image (addresses stashed
+    in VM statics); `bakeNoClinit`/`clinitDeferred` defer initializers to a
+    seed-JVM snapshot (`StaticSnapshot` reads the host class's statics via
+    reflection and fills the image slots) — primitives AND object graphs:
+    `bakeDiscover`/`writeBakedObject` deep-bake referenced objects (e.g. the
+    whole `IntegerCache`) as real heap-layout image objects.
+  - Baked classes carry real TIBs/vtables and baked String objects; stock
+    methods that won't compile become stubs (`compileOrStub`; bake domain =
+    `java/`, `jdk/`, `sun/` prefixes).
+  - **Endgame:** the on-metal Loader consults a writer-emitted baked-link table
+    in `lazyCompile` — a demand-loaded class's method whose signature matches a
+    baked body links to it instead of JIT-compiling (`baked <cls>.<name>` boot
+    lines), so the baked closure absorbs lazy-compile work in the live socket
+    path (`Preconditions.checkFromIndexSize`, `Math.min`, `String.length`...).
+  - Boot runs an 11-probe bootstrap battery (`Math`/`Integer`/`IntegerCache`/
+    `valueOf`/`equals`/`toString`/`instanceof`/`compareTo`) gating every image.
 - **OS-runtime M3 DONE — a stock `java.net.Socket` HTTP GET on bare metal.** The
   image now runs like a traditional JVM-on-an-OS: `VM.boot` brings up HW + WiFi,
   then `Loader.launch` runs the `main(String[])` named by the RAMFS `/etc/init`
