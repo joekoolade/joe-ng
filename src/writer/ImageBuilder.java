@@ -208,15 +208,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
-            // M8 world unification: a baked method is loader-LINKABLE unless it crosses worlds by
-            // writer-side identity -- no instanceof/checkcast and no invokeinterface (writer Types
-            // and itables are distinct nodes from the loader's). Plain invokevirtual LINKS: since
-            // the writer chain-flattens vtables exactly like the loader (same classfiles, same
-            // membership predicate, same super-chain rule -- Object's virtuals prefix, overrides
-            // in place), a writer slot number IS the loader slot number; the vtparity check
-            // verifies that per baked class at every boot before any dispatch can land wrong.
-            // Field offsets and BL targets are world-independent, so everything else links.
-            if (cm.relocs().typeRefs().size() > 0 || cm.relocs().interfaceRefs().size() > 0)
+            // M8 world unification: a baked method is loader-LINKABLE unless it still crosses
+            // worlds by writer-side identity. invokevirtual links (slot-numbering parity, vtparity-
+            // checked at boot). instanceof/checkcast against a CLASS links too: Type adoption makes
+            // the writer's node the class's ONE runtime Type, so VM.instanceOf's super-chain walk
+            // compares equal pointers on loader receivers. What still doesn't link: instanceof/
+            // checkcast against an INTERFACE (VM.instanceOf answers those from the Type's
+            // itableDir, which is loader-owned on adopted nodes -- writer interface Types would
+            // never match), and invokeinterface (per-world itables). Field offsets and BL targets
+            // are world-independent.
+            boolean noLink = cm.relocs().interfaceRefs().size() > 0;
+            var _tr9 = cm.relocs().typeRefs();
+            for (int _ti9 = 0; _ti9 < _tr9.size(); _ti9++)
+            {
+                if (registry.resolve(_tr9.get(_ti9).className()).isInterface())
+                {
+                    noLink = true;
+                }
+            }
+            if (noLink)
             {
                 noLinkKeys.add(k);
             }
