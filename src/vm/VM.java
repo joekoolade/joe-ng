@@ -1011,6 +1011,10 @@ public final class VM
     static long integerIntValueAddr;   // baked stock java/lang/Integer.intValue()I — reads a baked object's field directly
     static long integerCacheSlotAddr;  // address OF the java/lang/Integer$IntegerCache.cache static slot (M8 scalar-objects probe)
     static long integerValueOfAddr;    // baked stock java/lang/Integer.valueOf(I)Ljava/lang/Integer; — M8 bake-stubs probe target
+    static long integerEqualsAddr;     // baked stock Integer.equals(Object) — invokevirtual intValue() through the arg's TIB
+    static long longEqualsAddr;        // baked stock Long.equals(Object) — ditto via longValue() on a baked-only-class TIB
+    static long longLongValueAddr;     // baked stock Long.longValue()J — the rooted virtual-dispatch target
+    static long longCacheSlotAddr;     // address OF the java/lang/Long$LongCache.cache static slot
 
     /** M8 bake stubs: a stock java.base method the host writer could NOT compile (native, abstract,
      *  unsupported opcode) was baked as a stub that lands here. A well-formed image never calls one —
@@ -1790,6 +1794,32 @@ public final class VM
         boolean vOk = va != 0 && va == obj170 && vv == 200
                    && Magic.load64(va) != 0 && Magic.load64(va) == Magic.load64(vc);
         Uart.write(vOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (valueOf not baked?)\n"));
+
+        // REAL VTABLES: stock Integer.equals runs `instanceof Integer` (a Type walk over the baked
+        // object's TIB[0] chain), checkcast, and a genuine invokevirtual intValue() THROUGH the
+        // argument's TIB -- virtual dispatch on an image-baked object. And the Long half: nothing
+        // in the compiled closure ever `new`s a Long, so the baked LongCache Longs carry a TIB only
+        // because every baked scalar's class now joins the TIB layout (stub-safe vtable pull);
+        // Long.equals dispatches longValue() through it.
+        Uart.write(Magic.bytes("  Integer.equals(42,42|43)="));
+        Magic.store64(argBase, obj170);                   // receiver: baked Integer 42
+        Magic.store64(argBase + 8L, va);                  // arg: valueOf(42) -> the same baked object
+        long eqSame = Magic.callN(integerEqualsAddr, argBase);
+        long obj171 = cacheArr == 0 ? 0 : Magic.load64(cacheArr + 24L + 171L * 8L);
+        Magic.store64(argBase + 8L, obj171);              // arg: baked Integer 43
+        long eqDiff = Magic.callN(integerEqualsAddr, argBase);
+        printDec((int) eqSame);
+        Uart.putc(',');
+        printDec((int) eqDiff);
+        Uart.write(Magic.bytes("  Long.equals(42L,42L)="));
+        long lCacheArr = Magic.load64(longCacheSlotAddr); // the static slot -> baked Long[]
+        long lobj170 = lCacheArr == 0 ? 0 : Magic.load64(lCacheArr + 24L + 170L * 8L);
+        Magic.store64(argBase, lobj170);                  // receiver: baked Long 42
+        Magic.store64(argBase + 8L, lobj170);             // arg: the same baked Long
+        long leq = lobj170 == 0 ? 0 : Magic.callN(longEqualsAddr, argBase);
+        printDec((int) leq);
+        boolean vtOk = eqSame == 1 && eqDiff == 0 && lobj170 != 0 && leq == 1;
+        Uart.write(vtOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked vtables?)\n"));
     }
 
     static void run()
