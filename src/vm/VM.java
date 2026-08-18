@@ -1268,6 +1268,14 @@ public final class VM
         }
         if (ref != 0L && instanceOf(ref, targetType) == 0)
         {
+            if (Magic.load64(ref) <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+            {
+                // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
+                // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's
+                // conservative 0 for raw arrays. Reached when a baked method's array result (e.g. the value
+                // of Integer.toString's String) flows into loader-compiled code that casts it.
+                return ref;
+            }
             while (true)
             {
                 Magic.wfe();
