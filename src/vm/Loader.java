@@ -6491,6 +6491,109 @@ public final class Loader
     private static final boolean BAKED_LINK = true;
 
     /**
+     * M8 object links: resolve a called bake stub — the writer couldn't compile this method, so
+     * demand-load its class into the running program (the loaded world shares the baked world's
+     * statics, Types, vtable numbering and itables, so the lazily-compiled code and the baked code
+     * agree on everything) and return a callable buffer for the method. The three utf8 args are
+     * absolute {u2 len}{bytes} runs from the stub table. Halts loudly if the class isn't embedded
+     * or the method can't be found — a stub fired that the system genuinely cannot satisfy.
+     */
+    static long resolveBakeStub(long clsU, long nameU, long descU)
+    {
+        if (clTab == null)
+        {
+            capHalt(Magic.bytes("bakeresolve-early"), 0);   // a stub fired before the loader exists
+        }
+        Uart.write(Magic.bytes("  bakeresolve "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        Uart.putc(0x0A);
+        int len = u2(clsU);
+        byte[] slash = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            slash[i] = (byte) u1(clsU + 2 + i);
+            i += 1;
+        }
+        if (classIndexByName(slash) < 0)
+        {
+            if (loadClassIncremental(slash) == 0L)
+            {
+                capHalt(Magic.bytes("bakeresolve-load"), 0);
+            }
+        }
+        long buf = bufBySigU(clsU, nameU, descU);
+        if (buf == 0L)
+        {
+            capHalt(Magic.bytes("bakeresolve-find"), 0);
+        }
+        return buf;
+    }
+
+    /** A callable buffer for (class, name, desc) given as absolute utf8 runs: a registered compiled
+     *  buffer, else a phase-A static cell's stub, else the class's TIB slot (virtual lazy stub) — any
+     *  of which self-compiles on entry if still lazy. 0 if unknown. */
+    private static long bufBySigU(long clsU, long nameU, long descU)
+    {
+        int k = 0;
+        while (k < rgCount)
+        {
+            if (rgTab[k].buf != 0L
+                    && utf8EqAt(rgTab[k].base, rgTab[k].classOff, clsU, 0)
+                    && utf8EqAt(rgTab[k].base, rgTab[k].nameOff, nameU, 0)
+                    && utf8EqAt(rgTab[k].base, rgTab[k].descOff, descU, 0))
+            {
+                return rgTab[k].buf;
+            }
+            k += 1;
+        }
+        k = 0;
+        while (k < dlN)
+        {
+            if (utf8EqAt(dlTab[k].blob, dlTab[k].classOff, clsU, 0)
+                    && utf8EqAt(dlTab[k].blob, dlTab[k].nameOff, nameU, 0)
+                    && utf8EqAt(dlTab[k].blob, dlTab[k].descOff, descU, 0))
+            {
+                return Magic.load64(dlTab[k].cell);
+            }
+            k += 1;
+        }
+        k = 0;
+        while (k < vtCount)
+        {
+            if (utf8EqAt(vtClassBase[k], vtClassOff[k], clsU, 0)
+                    && utf8EqAt(vtNameBase[k], vtNameOff[k], nameU, 0)
+                    && utf8EqAt(vtNameBase[k], vtDescOff[k], descU, 0))
+            {
+                int r = regBySigU(clsU);
+                if (r >= 0 && clTab[r].tib != 0L)
+                {
+                    return Magic.load64(clTab[r].tib + 8 + vtSlot[k] * 8L);
+                }
+            }
+            k += 1;
+        }
+        return 0L;
+    }
+
+    /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
+    private static int regBySigU(long clsU)
+    {
+        int r = 0;
+        while (r < clCount)
+        {
+            if (utf8EqAt(clTab[r].base, clTab[r].nameOff, clsU, 0))
+            {
+                return r;
+            }
+            r += 1;
+        }
+        return -1;
+    }
+
+    /**
      * M8 world unification: linked baked code dispatches invokevirtual by WRITER vtable-slot number
      * on whatever receiver it is handed -- usually a LOADER-built object. That is sound only if both
      * worlds flatten a class's vtable identically, so for every baked class (the writer emits its

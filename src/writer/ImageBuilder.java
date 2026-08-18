@@ -36,13 +36,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static final int CLASS_ENTRY_WORDS = 4 * WORDS_PER_SLOT;
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
-    private static final String BAKE_TRAP = "vm/VM.bakeTrap()V";
+    private static final String BAKE_RESOLVE = "vm/VM.bakeResolve(I)J";
 
-    // M8 bake stubs: stock java.base methods the host compiler couldn't compile, baked as trap stubs
-    // (a BL to VM.bakeTrap). Filled during the sizing pass; consulted by the emit pass (deterministic),
-    // by generateInitClasses (a stubbed <clinit> is dropped -- deferred), and by the statics snapshot
-    // (a deferred class's referenced statics come from the seed JVM instead).
+    // M8 bake stubs -> LAZY cross-world resolution (object-links increment): stock java.base
+    // methods the host compiler couldn't compile bake as RESOLVE stubs -- an arg-preserving
+    // trampoline that calls VM.bakeResolve(stubIndex), which demand-loads the class through the
+    // on-metal loader (against the now-SHARED statics/Types/vtables/itables) and tail-branches to
+    // the resolved buffer (memoized in the stub table). Filled during the sizing pass; consulted
+    // by the emit pass (deterministic), by generateInitClasses (a stubbed <clinit> is dropped --
+    // deferred), and by the statics snapshot (deferred statics come from the seed JVM instead).
     private final StrSet stubbedKeys = new StrSet();
+    private final StrIntTable stubIndex = new StrIntTable();   // key -> stub-table index (add order)
 
     // M8 full bootstrap (path 1), static state: stock java.base methods force-rooted into the compile
     // closure, each compiled address stashed in a VM static so VM.bootstrapProbe can Magic.callN it.
@@ -199,6 +203,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 }
                 if (stubbedKeys.add(vk))
                 {
+                    stubIndex.put(vk, stubIndex.size());
                     System.out.println("  bake-stub " + vk + " (vtable slot, not reached)");
                 }
                 worklist.add(vk);  // compileOrStub sees stubbedKeys first -> stub, no compile attempt
@@ -630,11 +635,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 continue;      // never lazy-compiled by name; init semantics stay per-world
             }
-            char ret = k.charAt(k.indexOf(')') + 1);
-            if (ret == 'L' || ret == '[')
-            {
-                continue;      // would leak a writer-TIB object into the loader world
-            }
+            // M8 object links: OBJECT-returning methods link too. A writer-TIB object in loader
+            // hands is safe now -- layout/vtables/Types/statics are unified, and any dispatch that
+            // lands in a bake stub resolves lazily through VM.bakeResolve instead of trapping.
             bakedLink.add(k);
         }
         System.out.println("  baked-link " + bakedLink.size() + " methods");
@@ -689,6 +692,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 vtSigDescWord[i][s] = cur;
                 cur += align8Words(2 + vt.get(s)[1].length());
             }
+        }
+        // --- M8 object links: the bake-STUB table -- {classUtf8, nameUtf8, descUtf8, memo} per
+        //     stub, in stubIndex order (the movz immediate each stub carries). VM.bakeResolve reads
+        //     entry[idx], demand-loads the class via the loader, and memoizes the callable buffer
+        //     in the 4th slot (runtime-written; the image is RAM). ---
+        int stubTabWord = cur;
+        cur += stubIndex.size() * 8;                                // 4 longs per stub
+        int[] stubClsWord = new int[stubIndex.size()];
+        int[] stubNameWord = new int[stubIndex.size()];
+        int[] stubDescWord = new int[stubIndex.size()];
+        for (int i = 0; i < stubIndex.size(); i++)
+        {
+            String k = stubIndex.keyAt(i);
+            stubClsWord[i] = cur;
+            cur += align8Words(2 + ownerOf(k).length());
+            stubNameWord[i] = cur;
+            cur += align8Words(2 + (k.indexOf('(') - ownerOf(k).length() - 1));
+            stubDescWord[i] = cur;
+            cur += align8Words(2 + (k.length() - k.indexOf('(')));
         }
         int totalWords = cur;
 
@@ -915,6 +937,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         fillStatic(image, staticWord, "vm/VM.vtSigTable", addr(vtSigDirWord));
         fillStatic(image, staticWord, "vm/VM.vtSigCount", vtSigClasses.size());
+        for (int i = 0; i < stubIndex.size(); i++)
+        {
+            String k = stubIndex.keyAt(i);
+            String owner = ownerOf(k);
+            writeBytes(image, stubClsWord[i], utf8(owner));
+            writeBytes(image, stubNameWord[i], utf8(k.substring(owner.length() + 1, k.indexOf('('))));
+            writeBytes(image, stubDescWord[i], utf8(k.substring(k.indexOf('('))));
+            int w = stubTabWord + i * 8;
+            writeLong(image, w,     addr(stubClsWord[i]));
+            writeLong(image, w + 2, addr(stubNameWord[i]));
+            writeLong(image, w + 4, addr(stubDescWord[i]));
+            writeLong(image, w + 6, 0);                             // memo: resolved buffer (runtime)
+        }
+        fillStatic(image, staticWord, "vm/VM.bakeStubTable", addr(stubTabWord));
+        fillStatic(image, staticWord, "vm/VM.bakeStubCount", stubIndex.size());
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
@@ -1710,15 +1747,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** M8 bake stubs: compile {@code key}, or -- when a STOCK java.base method can't be host-compiled
-     *  (native/abstract = no Code, unsupported opcode, missing helper or class) -- bake a trap stub
-     *  in its place, so the closure of a baked method survives its uncompilable fringe. A stub that
-     *  actually gets CALLED lands in {@code VM.bakeTrap} (loud halt). Failures outside java.base
-     *  (vm/board/net/...) stay fatal: the core must always compile. */
+     *  (native/abstract = no Code, unsupported opcode, missing helper or class) -- bake a RESOLVE
+     *  stub in its place, so the closure of a baked method survives its uncompilable fringe. A stub
+     *  that actually gets CALLED resolves lazily through {@code VM.bakeResolve} (loader demand-load
+     *  + tail-branch). Failures outside java.base (vm/board/net/...) stay fatal. */
     private CompiledMethod compileOrStub(String key, long base, boolean isEntry)
     {
         if (stubbedKeys.contains(key))
         {
-            return stubMethod();
+            return stubMethod(key);
         }
         try
         {
@@ -1732,9 +1769,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             if (stubbedKeys.add(key))
             {
+                stubIndex.put(key, stubIndex.size());
                 System.out.println("  bake-stub " + key + " (" + e.getMessage() + ")");
             }
-            return stubMethod();
+            return stubMethod(key);
         }
     }
 
@@ -1751,21 +1789,34 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return cls.startsWith("java/") || cls.startsWith("jdk/") || cls.startsWith("sun/");
     }
 
-    /** The trap stub baked for an uncompilable method: save LR, BL {@code VM.bakeTrap}, ret. */
-    private CompiledMethod stubMethod()
+    /** The RESOLVE stub baked for an uncompilable method: preserve the call's args (x0..x7) + LR,
+     *  call {@code VM.bakeResolve(stubIndex)} -- which demand-loads the class through the on-metal
+     *  loader and returns a callable buffer, memoized in the stub table -- then restore and
+     *  tail-branch to it. Constant-size regardless of index (one movz), so both passes agree. */
+    private CompiledMethod stubMethod(String key)
     {
-        int frame = A64.align16(8);                                 // LR only
+        int idx = stubIndex.get(key);
         IntVec w = new IntVec();
         BaselineCompiler.Relocations relocs = new BaselineCompiler.Relocations();
-        w.add(A64.subImm(31, 31, frame));
+        w.add(A64.subImm(31, 31, 96));
         w.add(A64.strx(30, 31, 0));
-        relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), BAKE_TRAP));
+        for (int r = 0; r <= 7; r++)
+        {
+            w.add(A64.strx(r, 31, 8 + r * 8));
+        }
+        w.add(A64.movz(0, idx, 0));
+        relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), BAKE_RESOLVE));
         w.add(A64.bl(0));
+        w.add(A64.movReg(16, 0));
+        for (int r = 0; r <= 7; r++)
+        {
+            w.add(A64.ldrx(r, 31, 8 + r * 8));
+        }
         w.add(A64.ldrx(30, 31, 0));
-        w.add(A64.addImm(31, 31, frame));
-        w.add(A64.ret());
+        w.add(A64.addImm(31, 31, 96));
+        w.add(A64.br(16));
         Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
-        return new CompiledMethod(w.toArray(), relocs, frame, handlers, null);
+        return new CompiledMethod(w.toArray(), relocs, 96, handlers, null);
     }
 
     /** Whether {@code cls}'s {@code <clinit>} never runs (neither at build time nor boot): explicitly

@@ -1044,20 +1044,25 @@ public final class VM
         }
     }
 
-    /** M8 bake stubs: a stock java.base method the host writer could NOT compile (native, abstract,
-     *  unsupported opcode) was baked as a stub that lands here. A well-formed image never calls one —
-     *  firing means a baked code path genuinely needs that method: give the writer a real lowering
-     *  (native map / opcode support) rather than widening anything. Loud halt, like denylistTrap. */
-    static void bakeTrap()
+    static long bakeStubTable;         // M8 object links: {classUtf8, nameUtf8, descUtf8, memo}* per bake stub
+    static long bakeStubCount;
+
+    /** M8 object links: a writer-baked RESOLVE stub was called — the method the host writer could
+     *  not compile is genuinely needed now. Resolve it through the on-metal loader (demand-load the
+     *  class against the SHARED statics/Types/vtables/itables, find its callable buffer), memoize
+     *  in the stub table, and return it for the stub's tail-branch. The lazy fringe of the baked
+     *  world, closed by the unification arc. */
+    static long bakeResolve(int idx)
     {
-        long lr = Magic.readLR();                          // FIRST op: x30 = the stub's BL site + 4
-        Uart.write(Magic.bytes("\nBAKE TRAP: writer-stubbed stock method called (lr="));
-        printHex(lr);
-        Uart.write(Magic.bytes(")\n"));
-        while (true)
+        long e = bakeStubTable + (long) idx * 32L;
+        long memo = Magic.load64(e + 24L);
+        if (memo != 0L)
         {
-            Magic.wfe();
+            return memo;
         }
+        long buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
+        Magic.store64(e + 24L, buf);
+        return buf;
     }
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
@@ -1263,6 +1268,14 @@ public final class VM
         }
         if (ref != 0L && instanceOf(ref, targetType) == 0)
         {
+            if (Magic.load64(ref) <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+            {
+                // A RAW array (writer/boot alloc: element size in @0, no Type node) cast to an array class:
+                // there is no Type to walk, so trust the verifier-proved cast — the mirror of instanceOf's
+                // conservative 0 for raw arrays. Reached when a baked method's array result (e.g. the value
+                // of Integer.toString's String) flows into loader-compiled code that casts it.
+                return ref;
+            }
             while (true)
             {
                 Magic.wfe();
