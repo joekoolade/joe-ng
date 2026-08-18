@@ -1903,6 +1903,25 @@ DIFFs) + the four-demo battery (ThreadDemo/SortProbe/LispDemo/WordCount) all cle
 Remaining: object-returning links — now gated only on TIB-slot content (a writer-TIB object
 in loader hands can dispatch into bake stubs), the arc's last rung.
 
+**Increment 10 DONE — object-returning links: the arc's last rung, and its thesis made
+mechanism.** Bake stubs are no longer traps: each is an arg-preserving RESOLVE trampoline
+(save x0..x7+LR, `movz` its stub-table index, `BL VM.bakeResolve`, tail-branch the result).
+`VM.bakeResolve` reads the new stub table ({classUtf8, nameUtf8, descUtf8, memo} per stub),
+and `Loader.resolveBakeStub` demand-loads the class into the running program
+(`loadClassIncremental`) and finds a callable buffer three ways — registered compiled buffer,
+phase-A static cell, or the class's TIB slot (all self-compiling if still lazy) — memoized in
+the table. This is only sound because of everything before it: the lazily-compiled method and
+the baked caller agree on field offsets, vtable slots, itable slots, Types, AND statics. With
+the fringe closed, the primitive-return link gate is LIFTED: 44 → **56 linked methods**,
+including `valueOf`, `toString`, `toHexString`, `String.valueOf`. The boot log shows the
+whole story in two lines: `baked java/lang/Integer.valueOf` (an object-returning link hands
+a BAKED Integer to loader code) followed by `bakeresolve java/lang/Integer.hashCode` (the
+dispatch on it lands in a stub and resolves lazily instead of trapping). Demo battery:
+LispDemo resolves `Integer.toString` live, WordCount resolves `Integer.hashCode` — correct
+outputs, zero traps. **The world-unification arc is complete**: one vtable numbering, one
+dispatch fabric (virtual + interface), one Type per class, one home per static, and a lazy
+bridge over the uncompilable fringe — the loader and the baked image are one VM.
+
 ---
 
 ## 5. Design decisions to lock day one
