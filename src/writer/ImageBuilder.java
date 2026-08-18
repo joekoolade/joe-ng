@@ -208,16 +208,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
-            // M8 world unification: a baked method is loader-LINKABLE only if it never crosses
-            // worlds by writer-side identity -- no instanceof/checkcast/invokeinterface (writer
-            // Types and itables are distinct nodes), and no invokevirtual: the vtparity boot check
-            // measures the slot-numbering divergence (the loader flattens the loaded java/* super
-            // chain -- Object's slots prefix every vtable -- where the writer's isRoot stop
-            // discards it, shifting every writer index). Once the writer adopts chain flattening
-            // and vtparity reads OK, the virtualDispatch exclusion can lift. Field offsets and BL
-            // targets are world-independent, so everything else links.
-            if (cm.relocs().typeRefs().size() > 0 || cm.relocs().interfaceRefs().size() > 0
-                    || cm.relocs().virtualDispatch())
+            // M8 world unification: a baked method is loader-LINKABLE unless it crosses worlds by
+            // writer-side identity -- no instanceof/checkcast and no invokeinterface (writer Types
+            // and itables are distinct nodes from the loader's). Plain invokevirtual LINKS: since
+            // the writer chain-flattens vtables exactly like the loader (same classfiles, same
+            // membership predicate, same super-chain rule -- Object's virtuals prefix, overrides
+            // in place), a writer slot number IS the loader slot number; the vtparity check
+            // verifies that per baked class at every boot before any dispatch can land wrong.
+            // Field offsets and BL targets are world-independent, so everything else links.
+            if (cm.relocs().typeRefs().size() > 0 || cm.relocs().interfaceRefs().size() > 0)
             {
                 noLinkKeys.add(k);
             }
