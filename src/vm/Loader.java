@@ -6067,7 +6067,22 @@ public final class Loader
         // bytes), so VM.instanceOf and the shared Baseline core read JIT'd objects the
         // same way they read image objects (M5.4.e). The itableDir slot currently holds
         // the flat imap; step 2 replaces it with a proper itable directory.
-        gType = Heap.allocData(24);
+        // M8 Type adoption: a baked class ADOPTS the writer's Type node instead of allocating its
+        // own -- one Type per class across both worlds. The two stores below are then idempotent
+        // (instanceSize matches by field-layout parity; superType matches because supers adopt
+        // too, so clTab[sr].type IS the writer's super node); itableDir stays loader-owned
+        // (buildTib overwrites it with this world's imap dir -- the writer side never reads it).
+        if (gAdoptType != 0L)
+        {
+            gType = gAdoptType;
+            Uart.write(Magic.bytes("  typeadopt "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.putc(0x0A);
+        }
+        else
+        {
+            gType = Heap.allocData(24);
+        }
         Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
         Magic.store64(gType + 8, sr >= 0 ? clTab[sr].type : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
         gTib = Heap.allocData((1 + gvCount) * 8);
@@ -6407,8 +6422,14 @@ public final class Loader
      * slot signatures) verify OUR freshly-built flattening slot-for-slot at structure time. A
      * divergence prints loudly BEFORE any cross-world dispatch can land on the wrong slot.
      */
+    // M8 Type adoption: the writer's Type node for the class currently in phase A (0 = none) --
+    // set by checkVtParity from the signature table, consumed by allocTib so a baked class has
+    // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
+    private static long gAdoptType;
+
     private static void checkVtParity()
     {
+        gAdoptType = 0L;
         int n = (int) VM.vtSigCount;
         int i = 0;
         while (i < n)
@@ -6416,6 +6437,7 @@ public final class Loader
             long e = VM.vtSigTable + (long) i * 32L;
             if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0))
             {
+                gAdoptType = Magic.load64(e + 24L);
                 vtParityAt(Magic.load64(e + 8L), (int) Magic.load64(e + 16L));
                 return;
             }

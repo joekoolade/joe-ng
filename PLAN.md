@@ -1797,6 +1797,25 @@ the baked closure absorbs work from the lazy path. Remaining unification rungs: 
 adoption (one class identity → cross-world `instanceof`, lifts the typeRefs exclusion),
 then statics.
 
+**Increment 4 DONE — Type adoption: ONE Type node per baked class across both worlds.**
+Two fixes in one move. First, a latent writer hole: `addTypeClass`'s `isRoot` stop meant
+`java/*` classes had NO writer Type at all — every baked `instanceof` site patched the same
+out-of-range address (accidentally consistent, zero discrimination between java/* classes).
+Now the full registered super chain gets real, distinct, chained Type nodes (Type fill stops
+at `sup == null`; vm-class chains continue into guest Object's Type too). Second, the
+adoption itself: the vtSig table widened from bake-domain∩tibClasses to bake-domain
+non-interface **typeClasses** (all instantiated classes, type-check targets, and their full
+chains), its spare 4th slot now carrying the writer Type address; the loader's phase A
+(`checkVtParity` → `gAdoptType` → `allocTib`) ADOPTS that node as the class's runtime Type
+instead of allocating its own. The loader's two Type-field stores are idempotent on adopted
+nodes (instanceSize by field parity; superType because supers adopt too), and `itableDir`
+stays loader-owned (the writer never reads it). QEMU: **15 `typeadopt` lines** — Object,
+Number, Throwable, the whole exception chain, String/Integer/Long/StringBuilder — and
+vtparity coverage widened 8 → **15 classes, all OK** (including `Object OK 9`). All 7 probes
+PASS, 38 links fire, tests green, normal endpoint. **Increment 5:** lift the `typeRefs` link
+exclusion — `instanceof`/`checkcast` in linked code now compare the shared node — so
+`String.equals`/`Integer.equals` link.
+
 ---
 
 ## 5. Design decisions to lock day one
