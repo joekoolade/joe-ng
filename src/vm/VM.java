@@ -1920,6 +1920,22 @@ public final class VM
         printDec(notCmp ? 1 : 0);
         boolean ifOk = isCmp && !notCmp;
         Uart.write(ifOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (interface itables?)\n"));
+
+        // INVOKEINTERFACE (writer world): dispatch compareTo on the boxed 7 through Integer's
+        // itable -- the inline directory search keys on the (shared) Comparable Type and indexes
+        // the per-interface slot, landing in the rooted compareTo bridge (checkcast + invokevirtual
+        // to the typed compareTo). This exercises the itable CONTENT that the findImpl chain fix
+        // made buildable. Cross-world linking of invokeinterface methods stays excluded until the
+        // loader adopts per-interface itable slots (it currently indexes by a global method index).
+        Uart.write(Magic.bytes("  Comparable.compareTo(7:9,7:7)="));
+        Comparable cmpI = (Comparable) cmpProbe;
+        int c79 = (int) cmpI.compareTo(Integer.valueOf(9));
+        int c77 = (int) cmpI.compareTo(Integer.valueOf(7));
+        Uart.putc(c79 < 0 ? 0x3C : c79 > 0 ? 0x3E : 0x3D);   // '<' / '>' / '=' (printDec is unsigned)
+        Uart.putc(0x2C);
+        printDec(c77);
+        boolean iiOk = c79 < 0 && c77 == 0;
+        Uart.write(iiOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (writer itable dispatch?)\n"));
     }
 
     static void run()

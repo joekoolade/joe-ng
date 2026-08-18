@@ -1848,6 +1848,21 @@ Integer's itable directory, a plain Object doesn't. Debugging lesson: a same-sec
 left `out/.stamp` equal to the source mtime, so make skipped recompiles and QEMU tested
 stale images — `touch` before rebuilding when iterating fast.
 
+**Increment 7 DONE — writer-world `invokeinterface` proven; the loader itable refactor
+deliberately deferred.** Probe 9 dispatches `compareTo` on the boxed 7 through Integer's
+itable — the inline directory search keys on the shared Comparable Type and indexes the
+per-interface slot, landing in the newly-rooted `Integer.compareTo(Object)` bridge
+(checkcast + invokevirtual to the typed `compareTo(Integer)`, also rooted): `<,0 PASS`.
+This is the first live exercise of the itable CONTENT the `findImpl` chain fix made
+buildable. The compareTo pair also joined the link table (44 methods — prim return,
+class-only checkcast, parity-safe dispatch). **Scope decision:** unifying `invokeinterface`
+itself needs the loader to move from its global interface-method index (flat MAXIFM imaps)
+to per-interface itable slots — but the imap is load-bearing across `refillImaps` (default-
+method repair), the baked run-trampoline (assumes the shared table at dir[0]), lambda
+synthesis, and EnumMap seeding, and much of that is Pi-only-verifiable. Per the batching
+lesson (PR #71), that refactor is its own future increment; the `interfaceRefs` link
+exclusion stays until then.
+
 ---
 
 ## 5. Design decisions to lock day one
