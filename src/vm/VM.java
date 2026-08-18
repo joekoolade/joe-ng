@@ -1020,6 +1020,25 @@ public final class VM
     static long stringCharAtAddr;      // baked stock String.charAt(I)C
     static long stringCoderAddr;       // baked stock String.coder()B — length()'s invokevirtual target
     static long stringIsLatin1Addr;    // baked stock String.isLatin1()Z — charAt()'s invokevirtual target
+    static long integerToStringAddr;   // baked stock Integer.toString(I) — builds a real String on the metal heap
+    static long longToStringAddr;      // baked stock Long.toString(J)
+    static long integerToHexStringAddr;// baked stock Integer.toHexString(I)
+    static long stringEqualsAddr;      // baked stock String.equals(Object) — content compare
+
+    /** Print a java/lang/String (baked or metal-heap) via the baked stock length()/charAt(). */
+    private static void printJavaString(long str)
+    {
+        long[] s = new long[8];
+        long b = Magic.addrOf(s) + 24L;                    // array elements (header 16 + length 8)
+        Magic.store64(b, str);
+        long n = Magic.callN(stringLengthAddr, b);
+        for (int i = 0; i < (int) n; i++)
+        {
+            Magic.store64(b, str);
+            Magic.store64(b + 8L, i);
+            Uart.putc((int) Magic.callN(stringCharAtAddr, b));
+        }
+    }
 
     /** M8 bake stubs: a stock java.base method the host writer could NOT compile (native, abstract,
      *  unsupported opcode) was baked as a stub that lands here. A well-formed image never calls one —
@@ -1846,6 +1865,40 @@ public final class VM
         long strFalse = Magic.callN(stringValueOfBoolAddr, argBase);
         boolean strOk = strTrue != 0 && strLen == 4 && strFalse != 0 && strFalse != strTrue;
         Uart.write(strOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (baked strings?)\n"));
+
+        // WIDENED bake: Integer/Long.toString build REAL Strings on the metal heap -- the guest
+        // DecimalDigits overlay computes the digits (the registry resolves the metal-friendly
+        // overlay, not the Unsafe-table stock), stock newStringWithLatin1Bytes wraps them through
+        // the private String(byte[],byte) constructor -- and String.equals compares content: two
+        // DISTINCT heap Strings from the same value are equal, different values are not.
+        Uart.write(Magic.bytes("  Integer.toString(-2026)="));
+        Magic.store64(argBase, -2026L);
+        long tsNeg = Magic.callN(integerToStringAddr, argBase);
+        printJavaString(tsNeg);
+        Uart.write(Magic.bytes(" Long.toString(1<<40)="));
+        Magic.store64(argBase, 1L << 40);
+        long tsLong = Magic.callN(longToStringAddr, argBase);
+        printJavaString(tsLong);
+        Uart.write(Magic.bytes(" toHex(0xBEEF)="));
+        Magic.store64(argBase, 0xBEEFL);
+        long tsHex = Magic.callN(integerToHexStringAddr, argBase);
+        printJavaString(tsHex);
+        Magic.store64(argBase, 42L);
+        long s42a = Magic.callN(integerToStringAddr, argBase);
+        Magic.store64(argBase, 42L);
+        long s42b = Magic.callN(integerToStringAddr, argBase);
+        Magic.store64(argBase, s42a);
+        Magic.store64(argBase + 8L, s42b);
+        long seq = Magic.callN(stringEqualsAddr, argBase);
+        Magic.store64(argBase, s42a);
+        Magic.store64(argBase + 8L, tsHex);
+        long sne = Magic.callN(stringEqualsAddr, argBase);
+        Uart.write(Magic.bytes(" equals="));
+        printDec((int) seq);
+        Uart.putc(',');
+        printDec((int) sne);
+        boolean widenOk = s42a != s42b && seq == 1 && sne == 0;
+        Uart.write(widenOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (widened bake?)\n"));
     }
 
     static void run()
