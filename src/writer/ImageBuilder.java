@@ -32,6 +32,31 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     private static final int WORDS_PER_SLOT = ObjectModel.WORD / 4;   // 8-byte slot = 2 image ints
     private static final int TYPE_WORDS = ObjectModel.TYPE_SIZE / 4;  // Type = { instanceSize, superType }
+
+    /** Descriptor per newarray atype (4..11); mirrors compiler/WriterSymbols.PRIM_ARRAY_DESC. */
+    private static final String[] PRIM_ARRAY_DESC = {"[Z", "[C", "[F", "[D", "[B", "[S", "[I", "[J"};
+
+    /** Element size in bytes for a newarray atype (4..11). */
+    private static long primArrayElemSize(int atype)
+    {
+        if (atype == 4 || atype == 8)  { return 1; }   // boolean, byte
+        if (atype == 5 || atype == 9)  { return 2; }   // char, short
+        if (atype == 6 || atype == 10) { return 4; }   // float, int
+        return 8;                                      // double, long
+    }
+
+    /** The newarray atype (4..11) for a primitive array component type. */
+    private static int atypeOfComponent(Class<?> c)
+    {
+        if (c == boolean.class) { return 4; }
+        if (c == char.class)    { return 5; }
+        if (c == float.class)   { return 6; }
+        if (c == double.class)  { return 7; }
+        if (c == byte.class)    { return 8; }
+        if (c == short.class)   { return 9; }
+        if (c == int.class)     { return 10; }
+        return 11;                                     // long
+    }
     /** A class-table directory entry: {nameAddr, nameLen, bytesAddr, bytesLen} = 4 longs. */
     private static final int CLASS_ENTRY_WORDS = 4 * WORDS_PER_SLOT;
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
@@ -250,6 +275,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             for (int _ri3 = 0; _ri3 < _r3.size(); _ri3++)
             {
                 var t = _r3.get(_ri3);
+                if (t.className().startsWith("["))
+                {
+                    continue;   // prim-array Type target: laid out canonically, not a classfile
+                }
                 typeRefClasses.add(t.className());
                 // M8 itables: an INTERFACE instanceof/checkcast target must also join the itable
                 // directories (VM.instanceOf answers interface targets from dir KEYS) -- before
@@ -285,6 +314,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             for (int _ri4 = 0; _ri4 < _r4.size(); _ri4++)
             {
                 var t = _r4.get(_ri4);
+                if (t.className().startsWith("["))
+                {
+                    continue;   // tagArray's prim-array TIB ref: not a class, nothing to use/clinit
+                }
                 use(t.className(), usedClasses, clinitOrder, worklist);
             }
             var _r7 = cm.relocs().staticRefs();
@@ -299,6 +332,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             for (int _ri8 = 0; _ri8 < _r8.size(); _ri8++)
             {
                 var t = _r8.get(_ri8);
+                if (t.className().startsWith("["))
+                {
+                    continue;   // prim-array TIBs are laid out canonically, no vtable pull
+                }
                 if (tibClasses.add(t.className()))
                 {
                     // A bake-domain (stock java.base) class's vtable methods are NOT cascade-compiled:
@@ -429,6 +466,24 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             tibWord.put(cls, cur);
             cur += ObjectModel.tibSize(vtableLength(cls)) / 4;
         }
+        // M8 array-Type unification: one canonical Type + TIB per primitive array class (newarray
+        // atype 4..11), registered in typeWord/tibWord under the descriptor ("[B"...) so the normal
+        // typeRef/tibRef patching and baked-array headers all resolve them uniformly. The TIB carries
+        // java/lang/Object's vtable (an array's static type is Object at a dispatch site). The loader
+        // ADOPTS these nodes via the VM.primArrayTibs table -- ONE array class across both worlds.
+        for (int _a1 = 4; _a1 <= 11; _a1++)
+        {
+            typeWord.put(PRIM_ARRAY_DESC[_a1 - 4], cur);
+            cur += ObjectModel.ARRAY_TYPE_SIZE / 4;
+        }
+        int objectVtLen = vtableLength("java/lang/Object");
+        for (int _a2 = 4; _a2 <= 11; _a2++)
+        {
+            tibWord.put(PRIM_ARRAY_DESC[_a2 - 4], cur);
+            cur += ObjectModel.tibSize(objectVtLen) / 4;
+        }
+        int primArrTabWord = cur;                     // 8 longs: baked array TIB per atype (4..11)
+        cur += 16;
         ByteKeyIntTable strWord = new ByteKeyIntTable();
         for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
@@ -854,6 +909,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
         }
 
+        // --- primitive-array Types + TIBs (canonical; the loader adopts them via VM.primArrayTibs) ---
+        var objSlots = model.vtable("java/lang/Object");
+        for (int _a3 = 4; _a3 <= 11; _a3++)
+        {
+            String d = PRIM_ARRAY_DESC[_a3 - 4];
+            int tw = typeWord.get(d);
+            writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
+                      ObjectModel.ARRAY_TYPE_TAG | primArrayElemSize(_a3));
+            writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
+            writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
+            writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, 0);
+            int bw = tibWord.get(d);
+            writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(tw));
+            for (int slot = 0; slot < objSlots.size(); slot++)
+            {
+                ClassModel.VSlot s = objSlots.get(slot);
+                int mbase = wordOffset.get(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
+                writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
+            }
+            writeLong(image, primArrTabWord + (_a3 - 4) * 2, addr(bw));
+        }
+
         // --- unwind tables + their location statics ---
         for (int i = 0; i < frameEntries.size(); i++)
         {
@@ -952,6 +1029,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         fillStatic(image, staticWord, "vm/VM.bakeStubTable", addr(stubTabWord));
         fillStatic(image, staticWord, "vm/VM.bakeStubCount", stubIndex.size());
+        fillStatic(image, staticWord, "vm/VM.primArrayTibs", addr(primArrTabWord));
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
@@ -1143,7 +1221,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _s11 = 0; _s11 < strings.size(); _s11++)
         {
             byte[] s = strings.at(_s11);
-            writeStringObject(image, strWord.get(s), s);
+            writeStringObject(image, strWord.get(s), s, addr(tibWord.get("[B")));
         }
 
         CodeBuffer cb = new CodeBuffer();                           // base = LOAD_ADDRESS
@@ -1319,9 +1397,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     }
 
     /** Write a byte[] object holding literal bytes {@code b} at image word {@code w}. */
-    private static void writeStringObject(int[] image, int w, byte[] b)
+    private static void writeStringObject(int[] image, int w, byte[] b, long byteArrTib)
     {
-        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);                // null TIB (as arrays)
+        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, byteArrTib);       // the canonical [B TIB
         writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
         writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, b.length);
         int base = w + ObjectModel.ARRAY_BASE_OFFSET / 4;
@@ -1424,11 +1502,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             if (o.getClass().getComponentType().isPrimitive())
             {
-                writeArrayObject(image, w, o);
+                // Typed with the canonical prim-array TIB (registered in tibWord under "[B"...):
+                // a baked String's value byte[] passes array type-checks like any loader array.
+                int at = atypeOfComponent(o.getClass().getComponentType());
+                writeArrayObject(image, w, o, addr(tibWord.get(PRIM_ARRAY_DESC[at - 4])));
                 return;
             }
             Object[] a = (Object[]) o;
-            writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);          // null TIB (as arrays)
+            writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);          // raw (ref-array Types not baked yet)
             writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
             writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, a.length);
             int base = w + ObjectModel.ARRAY_BASE_OFFSET / 4;
@@ -1545,11 +1626,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
 
     /** Write a baked primitive-array object holding {@code v}'s elements at image word {@code w} —
      *  the same shape as {@link #writeStringObject} (null TIB), generalized over element size. */
-    private static void writeArrayObject(int[] image, int w, Object v)
+    private static void writeArrayObject(int[] image, int w, Object v, long tibAddr)
     {
         int scale = arrayScale(v);
         int n = java.lang.reflect.Array.getLength(v);
-        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);
+        writeLong(image, w + ObjectModel.TIB_OFFSET / 4, tibAddr);
         writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
         writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, n);
         int base = w * 4 + ObjectModel.ARRAY_BASE_OFFSET;           // byte offset within the image
@@ -1886,7 +1967,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             var tr = cm.relocs().tibRefs();
             for (int i = 0; i < tr.size(); i++)
             {
-                useDiag(tr.get(i).className(), used, clinitOrder, worklist, parent, parentKey, k);
+                if (!tr.get(i).className().startsWith("["))
+                {
+                    useDiag(tr.get(i).className(), used, clinitOrder, worklist, parent, parentKey, k);
+                }
             }
             var sr = cm.relocs().staticRefs();
             for (int i = 0; i < sr.size(); i++)

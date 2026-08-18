@@ -115,6 +115,8 @@ public final class Loader
     // Array Type cache (per demand-load batch, since resetLoader reclaims the heap under them). primArrTib is
     // indexed by newarray atype (4..11); refArr* is a small element-Type-keyed registry for reference arrays.
     private static long[] primArrTib;     // arrayTib per primitive atype (0 = not yet created)
+    private static boolean[] primArrAdopted;   // true = writer-baked image TIB (never refill: its Object
+                                               // impls are baked code; loader bufs die with the batch heap)
     private static long[] refArrElem;     // element Type key (reference arrays)
     private static long[] refArrTib;      // arrayTib for that element
     private static int refArrCount;
@@ -1657,6 +1659,7 @@ public final class Loader
         clinitFdFirst = -1;
         clinitRunFrom = 0;
         primArrTib = new long[12];         // array Types live in the (reclaimed) demand heap: recreate per batch
+        primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
         refArrElem = new long[64];
         refArrTib = new long[64];
         refArrCount = 0;
@@ -8111,9 +8114,9 @@ public final class Loader
             int a = 0;
             while (a < primArrTib.length)
             {
-                if (primArrTib[a] != 0L)
+                if (primArrTib[a] != 0L && !primArrAdopted[a])
                 {
-                    fillObjectVtable(primArrTib[a]);
+                    fillObjectVtable(primArrTib[a]);   // adopted (baked) TIBs keep their writer impls
                 }
                 a += 1;
             }
@@ -8153,7 +8156,7 @@ public final class Loader
              : 8;                                        // double, long
     }
 
-    /** The array TIB for a primitive array of the given newarray {@code atype}; created + cached on demand. */
+    /** The array TIB for a primitive array of the given newarray {@code atype}; adopted or created on demand. */
     static long primArrayTib(int atype)
     {
         if (atype < 0 || atype >= 12)
@@ -8162,9 +8165,40 @@ public final class Loader
         }
         if (primArrTib[atype] == 0L)
         {
-            primArrTib[atype] = makeArrayTib(primElemSize(atype), 0L);
+            // M8 array-Type unification: ADOPT the writer-baked canonical array TIB (VM.primArrayTibs,
+            // 8 longs indexed atype-4) so byte[] is ONE class across both worlds -- writer-tagged
+            // arrays and loader arrays carry the same Type node, and instanceof/checkcast targets
+            // resolve to it on both sides. Metal-built only if the image predates the table.
+            long tab = VM.primArrayTibs;
+            long baked = tab == 0L || atype < 4 ? 0L : Magic.load64(tab + (long) (atype - 4) * 8L);
+            if (baked != 0L)
+            {
+                primArrTib[atype] = baked;
+                primArrAdopted[atype] = true;
+                Uart.write(Magic.bytes("  arrayadopt "));
+                Uart.putc(0x5B);                        // '['
+                Uart.putc(primDescChar(atype));
+                Uart.putc(0x0A);
+            }
+            else
+            {
+                primArrTib[atype] = makeArrayTib(primElemSize(atype), 0L);
+            }
         }
         return primArrTib[atype];
+    }
+
+    /** JVMS descriptor char for a newarray atype (4..11). */
+    private static int primDescChar(int atype)
+    {
+        if (atype == 4)  { return 0x5A; }   // 'Z'
+        if (atype == 5)  { return 0x43; }   // 'C'
+        if (atype == 6)  { return 0x46; }   // 'F'
+        if (atype == 7)  { return 0x44; }   // 'D'
+        if (atype == 8)  { return 0x42; }   // 'B'
+        if (atype == 9)  { return 0x53; }   // 'S'
+        if (atype == 10) { return 0x49; }   // 'I'
+        return 0x4A;                        // 'J'
     }
 
     /** Array TIB for a byte[] (newarray atype 8) — used to type String value arrays / interned literals. */
