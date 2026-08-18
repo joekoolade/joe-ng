@@ -74,6 +74,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/Long.toString(J)Ljava/lang/String;",       "vm/VM.longToStringAddr" },
         { "java/lang/Integer.toHexString(I)Ljava/lang/String;", "vm/VM.integerToHexStringAddr" },
         { "java/lang/String.equals(Ljava/lang/Object;)Z",       "vm/VM.stringEqualsAddr" },
+        // M8 invokeinterface (writer world): the compareTo pair backs Integer's Comparable itable
+        // slot with real code -- the bridge is the itable entry, its checkcast+invokevirtual body
+        // needs the typed compareTo compiled too. Dispatched by probe 9 through the itable
+        // directory (no VM-static stash needed; the probe calls it as ordinary Java).
+        { "java/lang/Integer.compareTo(Ljava/lang/Object;)I",  "vm/VM.integerCompareToBridgeAddr" },
+        { "java/lang/Integer.compareTo(Ljava/lang/Integer;)I", "vm/VM.integerCompareToAddr" },
     };
 
     // M8 static state: statics force-added to the referenced set so they get a slot and a deep
