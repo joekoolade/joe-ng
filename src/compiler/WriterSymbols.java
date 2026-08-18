@@ -131,9 +131,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public int vtableSlot(int methodCp)
     {
-        // M8 endgame: a method that dispatches by WRITER vtable-slot number is unsafe to run on
-        // LOADER-built receivers (the loader's flattening excludes private methods, so slot indices
-        // diverge) -- mark it so the baked-link table skips it.
+        // M8 unification: a method that dispatches by WRITER vtable-slot number is unsafe on
+        // LOADER-built receivers until the numbering unifies -- the loader flattens the loaded
+        // java/* super chain (Object's slots prefix every vtable) where the writer's isRoot stop
+        // discards it, so every writer index is shifted (measured by the boot vtparity check).
+        // Mark the method so the baked-link table skips it.
         relocs.markVirtualDispatch();
         ClassFile.MemberRef ref = cf.memberRef(methodCp);
         return ClassFile.vtableSlot(ref.owner(), ref.name(), ref.descriptor(), this);
