@@ -45,6 +45,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return 8;                                      // double, long
     }
 
+    /** Element class of a single-dim reference-array descriptor "[L<cls>;", or null. */
+    private static String refArrayElementOf(String desc)
+    {
+        if (desc.length() > 3 && desc.startsWith("[L") && desc.endsWith(";"))
+        {
+            return desc.substring(2, desc.length() - 1);
+        }
+        return null;
+    }
+
     /** The newarray atype (4..11) for a primitive array component type. */
     private static int atypeOfComponent(Class<?> c)
     {
@@ -183,6 +193,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         StrSet statics = new StrSet();
         StrSet typeRefClasses = new StrSet();          // instanceof/checkcast/interface targets
         StrSet usedInterfaces = new StrSet();          // invokeinterface targets (itable build)
+        StrSet refArrDescs = new StrSet();             // "[L<cls>;" ref-array descs needing baked Types
         StrSet usedClasses = new StrSet();
         Vec<String> clinitOrder = new Vec<>();               // <clinit>s to run, first-use order
         int frameCount = 0;                                          // unwind-table entry counts
@@ -277,7 +288,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r3.get(_ri3);
                 if (t.className().startsWith("["))
                 {
-                    continue;   // prim-array Type target: laid out canonically, not a classfile
+                    // Array Type target: laid out canonically, not a classfile. A single-dim
+                    // ref-array desc pulls its ELEMENT class in (the covariance walk + the baked
+                    // {elementType, tib} table both need the element's Type node).
+                    String el = refArrayElementOf(t.className());
+                    if (el != null)
+                    {
+                        refArrDescs.add(t.className());
+                        typeRefClasses.add(el);
+                        if (registry.resolve(el).isInterface())
+                        {
+                            usedInterfaces.add(el);
+                        }
+                    }
+                    continue;
                 }
                 typeRefClasses.add(t.className());
                 // M8 itables: an INTERFACE instanceof/checkcast target must also join the itable
@@ -316,7 +340,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r4.get(_ri4);
                 if (t.className().startsWith("["))
                 {
-                    continue;   // tagArray's prim-array TIB ref: not a class, nothing to use/clinit
+                    // tagArray's array TIB ref: not a class, nothing to use/clinit -- but a ref-array
+                    // desc still pulls its element class's Type in (the TIB's Type carries it).
+                    String el = refArrayElementOf(t.className());
+                    if (el != null)
+                    {
+                        refArrDescs.add(t.className());
+                        typeRefClasses.add(el);
+                    }
+                    continue;
                 }
                 use(t.className(), usedClasses, clinitOrder, worklist);
             }
@@ -452,6 +484,18 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String c = typeRefClasses.at(_s2);
             addTypeClass(c, typeClasses);
         }
+        // M8 ref arrays: a deep-baked reference array (e.g. IntegerCache's Integer[]) is typed with
+        // the canonical ref-array TIB for its component class -- pull desc + element chain in.
+        for (int _s2b = 0; _s2b < bakedObjs.size(); _s2b++)
+        {
+            Class<?> bc = bakedObjs.get(_s2b).getClass();
+            if (bc.isArray() && !bc.getComponentType().isPrimitive() && !bc.getComponentType().isArray())
+            {
+                String el = bc.getComponentType().getName().replace('.', '/');
+                refArrDescs.add("[L" + el + ";");
+                addTypeClass(el, typeClasses);
+            }
+        }
         StrIntTable typeWord = new StrIntTable();
         for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
         {
@@ -484,6 +528,21 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         int primArrTabWord = cur;                     // 8 longs: baked array TIB per atype (4..11)
         cur += 16;
+        // Single-dim reference arrays: one Type + TIB per element class in use, plus the
+        // {elementType, tib} pair table the loader adopts from (VM.refArrayTibs). Keyed by the
+        // shared adopted element Type nodes, so both worlds resolve the same array class.
+        for (int _a2b = 0; _a2b < refArrDescs.size(); _a2b++)
+        {
+            typeWord.put(refArrDescs.at(_a2b), cur);
+            cur += ObjectModel.ARRAY_TYPE_SIZE / 4;
+        }
+        for (int _a2c = 0; _a2c < refArrDescs.size(); _a2c++)
+        {
+            tibWord.put(refArrDescs.at(_a2c), cur);
+            cur += ObjectModel.tibSize(objectVtLen) / 4;
+        }
+        int refArrTabWord = cur;                      // {elementType, tib} pair per baked ref-array desc
+        cur += refArrDescs.size() * 4;
         ByteKeyIntTable strWord = new ByteKeyIntTable();
         for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
@@ -930,6 +989,27 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             writeLong(image, primArrTabWord + (_a3 - 4) * 2, addr(bw));
         }
+        for (int _a4 = 0; _a4 < refArrDescs.size(); _a4++)
+        {
+            String d = refArrDescs.at(_a4);
+            String el = refArrayElementOf(d);
+            int tw = typeWord.get(d);
+            writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
+                      ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD);
+            writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
+            writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
+            writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, addr(typeWord.get(el)));
+            int bw = tibWord.get(d);
+            writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(tw));
+            for (int slot = 0; slot < objSlots.size(); slot++)
+            {
+                ClassModel.VSlot s = objSlots.get(slot);
+                int mbase = wordOffset.get(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
+                writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(slot)) / 4, addr(mbase));
+            }
+            writeLong(image, refArrTabWord + _a4 * 4, addr(typeWord.get(el)));
+            writeLong(image, refArrTabWord + _a4 * 4 + 2, addr(bw));
+        }
 
         // --- unwind tables + their location statics ---
         for (int i = 0; i < frameEntries.size(); i++)
@@ -1030,6 +1110,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.bakeStubTable", addr(stubTabWord));
         fillStatic(image, staticWord, "vm/VM.bakeStubCount", stubIndex.size());
         fillStatic(image, staticWord, "vm/VM.primArrayTibs", addr(primArrTabWord));
+        fillStatic(image, staticWord, "vm/VM.refArrayTibs", addr(refArrTabWord));
+        fillStatic(image, staticWord, "vm/VM.refArrayTibCount", refArrDescs.size());
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
@@ -1509,7 +1591,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 return;
             }
             Object[] a = (Object[]) o;
-            writeLong(image, w + ObjectModel.TIB_OFFSET / 4, 0);          // raw (ref-array Types not baked yet)
+            Class<?> comp = o.getClass().getComponentType();
+            int atw = comp.isArray() ? -1
+                    : tibWord.get("[L" + comp.getName().replace('.', '/') + ";");
+            writeLong(image, w + ObjectModel.TIB_OFFSET / 4, atw >= 0 ? addr(atw) : 0);
             writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
             writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, a.length);
             int base = w + ObjectModel.ARRAY_BASE_OFFSET / 4;

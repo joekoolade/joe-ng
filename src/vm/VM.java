@@ -1047,6 +1047,8 @@ public final class VM
     static long bakeStubTable;         // M8 object links: {classUtf8, nameUtf8, descUtf8, memo}* per bake stub
     static long bakeStubCount;
     static long primArrayTibs;         // M8 array unification: 8-long table, baked prim-array TIB per atype (4..11)
+    static long refArrayTibs;          // M8 ref arrays: {elementType, tib} pair table (baked single-dim ref arrays)
+    static long refArrayTibCount;
 
     /** M8 object links: a writer-baked RESOLVE stub was called — the method the host writer could
      *  not compile is genuinely needed now. Resolve it through the on-metal loader (demand-load the
@@ -1970,6 +1972,24 @@ public final class VM
         printDec(aoOk ? 1 : 0);
         boolean arrOk = abOk && !aiNo && aoOk && aiOk;
         Uart.write(arrOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (array Types not baked/tagged?)\n"));
+
+        // 13) M8 ref-array unification: anewarray tags with the baked ref-array TIB for the element
+        // class, and "[L<cls>;" type-check targets resolve baked ref-array Types. The covariance
+        // walk runs on the element Types (Integer[] IS a Number[], is NOT a Long[]). The same
+        // {elementType, tib} table is ADOPTED by the loader -- Integer[] is ONE class both worlds.
+        Uart.write(Magic.bytes("  new Integer[2] instanceof Integer[],Number[],Long[]="));
+        Object ra = new Integer[2];
+        boolean r1 = ra instanceof Integer[];
+        boolean r2 = ra instanceof Number[];             // covariant up
+        boolean r3 = ra instanceof Long[];               // sibling: false
+        boolean r4 = ra instanceof Object;
+        printDec(r1 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(r2 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(r3 ? 1 : 0);
+        boolean refArrOk = r1 && r2 && !r3 && r4;
+        Uart.write(refArrOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (ref-array Types not baked/tagged?)\n"));
     }
 
     static void run()

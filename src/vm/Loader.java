@@ -119,6 +119,7 @@ public final class Loader
                                                // impls are baked code; loader bufs die with the batch heap)
     private static long[] refArrElem;     // element Type key (reference arrays)
     private static long[] refArrTib;      // arrayTib for that element
+    private static boolean[] refArrAdopted;    // true = writer-baked image TIB (never refill)
     private static int refArrCount;
     // java.lang.Class mirrors: one Class object per VM Type (identity stable), materialised on ldc class-literal
     // or Object.getClass(). Per batch (they live in the reclaimed demand heap, like array Types).
@@ -1662,6 +1663,7 @@ public final class Loader
         primArrAdopted = new boolean[12];  // (adopted image TIBs are permanent but re-adopting is idempotent)
         refArrElem = new long[64];
         refArrTib = new long[64];
+        refArrAdopted = new boolean[64];
         refArrCount = 0;
         mirType = new long[256];           // Class mirrors: also per batch (reclaimed heap)
         mirObj = new long[256];
@@ -8124,9 +8126,9 @@ public final class Loader
         int r = 0;
         while (r < refArrCount)
         {
-            if (refArrTib[r] != 0L)
+            if (refArrTib[r] != 0L && !refArrAdopted[r])
             {
-                fillObjectVtable(refArrTib[r]);
+                fillObjectVtable(refArrTib[r]);        // adopted (baked) TIBs keep their writer impls
             }
             r += 1;
         }
@@ -8284,11 +8286,45 @@ public final class Loader
             }
             i += 1;
         }
-        long tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
+        // M8 ref-array unification: ADOPT the writer-baked ref-array TIB whose element Type matches.
+        // The table (VM.refArrayTibs: {elementType, tib} pairs) is keyed by the SAME adopted element
+        // Type nodes both worlds share, so a writer-tagged Integer[] and a loader Integer[] carry one
+        // TIB -- and the covariance walk compares one set of nodes. Metal-built when not baked.
+        long tib = 0L;
+        boolean adopted = false;
+        if (elementType != 0L)
+        {
+            long tab = VM.refArrayTibs;
+            long n = VM.refArrayTibCount;
+            long k = 0;
+            while (k < n)
+            {
+                if (Magic.load64(tab + k * 16L) == elementType)
+                {
+                    tib = Magic.load64(tab + k * 16L + 8L);
+                    adopted = true;
+                    Uart.write(Magic.bytes("  arrayadopt [L"));
+                    int r = regOfType(elementType);
+                    if (r >= 0)
+                    {
+                        writeName(clTab[r].base + clTab[r].nameOff + 2, u2(clTab[r].base + clTab[r].nameOff));
+                    }
+                    Uart.putc(0x3B);                    // ';'
+                    Uart.putc(0x0A);
+                    break;
+                }
+                k += 1;
+            }
+        }
+        if (tib == 0L)
+        {
+            tib = makeArrayTib(ObjectModel.WORD, elementType);   // reference elements are 8-byte pointers
+        }
         if (refArrCount < refArrTib.length)
         {
             refArrElem[refArrCount] = elementType;
             refArrTib[refArrCount] = tib;
+            refArrAdopted[refArrCount] = adopted;
             refArrCount += 1;
         }
         return tib;

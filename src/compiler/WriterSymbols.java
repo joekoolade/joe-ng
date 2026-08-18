@@ -66,15 +66,15 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public void type(CodeBuffer cb, int reg, int classCp)
     {
         String cls = cf.classAt(classCp);
-        if (cls.startsWith("[") && primArrayAtype(cls) < 0)
+        if (cls.startsWith("[") && primArrayAtype(cls) < 0 && refArrayElement(cls) == null)
         {
-            // Reference/nested array Types aren't baked yet (their instances stay raw; VM.checkCast
-            // has a raw-array backstop) -- an instanceof/checkcast against one can't compile here.
+            // Nested-array Types ("[[...") aren't baked (their instances stay raw; VM.checkCast has
+            // a raw-array backstop) -- an instanceof/checkcast against one can't compile here.
             // Under the M8 bake, such a stock method becomes a resolve stub instead of a wrong answer.
             throw new UnsupportedOperationException("array type-check not compiled by the host writer: " + cls);
         }
-        // Single-dim primitive-array targets ("[B"...) resolve against the baked canonical array
-        // Types -- ImageBuilder registers them in typeWord under the descriptor.
+        // Single-dim array targets ("[B", "[Ljava/lang/Integer;"...) resolve against the baked
+        // canonical array Types -- ImageBuilder registers them in typeWord under the descriptor.
         relocs.typeRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cls));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
@@ -83,16 +83,37 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public void tagArray(CodeBuffer cb, int arrReg, int operand, boolean isRef)
     {
+        // M8 array-Type unification: store the baked canonical array TIB into the new array's
+        // header, so writer-world arrays carry the SAME Type node the loader adopts. Recorded as a
+        // TibRef under the array descriptor ("[B" / "[Ljava/lang/Integer;") -- ImageBuilder
+        // registers the baked array TIBs in tibWord under those keys, so the normal tib patch
+        // resolves it. anewarray of an ARRAY element ("[[...") stays raw (checkCast backstop).
+        String desc;
         if (isRef)
         {
-            return;   // reference arrays stay raw for now (VM.checkCast raw-array backstop; the
-        }             // covariance walk rides shared element Types once these unify too)
-        // M8 array-Type unification: store the baked canonical primitive-array TIB into the new
-        // array's header, so writer-world arrays carry the SAME Type node the loader adopts.
-        // Recorded as a TibRef under the array descriptor ("[B"...) -- ImageBuilder registers the
-        // baked array TIBs in tibWord under those keys, so the normal tib patch resolves it.
-        relocs.tibRefs().add(new TibRef(cb.reserveAddr(16), 16, PRIM_ARRAY_DESC[operand - 4]));
+            String elem = cf.classAt(operand);
+            if (elem.startsWith("["))
+            {
+                return;
+            }
+            desc = "[L" + elem + ";";
+        }
+        else
+        {
+            desc = PRIM_ARRAY_DESC[operand - 4];
+        }
+        relocs.tibRefs().add(new TibRef(cb.reserveAddr(16), 16, desc));
         cb.emit(A64.strx(16, arrReg, ObjectModel.TIB_OFFSET));
+    }
+
+    /** The element class of a single-dim reference-array descriptor "[L<cls>;", or null. */
+    static String refArrayElement(String desc)
+    {
+        if (desc.length() > 3 && desc.startsWith("[L") && desc.endsWith(";"))
+        {
+            return desc.substring(2, desc.length() - 1);
+        }
+        return null;
     }
 
     /** Descriptor per newarray atype (4..11). */
