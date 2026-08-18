@@ -1656,6 +1656,29 @@ writer-side native stubbing before it can compile. Next: bake `valueOf` itself (
 or pruned branches), Strings, TIBs for baked-only classes, then `vm/Loader` uses baked
 `java.base`.
 
+**Increment 4 DONE — bake stubs: `Integer.valueOf` compiles, uncompilable fringe traps.**
+Three writer mechanisms: (1) `compileOrStub` — a stock-java.base (`bakeDomain`: java/jdk/sun)
+method that fails to host-compile (native/abstract = no Code, unsupported opcode, missing
+class/helper) bakes as a trap stub (save LR, `BL VM.bakeTrap` → loud halt) instead of failing
+the build; failures outside the bake domain stay fatal. A stubbed `<clinit>` is dropped from
+`VM.initClasses` (deferred) and its class's referenced statics flow through the snapshot
+(`clinitDeferred`). (2) **Contained vtable pull** — a bake-domain instantiated class's vtable
+methods park in `pendingVtable`; after the called closure drains, unreached slots bake as
+stubs *without a compile attempt*. Without this, one `new Integer` cascade-compiled half of
+java.base (660 stubs, TreeMap/Pattern pulled in, snapshot trying to bake Pattern node graphs);
+with it, exactly Integer's 13 unreached virtuals stub. (3) `isSkippableInit` is now
+caller-aware: the vm-side "super() into a JDK class" shim still skips, but java.base calling
+a java.base `<init>` is a real compiled call — `valueOf(200)`'s `new Integer` runs stock
+`Integer.<init>` → mini `Number.<init>` → `Object.<init>` and the field actually stores.
+Also: `instanceof`/`checkcast` against an ARRAY type now fails the compile explicitly (the
+host writer lays out no array Types) so such methods stub rather than mis-answer. Probe:
+`valueOf(42)` returns the very baked `cache[170]` object; `valueOf(200)` heap-allocates with
+the REAL Integer TIB (equal to the baked objects' TIB) and `intValue()` reads 200. Gotcha
+fixed en route: the BFS body's `continue` for already-sized keys skipped an end-of-body
+drain — the pendingVtable pop had to move to the loop top under a widened loop condition.
+Next: Strings, real vtables/TIBs for baked classes (stubs make the pull safe now), widen the
+baked method set, then `vm/Loader` uses baked `java.base`.
+
 ---
 
 ## 5. Design decisions to lock day one

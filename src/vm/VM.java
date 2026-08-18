@@ -1010,6 +1010,23 @@ public final class VM
     static long formatUnsignedIntAddr; // baked stock java/lang/Integer.formatUnsignedInt(II[BI)V — M8 object-statics probe target
     static long integerIntValueAddr;   // baked stock java/lang/Integer.intValue()I — reads a baked object's field directly
     static long integerCacheSlotAddr;  // address OF the java/lang/Integer$IntegerCache.cache static slot (M8 scalar-objects probe)
+    static long integerValueOfAddr;    // baked stock java/lang/Integer.valueOf(I)Ljava/lang/Integer; — M8 bake-stubs probe target
+
+    /** M8 bake stubs: a stock java.base method the host writer could NOT compile (native, abstract,
+     *  unsupported opcode) was baked as a stub that lands here. A well-formed image never calls one —
+     *  firing means a baked code path genuinely needs that method: give the writer a real lowering
+     *  (native map / opcode support) rather than widening anything. Loud halt, like denylistTrap. */
+    static void bakeTrap()
+    {
+        long lr = Magic.readLR();                          // FIRST op: x30 = the stub's BL site + 4
+        Uart.write(Magic.bytes("\nBAKE TRAP: writer-stubbed stock method called (lr="));
+        printHex(lr);
+        Uart.write(Magic.bytes(")\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
     static long fault0Esr, fault0Elr, fault0Far;   // the FIRST fault's syndrome, kept for the nested-fault report
 
@@ -1755,6 +1772,24 @@ public final class VM
         Uart.putc((int) iv);                              // '*'
         boolean scalarOk = cacheArr != 0 && obj170 != 0 && iv == 42;
         Uart.write(scalarOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (scalar objects not baked?)\n"));
+
+        // valueOf itself (bake stubs): baking stock Integer.valueOf drags in `new Integer`, and with
+        // it every Integer virtual -- whose closures hit natives and opcodes the host writer can't
+        // compile. Those bake as trap stubs now (never called on this path). valueOf(42) must return
+        // the SAME baked object probe 3 indexed out of the cache; valueOf(200) takes the new-path and
+        // allocates a fresh Integer on the METAL heap -- whose TIB must equal the baked object's TIB,
+        // i.e. image-baked and runtime-allocated objects share one real class.
+        Uart.write(Magic.bytes("  Integer.valueOf(42)==cache[170], valueOf(200).intValue()="));
+        Magic.store64(argBase, 42L);
+        long va = Magic.callN(integerValueOfAddr, argBase);
+        Magic.store64(argBase, 200L);
+        long vc = Magic.callN(integerValueOfAddr, argBase);
+        Magic.store64(argBase, vc);
+        long vv = Magic.callN(integerIntValueAddr, argBase);
+        printDec((int) vv);                               // 200
+        boolean vOk = va != 0 && va == obj170 && vv == 200
+                   && Magic.load64(va) != 0 && Magic.load64(va) == Magic.load64(vc);
+        Uart.write(vOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (valueOf not baked?)\n"));
     }
 
     static void run()

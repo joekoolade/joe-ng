@@ -65,7 +65,15 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public void type(CodeBuffer cb, int reg, int classCp)
     {
-        relocs.typeRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cf.classAt(classCp)));
+        String cls = cf.classAt(classCp);
+        if (cls.startsWith("["))
+        {
+            // The host writer lays out no array Types (only the metal loader has them) -- an
+            // instanceof/checkcast against an array type can't compile here. Under the M8 bake,
+            // such a stock method becomes a trap stub instead of a wrong answer.
+            throw new UnsupportedOperationException("array type-check not compiled by the host writer: " + cls);
+        }
+        relocs.typeRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cls));
     }
     public void interfaceType(CodeBuffer cb, int reg, int ifaceMethodCp)
     {
@@ -198,7 +206,18 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public boolean isSkippableInit(int methodCp)
     {
         ClassFile.MemberRef r = cf.memberRef(methodCp);
-        return ClassFile.isRoot(r.owner()) && r.name().equals("<init>");
+        if (!ClassFile.isRoot(r.owner()) || !r.name().equals("<init>"))
+        {
+            return false;
+        }
+        // The skip is the vm-side shim: a vm/... class's super() into a JDK class it doesn't
+        // compile (throwables extending java/lang/Exception etc.). Inside the M8 bake domain the
+        // stock <init>s ARE real compiled code -- java.base calling a java.base <init> (e.g.
+        // Integer.valueOf's `new Integer(i)` -> Integer.<init> -> Number.<init> -> Object.<init>)
+        // must run, or the constructed object's fields stay zero.
+        String caller = cf.thisClassName();
+        boolean callerBaked = caller.startsWith("java/") || caller.startsWith("jdk/") || caller.startsWith("sun/");
+        return !callerBaked;
     }
 
     // invokedynamic never occurs in the image's own (JDK-free) classes, so the writer never lowers it.
