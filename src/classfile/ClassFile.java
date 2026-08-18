@@ -133,6 +133,10 @@ public final class ClassFile
     {
         return superClass;
     }
+    public boolean isInterface()
+    {
+        return ClassReader.isInterface(bytes(), afterCp);
+    }
     public String[] interfaceNames()
     {
         return interfaces;

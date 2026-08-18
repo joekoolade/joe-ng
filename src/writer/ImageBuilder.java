@@ -611,16 +611,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             bakedDescWord[i] = cur;
             cur += align8Words(2 + (k.length() - k.indexOf('(')));
         }
-        // --- M8 world unification: vtable-SIGNATURE table for bake-domain classes with writer TIBs.
-        //     Per class {classUtf8Addr, slotsAddr, count, 0} (4 longs), slots as {nameUtf8Addr,
+        // --- M8 world unification: vtable-SIGNATURE + TYPE-ADOPTION table for bake-domain classes.
+        //     Per class {classUtf8Addr, slotsAddr, count, typeAddr} (4 longs), slots as {nameUtf8Addr,
         //     descUtf8Addr} pairs. The loader compares its own flattening against this at structure
-        //     time (vtparity) -- writer/loader slot-numbering parity, the precondition for linked
-        //     baked code dispatching on loader receivers, becomes an invariant checked every boot. ---
+        //     time (vtparity) AND adopts the writer's Type node as the class's runtime Type -- ONE
+        //     Type per baked class across both worlds, so instanceof/checkcast agree everywhere.
+        //     Covers every bake-domain class with a writer Type (typeClasses: instantiated classes,
+        //     type-check targets, and their full super chains); interfaces are skipped (the loader
+        //     never runs the class phase-A path for them, and itables stay per-world for now). ---
         Vec<String> vtSigClasses = new Vec<>();
-        for (int i = 0; i < tibClasses.size(); i++)
+        for (int i = 0; i < typeClasses.size(); i++)
         {
-            String c = tibClasses.at(i);
-            if (bakeDomain(c))
+            String c = typeClasses.at(i);
+            if (bakeDomain(c) && !registry.resolve(c).isInterface())
             {
                 vtSigClasses.add(c);
             }
@@ -737,7 +740,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                       ObjectModel.scalarSize(ClassFile.chainFieldBase(cls, this)
                                              + model.instanceFieldCount(cls)));
             String sup = model.superClassName(cls);
-            long superAddr = model.isRoot(sup) ? 0 : addr(typeWord.get(sup));
+            long superAddr = sup == null ? 0 : addr(typeWord.get(sup));   // full chain (0 only at Object)
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
             long dir = itableDirWord.containsKey(cls) ? addr(itableDirWord.get(cls)) : 0;
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
@@ -867,7 +870,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, w,     addr(vtSigClsWord[i]));
             writeLong(image, w + 2, addr(vtSigSlotsWord[i]));
             writeLong(image, w + 4, vt.size());
-            writeLong(image, w + 6, 0);
+            writeLong(image, w + 6, addr(typeWord.get(vtSigClasses.get(i))));   // the ONE Type node
         }
         fillStatic(image, staticWord, "vm/VM.vtSigTable", addr(vtSigDirWord));
         fillStatic(image, staticWord, "vm/VM.vtSigCount", vtSigClasses.size());
@@ -1092,10 +1095,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return cb;
     }
 
-    /** Add {@code cls} and all its superclasses (up to Object) to {@code set}. */
+    /** Add {@code cls} and its WHOLE registered super chain (through java/* up to Object) to
+     *  {@code set}. M8 world unification: every class in a Type walk gets a real, distinct Type
+     *  node -- the old isRoot stop left java/* classes with no Type at all, so their instanceof
+     *  sites all patched the same out-of-range address (accidentally-consistent, no discrimination). */
     private void addTypeClass(String cls, StrSet set)
     {
-        while (!model.isRoot(cls) && set.add(cls))
+        while (cls != null && set.add(cls))
         {
             cls = model.superClassName(cls);
         }
