@@ -4105,6 +4105,7 @@ public final class Loader
             // baked code matches loader receivers. The adopted node's fields stand as written
             // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
             findVtSig();                                // adoption entry (itparity compares later, post-fill)
+            adoptStatics();                             // interface constants share the writer block too
             if (gAdoptType != 0L)
             {
                 gType = gAdoptType;
@@ -4140,6 +4141,7 @@ public final class Loader
         }
         parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
         checkVtParity();                                // M8 unification: writer/loader slot numbering must agree
+        adoptStatics();                                 // M8 statics unification: ONE static block per baked class
         allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
         clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
@@ -6500,29 +6502,60 @@ public final class Loader
     // ONE Type across both worlds (cross-world instanceof/checkcast compare equal pointers).
     private static long gAdoptType;
 
-    private static long gVtSigSlots;   // matched vtSig entry's slot-pair table (0 = class not baked)
-    private static int gVtSigCount;    // ... its slot count
+    private static long gVtSigSlots;    // matched vtSig entry's slot-pair table (0 = class not baked)
+    private static int gVtSigCount;     // ... its slot count
+    private static long gAdoptStatics;  // M8 statics unification: the writer's dense per-class block (0 = none)
+    private static int gAdoptStaticCount;   // ... its declared-static slot count (guard vs gsfCount)
 
-    /** Find the current class's vtSig/adoption entry: sets gAdoptType + gVtSigSlots/gVtSigCount. */
+    /** Find the current class's vtSig/adoption entry: sets gAdoptType/gAdoptStatics + parity data. */
     private static void findVtSig()
     {
         gAdoptType = 0L;
         gVtSigSlots = 0L;
         gVtSigCount = 0;
+        gAdoptStatics = 0L;
+        gAdoptStaticCount = 0;
         int n = (int) VM.vtSigCount;
         int i = 0;
         while (i < n)
         {
-            long e = VM.vtSigTable + (long) i * 32L;
+            long e = VM.vtSigTable + (long) i * 48L;
             if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0))
             {
                 gVtSigSlots = Magic.load64(e + 8L);
                 gVtSigCount = (int) Magic.load64(e + 16L);
                 gAdoptType = Magic.load64(e + 24L);
+                gAdoptStatics = Magic.load64(e + 32L);
+                gAdoptStaticCount = (int) Magic.load64(e + 40L);
                 return;
             }
             i += 1;
         }
+    }
+
+    /** M8 statics unification: replace the freshly-allocated gStatics with the writer's dense
+     *  per-class block -- ONE home per static field across both worlds (this world's <clinit>
+     *  run then initializes the SHARED slots; deferred classes carry the seed-JVM snapshot).
+     *  Slot numbering = declared statics in declaration order on both sides; a count mismatch
+     *  keeps the loader block (safe degrade) and prints the divergence. */
+    private static void adoptStatics()
+    {
+        if (gAdoptStatics == 0L)
+        {
+            return;
+        }
+        if (gAdoptStaticCount != gsfCount)
+        {
+            Uart.write(Magic.bytes("  staticadopt "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.write(Magic.bytes(" DIFF "));
+            VM.printDec(gAdoptStaticCount);
+            Uart.putc(0x2F);
+            VM.printDec(gsfCount);
+            Uart.putc(0x0A);
+            return;
+        }
+        gStatics = gAdoptStatics;
     }
 
     private static void checkVtParity()
