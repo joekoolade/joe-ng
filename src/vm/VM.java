@@ -1024,6 +1024,8 @@ public final class VM
     static long longToStringAddr;      // baked stock Long.toString(J)
     static long integerToHexStringAddr;// baked stock Integer.toHexString(I)
     static long stringEqualsAddr;      // baked stock String.equals(Object) — content compare
+    static long bakedTable;            // M8 endgame: baked-method LINK table {classUtf8, nameUtf8, descUtf8, code}*
+    static long bakedCount;            // ... its entry count (Loader.bakedBuf scans it at lazy-compile time)
 
     /** Print a java/lang/String (baked or metal-heap) via the baked stock length()/charAt(). */
     private static void printJavaString(long str)

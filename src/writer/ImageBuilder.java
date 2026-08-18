@@ -154,6 +154,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int handlerCount = 0;
         Vec<String> worklist = new Vec<>();
         Vec<String> pendingVtable = new Vec<>();   // bake-domain vtable slots: stub unless really called
+        StrSet noLinkKeys = new StrSet();          // baked methods the LOADER must not link (world-crossing unsafe)
         StrIntTable lineTabIndex = new StrIntTable();   // stack-trace debug: method key -> position in lineTabList
         Vec<int[]> lineTabList = new Vec<>();           // per method: {wordOffset, line}* transitions (machine-independent)
         worklist.add(entryKey);
@@ -207,6 +208,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
+            // M8 endgame: a baked method is loader-LINKABLE only if it never crosses worlds by
+            // writer-side identity -- no instanceof/checkcast (writer Types), no invokevirtual/
+            // invokeinterface (writer vtable slot numbers, which diverge from the loader's:
+            // the loader's flattening excludes private methods). Field offsets and BL targets
+            // are world-independent, so everything else links.
+            if (cm.relocs().typeRefs().size() > 0 || cm.relocs().interfaceRefs().size() > 0
+                    || cm.relocs().virtualDispatch())
+            {
+                noLinkKeys.add(k);
+            }
             var _r1 = cm.relocs().callSites();
             for (int _ri1 = 0; _ri1 < _r1.size(); _ri1++)
             {
@@ -550,6 +561,54 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             symLineWord[i] = cur;
             cur += 1 + symLine[i].length;                          // {count}{(off,line) ints}
         }
+        // --- M8 endgame: baked-method LINK table -- the writer-compiled stock methods the on-metal
+        //     Loader may run instead of lazy-compiling its own copy. {classUtf8Addr, nameUtf8Addr,
+        //     descUtf8Addr, codeAddr} per entry (4 longs); the name runs are {u2 len}{bytes}, the same
+        //     shape as classfile Utf8s. Restricted to methods safe to run on LOADER-world receivers:
+        //     primitive/void return (no writer-TIB objects leak out), and none of the world-crossing
+        //     constructs (noLinkKeys). Statics they read are the writer's snapshotted slots --
+        //     effectively-final config values (e.g. COMPACT_STRINGS), consistent across worlds. ---
+        Vec<String> bakedLink = new Vec<>();
+        for (int i = 0; i < sizeWords.size(); i++)
+        {
+            String k = sizeWords.keyAt(i);
+            if (k.equals(INIT_CLASSES) || !bakeDomain(ownerOf(k)))
+            {
+                continue;
+            }
+            if (stubbedKeys.contains(k) || noLinkKeys.contains(k))
+            {
+                continue;
+            }
+            String name = k.substring(ownerOf(k).length() + 1, k.indexOf('('));
+            if (name.equals("<init>") || name.equals("<clinit>"))
+            {
+                continue;      // never lazy-compiled by name; init semantics stay per-world
+            }
+            char ret = k.charAt(k.indexOf(')') + 1);
+            if (ret == 'L' || ret == '[')
+            {
+                continue;      // would leak a writer-TIB object into the loader world
+            }
+            bakedLink.add(k);
+        }
+        System.out.println("  baked-link " + bakedLink.size() + " methods");
+        int bakedTableWord = cur;
+        cur += bakedLink.size() * 8;                                // 4 longs per entry
+        int[] bakedClsWord = new int[bakedLink.size()];
+        int[] bakedNameWord = new int[bakedLink.size()];
+        int[] bakedDescWord = new int[bakedLink.size()];
+        for (int i = 0; i < bakedLink.size(); i++)
+        {
+            String k = bakedLink.get(i);
+            String owner = ownerOf(k);
+            bakedClsWord[i] = cur;
+            cur += align8Words(2 + owner.length());
+            bakedNameWord[i] = cur;
+            cur += align8Words(2 + (k.indexOf('(') - owner.length() - 1));
+            bakedDescWord[i] = cur;
+            cur += align8Words(2 + (k.length() - k.indexOf('(')));
+        }
         int totalWords = cur;
 
         // --- final compile at real bases; concatenate; gather fixups ---
@@ -736,6 +795,23 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
         fillStatic(image, staticWord, "vm/VM.staticsEnd",   addr(staticsRegionEnd));
+        for (int i = 0; i < bakedLink.size(); i++)
+        {
+            String k = bakedLink.get(i);
+            String owner = ownerOf(k);
+            String mname = k.substring(owner.length() + 1, k.indexOf('('));
+            String mdesc = k.substring(k.indexOf('('));
+            writeBytes(image, bakedClsWord[i], utf8(owner));
+            writeBytes(image, bakedNameWord[i], utf8(mname));
+            writeBytes(image, bakedDescWord[i], utf8(mdesc));
+            int w = bakedTableWord + i * 8;
+            writeLong(image, w,     addr(bakedClsWord[i]));
+            writeLong(image, w + 2, addr(bakedNameWord[i]));
+            writeLong(image, w + 4, addr(bakedDescWord[i]));
+            writeLong(image, w + 6, addr(wordOffset.get(k)));
+        }
+        fillStatic(image, staticWord, "vm/VM.bakedTable", addr(bakedTableWord));
+        fillStatic(image, staticWord, "vm/VM.bakedCount", bakedLink.size());
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");

@@ -1727,6 +1727,27 @@ false). Probe line: `toString(-2026)=-2026, Long 1<<40=1099511627776, toHex=beef
 118 stubs total. Remaining: the arc endgame — `vm/Loader` resolves calls into baked
 `java.base` instead of demand-compiling its own copies.
 
+**Increment 8 DONE — THE ENDGAME: the Loader USES baked `java.base`.** The writer emits a
+**baked-method LINK table** ({classUtf8, nameUtf8, descUtf8, code} per entry; names as
+{u2 len}{bytes} runs, the classfile-Utf8 shape) of every writer-compiled stock method that is
+safe to run on LOADER-world receivers, and `Loader.lazyCompile` consults it FIRST
+(`bakedBuf`): on a hit the lazy stub/TIB slot is patched with the image's compiled buffer and
+no on-metal compile happens — the JikesRVM boot-image contract, live. The safety filter is
+mechanical: primitive/void return only (a reference return would leak a writer-TIB object
+into the loader world, where un-rooted virtuals are trap stubs), and none of the
+world-crossing constructs — no `instanceof`/`checkcast` (writer Types ≠ loader Types) and no
+`invokevirtual`/`invokeinterface` (**writer vtables include private methods, the loader's
+exclude them — slot numbers diverge**; found by inspection, tracked per-method via a new
+`virtualDispatch` reloc flag set in `WriterSymbols.vtableSlot`). Field offsets and BL targets
+are world-independent, so everything else links: 31 methods. For deferral entries (bytecode
+captured, no name) a new `findNameByCode` walks the method table inverse to
+`findMethodByOffsets`. QEMU: 4 live cross-world links during the NetDemo demand-load —
+`String.coder`, `Integer.intValue`, `String.isLatin1`, `StringLatin1.charAt` — loader-created
+objects flowing through writer-compiled stock code, then the normal endpoint;
+`BAKED_LINK=false` restores the old behavior bit-for-bit (flag default ON). Widening the
+linkable set (object returns, virtual dispatch) needs ONE String/Integer class across both
+worlds — unified Types + vtable numbering — the natural next arc.
+
 ---
 
 ## 5. Design decisions to lock day one

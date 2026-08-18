@@ -6337,6 +6337,33 @@ public final class Loader
             descOff = gFoundDescOff;
             isStatic = gFoundStatic;
         }
+        // M8 endgame (the Loader USES baked java.base): if the writer baked this exact method and
+        // listed it as loader-linkable, run the image's compiled stock code instead of compiling our
+        // own copy -- the JikesRVM boot-image contract. Field offsets and direct calls inside baked
+        // code are world-independent; the link table already excludes anything that isn't.
+        if (BAKED_LINK)
+        {
+            int bkName = lzTab[idx].nameOff;
+            if (bkName == 0)
+            {
+                bkName = findNameByCode(lzTab[idx].code);    // deferral entries capture only bytecode
+            }
+            long baked = bakedBuf(bkName, descOff);
+            if (baked != 0L)
+            {
+                Uart.write(Magic.bytes("  baked "));
+                printNameAt(gbase, gThisNameOff);
+                Uart.putc(0x2E);
+                printNameAt(gbase, bkName);
+                Uart.putc(0x0A);
+                lzTab[idx].cache = baked;
+                if (lzTab[idx].slot != 0L)
+                {
+                    Magic.store64(lzTab[idx].slot, baked);
+                }
+                return baked;
+            }
+        }
         if (LAZY_TRACE)                                  // per-method compile trace (debug; off by default)
         {
             Uart.write(Magic.bytes("  jitc "));
@@ -6367,6 +6394,60 @@ public final class Loader
         gType = clTab[reg].type;
         gTib = clTab[reg].tib;
         provideKnownStatics();
+    }
+
+    // M8 endgame: consult the writer's baked-method link table before lazy-compiling (default ON).
+    private static final boolean BAKED_LINK = true;
+
+    /**
+     * The writer-baked, loader-linkable compiled buffer for the CURRENT class's method with the given
+     * (name, descriptor) Utf8 offsets in {@code gbase} -- or 0 (compile our own copy). Table entries are
+     * {classUtf8, nameUtf8, descUtf8, code} quadruples of image addresses; the name runs are
+     * {u2 len}{bytes}, the same shape as classfile Utf8s, so {@link #utf8EqAt} compares them directly
+     * (each run's own address with offset 0).
+     */
+    private static long bakedBuf(int nameOff, int descOff)
+    {
+        if (nameOff == 0)
+        {
+            return 0L;
+        }
+        int n = (int) VM.bakedCount;
+        int i = 0;
+        while (i < n)
+        {
+            long e = VM.bakedTable + (long) i * 32L;
+            if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0)
+                    && utf8EqAt(gbase, nameOff, Magic.load64(e + 8L), 0)
+                    && utf8EqAt(gbase, descOff, Magic.load64(e + 16L), 0))
+            {
+                return Magic.load64(e + 24L);
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** The name Utf8 offset of the current blob's method whose Code attribute is at {@code code} -- the
+     *  inverse of {@link #findMethodByOffsets}, for deferred entries that captured only bytecode.
+     *  Compile context must be established (gp at the method table). 0 if not found. */
+    private static int findNameByCode(long code)
+    {
+        long p = gp;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (findCode(gbase, p + 8, attrs) == code)
+            {
+                return gcp[u2(p + 2)];
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0;
     }
 
     /** Find a method in the current blob by its (name, descriptor) Utf8 offsets; sets gcodeLen/gFoundDescOff/
