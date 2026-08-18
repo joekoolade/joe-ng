@@ -36,6 +36,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static final int CLASS_ENTRY_WORDS = 4 * WORDS_PER_SLOT;
     /** Entry-called stub whose body the writer fills with <clinit> calls (eager init). */
     private static final String INIT_CLASSES = "vm/VM.initClasses()V";
+    private static final String BAKE_TRAP = "vm/VM.bakeTrap()V";
+
+    // M8 bake stubs: stock java.base methods the host compiler couldn't compile, baked as trap stubs
+    // (a BL to VM.bakeTrap). Filled during the sizing pass; consulted by the emit pass (deterministic),
+    // by generateInitClasses (a stubbed <clinit> is dropped -- deferred), and by the statics snapshot
+    // (a deferred class's referenced statics come from the seed JVM instead).
+    private final StrSet stubbedKeys = new StrSet();
 
     // M8 full bootstrap (path 1), static state: stock java.base methods force-rooted into the compile
     // closure, each compiled address stashed in a VM static so VM.bootstrapProbe can Magic.callN it.
@@ -45,6 +52,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/StringUTF16.getBytes([BII[BI)V",     "vm/VM.utf16GetBytesAddr" },
         { "java/lang/Integer.formatUnsignedInt(II[BI)V",  "vm/VM.formatUnsignedIntAddr" },
         { "java/lang/Integer.intValue()I",                "vm/VM.integerIntValueAddr" },
+        { "java/lang/Integer.valueOf(I)Ljava/lang/Integer;", "vm/VM.integerValueOfAddr" },
     };
 
     // M8 static state: statics force-added to the referenced set so they get a slot and a deep
@@ -121,6 +129,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int frameCount = 0;                                          // unwind-table entry counts
         int handlerCount = 0;
         Vec<String> worklist = new Vec<>();
+        Vec<String> pendingVtable = new Vec<>();   // bake-domain vtable slots: stub unless really called
         StrIntTable lineTabIndex = new StrIntTable();   // stack-trace debug: method key -> position in lineTabList
         Vec<int[]> lineTabList = new Vec<>();           // per method: {wordOffset, line}* transitions (machine-independent)
         worklist.add(entryKey);
@@ -133,14 +142,30 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             statics.add(BAKE_STATICS[bs][0]);
             use(ownerOf(BAKE_STATICS[bs][0]), usedClasses, clinitOrder, worklist);
         }
-        while (!worklist.isEmpty())
+        while (!worklist.isEmpty() || !pendingVtable.isEmpty())
         {
+            // Called work first; once it drains, size parked bake-domain vtable slots as stubs (their
+            // stub's BL to VM.bakeTrap feeds the worklist and compiles the trap + its vm closure).
+            if (worklist.isEmpty())
+            {
+                String vk = pendingVtable.removeFirst();
+                if (sizeWords.containsKey(vk))
+                {
+                    continue;      // reached by real calls -> already compiled (or attempted)
+                }
+                if (stubbedKeys.add(vk))
+                {
+                    System.out.println("  bake-stub " + vk + " (vtable slot, not reached)");
+                }
+                worklist.add(vk);  // compileOrStub sees stubbedKeys first -> stub, no compile attempt
+                continue;
+            }
             String k = worklist.removeFirst();
             if (k.equals(INIT_CLASSES) || sizeWords.containsKey(k))
             {
                 continue;    // init body is generated
             }
-            CompiledMethod cm = compile(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
+            CompiledMethod cm = compileOrStub(k, CodeBuffer.LOAD_ADDRESS, k.equals(entryKey));
             sizeWords.put(k, cm.words().length);
             lineTabIndex.put(k, lineTabList.size());
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
@@ -203,11 +228,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r8.get(_ri8);
                 if (tibClasses.add(t.className()))
                 {
+                    // A bake-domain (stock java.base) class's vtable methods are NOT cascade-compiled:
+                    // they park in pendingVtable, and any slot the CALLED closure never reaches bakes
+                    // as a trap stub without a compile attempt -- else one `new Integer` drags every
+                    // Integer virtual (toString -> String -> Pattern...) plus THEIR closures into the
+                    // image. vm/board/... classes keep the eager pull (their vtables must all compile).
+                    boolean park = bakeDomain(t.className());
                     Vec<ClassModel.VSlot> vt = model.vtable(t.className());
                     for (int _vi = 0; _vi < vt.size(); _vi++)
                     {
                         ClassModel.VSlot s = vt.get(_vi);
-                        worklist.add(BaselineCompiler.key(s.owner(), s.name(), s.descriptor()));
+                        String vk = BaselineCompiler.key(s.owner(), s.name(), s.descriptor());
+                        if (park)
+                        {
+                            pendingVtable.add(vk);
+                        }
+                        else
+                        {
+                            worklist.add(vk);
+                        }
                     }
                 }
             }
@@ -276,7 +315,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _s14 = 0; _s14 < statics.size(); _s14++)
         {
             String key = statics.at(_s14);
-            if (bakeNoClinit(ownerOf(key)))
+            if (clinitDeferred(ownerOf(key)))
             {
                 Object v = StaticSnapshot.reference(key);
                 if (v != null)
@@ -429,7 +468,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String k = sizeWords.keyAt(si);
             int base = wordOffset.get(k);
             CompiledMethod cm = k.equals(INIT_CLASSES) ? initBody
-                                : compile(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
+                                : compileOrStub(k, CodeBuffer.LOAD_ADDRESS + (long) base * 4, k.equals(entryKey));
             if (cm.words().length != sizeWords.get(k))
             {
                 throw new IllegalStateException("size drift for " + k);
@@ -699,7 +738,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int si = 0; si < statics.size(); si++)
         {
             String key = statics.at(si);
-            if (bakeNoClinit(ownerOf(key)))
+            if (clinitDeferred(ownerOf(key)))
             {
                 Long bits = StaticSnapshot.primitiveBits(key);
                 if (bits != null)
@@ -880,6 +919,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         w.add(A64.strx(30, 31, 0));
         for (int ci = 0; ci < clinits.size(); ci++)
         {
+            if (stubbedKeys.contains(clinits.get(ci)))
+            {
+                continue;      // uncompilable <clinit> -> deferred; its statics come from the snapshot
+            }
             relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), clinits.get(ci)));
             w.add(A64.bl(0));
         }
@@ -1297,6 +1340,73 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             throw new RuntimeException("compiling " + key + ": " + e.getMessage(), e);
         }
+    }
+
+    /** M8 bake stubs: compile {@code key}, or -- when a STOCK java.base method can't be host-compiled
+     *  (native/abstract = no Code, unsupported opcode, missing helper or class) -- bake a trap stub
+     *  in its place, so the closure of a baked method survives its uncompilable fringe. A stub that
+     *  actually gets CALLED lands in {@code VM.bakeTrap} (loud halt). Failures outside java.base
+     *  (vm/board/net/...) stay fatal: the core must always compile. */
+    private CompiledMethod compileOrStub(String key, long base, boolean isEntry)
+    {
+        if (stubbedKeys.contains(key))
+        {
+            return stubMethod();
+        }
+        try
+        {
+            return compile(key, base, isEntry);
+        }
+        catch (RuntimeException e)
+        {
+            if (!stubbable(key))
+            {
+                throw e;
+            }
+            if (stubbedKeys.add(key))
+            {
+                System.out.println("  bake-stub " + key + " (" + e.getMessage() + ")");
+            }
+            return stubMethod();
+        }
+    }
+
+    /** Whether a compile failure of {@code key} may be stubbed: only stock java.base territory.
+     *  (Guest overlays share these prefixes but are never writer-compiled outside bake roots.) */
+    private static boolean stubbable(String key)
+    {
+        return bakeDomain(ownerOf(key));
+    }
+
+    /** Whether {@code cls} is stock-java.base territory for the M8 bake (stub-tolerant). */
+    private static boolean bakeDomain(String cls)
+    {
+        return cls.startsWith("java/") || cls.startsWith("jdk/") || cls.startsWith("sun/");
+    }
+
+    /** The trap stub baked for an uncompilable method: save LR, BL {@code VM.bakeTrap}, ret. */
+    private CompiledMethod stubMethod()
+    {
+        int frame = A64.align16(8);                                 // LR only
+        IntVec w = new IntVec();
+        BaselineCompiler.Relocations relocs = new BaselineCompiler.Relocations();
+        w.add(A64.subImm(31, 31, frame));
+        w.add(A64.strx(30, 31, 0));
+        relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), BAKE_TRAP));
+        w.add(A64.bl(0));
+        w.add(A64.ldrx(30, 31, 0));
+        w.add(A64.addImm(31, 31, frame));
+        w.add(A64.ret());
+        Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
+        return new CompiledMethod(w.toArray(), relocs, frame, handlers, null);
+    }
+
+    /** Whether {@code cls}'s {@code <clinit>} never runs (neither at build time nor boot): explicitly
+     *  deferred ({@link #bakeNoClinit}) or stubbed as uncompilable. Such a class's referenced statics
+     *  are snapshotted from the seed JVM instead. */
+    private boolean clinitDeferred(String cls)
+    {
+        return bakeNoClinit(cls) || stubbedKeys.contains(cls + ".<clinit>()V");
     }
 
     private Resolved lookup(String key)
