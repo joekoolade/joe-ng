@@ -1715,6 +1715,18 @@ back char by char. Negative control (byte[] literal instead of object): `length(
 dispatch wild-branches through the null TIB → caught by the boot re-entry guard. Next:
 widen the baked set (String utilities now unblocked), then `vm/Loader` uses baked `java.base`.
 
+**Increment 7 DONE — widened bake: toString/toHexString/String.equals, zero new mechanism.**
+Four roots added and everything simply worked — the measure that the machinery is now complete
+for this class of code: `Integer.toString(int)` and `Long.toString(long)` build REAL Strings
+on the metal heap (the registry resolves the **guest DecimalDigits overlay** — metal-friendly
+digit math, not the Unsafe-table stock — while stock `newStringWithLatin1Bytes` and the
+private `String(byte[],byte)` constructor run as compiled stock code), `Integer.toHexString`
+exercises the unsigned/letters path, and `String.equals` compares content across two DISTINCT
+heap Strings (`toString(42)` twice → different objects, equal content → true; vs "beef" →
+false). Probe line: `toString(-2026)=-2026, Long 1<<40=1099511627776, toHex=beef, equals=1,0`.
+118 stubs total. Remaining: the arc endgame — `vm/Loader` resolves calls into baked
+`java.base` instead of demand-compiling its own copies.
+
 ---
 
 ## 5. Design decisions to lock day one

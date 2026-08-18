@@ -67,6 +67,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/String.charAt(I)C",                  "vm/VM.stringCharAtAddr" },
         { "java/lang/String.coder()B",                    "vm/VM.stringCoderAddr" },
         { "java/lang/String.isLatin1()Z",                 "vm/VM.stringIsLatin1Addr" },
+        // M8 widen: toString builds a REAL String on the metal heap (guest DecimalDigits overlay
+        // computes digits, stock newStringWithLatin1Bytes + the private String(byte[],byte) ctor
+        // wrap them); String.equals compares content across distinct heap Strings.
+        { "java/lang/Integer.toString(I)Ljava/lang/String;",    "vm/VM.integerToStringAddr" },
+        { "java/lang/Long.toString(J)Ljava/lang/String;",       "vm/VM.longToStringAddr" },
+        { "java/lang/Integer.toHexString(I)Ljava/lang/String;", "vm/VM.integerToHexStringAddr" },
+        { "java/lang/String.equals(Ljava/lang/Object;)Z",       "vm/VM.stringEqualsAddr" },
     };
 
     // M8 static state: statics force-added to the referenced set so they get a slot and a deep
