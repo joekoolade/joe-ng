@@ -1784,6 +1784,19 @@ compiled guest Object methods (35). QEMU: **all eight `vtparity` lines flip DIFF
 probes PASS, links fire, tests green, normal endpoint. **Increment 3:** lift the
 `virtualDispatch` link exclusion — now provably sound — so `String.length`/`charAt` link.
 
+**Increment 3 DONE — the `virtualDispatch` exclusion lifted: cross-world virtual dispatch is
+live.** With slot numbering algorithmically identical (increment 2) and boot-verified
+(vtparity), plain `invokevirtual` inside linked baked code is sound: a writer slot number IS
+the loader slot number. The exclusion clause and the `virtualDispatch` reloc flag are gone;
+only `instanceof`/`checkcast`/`invokeinterface` (writer Types/itables, still distinct nodes)
+keep a method out of the link table. 35 → **38 linked methods**, and the exact case that
+wild-branched pre-parity now works: linked `String.length` dispatches `coder()` through the
+LOADER String's TIB at the parity slot. Second-order win: linked `String.charAt` BLs the
+writer's `StringLatin1.charAt` directly, so the loader no longer lazy-compiles it at all —
+the baked closure absorbs work from the lazy path. Remaining unification rungs: Type/TIB
+adoption (one class identity → cross-world `instanceof`, lifts the typeRefs exclusion),
+then statics.
+
 ---
 
 ## 5. Design decisions to lock day one

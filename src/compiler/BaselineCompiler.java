@@ -34,12 +34,8 @@ public final class BaselineCompiler
         private final Vec<TypeRef> typeRefs = new Vec<>();
         private final Vec<TypeRef> interfaceRefs = new Vec<>();   // interface Type address loads
 
-        private boolean virtualDispatch;                          // method emits invokevirtual (TIB-slot indexed)
-
         public Vec<CallSite> callSites() { return callSites; }
         public Vec<TibRef> tibRefs() { return tibRefs; }
-        public void markVirtualDispatch() { virtualDispatch = true; }
-        public boolean virtualDispatch() { return virtualDispatch; }
         public Vec<StrRef> strRefs() { return strRefs; }
         public Vec<StrRef> stringObjs() { return stringObjs; }
         public Vec<StaticRef> staticRefs() { return staticRefs; }
