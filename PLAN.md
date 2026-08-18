@@ -1768,6 +1768,22 @@ restored (with the corrected rationale); the linked set stays at 31. **Increment
 writer adopts chain flattening over registered `java/*` supers (and inherited-first field
 layout, the same own-only assumption) so vtparity reads OK — then the relaxation is sound.
 
+**Increment 2 DONE — writer chain-flattening: vtparity reads OK across the board.**
+`ClassFile.vtable` now flattens the WHOLE registered super chain (stop at `sup == null`, not
+`isRoot`): guest Object's 9 virtuals prefix every vtable, overrides land in place — exactly
+the loader's numbering. The co-fix landed with it: field layout is chain-aware
+(`ClassFile.chainFieldBase`; `WriterSymbols.fieldOffset`/`objectSize`, the Type
+`instanceSize`, and the deep-snapshot baker's size/walk all lay inherited fields FIRST, like
+the loader). A new `Resolver.canResolve` seam keeps resolver-less fixture compiles on the old
+flat view. Consequences absorbed: every writer TIB grew by the Object-chain slots (their
+impls = guest Object methods, compiled or bake-stubbed — pre-existing writer code never
+dispatched them, so stubs are pure additions); `CompilerTest`'s vtable pins moved to the new
+numbering (Animal/Dog `sound` at slot 9 of 10); the baked-link table picked up 4 newly
+compiled guest Object methods (35). QEMU: **all eight `vtparity` lines flip DIFF → OK**
+(`String OK 92`, `Integer/Long OK 20`, `StringBuilder OK 19`, throwables `OK 12`), all 7
+probes PASS, links fire, tests green, normal endpoint. **Increment 3:** lift the
+`virtualDispatch` link exclusion — now provably sound — so `String.length`/`charAt` link.
+
 ---
 
 ## 5. Design decisions to lock day one

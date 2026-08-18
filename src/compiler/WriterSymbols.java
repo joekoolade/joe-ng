@@ -121,13 +121,26 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     // ----- Symbols: numeric / boolean queries resolved against the classfiles -----
     public int fieldOffset(int fieldCp)
     {
+        // M8 world unification: inherited fields lay out FIRST (chainFieldBase), matching the
+        // loader; the Fieldref's owner is the declaring class, so its own index sits on top.
         ClassFile.MemberRef ref = cf.memberRef(fieldCp);
         ClassFile owner = resolve(ref.owner());
-        return ObjectModel.fieldOffset(owner.instanceFieldIndex(ref.name()));
+        return ObjectModel.fieldOffset(chainBase(ref.owner()) + owner.instanceFieldIndex(ref.name()));
     }
     public int objectSize(int classCp)
     {
-        return ObjectModel.scalarSize(resolve(cf.classAt(classCp)).instanceFieldCount());
+        String cls = cf.classAt(classCp);
+        return ObjectModel.scalarSize(chainBase(cls) + resolve(cls).instanceFieldCount());
+    }
+
+    /** Inherited-field slot count of {@code cls}; 0 in resolver-less fixture compiles (flat classes). */
+    private int chainBase(String cls)
+    {
+        if (resolver == null)
+        {
+            return 0;
+        }
+        return ClassFile.chainFieldBase(cls, this);
     }
     public int vtableSlot(int methodCp)
     {
@@ -273,6 +286,10 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
 
     // ----- classfile resolution (also the ClassFile.Resolver seam for vtableSlot) -----
+    public boolean canResolve(String owner)
+    {
+        return resolver != null || owner.equals(cf.thisClassName());
+    }
     public ClassFile resolve(String owner)
     {
         if (owner.equals(cf.thisClassName()))
