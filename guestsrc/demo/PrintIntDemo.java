@@ -15,6 +15,8 @@ public class PrintIntDemo
         System.out.print(ws.length() == 3 ? "D" : "d");  // linked length() on it -> known good
         byte[] wb = ws.getBytes();                       // the suspect call
         System.out.print(wb.length == 3 ? "E" : "e");
+        Object ca = ws.toCharArray();                    // array born in writer-baked code (if linked)
+        System.out.print(ca instanceof char[] ? "F" : "f");   // cross-world array instanceof
         System.out.print("done");
     }
 }

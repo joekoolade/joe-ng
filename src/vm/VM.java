@@ -1046,6 +1046,7 @@ public final class VM
 
     static long bakeStubTable;         // M8 object links: {classUtf8, nameUtf8, descUtf8, memo}* per bake stub
     static long bakeStubCount;
+    static long primArrayTibs;         // M8 array unification: 8-long table, baked prim-array TIB per atype (4..11)
 
     /** M8 object links: a writer-baked RESOLVE stub was called — the method the host writer could
      *  not compile is genuinely needed now. Resolve it through the on-metal loader (demand-load the
@@ -1949,6 +1950,26 @@ public final class VM
         printDec(c77);
         boolean iiOk = c79 < 0 && c77 == 0;
         Uart.write(iiOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (writer itable dispatch?)\n"));
+
+        // 12) M8 array-Type unification: writer-compiled newarray now TAGS the allocation with the
+        // baked canonical primitive-array TIB, and instanceof against an array class resolves the
+        // baked array Type -- so array type-checks discriminate in the writer world (raw arrays used
+        // to answer false for everything). The same baked nodes are ADOPTED by the loader
+        // (VM.primArrayTibs), making byte[] ONE class across both worlds.
+        Uart.write(Magic.bytes("  new byte[2] instanceof byte[],int[],Object="));
+        Object ba = new byte[2];
+        Object ia = new int[2];
+        boolean abOk = ba instanceof byte[];
+        boolean aiNo = ba instanceof int[];
+        boolean aoOk = ba instanceof Object;
+        boolean aiOk = ia instanceof int[];
+        printDec(abOk ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(aiNo ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(aoOk ? 1 : 0);
+        boolean arrOk = abOk && !aiNo && aoOk && aiOk;
+        Uart.write(arrOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (array Types not baked/tagged?)\n"));
     }
 
     static void run()
