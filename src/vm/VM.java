@@ -1903,6 +1903,23 @@ public final class VM
         printDec((int) sne);
         boolean widenOk = s42a != s42b && seq == 1 && sne == 0;
         Uart.write(widenOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (widened bake?)\n"));
+
+        // ITABLES: interface instanceof. A boxed Integer held as Object must satisfy `instanceof
+        // Comparable` -- answered from Integer's itable DIRECTORY (interface targets match dir
+        // keys, not the super chain), which now includes instanceof-only interfaces. A plain
+        // Object must not. Cross-world: java/lang/Comparable joins the adoption table, so the
+        // loader's Comparable adopts the writer's Type node at boot (the typeadopt line) and the
+        // same discrimination holds for linked code on loader receivers.
+        Uart.write(Magic.bytes("  Integer instanceof Comparable, Object="));
+        Object cmpProbe = Integer.valueOf(7);
+        boolean isCmp = cmpProbe instanceof Comparable;
+        Object plain = new Object();
+        boolean notCmp = plain instanceof Comparable;
+        printDec(isCmp ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(notCmp ? 1 : 0);
+        boolean ifOk = isCmp && !notCmp;
+        Uart.write(ifOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (interface itables?)\n"));
     }
 
     static void run()
