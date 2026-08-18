@@ -325,11 +325,13 @@ public final class ClassFile
         throw new IllegalArgumentException("no interface method " + name + descriptor + " in " + thisClass);
     }
 
-    /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet). */
+    /** All interfaces {@code cls} implements, directly or via superclasses (no super-interfaces yet).
+     *  M8 world unification: walks the WHOLE registered chain (the old isRoot stop meant a java/*
+     *  class reported NO interfaces at all -- its itable directory came out empty). */
     public static StrSet allInterfaces(String cls, Resolver resolve)
     {
         StrSet out = new StrSet();
-        for (String c = cls; !isRoot(c); c = resolve.resolve(c).superClass)
+        for (String c = cls; c != null; c = resolve.resolve(c).superClass)
         {
             for (String i : resolve.resolve(c).interfaces)
             {
@@ -339,10 +341,12 @@ public final class ClassFile
         return out;
     }
 
-    /** The class providing {@code cls}'s implementation of {@code name+descriptor} (walk supers). */
+    /** The class providing {@code cls}'s implementation of {@code name+descriptor} (walk supers).
+     *  M8 world unification: walks the WHOLE registered chain (the old isRoot stop meant a java/*
+     *  class could never provide an itable implementation). */
     public static String findImpl(String cls, String name, String descriptor, Resolver resolve)
     {
-        for (String c = cls; !isRoot(c); c = resolve.resolve(c).superClass)
+        for (String c = cls; c != null; c = resolve.resolve(c).superClass)
         {
             for (Method m : resolve.resolve(c).methods)
             {

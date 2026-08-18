@@ -4064,10 +4064,25 @@ public final class Loader
             registerInterface();                        // give its methods global itable indices
             // Give the interface a Type and register it, so implementors' itable
             // directories can key on it and the core's interfaceType resolves (M5.4.e).
-            gType = Heap.allocData(24);
-            Magic.store64(gType + 0, 0L);               // instanceSize (not instantiated)
-            Magic.store64(gType + 8, 0L);               // superType
-            Magic.store64(gType + 16, 0L);              // no itableDir
+            // M8 itables: a BAKED interface ADOPTS the writer's Type node instead -- implementors'
+            // dir entries then key on the shared node, so interface instanceof/checkcast in linked
+            // baked code matches loader receivers. The adopted node's fields stand as written
+            // (superType = Object's shared node; nothing reads an interface Type's instanceSize).
+            checkVtParity();                            // interface entries carry no vtable: adoption only
+            if (gAdoptType != 0L)
+            {
+                gType = gAdoptType;
+                Uart.write(Magic.bytes("  typeadopt "));
+                printNameAt(gbase, gThisNameOff);
+                Uart.putc(0x0A);
+            }
+            else
+            {
+                gType = Heap.allocData(24);
+                Magic.store64(gType + 0, 0L);           // instanceSize (not instantiated)
+                Magic.store64(gType + 8, 0L);           // superType
+                Magic.store64(gType + 16, 0L);          // no itableDir
+            }
             clTab[clCount] = new RVMClass();
             clTab[clCount].base = gbase;
             clTab[clCount].nameOff = gThisNameOff;
@@ -6438,7 +6453,11 @@ public final class Loader
             if (utf8EqAt(gbase, gThisNameOff, Magic.load64(e), 0))
             {
                 gAdoptType = Magic.load64(e + 24L);
-                vtParityAt(Magic.load64(e + 8L), (int) Magic.load64(e + 16L));
+                long slots = Magic.load64(e + 8L);
+                if (slots != 0L)                        // 0 = interface entry: Type adoption only, no vtable
+                {
+                    vtParityAt(slots, (int) Magic.load64(e + 16L));
+                }
                 return;
             }
             i += 1;

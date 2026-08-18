@@ -210,23 +210,16 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             lineTabList.add(buildLineTable(cm.bcToWord(), k));
             // M8 world unification: a baked method is loader-LINKABLE unless it still crosses
             // worlds by writer-side identity. invokevirtual links (slot-numbering parity, vtparity-
-            // checked at boot). instanceof/checkcast against a CLASS links too: Type adoption makes
-            // the writer's node the class's ONE runtime Type, so VM.instanceOf's super-chain walk
-            // compares equal pointers on loader receivers. What still doesn't link: instanceof/
-            // checkcast against an INTERFACE (VM.instanceOf answers those from the Type's
-            // itableDir, which is loader-owned on adopted nodes -- writer interface Types would
-            // never match), and invokeinterface (per-world itables). Field offsets and BL targets
-            // are world-independent.
-            boolean noLink = cm.relocs().interfaceRefs().size() > 0;
-            var _tr9 = cm.relocs().typeRefs();
-            for (int _ti9 = 0; _ti9 < _tr9.size(); _ti9++)
-            {
-                if (registry.resolve(_tr9.get(_ti9).className()).isInterface())
-                {
-                    noLink = true;
-                }
-            }
-            if (noLink)
+            // checked at boot). instanceof/checkcast link for BOTH class and interface targets:
+            // Type adoption makes the writer's node the ONE runtime Type -- classes match on the
+            // super-chain walk, interfaces match on the itableDir KEY compare (the loader's dir
+            // entries hold the adopted interface Type). The one remaining exclusion is
+            // invokeinterface: the two worlds index itables differently (the loader by a GLOBAL
+            // interface-method index deduped by name+descriptor across all loaded interfaces, the
+            // writer by per-interface declaration slot), so a writer-compiled itable lookup on a
+            // loader receiver would index the wrong entry. Field offsets and BL targets are
+            // world-independent.
+            if (cm.relocs().interfaceRefs().size() > 0)
             {
                 noLinkKeys.add(k);
             }
@@ -257,6 +250,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             {
                 var t = _r3.get(_ri3);
                 typeRefClasses.add(t.className());
+                // M8 itables: an INTERFACE instanceof/checkcast target must also join the itable
+                // directories (VM.instanceOf answers interface targets from dir KEYS) -- before
+                // this, only invokeinterface targets did, so a pure instanceof-interface read
+                // false even against a genuine implementor.
+                if (registry.resolve(t.className()).isInterface())
+                {
+                    usedInterfaces.add(t.className());
+                }
             }
             var _r5 = cm.relocs().interfaceRefs();
             for (int _ri5 = 0; _ri5 < _r5.size(); _ri5++)
@@ -629,27 +630,33 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         //     Covers every bake-domain class with a writer Type (typeClasses: instantiated classes,
         //     type-check targets, and their full super chains); interfaces are skipped (the loader
         //     never runs the class phase-A path for them, and itables stay per-world for now). ---
+        // M8 itables: INTERFACES join the table too, for Type adoption alone -- they carry no
+        // vtable signatures (slotsAddr 0 = the no-parity marker; interfaces have no vtable).
+        // A shared interface Type makes cross-world interface instanceof/checkcast sound:
+        // VM.instanceOf answers those by comparing the ifaceType KEYS in a Type's itableDir,
+        // and the loader's dir entries hold the (now adopted) interface Type.
         Vec<String> vtSigClasses = new Vec<>();
         for (int i = 0; i < typeClasses.size(); i++)
         {
             String c = typeClasses.at(i);
-            if (bakeDomain(c) && !registry.resolve(c).isInterface())
+            if (bakeDomain(c))
             {
                 vtSigClasses.add(c);
             }
         }
         int vtSigDirWord = cur;
-        cur += vtSigClasses.size() * 8;                             // {classUtf8, slotsAddr, count, 0}
+        cur += vtSigClasses.size() * 8;                             // {classUtf8, slotsAddr, count, typeAddr}
         int[] vtSigClsWord = new int[vtSigClasses.size()];
         int[] vtSigSlotsWord = new int[vtSigClasses.size()];
         int[][] vtSigNameWord = new int[vtSigClasses.size()][];
         int[][] vtSigDescWord = new int[vtSigClasses.size()][];
         for (int i = 0; i < vtSigClasses.size(); i++)
         {
-            Vec<ClassModel.VSlot> vt = model.vtable(vtSigClasses.get(i));
+            boolean iface = registry.resolve(vtSigClasses.get(i)).isInterface();
+            Vec<ClassModel.VSlot> vt = iface ? new Vec<>() : model.vtable(vtSigClasses.get(i));
             vtSigClsWord[i] = cur;
             cur += align8Words(2 + vtSigClasses.get(i).length());
-            vtSigSlotsWord[i] = cur;
+            vtSigSlotsWord[i] = iface ? 0 : cur;
             cur += vt.size() * 4;                                   // {nameAddr, descAddr} per slot
             vtSigNameWord[i] = new int[vt.size()];
             vtSigDescWord[i] = new int[vt.size()];
@@ -867,7 +874,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.bakedCount", bakedLink.size());
         for (int i = 0; i < vtSigClasses.size(); i++)
         {
-            Vec<ClassModel.VSlot> vt = model.vtable(vtSigClasses.get(i));
+            boolean iface = registry.resolve(vtSigClasses.get(i)).isInterface();
+            Vec<ClassModel.VSlot> vt = iface ? new Vec<>() : model.vtable(vtSigClasses.get(i));
             writeBytes(image, vtSigClsWord[i], utf8(vtSigClasses.get(i)));
             for (int s = 0; s < vt.size(); s++)
             {
@@ -878,7 +886,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             int w = vtSigDirWord + i * 8;
             writeLong(image, w,     addr(vtSigClsWord[i]));
-            writeLong(image, w + 2, addr(vtSigSlotsWord[i]));
+            writeLong(image, w + 2, iface ? 0 : addr(vtSigSlotsWord[i]));       // 0 = no parity data
             writeLong(image, w + 4, vt.size());
             writeLong(image, w + 6, addr(typeWord.get(vtSigClasses.get(i))));   // the ONE Type node
         }

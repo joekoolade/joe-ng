@@ -1830,6 +1830,24 @@ normal endpoint. Remaining exclusions: interface type-checks + `invokeinterface`
 unification), then statics — after which object-returning links (`valueOf`/`toString`)
 become the last frontier.
 
+**Increment 6 DONE — interface Type adoption + two more `isRoot` bugs down.** Interfaces now
+join the adoption table (with `slotsAddr = 0` as the no-vtable marker — the loader's
+interface phase-A branch adopts the writer's Type node, `typeadopt java/lang/Comparable`),
+making cross-world interface `instanceof` sound: `VM.instanceOf` answers interface targets by
+comparing the ifaceType KEYS in a Type's itableDir, and the loader's dir entries now hold the
+shared node. The interface-target `typeRefs` exclusion is lifted; only `invokeinterface`
+remains excluded (the two worlds index itables differently: loader = global interface-method
+index, writer = per-interface slot). Getting the probe green surfaced THREE writer gaps, all
+the same `isRoot` family: (1) itable directories were built only from `invokeinterface`
+targets, so a pure `instanceof SomeInterface` read false even writer-side — instanceof
+interface targets now join `usedInterfaces`; (2) `ClassFile.allInterfaces` never walked a
+`java/*` class (empty interface set for Integer!); (3) `ClassFile.findImpl` likewise — it
+could never find `Integer.compareTo(Object)` for the itable fill. Probe 8:
+`Integer instanceof Comparable, Object = 1,0` — a baked Integer (as Object) matches via
+Integer's itable directory, a plain Object doesn't. Debugging lesson: a same-second edit
+left `out/.stamp` equal to the source mtime, so make skipped recompiles and QEMU tested
+stale images — `touch` before rebuilding when iterating fast.
+
 ---
 
 ## 5. Design decisions to lock day one
