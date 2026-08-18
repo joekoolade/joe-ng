@@ -735,7 +735,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String cls = typeClasses.at(_s8);
             int tw = typeWord.get(cls);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
-                      ObjectModel.scalarSize(model.instanceFieldCount(cls)));
+                      ObjectModel.scalarSize(ClassFile.chainFieldBase(cls, this)
+                                             + model.instanceFieldCount(cls)));
             String sup = model.superClassName(cls);
             long superAddr = model.isRoot(sup) ? 0 : addr(typeWord.get(sup));
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
@@ -1234,19 +1235,41 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 }
                 continue;
             }
-            ClassFile cf = registry.resolve(bakedClassName(o));
-            for (ClassFile.FieldInfo f : cf.fields())
+            Vec<ClassFile> chain = superChain(bakedClassName(o));
+            for (int ci = 0; ci < chain.size(); ci++)
             {
-                if (!f.isStatic() && isRefDescriptor(f.descriptor()))
+                for (ClassFile.FieldInfo f : chain.get(ci).fields())
                 {
-                    Object child = StaticSnapshot.instanceRef(o, f.name());
-                    if (child != null)
+                    if (!f.isStatic() && isRefDescriptor(f.descriptor()))
                     {
-                        work.add(child);
+                        Object child = StaticSnapshot.instanceRef(o, f.name());
+                        if (child != null)
+                        {
+                            work.add(child);
+                        }
                     }
                 }
             }
         }
+    }
+
+    /** {@code cls}'s classfile chain, ROOT-most first (Object..cls) — the field-layout order:
+     *  inherited fields lay out before a subclass's own, matching the on-metal loader. */
+    private Vec<ClassFile> superChain(String cls)
+    {
+        Vec<ClassFile> chain = new Vec<>();
+        String c = cls;
+        while (c != null)
+        {
+            chain.add(registry.resolve(c));
+            c = registry.resolve(c).superClassName();
+        }
+        Vec<ClassFile> rootFirst = new Vec<>();
+        for (int i = chain.size() - 1; i >= 0; i--)
+        {
+            rootFirst.add(chain.get(i));
+        }
+        return rootFirst;
     }
 
     /** Image words the baked object {@code o} occupies. */
@@ -1261,7 +1284,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             int n = java.lang.reflect.Array.getLength(o);
             return (ObjectModel.ARRAY_BASE_OFFSET + n * ObjectModel.WORD) / 4;
         }
-        return ObjectModel.scalarSize(registry.resolve(bakedClassName(o)).instanceFieldCount()) / 4;
+        String cls = bakedClassName(o);
+        return ObjectModel.scalarSize(ClassFile.chainFieldBase(cls, this)
+                                      + registry.resolve(cls).instanceFieldCount()) / 4;
     }
 
     /** Write baked object {@code o} at image word {@code w}; references resolve through the graph. */
@@ -1291,26 +1316,29 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int tw = tibWord.get(cls);
         writeLong(image, w + ObjectModel.TIB_OFFSET / 4, tw >= 0 ? addr(tw) : 0);
         writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
-        ClassFile cf = registry.resolve(cls);
+        Vec<ClassFile> chain = superChain(cls);              // inherited fields first (loader layout)
         int slot = 0;
-        for (ClassFile.FieldInfo f : cf.fields())
+        for (int ci = 0; ci < chain.size(); ci++)
         {
-            if (f.isStatic())
+            for (ClassFile.FieldInfo f : chain.get(ci).fields())
             {
-                continue;
+                if (f.isStatic())
+                {
+                    continue;
+                }
+                long bits;
+                if (isRefDescriptor(f.descriptor()))
+                {
+                    Object child = StaticSnapshot.instanceRef(o, f.name());
+                    bits = child == null ? 0 : addr(objWord[bakedIndexOf(objs, child)]);
+                }
+                else
+                {
+                    bits = StaticSnapshot.instanceBits(o, f.name());
+                }
+                writeLong(image, w + ObjectModel.fieldOffset(slot) / 4, bits);
+                slot++;
             }
-            long bits;
-            if (isRefDescriptor(f.descriptor()))
-            {
-                Object child = StaticSnapshot.instanceRef(o, f.name());
-                bits = child == null ? 0 : addr(objWord[bakedIndexOf(objs, child)]);
-            }
-            else
-            {
-                bits = StaticSnapshot.instanceBits(o, f.name());
-            }
-            writeLong(image, w + ObjectModel.fieldOffset(slot) / 4, bits);
-            slot++;
         }
     }
 

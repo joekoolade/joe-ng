@@ -285,11 +285,14 @@ public final class CompilerTest
                 throw new RuntimeException(e);
             }
         };
-        T.eq("Animal vtable size", 1, ClassFile.vtable("vm/Animal", res).size());
-        T.eq("Dog vtable size (override, not append)", 1, ClassFile.vtable("vm/Dog", res).size());
-        T.eq("Animal.sound slot", 0, ClassFile.vtableSlot("vm/Animal", "sound", "()I", res));
-        T.eq("Dog.sound shares slot 0", 0, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
-        T.eq("Dog slot 0 impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(0).owner().equals("vm/Dog") ? 1 : 0);
+        // M8 world unification: the whole registered super chain flattens -- guest java/lang/Object's
+        // 9 virtuals prefix every vtable (matching the on-metal loader's numbering), so Animal's own
+        // sound() lands at slot 9 and Dog overrides it in place.
+        T.eq("Animal vtable size", 10, ClassFile.vtable("vm/Animal", res).size());
+        T.eq("Dog vtable size (override, not append)", 10, ClassFile.vtable("vm/Dog", res).size());
+        T.eq("Animal.sound slot", 9, ClassFile.vtableSlot("vm/Animal", "sound", "()I", res));
+        T.eq("Dog.sound shares slot 9", 9, ClassFile.vtableSlot("vm/Dog", "sound", "()I", res));
+        T.eq("Dog slot 9 impl is Dog", 1, ClassFile.vtable("vm/Dog", res).get(9).owner().equals("vm/Dog") ? 1 : 0);
 
         // ---- interfaces: implements set, itable slot, resolved implementation ----
         T.eq("Robot implements Speaker", 1, ClassFile.allInterfaces("vm/Robot", res).contains("vm/Speaker") ? 1 : 0);

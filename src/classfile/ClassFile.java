@@ -205,6 +205,13 @@ public final class ClassFile
     public interface Resolver
     {
         ClassFile resolve(String owner);
+
+        /** Whether {@link #resolve} can supply {@code owner} — false in resolver-less fixture
+         *  compiles, where chain flattening/field-chaining fall back to the flat (own-only) view. */
+        default boolean canResolve(String owner)
+        {
+            return true;
+        }
     }
 
     /**
@@ -217,7 +224,11 @@ public final class ClassFile
         ClassFile cf = resolve.resolve(cls);
         String sup = cf.superClass;
         Vec<VSlot> slots = new Vec<>();
-        if (!isRoot(sup))
+        // M8 world unification: flatten the WHOLE registered super chain -- including java/* supers
+        // up to java/lang/Object -- exactly like the on-metal loader, so writer and loader agree on
+        // every slot number (Object's virtuals prefix every vtable; overrides land in place). The
+        // old isRoot stop discarded java/* supers, shifting every index (the vtparity DIFF map).
+        if (sup != null && resolve.canResolve(sup))
         {
             Vec<VSlot> parent = vtable(sup, resolve);
             for (int i = 0; i < parent.size(); i++)
@@ -249,6 +260,21 @@ public final class ClassFile
             }
         }
         return slots;
+    }
+
+    /** Number of instance-field slots {@code cls} inherits from its super chain — inherited fields
+     *  lay out FIRST (before the class's own), matching the on-metal loader's field layout. */
+    public static int chainFieldBase(String cls, Resolver resolve)
+    {
+        String sup = resolve.resolve(cls).superClassName();
+        int n = 0;
+        while (sup != null)
+        {
+            ClassFile cf = resolve.resolve(sup);
+            n += cf.instanceFieldCount();
+            sup = cf.superClassName();
+        }
+        return n;
     }
 
     /** Vtable slot index of {@code name+descriptor} in {@code cls}'s flattened vtable. */
