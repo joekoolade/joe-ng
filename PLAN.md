@@ -1679,6 +1679,22 @@ drain — the pendingVtable pop had to move to the loop top under a widened loop
 Next: Strings, real vtables/TIBs for baked classes (stubs make the pull safe now), widen the
 baked method set, then `vm/Loader` uses baked `java.base`.
 
+**Increment 5 DONE — real vtables for baked classes: virtual dispatch on baked objects.**
+The deep-snapshot graph discovery moved from layout INTO the compile fixpoint: the BFS drains
+the called worklist + parked vtable stubs, then discovers the object graphs of all
+deferred-`<clinit>` reference statics seen so far, and **every baked scalar's class joins
+`tibClasses`** — real TIB + Type, unreached vtable slots baked as trap stubs — looping until
+nothing new appears. Baked objects no longer ever carry a null TIB. Key semantics: virtual
+dispatch TARGETS are not BL-reached, so a method meant to be dispatched through a baked TIB
+must be rooted (`BAKE_ROOTS`) or its slot stays a trap stub — the lazy-trap default per slot.
+Proof: stock `Integer.equals` (rooted) runs `instanceof` (Type-chain walk over a baked
+object), checkcast, and a genuine `invokevirtual intValue()` through the argument's TIB →
+`1,0` for 42==42 / 42==43; and `Long$LongCache.cache` is baked while NOTHING in the compiled
+closure ever `new`s a Long — its Longs carry a TIB purely via the fixpoint, and `Long.equals`
+dispatches `longValue()` through it → `1`. Negative control: un-rooting `Long.longValue` made
+that dispatch land in its stub → live `BAKE TRAP (lr=...)` halt — the trap semantics proven
+on the metal. Next: Strings, widen the baked set, then `vm/Loader` uses baked `java.base`.
+
 ---
 
 ## 5. Design decisions to lock day one

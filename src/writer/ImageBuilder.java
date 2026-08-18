@@ -53,6 +53,12 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/Integer.formatUnsignedInt(II[BI)V",  "vm/VM.formatUnsignedIntAddr" },
         { "java/lang/Integer.intValue()I",                "vm/VM.integerIntValueAddr" },
         { "java/lang/Integer.valueOf(I)Ljava/lang/Integer;", "vm/VM.integerValueOfAddr" },
+        // M8 real vtables: virtual-dispatch TARGETS are not reached by BL relocations, so a method
+        // meant to be dispatched through a baked TIB must be rooted here (else its slot is a trap
+        // stub). equals() itself contains the probe's invokevirtual through the argument's TIB.
+        { "java/lang/Integer.equals(Ljava/lang/Object;)Z", "vm/VM.integerEqualsAddr" },
+        { "java/lang/Long.equals(Ljava/lang/Object;)Z",   "vm/VM.longEqualsAddr" },
+        { "java/lang/Long.longValue()J",                  "vm/VM.longLongValueAddr" },
     };
 
     // M8 static state: statics force-added to the referenced set so they get a slot and a deep
@@ -63,6 +69,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     // the static directly keeps the closure tiny until the writer can stub natives.)
     private static final String[][] BAKE_STATICS = {
         { "java/lang/Integer$IntegerCache.cache", "vm/VM.integerCacheSlotAddr" },
+        // Long's cache: nothing in the compiled closure ever `new`s a Long, so these baked Longs
+        // get their TIB purely through the baked-scalar-class fixpoint -- the real-vtables proof.
+        { "java/lang/Long$LongCache.cache",       "vm/VM.longCacheSlotAddr" },
     };
 
     private final ClassRegistry registry;
@@ -142,6 +151,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             statics.add(BAKE_STATICS[bs][0]);
             use(ownerOf(BAKE_STATICS[bs][0]), usedClasses, clinitOrder, worklist);
         }
+        // M8 real vtables for baked classes: the deep-snapshot object graphs are discovered INSIDE
+        // the compile fixpoint (not at layout), so every baked scalar's class can still join
+        // tibClasses -- getting a real TIB + Type, with unreached vtable slots baked as stubs. The
+        // outer loop runs discovery each time the compile worklists drain, until nothing new appears
+        // (a discovered graph can add classes whose stub vtables add code, which can add statics).
+        Vec<String> bakedKeys = new Vec<>();
+        Vec<Object> bakedRoots = new Vec<>();
+        Vec<Object> bakedObjs = new Vec<>();
+        StrSet bakedStaticsDone = new StrSet();
+        while (true)
+        {
         while (!worklist.isEmpty() || !pendingVtable.isEmpty())
         {
             // Called work first; once it drains, size parked bake-domain vtable slots as stubs (their
@@ -251,6 +271,59 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 }
             }
         }
+        // Fixpoint step: snapshot the object graph of every deferred-<clinit> reference static seen
+        // so far, and give each newly-discovered baked scalar's class a TIB (parked vtable). Any
+        // progress re-enters the compile drain above.
+        boolean more = false;
+        for (int _s16 = 0; _s16 < statics.size(); _s16++)
+        {
+            String key = statics.at(_s16);
+            if (!clinitDeferred(ownerOf(key)) || !bakedStaticsDone.add(key))
+            {
+                continue;
+            }
+            Object v = StaticSnapshot.reference(key);
+            if (v == null)
+            {
+                continue;
+            }
+            bakedKeys.add(key);
+            bakedRoots.add(v);
+            bakeDiscover(v, bakedObjs);
+            more = true;
+        }
+        for (int _s17 = 0; _s17 < bakedObjs.size(); _s17++)
+        {
+            Object o = bakedObjs.get(_s17);
+            if (o.getClass().isArray())
+            {
+                continue;
+            }
+            String cls = bakedClassName(o);
+            if (tibClasses.add(cls))
+            {
+                Vec<ClassModel.VSlot> vt = model.vtable(cls);
+                for (int _vi2 = 0; _vi2 < vt.size(); _vi2++)
+                {
+                    ClassModel.VSlot s = vt.get(_vi2);
+                    String vk = BaselineCompiler.key(s.owner(), s.name(), s.descriptor());
+                    if (bakeDomain(cls))
+                    {
+                        pendingVtable.add(vk);
+                    }
+                    else
+                    {
+                        worklist.add(vk);
+                    }
+                }
+                more = true;
+            }
+        }
+        if (!more)
+        {
+            break;
+        }
+        }
         // Generate VM.initClasses(): call each discovered <clinit> once, in first-use order.
         CompiledMethod initBody = generateInitClasses(clinitOrder);
         sizeWords.put(INIT_CLASSES, initBody.words().length);
@@ -302,30 +375,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             strWord.put(s, cur);
             cur += stringWords(s);
         }
-        // M8 static state, object statics: a bakeNoClinit class's reference-typed static is DEEP
-        // snapshotted -- the seed JVM's whole reachable object graph (primitive arrays, reference
-        // arrays, scalar objects with their fields) is baked into the image and the static slot
-        // points at the root. A scalar gets its class's TIB when the image lays one out
-        // (instantiated classes); otherwise a null TIB like interned strings -- fine until
-        // something virtually dispatches on it. Scalar field layout comes from the SAME registered
-        // classfile the compiler resolves getfield against, so offsets agree by construction.
-        Vec<String> bakedKeys = new Vec<>();
-        Vec<Object> bakedRoots = new Vec<>();
-        Vec<Object> bakedObjs = new Vec<>();
-        for (int _s14 = 0; _s14 < statics.size(); _s14++)
-        {
-            String key = statics.at(_s14);
-            if (clinitDeferred(ownerOf(key)))
-            {
-                Object v = StaticSnapshot.reference(key);
-                if (v != null)
-                {
-                    bakedKeys.add(key);
-                    bakedRoots.add(v);
-                    bakeDiscover(v, bakedObjs);
-                }
-            }
-        }
+        // M8 static state, object statics: the deep-snapshotted graphs (discovered in the compile
+        // fixpoint above -- primitive arrays, reference arrays, scalar objects) get their image
+        // words here. Every scalar's class has a real TIB (it joined tibClasses during discovery);
+        // scalar field layout comes from the SAME registered classfile the compiler resolves
+        // getfield against, so offsets agree by construction.
         int[] bakedObjWord = new int[bakedObjs.size()];
         for (int _s15 = 0; _s15 < bakedObjs.size(); _s15++)
         {
@@ -899,7 +953,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return cls.equals("java/lang/Math")
                 || cls.equals("java/lang/Integer")
                 || cls.equals("java/lang/StringUTF16")
-                || cls.equals("java/lang/Integer$IntegerCache");
+                || cls.equals("java/lang/Integer$IntegerCache")
+                || cls.equals("java/lang/Long")
+                || cls.equals("java/lang/Long$LongCache");
     }
 
     /** Owner class of a method key ("o/C.m(desc)") or field key ("o/C.f"). */
