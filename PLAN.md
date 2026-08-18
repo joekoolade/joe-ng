@@ -1816,6 +1816,20 @@ PASS, 38 links fire, tests green, normal endpoint. **Increment 5:** lift the `ty
 exclusion — `instanceof`/`checkcast` in linked code now compare the shared node — so
 `String.equals`/`Integer.equals` link.
 
+**Increment 5 DONE — the `typeRefs` exclusion lifted: cross-world `instanceof` live.** With
+Type adoption, `instanceof`/`checkcast` against a CLASS in linked baked code compares the
+shared node on loader receivers — sound. The analysis surfaced one refinement:
+`VM.instanceOf` answers INTERFACE targets from the Type's `itableDir`, which is loader-owned
+on adopted nodes (writer interface Types would never match), so methods type-checking
+against an interface stay excluded — the filter now checks each typeRef target's
+interface-ness — as does `invokeinterface`. 38 → **41 linked methods** (`String.equals`,
+`Integer.equals`, `Long.equals`). QEMU shows the payoff live: `baked java/lang/Integer.equals`
+links and runs in the boot path — its `instanceof Integer` walking loader Integers' Type
+chains into the shared adopted node. All 7 probes PASS, no vtparity DIFFs, tests green,
+normal endpoint. Remaining exclusions: interface type-checks + `invokeinterface` (itable
+unification), then statics — after which object-returning links (`valueOf`/`toString`)
+become the last frontier.
+
 ---
 
 ## 5. Design decisions to lock day one
