@@ -7152,11 +7152,6 @@ public final class Loader
                 // VarHandle/MethodHandles shims: signature-polymorphic sites resolved by NAME at compile time:
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/"))
-                // VM-seeded / hand-ordered <clinit> infrastructure (SharedSecrets + the access shims that
-                // FileDescriptor.<clinit> must register before NioSocketImpl reads them):
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/access/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Thread"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/System"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));    // 9-virtuals prefix of every vtable
     }
 
