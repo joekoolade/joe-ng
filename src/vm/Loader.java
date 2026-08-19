@@ -7143,12 +7143,11 @@ public final class Loader
      *  and reflection demos cover them. */
     private static boolean eagerKept(long base, int off)
     {
-        // The socket-native stack + its overlay/shim floor (java.net + sun.nio.ch + charsets + buffers):
+        // The socket-native stack itself (java.net + sun.nio.ch + the platform impl). The charset/buffer/fd
+        // DATA layer below it is lazy as of increment 6; what is left here is the impl stack and its natives.
         return utf8HasPrefix(base, off, Magic.bytes("java/net/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/io/FileDescriptor"))
                 // VarHandle/MethodHandles shims: signature-polymorphic sites resolved by NAME at compile time:
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/"))
