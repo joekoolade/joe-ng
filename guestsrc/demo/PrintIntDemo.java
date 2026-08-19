@@ -17,6 +17,8 @@ public class PrintIntDemo
         System.out.print(wb.length == 3 ? "E" : "e");
         Object ca = ws.toCharArray();                    // array born in writer-baked code (if linked)
         System.out.print(ca instanceof char[] ? "F" : "f");   // cross-world array instanceof
+        Object ra = new Integer[1];                      // loader anewarray -> ADOPTS the baked ref-array TIB
+        System.out.print(ra instanceof Number[] ? "G" : "g"); // covariance through the shared element Types
         System.out.print("done");
     }
 }
