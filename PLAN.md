@@ -2001,7 +2001,12 @@ absolute `{u2 len}{bytes}` runs at offset 0 — one table, both worlds. This gen
 any metadata-only class whose baked body calls a native needs it, `Throwable` was just
 the first to arrive.
 
-**Increment 3 — shrink `eagerKept`: the reference/cleaner/event subsystem.** Off the list:
+**Increment 3 — shrink `eagerKept`: the reference/cleaner/event subsystem. DONE,
+PI-VALIDATED (PR #104).** Real Pi 4: 16 probes PASS, `lifecycle OK 162`, WPA2 join + DHCP,
+HTTP 200 OK with the full body (`bytes=828`), clean `close()` and return. All nine classes
+carry phase-A lines (`Reference` 4 cells, `SocketRead/WriteEvent` 6 each, `Cleaner` and
+`CleanerFactory` 1 each) — so the cleaner and the read/write event probes ran lazily on the
+live socket path, which is the part QEMU cannot reach. Off the list:
 `java/lang/ref/`, `jdk/internal/ref/`, `jdk/internal/event/` — nine classes
 (`Cleaner`(+`$Sync`,`$Cleanable`), `CleanerFactory`, `PhantomCleanable`, `Reference`,
 `PhantomReference`, `Event`, `SocketReadEvent`, `SocketWriteEvent`). One subsystem, taken
