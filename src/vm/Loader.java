@@ -5123,156 +5123,168 @@ public final class Loader
      */
     private static long nativeBuf(int idx)
     {
-        int classOff = refClassNameOff(idx);
-        int nameOff = mrefNameOff(idx);
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/System")))
+        return nativeBufAt(gbase, refClassNameOff(idx), gbase, mrefNameOff(idx));
+    }
+
+    /**
+     * The provided-native table, keyed by a class name and a method name each given as a
+     * {@code (base, offset)} pair. Compile-time resolution passes the current blob's constant-pool
+     * offsets ({@link #nativeBuf}); {@link #resolveBakeStub} passes absolute {@code {u2 len}{bytes}}
+     * runs at offset 0, so a BAKED body calling a native (its stub can't be compiled, so it fires
+     * the resolver) reaches the same VM helper the loader would have linked. Before this, only the
+     * compile-time path could see the table, so a metadata-only class whose baked body called a
+     * native halted with {@code bakeresolve-find} — no bytecode exists for a native to fall back to.
+     */
+    static long nativeBufAt(long clsBase, int clsOff, long nameBase, int nameOff)
+    {
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/System")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Throwable")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/io/FileInputStream")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileInputStream")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
         }
         // VarHandle overlay: resolve an instance field's byte offset from the target object's class.
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/invoke/VarHandle")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/VarHandle")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
         }
         // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle, and
         // resolve their caller's class (getCallerClass) for the field-access check.
-        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
-                || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
-                || utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicLongFieldUpdater"))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicReferenceFieldUpdater")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
-                || utf8IsStr(classOff, Magic.bytes("java/lang/reflect/AccessibleObject")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
         }
         // Reflective Field.get/set: resolve the field's byte offset from the target object's class (same
         // loader field registry as the VarHandle/atomic-updater shims).
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Field")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Method")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
-            if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
         }
         // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
         // and allocate the instance.
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Constructor")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Constructor")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
-            if (utf8IsStr(nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
-            if (utf8IsStr(nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("ctorResolve0")))     { return VM.constructorResolveAddr; }  // (Class,I)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }          // (I,byte[],long[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))   { return VM.allocInstanceAddr; }       // (Class)Object
         }
         // FileDescriptor.<clinit> runs (to register the JavaIOFileDescriptorAccess); its 3 natives are inert
         // on metal -- initIDs is a no-op, and handle/append are Windows/append-mode fields unused by sockets.
-        if (utf8IsStr(classOff, Magic.bytes("java/io/FileDescriptor")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileDescriptor")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
-            if (utf8IsStr(nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getHandle")))         { return VM.sockZeroAddr; }    // (I)J -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getAppend")))         { return VM.sockZeroAddr; }    // (I)Z -> false
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/net/InetAddress")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/net/InetAddress")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resolve0")))          { return VM.dnsResolveAddr; }  // (byte[])I -> WiFi DNS
         }
         // M3 socket natives: stock sun.nio.ch backed by net.Tcp (fd int = the net.Tcp handle).
-        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/Net")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/Net")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
-            if (utf8IsStr(nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
-            if (utf8IsStr(nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
-            if (utf8IsStr(nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
-            if (utf8IsStr(nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("socket0")))           { return VM.sockSocket0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("connect0")))          { return VM.sockConnect0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("available")))         { return VM.sockAvailableAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localPort")))         { return VM.sockZeroAddr; }     // -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getIntOption0")))     { return VM.sockZeroAddr; }     // -> 0 (SO_LINGER)
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("localInetAddress")))  { return VM.sockZeroAddr; }     // -> null wildcard
             // Net.<clinit> capability probes: no poll, IPv4-only, no reuse-port on metal -> all 0/false.
-            if (utf8IsStr(nameOff, Magic.bytes("pollinValue")))       { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("polloutValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("pollerrValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("pollhupValue")))      { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("pollnvalValue")))     { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("pollconnValue")))     { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.sockZeroAddr; }  // -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollinValue")))       { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("polloutValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollerrValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollhupValue")))      { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollnvalValue")))     { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("pollconnValue")))     { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isIPv6Available0")))  { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isReusePortAvailable0"))) { return VM.sockZeroAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isExclusiveBindAvailable"))) { return VM.sockZeroAddr; }  // -> 0
         }
-        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/SocketDispatcher")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("read0")))             { return VM.sockRead0Addr; }
-            if (utf8IsStr(nameOff, Magic.bytes("write0")))            { return VM.sockWrite0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("read0")))             { return VM.sockRead0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("write0")))            { return VM.sockWrite0Addr; }
         }
-        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/UnixDispatcher")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/UnixDispatcher")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("close0")))            { return VM.sockClose0Addr; }
-            if (utf8IsStr(nameOff, Magic.bytes("preClose0")))         { return VM.sockNoopAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("close0")))            { return VM.sockClose0Addr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("preClose0")))         { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
         }
-        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/IOUtil")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/IOUtil")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fdVal")))             { return VM.fdValAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setfdVal")))          { return VM.setFdValAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.sockNoopAddr; }
         }
-        if (utf8IsStr(classOff, Magic.bytes("sun/nio/ch/NativeThread")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("sun/nio/ch/NativeThread")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("current0")))          { return VM.sockZeroAddr; }     // -> 0
-            if (utf8IsStr(nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
-            if (utf8IsStr(nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("current0")))          { return VM.sockZeroAddr; }     // -> 0
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("init")))              { return VM.sockNoopAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("supportPendingSignals0"))) { return VM.sockZeroAddr; } // -> false
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("signal0")))           { return VM.sockNoopAddr; }      // no thread to wake
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Object")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Object")))
         {
             // Object.clone() shallow copy: same block-copy as the [T.clone() intrinsic (TIB + body from the
             // status-word size), so reuse arrayClone. Cloneable collections super.clone() then fix their links.
-            if (utf8IsStr(nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("clone0")))            { return VM.arrayCloneAddr; }    // (Object)Object
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/reflect/Array")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Array")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("newArray0")))         { return VM.newReflectArrayAddr; } // (Class,I)Object
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Class")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
-            if (utf8IsStr(nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
-            if (utf8IsStr(nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
-            if (utf8IsStr(nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
-            if (utf8IsStr(nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
-            if (utf8IsStr(nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
-            if (utf8IsStr(nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
-            if (utf8IsStr(nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/ClassLoader")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Thread")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Float")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Float")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("floatToRawIntBits"))) { return VM.identityAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("intBitsToFloat")))    { return VM.identityAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("floatToRawIntBits"))) { return VM.identityAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intBitsToFloat")))    { return VM.identityAddr; }
         }
-        if (utf8IsStr(classOff, Magic.bytes("java/lang/Double")))
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Double")))
         {
-            if (utf8IsStr(nameOff, Magic.bytes("doubleToRawLongBits"))) { return VM.identityAddr; }
-            if (utf8IsStr(nameOff, Magic.bytes("longBitsToDouble")))    { return VM.identityAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("doubleToRawLongBits"))) { return VM.identityAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("longBitsToDouble")))    { return VM.identityAddr; }
         }
         return 0L;
     }
@@ -6633,6 +6645,10 @@ public final class Loader
         long buf = bufBySigU(clsU, nameU, descU);
         if (buf == 0L)
         {
+            buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find: link the VM helper
+        }
+        if (buf == 0L)
+        {
             capHalt(Magic.bytes("bakeresolve-find"), 0);
         }
         return buf;
@@ -7118,11 +7134,13 @@ public final class Loader
         return !eagerKept(base, off);
     }
 
-    /** The classes KEPT on the eager compile path (the stage-5 exception list). Conservative by design:
-     *  the socket-native stack and everything adjacent to it (hand-tuned {@code <clinit>} ordering, VM-seeded
-     *  statics, and the #43 denylist-trap interplay that regressed PR #71 on real HW -- QEMU cannot catch
-     *  those, so each of these widens to lazy only one-at-a-time with individual Pi validation), plus the
-     *  Throwable hierarchy (the unwinder resolves handlers against compiled bodies mid-throw). */
+    /** The classes KEPT on the eager compile path (the stage-5 exception list, shrinking toward empty).
+     *  What is left is the socket-native stack and everything adjacent to it: hand-tuned {@code <clinit>}
+     *  ordering, VM-seeded statics, and the #43 denylist-trap interplay that regressed PR #71 on real HW.
+     *  QEMU cannot exercise any of it (no CYW43 -> it traps at connect first), so these come off the list
+     *  one prefix at a time, each with its own Pi run. The Throwable hierarchy and the reflection floor
+     *  (java/lang/reflect, java/lang/Class) are already off -- both are QEMU-verifiable, and the exception
+     *  and reflection demos cover them. */
     private static boolean eagerKept(long base, int off)
     {
         // The socket-native stack + its overlay/shim floor (java.net + sun.nio.ch + charsets + buffers):
@@ -7140,38 +7158,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/ref/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/event/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ref/"))
-                // Overlaid reflection floor (Class/reflect run against loader registries):
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Class"))     // + ClassLoader/ClassValue
                 // Locks + TimeUnit (ReentrantLock overlay; TimeUnit was in the regressed PR #71 batch):
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/concurrent/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Thread"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/System"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"))     // 9-virtuals prefix of every vtable
-                // The Throwable hierarchy: the unwinder walks handler tables against compiled bodies mid-throw:
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Throwable"))
-                || utf8HasSuffix(base, off, Magic.bytes("Exception"))
-                || utf8HasSuffix(base, off, Magic.bytes("Error"));
-    }
-
-    /** True if the class name at {@code off} in {@code base} ends with {@code suffix}. */
-    private static boolean utf8HasSuffix(long base, int off, byte[] suffix)
-    {
-        int len = u2(base + off);
-        if (len < suffix.length)
-        {
-            return false;
-        }
-        int k = 0;
-        while (k < suffix.length)
-        {
-            if (u1(base + off + 2 + (len - suffix.length) + k) != (suffix[k] & 0xFF))
-            {
-                return false;
-            }
-            k += 1;
-        }
-        return true;
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));    // 9-virtuals prefix of every vtable
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
