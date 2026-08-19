@@ -3749,20 +3749,18 @@ public final class Loader
             if (code != 0L && (markActive == 0 || isReach(code)))   // reachability-pruned when a mark ran
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
-                if (LAZY_STAGE2 && phaseACelled(gcp[u2(p + 2)], gcp[u2(p + 4)]))
+                if (phaseACelled(gcp[u2(p + 2)], gcp[u2(p + 4)]))
                 {
-                    // Stage 2: metadata-only -- this method already has a structure-time cell (armPhaseACells),
-                    // so skip its eager compile entirely; it compiles on first call through that cell.
+                    // Metadata-only: this static already has a structure-time cell (armPhaseACells), so it is
+                    // never sized, emitted or registered here -- it compiles on first call through that cell.
                 }
                 else
                 {
                     addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
-                    // Defer this method (compile on first call) if: it's the LAZY_DEFER-gated class, OR it's a
-                    // Stage-2 class's non-static method (statics take the phase-A cell path above; virtuals/others
-                    // take the TIB/registry stub path here) -- so a Stage-2 class with virtual methods is fully
-                    // metadata-only, not just the all-static utilities.
-                    boolean defer = (LAZY_DEFER && deferrable(gcp[u2(p + 2)]))
-                            || (LAZY_STAGE2 && stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]));
+                    // Everything else that is not an initializer takes the other route to the same engine: a
+                    // deferral stub standing in for the body (statics went the cell way above). Only <init>
+                    // and <clinit> are still compiled here, because loading a class runs them.
+                    boolean defer = stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]);
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -4510,10 +4508,7 @@ public final class Loader
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
-        if (LAZY_DEFER || LAZY_STAGE2)
-        {
-            mDefer = new int[MAXM];                      // only allocated when deferral is enabled
-        }
+        mDefer = new int[MAXM];
         mCount = 0;
     }
 
@@ -4603,7 +4598,7 @@ public final class Loader
      */
     private static void sizeMethod(int i)
     {
-        if ((LAZY_DEFER || LAZY_STAGE2) && mDefer[i] != 0)
+        if (mDefer[i] != 0)
         {
             mBuf[i] = Heap.allocCode(32);               // just the stub -> no dry-run compile at load (genuine defer)
             return;
@@ -4614,7 +4609,7 @@ public final class Loader
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
-        if ((LAZY_DEFER || LAZY_STAGE2) && mDefer[i] != 0)               // deferred: install a stub; the body compiles on first call
+        if (mDefer[i] != 0)                             // deferred: install a stub; the body compiles on first call
         {
             emitDeferredStub(i);
             return;
@@ -4646,17 +4641,6 @@ public final class Loader
             VM.addJitHandler(ms, me, hh, ct);
             h += 1;
         }
-    }
-
-    /** True if the current class + method name is one we defer (gated to java/lang/String, excluding the
-     *  initializers which must run at load). */
-    private static boolean deferrable(int nameOff)
-    {
-        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))
-        {
-            return false;
-        }
-        return notInit(nameOff);
     }
 
     /** True if {@code nameOff} is neither {@code <clinit>} nor {@code <init>} (the initializers must run at load). */
@@ -5399,10 +5383,7 @@ public final class Loader
         }
         captureDirectIfaces();
         clCount += 1;
-        if (LAZY_PHASEA || LAZY_STAGE2)                 // M8 phase-A / Stage 2: allocate this class's method cells now
-        {
-            armPhaseACells();
-        }
+        armPhaseACells();                               // cells for this class's statics, before any body compiles
         int st = 0;
         while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
         {
@@ -6314,14 +6295,6 @@ public final class Loader
             Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
             s += 1;
         }
-        if (LAZY_TIB)                                   // M8 increment 1a: re-arm this class's vtable with
-        {                                              //   compile-eager / install-on-first-call stubs
-            lazyArmTib();
-        }
-        if (LAZY_COMPILE)                               // M8 increment 1b: compile-on-first-call
-        {
-            lazyArmCompile();
-        }
         long dir = buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
         if (dir != 0L && instImaps != null && instImapN < instImaps.length)
         {
@@ -6333,43 +6306,7 @@ public final class Loader
         buildImplBitmap(gType);                         // O(1) interface checks: super bits | dir bits
     }
 
-    // ----- M8 increment 1a: lazy-dispatch trampoline (compile-eager, install-on-first-call) -----
-    // First step of the JikesRVM-model redirect (see PLAN.md "M8"). Proves the self-modifying vtable
-    // dispatch + ABI on metal without the harder context-restore of a real deferred compile (1b).
-    // Default OFF -> the `if (LAZY_TIB)` branch is a compile-time-constant dead branch, so lazyArmTib /
-    // buildLazyStub are unreachable and the emitted image is byte-identical to the eager path.
-    private static final boolean LAZY_TIB = false;
-
-    /** Re-arm the just-filled vtable of the gated class: replace each real code buffer in the TIB with a
-     *  self-contained stub that, on the FIRST virtual call through that slot, patches the slot back to the
-     *  real buffer and tail-branches into it. Every later call dispatches directly. */
-    private static void lazyArmTib()
-    {
-        if (gvCount <= 0)                              // no vtable (interface / no virtual methods) -> nothing to arm
-        {
-            return;
-        }
-        int armed = 0;
-        int s = 0;
-        while (s < gvCount)
-        {
-            long slotAddr = gTib + 8 + s * 8;
-            long real = Magic.load64(slotAddr);
-            if (real != 0L)
-            {
-                Magic.store64(slotAddr, buildLazyStub(real, slotAddr));
-                armed += 1;
-            }
-            s += 1;
-        }
-        Uart.write(Magic.bytes("  lazy: armed "));
-        VM.printDec(armed);
-        Uart.write(Magic.bytes(" slots for "));
-        printNameAt(gbase, gThisNameOff);
-        Uart.putc(0x0A);
-    }
-
-    /** Print the Utf8 class name at (base, off) over the UART (diagnostic for lazy arming). */
+    /** Print the Utf8 class name at (base, off) over the UART. */
     private static void printNameAt(long base, int off)
     {
         int len = u2(base + off);
@@ -6381,99 +6318,20 @@ public final class Loader
         }
     }
 
-    /**
-     * Emit a Java-free lazy-dispatch stub for one vtable slot. Entered via {@code blr} with the call's
-     * x0..x7 args and x30 return address untouched; it patches {@code slotAddr} (a TIB word — DATA, so no
-     * I-cache maintenance) to {@code realBuf} and tail-branches there, so the tail-called method sees the
-     * exact original call state. {@code realBuf}'s code was already published by the eager compile.
-     */
-    private static long buildLazyStub(long realBuf, long slotAddr)
-    {
-        long buf = Heap.allocCode(32);
-        int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (slotAddr & 0xFFFF), 0));          w += 1;  // x16 = &TIB[slot]
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((slotAddr >> 16) & 0xFFFF), 1));  w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((slotAddr >> 32) & 0xFFFF), 2));  w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movz(17, (int) (realBuf & 0xFFFF), 0));           w += 1;  // x17 = real code
-        Magic.store32(buf + w * 4L, A64Enc.movk(17, (int) ((realBuf >> 16) & 0xFFFF), 1));   w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(17, (int) ((realBuf >> 32) & 0xFFFF), 2));   w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(17, 16, 0));                                 w += 1;  // *slot = real
-        Magic.store32(buf + w * 4L, A64Enc.br(17));                                          w += 1;  // tail-call real
-        Heap.publishCode(buf, buf + w * 4L);
-        return buf;
-    }
-
-    // ----- M8 increment 1b: compile-on-first-call (runtime single-method compile) -----
-    // 1a proved the self-modifying dispatch with an EAGER buffer. 1b proves the harder half: compiling a
-    // method AT CALL TIME with its compile context restored. Safe variant (no static-call offset table yet,
-    // that is 1c): the eager buffer stays -- so direct invokestatic/invokespecial refs still resolve -- but
-    // the gated class's TIB vtable slots hold a trampoline that, on the FIRST virtual call, restores the
-    // class's g* context (mirroring loadBodies' preamble) and compiles the method FRESH, installing the new
-    // buffer. If the program still runs with methods compiled at call time, the runtime-compile path works.
-    // Default OFF. (Unlike 1a this is not byte-identical off: lazyCompile is force-compiled for its stash,
-    // but nothing arms it, so behaviour is unchanged -- verified by QEMU off == main.)
-    private static final boolean LAZY_COMPILE = false;
+    // ----- the lazy-compile engine: every method body compiles on its first call -----
+    // A method is reached one of two ways, both landing in the same engine. A STATIC gets a phase-A cell at
+    // structure registration (armPhaseACells) and its callers emit `ldr x16,[cell]; blr x16`; a VIRTUAL (or
+    // any non-static) gets a deferral stub as both its registered buffer and its TIB slot (emitDeferredStub).
+    // Either way the first call routes through the shared trampoline into lazyCompile, which compiles the one
+    // method and data-patches the cell/slot, so later calls dispatch straight to the body.
     private static final int MAXLAZY = 8192;
     private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
 
-    // M8 genuine deferral: a gated class's methods are NOT compiled at load -- sizeMethod/emitMethod install a
-    // stub, and the body compiles on first call (any path: virtual TIB slot or direct BL both hit the stub).
-    // Default OFF -> every `if (LAZY_DEFER ...)` is a compile-time dead branch (core emit path byte-identical).
-    private static final boolean LAZY_DEFER = false;
-
-    // M8 phase-A cells: allocate a per-method offset cell + stub at STRUCTURE registration (before any body
-    // compiles), so a direct caller indirects through it regardless of load order -- lifting 1c's "callee must
-    // already be registered" limitation. Reuses the 1c indirect emit + the lz/trampoline engine (the cell is
-    // the lz entry's lzSlot, data-patched to the compiled buffer on first call). Gated to java/util/Objects.
-    private static final boolean LAZY_PHASEA = false;
-
-    // M8 Stage 2: a gated class becomes METADATA-ONLY -- phase-A cells for every method (so all direct calls
-    // indirect through them, order-independent) PLUS its bodies are never eagerly compiled (skipped in
-    // compileClass's seed loop). Every body compiles purely on demand, on first call, through its cell. This
-    // is the shape the whole M8 redirect was built toward: the boot image ships class metadata + cells/stubs,
-    // not compiled bodies. Gated to the stage2Gated() class set (Objects/Preconditions/ArraysSupport/String).
-    // NOW ON BY DEFAULT: those java.base classes are lazy (metadata + cells at load, bodies on first call) in
-    // the shipped image -- the first classes joe-ng compiles purely on demand, no eager whole-closure compile.
-    private static final boolean LAZY_STAGE2 = true;
     private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
     private static DynLink[] dlTab;    // phase-A dynamic-linking table (reified: one DynLink per method cell)
     private static int    dlN;
-
-    /** Arm the gated class's OWN virtual methods (those with source bytecode) for compile-on-first-call. */
-    private static void lazyArmCompile()
-    {
-        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/String")))   // one class first
-        {
-            return;
-        }
-        lazyEnsureTables();
-        int reg = classRegByName(gThisNameOff);
-        int pd = findPdByName(gbase, gThisNameOff);
-        int len = pdLen[pd];
-        int armed = 0;
-        int s = 0;
-        while (s < gvCount)
-        {
-            if (gvTab[s].implCode != 0L && lzN < MAXLAZY)   // own method only (inherited slots have no source here)
-            {
-                lzTab[lzN].blob = gbase;
-                lzTab[lzN].len = len;
-                lzTab[lzN].reg = reg;
-                lzTab[lzN].nameOff = gvTab[s].name;
-                lzTab[lzN].descOff = gvTab[s].desc;
-                lzTab[lzN].slot = gTib + 8 + s * 8;
-                Magic.store64(lzTab[lzN].slot, buildLazyCompileStub(lzN));
-                lzN += 1;
-                armed += 1;
-            }
-            s += 1;
-        }
-        Uart.write(Magic.bytes("  lazy-compile: armed "));
-        VM.printDec(armed);
-        Uart.write(Magic.bytes(" java/lang/String methods (compile-on-first-call)\n"));
-    }
 
     /** Per-method stub: x9 = deferred index, then branch to the shared trampoline. */
     private static long buildLazyCompileStub(int idx)
@@ -7030,54 +6888,19 @@ public final class Loader
         return 0L;
     }
 
-    // ----- M8 increment 1c: static/special calls via an offset table (lazy direct calls) -----
-    // 1b routed VIRTUAL dispatch (TIB slot) through the lazy trampoline. Direct invokestatic calls compile to
-    // a `BL <buffer>`, so they cannot be deferred. 1c adds the JikesRVM offset-table indirection: a call to a
-    // gated method compiles to `ldr x16,[cell]; blr x16` through a per-method DATA cell (no code-patch). The
-    // cell starts pointing at the same lazy stub as 1b; on the first call it is patched (data) to the freshly
-    // compiled buffer, so later calls dispatch directly. Reuses the whole 1b engine (trampoline / lazyCompile
-    // / findMethodByOffsets), with the cell as lzSlot and the target-class context taken from the method
-    // registry (rgBase/rgNameOff/rgDescOff -- the offsets are in the TARGET blob, which is what compile needs).
-    // Gated to java/util/Objects (an all-static utility called in NetDemo). Default OFF -> lazyStaticCell folds
-    // to `return 0`, so MetalSymbols.call takes the normal BL path unchanged.
-    private static final boolean LAZY_STATIC = false;
-
     /**
-     * If direct call {@code methodCp} targets a gated, already-registered method, return its offset-table cell
-     * (allocating one on first request) so the caller emits an indirect `ldr;blr` through it; else 0 (the
-     * caller emits a normal BL). Runs at compile time -- in both the size and emit passes -- so it dedups by
-     * target method: the size pass allocates the cell, the emit pass reuses it (the indirect sequence is a
-     * fixed 5 words either way, base-independent, so sizing stays consistent).
+     * The offset-table cell a direct call should indirect through, or 0 for a normal `bl`. Every static is
+     * celled at structure registration, so the caller emits `ldr x16,[cell]; blr x16` and the cell resolves
+     * itself on first call. Runs at compile time in both the size and emit passes, and dedups by target, so
+     * both passes see the same fixed 5-word sequence and sizing stays consistent.
      */
     static long lazyStaticCell(int methodCp)
     {
-        if (!LAZY_STATIC && !LAZY_PHASEA && !LAZY_STAGE2)
+        if (dlTab == null)
         {
-            return 0L;                                  // constant-folded off: normal BL path, unchanged
+            return 0L;                                  // no cells yet (nothing celled): normal BL path
         }
-        int classOff = refClassNameOff(methodCp);
-        int nameOff = mrefNameOff(methodCp);
-        int descOff = mrefDescOff(methodCp);
-        if ((LAZY_PHASEA || LAZY_STAGE2) && dlTab != null)   // phase-A cells: order-independent (structure-time)
-        {
-            return dlCellFor(classOff, nameOff, descOff);    // dl* membership IS the gate (only celled classes are in it)
-        }
-        if (!stage2Gated(gbase, classOff))
-        {
-            return 0L;                                  // only the gated class
-        }
-        int i = 0;
-        while (i < rgCount)                             // 1c fallback: locate the target in the method registry
-        {
-            if (utf8EqAt(gbase, classOff, rgTab[i].base, rgTab[i].classOff)
-                    && utf8EqAt(gbase, nameOff, rgTab[i].base, rgTab[i].nameOff)
-                    && utf8EqAt(gbase, descOff, rgTab[i].base, rgTab[i].descOff))
-            {
-                return lazyCellFor(i);
-            }
-            i += 1;
-        }
-        return 0L;                                      // not registered yet -> normal (eager, reloc) path
+        return dlCellFor(refClassNameOff(methodCp), mrefNameOff(methodCp), mrefDescOff(methodCp));
     }
 
     /**
@@ -7255,45 +7078,7 @@ public final class Loader
         return false;
     }
 
-    /** Allocate (or reuse) the offset-table cell for registry method {@code i}, plus its lazy stub + lz entry. */
-    private static long lazyCellFor(int i)
-    {
-        lazyEnsureTables();
-        int k = 0;
-        while (k < lzN)                                 // dedup: one cell per target method (many call sites)
-        {
-            if (lzTab[k].blob == rgTab[i].base && lzTab[k].nameOff == rgTab[i].nameOff && lzTab[k].descOff == rgTab[i].descOff)
-            {
-                return lzTab[k].slot;
-            }
-            k += 1;
-        }
-        if (lzN >= MAXLAZY)
-        {
-            return 0L;                                  // table full -> normal path (safe fallback)
-        }
-        int reg = classRegByNameAt(rgTab[i].base, rgTab[i].classOff);
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        int pd = findPdByName(rgTab[i].base, rgTab[i].classOff);
-        long cell = Heap.allocData(8);
-        lzTab[lzN].blob = rgTab[i].base;
-        lzTab[lzN].len = pdLen[pd];
-        lzTab[lzN].reg = reg;
-        lzTab[lzN].nameOff = rgTab[i].nameOff;
-        lzTab[lzN].descOff = rgTab[i].descOff;
-        lzTab[lzN].slot = cell;                             // lazyCompile patches this word with the fresh buffer
-        Magic.store64(cell, buildLazyCompileStub(lzN)); // cell starts -> the shared lazy stub
-        lzN += 1;
-        Uart.write(Magic.bytes("  lazy-static: cell for java/util/Objects."));
-        printNameAt(rgTab[i].base, rgTab[i].nameOff);
-        Uart.putc(0x0A);
-        return cell;
-    }
-
-    /** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
+/** Allocate the shared lazy tables + trampoline if not yet done (shared by 1b and 1c). */
     private static void lazyEnsureTables()
     {
         if (lzTab == null)
@@ -7307,22 +7092,7 @@ public final class Loader
         }
     }
 
-    /** {@link #classRegByName} but matching a name in an arbitrary blob {@code (base, off)}. */
-    private static int classRegByNameAt(long base, int off)
-    {
-        int i = 0;
-        while (i < clCount)
-        {
-            if (utf8EqAt(base, off, clTab[i].base, clTab[i].nameOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
-    }
-
-    /**
+/**
      * Repair default-method imap slots left 0 during phase B. {@link #buildImap} fills an unoverridden interface
      * method's slot with {@link #defaultImplOf} = the interface default's COMPILED buffer, but phase B is
      * superclass-first (not super-interface-first), so the interface holding the default may be emitted AFTER an
