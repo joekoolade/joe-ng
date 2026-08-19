@@ -1049,6 +1049,7 @@ public final class VM
     static long primArrayTibs;         // M8 array unification: 8-long table, baked prim-array TIB per atype (4..11)
     static long refArrayTibs;          // M8 ref arrays: {elementType, tib} pair table (baked single-dim ref arrays)
     static long refArrayTibCount;
+    static long ifaceIdNext;           // O(1) interface checks: next unassigned interface ID (writer used 1..N)
 
     /** M8 object links: a writer-baked RESOLVE stub was called — the method the host writer could
      *  not compile is genuinely needed now. Resolve it through the on-metal loader (demand-load the
@@ -1250,6 +1251,23 @@ public final class VM
                     return false;
                 }
                 return Magic.load64(disp + tDepth * 8L) == targetType;
+            }
+            // O(1) interface fast path: a NUMBERED interface target (depth -1, ID 1..127) against a
+            // receiver with a COMPUTED doesImplement bitmap is one bit test. Unnumbered interfaces
+            // and marker-less receivers fall through to the itable-dir walk below.
+            if (tDisp == 0L && Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET) == -1L)
+            {
+                long id = Magic.load64(targetType + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+                long b0 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+                if (id > 0L && id < 128L && (b0 & 1L) != 0L)
+                {
+                    if (id < 64L)
+                    {
+                        return ((b0 >>> (int) id) & 1L) != 0L;
+                    }
+                    long b1 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+                    return ((b1 >>> (int) (id - 64L)) & 1L) != 0L;
+                }
             }
         }
         while (type != 0L)
@@ -2047,6 +2065,24 @@ public final class VM
         printDec(d3 ? 1 : 0);
         boolean dispOk = d1 && d2 && !d3;
         Uart.write(dispOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (display broken?)\n"));
+
+        // 16) O(1) interface checks: interface Types carry a global ID and class/array Types a
+        // doesImplement bitmap -- instanceof a numbered interface is one bit test (the itable-dir
+        // walk remains only for unnumbered targets). Runnable gets a Type+ID by being named here;
+        // Integer does not implement it (bit clear), and an int[]'s bitmap is empty-but-computed.
+        Uart.write(Magic.bytes("  Integer instanceof Comparable,Runnable; int[] as Comparable="));
+        Object ep = Integer.valueOf(6);
+        Object ea = new int[1];
+        boolean e1 = ep instanceof Comparable;
+        boolean e2 = ep instanceof Runnable;
+        boolean e3 = ea instanceof Comparable;
+        printDec(e1 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(e2 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(e3 ? 1 : 0);
+        boolean bmOk = e1 && !e2 && !e3;
+        Uart.write(bmOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (doesImplement bitmap broken?)\n"));
     }
 
     static void run()

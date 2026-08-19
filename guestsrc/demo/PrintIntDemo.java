@@ -21,6 +21,8 @@ public class PrintIntDemo
         System.out.print(ra instanceof Number[] ? "G" : "g"); // covariance through the shared element Types
         Object na = new int[1][];                        // nested: element is the canonical [I node
         System.out.print(na instanceof int[][] ? "H" : "h");  // adopts the baked [[I TIB (probe bakes it)
+        Object cs = "x";                                 // adopted String Type: writer bitmap + loader OR
+        System.out.print(cs instanceof Comparable ? "I" : "i");   // one bit test on the shared node
         System.out.print("done");
     }
 }

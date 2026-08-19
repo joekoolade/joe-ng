@@ -4127,6 +4127,16 @@ public final class Loader
                 Magic.store64(gType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
                 Magic.store64(gType + ObjectModel.TYPE_DEPTH_OFFSET, -1L);   // interface: never in a chain
                 Magic.store64(gType + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+                // O(1) interface checks: number this interface from the shared counter (the writer
+                // used 1..N-1; IDs >= 128 stay 0 = unnumbered -> those targets keep the dir walk).
+                long nid = VM.ifaceIdNext;
+                Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET,
+                              nid > 0L && nid < 128L ? nid : 0L);
+                Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
+                if (nid > 0L && nid < 128L)
+                {
+                    VM.ifaceIdNext = nid + 1L;
+                }
             }
             clTab[clCount] = new RVMClass();
             clTab[clCount].base = gbase;
@@ -6175,6 +6185,8 @@ public final class Loader
             Magic.store64(gType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
             Magic.store64(gType + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
             Magic.store64(gType + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+            Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 0L);       // bitmap built at fillTib
+            Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
             buildDisplay(gType, sr >= 0 ? clTab[sr].type : 0L);
         }
         gTib = Heap.allocData((1 + gvCount) * 8);
@@ -6206,6 +6218,7 @@ public final class Loader
             instImapN += 1;
         }
         Magic.store64(gType + 16, dir);                 // TYPE_ITABLE_DIR_OFFSET
+        buildImplBitmap(gType);                         // O(1) interface checks: super bits | dir bits
     }
 
     // ----- M8 increment 1a: lazy-dispatch trampoline (compile-eager, install-on-first-call) -----
@@ -7936,6 +7949,9 @@ public final class Loader
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
         Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
         Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
+        buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
         // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
         long tib = Heap.allocData(8);
         Magic.store64(tib + 0L, type);
@@ -8087,6 +8103,8 @@ public final class Loader
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
         Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
         Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 1L);   // empty-but-computed bitmap
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
         buildDisplay(type, objType);                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
@@ -8237,6 +8255,55 @@ public final class Loader
         Magic.store64(disp + d * 8L, type);
         Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, d);
         Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, disp);
+    }
+
+    /** O(1) interface checks: (re)build {@code type}'s doesImplement bitmap = the super's bitmap |
+     *  any bits already present (an ADOPTED node keeps its writer bits) | this type's own itable-dir
+     *  interfaces' ID bits. Unnumbered dir interfaces are simply skipped -- their targets fall back
+     *  to the dir walk, so the bitmap stays definitive for every NUMBERED interface. A super without
+     *  a computed bitmap leaves this type without one too (walk fallback). */
+    private static void buildImplBitmap(long type)
+    {
+        long b0 = 1L;                                    // bit 0 = computed marker
+        long b1 = 0L;
+        long superType = Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET);
+        if (superType != 0L)
+        {
+            long sb0 = Magic.load64(superType + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+            if ((sb0 & 1L) == 0L)
+            {
+                return;                                  // super uncomputed: stay on the walk
+            }
+            b0 |= sb0;
+            b1 |= Magic.load64(superType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+        }
+        long own0 = Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+        if ((own0 & 1L) != 0L)                           // adopted node: keep the writer's bits
+        {
+            b0 |= own0;
+            b1 |= Magic.load64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L);
+        }
+        long e = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        if (e != 0L)
+        {
+            long iface = Magic.load64(e + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+            while (iface != 0L)
+            {
+                long id = Magic.load64(iface + ObjectModel.TYPE_IMPLEMENTS_OFFSET);
+                if (id > 0L && id < 64L)
+                {
+                    b0 |= 1L << (int) id;
+                }
+                else if (id >= 64L && id < 128L)
+                {
+                    b1 |= 1L << (int) (id - 64L);
+                }
+                e += ObjectModel.ITABLE_ENTRY_SIZE;
+                iface = Magic.load64(e + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+            }
+        }
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, b0);
+        Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, b1);
     }
 
     /** JVMS descriptor char for a newarray atype (4..11). */
