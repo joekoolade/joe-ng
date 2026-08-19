@@ -2074,6 +2074,20 @@ are never deferred, so `FileDescriptor.<clinit>` still registers
 `JavaIOFileDescriptorAccess` at load, before `NioSocketImpl` reads it. Only the accessor
 bodies defer.
 
+**Increment 6 — shrink `eagerKept`: the charset/buffer/fd data layer.** Off the list:
+`java/nio/` (the `ByteBuffer` overlay, `Charset`), `sun/nio/cs/` (the `UTF_8`/`ISO_8859_1`/
+`US_ASCII` overlay singletons) and `java/io/FileDescriptor`. `sun/nio/` narrows to
+`sun/nio/ch/`, so the dispatcher stack stays eager while the data layer under it goes lazy.
+
+**This is the PR #71 retry.** That batch — charsets plus `IOStatus` — was the one that
+regressed on real hardware with `DENYLIST TRAP: call into a pruned class` at
+`NioSocketImpl.connect`, and it is why the widening arc stopped at 40 classes. Two
+root-cause fixes have landed since, either of which could have been that failure: a lazy
+compile's own relocs were never patched (increment 1), and an inherited static never found
+its cell (increment 1) or a baked body's native never resolved (increment 2) — all three
+produce exactly a call that resolves to nothing and gets trap-wired. Retrying the charsets
+now tests that directly. `IOStatus` stays behind for the `sun/nio/ch/` increment.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
