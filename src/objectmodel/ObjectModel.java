@@ -64,8 +64,15 @@ public final class ObjectModel
     public static final int TYPE_SUPER_OFFSET = WORD;      // 8
     /** Type field: pointer to the itable directory ({interfaceType, itable} entries, 0-terminated). */
     public static final int TYPE_ITABLE_DIR_OFFSET = 2 * WORD; // 16
-    /** Total Type size. */
-    public static final int TYPE_SIZE = 3 * WORD;          // 24
+    // (offset 3*WORD is ARRAY_TYPE_ELEMENT_OFFSET below -- scalar Types leave it 0)
+    /** Type field: superclass-chain depth (Object = 0); -1 for interface Types (never in a chain). */
+    public static final int TYPE_DEPTH_OFFSET = 4 * WORD;  // 32
+    /** Type field: pointer to the superclass DISPLAY -- an array of depth+1 Type addrs, display[d] =
+     *  this chain's ancestor at depth d (display[depth] = self). O(1) subclass test: T is assignable
+     *  from S iff S.depth >= T.depth and S.display[T.depth] == T. 0 = no display (walk fallback). */
+    public static final int TYPE_DISPLAY_OFFSET = 5 * WORD; // 40
+    /** Total Type size (one uniform record for class AND array Types). */
+    public static final int TYPE_SIZE = 6 * WORD;          // 48
 
     // ----- array Type (a Type node whose objects are arrays) ---------------
     // An array's header TIB slot (@0) holds either a small element size (1/2/4/8 — a raw, untyped array, the
@@ -79,8 +86,8 @@ public final class ObjectModel
     public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
     /** Array Type field: the element's Type (0 for a primitive element); used for reference-array covariance. */
     public static final int ARRAY_TYPE_ELEMENT_OFFSET = 3 * WORD;   // 24
-    /** Total array Type size (class-Type prefix + element Type). */
-    public static final int ARRAY_TYPE_SIZE = 4 * WORD;    // 32
+    /** Total array Type size (= TYPE_SIZE: one uniform record, arrays fill the element word). */
+    public static final int ARRAY_TYPE_SIZE = TYPE_SIZE;   // 48
     /** A TIB slot value at or below this is a raw array's element size, not a TIB pointer. */
     public static final int MAX_RAW_ARRAY_TIB = WORD;      // 8
 

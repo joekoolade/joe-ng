@@ -567,6 +567,29 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
         int refArrTabWord = cur;                      // {elementType, tib} pair per baked ref-array desc
         cur += refArrDescs.size() * 4;
+        // O(1) type checks: one DISPLAY per class/array Type -- depth+1 Type addrs, display[d] =
+        // the chain's ancestor at depth d (display[depth] = self). Interfaces get none.
+        StrIntTable displayWord = new StrIntTable();
+        for (int _d1 = 0; _d1 < typeClasses.size(); _d1++)
+        {
+            String dcls = typeClasses.at(_d1);
+            if (registry.resolve(dcls).isInterface())
+            {
+                continue;
+            }
+            displayWord.put(dcls, cur);
+            cur += (chainDepthOf(dcls) + 1) * 2;
+        }
+        for (int _d2 = 4; _d2 <= 11; _d2++)
+        {
+            displayWord.put(PRIM_ARRAY_DESC[_d2 - 4], cur);
+            cur += 4;                                  // arrays: [Object, self]
+        }
+        for (int _d3 = 0; _d3 < refArrDescs.size(); _d3++)
+        {
+            displayWord.put(refArrDescs.at(_d3), cur);
+            cur += 4;
+        }
         ByteKeyIntTable strWord = new ByteKeyIntTable();
         for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
@@ -943,6 +966,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, superAddr);
             long dir = itableDirWord.containsKey(cls) ? addr(itableDirWord.get(cls)) : 0;
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, dir);
+            // O(1) type checks: depth + superclass display (interfaces: depth -1, no display --
+            // they are answered from itable dirs, never the chain).
+            if (registry.resolve(cls).isInterface())
+            {
+                writeLong(image, tw + ObjectModel.TYPE_DEPTH_OFFSET / 4, -1L);
+            }
+            else
+            {
+                int depth = chainDepthOf(cls);
+                int dw = displayWord.get(cls);
+                writeLong(image, tw + ObjectModel.TYPE_DEPTH_OFFSET / 4, depth);
+                writeLong(image, tw + ObjectModel.TYPE_DISPLAY_OFFSET / 4, addr(dw));
+                String c2 = cls;
+                for (int dd = depth; dd >= 0; dd--)
+                {
+                    writeLong(image, dw + dd * 2, addr(typeWord.get(c2)));
+                    c2 = model.superClassName(c2);
+                }
+            }
         }
 
         // --- itable directories and itables (interface method dispatch) ---
@@ -1003,6 +1045,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
             writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, 0);
+            writeArrayDisplay(image, tw, displayWord.get(d), typeWord.get("java/lang/Object"));
             int bw = tibWord.get(d);
             writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(tw));
             for (int slot = 0; slot < objSlots.size(); slot++)
@@ -1023,6 +1066,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, tw + ObjectModel.TYPE_SUPER_OFFSET / 4, addr(typeWord.get("java/lang/Object")));
             writeLong(image, tw + ObjectModel.TYPE_ITABLE_DIR_OFFSET / 4, 0);
             writeLong(image, tw + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET / 4, addr(typeWord.get(el)));
+            writeArrayDisplay(image, tw, displayWord.get(d), typeWord.get("java/lang/Object"));
             int bw = tibWord.get(d);
             writeLong(image, bw + ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT) / 4, addr(tw));
             for (int slot = 0; slot < objSlots.size(); slot++)
@@ -1389,6 +1433,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             cls = model.superClassName(cls);
         }
+    }
+
+    /** Array-Type display: depth 1, display = [Object's Type, self]. */
+    private void writeArrayDisplay(int[] image, int typeW, int dispW, int objectTypeW)
+    {
+        writeLong(image, typeW + ObjectModel.TYPE_DEPTH_OFFSET / 4, 1);
+        writeLong(image, typeW + ObjectModel.TYPE_DISPLAY_OFFSET / 4, addr(dispW));
+        writeLong(image, dispW, addr(objectTypeW));
+        writeLong(image, dispW + 2, addr(typeW));
+    }
+
+    /** Superclass-chain depth of {@code cls} (java/lang/Object = 0). */
+    private int chainDepthOf(String cls)
+    {
+        int d = 0;
+        String sup = model.superClassName(cls);
+        while (sup != null)
+        {
+            d += 1;
+            sup = model.superClassName(sup);
+        }
+        return d;
     }
 
     private int vtableLength(String cls)
