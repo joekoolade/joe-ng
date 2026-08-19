@@ -2162,7 +2162,10 @@ both worlds, so those slots are what writer-baked and loader-compiled code agree
    (or creates one for a celled static), which also lets later direct calls link straight
    to the body instead of through the stub. Traces read correctly again.
 
-**Increment 9 — lazy, full stop: the prefix gate goes.** `stage2Gated` no longer requires a
+**Increment 9 — lazy, full stop: the prefix gate goes. DONE, PI-VALIDATED (PR #110).**
+Real Pi 4: `socket connected`, HTTP 200 OK with the full body (`bytes=828`), clean return —
+with `phaseA: 1 cells … demo/NetDemo` in the log, i.e. the demo class itself metadata-only
+and its `main` resolved through the new cell lookup. `stage2Gated` no longer requires a
 `java/`/`jdk/`/`sun/` prefix, so **every** demand-loaded class is metadata-only — demos and
 plugins included — with `java/lang/Object` the sole exception. The prefix was scaffolding
 from when laziness was gated to a handful of named java.base utilities; there was never a
