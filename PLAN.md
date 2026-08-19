@@ -2162,6 +2162,43 @@ both worlds, so those slots are what writer-baked and loader-compiled code agree
    (or creates one for a celled static), which also lets later direct calls link straight
    to the body instead of through the stub. Traces read correctly again.
 
+**Increment 9 — lazy, full stop: the prefix gate goes. DONE, PI-VALIDATED (PR #110).**
+Real Pi 4: `socket connected`, HTTP 200 OK with the full body (`bytes=828`), clean return —
+with `phaseA: 1 cells … demo/NetDemo` in the log, i.e. the demo class itself metadata-only
+and its `main` resolved through the new cell lookup. `stage2Gated` no longer requires a
+`java/`/`jdk/`/`sun/` prefix, so **every** demand-loaded class is metadata-only — demos and
+plugins included — with `java/lang/Object` the sole exception. The prefix was scaffolding
+from when laziness was gated to a handful of named java.base utilities; there was never a
+reason for guest code to be the eager one.
+
+It exposed the same missing tier a third time, now at the launcher: `globalMethodBuf`
+looked up `main(String[])` in the method registry, and a celled static has no registry
+entry, so the image booted to `launch: no main(String[]) in demo/NetDemo`. Same fix shape
+as `dlStubByRef` and `bufBySigU`'s second tier — `dlStubByName` reads the cell, which holds
+callable code either way. Three sites have now needed this (bake-stub resolution, reloc
+patching, launcher lookup); a future cleanup should collapse them into one resolver.
+
+### What "retire the eager loader" actually means
+
+The staged plan said stage 5 ends by deleting `markReachable`/`resetLoader`/`patchRelocs`/
+the `MAX*` caps. That wording conflated two things which turn out to be independent:
+
+- **Eager whole-closure compilation** — gone. No ordinary method body is compiled at load
+  any more; every one compiles on first call. That is the part stage 5 was for.
+- **The demand-load batch machinery** — still load-bearing, and not because of eagerness.
+  `resetLoader` allocates the per-batch tables and reclaims the batch heap; `markReachable`
+  prunes *which classes get pulled* (a MAXBLOB concern, not a compile concern);
+  `patchRelocs` still resolves the cross-class calls of the one thing that is still
+  compiled at load — `<init>` and `<clinit>` — and `patchRelocsFrom` serves every lazy
+  compile. The `MAX*` caps are just table sizes.
+
+So the honest end state is that the eager *compiler* is retired while the batch *loader*
+remains the architecture. What is genuinely dead is the staging scaffolding: `LAZY_TIB`,
+`LAZY_COMPILE`, `LAZY_DEFER`, `LAZY_PHASEA` and `LAZY_STATIC` are all compile-time false,
+with `lazyArmTib`/`buildLazyStub`/`lazyArmCompile`/`deferrable` unreachable behind them, and
+`LAZY_STAGE2` is now always true. Deleting those — and folding the three cell-lookup sites
+into one resolver — is the next increment.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
