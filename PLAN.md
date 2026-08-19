@@ -2001,6 +2001,24 @@ absolute `{u2 len}{bytes}` runs at offset 0 — one table, both worlds. This gen
 any metadata-only class whose baked body calls a native needs it, `Throwable` was just
 the first to arrive.
 
+**Increment 3 — shrink `eagerKept`: the reference/cleaner/event subsystem.** Off the list:
+`java/lang/ref/`, `jdk/internal/ref/`, `jdk/internal/event/` — nine classes
+(`Cleaner`(+`$Sync`,`$Cleanable`), `CleanerFactory`, `PhantomCleanable`, `Reference`,
+`PhantomReference`, `Event`, `SocketReadEvent`, `SocketWriteEvent`). One subsystem, taken
+together: the `Cleaner`/`CleanerFactory` overlays are small pure-Java stand-ins (register
+returns a synchronous `Sync`; no daemon thread, no `ReferenceQueue`), and the event classes
+are stock all-static no-op probes. The `Reference`/`PhantomReference` bodies are never
+called at all — the overlay bypasses them — so laziness means they are simply never
+compiled.
+
+Unlike increments 1–2 this is **socket-path material**: `NioSocketImpl` registers a cleaner
+and calls `cleaner.clean()` on `close()`, and reads/writes hit `SocketRead/WriteEvent`.
+QEMU can only prove the absence of collateral damage (it stops at `connect`); the Pi run is
+what actually exercises these. Batching the trio is a deliberate exception to the
+one-at-a-time rule for socket-adjacent classes: they are one functional unit, and every
+failure mode we have seen here (`bakeresolve-find`, `DENYLIST TRAP`, `CAP EXCEEDED`) names
+the offending class, so attribution survives.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

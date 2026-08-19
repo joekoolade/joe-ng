@@ -7152,12 +7152,9 @@ public final class Loader
                 // VarHandle/MethodHandles shims: signature-polymorphic sites resolved by NAME at compile time:
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/"))
-                // VM-seeded / hand-ordered <clinit> infrastructure (SharedSecrets, Unsafe, Cleaner, events):
+                // VM-seeded / hand-ordered <clinit> infrastructure (SharedSecrets, Unsafe):
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/access/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/misc/"))
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/ref/"))
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/event/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/ref/"))
                 // Locks + TimeUnit (ReentrantLock overlay; TimeUnit was in the regressed PR #71 batch):
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/concurrent/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Thread"))
