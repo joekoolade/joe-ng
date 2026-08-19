@@ -2051,6 +2051,29 @@ shims `FileDescriptor.<clinit>` must register first), `java/lang/Thread`,
 `sun/net/`, `java/nio/`, `java/io/FileDescriptor`, `java/lang/invoke/`,
 `jdk/internal/invoke/`).
 
+**Increment 5 — shrink `eagerKept`: `System`, `Thread` and the access shims. DONE,
+PI-VALIDATED (PR #106).** Real Pi 4: 16 probes PASS, `lifecycle OK 162`, WPA2 join + DHCP,
+HTTP 200 OK with the full body, clean return. `System` 31 cells, `SharedSecrets` 63,
+`Thread` 8, `MetalJavaLangAccess` 0 — the fd access shim resolved lazily on the live socket
+path, confirming the `<clinit>`-never-defers argument holds where it matters. Off the
+list: `java/lang/System` (31 cells), `java/lang/Thread` (8, + `ThreadLocal`/`ThreadGroup`)
+and `jdk/internal/access/` (`SharedSecrets` 63, `MetalJavaLangAccess`). After this only the
+socket floor and `java/lang/Object` remain.
+
+`Thread` was held back in increment 4 on the theory that the scheduler might enter Thread
+code from a context switch, where a first-call compile would re-enter the loader from an
+interrupt. Checking rather than assuming: **`VMScheduler` implements the Thread services
+itself** (`taskInterrupted`, `isAlive`, the `join` core, `holdsLock`) and treats the thread
+object as an opaque `Object` — the call direction is guest `Thread` → `VMScheduler`, never
+the reverse. Guest `run()` is entered at task start, in ordinary context, where a lazy
+compile is no different from any other first call. So the concern does not apply and Thread
+goes with this batch.
+
+`SharedSecrets` keeps its `<clinit>` ordering for the same reason `Unsafe` did: initializers
+are never deferred, so `FileDescriptor.<clinit>` still registers
+`JavaIOFileDescriptorAccess` at load, before `NioSocketImpl` reads it. Only the accessor
+bodies defer.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
