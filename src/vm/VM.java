@@ -1990,6 +1990,26 @@ public final class VM
         printDec(r3 ? 1 : 0);
         boolean refArrOk = r1 && r2 && !r3 && r4;
         Uart.write(refArrOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (ref-array Types not baked/tagged?)\n"));
+
+        // 14) Nested arrays: "[[..." descs chain-collect down to their base element, so int[][]'s
+        // Type carries the canonical "[I" element node and Integer[][]'s carries "[LInteger;" --
+        // the covariance walk then discriminates nested arrays and covaries on the element arrays
+        // (Integer[][] IS a Number[][] because Integer[] IS a Number[]). new int[2][] lowers to
+        // anewarray "[I" (single-dim create of the outer array; multianewarray stays unsupported).
+        Uart.write(Magic.bytes("  new int[2][] instanceof int[][],long[][]; Integer[][] as Number[][]="));
+        Object na = new int[2][];
+        Object nb = new Integer[2][];
+        boolean m1 = na instanceof int[][];
+        boolean m2 = na instanceof long[][];             // sibling: false
+        boolean m3 = nb instanceof Number[][];           // nested covariance
+        boolean m4 = na instanceof Object;
+        printDec(m1 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(m2 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(m3 ? 1 : 0);
+        boolean nestOk = m1 && !m2 && m3 && m4;
+        Uart.write(nestOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (nested array Types not baked/tagged?)\n"));
     }
 
     static void run()

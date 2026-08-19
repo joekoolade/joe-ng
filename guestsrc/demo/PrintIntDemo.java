@@ -19,6 +19,8 @@ public class PrintIntDemo
         System.out.print(ca instanceof char[] ? "F" : "f");   // cross-world array instanceof
         Object ra = new Integer[1];                      // loader anewarray -> ADOPTS the baked ref-array TIB
         System.out.print(ra instanceof Number[] ? "G" : "g"); // covariance through the shared element Types
+        Object na = new int[1][];                        // nested: element is the canonical [I node
+        System.out.print(na instanceof int[][] ? "H" : "h");  // adopts the baked [[I TIB (probe bakes it)
         System.out.print("done");
     }
 }

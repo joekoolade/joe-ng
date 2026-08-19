@@ -55,6 +55,42 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         return null;
     }
 
+    /** typeWord key of an array descriptor's element: the class of "[L<cls>;", or the element
+     *  array desc of a nested "[[...". */
+    private static String arrayElementKeyOf(String desc)
+    {
+        String el = refArrayElementOf(desc);
+        return el != null ? el : desc.substring(1);
+    }
+
+    /** Collect an array descriptor chain for baking: add {@code desc} and every nested element desc
+     *  to {@code refArrDescs} (stopping at the canonical prim arrays), and the base element class
+     *  (if any) to {@code elemClasses} so its Type chain lays out. Interface elements join
+     *  {@code usedInterfaces} (the covariance walk answers them from itable dirs) when given. */
+    private void collectArrayDesc(String desc, StrSet refArrDescs, StrSet elemClasses, StrSet usedInterfaces)
+    {
+        String d = desc;
+        while (d.startsWith("["))
+        {
+            if (d.length() == 2 && "ZCFDBSIJ".indexOf(d.charAt(1)) >= 0)
+            {
+                return;                               // canonical prim array: always laid out
+            }
+            String el = refArrayElementOf(d);
+            refArrDescs.add(d);
+            if (el != null)
+            {
+                elemClasses.add(el);
+                if (usedInterfaces != null && registry.resolve(el).isInterface())
+                {
+                    usedInterfaces.add(el);
+                }
+                return;
+            }
+            d = d.substring(1);                       // nested: continue with the element desc
+        }
+    }
+
     /** The newarray atype (4..11) for a primitive array component type. */
     private static int atypeOfComponent(Class<?> c)
     {
@@ -288,19 +324,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r3.get(_ri3);
                 if (t.className().startsWith("["))
                 {
-                    // Array Type target: laid out canonically, not a classfile. A single-dim
-                    // ref-array desc pulls its ELEMENT class in (the covariance walk + the baked
+                    // Array Type target: laid out canonically, not a classfile. The desc chain
+                    // pulls its ELEMENT descs/class in (the covariance walk + the baked
                     // {elementType, tib} table both need the element's Type node).
-                    String el = refArrayElementOf(t.className());
-                    if (el != null)
-                    {
-                        refArrDescs.add(t.className());
-                        typeRefClasses.add(el);
-                        if (registry.resolve(el).isInterface())
-                        {
-                            usedInterfaces.add(el);
-                        }
-                    }
+                    collectArrayDesc(t.className(), refArrDescs, typeRefClasses, usedInterfaces);
                     continue;
                 }
                 typeRefClasses.add(t.className());
@@ -340,14 +367,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 var t = _r4.get(_ri4);
                 if (t.className().startsWith("["))
                 {
-                    // tagArray's array TIB ref: not a class, nothing to use/clinit -- but a ref-array
-                    // desc still pulls its element class's Type in (the TIB's Type carries it).
-                    String el = refArrayElementOf(t.className());
-                    if (el != null)
-                    {
-                        refArrDescs.add(t.className());
-                        typeRefClasses.add(el);
-                    }
+                    // tagArray's array TIB ref: not a class, nothing to use/clinit -- but the desc
+                    // chain still pulls its element descs/class in (the TIB's Type carries them).
+                    collectArrayDesc(t.className(), refArrDescs, typeRefClasses, null);
                     continue;
                 }
                 use(t.className(), usedClasses, clinitOrder, worklist);
@@ -479,22 +501,24 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String c = tibClasses.at(_s1);
             addTypeClass(c, typeClasses);
         }
+        // M8 ref arrays: a deep-baked reference array (e.g. IntegerCache's Integer[]) is typed with
+        // the canonical array TIB for its component -- pull the desc chain + element class in
+        // (BEFORE typeRefClasses is consumed below, so elements get Type chains like any target).
+        for (int _s2b = 0; _s2b < bakedObjs.size(); _s2b++)
+        {
+            Class<?> bc = bakedObjs.get(_s2b).getClass();
+            if (bc.isArray() && !bc.getComponentType().isPrimitive())
+            {
+                Class<?> comp = bc.getComponentType();
+                String d = comp.isArray() ? "[" + comp.getName().replace('.', '/')
+                                          : "[L" + comp.getName().replace('.', '/') + ";";
+                collectArrayDesc(d, refArrDescs, typeRefClasses, null);
+            }
+        }
         for (int _s2 = 0; _s2 < typeRefClasses.size(); _s2++)
         {
             String c = typeRefClasses.at(_s2);
             addTypeClass(c, typeClasses);
-        }
-        // M8 ref arrays: a deep-baked reference array (e.g. IntegerCache's Integer[]) is typed with
-        // the canonical ref-array TIB for its component class -- pull desc + element chain in.
-        for (int _s2b = 0; _s2b < bakedObjs.size(); _s2b++)
-        {
-            Class<?> bc = bakedObjs.get(_s2b).getClass();
-            if (bc.isArray() && !bc.getComponentType().isPrimitive() && !bc.getComponentType().isArray())
-            {
-                String el = bc.getComponentType().getName().replace('.', '/');
-                refArrDescs.add("[L" + el + ";");
-                addTypeClass(el, typeClasses);
-            }
         }
         StrIntTable typeWord = new StrIntTable();
         for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
@@ -992,7 +1016,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         for (int _a4 = 0; _a4 < refArrDescs.size(); _a4++)
         {
             String d = refArrDescs.at(_a4);
-            String el = refArrayElementOf(d);
+            String el = arrayElementKeyOf(d);       // element class, or the nested element array desc
             int tw = typeWord.get(d);
             writeLong(image, tw + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET / 4,
                       ObjectModel.ARRAY_TYPE_TAG | ObjectModel.WORD);
@@ -1592,8 +1616,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             }
             Object[] a = (Object[]) o;
             Class<?> comp = o.getClass().getComponentType();
-            int atw = comp.isArray() ? -1
-                    : tibWord.get("[L" + comp.getName().replace('.', '/') + ";");
+            String cdesc = comp.isArray() ? "[" + comp.getName().replace('.', '/')
+                                          : "[L" + comp.getName().replace('.', '/') + ";";
+            int atw = tibWord.get(cdesc);
             writeLong(image, w + ObjectModel.TIB_OFFSET / 4, atw >= 0 ? addr(atw) : 0);
             writeLong(image, w + ObjectModel.STATUS_OFFSET / 4, 0);
             writeLong(image, w + ObjectModel.ARRAY_LENGTH_OFFSET / 4, a.length);
