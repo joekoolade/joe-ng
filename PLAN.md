@@ -1975,6 +1975,27 @@ lazily compiled body that needed them:
    `stage2Gated(ref-class)` pre-gate is gone with it: membership in the `dl*` table is
    itself the gate, and it is the *declaring* class that must be gated, not the ref'd one.
 
+**Increment 2 — shrink `eagerKept`: the reflection floor and the Throwable hierarchy.**
+Both come off the eager list. They are the QEMU-verifiable half of the exception list —
+the reflection demos (`ForName`/`Method`/`Field`/`Ctor`/`Enum`/`Access`/`DefineClass`/
+`ReflectLoad`) and the exception demos (`Trace`/`Unwind`/`StackTrace`/`InfraProbe`) cover
+them without a Pi. Removed: `java/lang/reflect/`, `java/lang/Class*`, `java/lang/Throwable`,
+and the name-suffix `Exception`/`Error` rules (with `utf8HasSuffix`, now unused). What
+remains on the list is exactly the socket-native stack and its adjacent prefixes, which
+only real hardware can exercise.
+
+**The gap it exposed — a baked body calling a PROVIDED NATIVE.** With `Throwable` lazy,
+its `printStackTrace` is no longer compiled by the loader; the writer-baked body runs
+instead, and inside it the call to `printStackTrace0` is a bake stub. `resolveBakeStub`'s
+three tiers (`rg*` registry → `dl*` cells → vtable slots) all search for *bytecode*, and a
+native has none — so it halted with `bakeresolve-find`. The provided-native table was
+reachable only from the compile-time path, keyed by constant-pool offsets in the current
+blob. `nativeBufAt(clsBase, clsOff, nameBase, nameOff)` now takes a `(base, offset)` pair
+per name, so `nativeBuf` passes the blob's cp offsets and `resolveBakeStub` passes its
+absolute `{u2 len}{bytes}` runs at offset 0 — one table, both worlds. This generalizes:
+any metadata-only class whose baked body calls a native needs it, `Throwable` was just
+the first to arrive.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
