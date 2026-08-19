@@ -71,8 +71,16 @@ public final class ObjectModel
      *  this chain's ancestor at depth d (display[depth] = self). O(1) subclass test: T is assignable
      *  from S iff S.depth >= T.depth and S.display[T.depth] == T. 0 = no display (walk fallback). */
     public static final int TYPE_DISPLAY_OFFSET = 5 * WORD; // 40
+    /** Type field, dual-purpose by kind (a receiver's Type is never an interface, so no conflict):
+     *  - class/array Type: doesImplement BITMAP, two 64-bit words (this word + the next). Bit 0 =
+     *    "bitmap computed" marker; bit i (i = 1..127) = implements the interface with ID i. O(1)
+     *    interface test: S implements I iff S.bitmap[I.id] (definitive only for NUMBERED targets;
+     *    unnumbered interfaces keep the itable-dir walk).
+     *  - interface Type: its global interface ID (1..127; 0 = unnumbered). Writer-baked interfaces
+     *    get build-time IDs; the loader numbers new ones from the shared VM.ifaceIdNext counter. */
+    public static final int TYPE_IMPLEMENTS_OFFSET = 6 * WORD; // 48 (+56 = bitmap word 1)
     /** Total Type size (one uniform record for class AND array Types). */
-    public static final int TYPE_SIZE = 6 * WORD;          // 48
+    public static final int TYPE_SIZE = 8 * WORD;          // 64
 
     // ----- array Type (a Type node whose objects are arrays) ---------------
     // An array's header TIB slot (@0) holds either a small element size (1/2/4/8 — a raw, untyped array, the

@@ -590,6 +590,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             displayWord.put(refArrDescs.at(_d3), cur);
             cur += 4;
         }
+        // O(1) interface checks: number every baked interface Type (IDs 1..127; 0 stays "walk").
+        // The loader continues from VM.ifaceIdNext, so IDs are globally unique across both worlds.
+        StrIntTable ifaceId = new StrIntTable();
+        int nextIfaceId = 1;
+        for (int _d4 = 0; _d4 < typeClasses.size(); _d4++)
+        {
+            String icls = typeClasses.at(_d4);
+            if (registry.resolve(icls).isInterface() && nextIfaceId < 128)
+            {
+                ifaceId.put(icls, nextIfaceId);
+                nextIfaceId += 1;
+            }
+        }
         ByteKeyIntTable strWord = new ByteKeyIntTable();
         for (int _s5 = 0; _s5 < strings.size(); _s5++)
         {
@@ -971,6 +984,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             if (registry.resolve(cls).isInterface())
             {
                 writeLong(image, tw + ObjectModel.TYPE_DEPTH_OFFSET / 4, -1L);
+                writeLong(image, tw + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4,
+                          ifaceId.containsKey(cls) ? ifaceId.get(cls) : 0);   // interface: its global ID
             }
             else
             {
@@ -984,6 +999,28 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     writeLong(image, dw + dd * 2, addr(typeWord.get(c2)));
                     c2 = model.superClassName(c2);
                 }
+                // doesImplement bitmap over the full interface closure (marker bit 0 + ID bits).
+                long b0 = 1L;
+                long b1 = 0L;
+                StrSet all = model.allInterfaces(cls);
+                for (int ii = 0; ii < all.size(); ii++)
+                {
+                    String ic = all.at(ii);
+                    if (ifaceId.containsKey(ic))
+                    {
+                        int iid = ifaceId.get(ic);
+                        if (iid < 64)
+                        {
+                            b0 |= 1L << iid;
+                        }
+                        else
+                        {
+                            b1 |= 1L << (iid - 64);
+                        }
+                    }
+                }
+                writeLong(image, tw + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4, b0);
+                writeLong(image, tw + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4 + 2, b1);
             }
         }
 
@@ -1180,6 +1217,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.primArrayTibs", addr(primArrTabWord));
         fillStatic(image, staticWord, "vm/VM.refArrayTibs", addr(refArrTabWord));
         fillStatic(image, staticWord, "vm/VM.refArrayTibCount", refArrDescs.size());
+        fillStatic(image, staticWord, "vm/VM.ifaceIdNext", nextIfaceId);
         // Stash each runtime-helper method address so the on-metal JIT (MetalSymbols)
         // can BL it. Keys mirror compiler/WriterSymbols.HELPER_KEY.
         stashHelper(image, staticWord, wordOffset, "vm/Heap.alloc(I)J",       "vm/VM.heapAlloc");
@@ -1435,11 +1473,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         }
     }
 
-    /** Array-Type display: depth 1, display = [Object's Type, self]. */
+    /** Array-Type display: depth 1, display = [Object's Type, self]; empty-but-computed bitmap
+     *  (arrays implement no modeled interfaces). */
     private void writeArrayDisplay(int[] image, int typeW, int dispW, int objectTypeW)
     {
         writeLong(image, typeW + ObjectModel.TYPE_DEPTH_OFFSET / 4, 1);
         writeLong(image, typeW + ObjectModel.TYPE_DISPLAY_OFFSET / 4, addr(dispW));
+        writeLong(image, typeW + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4, 1);   // marker only
         writeLong(image, dispW, addr(objectTypeW));
         writeLong(image, dispW + 2, addr(typeW));
     }
