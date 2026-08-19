@@ -2131,7 +2131,12 @@ Stage-2 shape.
 
 **Only `java/net/` + `sun/nio/ch/` (and `java/lang/Object`) remain.**
 
-**Increment 8 — `eagerKept` down to one class: the socket-native stack goes lazy.** Off the
+**Increment 8 — `eagerKept` down to one class: the socket-native stack goes lazy. DONE,
+PI-VALIDATED (PR #109).** Real Pi 4: `socket connected`, HTTP 200 OK with the full body
+(`bytes=828`), clean `close()` and return. The whole stack ran metadata-only — `Net` 49
+cells, `IOUtil` 27, `Socket` 8, `NioSocketImpl` 6, `IOStatus` 6, `NativeThread` 5,
+`InetAddress` 5, `Inet6Address` 10 — and no trap fired on `close()`, which is where the
+`lambda$closerFor$0` fix had to hold. Off the
 list: `java/net/` and `sun/nio/ch/` — `Socket`, `SocketImpl`, `SocksSocketImpl`,
 `DelegatingSocketImpl`, the `InetAddress` family, `NioSocketImpl`, `Net` (49 cells),
 `IOUtil` (27), `NativeThread`, `IOStatus`, `SocketDispatcher`, `Util`,
