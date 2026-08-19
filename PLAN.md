@@ -2109,7 +2109,12 @@ its cell (increment 1) or a baked body's native never resolved (increment 2) —
 produce exactly a call that resolves to nothing and gets trap-wired. Retrying the charsets
 now tests that directly. `IOStatus` stays behind for the `sun/nio/ch/` increment.
 
-**Increment 7 — shrink `eagerKept`: the invoke shims.** Off the list: `java/lang/invoke/`
+**Increment 7 — shrink `eagerKept`: the invoke shims. DONE, PI-VALIDATED (PR #108).**
+Real Pi 4: `socket connected`, HTTP 200 OK with the full body (`bytes=828`), clean return.
+`VarHandle` 1 cell, `MhUtil` 3, `MethodHandles` 1, `Lookup` 0, `ExtendedSocketOptions` 1 —
+so `Socket`'s signature-polymorphic `STATE.getAndBitwiseOr` / `IN`/`OUT.compareAndSet`
+resolved by name into a *deferred stub* and compiled on first call, on a live connection.
+Off the list: `java/lang/invoke/`
 (the `VarHandle` and `MethodHandles` overlays), `jdk/internal/invoke/` (`MhUtil`) and
 `sun/net/` (the `ExtendedSocketOptions` no-op overlay, the `PlatformSocketImpl` interface).
 
