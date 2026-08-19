@@ -5114,6 +5114,29 @@ public final class Loader
         return dlStubByRef(refBase, classOff, nameOff, descOff);
     }
 
+    /**
+     * The phase-A cell for a method whose class, name and descriptor each live at a {@code (base, offset)}
+     * pair, or 0. The three offset-keyed lookups differ only in where those runs come from — a reloc's ref
+     * blob, the compile context plus a walked superclass, or the absolute utf8 runs of a bake stub — so they
+     * all funnel through here. Returns the CELL address; callers read it for callable code (the lazy stub,
+     * or the body once first-called) or hand it to an emitter to indirect through.
+     */
+    private static long dlCellOf(long clsBase, int clsOff, long nameBase, int nameOff, long descBase, int descOff)
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            if (utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
+                    && utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
+                    && utf8EqAt(descBase, descOff, dlTab[k].blob, dlTab[k].descOff))
+            {
+                return dlTab[k].cell;
+            }
+            k += 1;
+        }
+        return 0L;
+    }
+
     /** Current contents of the phase-A cell for a method ref given as blob base + Utf8 offsets, or 0. */
     private static long dlStubByRef(long refBase, int classOff, int nameOff, int descOff)
     {
@@ -5121,19 +5144,8 @@ public final class Loader
         {
             return 0L;
         }
-        int k = 0;
-        while (k < dlN)
-        {
-            DynLink d = dlTab[k];
-            if (utf8EqAt(refBase, classOff, d.blob, d.classOff)
-                    && utf8EqAt(refBase, nameOff, d.blob, d.nameOff)
-                    && utf8EqAt(refBase, descOff, d.blob, d.descOff))
-            {
-                return Magic.load64(d.cell);
-            }
-            k += 1;
-        }
-        return 0L;
+        long cell = dlCellOf(refBase, classOff, refBase, nameOff, refBase, descOff);
+        return cell == 0L ? 0L : Magic.load64(cell);
     }
 
     /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
@@ -6613,16 +6625,10 @@ public final class Loader
             }
             k += 1;
         }
-        k = 0;
-        while (k < dlN)
+        long cell = dlCellOf(clsU, 0, nameU, 0, descU, 0);   // tier 2: a celled static, callable via its cell
+        if (cell != 0L)
         {
-            if (utf8EqAt(dlTab[k].blob, dlTab[k].classOff, clsU, 0)
-                    && utf8EqAt(dlTab[k].blob, dlTab[k].nameOff, nameU, 0)
-                    && utf8EqAt(dlTab[k].blob, dlTab[k].descOff, descU, 0))
-            {
-                return Magic.load64(dlTab[k].cell);
-            }
-            k += 1;
+            return Magic.load64(cell);
         }
         k = 0;
         while (k < vtCount)
@@ -6939,19 +6945,7 @@ public final class Loader
      *  {@code clsBase}, or 0 if that exact class has no such phase-A cell. */
     private static long dlCellAt(long clsBase, int classOff, int nameOff, int descOff)
     {
-        int k = 0;
-        while (k < dlN)
-        {
-            DynLink d = dlTab[k];
-            if (utf8EqAt(clsBase, classOff, d.blob, d.classOff)
-                    && utf8EqAt(gbase, nameOff, d.blob, d.nameOff)
-                    && utf8EqAt(gbase, descOff, d.blob, d.descOff))
-            {
-                return d.cell;
-            }
-            k += 1;
-        }
-        return 0L;
+        return dlCellOf(clsBase, classOff, gbase, nameOff, gbase, descOff);
     }
 
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
