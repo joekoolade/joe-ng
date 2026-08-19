@@ -8223,30 +8223,44 @@ public final class Loader
         return -1;                      // 'L' reference or '[' nested array
     }
 
-    /** Array TIB for the array descriptor at {@code base+nameOff} (a Utf8 like "[B" / "[Ljava/lang/String;"), or 0. */
+    /** Array TIB for the array descriptor at {@code base+nameOff} (a Utf8 like "[B" / "[Ljava/lang/String;" /
+     *  "[[I"), or 0. */
     private static long arrayTibOfDesc(long base, int nameOff)
     {
-        int c = u1(base + nameOff + 3);                 // char after the leading '['
+        return arrayTibOfDescN(base, nameOff + 2, u2(base + nameOff));   // skip the u2 length prefix
+    }
+
+    /** Array TIB for the {@code n}-byte descriptor at {@code base+off}. Nested descriptors recurse: the
+     *  element of "[[I" is "[I", whose Type keys the ref-array cache -- so int[][] shares the SAME canonical
+     *  "[I" element node both worlds bake/adopt, and the covariance walk discriminates nested arrays. */
+    private static long arrayTibOfDescN(long base, int off, int n)
+    {
+        int c = u1(base + off + 1);                     // char after the leading '['
         int atype = atypeForDescChar(c);
         if (atype >= 0)
         {
             return primArrayTib(atype);                 // "[<primitive>"
         }
-        return refArrayTib(elementTypeOfArrayDesc(base, nameOff));   // "[L...;" / "[[..." (reference element)
+        if (c == 0x5B)                                  // '[': nested -- element desc is this minus one '['
+        {
+            long elTib = arrayTibOfDescN(base, off + 1, n - 1);
+            return refArrayTib(elTib == 0L ? 0L : Magic.load64(elTib));
+        }
+        return refArrayTib(elementTypeOfArrayDescN(base, off, n));   // "[L<class>;"
     }
 
-    /** Element Type of a reference-array descriptor "[L<class>;" (the class's Type, or 0 for nested/unresolved). */
-    private static long elementTypeOfArrayDesc(long base, int nameOff)
+    /** Element Type of the {@code n}-byte reference-array descriptor "[L<class>;" at {@code base+off}
+     *  (the class's Type, or 0 when unresolved). */
+    private static long elementTypeOfArrayDescN(long base, int off, int n)
     {
-        if (u1(base + nameOff + 3) != 0x4C)             // not 'L' (a nested array "[[..." — leave element 0)
+        if (u1(base + off + 1) != 0x4C)                 // not 'L'
         {
             return 0L;
         }
-        int len = u2(base + nameOff);                   // strip the leading "[L" and trailing ';' -> class name
-        int i = 0;
+        int i = 0;                                      // strip the leading "[L" and trailing ';' -> class name
         while (i < clCount)
         {
-            if (utf8SliceEq(base, nameOff + 4, len - 3, clTab[i].base, clTab[i].nameOff))
+            if (utf8SliceEq(base, off + 2, n - 3, clTab[i].base, clTab[i].nameOff))
             {
                 return clTab[i].type;
             }
@@ -8303,13 +8317,17 @@ public final class Loader
                 {
                     tib = Magic.load64(tab + k * 16L + 8L);
                     adopted = true;
-                    Uart.write(Magic.bytes("  arrayadopt [L"));
                     int r = regOfType(elementType);
                     if (r >= 0)
                     {
+                        Uart.write(Magic.bytes("  arrayadopt [L"));
                         writeName(clTab[r].base + clTab[r].nameOff + 2, u2(clTab[r].base + clTab[r].nameOff));
+                        Uart.putc(0x3B);                // ';'
                     }
-                    Uart.putc(0x3B);                    // ';'
+                    else
+                    {
+                        Uart.write(Magic.bytes("  arrayadopt [[ (nested)"));   // element is itself an array Type
+                    }
                     Uart.putc(0x0A);
                     break;
                 }

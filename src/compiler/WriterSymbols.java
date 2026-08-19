@@ -66,14 +66,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     public void type(CodeBuffer cb, int reg, int classCp)
     {
         String cls = cf.classAt(classCp);
-        if (cls.startsWith("[") && primArrayAtype(cls) < 0 && refArrayElement(cls) == null)
+        if (cls.startsWith("[") && !arrayDescSupported(cls))
         {
-            // Nested-array Types ("[[...") aren't baked (their instances stay raw; VM.checkCast has
-            // a raw-array backstop) -- an instanceof/checkcast against one can't compile here.
-            // Under the M8 bake, such a stock method becomes a resolve stub instead of a wrong answer.
             throw new UnsupportedOperationException("array type-check not compiled by the host writer: " + cls);
         }
-        // Single-dim array targets ("[B", "[Ljava/lang/Integer;"...) resolve against the baked
+        // Array targets ("[B", "[Ljava/lang/Integer;", "[[I"...) resolve against the baked
         // canonical array Types -- ImageBuilder registers them in typeWord under the descriptor.
         relocs.typeRefs().add(new TypeRef(cb.reserveAddr(reg), reg, cls));
     }
@@ -85,18 +82,14 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         // M8 array-Type unification: store the baked canonical array TIB into the new array's
         // header, so writer-world arrays carry the SAME Type node the loader adopts. Recorded as a
-        // TibRef under the array descriptor ("[B" / "[Ljava/lang/Integer;") -- ImageBuilder
+        // TibRef under the array descriptor ("[B" / "[Ljava/lang/Integer;" / "[[I") -- ImageBuilder
         // registers the baked array TIBs in tibWord under those keys, so the normal tib patch
-        // resolves it. anewarray of an ARRAY element ("[[...") stays raw (checkCast backstop).
+        // resolves it. anewarray of an ARRAY element class prepends one '[' to the element's desc.
         String desc;
         if (isRef)
         {
             String elem = cf.classAt(operand);
-            if (elem.startsWith("["))
-            {
-                return;
-            }
-            desc = "[L" + elem + ";";
+            desc = elem.startsWith("[") ? "[" + elem : "[L" + elem + ";";
         }
         else
         {
@@ -114,6 +107,27 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
             return desc.substring(2, desc.length() - 1);
         }
         return null;
+    }
+
+    /** True for a well-formed array descriptor the bake can lay out: any depth of '[' over a
+     *  primitive element char or an "L<cls>;" element. */
+    static boolean arrayDescSupported(String desc)
+    {
+        int i = 0;
+        while (i < desc.length() && desc.charAt(i) == '[')
+        {
+            i += 1;
+        }
+        if (i == 0 || i >= desc.length())
+        {
+            return false;
+        }
+        String base = desc.substring(i);
+        if (base.length() == 1 && "ZCFDBSIJ".indexOf(base.charAt(0)) >= 0)
+        {
+            return true;
+        }
+        return base.length() > 2 && base.charAt(0) == 'L' && base.endsWith(";");
     }
 
     /** Descriptor per newarray atype (4..11). */
