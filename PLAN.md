@@ -1930,7 +1930,11 @@ out the metadata model. Stage 5 retires the eager per-batch machinery itself —
 the default and the eager path the pinned exception, then shrinking the exception list
 one Pi-validated class at a time until the eager machinery is dead code.
 
-**Increment 1 — lazy by DEFAULT (the allowlist inverts).** `stage2Gated` no longer names
+**Increment 1 — lazy by DEFAULT (the allowlist inverts). DONE, PI-VALIDATED (PR #102).**
+Real Pi 4: 16 bootstrap probes PASS, `lifecycle OK 162`, WPA2-PSK join + DHCP
+(192.168.1.247), **HTTP 200 OK with the full body over stock `java.net.Socket`**
+(`bytes=828`), clean `[main returned normally]` — no cap halt, no trap fired, no wild
+branch. `stage2Gated` no longer names
 the metadata-only classes: ANY demand-loaded java.base class (`java/`/`jdk/`/`sun/`
 prefixes) is metadata-only unless `eagerKept` pins it to the eager path. The eager-keep
 list is the conservative complement of everything the widening arc (PRs #59–#65, #71)
