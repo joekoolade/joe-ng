@@ -22,4 +22,15 @@ final class RVMClass
     boolean isIface;     // interface? (phase B compiles only its default/static bodies, no TIB fill)
     int     ifmStart;    // interfaces only: start of the FLATTENED per-interface method run in ifBase/ifNameOff/ifDescOff
     int     ifmCount;    // ... its length = this interface's itable slot count (0 for classes)
+    int     state;       // 4-phase lifecycle position (ST_*), advanced by the loader, never regressed
+
+    // ----- JikesRVM 4-phase class lifecycle: load -> resolve -> instantiate -> initialize -----
+    /** Classfile parsed, RVMClass created (registration in progress). */
+    static final int ST_LOADED = 1;
+    /** Structure complete: fields/vtable laid out, statics adopted, Type + TIB allocated (phase A done). */
+    static final int ST_RESOLVED = 2;
+    /** Bodies compiled or celled, TIB + itables filled -- ready for new/dispatch (phase B done). */
+    static final int ST_INSTANTIATED = 3;
+    /** Queued {@code <clinit>} has run (or was deliberately skipped with seeded statics). */
+    static final int ST_INITIALIZED = 4;
 }

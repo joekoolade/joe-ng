@@ -3911,6 +3911,32 @@ public final class Loader
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
+        // 4-phase lifecycle: batch initialization just completed -- every INSTANTIATED class's queued
+        // <clinit> has run (or was deliberately skipped with seeded statics), so the whole batch
+        // reaches INITIALIZED. The boot invariant flags any class stuck short of phase B (a hole in
+        // the pipeline that previously failed silently as a 0 buffer or an unfilled TIB).
+        int lcOk = 0;
+        int lc = 0;
+        while (lc < clCount)
+        {
+            if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
+            {
+                clTab[lc].state = RVMClass.ST_INITIALIZED;
+                lcOk += 1;
+            }
+            else
+            {
+                Uart.write(Magic.bytes("  lifecycle DIFF "));
+                writeName(clTab[lc].base + clTab[lc].nameOff + 2, u2(clTab[lc].base + clTab[lc].nameOff));
+                Uart.write(Magic.bytes(" state="));
+                VM.printDec(clTab[lc].state);
+                Uart.putc(0x0A);
+            }
+            lc += 1;
+        }
+        Uart.write(Magic.bytes("  lifecycle OK "));
+        VM.printDec(lcOk);
+        Uart.putc(0x0A);
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
         markActive = 0;                                 // don't leak the reachability state past this batch
@@ -4139,6 +4165,7 @@ public final class Loader
                 }
             }
             clTab[clCount] = new RVMClass();
+            clTab[clCount].state = RVMClass.ST_LOADED;
             clTab[clCount].base = gbase;
             clTab[clCount].nameOff = gThisNameOff;
             clTab[clCount].tib = 0L;
@@ -4154,6 +4181,7 @@ public final class Loader
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
             checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
+            clTab[clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
             clCount += 1;
             return;                                     // bodies (default/static methods) compiled in phase B
         }
@@ -4163,6 +4191,7 @@ public final class Loader
         allocTib();                                     // allocate Type + empty TIB at a stable address (gTib)
         registerClassStructure();                       // class + fields + statics + vtable STRUCTURE (bufs 0)
         clTab[clCount - 1].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
+        clTab[clCount - 1].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
     }
 
     /**
@@ -4187,6 +4216,7 @@ public final class Loader
                                                         // walk never matches (invokeinterface sentinel NPE).
             compileClass(bytes);                        // interface CONCRETE methods (static like List.of + defaults)
             registerAll();
+            clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies done
             return;
         }
         parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
@@ -4201,6 +4231,7 @@ public final class Loader
         compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
         registerAll();                                  // methods -> globalBuf
         fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
+        clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies + TIB + itables done
     }
 
     /**
@@ -5265,6 +5296,7 @@ public final class Loader
         if (fldCount + gifCount >= MAXFIELD) { capHalt(Magic.bytes("MAXFIELD"), fldCount); } // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         if (vtCount + gvCount >= MAXVT) { capHalt(Magic.bytes("MAXVT"), vtCount); }          // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         clTab[clCount] = new RVMClass();
+        clTab[clCount].state = RVMClass.ST_LOADED;
         clTab[clCount].base = gbase;
         clTab[clCount].nameOff = gThisNameOff;
         clTab[clCount].tib = gTib;
@@ -6507,6 +6539,13 @@ public final class Loader
     /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
     private static void restoreCtxForCompile(long bytes, int len, int reg)
     {
+        if (reg >= 0 && clTab[reg].state < RVMClass.ST_RESOLVED)
+        {
+            // Lifecycle guard: a lazy compile needs the class's STRUCTURE (field layout, statics,
+            // vtable numbering, Type/TIB). Firing before phase A completes would compile against a
+            // half-built context and corrupt silently -- halt loudly instead.
+            capHalt(Magic.bytes("lifecycle-compile"), reg);
+        }
         parseConstPool(bytes, len);
         parseFields();
         gStatics = clTab[reg].statics;
@@ -6553,6 +6592,14 @@ public final class Loader
             {
                 capHalt(Magic.bytes("bakeresolve-load"), 0);
             }
+        }
+        int lreg = classIndexByName(slash);
+        if (lreg >= 0 && clTab[lreg].state < RVMClass.ST_INSTANTIATED)
+        {
+            // Lifecycle guard: baked code is about to CALL into this class, so its bodies/cells and
+            // TIB must be in place (phase B). A short state here means the incremental load pipeline
+            // returned a half-lifecycle class -- halt loudly rather than branch into a 0 buffer.
+            capHalt(Magic.bytes("lifecycle-resolve"), lreg);
         }
         long buf = bufBySigU(clsU, nameU, descU);
         if (buf == 0L)
