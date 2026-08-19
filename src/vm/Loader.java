@@ -5097,6 +5097,33 @@ public final class Loader
             }
             pd = spd;
         }
+        // Last tier: a METADATA-ONLY class's celled static is never eagerly compiled or registered, so both
+        // scans above miss it. Its phase-A cell holds callable code -- the lazy stub, or the compiled body
+        // once first-called -- so a `bl` may target that directly (the same tier bufBySigU uses for bake
+        // stubs). Without this a reloc into a celled method traps: NioSocketImpl's `lambda$closerFor$0` is
+        // the one that bites, since the lambda IS the Cleaner action run by close().
+        return dlStubByRef(refBase, classOff, nameOff, descOff);
+    }
+
+    /** Current contents of the phase-A cell for a method ref given as blob base + Utf8 offsets, or 0. */
+    private static long dlStubByRef(long refBase, int classOff, int nameOff, int descOff)
+    {
+        if (dlTab == null)
+        {
+            return 0L;
+        }
+        int k = 0;
+        while (k < dlN)
+        {
+            DynLink d = dlTab[k];
+            if (utf8EqAt(refBase, classOff, d.blob, d.classOff)
+                    && utf8EqAt(refBase, nameOff, d.blob, d.nameOff)
+                    && utf8EqAt(refBase, descOff, d.blob, d.descOff))
+            {
+                return Magic.load64(d.cell);
+            }
+            k += 1;
+        }
         return 0L;
     }
 
@@ -6569,12 +6596,44 @@ public final class Loader
         {
             capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
         }
+        rememberLazyBody(idx, buf);
         lzTab[idx].cache = buf;
         if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
         {
             Magic.store64(lzTab[idx].slot, buf);
         }
         return buf;
+    }
+
+    /**
+     * Point the method registry at a freshly lazy-compiled body. {@link #printFrameAt} names a PC by the
+     * nearest registered buffer at-or-below it, so an unregistered fresh buffer makes every frame in that
+     * method report as whatever unrelated method happens to sit below it (the socket stack traced as
+     * {@code InternalError.<init>} until this landed). A celled static has no registry entry at all, so it
+     * gets one here; a deferred method has one pointing at its stub, which is updated in place — which also
+     * lets later direct calls link straight to the body instead of through the stub.
+     */
+    private static void rememberLazyBody(int idx, long buf)
+    {
+        int nameOff = lzTab[idx].nameOff;
+        if (nameOff == 0)
+        {
+            nameOff = findNameByCode(lzTab[idx].code);   // deferral entries capture bytecode, not the name
+        }
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgTab[i].base == lzTab[idx].blob && rgTab[i].nameOff == nameOff
+                    && rgTab[i].descOff == lzTab[idx].descOff)
+            {
+                rgTab[i].buf = buf;
+                rgTab[i].line = mLine[0];
+                rgTab[i].src = mSrc[0];
+                return;
+            }
+            i += 1;
+        }
+        register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc[0], 0);
     }
 
     /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
@@ -7134,20 +7193,21 @@ public final class Loader
         return !eagerKept(base, off);
     }
 
-    /** The classes KEPT on the eager compile path (the stage-5 exception list, shrinking toward empty).
-     *  What is left is the socket-native stack and everything adjacent to it: hand-tuned {@code <clinit>}
-     *  ordering, VM-seeded statics, and the #43 denylist-trap interplay that regressed PR #71 on real HW.
-     *  QEMU cannot exercise any of it (no CYW43 -> it traps at connect first), so these come off the list
-     *  one prefix at a time, each with its own Pi run. The Throwable hierarchy and the reflection floor
-     *  (java/lang/reflect, java/lang/Class) are already off -- both are QEMU-verifiable, and the exception
-     *  and reflection demos cover them. */
+    /**
+     * The classes KEPT on the eager compile path — down to ONE. Stage 5 emptied this list a prefix at a
+     * time, each with its own Pi run: the reflection floor and Throwable hierarchy, the reference/cleaner/
+     * event subsystem, concurrency and {@code Unsafe}, {@code System}/{@code Thread}/the access shims, the
+     * charset/buffer/fd data layer, the invoke shims, and finally the socket-native stack itself.
+     *
+     * <p>{@code java.lang.Object} stays because it is not a class like the others: its 9 virtuals are the
+     * prefix of EVERY vtable in both worlds, so its slots are what writer-baked code and loader-compiled
+     * code agree on. Deferring them would put stubs in that shared prefix, and a stub there is entered
+     * before the loader can be sure which world the receiver came from. There is no demand for making it
+     * lazy either — every program uses it immediately.
+     */
     private static boolean eagerKept(long base, int off)
     {
-        // The socket-native stack itself (java.net + sun.nio.ch + the platform impl). The charset/buffer/fd
-        // DATA layer below it is lazy as of increment 6; what is left here is the impl stack and its natives.
-        return utf8HasPrefix(base, off, Magic.bytes("java/net/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));    // 9-virtuals prefix of every vtable
+        return utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,

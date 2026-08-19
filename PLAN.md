@@ -2131,6 +2131,37 @@ Stage-2 shape.
 
 **Only `java/net/` + `sun/nio/ch/` (and `java/lang/Object`) remain.**
 
+**Increment 8 — `eagerKept` down to one class: the socket-native stack goes lazy. DONE,
+PI-VALIDATED (PR #109).** Real Pi 4: `socket connected`, HTTP 200 OK with the full body
+(`bytes=828`), clean `close()` and return. The whole stack ran metadata-only — `Net` 49
+cells, `IOUtil` 27, `Socket` 8, `NioSocketImpl` 6, `IOStatus` 6, `NativeThread` 5,
+`InetAddress` 5, `Inet6Address` 10 — and no trap fired on `close()`, which is where the
+`lambda$closerFor$0` fix had to hold. Off the
+list: `java/net/` and `sun/nio/ch/` — `Socket`, `SocketImpl`, `SocksSocketImpl`,
+`DelegatingSocketImpl`, the `InetAddress` family, `NioSocketImpl`, `Net` (49 cells),
+`IOUtil` (27), `NativeThread`, `IOStatus`, `SocketDispatcher`, `Util`,
+`SocketOptionRegistry`. **`java/lang/Object` is all that remains**, and it stays for a
+structural reason rather than caution: its 9 virtuals are the prefix of *every* vtable in
+both worlds, so those slots are what writer-baked and loader-compiled code agree on.
+
+**Two bugs this increment exposed, both invisible until the socket stack itself was lazy:**
+
+1. **A reloc into a celled static had no resolution tier.** `patchRelocs`' resolver
+   (`globalBufByRef`) scans the method registry and the super chain, but a metadata-only
+   class's celled statics are never eagerly compiled *or registered*, so both miss and the
+   site is trap-wired. The one that bites is `NioSocketImpl.lambda$closerFor$0` — an indy
+   thunk whose target is a synthetic static, and the lambda *is* the Cleaner action that
+   `close()` runs, so it would have fired on hardware while QEMU (which never connects)
+   stayed silent. Fixed by a last tier, `dlStubByRef`: the phase-A cell holds callable code
+   (the stub, or the body once first-called), which is exactly what `bufBySigU` already
+   does for bake stubs. Confirmed by the trap table returning to main's contents.
+2. **Lazily compiled bodies were invisible to stack traces.** `printFrameAt` names a PC by
+   the nearest *registered* buffer at or below it, and a fresh lazy body is not in the
+   registry — so the whole socket stack reported as `java/lang/InternalError.<init>` with
+   six-digit offsets. `rememberLazyBody` now updates the method's registry entry in place
+   (or creates one for a celled static), which also lets later direct calls link straight
+   to the body instead of through the stub. Traces read correctly again.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
