@@ -7147,10 +7147,6 @@ public final class Loader
         // DATA layer below it is lazy as of increment 6; what is left here is the impl stack and its natives.
         return utf8HasPrefix(base, off, Magic.bytes("java/net/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/"))
-                // VarHandle/MethodHandles shims: signature-polymorphic sites resolved by NAME at compile time:
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));    // 9-virtuals prefix of every vtable
     }
 
