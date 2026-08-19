@@ -4651,6 +4651,7 @@ public final class Loader
     private static void emitDeferredStub(int i)
     {
         lazyEnsureTables();
+        if (lzN >= MAXLAZY) { capHalt(Magic.bytes("MAXLAZY-defer"), lzN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         int idx = lzN;
         int reg = classRegByName(gThisNameOff);
         int pd = findPdByName(gbase, gThisNameOff);
@@ -4976,7 +4977,22 @@ public final class Loader
     private static void patchRelocs()
     {
         trapWireCount = 0;                                     // #43: fresh trap-site table per batch
-        int i = 0;
+        patchRelocsFrom(0, 0);
+    }
+
+    /**
+     * Patch the reloc sites recorded from {@code rcStart}/{@code rsStart} onward, leaving earlier ones (and
+     * the #43 trap-site table) alone. A LAZY compile runs long after its batch's {@link #patchRelocs}, so its
+     * own unresolved sites would otherwise stay {@code bl 0} forever and branch to address 0 — which the
+     * firmware's low-memory shim turns into a re-entry of the image entry point ("BOOT RE-ENTERED"). The
+     * eager path never hit this because every body was emitted before the batch-end patch. Re-resolution here
+     * is also what supplies {@link #globalBufByRef}'s super-chain walk for an INHERITED static/special call
+     * (e.g. {@code ArrayList.subList} calling {@code subListRangeCheck}, declared on {@code AbstractList}),
+     * which the compile-time {@link #resolveCallBuf} cannot see.
+     */
+    private static void patchRelocsFrom(int rcStart, int rsStart)
+    {
+        int i = rcStart;
         while (i < rcCount)
         {
             long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
@@ -5029,7 +5045,7 @@ public final class Loader
             }
             i += 1;
         }
-        int j = 0;
+        int j = rsStart;
         while (j < rsCount)
         {
             long addr = globalStaticByRef(rsBase[j], rsClass[j], rsName[j]);
@@ -6333,7 +6349,7 @@ public final class Loader
     // Default OFF. (Unlike 1a this is not byte-identical off: lazyCompile is force-compiled for its stash,
     // but nothing arms it, so behaviour is unchanged -- verified by QEMU off == main.)
     private static final boolean LAZY_COMPILE = false;
-    private static final int MAXLAZY = 1024;
+    private static final int MAXLAZY = 8192;
     private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
@@ -6522,12 +6538,25 @@ public final class Loader
             Uart.write(Magic.bytes("  jitc "));
             printNameAt(gbase, gThisNameOff);
             Uart.putc(0x2E);
-            printNameAt(lzTab[idx].blob, lzTab[idx].code != 0L ? lzTab[idx].descOff : lzTab[idx].nameOff);
+            int trName = lzTab[idx].nameOff;            // deferral entries capture bytecode, not the name
+            if (trName == 0)
+            {
+                trName = findNameByCode(lzTab[idx].code);
+            }
+            printNameAt(lzTab[idx].blob, trName);
+            printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
             Uart.putc(0x0A);
         }
         compileReuseTib = true;                         // keep this class's TIB (already filled)
+        int rcMark = rcCount;                           // this compile's own reloc sites start here
+        int rsMark = rsCount;
         long buf = compile(code, len, descOff, isStatic);
         compileReuseTib = false;
+        patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
+        if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
+        {
+            capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
+        }
         lzTab[idx].cache = buf;
         if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
         {
@@ -6927,27 +6956,15 @@ public final class Loader
             return 0L;                                  // constant-folded off: normal BL path, unchanged
         }
         int classOff = refClassNameOff(methodCp);
-        if (!stage2Gated(gbase, classOff))
-        {
-            return 0L;                                  // only the gated class
-        }
         int nameOff = mrefNameOff(methodCp);
         int descOff = mrefDescOff(methodCp);
         if ((LAZY_PHASEA || LAZY_STAGE2) && dlTab != null)   // phase-A cells: order-independent (structure-time)
         {
-            int k = 0;
-            while (k < dlN)
-            {
-                DynLink d = dlTab[k];
-                if (utf8EqAt(gbase, classOff, d.blob, d.classOff)
-                        && utf8EqAt(gbase, nameOff, d.blob, d.nameOff)
-                        && utf8EqAt(gbase, descOff, d.blob, d.descOff))
-                {
-                    return d.cell;
-                }
-                k += 1;
-            }
-            return 0L;
+            return dlCellFor(classOff, nameOff, descOff);    // dl* membership IS the gate (only celled classes are in it)
+        }
+        if (!stage2Gated(gbase, classOff))
+        {
+            return 0L;                                  // only the gated class
         }
         int i = 0;
         while (i < rgCount)                             // 1c fallback: locate the target in the method registry
@@ -6961,6 +6978,57 @@ public final class Loader
             i += 1;
         }
         return 0L;                                      // not registered yet -> normal (eager, reloc) path
+    }
+
+    /**
+     * The phase-A cell for a static/special call ref, or 0. Resolution follows JVMS order: the ref'd class
+     * first, then its superclasses — an INHERITED static is named through the subclass by javac (e.g.
+     * {@code ArrayList.subListRangeCheck}, declared on {@code AbstractList}). Without the walk such a call
+     * finds no cell, and no registry entry either (a metadata-only class's celled statics are never eagerly
+     * compiled or registered), so it would trap as an unresolved callee.
+     */
+    private static long dlCellFor(int classOff, int nameOff, int descOff)
+    {
+        long cell = dlCellAt(gbase, classOff, nameOff, descOff);
+        if (cell != 0L)
+        {
+            return cell;
+        }
+        int pd = findPdByName(gbase, classOff);
+        while (pd >= 0 && pdSuperOff[pd] != 0)
+        {
+            int spd = findPdByName(pdBase[pd], pdSuperOff[pd]);
+            if (spd < 0)
+            {
+                return 0L;
+            }
+            cell = dlCellAt(pdBase[spd], pdNameOff[spd], nameOff, descOff);
+            if (cell != 0L)
+            {
+                return cell;
+            }
+            pd = spd;
+        }
+        return 0L;
+    }
+
+    /** Cell for the method (name, desc in gbase) declared by the class named at {@code classOff} in
+     *  {@code clsBase}, or 0 if that exact class has no such phase-A cell. */
+    private static long dlCellAt(long clsBase, int classOff, int nameOff, int descOff)
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            DynLink d = dlTab[k];
+            if (utf8EqAt(clsBase, classOff, d.blob, d.classOff)
+                    && utf8EqAt(gbase, nameOff, d.blob, d.nameOff)
+                    && utf8EqAt(gbase, descOff, d.blob, d.descOff))
+            {
+                return d.cell;
+            }
+            k += 1;
+        }
+        return 0L;
     }
 
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
@@ -7033,55 +7101,77 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** The set of classes made metadata-only (phase-A cells + no eager compile). All-static utilities called
-     *  in NetDemo, whose methods are pure integer arithmetic (compile cleanly on the metal). */
+    /** M8 stage 5: LAZY BY DEFAULT. Every demand-loaded java.base class is metadata-only (phase-A cells for
+     *  its statics + deferred stubs for its virtuals; {@code <init>}/{@code <clinit>} still compile at load)
+     *  UNLESS {@link #eagerKept} pins it to the eager path. Replaces the per-class allowlist that grew
+     *  4->13->20->35->40 across the stage-2 widening PRs: the default flips, and the eager path becomes the
+     *  exception -- the last strangler step before the eager machinery (markReachable/patchRelocs) retires.
+     *  Non-java.base classes (demos, vm/*) always load eagerly. */
     private static boolean stage2Gated(long base, int off)
     {
-        return utf8IsAtBase(base, off, Magic.bytes("java/util/Objects"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/Preconditions"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/String"))     // a class WITH virtual methods
-                // widen (safe: lazy only compiles CALLED methods, a subset of what eager compiled):
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringLatin1"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringUTF16"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringCoding"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Integer"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Long"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Character"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Boolean"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Byte"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Arrays"))
-                // widen batch 3: core java.lang + java.util collections (incl. inheritance/interfaces):
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Number"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StringBuilder"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashSet"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractMap"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractCollection"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/AbstractSet"))
-                // widen batch 4: the HashMap family (nodes/iterators) + character data + numerics:
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$Node"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$TreeNode"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$KeySet"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$EntrySet"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$HashIterator"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$KeyIterator"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$EntryIterator"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/LinkedHashMap$Entry"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterDataLatin1"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterData"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Enum"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Double"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Math"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StrictMath"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"))
-                // widen batch 5: java.io output/input + a couple more java.lang:
-                || utf8IsAtBase(base, off, Magic.bytes("java/io/PrintStream"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/io/OutputStream"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/io/InputStream"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/io/ObjectStreamField"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Comparator"));
+        if (!utf8HasPrefix(base, off, Magic.bytes("java/"))
+                && !utf8HasPrefix(base, off, Magic.bytes("jdk/"))
+                && !utf8HasPrefix(base, off, Magic.bytes("sun/")))
+        {
+            return false;
+        }
+        return !eagerKept(base, off);
+    }
+
+    /** The classes KEPT on the eager compile path (the stage-5 exception list). Conservative by design:
+     *  the socket-native stack and everything adjacent to it (hand-tuned {@code <clinit>} ordering, VM-seeded
+     *  statics, and the #43 denylist-trap interplay that regressed PR #71 on real HW -- QEMU cannot catch
+     *  those, so each of these widens to lazy only one-at-a-time with individual Pi validation), plus the
+     *  Throwable hierarchy (the unwinder resolves handlers against compiled bodies mid-throw). */
+    private static boolean eagerKept(long base, int off)
+    {
+        // The socket-native stack + its overlay/shim floor (java.net + sun.nio.ch + charsets + buffers):
+        return utf8HasPrefix(base, off, Magic.bytes("java/net/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/nio/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/io/FileDescriptor"))
+                // VarHandle/MethodHandles shims: signature-polymorphic sites resolved by NAME at compile time:
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/"))
+                // VM-seeded / hand-ordered <clinit> infrastructure (SharedSecrets, Unsafe, Cleaner, events):
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/access/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/misc/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/ref/"))
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/event/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/ref/"))
+                // Overlaid reflection floor (Class/reflect run against loader registries):
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Class"))     // + ClassLoader/ClassValue
+                // Locks + TimeUnit (ReentrantLock overlay; TimeUnit was in the regressed PR #71 batch):
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/concurrent/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Thread"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/System"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"))     // 9-virtuals prefix of every vtable
+                // The Throwable hierarchy: the unwinder walks handler tables against compiled bodies mid-throw:
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/Throwable"))
+                || utf8HasSuffix(base, off, Magic.bytes("Exception"))
+                || utf8HasSuffix(base, off, Magic.bytes("Error"));
+    }
+
+    /** True if the class name at {@code off} in {@code base} ends with {@code suffix}. */
+    private static boolean utf8HasSuffix(long base, int off, byte[] suffix)
+    {
+        int len = u2(base + off);
+        if (len < suffix.length)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < suffix.length)
+        {
+            if (u1(base + off + 2 + (len - suffix.length) + k) != (suffix[k] & 0xFF))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
