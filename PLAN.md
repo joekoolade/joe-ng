@@ -1975,7 +1975,12 @@ lazily compiled body that needed them:
    `stage2Gated(ref-class)` pre-gate is gone with it: membership in the `dl*` table is
    itself the gate, and it is the *declaring* class that must be gated, not the ref'd one.
 
-**Increment 2 — shrink `eagerKept`: the reflection floor and the Throwable hierarchy.**
+**Increment 2 — shrink `eagerKept`: the reflection floor and the Throwable hierarchy.
+DONE, PI-VALIDATED (PR #103).** Real Pi 4: 16 probes PASS, `lifecycle OK 162`, WPA2 join
++ DHCP, **HTTP 200 OK with the full body** (`bytes=828`), clean return. The boot log shows
+the flip directly — `phaseA: 2 cells … java/lang/Class` and phase-A lines for the whole
+exception hierarchy (`Throwable`, `Exception`, `Error`, `NullPointerException`,
+`ClassCastException`, `InternalError`, …), all metadata-only, with no `bakeresolve-find`.
 Both come off the eager list. They are the QEMU-verifiable half of the exception list —
 the reflection demos (`ForName`/`Method`/`Field`/`Ctor`/`Enum`/`Access`/`DefineClass`/
 `ReflectLoad`) and the exception demos (`Trace`/`Unwind`/`StackTrace`/`InfraProbe`) cover
