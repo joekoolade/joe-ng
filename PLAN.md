@@ -2109,6 +2109,23 @@ its cell (increment 1) or a baked body's native never resolved (increment 2) —
 produce exactly a call that resolves to nothing and gets trap-wired. Retrying the charsets
 now tests that directly. `IOStatus` stays behind for the `sun/nio/ch/` increment.
 
+**Increment 7 — shrink `eagerKept`: the invoke shims.** Off the list: `java/lang/invoke/`
+(the `VarHandle` and `MethodHandles` overlays), `jdk/internal/invoke/` (`MhUtil`) and
+`sun/net/` (the `ExtendedSocketOptions` no-op overlay, the `PlatformSocketImpl` interface).
+
+The invoke shims looked like the one place laziness could collide with a *compile-time*
+mechanism, since `VarHandle`'s call sites are signature-polymorphic — `Socket` calls
+`getAndBitwiseOr:(Ljava/net/Socket;I)I` while the overlay declares
+`(Ljava/lang/Object;I)I`, so the normal name+descriptor match misses and
+`vtableSlotOf` resolves those ops **by name** (`varHandleSlotByName`), with
+`markReachable` seeding them so their TIB slots get filled. Neither part depends on when
+the body compiles: slot numbering comes from the vtable registry built at phase A, and
+seeding marks the method reachable so the deferral path still installs a stub in the slot.
+Deferral just makes that slot's contents a stub instead of a body, which is the ordinary
+Stage-2 shape.
+
+**Only `java/net/` + `sun/nio/ch/` (and `java/lang/Object`) remain.**
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
