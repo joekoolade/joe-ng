@@ -2024,7 +2024,12 @@ one-at-a-time rule for socket-adjacent classes: they are one functional unit, an
 failure mode we have seen here (`bakeresolve-find`, `DENYLIST TRAP`, `CAP EXCEEDED`) names
 the offending class, so attribution survives.
 
-**Increment 4 — shrink `eagerKept`: concurrency + `Unsafe`.** Off the list:
+**Increment 4 — shrink `eagerKept`: concurrency + `Unsafe`. DONE, PI-VALIDATED (PR #105).**
+Real Pi 4: 16 probes PASS, `lifecycle OK 162`, WPA2 join + DHCP, HTTP 200 OK with the full
+body (`bytes=828`), clean return. `ReentrantLock`, `TimeUnit`, the atomics and `Unsafe` all
+carry phase-A lines — so `NioSocketImpl`'s per-read/write lock and `Unsafe`'s array-offset
+statics came up lazily on the live socket path, and `TimeUnit` (the PR #71 regressor)
+cleared its own run. Off the list:
 `java/util/concurrent/` (the no-op `ReentrantLock`/`Semaphore`/`LockSupport` overlays,
 `TimeUnit`, the atomics, `ConcurrentHashMap`) and `jdk/internal/misc/` (the `Unsafe`
 overlay). `Unsafe` looks load-bearing but is not: its `<clinit>` assigns the
