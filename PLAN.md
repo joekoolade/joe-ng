@@ -1922,7 +1922,54 @@ outputs, zero traps. **The world-unification arc is complete**: one vtable numbe
 dispatch fabric (virtual + interface), one Type per class, one home per static, and a lazy
 bridge over the uncompilable fringe — the loader and the baked image are one VM.
 
----
+### Stage 5 — retire the eager loader (STARTED 2026-08-18)
+
+Stage 4 (O(1) type checks, PRs #99/#100, + the reified 4-phase lifecycle, PR #101) closed
+out the metadata model. Stage 5 retires the eager per-batch machinery itself —
+`markReachable`/`resetLoader`/`patchRelocs`/`MAX*` caps — by first making the lazy path
+the default and the eager path the pinned exception, then shrinking the exception list
+one Pi-validated class at a time until the eager machinery is dead code.
+
+**Increment 1 — lazy by DEFAULT (the allowlist inverts).** `stage2Gated` no longer names
+the metadata-only classes: ANY demand-loaded java.base class (`java/`/`jdk/`/`sun/`
+prefixes) is metadata-only unless `eagerKept` pins it to the eager path. The eager-keep
+list is the conservative complement of everything the widening arc (PRs #59–#65, #71)
+proved or suspected risky: the socket-native stack and its adjacent prefixes (`java/net/`,
+`sun/nio/`, `sun/net/`, `java/nio/`, `java/io/FileDescriptor*`, the VarHandle/invoke
+shims, `jdk/internal/{access,misc,ref,event}/`, `java/lang/ref/`, the reflection floor,
+`java/util/concurrent/` — including PR #71's regressed TimeUnit — Thread, System, Class,
+Object) plus the Throwable hierarchy (exact `Throwable` + name-suffix
+`Exception`/`Error`, since the unwinder resolves handlers against compiled bodies
+mid-throw). `<init>`/`<clinit>` still compile at load exactly as before, so the hand-tuned
+clinit ordering is untouched — the flip only defers plain method bodies, which the
+stage-2 safety invariant covers (lazy compiles only CALLED methods, a subset of what
+eager compiled). Plumbing: `MAXLAZY` 1024→8192 (the NetDemo batch alone arms ~907 cells;
+the old cap was already within ~10% of overflow) and a `capHalt` overflow guard on
+`emitDeferredStub`, which wrote `lzTab[lzN]` unguarded.
+
+**Two latent lazy-path bugs the flip exposed** (both found on WordCount, whose
+`String.split` reaches `ArrayList.subList` — a call chain no class in the old 40 could
+make). Neither is specific to the classes now gated; both were waiting for the first
+lazily compiled body that needed them:
+
+1. **A lazy compile's own relocs were never patched.** `MetalSymbols.call` emits `bl 0`
+   plus a reloc record when a callee doesn't resolve at compile time, and only
+   `patchRelocs()` (batch end, in `loadAll`) ever rewrites those. A body compiled on
+   first call runs *after* that patch, so its `bl 0` stayed — and a `bl` to absolute 0
+   lands in the firmware's low-memory shim, which jumps to the image entry: the
+   `BOOT RE-ENTERED at EL1` wild-branch halt, with no hint of the real callee. Fix:
+   `patchRelocsFrom(rcStart, rsStart)` patches just the sites a compile recorded (the
+   trap-site table is not reset), and `lazyCompile` brackets its `compile()` with the
+   marks. A `capHalt("lazy-compile-null")` now also catches a 0 return, which the
+   trampoline would otherwise `br 0` into the same shim.
+2. **Inherited statics missed their cell.** javac names an inherited static through the
+   subclass (`ArrayList.subListRangeCheck`, declared on `AbstractList`). The cell lookup
+   matched the ref'd class only, and the registry fallback can't help either — a
+   metadata-only class's celled statics are never compiled or registered. Fix:
+   `dlCellFor` walks the ref class's super chain (JVMS resolution order), mirroring the
+   walk `globalBufByRef` already had for the eager path. The old
+   `stage2Gated(ref-class)` pre-gate is gone with it: membership in the `dl*` table is
+   itself the gate, and it is the *declaring* class that must be gated, not the ref'd one.
 
 ## 5. Design decisions to lock day one
 
