@@ -2199,7 +2199,9 @@ with `lazyArmTib`/`buildLazyStub`/`lazyArmCompile`/`deferrable` unreachable behi
 `LAZY_STAGE2` is now always true. Deleting those — and folding the three cell-lookup sites
 into one resolver — is the next increment.
 
-**Increment 10 — delete the staging scaffolding.** Pure cleanup, no behavior change: the
+**Increment 10 — delete the staging scaffolding. DONE, PI-VALIDATED (PR #111).** Real Pi 4:
+`socket connected`, HTTP 200 OK with the full body, clean return — identical behavior, as a
+pure deletion should be. Pure cleanup, no behavior change: the
 QEMU boot output is byte-identical to increment 9's. Removed the five compile-time-false
 flags from the 1a/1b/1c arc — `LAZY_TIB`, `LAZY_COMPILE`, `LAZY_DEFER`, `LAZY_PHASEA`,
 `LAZY_STATIC` — along with everything unreachable behind them (`lazyArmTib`,
