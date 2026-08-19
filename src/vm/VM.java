@@ -1234,6 +1234,24 @@ public final class VM
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }
+        // O(1) display fast path: class/array targets carry a depth + display, so the whole chain
+        // question is one bounds check + one compare (S is a T iff S.display[T.depth] == T).
+        // Interface targets carry depth -1 and NO display -- their answers live in itable dirs,
+        // handled by the walk below; a Type without a display (lambda, self-build) also falls back.
+        if (targetType != 0L)
+        {
+            long tDisp = Magic.load64(targetType + ObjectModel.TYPE_DISPLAY_OFFSET);
+            long disp = Magic.load64(type + ObjectModel.TYPE_DISPLAY_OFFSET);
+            if (tDisp != 0L && disp != 0L)
+            {
+                long tDepth = Magic.load64(targetType + ObjectModel.TYPE_DEPTH_OFFSET);
+                if (Magic.load64(type + ObjectModel.TYPE_DEPTH_OFFSET) < tDepth)
+                {
+                    return false;
+                }
+                return Magic.load64(disp + tDepth * 8L) == targetType;
+            }
+        }
         while (type != 0L)
         {
             if (type == targetType)
@@ -2010,6 +2028,25 @@ public final class VM
         printDec(m3 ? 1 : 0);
         boolean nestOk = m1 && !m2 && m3 && m4;
         Uart.write(nestOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (nested array Types not baked/tagged?)\n"));
+
+        // 15) O(1) type checks: Types now carry {depth, display}; instanceof a CLASS target is one
+        // bounds check + one compare (S.display[T.depth] == T) instead of the linear super walk.
+        // Integer sits at depth 2 (Object -> Number -> Integer), so these hits read display[1] and
+        // display[2]; the Long-as-Integer miss is the same-depth sibling compare. Interfaces keep
+        // the itable-dir walk (probe 11 covers that path).
+        Uart.write(Magic.bytes("  Integer(5) instanceof Number,Integer; Long(7) as Integer="));
+        Object dp = Integer.valueOf(5);
+        Object dq = Long.valueOf(7);
+        boolean d1 = dp instanceof Number;
+        boolean d2 = dp instanceof Integer;
+        boolean d3 = dq instanceof Integer;              // sibling at the same depth: false
+        printDec(d1 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(d2 ? 1 : 0);
+        Uart.putc(0x2C);
+        printDec(d3 ? 1 : 0);
+        boolean dispOk = d1 && d2 && !d3;
+        Uart.write(dispOk ? Magic.bytes("  PASS\n") : Magic.bytes("  FAIL (display broken?)\n"));
     }
 
     static void run()

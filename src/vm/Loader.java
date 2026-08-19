@@ -4120,10 +4120,13 @@ public final class Loader
             }
             else
             {
-                gType = Heap.allocData(24);
+                gType = Heap.allocData(ObjectModel.TYPE_SIZE);
                 Magic.store64(gType + 0, 0L);           // instanceSize (not instantiated)
                 Magic.store64(gType + 8, 0L);           // superType
                 Magic.store64(gType + 16, 0L);          // no itableDir
+                Magic.store64(gType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
+                Magic.store64(gType + ObjectModel.TYPE_DEPTH_OFFSET, -1L);   // interface: never in a chain
+                Magic.store64(gType + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
             }
             clTab[clCount] = new RVMClass();
             clTab[clCount].base = gbase;
@@ -6161,10 +6164,19 @@ public final class Loader
         }
         else
         {
-            gType = Heap.allocData(24);
+            gType = Heap.allocData(ObjectModel.TYPE_SIZE);
         }
         Magic.store64(gType + 0, 16 + gifCount * 8);       // TYPE_INSTANCE_SIZE_OFFSET
         Magic.store64(gType + 8, sr >= 0 ? clTab[sr].type : 0L);   // TYPE_SUPER_OFFSET (0 at Object)
+        if (gAdoptType == 0L)
+        {
+            // O(1) type checks: metal-built class Types get a depth + display like the writer's
+            // (adopted nodes already carry the writer's -- never overwrite with batch-heap arrays).
+            Magic.store64(gType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
+            Magic.store64(gType + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
+            Magic.store64(gType + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+            buildDisplay(gType, sr >= 0 ? clTab[sr].type : 0L);
+        }
         gTib = Heap.allocData((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type (slots filled by fillTib)
     }
@@ -7915,11 +7927,15 @@ public final class Loader
         }
         Magic.store64(dir + e * 16L + 0L, 0L);           // sentinel: interfaceType 0 ends the directory
         Magic.store64(dir + e * 16L + 8L, 0L);
-        // Type { instanceSize, superType=Object(0), itableDir }.
-        long type = Heap.allocData(24);
+        // Type { instanceSize, superType=Object(0), itableDir } -- no depth/display (a lambda is
+        // only ever type-checked through its interface dir, so the walk fallback covers it).
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
         Magic.store64(type + 0L, 16 + nc * 8);
         Magic.store64(type + 8L, 0L);
         Magic.store64(type + 16L, dir);
+        Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
         // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
         long tib = Heap.allocData(8);
         Magic.store64(tib + 0L, type);
@@ -8064,10 +8080,14 @@ public final class Loader
     private static long makeArrayTib(int elemSize, long elementType)
     {
         long type = Heap.allocData(ObjectModel.ARRAY_TYPE_SIZE);
+        long objType = objectTypeAddr();
         Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET, ObjectModel.ARRAY_TYPE_TAG | (long) elemSize);
-        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // arr instanceof Object
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objType);            // arr instanceof Object
         Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);            // Cloneable/Serializable: later
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, elementType);
+        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
+        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, 0L);
+        buildDisplay(type, objType);                     // depth 1, display [Object, self]
         // The array TIB carries java/lang/Object's vtable so an invokevirtual on an array works. An array's static
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
@@ -8188,6 +8208,35 @@ public final class Loader
             }
         }
         return primArrTib[atype];
+    }
+
+    /** O(1) type checks: give {@code type} a depth + superclass display (depth+1 Type addrs,
+     *  display[d] = ancestor at depth d, display[depth] = self). Copies the super's display, so it
+     *  requires the super's Type to be complete (supers register first; adopted supers carry the
+     *  writer's). A super without a display leaves this one without too (the walk fallback holds). */
+    private static void buildDisplay(long type, long superType)
+    {
+        long d = 0L;
+        long sd = 0L;
+        if (superType != 0L)
+        {
+            sd = Magic.load64(superType + ObjectModel.TYPE_DISPLAY_OFFSET);
+            if (sd == 0L)
+            {
+                return;                                  // super has no display: stay on the walk
+            }
+            d = Magic.load64(superType + ObjectModel.TYPE_DEPTH_OFFSET) + 1L;
+        }
+        long disp = Heap.allocData(((int) d + 1) * 8);
+        long i = 0L;
+        while (i < d)
+        {
+            Magic.store64(disp + i * 8L, Magic.load64(sd + i * 8L));
+            i += 1;
+        }
+        Magic.store64(disp + d * 8L, type);
+        Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, d);
+        Magic.store64(type + ObjectModel.TYPE_DISPLAY_OFFSET, disp);
     }
 
     /** JVMS descriptor char for a newarray atype (4..11). */
