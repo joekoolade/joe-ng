@@ -2199,6 +2199,24 @@ with `lazyArmTib`/`buildLazyStub`/`lazyArmCompile`/`deferrable` unreachable behi
 `LAZY_STAGE2` is now always true. Deleting those — and folding the three cell-lookup sites
 into one resolver — is the next increment.
 
+**Increment 10 — delete the staging scaffolding. DONE, PI-VALIDATED (PR #111).** Real Pi 4:
+`socket connected`, HTTP 200 OK with the full body, clean return — identical behavior, as a
+pure deletion should be. Pure cleanup, no behavior change: the
+QEMU boot output is byte-identical to increment 9's. Removed the five compile-time-false
+flags from the 1a/1b/1c arc — `LAZY_TIB`, `LAZY_COMPILE`, `LAZY_DEFER`, `LAZY_PHASEA`,
+`LAZY_STATIC` — along with everything unreachable behind them (`lazyArmTib`,
+`buildLazyStub`, `lazyArmCompile`, `deferrable`, `lazyCellFor`, `classRegByNameAt`, and
+1c's registry-scan fallback in `lazyStaticCell`). `LAZY_STAGE2` was always true, so its
+conditions collapse: `armPhaseACells` runs unconditionally, `mDefer` is always allocated,
+and `sizeMethod`/`emitMethod` test the flag alone. `LAZY_TRACE` stays — it is a real
+debugging tool, and it earned its keep twice in this arc. Net −230 lines.
+
+Those flags were the strangler scaffolding: each staged one property of compile-on-first-
+call (self-modifying dispatch, context restore, the offset table, genuine deferral,
+metadata-only classes) behind a default-off switch so the shipped image stayed byte-
+identical until the step was proven. With laziness unconditional they only described
+history, which is what PLAN.md is for.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
