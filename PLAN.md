@@ -2024,6 +2024,28 @@ one-at-a-time rule for socket-adjacent classes: they are one functional unit, an
 failure mode we have seen here (`bakeresolve-find`, `DENYLIST TRAP`, `CAP EXCEEDED`) names
 the offending class, so attribution survives.
 
+**Increment 4 — shrink `eagerKept`: concurrency + `Unsafe`.** Off the list:
+`java/util/concurrent/` (the no-op `ReentrantLock`/`Semaphore`/`LockSupport` overlays,
+`TimeUnit`, the atomics, `ConcurrentHashMap`) and `jdk/internal/misc/` (the `Unsafe`
+overlay). `Unsafe` looks load-bearing but is not: its `<clinit>` assigns the
+`ARRAY_*_BASE_OFFSET`/`INDEX_SCALE` statics that `ArraysSupport` reads cross-class, and
+`<clinit>` is *never* deferred — the lazy path always compiles and runs it at load. What
+defers is its method bodies, which are one-line `Magic.loadX(addrOf(obj) + offset)`
+wrappers. The atomics' natives (`fieldOffset0`, `callerClass0`) resolve through
+`nativeBufAt` (increment 2) from either world.
+
+`TimeUnit` was in the batch that regressed on real HW in PR #71, so it gets its own Pi run
+here rather than riding along with a wider change. `java/lang/Thread` deliberately stays
+eager for now: the scheduler can enter Thread code from a context switch, and a first-call
+compile there would re-enter the loader from an interrupt — that needs its own increment
+and its own reasoning, not a batch.
+
+**Still on `eagerKept` after this:** `jdk/internal/access/` (SharedSecrets and the access
+shims `FileDescriptor.<clinit>` must register first), `java/lang/Thread`,
+`java/lang/System`, `java/lang/Object`, and the socket floor (`java/net/`, `sun/nio/`,
+`sun/net/`, `java/nio/`, `java/io/FileDescriptor`, `java/lang/invoke/`,
+`jdk/internal/invoke/`).
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
