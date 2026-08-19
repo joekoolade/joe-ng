@@ -751,6 +751,31 @@ public final class Loader
             }
             i += 1;
         }
+        return dlStubByName(cls, name, desc);           // a celled static has no registry entry: use its cell
+    }
+
+    /** Current contents of the phase-A cell for a method named by literal bytes, or 0. Now that EVERY class
+     *  is metadata-only, a static named from outside the loader — {@code main(String[])} above all — lives
+     *  only as a cell, never as a registry entry. The cell holds callable code either way: the lazy stub, or
+     *  the compiled body once first-called. */
+    private static long dlStubByName(byte[] cls, byte[] name, byte[] desc)
+    {
+        if (dlTab == null)
+        {
+            return 0L;
+        }
+        int k = 0;
+        while (k < dlN)
+        {
+            DynLink d = dlTab[k];
+            if (utf8IsAtBase(d.blob, d.classOff, cls)
+                    && utf8IsAtBase(d.blob, d.nameOff, name)
+                    && utf8IsAtBase(d.blob, d.descOff, desc))
+            {
+                return Magic.load64(d.cell);
+            }
+            k += 1;
+        }
         return 0L;
     }
 
@@ -7176,20 +7201,19 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
-    /** M8 stage 5: LAZY BY DEFAULT. Every demand-loaded java.base class is metadata-only (phase-A cells for
-     *  its statics + deferred stubs for its virtuals; {@code <init>}/{@code <clinit>} still compile at load)
-     *  UNLESS {@link #eagerKept} pins it to the eager path. Replaces the per-class allowlist that grew
-     *  4->13->20->35->40 across the stage-2 widening PRs: the default flips, and the eager path becomes the
-     *  exception -- the last strangler step before the eager machinery (markReachable/patchRelocs) retires.
-     *  Non-java.base classes (demos, vm/*) always load eagerly. */
+    /**
+     * M8 stage 5: LAZY, FULL STOP. EVERY demand-loaded class is metadata-only — phase-A cells for its
+     * statics, deferred stubs for its virtuals — with only {@link #eagerKept} (now `java/lang/Object`
+     * alone) on the eager path. Initializers are the one thing still compiled at load: {@code <init>} and
+     * {@code <clinit>} run as part of loading, which is what has kept the hand-tuned clinit ordering intact
+     * through the whole arc.
+     *
+     * <p>This drops the last restriction — the `java/`/`jdk/`/`sun/` prefix — so demo and plugin classes are
+     * lazy too, not just `java.base`. There was never a reason for guest code to be the eager exception; the
+     * prefix was scaffolding from when laziness was gated to a handful of named java.base utilities.
+     */
     private static boolean stage2Gated(long base, int off)
     {
-        if (!utf8HasPrefix(base, off, Magic.bytes("java/"))
-                && !utf8HasPrefix(base, off, Magic.bytes("jdk/"))
-                && !utf8HasPrefix(base, off, Magic.bytes("sun/")))
-        {
-            return false;
-        }
         return !eagerKept(base, off);
     }
 
