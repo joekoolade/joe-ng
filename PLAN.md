@@ -2051,7 +2051,11 @@ shims `FileDescriptor.<clinit>` must register first), `java/lang/Thread`,
 `sun/net/`, `java/nio/`, `java/io/FileDescriptor`, `java/lang/invoke/`,
 `jdk/internal/invoke/`).
 
-**Increment 5 — shrink `eagerKept`: `System`, `Thread` and the access shims.** Off the
+**Increment 5 — shrink `eagerKept`: `System`, `Thread` and the access shims. DONE,
+PI-VALIDATED (PR #106).** Real Pi 4: 16 probes PASS, `lifecycle OK 162`, WPA2 join + DHCP,
+HTTP 200 OK with the full body, clean return. `System` 31 cells, `SharedSecrets` 63,
+`Thread` 8, `MetalJavaLangAccess` 0 — the fd access shim resolved lazily on the live socket
+path, confirming the `<clinit>`-never-defers argument holds where it matters. Off the
 list: `java/lang/System` (31 cells), `java/lang/Thread` (8, + `ThreadLocal`/`ThreadGroup`)
 and `jdk/internal/access/` (`SharedSecrets` 63, `MetalJavaLangAccess`). After this only the
 socket floor and `java/lang/Object` remain.
