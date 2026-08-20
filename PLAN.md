@@ -2244,6 +2244,50 @@ staging scaffolding (#111), and unify the resolver (#112). Five real bugs surfac
 them latent under eager compilation and four of them invisible to QEMU. `java/lang/Object`
 remains the single eager class, for a structural reason that is unlikely to change.
 
+### Lazy initialization (arc started 2026-08-19)
+
+Stage 5 made every method *body* compile on first call. Class *initialization* is still
+eager: `runClinits()` runs every enqueued `<clinit>` at batch end, in dependency order, so a
+program pays for initializers it may never need. JVMS 5.5 says a class initializes on first
+**active use** — `new`, a static field access, a static method call, reflection — and that
+is what this arc moves toward.
+
+**The trigger set is the whole problem.** Three of the four triggers have a natural hook in
+this VM and one does not:
+
+| trigger | hook |
+|---|---|
+| static method call | **free** — every static already routes through a phase-A cell whose first call enters `lazyCompile` |
+| virtual call | **free** — same engine, via the TIB deferral stub |
+| `new C` | needs a barrier emitted at the `new` site |
+| `getstatic`/`putstatic` of C's field | **no hook** — the address is resolved at compile time and the load is direct |
+
+So the correctness rule for any class made lazy-init today is: *nothing outside the class
+may read its statics*, because a cross-class `getstatic` has no barrier to fire.
+
+**Increment 1 — the barrier, on two classes.** `ensureClinit(reg)` runs a gated class's
+pending initializer from `lazyCompile`, before the compile context is restored (the
+initializer's own calls re-enter `lazyCompile`, and each nested compile clobbers `g*`).
+`runClinits` leaves gated initializers pending; the lifecycle sweep leaves those classes at
+`ST_INSTANTIATED` and reports them as `lifecycle OK <n> (+<k> lazy-init pending)`, since
+pending is a legitimate state while short-of-INSTANTIATED still is not.
+
+The two gated classes were chosen to show both outcomes and to satisfy the statics rule:
+`jdk/internal/ref/CleanerFactory` (its `commonCleaner` is private, read only by `cleaner()`)
+initializes **late** — NetDemo's boot log shows `clinit-lazy jdk/internal/ref/CleanerFactory`
+after `lifecycle OK`, when the socket registers its cleaner. `java/lang/ConditionalSpecialCasing`
+(private tables, read only by its own case-mapping methods) is **never** initialized in
+NetDemo, and its absence is visible: the `baked java/lang/Integer.valueOf` and `bakeresolve
+java/lang/Integer.hashCode` lines that used to appear at the end of boot are gone, because
+they were that initializer boxing code points into its `HashMap`.
+
+**A bug the first run caught.** `ensureClinit` initially ran *any* pending initializer for
+the class rather than only a gated one. A lazy compile can happen **during** `runClinits`
+(an initializer calling a deferred method), so the barrier pulled `StandardProtocolFamily`
+and `ArraysSupport` ahead of the initializers they depend on. Non-gated classes must stay
+under `runClinits`' dependency-ordered control; the gate check is what keeps the two regimes
+from interleaving.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
