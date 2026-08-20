@@ -462,6 +462,7 @@ public final class Loader
     private static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
+    private static int[] clinitRan;      // 1 once initializer i has actually executed (batch sweep OR lazy barrier)
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -508,6 +509,7 @@ public final class Loader
                 Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
             }
             long unusedFd = Magic.call0(clinitEntry[clinitFdFirst]);
+            clinitRan[clinitFdFirst] = 1;
             done[clinitFdFirst] = true;
             remaining -= 1;
         }
@@ -517,7 +519,16 @@ public final class Loader
             int i = 0;
             while (i < clinitN)
             {
-                if (!done[i] && !clinitDepBlocked(i, done))
+                if (!done[i] && lazyClinitGated(pdBase[clinitPd[i]], pdNameOff[clinitPd[i]]))
+                {
+                    // JVMS 5.5 initialization-on-first-active-use: leave this one PENDING. The class stays at
+                    // ST_INSTANTIATED and its initializer runs from the barrier in lazyCompile, the first time
+                    // one of its methods is called -- or never, if the program never touches it.
+                    done[i] = true;                      // bookkeeping only: clinitRan[i] stays 0
+                    remaining -= 1;
+                    progress = 1;
+                }
+                else if (!done[i] && !clinitDepBlocked(i, done))
                 {
                     if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
                     {
@@ -527,6 +538,7 @@ public final class Loader
                         Uart.putc(0x0A);
                     }
                     long unused = Magic.call0(clinitEntry[i]);
+                    clinitRan[i] = 1;
                     done[i] = true;
                     remaining -= 1;
                     progress = 1;
@@ -543,6 +555,7 @@ public final class Loader
                 if (j < clinitN)
                 {
                     long unused = Magic.call0(clinitEntry[j]);
+                    clinitRan[j] = 1;
                     done[j] = true;
                     remaining -= 1;
                 }
@@ -553,6 +566,78 @@ public final class Loader
             }
         }
         clinitRunFrom = clinitN;                         // these have run; a later incremental batch starts past here
+    }
+
+    /**
+     * The classes whose {@code <clinit>} is run on FIRST ACTIVE USE (JVMS 5.5) instead of at batch end.
+     * Deliberately small to start: correctness rests on the trigger set being complete for the class, and
+     * today the only barrier is {@link #lazyCompile} — a call to one of the class's own methods. That is
+     * sound exactly when nothing reads the class's statics from OUTSIDE it, since a cross-class
+     * {@code getstatic} compiles to a direct address load with no barrier to fire.
+     *
+     * <p>Both classes here satisfy that. {@code CleanerFactory.commonCleaner} is private and read only by
+     * {@code cleaner()}; {@code ConditionalSpecialCasing}'s tables are private and read only by its own
+     * {@code toUpperCaseEx}/{@code toLowerCaseEx}. They also demonstrate the two outcomes: NetDemo calls
+     * {@code CleanerFactory.cleaner()} while setting up the socket (so its initializer runs late, on
+     * demand), and never calls {@code ConditionalSpecialCasing} at all (so its initializer — which builds a
+     * HashMap of Entry objects — never runs).
+     */
+    private static boolean lazyClinitGated(long base, int off)
+    {
+        return utf8IsAtBase(base, off, Magic.bytes("jdk/internal/ref/CleanerFactory"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"));
+    }
+
+    /**
+     * Initialization barrier: run class {@code reg}'s pending {@code <clinit>} now, if it has one. Called
+     * from {@link #lazyCompile} BEFORE the compile context is restored — the initializer's own calls can
+     * re-enter lazyCompile, and each nested compile clobbers the {@code g*} context, so it must not run
+     * inside ours.
+     */
+    private static void ensureClinit(int reg)
+    {
+        if (reg < 0 || clTab == null || clTab[reg] == null || clTab[reg].state >= RVMClass.ST_INITIALIZED)
+        {
+            return;
+        }
+        if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
+        {
+            // Only a gated class initializes here. Every other initializer stays under runClinits'
+            // dependency-ordered control: a lazy compile can happen DURING runClinits (an initializer calling
+            // a deferred method), and without this check the barrier would run whatever initializer happened
+            // to be pending for that class, ahead of the ones it depends on.
+            return;
+        }
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitRan[i] == 0 && clinitEntry[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            {
+                clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
+                Uart.write(Magic.bytes("  clinit-lazy "));
+                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                Uart.putc(0x0A);
+                long unused = Magic.call0(clinitEntry[i]);
+                clTab[reg].state = RVMClass.ST_INITIALIZED;
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    /** True if class {@code reg} has an enqueued {@code <clinit>} that has not executed yet. */
+    private static boolean clinitPendingFor(int reg)
+    {
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitRan[i] == 0 && clinitEntry[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
     }
 
     /** True if clinit {@code i} references a class whose own (still-unrun) {@code <clinit>} must run first. */
@@ -1677,6 +1762,7 @@ public final class Loader
         rsCount = 0;
         clinitEntry = new long[MAXBLOB];
         clinitPd = new int[MAXBLOB];
+        clinitRan = new int[MAXBLOB];
         clDepOff = new int[MAXDEP];
         clDepStart = new int[MAXBLOB];
         clDepN = new int[MAXBLOB];
@@ -3938,11 +4024,20 @@ public final class Loader
         // <clinit> has run (or was deliberately skipped with seeded statics), so the whole batch
         // reaches INITIALIZED. The boot invariant flags any class stuck short of phase B (a hole in
         // the pipeline that previously failed silently as a 0 buffer or an unfilled TIB).
+        // EXCEPT a lazy-init class: its initializer is deliberately PENDING, so it stays at
+        // INSTANTIATED until the barrier runs it. Counted separately -- pending is a legitimate
+        // state, a class short of INSTANTIATED still is not.
         int lcOk = 0;
+        int lcPend = 0;
         int lc = 0;
         while (lc < clCount)
         {
-            if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
+            if (clTab[lc].state >= RVMClass.ST_INSTANTIATED
+                    && lazyClinitGated(clTab[lc].base, clTab[lc].nameOff) && clinitPendingFor(lc))
+            {
+                lcPend += 1;
+            }
+            else if (clTab[lc].state >= RVMClass.ST_INSTANTIATED)
             {
                 clTab[lc].state = RVMClass.ST_INITIALIZED;
                 lcOk += 1;
@@ -3959,6 +4054,12 @@ public final class Loader
         }
         Uart.write(Magic.bytes("  lifecycle OK "));
         VM.printDec(lcOk);
+        if (lcPend > 0)                                 // deliberately uninitialized: waiting for first active use
+        {
+            Uart.write(Magic.bytes(" (+"));
+            VM.printDec(lcPend);
+            Uart.write(Magic.bytes(" lazy-init pending)"));
+        }
         Uart.putc(0x0A);
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
@@ -6416,6 +6517,9 @@ public final class Loader
         {
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
+        ensureClinit(lzTab[idx].reg);                   // JVMS 5.5 barrier: first call into the class initializes it.
+                                                        // BEFORE restoreCtxForCompile -- the initializer re-enters here
+                                                        // and each nested compile clobbers the g* context.
         restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);
         long code;
         int len;
