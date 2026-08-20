@@ -2318,7 +2318,12 @@ With all four triggers covered, the gate widens from 2 to 10: `StrictMath`, `Loc
 lazy-init pending)` and initializes **three** of them on demand — so seven initializers that
 used to run at every boot now never run at all.
 
-**Increment 3 — invert: lazy init by default.** The same strangler shape stage 5 used eleven
+**Increment 3 — invert: lazy init by default. DONE, PI-VALIDATED (PR #116).** Real Pi 4:
+`lifecycle OK 146 (+16 lazy-init pending)`, HTTP 200, clean return — and hardware fired
+**eleven** barriers where QEMU fires seven. The extra four are all past `connect`:
+`Preconditions` as the socket connects, `Arrays` during the read, and
+`StandardSocketOptions`, `Boolean` and `ExtendedSocketOptions` during `close()`. So of the 16
+deferred initializers, 11 run on demand and 5 never run at all. The same strangler shape stage 5 used eleven
 times. `lazyClinitGated` becomes `!clinitEagerKept`, so every class initializes on first
 active use unless it is pinned.
 
