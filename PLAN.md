@@ -2291,6 +2291,29 @@ and `ArraysSupport` ahead of the initializers they depend on. Non-gated classes 
 under `runClinits`' dependency-ordered control; the gate check is what keeps the two regimes
 from interleaving.
 
+**Increment 2 — close the other three triggers; widen to 10 classes.** The remaining triggers
+are covered without emitting a single runtime barrier instruction, by exploiting the fact that
+almost all code now compiles lazily:
+
+- **`getstatic`/`putstatic` and `new`** resolve their owner at *compile* time
+  (`staticAddr` → `globalStaticAddr`, `tibOfClass`). Initializing the owner when the
+  *referencing method is compiled* is still strictly before that method can *run*, so
+  `noteInitNeeded` records the owner during the compile and `drainPendingInit` initializes it
+  immediately after — inside `lazyCompile`, after the buffer is memoized so an initializer may
+  call straight back in. Recording is gated on `lzCompiling`, because a load-time compile (an
+  initializer) must leave ordering to `runClinits`. This is conservative — it initializes even
+  if the branch holding the access never executes — but sound and free.
+- **An eager initializer depending on a lazy class**: `runClinits` has already passed that
+  class over, so `clinitDepBlocked` now calls `ensureClinit` on each dependency it walks. That
+  is exactly the JVMS rule (the dependent initializer's use of C triggers C), and without it
+  the dependent would read unset statics.
+
+With all four triggers covered, the gate widens from 2 to 10: `StrictMath`, `Locale`,
+`HashMap$TreeNode`, `HashSet`, `CharacterDataLatin1`, `StandardProtocolFamily`, `TimeUnit`,
+`ExtendedSocketOptions` join the original two. NetDemo reports `lifecycle OK 152 (+10
+lazy-init pending)` and initializes **three** of them on demand — so seven initializers that
+used to run at every boot now never run at all.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
