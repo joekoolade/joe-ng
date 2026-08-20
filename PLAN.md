@@ -2352,7 +2352,14 @@ NetDemo: `lifecycle OK 146 (+16 lazy-init pending)`, of which **seven** initiali
 to run at every boot, that is 13 still eager plus 7 fired on demand, four of them after
 `launch`.
 
-**Increment 4 — name the invisible edge; `clinitEagerKept` goes empty.** Increment 3 kept the
+**Increment 4 — name the invisible edge; `clinitEagerKept` goes empty. DONE, PI-VALIDATED
+(PR #117).** Real Pi 4: `lifecycle OK 133 (+29 lazy-init pending)`, HTTP 200, `bytes=827`,
+clean return — with **seventeen** barriers firing where QEMU fires eleven. The ordering the
+increment exists to preserve is visible in the log: `clinit-lazy java/io/FileDescriptor`
+immediately before `clinit-lazy java/net/Socket`, and well before `sun/nio/ch/NioSocketImpl`.
+`SocketDispatcher` initializes as the GET is sent, and `StandardSocketOptions`, `Boolean`,
+`ExtendedSocketOptions` and `UnixDispatcher` during `close()`. Of the 29 deferred initializers,
+17 run on demand and 12 never run at all. Increment 3 kept the
 socket bring-up eager because one of its dependencies is invisible: `FileDescriptor.<clinit>`
 registers a `JavaIOFileDescriptorAccess` into `SharedSecrets` that `NioSocketImpl` and the
 dispatchers read back at their own `<clinit>` time. The edge runs through a registry, so it is
