@@ -1305,6 +1305,16 @@ public final class Loader
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
+        if (Heap.gcPressure != 0)                           // the program collected: report it unconditionally,
+        {                                                   //   so GC evidence needs no debug flag on real HW
+            Uart.write(Magic.bytes("gc: collections="));
+            VM.printDec(Heap.gcPressure);
+            Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
+            VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
+            Uart.write(Magic.bytes(" lastReclaimed="));
+            VM.printHex(VM.reclaimed);
+            Uart.putc(0x0A);
+        }
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
