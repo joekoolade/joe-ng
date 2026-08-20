@@ -2217,7 +2217,10 @@ metadata-only classes) behind a default-off switch so the shipped image stayed b
 identical until the step was proven. With laziness unconditional they only described
 history, which is what PLAN.md is for.
 
-**Increment 11 — one cell resolver, and the status catches up. STAGE 5 COMPLETE.** The cell
+**Increment 11 — one cell resolver, and the status catches up. STAGE 5 COMPLETE,
+PI-VALIDATED (PR #112).** Real Pi 4: `socket connected`, HTTP 200 OK with the full body
+(`bytes=825`), clean return — so all eleven increments are hardware-validated, not just the
+ten before it. The cell
 lookup had grown four copies as each caller discovered it needed one (bake-stub resolution,
 reloc patching, the inherited-static walk, the launcher). Three of them key on
 `(base, offset)` runs and now share `dlCellOf`; the fourth keys on literal `byte[]`s, so it
