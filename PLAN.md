@@ -2441,18 +2441,52 @@ building the same tree twice with only the dispatch flipped:
 The precise counts barely move between collections because what remains is the fixed root scan
 (stack + statics + secondary arenas); the part that varied *was* the `byte[]` payloads.
 
-**Increment 2 — scalar reference maps.** Add a `refMap` to the Type node (bit 0 = "computed"
-marker, like the `doesImplement` bitmap; bits 1.. = field slots), computed by the writer from
-`ClassFile.fields()` descriptors over the chain-aware slot numbering, and by the loader from
-`gifDescOff` OR'd with the super's map (phase A is super-first, so the super's Type is already
-built — the same shape as `buildDisplay`/`buildImplBitmap`). Baked classes get it free: the loader
-already **adopts** the writer's Type node, so there is one map per class across both worlds. A
-class whose slot count exceeds the map keeps marker 0 and stays conservative.
+**Increment 2 — scalar reference maps. DONE, PI-VALIDATED.** Real Pi 4, `main=demo/GcDemo`:
+`churnMB=625 live=32 intact=32`, then `gc: collections=3 lastProbes=0x0D12C7 roots=0x2EF
+heap=0x0D0FD8 nomap=0x0AF1` — `roots` matches QEMU's 751 exactly and `nomap` lands within three
+blocks of it, so both worlds traced the same shapes the same way. The Type node grows two words
+(`TYPE_REFMAP_OFFSET` at 64/72, `TYPE_SIZE` 64 → 80): bit 0 the "computed" marker, bit `1+slot` set
+when that field slot may hold a pointer. The writer computes it (`ClassFile.refMap`) over the
+chain-aware slot numbering — whole super chain first, root-most class first — and the loader
+rebuilds it for metal-only classes as `super's map | own bits` (phase A is super-first, so the
+super's Type is already built; same shape as `buildDisplay`/`buildImplBitmap`). Baked classes get
+it free, because the loader already **adopts** the writer's Type node: one map per class across
+both worlds.
+
+**The rule is "may hold a pointer", not "is a Java reference": `L`, `[` AND `J`.** This VM keeps raw
+addresses in `long` fields — `RVMClass.tib`, `.type`, `.statics`, `.base`, and the same pattern in
+`RVMMethod`/`DynLink`. Those words are the *only* root a metal-built TIB, Type or statics block has,
+so a map that honoured Java types would have swept the live metadata out from under the running
+program on the first collection. Everything else (`I`/`Z`/`C`/`B`/`S`/`F`/`D`) is skipped, and that
+is where the precision comes from: an `int` holding a size, an offset or a hash lands in
+`[0x04000000, heapTop)` easily, and each one was a plausible false root.
+
+Every degradation is toward *conservative*, never toward under-scanning: a class wider than 126
+slots, a chain with an unresolvable ancestor, a zeroed Type (lambda Types, the Types `SelfBuild`
+emits) — all publish no marker, and the collector scans the whole payload. `test/classfile/RefMapTest`
+pins the bits against hand-written layouts (13 checks), `vm/RVMClass` among them, because a wrong
+bit here is not a slow collection but a freed live object.
+
+Measured on QEMU (`main=demo/GcDemo`, map honoured vs map ignored, same build otherwise), now
+splitting the metric — and the split is the finding:
+
+| | probes | roots | heap (trace) | nomap (blocks scanned blind) |
+|---|---|---|---|---|
+| map ignored | 888,860 | 751 | 888,109 | 10,027 |
+| map honoured | 856,793 | 751 | 856,042 | 2,804 |
+
+Roots are **751 words** — the conservative half this arc can never fix is a rounding error, and
+essentially the entire cost is the trace side. Blocks scanned with no metadata at all fell 72%,
+while probes fell only 3.6%, and those two numbers together point straight at increment 3: what
+remains is a few thousand raw `allocData` structs, but they include the 4 KiB imaps, so ~97% of the
+surviving probes are in blocks that have no type at all rather than in mapped objects.
 
 **Increment 3 — raw metadata blocks get a kind.** The `allocData` structs are the remaining
-conservative surface, and one of them is the worst offender: a JIT code buffer scanned as pointers
-is a page of instruction words each probed as a candidate root. The status word is 8-aligned, so
-bits 1–2 are free for a kind tag (`data`/`refs`/`code`) alongside the mark bit in bit 0.
+conservative surface, and increment 2's numbers say they are now essentially the *whole* surface:
+2,804 blocks holding ~97% of the probes, the 4 KiB imaps worst among them. The status word is
+8-aligned, so bits 1–2 are free for a kind tag (`data`/`refs`/`code`) alongside the mark bit in
+bit 0 — a TIB is a run of code pointers, an itable dir is pairs, an imap is a sparse pointer array,
+a classfile copy holds nothing at all.
 
 **Increment 4 — prove the precision, not just the speed.** A demo whose object is retained only by
 an address-shaped `long` field: conservative tracing keeps it forever, precise tracing frees it —

@@ -31,7 +31,8 @@ final class VMGc
     {
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
-        probes = 0L;                                  // precision metric for this collection (gcLog)
+        probes = 0L;                                  // precision metrics for this collection (gcLog)
+        nomap = 0L;
         // Stale-root hygiene: reap dead-parked tasks BEFORE marking. A task that ran taskExit (BLOCKED on
         // the reserved dead semaphore) can never be rescheduled -- pickNext skips BLOCKED tasks -- so its
         // 32 KB heap stack, saved context, and guest Thread object are garbage; as roots they retained
@@ -68,6 +69,7 @@ final class VMGc
             markRange(Heap.arenaBase(sc), Magic.load64(Heap.PTR_CELL + sc * 8L));
             sc += 1;
         }
+        rootProbes = probes;                          // split the metric: everything above is ROOT scanning
         boolean changed = true;                       // trace: mark fields of marked objects to a fixpoint
         while (changed)
         {
@@ -138,6 +140,12 @@ final class VMGc
             printHex(reclaimed);
             Uart.write(Magic.bytes(" probes="));
             printHex(probes);                          // candidate words examined: the precision metric
+            Uart.write(Magic.bytes(" roots="));
+            printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
+            Uart.write(Magic.bytes(" heap="));
+            printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" nomap="));
+            printHex(nomap);                           // blocks still scanned conservatively
             Uart.write(Magic.bytes(" reaped="));
             printHex(reaped);                          // dead-parked tasks whose stacks this collection freed
             Uart.write(Magic.bytes(" stopAt="));
@@ -187,9 +195,16 @@ final class VMGc
                 {
                     return scanArray(o, size, isz & 0xFFFFL);   // typed array: element size in the tag
                 }
+                long map = Magic.load64(type + ObjectModel.TYPE_REFMAP_OFFSET);
+                if ((map & 1L) != 0L)                           // bit 0 = the class's map was computed
+                {
+                    return scanMapped(o, size, map,
+                                      Magic.load64(type + ObjectModel.TYPE_REFMAP_OFFSET + 8L));
+                }
             }
         }
-        return markRange(o + ObjectModel.HEADER_SIZE, o + size);   // scalar / untyped: conservative
+        nomap = nomap + 1L;                                        // the remaining conservative surface
+        return markRange(o + ObjectModel.HEADER_SIZE, o + size);   // unmapped scalar / untyped block
     }
 
     /**
@@ -214,6 +229,53 @@ final class VMGc
         }
         return markRange(o + ObjectModel.ARRAY_BASE_OFFSET, end);
     }
+
+    /**
+     * A scalar object whose class published a reference map: probe ONLY the slots the map names, skipping
+     * every {@code int}/{@code char}/{@code boolean}/{@code float}/{@code double} field. That is where the
+     * precision comes from — an {@code int} field holding a size, an offset or a hash that happens to land
+     * in [Heap.BASE, heapTop) used to retain a dead object, and now cannot.
+     *
+     * <p>Bits describe slots, not bytes: bit {@code 1+i} covers the field at {@code +16 + i*8}. Bits past
+     * the block's own slot count are ignored, so a first-fit block bigger than its object is safe, and the
+     * {@code w-16} probe is kept because a mapped {@code long} field routinely holds an {@link
+     * Heap#allocData} PAYLOAD address whose block base sits one header earlier.
+     */
+    private static boolean scanMapped(long o, long size, long w0, long w1)
+    {
+        boolean any = false;
+        long slots = (size - (long) ObjectModel.HEADER_SIZE) >> 3;
+        long i = 0;
+        while (i < slots && i <= (long) ObjectModel.TYPE_REFMAP_MAX_SLOT)
+        {
+            long bit = i < 63L ? (w0 >>> (int) (i + 1L)) : (w1 >>> (int) (i - 63L));
+            if ((bit & 1L) != 0L)
+            {
+                probes = probes + 1L;
+                long w = Magic.load64(o + (long) ObjectModel.HEADER_SIZE + i * 8L);
+                if (tryMark(w))
+                {
+                    any = true;
+                }
+                if (tryMark(w - 16L))
+                {
+                    any = true;
+                }
+            }
+            i += 1;
+        }
+        return any;
+    }
+
+    /** Marked blocks the last collection had to scan conservatively — no Type, or a Type with no map. The
+     *  metric increment 3 (a kind tag for raw {@code allocData} structs) is aimed at. */
+    static long nomap;
+
+    /** Of {@link #probes}, the part spent on ROOTS (stack, statics, secondary arenas). That half is
+     *  irreducibly conservative without stack maps; {@code probes - rootProbes} is the TRACE side, which is
+     *  the only part type metadata can shrink — and the only honest way to report this arc's effect, since
+     *  a full-java.base image's statics region dwarfs the heap walk. */
+    static long rootProbes;
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)

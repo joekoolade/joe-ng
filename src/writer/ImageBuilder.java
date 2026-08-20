@@ -1021,6 +1021,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 }
                 writeLong(image, tw + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4, b0);
                 writeLong(image, tw + ObjectModel.TYPE_IMPLEMENTS_OFFSET / 4 + 2, b1);
+                // GC reference map over the chain-aware slot numbering. The loader ADOPTS this node for
+                // any class it also loads, so both worlds trace the same object through the same map.
+                long[] rm = ClassFile.refMap(cls, this);
+                writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4, rm[0]);
+                writeLong(image, tw + ObjectModel.TYPE_REFMAP_OFFSET / 4 + 2, rm[1]);
             }
         }
 
