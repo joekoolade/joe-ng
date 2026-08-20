@@ -2291,7 +2291,11 @@ and `ArraysSupport` ahead of the initializers they depend on. Non-gated classes 
 under `runClinits`' dependency-ordered control; the gate check is what keeps the two regimes
 from interleaving.
 
-**Increment 2 — close the other three triggers; widen to 10 classes.** The remaining triggers
+**Increment 2 — close the other three triggers; widen to 10 classes. DONE, PI-VALIDATED
+(PR #115).** Real Pi 4: `lifecycle OK 152 (+10 lazy-init pending)`, HTTP 200, clean return.
+Hardware showed one more than QEMU could: `StandardProtocolFamily`, `CleanerFactory` and
+`TimeUnit` initialize around `connect`, and **`ExtendedSocketOptions` initializes during
+`close()`** — the SO_LINGER path QEMU never reaches. Four of ten initialize; six never run. The remaining triggers
 are covered without emitting a single runtime barrier instruction, by exploiting the fact that
 almost all code now compiles lazily:
 
