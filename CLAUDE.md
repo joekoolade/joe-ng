@@ -76,6 +76,40 @@ defines the minimum the assembler must encode.
   on-metal demand loader are ONE VM** (shared vtable numbering, Types, statics,
   and a lazy cross-world link bridge). Earlier: M4 done, M5 started (shared
   JDK-free `ClassReader`/`A64Enc`), OS-runtime M3 (stock `Socket` HTTP GET).
+- **STAGE 5 COMPLETE — every method body compiles on first call (PRs #102–#112,
+  each Pi-validated).** The loader no longer compiles anything eagerly except
+  `<init>`/`<clinit>`: a class is registered as METADATA plus dispatch stubs —
+  phase-A offset cells for its statics, deferral stubs in its TIB slots for its
+  virtuals — and each body is compiled the first time it is actually called.
+  This holds for **all** classes now, `java.base` and guest code alike; the one
+  exception is `java/lang/Object`, kept eager because its 9 virtuals are the
+  prefix of every vtable in both worlds. NetDemo's boot log is the shape of it:
+  ~1,900 cells armed at load, then `baked`/`jitc` lines as bodies materialize
+  during a live TCP session.
+  - **What "retire the eager loader" turned out to mean.** Eager whole-closure
+    *compilation* is gone. The demand-load *batch* machinery (`resetLoader`,
+    `markReachable`, `patchRelocs`, the `MAX*` caps) is independent of
+    eagerness and stays: it allocates per-batch tables, prunes which classes get
+    pulled, and resolves cross-class calls for initializers and every lazy
+    compile (`patchRelocsFrom`). PLAN.md §"Stage 5" records this distinction.
+  - **Five bugs eager compilation had been hiding**, each found by widening one
+    prefix at a time and Pi-validating: a lazy compile's own relocs were never
+    patched (a stale `bl 0` branches to address 0, which the firmware shim turns
+    into a re-entry of the image entry); an inherited static never found its
+    cell (javac names it through the subclass); a baked body calling a PROVIDED
+    NATIVE had no resolution tier (`nativeBufAt` now serves both worlds); a
+    reloc into a celled static had none either — which broke
+    `NioSocketImpl.lambda$closerFor$0`, the Cleaner action `close()` runs; and
+    lazily compiled bodies were invisible to stack traces (fixed by
+    `rememberLazyBody`, else the socket stack reports as `InternalError.<init>`).
+  - **Debugging note that cost a round trip:** QEMU has no CYW43, so its healthy
+    ending is a `DENYLIST TRAP` at `NioSocketImpl.connect` — TRAPWIRE index =
+    `jdk/internal/util/Exceptions.filterNonSocketInfo`, the exception *message
+    formatter*. A Pi run whose `connect()` fails produces a **byte-identical**
+    log. Always confirm whether a pasted log is Pi or QEMU, and re-run the
+    unmodified image before concluding a regression (one such "regression" was a
+    dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
+    line and is the tool that resolved both of this arc's hard bugs.
 - **World-unification arc DONE (PRs #85–#94, all Pi-validated).** The two
   parallel java.base worlds — writer-baked (image TIBs/Types/statics) vs
   loader-demand-loaded (metal-built) — are collapsed into ONE class identity per

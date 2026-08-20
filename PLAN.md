@@ -2217,6 +2217,30 @@ metadata-only classes) behind a default-off switch so the shipped image stayed b
 identical until the step was proven. With laziness unconditional they only described
 history, which is what PLAN.md is for.
 
+**Increment 11 — one cell resolver, and the status catches up. STAGE 5 COMPLETE.** The cell
+lookup had grown four copies as each caller discovered it needed one (bake-stub resolution,
+reloc patching, the inherited-static walk, the launcher). Three of them key on
+`(base, offset)` runs and now share `dlCellOf`; the fourth keys on literal `byte[]`s, so it
+keeps its own comparison but sits beside them. QEMU output byte-identical again.
+
+`CLAUDE.md`'s status section is updated to describe the finished shape rather than the
+widening arc, including the two things a future session most needs: that the batch loader
+is not the eager compiler, and that a healthy QEMU log is byte-identical to a failed Pi
+connect.
+
+### Stage 5 in one paragraph
+
+Ten increments, each Pi-validated on real hardware, moved the loader from "compile the
+whole reachable closure at load" to "compile each method the first time it is called".
+The order was: flip the default and keep an `eagerKept` exception list (#102), then empty
+that list a prefix at a time — reflection and Throwable (#103), reference/cleaner/event
+(#104), concurrency and `Unsafe` (#105), `System`/`Thread`/access shims (#106), the
+charset/buffer/fd data layer (#107), the invoke shims (#108), the socket-native stack
+(#109) — then drop the last restriction so guest code is lazy too (#110), delete the
+staging scaffolding (#111), and unify the resolver (#112). Five real bugs surfaced, all of
+them latent under eager compilation and four of them invisible to QEMU. `java/lang/Object`
+remains the single eager class, for a structural reason that is unlikely to change.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
