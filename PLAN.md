@@ -2265,7 +2265,10 @@ this VM and one does not:
 So the correctness rule for any class made lazy-init today is: *nothing outside the class
 may read its statics*, because a cross-class `getstatic` has no barrier to fire.
 
-**Increment 1 — the barrier, on two classes.** `ensureClinit(reg)` runs a gated class's
+**Increment 1 — the barrier, on two classes. DONE, PI-VALIDATED (PR #114).** Real Pi 4:
+`lifecycle OK 160 (+2 lazy-init pending)`, then `clinit-lazy jdk/internal/ref/CleanerFactory`
+immediately before `socket connected` — the barrier firing on the live socket path, with the
+`close()` that follows using the cleaner it built. HTTP 200, `bytes=829`, clean return. `ensureClinit(reg)` runs a gated class's
 pending initializer from `lazyCompile`, before the compile context is restored (the
 initializer's own calls re-enter `lazyCompile`, and each nested compile clobbers `g*`).
 `runClinits` leaves gated initializers pending; the lifecycle sweep leaves those classes at
