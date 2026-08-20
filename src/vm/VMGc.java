@@ -2,6 +2,7 @@ package vm;
 
 import magic.Magic;
 import board.bcm2711.Uart;
+import objectmodel.ObjectModel;
 import static vm.VM.*;   // GC roots + shared state stay in VM: the task table (stale-root reaping),
                          // staticsStart/End, STACK_TOP, gcLog/reclaimed, and printHex — reached by simple name.
 
@@ -30,6 +31,7 @@ final class VMGc
     {
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
+        probes = 0L;                                  // precision metric for this collection (gcLog)
         // Stale-root hygiene: reap dead-parked tasks BEFORE marking. A task that ran taskExit (BLOCKED on
         // the reserved dead semaphore) can never be rescheduled -- pickNext skips BLOCKED tasks -- so its
         // 32 KB heap stack, saved context, and guest Thread object are garbage; as roots they retained
@@ -82,7 +84,7 @@ final class VMGc
                 }
                 else
                 {
-                    if ((st & 1L) != 0L && markRange(o + 16L, o + size))
+                    if ((st & 1L) != 0L && scanBlock(o, size))
                     {
                         changed = true;
                     }
@@ -134,6 +136,8 @@ final class VMGc
             printHex(freedN);
             Uart.write(Magic.bytes(" bytes="));
             printHex(reclaimed);
+            Uart.write(Magic.bytes(" probes="));
+            printHex(probes);                          // candidate words examined: the precision metric
             Uart.write(Magic.bytes(" reaped="));
             printHex(reaped);                          // dead-parked tasks whose stacks this collection freed
             Uart.write(Magic.bytes(" stopAt="));
@@ -146,10 +150,79 @@ final class VMGc
         }
     }
 
+    /** Candidate words examined by the LAST collection. Conservative scanning probes every payload word of
+     *  every marked block; type metadata lets whole payloads be skipped, and this counter is the evidence.
+     *  Read by {@link Loader#launch} so a launched program reports it without the {@code gcLog} flag. */
+    static long probes;
+
+    /** Lowest address a TIB or Type pointer can have (the image loads at 0x80000); below it a header word
+     *  is a raw array's element size or an untyped block's zero, never a pointer to dereference. */
+    private static final long META_LOW  = 0x0008_0000L;
+    /** One past the highest: core 0's arena ends where core 1's begins ({@code Heap.arenaLimit(0)}), and
+     *  TIBs only ever live in the image or in core 0's heap. Anything else is garbage -> stay conservative. */
+    private static final long META_HIGH = 0x1000_0000L;
+
+    /**
+     * Scan one marked block's payload for references, using the block's own TYPE METADATA where it has any.
+     * Three shapes live in this heap and the header word at +0 tells them apart: 0 = a raw {@link
+     * Heap#allocData} struct (Type, TIB, itable, statics block, classfile copy) with no type at all;
+     * {@code <= MAX_RAW_ARRAY_TIB} = a raw array whose header holds its ELEMENT SIZE; anything else = a
+     * pointer to a TIB whose slot 0 is the Type. Only arrays are precise in this increment — a scalar
+     * object's per-field reference map lands in the next one, so scalars stay conservative.
+     */
+    private static boolean scanBlock(long o, long size)
+    {
+        long tibw = Magic.load64(o + ObjectModel.TIB_OFFSET);
+        if (tibw != 0L && tibw <= (long) ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return scanArray(o, size, tibw);           // raw array: the header word IS the element size
+        }
+        if (tibw >= META_LOW && tibw < META_HIGH && (tibw & 7L) == 0L)
+        {
+            long type = Magic.load64(tibw + ObjectModel.TIB_TYPE_SLOT * ObjectModel.WORD);
+            if (type >= META_LOW && type < META_HIGH && (type & 7L) == 0L)
+            {
+                long isz = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+                if ((isz & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+                {
+                    return scanArray(o, size, isz & 0xFFFFL);   // typed array: element size in the tag
+                }
+            }
+        }
+        return markRange(o + ObjectModel.HEADER_SIZE, o + size);   // scalar / untyped: conservative
+    }
+
+    /**
+     * An array block. Elements narrower than a word CANNOT hold a reference, so a {@code byte[]}/{@code
+     * char[]}/{@code int[]} payload is skipped entirely instead of being probed word by word (a 64 KiB
+     * byte[] cost 8192 probes per trace round). Word-wide elements are scanned over the ELEMENT range only.
+     * Element size alone decides: a {@code long[]} is scanned like an {@code Object[]}, because an array
+     * Type's element-Type slot is 0 both for a primitive element and for a reference element the loader
+     * could not resolve — sound over precise until that distinction is verified.
+     */
+    private static boolean scanArray(long o, long size, long elemSize)
+    {
+        if (elemSize < (long) ObjectModel.WORD)
+        {
+            return false;
+        }
+        long end = o + ObjectModel.ARRAY_BASE_OFFSET
+                 + Magic.load64(o + ObjectModel.ARRAY_LENGTH_OFFSET) * (long) ObjectModel.WORD;
+        if (end > o + size || end < o)
+        {
+            end = o + size;                            // a garbled length word: trust the block size instead
+        }
+        return markRange(o + ObjectModel.ARRAY_BASE_OFFSET, end);
+    }
+
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
     {
         boolean any = false;
+        if (hi > lo)
+        {
+            probes = probes + ((hi - lo) >> 3);
+        }
         while (lo < hi)
         {
             long w = Magic.load64(lo);

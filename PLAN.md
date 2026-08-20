@@ -2383,6 +2383,81 @@ NetDemo on QEMU: `lifecycle OK 133 (+29 lazy-init pending)`, eleven fired — in
 `FileDescriptor`, `Socket`, `NioSocketImpl` and `DelegatingSocketImpl`, all of which used to run
 at boot.
 
+### GC metadata — precise tracing (arc started 2026-08-20)
+
+The mark-sweep collector is conservative in *both* directions, and only one of them has a good
+reason to be. **Roots** — the stack, the statics region, the secondary arenas — must stay
+conservative: there are no stack maps, so a JIT'd frame's live references are only findable by
+probing every word (which is also why objects are never moved). The **trace** side has no such
+excuse. Today `gcCollect`'s fixpoint loop calls `markRange(o + 16, o + size)` on every marked
+block, so a `byte[]` is probed word by word exactly like an `Object[]`, and any payload word that
+happens to hold a value in `[Heap.BASE, heapTop)` on an 8-byte boundary that is a real block base
+retains that block.
+
+Two costs follow. **Time:** a live 64 KiB `byte[]` costs 8192 pointer probes *per trace round*,
+and the trace runs to a fixpoint — the classfile blobs, string values and JIT scratch that dominate
+this heap are exactly the blocks that can hold no references at all. **Precision:** a `long` field
+holding an address-shaped value (a code-buffer address, an `fd`-like handle, a hash) retains a dead
+object, and everything that object reaches, for the rest of the run.
+
+The VM already knows the answer for every block it allocates — the object model carries element
+sizes, array Types and (for classes) a field layout. This arc puts that knowledge where the
+collector can use it. It explicitly does **not** make roots precise and does **not** move objects;
+those need stack maps, and this is their prerequisite, not a substitute.
+
+**What the header word already tells you.** Three block shapes live in this heap, discriminated by
+the word at `+0` with no new metadata at all:
+
+| word at +0 | shape | payload |
+|---|---|---|
+| `0` | raw `Heap.allocData` struct — Type, TIB, itable dir, imap, statics block, classfile copy | starts at +16, no type at all |
+| `<= MAX_RAW_ARRAY_TIB` (1/2/4/8) | raw array: the word IS the element size | length @16, elements @24 |
+| a pointer | a typed object: TIB[0] is its Type (array Types carry `ARRAY_TYPE_TAG` + element size) | fields @16, or array elements @24 |
+
+**Increment 1 — type-directed dispatch; arrays become precise. DONE, PI-VALIDATED.** Real Pi 4,
+`main=demo/GcDemo`: `churnMB=625 live=32 intact=32`, then `gc: collections=3
+lastProbes=0x0D8F62 lastReclaimed=0x0B8FAFD8` — the probe count matches QEMU's to the digit, and
+the rotating live set survived all three collections with the narrowed scan. A NetDemo flash of the
+same build joined WPA2, returned HTTP 200 with `bytes=828`, and moved none of the boot asserts. `scanBlock` replaces the blanket
+`markRange` in the trace loop and routes by the table above. An array whose elements are narrower
+than a word cannot hold a reference, so its payload is skipped *entirely*; word-wide elements are
+scanned over the element range only. Element **size** alone decides — a `long[]` is still scanned
+like an `Object[]`, because an array Type's element-Type slot reads 0 both for a primitive element
+and for a reference element the loader could not resolve, and soundness beats precision until that
+distinction is verified. Scalars stay conservative (that is increment 2). The `gc` log line gains
+`probes=` — candidate words examined per collection — which is the metric the whole arc moves.
+
+Measured on QEMU with `main=demo/GcDemo` (625 MB of churn through the arena, three collections),
+building the same tree twice with only the dispatch flipped:
+
+| collection | probes, conservative | probes, type-directed | |
+|---|---|---|---|
+| 1 | 2,533,551 | 888,650 | −64.9% |
+| 2 | 2,705,616 | 888,677 | −67.2% |
+| 3 | 2,631,885 | 888,674 | −66.2% |
+
+`walked=19282 marked=3790 freed=15492 bytes=194,490,488` and `churnMB=625 live=32 intact=32` are
+**identical** in both builds — the same objects live and die, only the work to decide it changed.
+The precise counts barely move between collections because what remains is the fixed root scan
+(stack + statics + secondary arenas); the part that varied *was* the `byte[]` payloads.
+
+**Increment 2 — scalar reference maps.** Add a `refMap` to the Type node (bit 0 = "computed"
+marker, like the `doesImplement` bitmap; bits 1.. = field slots), computed by the writer from
+`ClassFile.fields()` descriptors over the chain-aware slot numbering, and by the loader from
+`gifDescOff` OR'd with the super's map (phase A is super-first, so the super's Type is already
+built — the same shape as `buildDisplay`/`buildImplBitmap`). Baked classes get it free: the loader
+already **adopts** the writer's Type node, so there is one map per class across both worlds. A
+class whose slot count exceeds the map keeps marker 0 and stays conservative.
+
+**Increment 3 — raw metadata blocks get a kind.** The `allocData` structs are the remaining
+conservative surface, and one of them is the worst offender: a JIT code buffer scanned as pointers
+is a page of instruction words each probed as a candidate root. The status word is 8-aligned, so
+bits 1–2 are free for a kind tag (`data`/`refs`/`code`) alongside the mark bit in bit 0.
+
+**Increment 4 — prove the precision, not just the speed.** A demo whose object is retained only by
+an address-shaped `long` field: conservative tracing keeps it forever, precise tracing frees it —
+the difference visible in `freed=`/`bytes=` rather than argued from the code.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
