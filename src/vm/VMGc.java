@@ -33,6 +33,8 @@ final class VMGc
         Magic.disableIrq();                           //   would allocate into the half-swept heap
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
+        markSp = MARK_STACK;                          // the trace worklist starts empty
+        markOverflow = 0;
         // Stale-root hygiene: reap dead-parked tasks BEFORE marking. A task that ran taskExit (BLOCKED on
         // the reserved dead semaphore) can never be rescheduled -- pickNext skips BLOCKED tasks -- so its
         // 32 KB heap stack, saved context, and guest Thread object are garbage; as roots they retained
@@ -70,29 +72,10 @@ final class VMGc
             sc += 1;
         }
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
-        boolean changed = true;                       // trace: mark fields of marked objects to a fixpoint
-        while (changed)
+        drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
+        if (markOverflow != 0)
         {
-            changed = false;
-            long o = Heap.BASE;
-            long top = Magic.load64(Heap.PTR_CELL);
-            while (o < top)
-            {
-                long st = Magic.load64(o + 8L);
-                long size = st & -8L;
-                if (size == 0L || o + size > top || o + size <= o)
-                {
-                    o = top;    // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
-                }
-                else
-                {
-                    if ((st & 1L) != 0L && scanBlock(o, size))
-                    {
-                        changed = true;
-                    }
-                    o = o + size;
-                }
-            }
+            traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
         }
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
@@ -277,6 +260,79 @@ final class VMGc
      *  a full-java.base image's statics region dwarfs the heap walk. */
     static long rootProbes;
 
+    /**
+     * The trace worklist: a block is pushed the moment it is marked ({@link #tryMark}), and scanned once
+     * when popped. Scanning pushes whatever it discovers, so the drain ends exactly when the reachable set
+     * is closed — where the old fixpoint re-walked the entire heap and re-scanned every marked block on
+     * every round until a round changed nothing. That multiplier was the collector's dominant cost: with
+     * three rounds, each live {@code Object[]} registry table was probed three times.
+     */
+    private static void drainMarkStack()
+    {
+        while (markSp > MARK_STACK)
+        {
+            markSp = markSp - 8L;
+            long o = Magic.load64(markSp);
+            long size = Magic.load64(o + 8L) & -8L;
+            if (size != 0L && o + size <= Magic.load64(Heap.PTR_CELL) && o + size > o)
+            {                                          // same guard the heap walk uses: never scan past a
+                boolean ignored = scanBlock(o, size);  //   corrupt size. Pushes are the real output here;
+            }                                          //   the returned flag only matters to the fallback.
+        }
+    }
+
+    /**
+     * The pre-worklist algorithm, kept as the overflow path: re-walk the heap scanning every marked block,
+     * repeating until a pass marks nothing new. Correct on its own (it is what shipped before), just slower,
+     * so a queue overflow costs speed and never correctness. It only triggers if a single collection marks
+     * more than {@link #MARK_STACK_SLOTS} blocks — far beyond anything seen (a full NetDemo boot marks a few
+     * thousand) — and the queue keeps filling underneath it, so later rounds still get the fast path.
+     */
+    private static void traceFixpoint()
+    {
+        while (true)
+        {
+            markOverflow = 0;                          // a pass that never overflows has closed the set
+            markSp = MARK_STACK;
+            long o = Heap.BASE;
+            long top = Magic.load64(Heap.PTR_CELL);
+            while (o < top)
+            {
+                long st = Magic.load64(o + 8L);
+                long size = st & -8L;
+                if (size == 0L || o + size > top || o + size <= o)
+                {
+                    o = top;    // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
+                }
+                else
+                {
+                    if ((st & 1L) != 0L)
+                    {
+                        boolean ignored = scanBlock(o, size);
+                    }
+                    o = o + size;
+                }
+            }
+            drainMarkStack();                          // anything this pass queued, scanned before re-walking
+            if (markOverflow == 0)
+            {
+                return;                                // the queue kept up: nothing left to discover
+            }
+        }
+    }
+
+    /** Trace worklist: one 8-byte entry per marked block, in the scratch window above the JIT unwind tables
+     *  ({@code JIT_TABLES} + 0x50000) and below the heap cells at {@code 0x03FF0000}. Outside the managed
+     *  heap on purpose — the collector must not allocate while collecting. */
+    static final long MARK_STACK     = 0x03E5_0000L;
+    static final long MARK_STACK_END = 0x03FF_0000L;
+    /** Capacity in entries (~213k): three orders of magnitude above the few thousand blocks a real
+     *  collection marks, so the overflow path is a safety net rather than a regime. */
+    static final long MARK_STACK_SLOTS = (MARK_STACK_END - MARK_STACK) / 8L;
+
+    private static long markSp;        // next free worklist slot
+    private static int  markOverflow;  // 1 = the queue filled; the fixpoint fallback finishes the trace
+
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
     {
@@ -314,6 +370,15 @@ final class VMGc
             if ((st & 1L) == 0L)
             {
                 Magic.store64(w + 8L, st + 1L);        // set mark bit
+                if (markSp < MARK_STACK_END)           // ... and queue it for scanning exactly once
+                {
+                    Magic.store64(markSp, w);
+                    markSp = markSp + 8L;
+                }
+                else
+                {
+                    markOverflow = 1;                  // queue full: the fixpoint fallback will catch up
+                }
                 return true;
             }
         }
