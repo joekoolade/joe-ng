@@ -32,6 +32,13 @@ public final class ObjectModelTest
         T.eq("TIB vmethod0 off 8", 8, ObjectModel.tibSlotOffset(ObjectModel.tibVMethodSlot(0)));
         T.eq("tibSize(3)=32", 32, ObjectModel.tibSize(3));          // align((1+3)*8)=32
 
+        // GC reference map: bit 0 the "computed" marker, bit 1+slot the slot's pointer-bearing flag.
+        T.eq("Type refMap @64", 64, ObjectModel.TYPE_REFMAP_OFFSET);
+        T.eq("Type refMap word1 @72", 72, ObjectModel.TYPE_REFMAP_OFFSET + ObjectModel.WORD);
+        T.eq("Type refMap covers 126 slots", 126, ObjectModel.TYPE_REFMAP_MAX_SLOT);
+        T.eq("Type size 80", 80, ObjectModel.TYPE_SIZE);
+        T.eq("array Type size = Type size", ObjectModel.TYPE_SIZE, ObjectModel.ARRAY_TYPE_SIZE);
+
         T.summary("object-model");
     }
 }

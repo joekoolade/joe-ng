@@ -1311,6 +1311,12 @@ public final class Loader
             VM.printDec(Heap.gcPressure);
             Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
             VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
+            Uart.write(Magic.bytes(" roots="));             // ... split into the irreducibly conservative
+            VM.printHex(VMGc.rootProbes);                   //   root scan and the TRACE side, which is what
+            Uart.write(Magic.bytes(" heap="));              //   type metadata actually shrinks
+            VM.printHex(VMGc.probes - VMGc.rootProbes);
+            Uart.write(Magic.bytes(" nomap="));             // blocks still scanned without any metadata
+            VM.printHex(VMGc.nomap);
             Uart.write(Magic.bytes(" lastReclaimed="));
             VM.printHex(VM.reclaimed);
             Uart.putc(0x0A);
@@ -6551,9 +6557,71 @@ public final class Loader
             Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 0L);       // bitmap built at fillTib
             Magic.store64(gType + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
             buildDisplay(gType, sr >= 0 ? clTab[sr].type : 0L);
-        }
+            buildRefMap(gType, sr >= 0 ? clTab[sr].type : 0L);   // GC reference map (adopted nodes carry
+        }                                                        //   the writer's -- never overwrite it)
         gTib = Heap.allocData((1 + gvCount) * 8);
         Magic.store64(gTib, gType);                      // TIB[0] = Type (slots filled by fillTib)
+    }
+
+    /**
+     * Build this class's GC reference map into its Type node: the superclass's map (already built — phase A
+     * runs super-first) plus one bit per OWN slot whose descriptor may hold a pointer. Same shape as
+     * {@link #buildDisplay}/{@code buildImplBitmap}, and the same numbering the writer uses, so an adopted
+     * Type and a metal-built one describe an instance identically.
+     *
+     * <p>Degrades to "no map" (both words 0, so the collector scans conservatively) when the super has no
+     * map or the class is wider than the two words can describe — never to a map that under-describes an
+     * object, which would free live data.
+     */
+    private static void buildRefMap(long type, long superType)
+    {
+        long w0 = 1L;                                   // bit 0: this map is computed
+        long w1 = 0L;
+        if (superType != 0L)
+        {
+            w0 = Magic.load64(superType + ObjectModel.TYPE_REFMAP_OFFSET);
+            w1 = Magic.load64(superType + ObjectModel.TYPE_REFMAP_OFFSET + 8L);
+            if ((w0 & 1L) == 0L)
+            {
+                Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET, 0L);      // super is unmapped: so are we
+                Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET + 8L, 0L);
+                return;
+            }
+        }
+        int s = superFieldCount();                      // own fields start after the inherited ones
+        while (s < gifCount)
+        {
+            if (s > ObjectModel.TYPE_REFMAP_MAX_SLOT)
+            {
+                Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET, 0L);      // too wide to describe
+                Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET + 8L, 0L);
+                return;
+            }
+            if (mayHoldPointer(gifDescOff[s]))
+            {
+                if (s < 63)
+                {
+                    w0 = w0 | (1L << (s + 1));
+                }
+                else
+                {
+                    w1 = w1 | (1L << (s - 63));
+                }
+            }
+            s += 1;
+        }
+        Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET, w0);
+        Magic.store64(type + ObjectModel.TYPE_REFMAP_OFFSET + 8L, w1);
+    }
+
+    /** Whether the field whose descriptor Utf8 sits at {@code descOff} may hold a pointer the collector
+     *  must follow: a reference ({@code L}/{@code [}) or a {@code long} — this VM keeps raw TIB/Type/
+     *  statics addresses in {@code long} fields ({@link RVMClass}), and skipping those would sweep the
+     *  live metadata. A stored Utf8 offset points at the length {@code u2}, so the text starts at +2. */
+    private static boolean mayHoldPointer(int descOff)
+    {
+        int k = u1(gbase + descOff + 2);
+        return k == 0x4C || k == 0x5B || k == 0x4A;     // 'L' object, '[' array, 'J' long
     }
 
     /** Fill the vtable slots (this class's + inherited impl code) and the itable directory. */

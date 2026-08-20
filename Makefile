@@ -52,6 +52,7 @@ test: build
 	$(JAVA) -cp $(OUT) asm.A64Test
 	$(JAVA) -cp $(OUT) objectmodel.ObjectModelTest
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
+	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
 

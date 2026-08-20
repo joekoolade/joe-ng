@@ -79,8 +79,25 @@ public final class ObjectModel
      *  - interface Type: its global interface ID (1..127; 0 = unnumbered). Writer-baked interfaces
      *    get build-time IDs; the loader numbers new ones from the shared VM.ifaceIdNext counter. */
     public static final int TYPE_IMPLEMENTS_OFFSET = 6 * WORD; // 48 (+56 = bitmap word 1)
+    /** Type field: the REFERENCE MAP — which of an instance's field slots the collector must scan.
+     *  Two 64-bit words (this word + the next). Bit 0 = "map computed" marker; bit {@code 1+slot} = slot
+     *  {@code slot} may hold a pointer. A Type with bit 0 clear (a zeroed node, a lambda Type, a class
+     *  with more than 126 slots) means "no map" and the collector scans that object's whole payload
+     *  conservatively — so an absent map is always safe.
+     *
+     *  <p>"May hold a pointer" is wider than "is a Java reference": it covers descriptors {@code L} and
+     *  {@code [} AND {@code J}. The VM's own reified objects ({@code RVMClass.tib}/{@code type}/{@code
+     *  statics}, {@code RVMMethod}, {@code DynLink}) keep raw addresses in {@code long} fields — those
+     *  words are the ONLY root a metal-built TIB, Type or statics block has, and a map that skipped them
+     *  would sweep the live metadata out from under the running program. Slots of every other kind
+     *  ({@code I}/{@code Z}/{@code C}/{@code B}/{@code S}/{@code F}/{@code D}) are skipped: an {@code int}
+     *  in [0x04000000,0x10000000) — a size, an offset, a hash — is a plausible false root today, and this
+     *  is what stops it being one. */
+    public static final int TYPE_REFMAP_OFFSET = 8 * WORD; // 64 (+72 = map word 1)
+    /** Highest instance-field slot the two-word reference map can describe (bit 0 is the marker). */
+    public static final int TYPE_REFMAP_MAX_SLOT = 126;
     /** Total Type size (one uniform record for class AND array Types). */
-    public static final int TYPE_SIZE = 8 * WORD;          // 64
+    public static final int TYPE_SIZE = 10 * WORD;         // 80
 
     // ----- array Type (a Type node whose objects are arrays) ---------------
     // An array's header TIB slot (@0) holds either a small element size (1/2/4/8 — a raw, untyped array, the
@@ -95,7 +112,8 @@ public final class ObjectModel
     /** Array Type field: the element's Type (0 for a primitive element); used for reference-array covariance. */
     public static final int ARRAY_TYPE_ELEMENT_OFFSET = 3 * WORD;   // 24
     /** Total array Type size (= TYPE_SIZE: one uniform record, arrays fill the element word). */
-    public static final int ARRAY_TYPE_SIZE = TYPE_SIZE;   // 48
+    public static final int ARRAY_TYPE_SIZE = TYPE_SIZE;   // = TYPE_SIZE (arrays leave the refMap zero:
+                                                           //   element size drives array scanning)
     /** A TIB slot value at or below this is a raw array's element size, not a TIB pointer. */
     public static final int MAX_RAW_ARRAY_TIB = WORD;      // 8
 

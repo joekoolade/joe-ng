@@ -281,6 +281,73 @@ public final class ClassFile
         return n;
     }
 
+    /**
+     * The GC reference map for {@code cls}: {@code {word0, word1}} in the layout
+     * {@link objectmodel.ObjectModel#TYPE_REFMAP_OFFSET} describes — bit 0 the "computed" marker, bit
+     * {@code 1+slot} set when field slot {@code slot} may hold a pointer. Slots are numbered exactly as
+     * the object lays out: the whole super chain first (root-most class first), then this class's own
+     * fields in declaration order, matching {@link #chainFieldBase} and the on-metal loader.
+     *
+     * <p>A class with more than {@link objectmodel.ObjectModel#TYPE_REFMAP_MAX_SLOT} slots returns
+     * {@code {0,0}} — no marker, so the collector scans it conservatively rather than under-scanning it.
+     * See the field's javadoc for why {@code J} counts as pointer-bearing alongside {@code L} and
+     * {@code [}.
+     */
+    public static long[] refMap(String cls, Resolver resolve)
+    {
+        Vec<String> chain = new Vec<>();          // root-most first: the order the fields lay out in
+        String c = cls;
+        while (c != null && resolve.canResolve(c))
+        {
+            chain.add(c);
+            c = resolve.resolve(c).superClassName();
+        }
+        if (c != null)
+        {
+            return new long[] {0L, 0L};           // chain incomplete: an unseen ancestor's fields would
+        }                                         //   shift every slot, so publish no map at all
+        long w0 = 1L;                             // bit 0: this map is computed
+        long w1 = 0L;
+        int slot = 0;
+        for (int i = chain.size() - 1; i >= 0; i--)
+        {
+            ClassFile cf = resolve.resolve(chain.get(i));
+            for (FieldInfo f : cf.fields())
+            {
+                if (f.isStatic())
+                {
+                    continue;
+                }
+                if (slot > objectmodel.ObjectModel.TYPE_REFMAP_MAX_SLOT)
+                {
+                    return new long[] {0L, 0L};   // too wide to describe: stay conservative
+                }
+                if (mayHoldPointer(f.descriptor()))
+                {
+                    int bit = slot + 1;
+                    if (bit < 64)
+                    {
+                        w0 |= 1L << bit;
+                    }
+                    else
+                    {
+                        w1 |= 1L << (bit - 64);
+                    }
+                }
+                slot++;
+            }
+        }
+        return new long[] {w0, w1};
+    }
+
+    /** Whether a field of this descriptor may hold a pointer the collector must follow: a reference
+     *  ({@code L}/{@code [}) or a {@code long} (the VM's own objects keep raw addresses in those). */
+    public static boolean mayHoldPointer(String descriptor)
+    {
+        char k = descriptor.charAt(0);
+        return k == 'L' || k == '[' || k == 'J';
+    }
+
     /** Vtable slot index of {@code name+descriptor} in {@code cls}'s flattened vtable. */
     public static int vtableSlot(String cls, String name, String descriptor,
                                  Resolver resolve)
