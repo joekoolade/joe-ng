@@ -2481,12 +2481,40 @@ while probes fell only 3.6%, and those two numbers together point straight at in
 remains is a few thousand raw `allocData` structs, but they include the 4 KiB imaps, so ~97% of the
 surviving probes are in blocks that have no type at all rather than in mapped objects.
 
-**Increment 3 — raw metadata blocks get a kind.** The `allocData` structs are the remaining
-conservative surface, and increment 2's numbers say they are now essentially the *whole* surface:
-2,804 blocks holding ~97% of the probes, the 4 KiB imaps worst among them. The status word is
-8-aligned, so bits 1–2 are free for a kind tag (`data`/`refs`/`code`) alongside the mark bit in
-bit 0 — a TIB is a run of code pointers, an itable dir is pairs, an imap is a sparse pointer array,
-a classfile copy holds nothing at all.
+**Increment 3 — the measurement retired the planned increment 3. DONE, PI-VALIDATED** (real Pi 4,
+`main=demo/GcDemo`: `churnMB=625 live=32 intact=32`, then `gc: collections=3 lastProbes=0x45F76
+roots=0x2F1 heap=0x45C85 nomap=0x3DC` — every metric identical to QEMU's digit for digit). The plan was a kind tag for raw
+`allocData` structs (status-word bits 1–2 are free beside the mark bit), on the inference that those
+2,804 unmapped blocks held most of the remaining probes. Instrumenting the residue *before* writing
+the tag showed the inference was wrong, and by two orders of magnitude:
+
+| trace probes, after increment 2 | | blocks |
+|---|---|---|
+| word-element arrays | 828,327 (96.8%) | 1,182 (avg 701 words) |
+| mapped scalars | 21,477 (2.5%) | — |
+| **untyped blocks** — the kind-tag target | **6,238 (0.7%)** | 2,804 (biggest 824 bytes) |
+
+The unmapped blocks are *numerous but tiny*; the cost is in reference arrays — the loader's registry
+tables. And `rounds=3`: the trace was a **fixpoint**, re-walking the entire heap and re-scanning
+every marked block until a pass marked nothing new, so each live table was probed three times.
+Kind tags would have bought 0.7%; scanning each block once buys the multiplier.
+
+So increment 3 is a **mark worklist**. A block is pushed the moment it is marked (`tryMark`) and
+scanned once when popped; scanning pushes what it finds, so the drain ends exactly when the
+reachable set closes. The queue is 213k entries in the scratch window between the JIT unwind tables
+and the heap cells — outside the managed heap, because a collector must not allocate while
+collecting. Overflow is a *speed* fallback, never a correctness one: the old fixpoint loop is kept
+and runs if the queue ever fills, with the queue refilling underneath it so later passes still take
+the fast path.
+
+Result on QEMU (`main=demo/GcDemo`): trace probes **856,042 → 285,829 (−66.6%)**, matching the
+`rounds=3` prediction exactly, and the three whole-heap walks (19,282 blocks each) are gone with
+them. `lastReclaimed` is unchanged and `churnMB=625 live=32 intact=32` still holds — same
+reachability, a third of the work. `demo/LispDemo` is the second workload, deliberately unlike
+GcDemo's flat `byte[]` churn: cons cells and environment frames, a deep pointer graph of exactly the
+shape a worklist traverses differently from a heap sweep. It still answers `(fact 10) = 3628800`,
+`(fib 18) = 2584`, `(sum 100 0) = 5050`, `(twice inc 40) = 42`. The kind tag stays available for later; at 0.7% it is a cleanup,
+not an increment.
 
 **Increment 4 — prove the precision, not just the speed.** A demo whose object is retained only by
 an address-shaped `long` field: conservative tracing keeps it forever, precise tracing frees it —
