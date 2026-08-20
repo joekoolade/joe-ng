@@ -496,13 +496,14 @@ public final class Loader
             remaining -= 1;
             w += 1;
         }
-        // FileDescriptor.<clinit> registers the JavaIOFileDescriptorAccess into SharedSecrets that many other
-        // <clinit>s read via getJavaIOFileDescriptorAccess() (NativeDispatcher, NioSocketImpl). If it runs late,
-        // that accessor sees a null field and falls back to MethodHandles.lookup().ensureInitialized (denied ->
-        // trap). The usage-dependency heuristic below doesn't capture the SharedSecrets-mediated edge, so run it
-        // first, unconditionally. It only WRITES a SharedSecrets field (no other class's statics read), so it is
-        // safe to run before its own deps.
-        if (clinitFdFirst >= 0 && clinitFdFirst < clinitN && !done[clinitFdFirst])
+        // FileDescriptor.<clinit> registers the JavaIOFileDescriptorAccess that the socket stack's own
+        // initializers read back via SharedSecrets. That edge is registry-mediated, so it appears in no
+        // class's bytecode; runClinits used to encode it as "run FileDescriptor first, unconditionally".
+        // With initialization lazy, the same rule lives in initPrereq instead -- FileDescriptor initializes
+        // when the first sun/nio/ch or java/net class does, which is both later and exactly as ordered. The
+        // eager pre-run is kept only for a FileDescriptor that is NOT lazy (nothing today).
+        if (clinitFdFirst >= 0 && clinitFdFirst < clinitN && !done[clinitFdFirst]
+                && !lazyClinitGated(pdBase[clinitPd[clinitFdFirst]], pdNameOff[clinitPd[clinitFdFirst]]))
         {
             if (logClinit != 0)
             {
@@ -602,12 +603,45 @@ public final class Loader
      */
     private static boolean clinitEagerKept(long base, int off)
     {
-        return utf8IsAtBase(base, off, Magic.bytes("java/io/FileDescriptor"))
-                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/net/Socket"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/net/DelegatingSocketImpl"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/misc/Unsafe"))
-                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"));
+        return false;                                   // nothing: every initializer now runs on first use
+    }
+
+    /**
+     * The one initialization edge that is REAL but invisible to every automatic mechanism here.
+     * {@code FileDescriptor.<clinit>} registers a {@code JavaIOFileDescriptorAccess} into
+     * {@code SharedSecrets}; {@code NioSocketImpl} and the dispatchers read it back out at their own
+     * {@code <clinit>} time. The dependency runs through a registry, so it appears in neither class's
+     * bytecode — no dependency scan, and no compile-time barrier, can find it. {@code runClinits}
+     * encodes it as "run FileDescriptor first"; this is the same rule for the lazy regime, and stating
+     * it explicitly is what lets the whole socket stack initialize on demand rather than staying eager.
+     */
+    private static void initPrereq(int reg)
+    {
+        if (!utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff, Magic.bytes("sun/nio/ch/"))
+                && !utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff, Magic.bytes("java/net/")))
+        {
+            return;
+        }
+        int fd = classRegByNameBytes(Magic.bytes("java/io/FileDescriptor"));
+        if (fd >= 0 && fd != reg)
+        {
+            ensureClinit(fd);
+        }
+    }
+
+    /** Class-registry index of the class with this exact name, or -1. */
+    private static int classRegByNameBytes(byte[] name)
+    {
+        int r = 0;
+        while (r < clCount)
+        {
+            if (clTab[r] != null && utf8IsAtBase(clTab[r].base, clTab[r].nameOff, name))
+            {
+                return r;
+            }
+            r += 1;
+        }
+        return -1;
     }
 
     /**
@@ -630,6 +664,7 @@ public final class Loader
             // to be pending for that class, ahead of the ones it depends on.
             return;
         }
+        initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
         int i = 0;
         while (i < clinitN)
         {
