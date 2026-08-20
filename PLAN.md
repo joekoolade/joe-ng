@@ -2318,6 +2318,35 @@ With all four triggers covered, the gate widens from 2 to 10: `StrictMath`, `Loc
 lazy-init pending)` and initializes **three** of them on demand — so seven initializers that
 used to run at every boot now never run at all.
 
+**Increment 3 — invert: lazy init by default.** The same strangler shape stage 5 used eleven
+times. `lazyClinitGated` becomes `!clinitEagerKept`, so every class initializes on first
+active use unless it is pinned.
+
+What stays pinned is the **socket bring-up order, which is hand-tuned and not derivable from
+bytecode**. The load-bearing case is `FileDescriptor.<clinit>`: it registers the
+`JavaIOFileDescriptorAccess` that `NioSocketImpl` and `NativeDispatcher` read back through
+`SharedSecrets` — an edge no dependency scan can see, because it runs through a registry
+rather than a direct reference, which is why `runClinits` special-cases it to run *first*. A
+barrier firing on first use cannot reproduce that ordering. The dispatchers and `Socket` sit
+in the same hand-ordered bring-up; `Unsafe` and `ArraysSupport` supply the array offsets that
+much of java.base reads through statics.
+
+**The demo suite caught the trigger this arc had not implemented: reflection.** Inverting made
+two demos fail in the same way — ForNameDemo lost its `Plugin.<clinit> ran, marker=42` line and
+EnumReflectDemo lost its constants. Both are JVMS 5.5 active uses that no compile-time hook can
+see: `Class.forName(name)` must initialize, and `Class.getEnumConstants()` reaches `values()`
+reflectively, which reads the `$VALUES` that only the initializer sets. Fixed at the two
+funnels — `forNameMirror` (both the already-loaded and incrementally-loaded paths) and
+`methodResolve` (the resolver behind `getDeclaredMethod`/`Method.invoke`), plus `allocInstance`
+for reflective instantiation. This is the value of a broad demo suite over a single acceptance
+test: a purely socket-shaped check would have shipped it.
+
+NetDemo: `lifecycle OK 146 (+16 lazy-init pending)`, of which **seven** initialize on demand —
+`java/lang/String`, the three `sun/nio/cs` charsets, `StandardProtocolFamily`,
+`CleanerFactory`, `TimeUnit` — and nine never run. Against the 29 initializers this batch used
+to run at every boot, that is 13 still eager plus 7 fired on demand, four of them after
+`launch`.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

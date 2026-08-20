@@ -584,19 +584,30 @@ public final class Loader
      */
     private static boolean lazyClinitGated(long base, int off)
     {
-        return utf8IsAtBase(base, off, Magic.bytes("jdk/internal/ref/CleanerFactory"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"))
-                // Widened once all four triggers are covered (increment 2). Each of these is initialized by
-                // a static call, a `new`, a cross-class static read, or an eager initializer's dependency --
-                // all of which now fire the barrier.
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StrictMath"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$TreeNode"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashSet"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterDataLatin1"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/net/StandardProtocolFamily"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/util/concurrent/TimeUnit"))
-                || utf8IsAtBase(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"));
+        return !clinitEagerKept(base, off);
+    }
+
+    /**
+     * The classes whose {@code <clinit>} still runs at batch end, under {@link #runClinits}'
+     * dependency ordering, instead of on first active use.
+     *
+     * <p>What is left here is the socket bring-up order, which is hand-tuned and NOT derivable from
+     * bytecode. The load-bearing example is {@code FileDescriptor.<clinit>}: it registers the
+     * {@code JavaIOFileDescriptorAccess} that {@code NioSocketImpl}/{@code NativeDispatcher} read back
+     * through {@code SharedSecrets}, an edge no dependency scan can see because it runs through a
+     * registry rather than a direct reference. `runClinits` special-cases it to run first; a barrier
+     * firing on first use would not reproduce that. The dispatchers and `Socket` sit in the same
+     * hand-ordered bring-up, and `Unsafe`/`ArraysSupport` supply array offsets that half of java.base
+     * reads through statics.
+     */
+    private static boolean clinitEagerKept(long base, int off)
+    {
+        return utf8IsAtBase(base, off, Magic.bytes("java/io/FileDescriptor"))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/nio/ch/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/net/Socket"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/net/DelegatingSocketImpl"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/misc/Unsafe"))
+                || utf8IsAtBase(base, off, Magic.bytes("jdk/internal/util/ArraysSupport"));
     }
 
     /**
@@ -677,6 +688,25 @@ public final class Loader
             int reg = lzInitReg[lzInitN];
             ensureClinit(reg);
         }
+    }
+
+    /** Class-registry index of the class whose Type node is {@code type}, or -1. */
+    private static int classRegByType(long type)
+    {
+        if (type == 0L)
+        {
+            return -1;
+        }
+        int r = 0;
+        while (r < clCount)
+        {
+            if (clTab[r] != null && clTab[r].type == type)
+            {
+                return r;
+            }
+            r += 1;
+        }
+        return -1;
     }
 
     /** Class-registry index of the class loaded from blob {@code base}, or -1. */
@@ -2942,10 +2972,12 @@ public final class Loader
         int ci = classIndexByName(slash);
         if (ci >= 0)
         {
+            ensureClinit(ci);                               // JVMS 5.5: Class.forName(name) INITIALIZES the class
             return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
         }
         long type = loadClassIncremental(slash);
-        return type == 0L ? 0L : classMirror(type);
+        ensureClinit(classRegByType(type));             // JVMS 5.5: forName INITIALIZES, and this batch's
+        return type == 0L ? 0L : classMirror(type);     // runClinits left a gated initializer pending
     }
 
     /**
@@ -5950,6 +5982,9 @@ public final class Loader
         {
             return -1;
         }
+        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5) --
+                                                        // Class.getEnumConstants reaches values() this way, and
+                                                        // values() reads $VALUES, which only <clinit> sets
         int idx = methodResolveRegistry(type, nameArr);
         if (idx >= 0)
         {
@@ -6195,6 +6230,7 @@ public final class Loader
         {
             return 0L;
         }
+        ensureClinit(ci);                               // reflective instantiation is an active use, like `new`
         long obj = Heap.alloc(16 + clTab[ci].fieldCount * 8);  // header(16) + instance fields (incl. inherited)
         Magic.store64(obj + ObjectModel.TIB_OFFSET, clTab[ci].tib);
         return obj;
