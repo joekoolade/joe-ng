@@ -585,7 +585,18 @@ public final class Loader
     private static boolean lazyClinitGated(long base, int off)
     {
         return utf8IsAtBase(base, off, Magic.bytes("jdk/internal/ref/CleanerFactory"))
-                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"));
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/ConditionalSpecialCasing"))
+                // Widened once all four triggers are covered (increment 2). Each of these is initialized by
+                // a static call, a `new`, a cross-class static read, or an eager initializer's dependency --
+                // all of which now fire the barrier.
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/StrictMath"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/Locale"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashMap$TreeNode"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/HashSet"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/lang/CharacterDataLatin1"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/net/StandardProtocolFamily"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/util/concurrent/TimeUnit"))
+                || utf8IsAtBase(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"));
     }
 
     /**
@@ -625,6 +636,64 @@ public final class Loader
         }
     }
 
+    // Classes a lazily-compiling method was seen to touch (cross-class getstatic/putstatic owner, `new`
+    // target). Collected DURING the compile and initialized right after it, which is still strictly before
+    // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
+    // on lzCompiling: a load-time compile (an initializer) must leave ordering to runClinits.
+    private static final int MAXPENDINIT = 64;
+    private static int[] lzInitReg;
+    private static int lzInitN;
+    private static boolean lzCompiling;
+
+    /** Note that the method being lazily compiled touches class {@code reg}, so it must be initialized
+     *  before that method runs (JVMS 5.5: a static access or a {@code new} is an active use). */
+    static void noteInitNeeded(int reg)
+    {
+        if (!lzCompiling || reg < 0 || clTab == null || clTab[reg] == null
+                || clTab[reg].state >= RVMClass.ST_INITIALIZED || lzInitN >= MAXPENDINIT)
+        {
+            return;
+        }
+        int i = 0;
+        while (i < lzInitN)
+        {
+            if (lzInitReg[i] == reg)
+            {
+                return;                                 // already noted for this compile
+            }
+            i += 1;
+        }
+        lzInitReg[lzInitN] = reg;
+        lzInitN += 1;
+    }
+
+    /** Initialize everything the just-compiled method touches. Drains rather than iterates: an initializer
+     *  can compile further methods, which can note more classes. */
+    private static void drainPendingInit()
+    {
+        while (lzInitN > 0)
+        {
+            lzInitN -= 1;
+            int reg = lzInitReg[lzInitN];
+            ensureClinit(reg);
+        }
+    }
+
+    /** Class-registry index of the class loaded from blob {@code base}, or -1. */
+    private static int classRegByBlob(long base)
+    {
+        int r = 0;
+        while (r < clCount)
+        {
+            if (clTab[r] != null && clTab[r].base == base)
+            {
+                return r;
+            }
+            r += 1;
+        }
+        return -1;
+    }
+
     /** True if class {@code reg} has an enqueued {@code <clinit>} that has not executed yet. */
     private static boolean clinitPendingFor(int reg)
     {
@@ -655,6 +724,10 @@ public final class Loader
             int jpd = findPdByName(pdBase[pd], clDepOff[d]);   // the referenced class's blob
             if (jpd >= 0 && jpd != pd)
             {
+                // An eagerly-run initializer that touches a LAZY-INIT class is an active use of it, and
+                // runClinits has already passed that class over. Initialize it here, which is exactly the
+                // JVMS rule; otherwise this initializer would read its statics unset.
+                ensureClinit(classRegByBlob(pdBase[jpd]));
                 int k = 0;
                 while (k < clinitN)                     // does that blob have a not-yet-run <clinit>?
                 {
@@ -1763,6 +1836,8 @@ public final class Loader
         clinitEntry = new long[MAXBLOB];
         clinitPd = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
+        lzInitReg = new int[MAXPENDINIT];
+        lzInitN = 0;
         clDepOff = new int[MAXDEP];
         clDepStart = new int[MAXBLOB];
         clDepN = new int[MAXBLOB];
@@ -3626,6 +3701,7 @@ public final class Loader
             }
             s += 1;
         }
+        noteInitNeeded(classRegOf(u2(gbase + gcp[idx])));   // cross-class static access = an active use
         return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
     }
 
@@ -6588,7 +6664,9 @@ public final class Loader
         compileReuseTib = true;                         // keep this class's TIB (already filled)
         int rcMark = rcCount;                           // this compile's own reloc sites start here
         int rsMark = rsCount;
+        lzCompiling = true;                             // collect the classes this body actively uses
         long buf = compile(code, len, descOff, isStatic);
+        lzCompiling = false;
         compileReuseTib = false;
         patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
@@ -6596,7 +6674,9 @@ public final class Loader
             capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
         }
         rememberLazyBody(idx, buf);
-        lzTab[idx].cache = buf;
+        lzTab[idx].cache = buf;                         // memoize BEFORE draining: an initializer we are about
+                                                        // to run may call straight back into this method
+        drainPendingInit();                             // initialize what the body touches -- still before it runs
         if (lzTab[idx].slot != 0L)                           // 1b/1c: point the TIB slot / offset cell at the buffer
         {
             Magic.store64(lzTab[idx].slot, buf);
@@ -8702,6 +8782,7 @@ public final class Loader
     static long tibOfClass(int classIdx)
     {
         int r = classRegOf(classIdx);
+        noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
         return r >= 0 ? clTab[r].tib : gTib;
     }
 
