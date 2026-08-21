@@ -2795,8 +2795,38 @@ The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand
 uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
 never have tested its absence. A cold power-on on real silicon did.
 
-**Increment 7 — retire the code rewind.** Needs per-buffer liveness for compiled code; the JIT unwind
-tables follow code's lifetime, since their entries are keyed by code-address ranges.
+**Increment 7 — code liveness, measured first.** Retiring the code rewind needs per-buffer liveness, and
+before building a code collector the arc's usual question: how much compiled code is still reachable?
+
+Two pieces answer it. `Heap.allocCode` now records every buffer as `{start, size}` in a **code-block
+registry** — the code arena is a headerless bump region, unlike the data heap whose status word makes it
+walkable, so nothing could enumerate compiled methods after the fact. And `tryMark`, which already sees
+every candidate word, sets a bit in a **code-reachability bitmap** (one per 8 bytes of the 16 MiB arena)
+when a word points into code instead of rejecting it. After the trace drains, a walk of the registry
+totals the blocks with any bit set. Both tables live in fixed scratch, outside the managed heap, for the
+reason the code-root table does: the collector must not be able to reclaim its own bookkeeping.
+
+**About 70% of all compiled code is garbage, and the share grows with runtime.** Early batches:
+13.8 KB live / 20.9 KB used (66%), falling through 26% to 17.5% as batches accumulate. Late batches:
+
+| live | used | live % | reclaimable |
+|---|---|---|---|
+| 1.28 MB | 5.00 MB | 25.7% | 3.72 MB |
+| 2.80 MB | 9.24 MB | 30.3% | 6.44 MB |
+| 3.30 MB | 9.51 MB | 34.7% | 6.21 MB |
+| 2.70 MB | 9.51 MB | 28.4% | **6.81 MB** |
+
+Live code plateaus near 3 MB while the total keeps climbing, so **"make the arena bigger" is the wrong
+reading**: the arena is not the constraint, the waste is, and it scales with how long the program runs
+rather than with how much code is in use. The measurement is conservative in the safe direction — one bit
+anywhere inside a method marks the whole method live, and code addresses held in `long` fields count as
+references — so the reclaimable share is *at least* this.
+
+Still needed for reclamation: a code free list with splitting and coalescing (the increment-5 lesson
+applies verbatim, or code fragments exactly as data did); dropping JIT unwind entries for reclaimed
+ranges, since their entries are keyed by code address and would otherwise alias a later method compiled
+at the same address; and tying code-root entries to the buffer that created them, instead of clearing the
+whole table with the arena as `resetLoader` does today.
 
 ## 5. Design decisions to lock day one
 

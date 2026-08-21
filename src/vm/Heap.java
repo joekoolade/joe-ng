@@ -99,7 +99,37 @@ public final class Heap
             }
         }
         Magic.store64(CODE_PTR_CELL, p + aligned);
+        noteCodeBlock(p, aligned);
         return p;
+    }
+
+    // ----- code-block registry (metadata lifetime arc, increment 7) --------------------------------------
+    /**
+     * Every JIT code buffer, as {@code {start, size}} pairs in fixed scratch. The code arena is a plain bump
+     * region with no headers — unlike the data heap, whose status word makes it walkable — so nothing can
+     * enumerate compiled methods after the fact. Reclaiming code by reachability needs that enumeration
+     * first, and answering the question that decides whether reclaiming is worth building at all: how much
+     * of the code ever compiled is still reachable?
+     *
+     * <p>Lives above the code-root table, below the secondary cores' stacks, and outside the managed heap
+     * for the same reason: the collector must not be able to reclaim its own bookkeeping.
+     */
+    public static final long CODE_BLOCKS     = 0x0354_0000L;
+    public static final long CODE_BLOCKS_END = 0x0364_0000L;   // 1 MiB = 65,536 blocks
+    public static long codeBlockN;
+    /** 1 = the registry filled; a code sweep must not run, since the unrecorded blocks cannot be found. */
+    public static int codeBlockOverflow;
+
+    private static void noteCodeBlock(long start, int size)
+    {
+        if (CODE_BLOCKS + codeBlockN * 16L >= CODE_BLOCKS_END)
+        {
+            codeBlockOverflow = 1;
+            return;
+        }
+        Magic.store64(CODE_BLOCKS + codeBlockN * 16L, start);
+        Magic.store64(CODE_BLOCKS + codeBlockN * 16L + 8L, (long) size);
+        codeBlockN += 1;
     }
 
     /**

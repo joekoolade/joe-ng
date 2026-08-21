@@ -57,6 +57,12 @@ final class VMGc
                 t += 1;
             }
         }
+        long cz = CODE_BITMAP;                        // clear the code-reachability bitmap for this pass
+        while (cz < CODE_BITMAP_END)
+        {
+            Magic.store64(cz, 0L);
+            cz += 8L;
+        }
         buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
         if (taskStackBase != null && curTask != 0 && taskStackBase[curTask] != 0L)
@@ -74,7 +80,8 @@ final class VMGc
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
-        drainMarkStack();                             // (counted AFTER the ordinary trace, so the count is
+        drainMarkStack();
+        measureCodeLiveness();                        // how much compiled code is still reachable at all                             // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
         if (markOverflow != 0)
         {
@@ -151,6 +158,10 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" codeLive="));
+            printHex(codeLive);                        // reachable compiled code ...
+            Uart.putc(0x2F);
+            printHex(codeUsed);                        // ... of the total ever compiled
             Uart.write(Magic.bytes(" trimmed="));
             printHex(trimmed);                         // handed back by lowering the bump pointer
             Uart.write(Magic.bytes(" codeOnly="));
@@ -465,6 +476,13 @@ final class VMGc
      *  status words. */
     private static boolean tryMark(long w)
     {
+        if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
+        {
+            long bit = (w - Heap.CODE_BASE) >> 3;       // a pointer INTO the code arena: record the hit so
+            long cw = CODE_BITMAP + ((bit >> 6) << 3);  //   the sweep can tell which compiled methods are
+            Magic.store64(cw, Magic.load64(cw) | (1L << (int) (bit & 63L)));   // still reachable
+            return false;                               // code is not a heap block; nothing to mark or trace
+        }
         if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L && isBlockBase(w))
         {
             long st = Magic.load64(w + 8L);
@@ -484,6 +502,49 @@ final class VMGc
             }
         }
         return false;
+    }
+
+    /** One bit per 8 bytes of the 16 MiB code arena (256 KiB), recording every word seen pointing into it.
+     *  A compiled method is reachable iff any bit inside its extent is set — the code-side equivalent of a
+     *  mark bit, kept out of line because the arena has no headers to hold one. */
+    static final long CODE_BITMAP = 0x0350_0000L;
+    private static final long CODE_BITMAP_END = 0x0354_0000L;
+
+    /** Bytes of compiled code still reachable at the last collection, and the total ever compiled. The ratio
+     *  decides whether reclaiming code is worth building: if nearly all of it is live, a code collector buys
+     *  nothing and the arena simply has to be big enough. */
+    static long codeLive;
+    static long codeUsed;
+
+    /** Walk the code-block registry and total the blocks with a bit set. Runs after the trace has drained,
+     *  so every reachable code pointer has been seen. */
+    private static void measureCodeLiveness()
+    {
+        codeLive = 0L;
+        codeUsed = 0L;
+        long i = 0;
+        while (i < Heap.codeBlockN)
+        {
+            long e = Heap.CODE_BLOCKS + i * 16L;
+            long start = Magic.load64(e);
+            long size = Magic.load64(e + 8L);
+            codeUsed = codeUsed + size;
+            long b = (start - Heap.CODE_BASE) >> 3;
+            long bEnd = b + (size >> 3);
+            while (b < bEnd)
+            {
+                if ((Magic.load64(CODE_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
+                {
+                    codeLive = codeLive + size;
+                    b = bEnd;                          // one hit makes the whole method live
+                }
+                else
+                {
+                    b += 1;
+                }
+            }
+            i += 1;
+        }
     }
 
     /** Block-start bitmap: 1 bit per 8 bytes of core 0's arena (3 MiB at a fixed scratch address, above
