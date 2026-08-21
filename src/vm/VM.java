@@ -930,6 +930,12 @@ public final class VM
         Uart.write(Magic.bytes(" lr="));
         printHex(lr);
         Uart.putc(0x0A);
+        Uart.write(Magic.bytes("  at elr: "));                 // the faulting instruction's own method: the
+        Loader.printFrameAt(elr);                              //   image symbol table names writer-compiled
+        Uart.putc(0x0A);                                       //   code, which reportMethodAt (JIT-only) cannot
+        Uart.write(Magic.bytes("  at lr:  "));                 //   -- without this a fault inside the loader
+        Loader.printFrameAt(lr);                               //   reads as "(no registered method)" and the
+        Uart.putc(0x0A);                                       //   only clue is a raw address
         Uart.write(Magic.bytes("  faulting method (lr): "));   // #43: name the demand-compiled method at lr
         Loader.reportMethodAt(lr);
         Uart.putc(0x0A);
@@ -998,6 +1004,7 @@ public final class VM
         }
         if (exc <= 0x1000L || Magic.load64(exc) == 0L)                  // exception class not loaded (TIB 0): can't
         {                                                              // throw without re-faulting inside unwind ->
+            reportFaultStack(elr, sp);                                 // ... but say WHERE first: the leaf alone
             reportFault();                                             // print the raw fault + halt (never returns)
         }
         Magic.enableIrq();                                             // resumed via branch, not ERET: re-unmask IRQs
@@ -1141,6 +1148,37 @@ public final class VM
         {
             Magic.wfe();
         }
+    }
+
+    /**
+     * Name every frame on the faulting stack, the same walk {@link #denylistTrap} uses (recover the caller's
+     * return address from the frame's saved LR, step by the writer-recorded frame size). A fault whose
+     * exception cannot be constructed -- the batch never loaded {@code NullPointerException}, so there is
+     * nothing to throw -- would otherwise report only the leaf method and a raw address, which is how a wild
+     * pointer inside a two-line helper like {@code Loader.u1} stays unexplained.
+     */
+    static void reportFaultStack(long pc, long sp)
+    {
+        Uart.write(Magic.bytes("\n  loader was compiling: "));
+        Loader.printCurrentClass();
+        long cpc = pc;
+        long csp = sp;
+        int depth = 0;
+        while (depth < 12 && cpc > 0x1000L)
+        {
+            Uart.write(Magic.bytes("\n    at "));
+            Loader.printFrameAt(cpc);
+            long fs = frameSizeAt(cpc);
+            if (fs == 0L)
+            {
+                Uart.write(Magic.bytes("  <frameless: caller unknown>"));
+                break;                                     // a leaf keeps its return address in x30, which the
+            }                                              //   sync vector's own bl has already overwritten
+            cpc = Magic.load64(csp) - 4L;                  // caller's return address = the call site
+            csp += fs;
+            depth += 1;
+        }
+        Uart.putc(0x0A);
     }
 
     /** Print {@code v} as {@code 0x} + 16 hex digits over the UART. */

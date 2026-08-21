@@ -214,6 +214,27 @@ public final class Loader
     {
         return Magic.load8(p) & 0xFF;
     }
+
+    /**
+     * A registry entry whose blob pointer is 0 — the shape a batch-reclaimed entry takes, since the reclaim
+     * zeroes the memory it rewinds. Name the caller and the class being compiled, then halt. Called BEFORE
+     * the read, so {@code lr} still holds the caller's return address; after the fault it is gone, and the
+     * raw abort names only the two-line helper that happened to do the load.
+     */
+    private static void badRead(long addr, long lr)
+    {
+        Uart.write(Magic.bytes("\nSTALE REGISTRY REF (blob "));
+        VM.printHex(addr);
+        Uart.write(Magic.bytes("\n  from "));
+        printFrameAt(lr - 4L);
+        Uart.write(Magic.bytes("\n  while compiling "));
+        printCurrentClass();
+        Uart.putc(0x0A);
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
     private static int u2(long p)
     {
         return (u1(p) << 8) | u1(p + 1);
@@ -251,14 +272,14 @@ public final class Loader
             if (clinitN >= MAXBLOB) { capHalt(Magic.bytes("MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
             // Record the initializer's PRECISE dependencies (from its bytecode) BEFORE compile — compile uses the
             // same gcp/gbase, but scanning first keeps the cp-parse state pristine for the walk.
-            clDepStart[clinitN] = clDepTop;
+                clDepStart[clinitN] = clDepTop;
             scanClinitDeps(code, gcodeLen);
-            clDepN[clinitN] = clDepTop - clDepStart[clinitN];
+                clDepN[clinitN] = clDepTop - clDepStart[clinitN];
             // Compile now (with this class's statics block live and cross-class calls recorded as relocs), but
             // ENQUEUE the entry — a <clinit> that calls another class (e.g. ArraysSupport -> SharedSecrets) would
             // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
             clinitEntry[clinitN] = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
-            clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
+                clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
             if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
@@ -1777,6 +1798,23 @@ public final class Loader
         return (int) Magic.call0(bufOf(code));
     }
 
+    /**
+     * Name the class the loader is compiling right now, for the fault reporter. A wild pointer inside a
+     * shared helper ({@code u1}, {@code utf8EqAt}) says nothing about which class's constant pool was being
+     * walked, and that is the first question worth answering.
+     */
+    static void printCurrentClass()
+    {
+        if (gbase != 0L && gThisNameOff != 0)
+        {
+            printNameAt(gbase, gThisNameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<none>"));
+        }
+    }
+
     /** Reset every loader registry to empty, ready for a fresh {@link #loadAll} batch. */
     private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
     private static long demandHeapHigh;                 // high-water: the largest extent any batch reached above the mark
@@ -1891,6 +1929,17 @@ public final class Loader
                     }
                     tt += 1;
                 }
+                // Phase-A cells and their lazy-method entries live in the memory just rewound. Every other
+                // registry is rebuilt below, but these two were not, so the NEXT batch's dlCellOf walked
+                // last batch's DynLink objects -- whose fields the rewind had zeroed -- and compared a name
+                // against blob 0, reading a classfile at a wild address. (Zeroing makes it look like a
+                // "class named by the empty string"; before the zero pass it would have matched stale text.)
+                // They are dropped here, inside the reclaim, so a batch that runs BEFORE reclaim is armed
+                // keeps its still-valid cells: the philosophers' surviving tasks dispatch through them.
+                dlTab = null;
+                dlN = 0;
+                lzTab = null;
+                lzN = 0;
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
@@ -4053,6 +4102,27 @@ public final class Loader
         while (true) { }
     }
 
+    /**
+     * Put {@code java/lang/Object} in the batch. Every vtable in this VM begins with Object's nine virtual
+     * slots: the writer bakes that prefix into every Type it emits, so a class ADOPTING a baked Type inherits
+     * those slot NUMBERS. A batch that never registers Object flattens its classes from slot 0 instead, and
+     * the loader's TIB then disagrees with the adopted Type by up to nine — {@code java/lang/String} came out
+     * 86 slots against the baked 92, and a cross-world virtual call read past the end of the TIB into
+     * whatever followed it (a data abort in the float/double demo, three batches after the first mismatch was
+     * printed and ignored).
+     *
+     * <p>Twelve of the batch drivers added the blob by hand with a comment about canonical slots; the rest
+     * silently did not. The invariant belongs to the loader, not to each caller, so it is asserted once here.
+     * {@link #addBlob} dedups by address, so a driver that still seeds Object explicitly costs nothing.
+     */
+    private static void ensureObjectBlob()
+    {
+        if (VM.objectBytes != 0L && VM.objectLen != 0L)
+        {
+            addBlob(VM.objectBytes, (int) VM.objectLen);
+        }
+    }
+
     private static void addBlob(long bytes, int len)
     {
         int i = 0;
@@ -4082,6 +4152,7 @@ public final class Loader
      */
     private static void loadAll()
     {
+        ensureObjectBlob();                              // every vtable starts with Object's 9 slots
         if (gEntryBlob != 0L)                            // reachability requested: mark + PULL the reachable
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
             markReachable();
@@ -6449,9 +6520,25 @@ public final class Loader
         return false;
     }
 
-    /** invokespecial is a real call (not an Object.&lt;init&gt; pop) if its class is loaded. */
+    /**
+     * invokespecial is a real call (not an {@code Object.<init>} pop) if its class is loaded — except for
+     * {@code java/lang/Object.<init>} itself, which is empty by definition and is a no-op in BOTH worlds
+     * (the writer's compiler skips it the same way).
+     *
+     * <p>The exception has to be stated, not inferred from "Object isn't registered". Every constructor
+     * begins with this call, and once {@link #ensureObjectBlob} put Object in every batch, the ref started
+     * resolving as a real call to a method that reachability pruning had (correctly) left uncompiled —
+     * {@code java/lang/String$CaseInsensitiveComparator.<init>} then sized a call to a target that does not
+     * exist and dereferenced a constant-pool Utf8 as a code address. It only worked before because no batch
+     * that pruned Object's body had Object registered at all.
+     */
     static boolean isRealSpecial(int idx)
     {
+        if (utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/Object"))
+                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("<init>")))
+        {
+            return false;
+        }
         return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
     }
 
@@ -7126,6 +7213,35 @@ public final class Loader
             Uart.putc(0x2F);
             VM.printDec(gvCount);
             Uart.putc(0x0A);
+            int w = 0;                                  // name the writer slots the loader lacks: a bare count
+                                                        //   mismatch says nothing, and the missing names ARE
+                                                        //   the diagnosis (six Object virtuals = no Object)
+            while (w < count)
+            {
+                long q = slots + (long) w * 16L;
+                int f = 0;
+                int found = 0;
+                while (f < gvCount)
+                {
+                    if (utf8EqAt(gvTab[f].base, gvTab[f].name, Magic.load64(q), 0)
+                            && utf8EqAt(gvTab[f].base, gvTab[f].desc, Magic.load64(q + 8L), 0))
+                    {
+                        found = 1;
+                        f = gvCount;
+                    }
+                    f += 1;
+                }
+                if (found == 0)
+                {
+                    Uart.write(Magic.bytes("    missing slot "));
+                    VM.printDec(w);
+                    Uart.putc(0x20);
+                    writeName(Magic.load64(q) + 2L, u2(Magic.load64(q)));
+                    writeName(Magic.load64(q + 8L) + 2L, u2(Magic.load64(q + 8L)));
+                    Uart.putc(0x0A);
+                }
+                w += 1;
+            }
             return;
         }
         int s = 0;
@@ -8310,6 +8426,10 @@ public final class Loader
     /** Compare a Utf8 entry in {@code baseA} against one in {@code baseB} (may be different classes). */
     private static boolean utf8EqAt(long baseA, int offA, long baseB, int offB)
     {
+        if (baseA == 0L || baseB == 0L)                // a reclaimed registry entry: halt NAMED, not wild
+        {
+            badRead(baseA == 0L ? 0L : 1L, Magic.readLR());
+        }
         if (baseA == baseB && offA == offB)
         {
             return true;
