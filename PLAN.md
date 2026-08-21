@@ -2761,8 +2761,42 @@ batches that allocate tens of MB in one go, which no between-batch policy can lo
 | trim (inc 4) | 18.0 MB | 115.6 MB | did not finish |
 | **trim + split/coalesce (inc 5)** | **3.3 MB** | 104.9 MB | **completes, 5 collections** |
 
-**Increment 6 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
-the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
+**Increment 6 — retire the data rewind.** `RECLAIM_BY_GC` becomes the default: the demand-load heap is
+reclaimed by reachability and `resetLoader` no longer rewinds it. Everything the arc measured had to be
+true first, and no single piece would have sufficed — the live set is genuinely small (4–6 MB against a
+mark that used to climb past 100 MB), the addresses compiled code bakes into its instruction stream are
+recorded where the collector can see them, the collector trims its bump pointer past the highest survivor,
+and the allocator splits and coalesces so freed memory is actually reusable.
+
+Code-root overflow becomes **fatal** under the new default. While the rewind ran, the table was insurance
+and a full table only warranted a warning; now it is the only record of those addresses, so a dropped
+entry would let the collector free a block that live code still points at — corruption found later and
+somewhere else. It halts with the count, like every other loader-table overflow. The fix is a larger
+window, not a weaker guarantee.
+
+The **code** arena still rewinds per batch. Code has no reachability story: its buffers live outside the
+managed heap, and the addresses pointing at them are `long`s the collector deliberately does not follow
+off-heap. Setting the flag false restores the whole-heap rewind, which is always safe — it discards
+everything above the watermark — and remains the fallback if metadata lifetime is ever suspect.
+
+**Pi-validated (2026-08-21).** The suite image with the data rewind retired runs the whole battery on a
+real Pi 4: no `CAP EXCEEDED`, no `FAULT`, no `STALE REGISTRY REF` across 24 batches, `churnMB=625 live=32
+intact=32` with 3 collections, `lisp: evals=600 result=610 stable=1` with **`gc during lisp:
+collections=5`** — the rewind baseline — and the WiFi finale joining WPA2 and returning **HTTP 200,
+828 bytes**, ending at `(self-build retired; host writer only)`.
+
+The numbers track QEMU closely enough to trust both: peak heap top **104.6 MB** (QEMU 104.9), live set
+steady at **~3.8 MB**, cumulative demand 511 MB data / 9.5 MB code (QEMU 457 / 9.5 — hardware adds the
+WiFi path). `codeOnly=3` appears on the first reclaim pass exactly as under emulation, so the
+code-embedded roots are load-bearing on silicon too. `trimmed=0x170228` (1.4 MB) shows the collector
+handing back a tail inside GcDemo rather than only between batches.
+
+The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand heap so an
+uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
+never have tested its absence. A cold power-on on real silicon did.
+
+**Increment 7 — retire the code rewind.** Needs per-buffer liveness for compiled code; the JIT unwind
+tables follow code's lifetime, since their entries are keyed by code-address ranges.
 
 ## 5. Design decisions to lock day one
 
