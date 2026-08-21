@@ -2520,6 +2520,68 @@ not an increment.
 an address-shaped `long` field: conservative tracing keeps it forever, precise tracing frees it —
 the difference visible in `freed=`/`bytes=` rather than argued from the code.
 
+### The demo suite's fault — three bugs behind one data abort (2026-08-20)
+
+With `ramfs/etc/init` removed the boot falls through to the **demo suite**, the only path that runs the
+whole battery (float/double, natives, collections, WordCount, GC, Lisp) in one image. It had rotted into
+a data abort in `Loader.u1` — a two-line helper — reported as `(no registered method)` with a raw
+address, and every arc's validation had quietly narrowed to one manifest program at a time.
+
+It was three independent bugs stacked, each invisible until the one before it was fixed.
+
+**1. `java/lang/Object` was not in every batch.** The boot log had been printing `vtparity
+java/lang/String DIFF count 92/86` for three separate demos and carrying on. Making the parity check
+name the *missing* slots turned it into a diagnosis in one run: `getClass`, `wait()`, `wait(J)`,
+`notify`, `notifyAll`, `clone` — precisely Object's virtuals that String does not override. Twelve of
+the 28 batch drivers seeded Object's blob by hand with a comment about canonical slots; the other
+sixteen did not, so their classes flattened vtables from slot 0 while *adopting* a baked Type whose
+numbering assumes Object's nine-slot prefix. `ensureObjectBlob()` in `loadAll` makes the invariant the
+loader's rather than each driver's.
+
+**2. `Object.<init>` then became a real call.** Every constructor starts with
+`invokespecial java/lang/Object.<init>`, and `isRealSpecial` answered "real call" for any *registered*
+class. Object had never been registered in those batches, so the call had been dropped by accident, not
+by rule — and with (1) fixed it began resolving to a body that reachability pruning had, correctly, not
+compiled. `java/lang/String$CaseInsensitiveComparator.<init>` sized a call to a target that does not
+exist. `Object.<init>` is empty by definition and the writer's compiler already skips it; `isRealSpecial`
+now says so explicitly.
+
+**3. The lazy tables outlived the batch reclaim.** `resetLoader` rebuilds every registry — `clTab`,
+`rgTab`, `sgTab`, the reloc tables — but not `dlTab`/`lzTab`, the phase-A dynamic-linking cells. Those
+objects live in the demand-load heap that the same reset *rewinds and zeroes*, so the next batch's
+`dlCellOf` walked the previous batch's `DynLink` entries, read `blob = 0` out of the zeroed memory, and
+compared a name against a classfile at address 0 — landing, a few frames later, on a Utf8 byte pattern
+used as a pointer. They are now dropped inside the reclaim itself, where the memory backing them dies;
+batches that run *before* reclaim is armed keep their still-valid cells, which the philosophers' surviving
+tasks dispatch through.
+
+**Pi-validated (2026-08-20).** The suite image on a real Pi 4 runs the whole battery with no
+`vtparity … DIFF`, no `FAULT` and no `STALE REGISTRY REF` across ~40 batches: the float/double *and*
+natives demos complete (`Float.floatToRawIntBits(1.5f) = 1069547520`, all three `arraycopy` cases),
+`words=25 distinct=16` from WordCount, `é`/`€` through the charset path, `churnMB=625 live=32
+intact=32`, `lisp: evals=600 result=610 stable=1` with 5 collections mid-computation, then the WiFi
+finale bringing up the CYW43 and joining WPA2. Hardware also exercises what QEMU cannot: real timer
+ticks (`ticks/core: c1=50 c2=50 c3=50`, `sched: 89 preemptions`, against 0 of each under emulation)
+and the philosophers running on real threads.
+
+Worth noting for the GC arc: its numbers hold *inside the suite*, which is a harder test than the
+isolated GcDemo manifest — same image, forty batches, live loader metadata throughout. Pi
+`probes=0x45B0E roots=0x2CB heap=0x45843 nomap=0x3AF` against QEMU's standalone `0x45F76 / 0x2F1 /
+0x45C85 / 0x3DC`, and the first collection reports `reaped=0x6` — the six dead philosopher tasks'
+stacks, a path the standalone demo never reaches.
+
+**The diagnostics were the actual deliverable.** Each bug was found by making the VM say something it
+had not been saying, and all four survive in the tree:
+
+- the fault reporter walks the faulting stack (`reportFaultStack`) and names frames through the **image**
+  symbol table, not just JIT'd ones — `vm/Loader.u1(Loader.java:215)` instead of `(no registered method)`;
+- it prints **which class the loader was compiling**, which is the first question worth asking when the
+  fault is inside a shared helper;
+- `vtparity` names the missing slots on a count mismatch, instead of printing `92/86` and continuing;
+- `utf8EqAt` halts *named* on a zero blob pointer (`STALE REGISTRY REF`) rather than reading a wild
+  address — the guard is called before the load, while `x30` still identifies the caller, which is how
+  bug 3 was found after bugs 1 and 2 had each moved the crash somewhere new.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
