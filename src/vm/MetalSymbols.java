@@ -133,6 +133,7 @@ final class MetalSymbols implements Symbols
     /** Fixed 2-word load of a &lt;4 GiB address into {@code reg} (MOVZ low16 + MOVK bits16..31). */
     private static void emitAddr(CodeBuffer cb, int reg, long addr)
     {
+        Loader.noteCodeRoot(addr);      // the pair below hides this address from any data scan: record it
         cb.emit(A64Enc.movz(reg, (int) addr, 0));
         cb.emit(A64Enc.movk(reg, (int) (addr >> 16), 1));
     }

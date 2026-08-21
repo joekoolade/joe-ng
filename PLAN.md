@@ -2672,11 +2672,29 @@ high-water of live-plus-garbage between collections, so it settles near the larg
 plus whatever is genuinely retained. Whether that "whatever" is real retention or conservative false
 roots is the question increment 2 answered above: it is neither — it is garbage awaiting collection.
 
-**Increment 3 — code-embedded roots.** Record, at `emitAddr` time, every heap address a compiled method
-bakes into its instruction stream, and scan that table as a root range. Nothing else in this arc can
-proceed without it: it is the prerequisite for retiring the code rewind, and for trimming the data heap's
-bump pointer back down to the live set — the step that would restore the rewind's memory profile (and with
-it the sweep cost, and Lisp's throughput) by reachability rather than by fiat.
+**Increment 3 — code-embedded roots. DONE.** `Loader.noteCodeRoot`, called from the one place a heap
+address enters the instruction stream (`MetalSymbols.emitAddr`), records TIB / Type / interface-Type /
+class-literal addresses into a table in fixed scratch at `0x0310_0000`. It sits *outside* the managed heap
+on purpose — a root table the collector can reclaim is not a root table — in the free band between
+`CORE_FLAGS` and the secondary cores' stacks. Image and statics addresses are filtered out: they are
+permanent and need no root. On overflow it warns and sets `codeRootOverflow` rather than halting, and
+increment 4 must refuse to reclaim while that flag is set, because the unrecorded entries are precisely
+the references nothing else holds.
+
+`VMGc.markCodeRoots` scans it **after** the ordinary trace has drained, so anything it newly marks is a
+block the rest of the reachability graph did not cover. That count is reported as `codeOnly=`.
+
+**The measurement says the hazard is latent, not active: `codeOnly=0` in every GcDemo collection.**
+Mid-batch, each TIB is also reachable through its registry entry (`RVMClass.tib`/`.type`/`.statics` are
+`long` fields, kept scannable by the refMap `J` rule), so nothing survives *only* through a code immediate
+today. It becomes real in increment 4's configuration — registries replaced while the code that references
+them survives — which is exactly when this table stops being insurance and starts being load-bearing.
+
+Two sizing lessons came out of the first run. The table overflowed at 131k entries, because the compiler
+runs a sizing pass and an emit pass over the same bytecode and both were recording; gating on
+`relocRecording` — the flag that already marks the real-base emit pass — halves the entries with no new
+state. And the regex closure alone bakes on the order of 100k addresses, so the table is now 4 MiB
+(524,288 entries).
 
 **Increment 4 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
 the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
