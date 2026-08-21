@@ -87,7 +87,10 @@ final class VMGc
         long markedN = 0L;
         long freedN = 0L;
         long o = Heap.BASE;
-        long stop = Magic.load64(Heap.PTR_CELL);
+        long stop = liveEndOf(Magic.load64(Heap.PTR_CELL));   // everything above the highest survivor is
+        trimmed = Magic.load64(Heap.PTR_CELL) - stop;         //   garbage in one contiguous run: give it
+        reclaimed = reclaimed + trimmed;                      //   back by lowering the bump pointer, not
+        Magic.store64(Heap.PTR_CELL, stop);                   //   by threading it onto the free list
         long stoppedAt = 0L;
         while (o < stop)
         {
@@ -132,6 +135,8 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" trimmed="));
+            printHex(trimmed);                         // handed back by lowering the bump pointer
             Uart.write(Magic.bytes(" codeOnly="));
             printHex(codeOnly);                        // blocks only a code immediate kept alive
             Uart.write(Magic.bytes(" live="));
@@ -289,6 +294,40 @@ final class VMGc
         }
         return found;
     }
+
+    /**
+     * The address just past the highest MARKED block — everything above it is garbage in one contiguous
+     * run, so the collector can hand it back by lowering the bump pointer instead of threading thousands of
+     * dead blocks onto the free list. This is what keeps the heap near its live size once the batch rewind
+     * is gone: without it the pointer only ever rises, the swept heap grows without bound, and every later
+     * collection walks more of it.
+     *
+     * <p>Returns {@code top} unchanged if the walk meets a corrupt size — trimming on a walk that could not
+     * be completed would hand back memory that is still live. The guard mirrors the sweep's own.
+     */
+    private static long liveEndOf(long top)
+    {
+        long end = Heap.BASE;
+        long o = Heap.BASE;
+        while (o < top)
+        {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L || o + size > top || o + size <= o)
+            {
+                return top;                            // corrupt: no trim, and the sweep reports stopAt
+            }
+            if ((st & 1L) != 0L)
+            {
+                end = o + size;
+            }
+            o = o + size;
+        }
+        return end;
+    }
+
+    /** Bytes the last collection returned by lowering the bump pointer rather than by freeing blocks. */
+    static long trimmed;
 
     /** Blocks the last collection kept alive ONLY because a code immediate referenced them. Zero means the
      *  dangling-metadata hazard is theoretical for that workload; non-zero means the batch rewind has been

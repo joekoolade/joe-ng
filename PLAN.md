@@ -2701,7 +2701,39 @@ Verified end to end on QEMU: the full suite, 3,187 lines, **zero faults and zero
 `lisp: evals=600 result=610 stable=1` with `gc during lisp: collections=5` — **the same collection count
 as the rewind baseline**, which is the check that recording roots costs the default path nothing.
 
-**Increment 4 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
+**Increment 4 — the trim, and the allocator underneath.** Two results and a blocker.
+
+*The trim works.* `VMGc` now computes the address past the highest **marked** block and hands the tail
+back by lowering the bump pointer rather than threading thousands of dead blocks onto the free list
+(`trimmed=`). It refuses to trim if the walk meets a corrupt size, mirroring the sweep's own guard. The
+ratchet is gone: where increment 1 climbed 3.3 → 4.5 → 7.9 → 7.9 → 9.2 → 12.6 → 18 → 18 MB, the same
+passes with the trim read 3.3 → 4.5 → 7.9 → **4.5** → 6.1 → 9.2 → 14.8 → **11.4** MB — rising *and
+falling* with the live set instead of only rising. Over all 25 batches the peak is **14.8 MB against
+116.6 MB untrimmed**, an eight-fold reduction that puts the heap within a few MB of its live set, and
+`churnMB=625 live=32 intact=32` still holds with zero faults.
+
+*The code-root table is load-bearing.* First pass with prompt reuse enabled: **`codeOnly=3`**. Three
+blocks survived only because a code immediate referenced them — pre-arm metadata whose registries were
+replaced long ago, with permanent code still pointing at it. Increment 3 measured `codeOnly=0` and called
+the hazard latent; enabling reuse is exactly what wakes it, and the table caught it on the first
+collection.
+
+*The blocker is the allocator, not the collector.* `Heap.allocLocked` satisfies a request from the free
+list by returning the block **whole** — no split, no remainder handed back (`return f; // status already
+holds the block size`). A 64 KiB freed block servicing a 32-byte cons cell stays 64 KiB. Under the rewind
+this is invisible, because the free list is discarded every batch and allocation is essentially pure bump.
+Without the rewind every post-collection allocation comes from that list, each consuming an arbitrarily
+oversized block, so usable capacity collapses and collections fire continuously — which is precisely where
+`demo/LispDemo` crawls. **Retiring the rewind by default waits on block splitting (and probably
+coalescing) in the allocator**; that is increment 5, and it is an allocator change, not a GC one.
+
+The evidence is a non-result, and worth stating as one: the trimmed no-rewind build ran the first 25
+batches cleanly in about the time the rewind build takes for the *whole* suite, then spent 80 minutes
+inside `demo/LispDemo`'s 600-eval loop without finishing, and was stopped there. Everything before Lisp
+is measured; the `gc during lisp: collections=` comparison against the rewind's 5 is still unmeasured,
+and belongs to increment 5, where splitting is supposed to fix it.
+
+**Increment 6 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
 the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
 
 ## 5. Design decisions to lock day one
