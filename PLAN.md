@@ -2761,8 +2761,26 @@ batches that allocate tens of MB in one go, which no between-batch policy can lo
 | trim (inc 4) | 18.0 MB | 115.6 MB | did not finish |
 | **trim + split/coalesce (inc 5)** | **3.3 MB** | 104.9 MB | **completes, 5 collections** |
 
-**Increment 6 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
-the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
+**Increment 6 — retire the data rewind.** `RECLAIM_BY_GC` becomes the default: the demand-load heap is
+reclaimed by reachability and `resetLoader` no longer rewinds it. Everything the arc measured had to be
+true first, and no single piece would have sufficed — the live set is genuinely small (4–6 MB against a
+mark that used to climb past 100 MB), the addresses compiled code bakes into its instruction stream are
+recorded where the collector can see them, the collector trims its bump pointer past the highest survivor,
+and the allocator splits and coalesces so freed memory is actually reusable.
+
+Code-root overflow becomes **fatal** under the new default. While the rewind ran, the table was insurance
+and a full table only warranted a warning; now it is the only record of those addresses, so a dropped
+entry would let the collector free a block that live code still points at — corruption found later and
+somewhere else. It halts with the count, like every other loader-table overflow. The fix is a larger
+window, not a weaker guarantee.
+
+The **code** arena still rewinds per batch. Code has no reachability story: its buffers live outside the
+managed heap, and the addresses pointing at them are `long`s the collector deliberately does not follow
+off-heap. Setting the flag false restores the whole-heap rewind, which is always safe — it discards
+everything above the watermark — and remains the fallback if metadata lifetime is ever suspect.
+
+**Increment 7 — retire the code rewind.** Needs per-buffer liveness for compiled code; the JIT unwind
+tables follow code's lifetime, since their entries are keyed by code-address ranges.
 
 ## 5. Design decisions to lock day one
 

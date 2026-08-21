@@ -1856,6 +1856,15 @@ public final class Loader
         }
         if (CODE_ROOTS + codeRootN * 8L >= CODE_ROOTS_END)
         {
+            if (RECLAIM_BY_GC)
+            {
+                // The heap is now reclaimed by reachability, so this table is the ONLY record of the
+                // addresses compiled code carries in its instruction stream. Dropping an entry would let
+                // the collector free a block that live code still points at -- silent corruption, found
+                // later and somewhere else. Halt with the count instead, the way every other loader table
+                // overflow does; the fix is a larger window, not a smaller guarantee.
+                capHalt(Magic.bytes("CODEROOTS"), (int) codeRootN);
+            }
             if (codeRootOverflow == 0)
             {
                 Uart.write(Magic.bytes("  code-root table full: reclamation must stay off\n"));
@@ -1892,16 +1901,24 @@ public final class Loader
     }
 
     /**
-     * Reclaim the demand-load heap BY REACHABILITY instead of by rewinding the bump pointer (the metadata
-     * lifetime arc). Off by default, so the emitted image is unchanged: with it off the batch rewind runs
-     * exactly as before. With it on, the data heap is left where it is and a collection runs at the END of
-     * this reset — by which point every registry has been replaced, so the previous batch's classes, TIBs,
-     * Types, itables and statics are unreachable and die like any other garbage. The CODE arena still
-     * rewinds; code has no reachability story yet (its buffers live outside the managed heap and the
-     * addresses that point at them are {@code long}s, which the collector deliberately does not follow off
-     * the heap), and that is the next increment.
+     * Reclaim the demand-load heap BY REACHABILITY rather than by rewinding the bump pointer — **the
+     * default since the metadata-lifetime arc's increment 6**. The data heap is left where it is and a
+     * collection runs at the END of each reset, by which point every registry has been replaced, so the
+     * previous batch's classes, TIBs, Types, itables and statics are unreachable and die like any other
+     * garbage. What made this viable, in order: the live set is genuinely small (4–6 MB against a heap mark
+     * that used to climb past 100 MB), compiled code's baked-in addresses are recorded so the collector can
+     * see them ({@link #CODE_ROOTS}), the collector trims its bump pointer back past the highest survivor,
+     * and the allocator splits and coalesces so freed memory is actually reusable. Without that last piece
+     * a batch's garbage was reusable only one allocation per block, and {@code demo/LispDemo} did not
+     * finish.
+     *
+     * <p>The CODE arena still rewinds per batch: code has no reachability story yet, since its buffers live
+     * outside the managed heap and the addresses pointing at them are {@code long}s the collector
+     * deliberately does not follow off-heap. Setting this to false restores the old whole-heap rewind,
+     * which is always safe (it discards everything above the watermark) and is the fallback if metadata
+     * lifetime is ever suspect.
      */
-    static final boolean RECLAIM_BY_GC = false;
+    static final boolean RECLAIM_BY_GC = true;
 
     /** Per-batch footprint accounting, printed when {@link #LIFETIME_TRACE} is on: what each batch actually
      *  costs in data and code is the number this arc has to fit inside the arena without a rewind. */
