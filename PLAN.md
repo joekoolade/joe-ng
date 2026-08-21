@@ -2795,6 +2795,30 @@ The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand
 uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
 never have tested its absence. A cold power-on on real silicon did.
 
+**Increment 9 — code-root ownership. DONE.** Each entry becomes `{addr, owner}`, the owner being the
+buffer that baked the address in, recorded from `emitMethod` — the only place `relocRecording` is set, so
+the guard that keeps the sizing pass from recording doubles as the guarantee that `owner` cannot go stale.
+Sweeping a method now calls `Loader.dropCodeRootsIn(start, end)` beside `dropJitTablesIn`.
+
+| | code-root entries | of capacity |
+|---|---|---|
+| before ownership | 216,423, climbing monotonically | 41% |
+| **with ownership** | **43,236 — rises and falls** | **16.5%** |
+
+The count tracks live code instead of accumulating (13,386 mid-run, 43,305 at peak, 43,236 after), a 5×
+reduction against a capacity *halved* by the doubled entry size — so effective headroom improved about
+tenfold, and the fatal `CAP EXCEEDED` a longer program would have hit is off the path. Suite: 3,212 lines,
+zero faults, `codeLive 1.75 MB / used 1.82 MB`, `churnMB=625 live=32 intact=32`, `gc during lisp:
+collections=5`, and `ExcDemo`'s four-frame trace still correct, so dropping roots alongside the unwind
+entries did not disturb the unwind path.
+
+Worth stating what this does *not* prove. Dropping is sound only because a swept method's baked-in
+addresses were reachable solely through its instruction stream — true by construction, since `emitAddr` is
+the one place they enter code and `owner` is recorded under the same guard, but an argument from the code
+rather than something the suite would catch if wrong. The failure would be a heap object freed while a
+live method still points at it: exactly the hazard increment 3's table was built for, surfacing later and
+elsewhere.
+
 **Increment 7 — code liveness, measured first.** Retiring the code rewind needs per-buffer liveness, and
 before building a code collector the arc's usual question: how much compiled code is still reachable?
 
@@ -2853,6 +2877,24 @@ The arena stops accumulating and tracks its live set:
 9.51 MB while live hovered near 3 MB — about **6.9 MB reclaimed**, matching increment 7's 6.8 MB estimate.
 Full suite: 3,212 lines, zero faults, no `CAP EXCEEDED`, `churnMB=625 live=32 intact=32`,
 `gc during lisp: collections=5`, through to `(self-build retired; host writer only)`.
+
+**Pi-validated (2026-08-21).** The sweep holds on hardware: no `FAULT`, no `CAP EXCEEDED`, no `STALE
+REGISTRY REF` across the whole battery, `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610
+stable=1` with 5 collections, WiFi to HTTP 200 / 828 bytes, ending at `(self-build retired; host writer
+only)`. `codeUsed` tracks `codeLive` — 1.88 MB live / 1.96 MB used at GcDemo, 1.83 / 1.90 at the last
+pass — and `ExcDemo`'s `level3 → level2 → level1 → main` trace comes back with correct line numbers, which
+is the direct evidence that `dropJitTablesIn` removed the right unwind entries and no stale one answered
+for a reused address. That was the subtle failure mode, and it did not happen.
+
+**The skipped ownership work is now quantified, and it is worse than "imprecise": the code-root table
+reached 216,423 of 524,288 entries — 41% full — in a single suite run.** A run twice this long trips
+`CAP EXCEEDED: CODEROOTS`, which is fatal by design. Per-buffer ownership is therefore the next required
+increment, not a refinement.
+
+A second gap the run makes visible: `code arena: cur-mark = 6.71 MB` while `codeUsed` is 1.9 MB. The
+arena's bump pointer never descends — freed buffers are reused through the free list rather than by
+lowering it — so `cur` is only a high-water mark. The data heap got a trim in increment 4; code wants the
+same, and it pairs naturally with the ownership fix.
 
 Two results to read correctly. `codeFreed` is large on the first sweep and zero afterwards — sweeping is
 incremental, so the standing evidence is `codeUsed ≈ codeLive`, not the per-pass delta. And the code-root
