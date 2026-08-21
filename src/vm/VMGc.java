@@ -307,10 +307,10 @@ final class VMGc
     {
         long found = 0L;
         long p = Loader.CODE_ROOTS;
-        long end = Loader.CODE_ROOTS + Loader.codeRootN * 8L;
+        long end = Loader.CODE_ROOTS + Loader.codeRootN * Loader.CODE_ROOT_ENTRY;
         while (p < end)
         {
-            long w = Magic.load64(p);
+            long w = Magic.load64(p);                  // {addr, owner}: the owner is for sweeping, not marking
             if (tryMark(w))
             {
                 found = found + 1L;
@@ -319,7 +319,7 @@ final class VMGc
             {
                 found = found + 1L;
             }
-            p = p + 8L;
+            p = p + Loader.CODE_ROOT_ENTRY;
         }
         return found;
     }
@@ -569,6 +569,7 @@ final class VMGc
                 // whatever is compiled at that address next -- the aliasing dropJitTablesAbove prevents
                 // under the batch rewind.
                 VM.dropJitTablesIn(start, start + size);
+                Loader.dropCodeRootsIn(start, start + size);   // its baked-in addresses die with it
                 Heap.freeCodeBlock(i);
                 codeFreed = codeFreed + size;
             }

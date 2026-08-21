@@ -1835,12 +1835,44 @@ public final class Loader
      * reclaim is no root table.
      */
     static final long CODE_ROOTS     = 0x0310_0000L;
-    static final long CODE_ROOTS_END = 0x0350_0000L;      // 4 MiB = 524,288 entries (1 MiB overflowed: the
-                                                          //   regex closure alone bakes ~100k addresses)
+    static final long CODE_ROOTS_END = 0x0350_0000L;      // 4 MiB = 262,144 entries of {addr, owner}
+    /** Bytes per entry: the address, and the code buffer that baked it in. Ownership is what lets a swept
+     *  method's roots be dropped; without it the table only ever grows (measured at 41% of capacity after a
+     *  single suite run, i.e. fatal for a program twice as long). */
+    static final long CODE_ROOT_ENTRY = 16L;
+    /** The buffer currently being emitted into — the owner recorded with each root. Only ever read while
+     *  {@code relocRecording} is set, which is exactly the real-base emit pass, so it cannot go stale. */
+    static long codeRootOwner;
     static long codeRootN;
     /** 1 = the table filled and addresses went unrecorded. Increment 4 must refuse to reclaim code or trim
      *  the heap while this is set: the missing entries are exactly the references nothing else records. */
     static int  codeRootOverflow;
+
+    /**
+     * Drop the code roots owned by a method the collector just swept. Their addresses were only ever
+     * reachable through that method's instruction stream, so keeping them would retain heap objects nothing
+     * can reach — and, more pressingly, would let the table grow without bound: one suite run filled 41% of
+     * it before ownership existed.
+     */
+    static void dropCodeRootsIn(long lo, long hi)
+    {
+        long kept = 0;
+        long i = 0;
+        while (i < codeRootN)
+        {
+            long src = CODE_ROOTS + i * CODE_ROOT_ENTRY;
+            long owner = Magic.load64(src + 8L);
+            if (owner < lo || owner >= hi)
+            {
+                long dst = CODE_ROOTS + kept * CODE_ROOT_ENTRY;
+                Magic.store64(dst, Magic.load64(src));
+                Magic.store64(dst + 8L, owner);
+                kept += 1;
+            }
+            i += 1;
+        }
+        codeRootN = kept;
+    }
 
     /** Record a heap address being baked into the instruction stream. Image and statics addresses are
      *  permanent and need no root; only the managed heap is collectable. */
@@ -1854,7 +1886,7 @@ public final class Loader
         {
             return;
         }
-        if (CODE_ROOTS + codeRootN * 8L >= CODE_ROOTS_END)
+        if (CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY >= CODE_ROOTS_END)
         {
             if (RECLAIM_BY_GC)
             {
@@ -1872,7 +1904,8 @@ public final class Loader
             }
             return;
         }
-        Magic.store64(CODE_ROOTS + codeRootN * 8L, addr);
+        Magic.store64(CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY, addr);
+        Magic.store64(CODE_ROOTS + codeRootN * CODE_ROOT_ENTRY + 8L, codeRootOwner);
         codeRootN += 1;
     }
 
@@ -5108,9 +5141,11 @@ public final class Loader
             emitDeferredStub(i);
             return;
         }
+        codeRootOwner = mBuf[i];                        // roots baked by this compile belong to this buffer
         relocRecording = 1;                             // record unresolved cross-class sites at their real address
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
         relocRecording = 0;
+        codeRootOwner = 0L;
         mLine[i] = buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
         mSrc[i] = sourceFileAddr();
         long out = mBuf[i];
