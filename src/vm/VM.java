@@ -1437,6 +1437,49 @@ public final class VM
         jitHandlerCount = compactTable(jitHandlerTable, jitHandlerCount, 32L, codeMark);
     }
 
+    /**
+     * Drop the JIT unwind entries whose code lies in {@code [lo,hi)} — a method the collector just swept.
+     * Their entries are keyed by machine-address range, so leaving them would make them answer for whatever
+     * is compiled at that address next: a stack walk would find a frame size or a catch handler belonging to
+     * a method that no longer exists. The batch rewind avoided this by dropping everything above the code
+     * mark at once; reclaiming individual methods needs the same hygiene per range.
+     */
+    static void dropJitTablesIn(long lo, long hi)
+    {
+        jitFrameCount = compactTableOutside(jitFrameTable, jitFrameCount, 24L, lo, hi);
+        jitLocalCount = compactTableOutside(jitLocalTable, jitLocalCount, 24L, lo, hi);
+        jitHandlerCount = compactTableOutside(jitHandlerTable, jitHandlerCount, 32L, lo, hi);
+    }
+
+    /** Keep only entries whose code start falls outside {@code [lo,hi)}; the kept count. */
+    private static long compactTableOutside(long table, long count, long entryBytes, long lo, long hi)
+    {
+        if (table == 0L)
+        {
+            return 0L;
+        }
+        long kept = 0L;
+        long i = 0L;
+        while (i < count)
+        {
+            long src = table + i * entryBytes;
+            long start = Magic.load64(src);
+            if (start < lo || start >= hi)
+            {
+                long dst = table + kept * entryBytes;
+                long b = 0L;
+                while (b < entryBytes)
+                {
+                    Magic.store64(dst + b, Magic.load64(src + b));
+                    b += 8L;
+                }
+                kept += 1L;
+            }
+            i += 1L;
+        }
+        return kept;
+    }
+
     /** Keep only entries whose first word (code start) is below {@code codeMark}; the kept count. */
     private static long compactTable(long table, long count, long entryBytes, long codeMark)
     {

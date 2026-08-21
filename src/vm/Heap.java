@@ -89,6 +89,11 @@ public final class Heap
     public static long allocCode(int size)
     {
         int aligned = (size + 7) & -8;
+        long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
+        if (reused != 0L)
+        {
+            return reused;
+        }
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -119,6 +124,59 @@ public final class Heap
     public static long codeBlockN;
     /** 1 = the registry filled; a code sweep must not run, since the unrecorded blocks cannot be found. */
     public static int codeBlockOverflow;
+
+    /** Registry entry flag (bit 0 of the size word; sizes are 8-aligned): this buffer has been swept and
+     *  its bytes are available again. */
+    public static final long CODE_FREE = 1L;
+
+    /**
+     * Reuse a swept code buffer of at least {@code aligned} bytes, splitting the remainder into its own
+     * free entry when it is worth tracking. First fit over the registry, which doubles as the free list —
+     * the code arena has no headers to thread a list through, and the registry already enumerates every
+     * buffer. Returns 0 if nothing fits.
+     *
+     * <p>Splitting matters here for the same reason it did in the data heap: without it a 4 KiB freed
+     * method satisfying a 200-byte one wastes the difference, and the arena fills with buffers far larger
+     * than what occupies them.
+     */
+    private static long takeFreeCode(int aligned)
+    {
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long e = CODE_BLOCKS + i * 16L;
+            long sz = Magic.load64(e + 8L);
+            if ((sz & CODE_FREE) != 0L)
+            {
+                long usable = sz & -8L;
+                if (usable >= (long) aligned)
+                {
+                    long start = Magic.load64(e);
+                    long rest = usable - (long) aligned;
+                    Magic.store64(e + 8L, (long) aligned);          // allocated, exact size
+                    if (rest >= 64L)                                // a remainder too small to hold any
+                    {                                               //   method is left inside the block
+                        noteCodeBlock(start + (long) aligned, (int) rest);
+                        Magic.store64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L, rest | CODE_FREE);
+                    }
+                    else
+                    {
+                        Magic.store64(e + 8L, usable);              // keep the slack with the allocation
+                    }
+                    return start;
+                }
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
+    /** Mark the registry entry for {@code start} free (the collector swept it). */
+    public static void freeCodeBlock(long i)
+    {
+        long e = CODE_BLOCKS + i * 16L;
+        Magic.store64(e + 8L, Magic.load64(e + 8L) | CODE_FREE);
+    }
 
     private static void noteCodeBlock(long start, int size)
     {
