@@ -2795,6 +2795,11 @@ The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand
 uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
 never have tested its absence. A cold power-on on real silicon did.
 
+**Increment 9 — code-root ownership. DONE, PI-VALIDATED.** On hardware `codeRoots` reads 13,579 →
+43,467 → 43,503 → 43,272 — rising *and falling*, matching QEMU — against 216,423-and-climbing before
+ownership. No `CAP EXCEEDED`, `ExcDemo`'s four frames correct, `churnMB=625 live=32 intact=32`, Lisp's 5
+collections, WPA2 → HTTP 200, `self-build retired`. The monotonic growth is gone on silicon.
+
 **Increment 9 — code-root ownership. DONE.** Each entry becomes `{addr, owner}`, the owner being the
 buffer that baked the address in, recorded from `emitMethod` — the only place `relocRecording` is set, so
 the guard that keeps the sizing pass from recording doubles as the guarantee that `owner` cannot go stale.
@@ -2819,7 +2824,28 @@ rather than something the suite would catch if wrong. The failure would be a hea
 live method still points at it: exactly the hazard increment 3's table was built for, surfacing later and
 elsewhere.
 
-**Increment 10 — the code-arena trim, and why it is not enough.** The sweep lowers `CODE_PTR_CELL` past a
+**Increment 10 — the code-arena trim: MEASURED ON HARDWARE, REVERTED.** The trim is gone; the reasoning
+below is kept because the measurement is the point.
+
+On QEMU it looked like a modest win (6.71 → 5.46 MB). **On a real Pi it reclaimed nothing**: `codeTrim`
+read 0 at every collection and the arena stayed pinned at 6.64 MB against 1.75 MB live — a 3.8× ratio
+against 3.5× *without* the trim, i.e. no better, and the QEMU gain was an artifact of that run's
+allocation ordering leaving the top of the arena free.
+
+| | arena | live | ratio |
+|---|---|---|---|
+| Pi, no trim (increment 8) | 6.71 MB | 1.90 MB | 3.5× |
+| **Pi, with trim** | **6.64 MB** | 1.75 MB | **3.8×** |
+| QEMU, with trim | 5.46 MB | 1.26 MB | 4.3× |
+
+So the trailing-run limitation is not a partial constraint here, it is total: a live method sits near the
+top of the arena and pins everything beneath it, every time. **Compaction is not the way to close the
+remaining 4× — it is the only mechanism that does anything at all**, and it means moving code and patching
+branch targets, TIB slots, phase-A cells and the `long` fields the refMap `J` rule keeps scannable. The
+trim was reverted rather than left inert, with the reasoning recorded at the point in `VMGc` where it
+would otherwise be reintroduced.
+
+**Increment 10 — the original write-up, kept for the record.** The sweep lowers `CODE_PTR_CELL` past a
 trailing run of swept buffers, the way the data heap's sweep trims its own: everything at or above the
 highest ALLOCATED block's end is free (blocks are disjoint, so a block starting above that line cannot
 extend below it), those registry entries are dropped with the space, and free entries below the line stay
