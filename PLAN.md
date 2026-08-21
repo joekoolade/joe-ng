@@ -2582,6 +2582,64 @@ had not been saying, and all four survive in the tree:
   address — the guard is called before the load, while `x30` still identifies the caller, which is how
   bug 3 was found after bugs 1 and 2 had each moved the crash somewhere new.
 
+### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
+
+M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
+trace, *replacing the per-batch reset*. Today `resetLoader` rewinds core 0's bump pointer to a watermark
+and the code arena to another, zeroing both, because the demand model assumes **nothing survives a batch
+but the image**. That assumption is exactly what stops joe-ng loading a class into a running program
+without a batch boundary — and it is what bit in the demo-suite arc, where `dlTab`/`lzTab` outlived the
+memory underneath them.
+
+Three pieces, and they are not equally hard:
+
+- **The data heap** is already reachability-ready. Every loader registry is an ordinary heap object held
+  from a `Loader` static, and every one is *replaced* at batch start, so the previous batch's classes,
+  TIBs, Types, itables, statics blocks and classfile copies are unreachable by construction. The
+  collector could take them.
+- **The code arena** is not GC-managed at all: buffers live at `0x0200_0000..0x0300_0000`, outside the
+  heap, and the addresses pointing at them are `long` fields the collector deliberately does not follow
+  off-heap (see the refMap `J` rule). Code needs either its own marking or a reason not to need it.
+- **The JIT unwind tables** sit in fixed scratch, keyed by code-address ranges, and are reset per batch —
+  which is also why a surviving method would lose its stack-trace entry.
+
+**Increment 1 — measure before designing** (the discipline that twice redirected the precise-tracing arc).
+Per-batch footprint accounting, plus a `RECLAIM_BY_GC` switch that leaves the data heap where it is and
+runs a collection at the *end* of the reset instead — after every registry has been replaced, so the
+previous batch's metadata is unreachable and dies as ordinary garbage. Default off; the image is
+unchanged with it off.
+
+The numbers reframe the problem — and the *shape* of the distribution is the finding, not the average.
+Through batch 18 the suite looked like 7–9 MB of data and 10–60 KB of code per batch, which suggested
+the code arena might need no reclamation at all. The last six batches say otherwise:
+
+| batch | data | code | what it is |
+|---|---|---|---|
+| 19 | 64 MB | 4.3 MB | the regex/String-ops closure |
+| 20–21 | 6.4 MB | ~25 KB | ordinary batches |
+| 22 | 63 MB | 4.2 MB | WordCount's closure (regex again) |
+| 24 | 183 MB | 110 KB | GcDemo, churning the arena on purpose |
+| **total (24)** | **457 MB** | **9.5 MB** | |
+
+So both arenas need the collector, for different reasons:
+
+- **Data: 457 MB against a 192 MB arena.** No-rewind-no-collect is not merely tight, it is impossible;
+  the heap must be reclaimed by *something*, and reachability is the only candidate that also lets a
+  class outlive its batch.
+- **Code: 9.5 MB against a 16 MB arena — 60% full, with no headroom.** A single regex-bearing batch
+  compiles 4+ MB. My first reading of this (that code was ~680 KB and the arena could simply hold
+  everything) came from the first eighteen batches and was wrong: the tail is where the code lives.
+  Code reclamation is therefore in scope, and it is the harder half, because a code buffer's only
+  references are `long` fields the collector deliberately does not follow off-heap.
+
+With `RECLAIM_BY_GC` on, each reset frees 8.7–22 MB and the heap above the watermark tracks
+`0x32AFC8 → 0x44B070 → 0x789390 → 0x789390 → 0x8F9438 → 0xC01C58 → 0x111F400 → 0x111F400` — ~18 MB after
+eight batches where the rewind-mode cumulative was already ~130 MB. It plateaus in steps rather than
+converging flat, which is the expected shape for a non-moving collector: the bump pointer is the
+high-water of live-plus-garbage between collections, so it settles near the largest batch's footprint
+plus whatever is genuinely retained. Whether that "whatever" is real retention or conservative false
+roots is the question increment 2 has to answer.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
