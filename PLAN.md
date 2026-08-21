@@ -2632,13 +2632,54 @@ So both arenas need the collector, for different reasons:
   Code reclamation is therefore in scope, and it is the harder half, because a code buffer's only
   references are `long` fields the collector deliberately does not follow off-heap.
 
+**Increment 2 — the live set answers it, and turns up the real blocker.** The collector now reports `live=`, the bytes that survived a
+collection, which separates the two readings of a high water mark. With `RECLAIM_BY_GC` on, across the
+first twelve batches the live set is **flat at 4.03–5.79 MB** while the heap above the watermark climbs
+3.3 → 28.5 MB. Metadata is dying correctly; the water mark is *garbage between collections plus
+fragmentation* — one collection per batch reset, against 7–9 MB of allocation per batch, and a first-fit
+free list that cannot always place a fresh 4 KiB imap or a 60 KB classfile copy, so the bump pointer
+creeps. That is a **collection-frequency and placement** problem, not a lifetime problem, and it means
+retiring the data rewind is sound: nothing the loader drops is being kept alive.
+
+The expensive batches say the same thing more strongly. At the regex closure the live set peaks at
+**14.2 MB** and falls straight back to 4 MB on the next pass, while the mark stands at 86.5 MB and later
+116.6 MB — so even the worst batch retains an eighth of the mark. Twenty-four passes, zero faults, no OOM,
+`churnMB=625 live=32 intact=32` from GcDemo and Lisp's answers all correct.
+
+**But the rewind cannot simply be deleted, for a reason the measurement surfaced: compiled code holds
+heap pointers the collector cannot see.** `MetalSymbols.emitAddr` bakes a TIB, Type, interface Type or
+class-literal address into the instruction stream as a **MOVZ + MOVK pair** — the address is split across
+two instruction immediate fields, so scanning the code arena as *data* cannot recover it, and the
+collector does not scan it at all. Today that is invisible because the rewind kills a batch's code and its
+metadata together; the registries (`RVMClass.tib`/`.type`/`.statics`, `long` fields the refMap `J` rule
+keeps scannable) hold everything alive while the batch is current. The moment either code outlives its
+batch or freed memory is reused promptly, a TIB whose only remaining reference is a code immediate becomes
+a dangling pointer. **Code-embedded roots therefore have to come before either the code rewind is retired
+or the data heap is trimmed** — which redefines increment 3.
+
+The second cost is throughput. With the rewind gone the swept heap no longer resets per batch, so
+collections walk a 100 MB+ heap instead of a rewound one, and an allocation-heavy program pays for it:
+`demo/LispDemo` crawls where the rewind build sails through. It is slow, not stuck — with a competing QEMU
+instance killed the run advanced through `(fact 10)`, `(fib 18)`, `(sum 100 0)` and `(twice inc 40) = 42`
+— but the suite's own `gc during lisp: collections=` line (5 under the rewind) is the number to compare,
+and heap size is what drives it.
+
 With `RECLAIM_BY_GC` on, each reset frees 8.7–22 MB and the heap above the watermark tracks
 `0x32AFC8 → 0x44B070 → 0x789390 → 0x789390 → 0x8F9438 → 0xC01C58 → 0x111F400 → 0x111F400` — ~18 MB after
 eight batches where the rewind-mode cumulative was already ~130 MB. It plateaus in steps rather than
 converging flat, which is the expected shape for a non-moving collector: the bump pointer is the
 high-water of live-plus-garbage between collections, so it settles near the largest batch's footprint
 plus whatever is genuinely retained. Whether that "whatever" is real retention or conservative false
-roots is the question increment 2 has to answer.
+roots is the question increment 2 answered above: it is neither — it is garbage awaiting collection.
+
+**Increment 3 — code-embedded roots.** Record, at `emitAddr` time, every heap address a compiled method
+bakes into its instruction stream, and scan that table as a root range. Nothing else in this arc can
+proceed without it: it is the prerequisite for retiring the code rewind, and for trimming the data heap's
+bump pointer back down to the live set — the step that would restore the rewind's memory profile (and with
+it the sweep cost, and Lisp's throughput) by reachability rather than by fiat.
+
+**Increment 4 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
+the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
 
 ## 5. Design decisions to lock day one
 

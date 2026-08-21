@@ -2104,6 +2104,8 @@ public final class Loader
                 VM.printHex(Magic.load64(Heap.PTR_CELL) - demandHeapMark);   // heap grown above the watermark
                 Uart.write(Magic.bytes(" freedThisPass="));
                 VM.printHex(VM.reclaimed);
+                Uart.write(Magic.bytes(" live="));      // the survivors -- if this stays small, the heap's
+                VM.printHex(VMGc.liveBytes);            //   high water mark is garbage, not retention
                 Uart.putc(0x0A);
             }
         }

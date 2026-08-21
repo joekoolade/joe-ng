@@ -79,6 +79,7 @@ final class VMGc
         }
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
+        liveBytes = 0L;
         long walked = 0L;
         long markedN = 0L;
         long freedN = 0L;
@@ -100,7 +101,8 @@ final class VMGc
                 if ((st & 1L) != 0L)
                 {
                     markedN = markedN + 1L;
-                    Magic.store64(o + 8L, size);    // unmark (clear bit0)
+                    liveBytes = liveBytes + size;   // what SURVIVED: the number that says whether a high heap
+                    Magic.store64(o + 8L, size);    //   water mark is retention or just uncollected garbage
                 }
                 else
                 {
@@ -127,6 +129,8 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" live="));
+            printHex(liveBytes);                       // survivors: retention vs uncollected garbage
             Uart.write(Magic.bytes(" nomap="));
             printHex(nomap);                           // blocks still scanned conservatively
             Uart.write(Magic.bytes(" reaped="));
@@ -253,6 +257,11 @@ final class VMGc
     /** Marked blocks the last collection had to scan conservatively — no Type, or a Type with no map. The
      *  metric increment 3 (a kind tag for raw {@code allocData} structs) is aimed at. */
     static long nomap;
+
+    /** Bytes that SURVIVED the last collection — the live set. It separates the two readings of a high heap
+     *  water mark: a large live set is genuine retention (metadata the program can still reach), a small one
+     *  means the mark is only garbage accumulated between collections, which collecting more often removes. */
+    static long liveBytes;
 
     /** Of {@link #probes}, the part spent on ROOTS (stack, statics, secondary arenas). That half is
      *  irreducibly conservative without stack maps; {@code probes - rootProbes} is the TRACE side, which is
