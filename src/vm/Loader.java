@@ -1839,6 +1839,27 @@ public final class Loader
         reclaimArmed = 1;
     }
 
+    /**
+     * Reclaim the demand-load heap BY REACHABILITY instead of by rewinding the bump pointer (the metadata
+     * lifetime arc). Off by default, so the emitted image is unchanged: with it off the batch rewind runs
+     * exactly as before. With it on, the data heap is left where it is and a collection runs at the END of
+     * this reset — by which point every registry has been replaced, so the previous batch's classes, TIBs,
+     * Types, itables and statics are unreachable and die like any other garbage. The CODE arena still
+     * rewinds; code has no reachability story yet (its buffers live outside the managed heap and the
+     * addresses that point at them are {@code long}s, which the collector deliberately does not follow off
+     * the heap), and that is the next increment.
+     */
+    static final boolean RECLAIM_BY_GC = false;
+
+    /** Per-batch footprint accounting, printed when {@link #LIFETIME_TRACE} is on: what each batch actually
+     *  costs in data and code is the number this arc has to fit inside the arena without a rewind. */
+    static final boolean LIFETIME_TRACE = true;
+    private static int  batchN;
+    private static long batchDataTotal;
+    private static long batchCodeTotal;
+    private static long batchDataPeak;
+    private static long batchCodePeak;
+
     private static void resetLoader()
     {
         if (reclaimArmed != 0)
@@ -1883,19 +1904,43 @@ public final class Loader
             }
             else
             {
+                long usedData = Magic.load64(Heap.PTR_CELL) - demandHeapMark;   // this batch's footprint, before
+                long usedCode = Magic.load64(Heap.CODE_PTR_CELL) - codeHeapMark;//   anything is reclaimed
+                batchN += 1;
+                batchDataTotal += usedData;
+                batchCodeTotal += usedCode;
+                if (usedData > batchDataPeak) { batchDataPeak = usedData; }
+                if (usedCode > batchCodePeak) { batchCodePeak = usedCode; }
+                if (LIFETIME_TRACE != false)
+                {
+                    Uart.write(Magic.bytes("  batch "));
+                    VM.printDec(batchN);
+                    Uart.write(Magic.bytes(": data="));
+                    VM.printHex(usedData);
+                    Uart.write(Magic.bytes(" code="));
+                    VM.printHex(usedCode);
+                    Uart.write(Magic.bytes(" cumData="));
+                    VM.printHex(batchDataTotal);           // what a no-rewind run would have to hold
+                    Uart.write(Magic.bytes(" cumCode="));
+                    VM.printHex(batchCodeTotal);
+                    Uart.putc(0x0A);
+                }
                 long oldPtr = Magic.load64(Heap.PTR_CELL);      // ZERO all heap ever used above the mark, so a reused
                 if (oldPtr > demandHeapHigh)                     // block never carries a PRIOR batch's code bytes: an
                 {                                                // uninitialized/OOB slot then reads 0 (a caught blr 0)
                     demandHeapHigh = oldPtr;                     // instead of stale code -> a layout-dependent wild branch.
                 }                                                // Zero up to the HIGH-WATER mark (not just the previous
-                long z = demandHeapMark;                         // batch) so a bigger batch's OOB reads land on 0 too.
-                while (z < demandHeapHigh)
-                {
-                    Magic.store64(z, 0L);
-                    z += 8L;
+                if (RECLAIM_BY_GC == false)                      // the arc's switch: rewind, or let the
+                {                                                //   collector decide what is still live
+                    long z = demandHeapMark;                     // batch) so a bigger batch's OOB reads land on 0 too.
+                    while (z < demandHeapHigh)
+                    {
+                        Magic.store64(z, 0L);
+                        z += 8L;
+                    }
+                    Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
+                    Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
                 }
-                Magic.store64(Heap.PTR_CELL, demandHeapMark);   // reclaim the previous demo's dead code + objects
-                Magic.store64(Heap.FREE_CELL, 0L);              // core 0's free-list entries are above it again
                 // Code-arena rewind (same batch-death model): zero every code byte the previous batches wrote
                 // above the mark -- a stale JIT buffer executed through a dangling pointer is the worst kind of
                 // wild branch (zeros decode as a caught udf instead) -- flush the zeroes past the I-cache, and
@@ -1921,7 +1966,7 @@ public final class Loader
                 // falsely retain whatever the NEXT batch allocates at that address. Its object is gone
                 // either way; currentThread() lazily re-wraps if such a task ever asks again.
                 int tt = 0;
-                while (tt < VM.taskCount)
+                while (tt < VM.taskCount && RECLAIM_BY_GC == false)
                 {
                     if (VM.taskThreadObj[tt] >= demandHeapMark)
                     {
@@ -2046,6 +2091,22 @@ public final class Loader
                                                          // jitFrameCount, so a stale jitLocalCount would keep growing past
                                                          // JIT_FRAME_MAX and overrun jitLocalTable into adjacent heap.
         VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
+        if (RECLAIM_BY_GC != false && reclaimArmed != 0)
+        {
+            // Every registry above has just been replaced, so the previous batch's classes, TIBs, Types,
+            // itables, statics blocks and classfile copies are now unreachable -- collect them the ordinary
+            // way. Runs HERE, at the end of the reset, rather than where the rewind used to be: before the
+            // registries are cleared those objects are still reachable and nothing would be freed.
+            Magic.gc();
+            if (LIFETIME_TRACE != false)
+            {
+                Uart.write(Magic.bytes("  reclaim-by-gc: top="));
+                VM.printHex(Magic.load64(Heap.PTR_CELL) - demandHeapMark);   // heap grown above the watermark
+                Uart.write(Magic.bytes(" freedThisPass="));
+                VM.printHex(VM.reclaimed);
+                Uart.putc(0x0A);
+            }
+        }
     }
 
     // ----- reachable-method compilation (M-B) --------------------------------
