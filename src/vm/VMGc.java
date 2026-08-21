@@ -73,6 +73,9 @@ final class VMGc
         }
         rootProbes = probes;                          // split the metric: everything above is ROOT scanning
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
+        codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
+        drainMarkStack();                             // (counted AFTER the ordinary trace, so the count is
+                                                      //  exactly "what nothing else kept alive")
         if (markOverflow != 0)
         {
             traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
@@ -129,6 +132,8 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" codeOnly="));
+            printHex(codeOnly);                        // blocks only a code immediate kept alive
             Uart.write(Magic.bytes(" live="));
             printHex(liveBytes);                       // survivors: retention vs uncollected garbage
             Uart.write(Magic.bytes(" nomap="));
@@ -257,6 +262,38 @@ final class VMGc
     /** Marked blocks the last collection had to scan conservatively — no Type, or a Type with no map. The
      *  metric increment 3 (a kind tag for raw {@code allocData} structs) is aimed at. */
     static long nomap;
+
+    /**
+     * Mark the heap addresses compiled code carries as {@code MOVZ}/{@code MOVK} immediates, which no scan
+     * of memory can find (see {@link Loader#CODE_ROOTS}). Runs AFTER the ordinary trace has drained, so a
+     * newly-marked entry is one the rest of the reachability graph did NOT cover — the return value is the
+     * count of those, i.e. the number of blocks that survive *only* because code points at them.
+     */
+    private static long markCodeRoots()
+    {
+        long found = 0L;
+        long p = Loader.CODE_ROOTS;
+        long end = Loader.CODE_ROOTS + Loader.codeRootN * 8L;
+        while (p < end)
+        {
+            long w = Magic.load64(p);
+            if (tryMark(w))
+            {
+                found = found + 1L;
+            }
+            if (tryMark(w - 16L))                      // an allocData payload address: mark its block base
+            {
+                found = found + 1L;
+            }
+            p = p + 8L;
+        }
+        return found;
+    }
+
+    /** Blocks the last collection kept alive ONLY because a code immediate referenced them. Zero means the
+     *  dangling-metadata hazard is theoretical for that workload; non-zero means the batch rewind has been
+     *  covering for it. */
+    static long codeOnly;
 
     /** Bytes that SURVIVED the last collection — the live set. It separates the two readings of a high heap
      *  water mark: a large live set is genuine retention (metadata the program can still reach), a small one

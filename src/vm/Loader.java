@@ -1815,6 +1815,58 @@ public final class Loader
         }
     }
 
+    // ----- code-embedded roots ---------------------------------------------------------------------
+    /**
+     * Heap addresses that compiled code carries INSIDE its instruction stream. {@code MetalSymbols.emitAddr}
+     * bakes a TIB, Type, interface Type or class literal into a {@code MOVZ}+{@code MOVK} pair, which splits
+     * the address across two instruction immediate fields — so scanning the code arena as *data* can never
+     * recover it, and the collector does not scan it at all. Every such address is recorded here as a plain
+     * word the collector CAN scan.
+     *
+     * <p>Nothing depends on it yet: the batch rewind still kills a class's code and its metadata together,
+     * and while a batch is current the registries hold the same objects through {@code RVMClass.tib}/{@code
+     * type}/{@code statics}. It exists because the opposite is true the moment code outlives its batch or
+     * freed memory is reused promptly — then a TIB whose only surviving reference is a code immediate is a
+     * dangling pointer. The table also answers whether that hazard is real for actual workloads: the
+     * collector counts how many of these addresses it would otherwise have left unmarked.
+     *
+     * <p>Lives in fixed scratch (0x0305_0000..0x0380_0000 is free between {@code CORE_FLAGS} and the
+     * secondary cores' stacks), not in the managed heap — a root table that the collector could itself
+     * reclaim is no root table.
+     */
+    static final long CODE_ROOTS     = 0x0310_0000L;
+    static final long CODE_ROOTS_END = 0x0350_0000L;      // 4 MiB = 524,288 entries (1 MiB overflowed: the
+                                                          //   regex closure alone bakes ~100k addresses)
+    static long codeRootN;
+    /** 1 = the table filled and addresses went unrecorded. Increment 4 must refuse to reclaim code or trim
+     *  the heap while this is set: the missing entries are exactly the references nothing else records. */
+    static int  codeRootOverflow;
+
+    /** Record a heap address being baked into the instruction stream. Image and statics addresses are
+     *  permanent and need no root; only the managed heap is collectable. */
+    static void noteCodeRoot(long addr)
+    {
+        if (relocRecording == 0)
+        {
+            return;    // the sizing pass emits the same addresses to a throwaway buffer; only the real
+        }              // emit pass produces code that will run, and it is the one relocRecording marks
+        if (addr < Heap.BASE || addr >= 0x1000_0000L)
+        {
+            return;
+        }
+        if (CODE_ROOTS + codeRootN * 8L >= CODE_ROOTS_END)
+        {
+            if (codeRootOverflow == 0)
+            {
+                Uart.write(Magic.bytes("  code-root table full: reclamation must stay off\n"));
+                codeRootOverflow = 1;
+            }
+            return;
+        }
+        Magic.store64(CODE_ROOTS + codeRootN * 8L, addr);
+        codeRootN += 1;
+    }
+
     /** Reset every loader registry to empty, ready for a fresh {@link #loadAll} batch. */
     private static long demandHeapMark;                 // free-heap watermark, taken once reclaim is armed
     private static long demandHeapHigh;                 // high-water: the largest extent any batch reached above the mark
@@ -1959,6 +2011,7 @@ public final class Loader
                 }
                 Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over the dead code
                 Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
+                codeRootN = 0;                                  // the code those roots belonged to is gone
                 VM.dropJitTablesAbove(codeHeapMark);            // frame/handler entries for the dead code would
                                                                 //   ALIAS the next batch's reused addresses
                 // Stale-root hygiene: a still-registered task Thread from a RECLAIMED batch (e.g. a sleeper
@@ -2106,6 +2159,10 @@ public final class Loader
                 VM.printHex(VM.reclaimed);
                 Uart.write(Magic.bytes(" live="));      // the survivors -- if this stays small, the heap's
                 VM.printHex(VMGc.liveBytes);            //   high water mark is garbage, not retention
+                Uart.write(Magic.bytes(" codeOnly="));  // blocks kept alive ONLY by a code immediate: the
+                VM.printHex(VMGc.codeOnly);             //   hazard the batch rewind has been covering for
+                Uart.write(Magic.bytes(" codeRoots="));
+                VM.printHex(Loader.codeRootN);
                 Uart.putc(0x0A);
             }
         }
