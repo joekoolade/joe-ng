@@ -81,7 +81,8 @@ final class VMGc
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
-        measureCodeLiveness();                        // how much compiled code is still reachable at all                             // (counted AFTER the ordinary trace, so the count is
+        measureCodeLiveness();                        // how much compiled code is still reachable at all
+        trimCodeArena();                              // ... and give the tail of it back                             // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
         if (markOverflow != 0)
         {
@@ -158,6 +159,8 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" codeTrim="));
+            printHex(codeTrimmed);                     // arena tail returned by lowering the pointer
             Uart.write(Magic.bytes(" codeFreed="));
             printHex(codeFreed);                       // unreachable code returned to the free list
             Uart.write(Magic.bytes(" codeLive="));
@@ -576,6 +579,63 @@ final class VMGc
             i += 1;
         }
     }
+
+    /**
+     * Lower the code arena's bump pointer past a trailing run of swept buffers, the way the data heap's
+     * sweep trims its own. Without it the arena only ever grows: freed buffers are reusable through the
+     * registry's free list, but the pointer stays at the high-water mark, so `cur - mark` read 6.71 MB on
+     * hardware while just 1.9 MB of code was in use.
+     *
+     * <p>Everything at or above the highest ALLOCATED block's end is free, because blocks are disjoint — a
+     * block starting above that point cannot extend below it. Those registry entries are dropped along with
+     * the space, since after the pointer moves they describe memory that no longer exists; the free entries
+     * *below* the line stay, as holes available for reuse.
+     */
+    private static void trimCodeArena()
+    {
+        codeTrimmed = 0L;
+        long liveEnd = Heap.CODE_BASE;
+        long i = 0;
+        while (i < Heap.codeBlockN)
+        {
+            long e = Heap.CODE_BLOCKS + i * 16L;
+            long sz = Magic.load64(e + 8L);
+            if ((sz & Heap.CODE_FREE) == 0L)
+            {
+                long end = Magic.load64(e) + (sz & -8L);
+                if (end > liveEnd)
+                {
+                    liveEnd = end;
+                }
+            }
+            i += 1;
+        }
+        long cur = Magic.load64(Heap.CODE_PTR_CELL);
+        if (liveEnd >= cur)
+        {
+            return;
+        }
+        long kept = 0;
+        long j = 0;
+        while (j < Heap.codeBlockN)
+        {
+            long src = Heap.CODE_BLOCKS + j * 16L;
+            if (Magic.load64(src) < liveEnd)
+            {
+                long dst = Heap.CODE_BLOCKS + kept * 16L;
+                Magic.store64(dst, Magic.load64(src));
+                Magic.store64(dst + 8L, Magic.load64(src + 8L));
+                kept += 1;
+            }
+            j += 1;
+        }
+        Heap.codeBlockN = kept;
+        codeTrimmed = cur - liveEnd;
+        Magic.store64(Heap.CODE_PTR_CELL, liveEnd);
+    }
+
+    /** Bytes of code arena handed back by lowering the bump pointer at the last collection. */
+    static long codeTrimmed;
 
     /** Block-start bitmap: 1 bit per 8 bytes of core 0's arena (3 MiB at a fixed scratch address, above
      *  the secondary stacks and below the heap cells). Rebuilt by each collection's pre-pass. */
