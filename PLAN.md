@@ -2696,6 +2696,11 @@ runs a sizing pass and an emit pass over the same bytecode and both were recordi
 state. And the regex closure alone bakes on the order of 100k addresses, so the table is now 4 MiB
 (524,288 entries).
 
+Verified end to end on QEMU: the full suite, 3,187 lines, **zero faults and zero overflow warnings**,
+`codeOnly=0` in all three GcDemo collections, `churnMB=625 live=32 intact=32`, and
+`lisp: evals=600 result=610 stable=1` with `gc during lisp: collections=5` — **the same collection count
+as the rewind baseline**, which is the check that recording roots costs the default path nothing.
+
 **Increment 4 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
 the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.
 
