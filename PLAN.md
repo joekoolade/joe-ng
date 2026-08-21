@@ -2819,6 +2819,32 @@ rather than something the suite would catch if wrong. The failure would be a hea
 live method still points at it: exactly the hazard increment 3's table was built for, surfacing later and
 elsewhere.
 
+**Increment 10 — the code-arena trim, and why it is not enough.** The sweep lowers `CODE_PTR_CELL` past a
+trailing run of swept buffers, the way the data heap's sweep trims its own: everything at or above the
+highest ALLOCATED block's end is free (blocks are disjoint, so a block starting above that line cannot
+extend below it), those registry entries are dropped with the space, and free entries below the line stay
+as holes for reuse.
+
+It works, and it barely helps:
+
+| | arena (`cur - mark`) | live |
+|---|---|---|
+| no trim (increment 8, on hardware) | 6.71 MB | 1.90 MB |
+| **with trim** | **5.46 MB** | 1.26 MB |
+
+Still 4.3× live, where the same trim brought the *data* heap's median to within a few percent. **The trim
+reclaims only a trailing run, and live methods in the code arena are scattered by construction** — every
+batch compiles a handful that survive (`String.length`, `Math.max`, the baked-link targets) interleaved
+with hundreds that do not, so one survivor near the top pins everything beneath it.
+
+The right reading is that the trim was the wrong lever for code. The free list already makes the interior
+holes reusable — `codeUsed` 1.33 MB against `codeLive` 1.26 MB says reuse is working — so the arena's
+5.46 MB is **capacity held, not memory wasted**, and it is bounded by peak demand rather than growing.
+Closing the remaining 4× needs **compaction**: moving code and patching every reference to it — branch
+targets, TIB slots, phase-A cells, and the `long` fields the refMap `J` rule keeps scannable. That is a
+harder problem than anything else in this arc, and it argues for relative branches plus an indirection
+table rather than a sweep. Not attempted here.
+
 **Increment 7 — code liveness, measured first.** Retiring the code rewind needs per-buffer liveness, and
 before building a code collector the arc's usual question: how much compiled code is still reachable?
 

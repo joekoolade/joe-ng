@@ -2235,6 +2235,8 @@ public final class Loader
                 VM.printHex(VMGc.codeOnly);             //   hazard the batch rewind has been covering for
                 Uart.write(Magic.bytes(" codeRoots="));
                 VM.printHex(Loader.codeRootN);
+                Uart.write(Magic.bytes(" codeArena="));  // how much of the arena is actually in use
+                VM.printHex(Magic.load64(Heap.CODE_PTR_CELL) - codeHeapMark);
                 Uart.write(Magic.bytes(" codeLive="));  // reachable compiled code / total ever compiled:
                 VM.printHex(VMGc.codeLive);             //   the ratio that decides whether reclaiming code
                 Uart.putc(0x2F);                        //   is worth building at all
