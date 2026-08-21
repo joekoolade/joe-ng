@@ -2828,6 +2828,39 @@ ranges, since their entries are keyed by code address and would otherwise alias 
 at the same address; and tying code-root entries to the buffer that created them, instead of clearing the
 whole table with the arena as `resetLoader` does today.
 
+**Increment 8 — the code sweep.** All three, behind `RECLAIM_CODE_BY_GC` (default off while it is
+measured). The **free list is the registry**: the arena has no headers to thread a list through, but the
+registry already enumerates every buffer, so a free bit in its size word turns it into one; `allocCode`
+first-fits over it and splits the remainder. **`VM.dropJitTablesIn(lo,hi)`** drops frame, local and handler
+entries whose code lies in a swept range — keyed by machine address, they would otherwise answer for
+whatever is compiled there next, which is the aliasing the batch rewind avoided by dropping everything
+above the code mark at once. And a **sweep floor** at the loader's code watermark keeps the boot vector
+table, the scheduler's switch stubs and the run trampoline out of reach: they are entered from hardware
+registers and stub-internal branches no scan can see.
+
+Code-root ownership was *not* built. A swept method's roots linger, which only ever over-retains heap
+objects and can never free something live — sound, at the cost of precision and a table that now grows
+monotonically.
+
+The arena stops accumulating and tracks its live set:
+
+| | code in use at GcDemo | live |
+|---|---|---|
+| increment 7 (no sweep) | 9.51 MB | 2.70 MB |
+| **increment 8 (sweeping)** | **2.65 MB** | 2.70 MB |
+
+`codeUsed` tracks `codeLive` within a few percent at every pass, where without sweeping it sat pinned at
+9.51 MB while live hovered near 3 MB — about **6.9 MB reclaimed**, matching increment 7's 6.8 MB estimate.
+Full suite: 3,212 lines, zero faults, no `CAP EXCEEDED`, `churnMB=625 live=32 intact=32`,
+`gc during lisp: collections=5`, through to `(self-build retired; host writer only)`.
+
+Two results to read correctly. `codeFreed` is large on the first sweep and zero afterwards — sweeping is
+incremental, so the standing evidence is `codeUsed ≈ codeLive`, not the per-pass delta. And the code-root
+table survived a whole suite uncleared, but that is one workload against a table that only grows; it is
+the likeliest thing to bite a longer-running program, and the honest fix is per-buffer ownership. The
+sweep floor's necessity is likewise asserted, not tested: nothing below the watermark was ever swept, so
+the boot stubs were never at risk in this run.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

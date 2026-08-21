@@ -1920,6 +1920,20 @@ public final class Loader
      */
     static final boolean RECLAIM_BY_GC = true;
 
+    /**
+     * Reclaim the CODE arena by reachability too — the last piece of the batch model. Off by default while
+     * it is measured. With it on, {@link #resetLoader} stops rewinding the code arena and the collector
+     * sweeps unreachable compiled methods into a free list instead ({@code VMGc.sweepCode}), which the
+     * measurement in increment 7 says is worth roughly 70% of everything ever compiled.
+     *
+     * <p>Two consequences to keep in view. The code-root table is no longer cleared with the arena, so its
+     * entries accumulate: they only ever over-retain heap objects (never free something live), but the
+     * table is finite and overflow is fatal once reclamation depends on it. And nothing below the loader's
+     * code watermark is ever swept — the boot vector table, the scheduler's switch stubs and the run
+     * trampoline are entered from hardware registers and stub-internal branches no scan can see.
+     */
+    static final boolean RECLAIM_CODE_BY_GC = false;
+
     /** Per-batch footprint accounting, printed when {@link #LIFETIME_TRACE} is on: what each batch actually
      *  costs in data and code is the number this arc has to fit inside the arena without a rewind. */
     static final boolean LIFETIME_TRACE = true;
@@ -1952,6 +1966,11 @@ public final class Loader
                     cz += 8L;
                 }
                 codeHeapHigh = czEnd;
+                VMGc.codeSweepFloor = codeHeapMark;    // never sweep the boot stubs below the watermark
+                if (RECLAIM_CODE_BY_GC)
+                {
+                    VMGc.sweepCode = 1;
+                }
                 // Pre-zero a generous span above the mark ONCE. The else-branch below only re-zeros up to the
                 // PRIOR batches' high-water, so the FIRST batch to grow taller than every previous one would
                 // otherwise read never-touched DRAM in its top region -- at cold power-on that's arbitrary
@@ -2015,20 +2034,23 @@ public final class Loader
                 // wild branch (zeros decode as a caught udf instead) -- flush the zeroes past the I-cache, and
                 // rewind the bump. A batch that spawns threads must (already) rebuild the run-trampoline; its
                 // compiled methods die with its registries exactly like its heap objects.
-                long ocPtr = Magic.load64(Heap.CODE_PTR_CELL);
-                if (ocPtr > codeHeapHigh)
+                if (RECLAIM_CODE_BY_GC == false)
                 {
-                    codeHeapHigh = ocPtr;
+                    long ocPtr = Magic.load64(Heap.CODE_PTR_CELL);
+                    if (ocPtr > codeHeapHigh)
+                    {
+                        codeHeapHigh = ocPtr;
+                    }
+                    long cz = codeHeapMark;
+                    while (cz < codeHeapHigh)
+                    {
+                        Magic.store64(cz, 0L);
+                        cz += 8L;
+                    }
+                    Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over dead code
+                    Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
+                    codeRootN = 0;                                  // the code those roots belonged to is gone
                 }
-                long cz = codeHeapMark;
-                while (cz < codeHeapHigh)
-                {
-                    Magic.store64(cz, 0L);
-                    cz += 8L;
-                }
-                Heap.publishCode(codeHeapMark, codeHeapHigh);   // drop stale I-cache lines over the dead code
-                Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
-                codeRootN = 0;                                  // the code those roots belonged to is gone
                 VM.dropJitTablesAbove(codeHeapMark);            // frame/handler entries for the dead code would
                                                                 //   ALIAS the next batch's reused addresses
                 // Stale-root hygiene: a still-registered task Thread from a RECLAIMED batch (e.g. a sleeper

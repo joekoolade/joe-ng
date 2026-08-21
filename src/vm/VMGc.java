@@ -158,6 +158,8 @@ final class VMGc
             printHex(rootProbes);                      // ... of which the (irreducibly conservative) roots
             Uart.write(Magic.bytes(" heap="));
             printHex(probes - rootProbes);             // ... and the TRACE side, which type metadata shrinks
+            Uart.write(Magic.bytes(" codeFreed="));
+            printHex(codeFreed);                       // unreachable code returned to the free list
             Uart.write(Magic.bytes(" codeLive="));
             printHex(codeLive);                        // reachable compiled code ...
             Uart.putc(0x2F);
@@ -515,6 +517,15 @@ final class VMGc
      *  nothing and the arena simply has to be big enough. */
     static long codeLive;
     static long codeUsed;
+    /** Bytes of unreachable compiled code the last collection returned to the code free list. */
+    static long codeFreed;
+    /** 1 = actually sweep unreachable code, not merely count it. Off until the code rewind is retired:
+     *  while the rewind runs, a batch's code is discarded wholesale and sweeping it would be busywork. */
+    static int sweepCode;
+    /** No code below this address is ever swept — the boot vector table, the scheduler's switch stubs and
+     *  the run trampoline are reached from hardware registers and stub-internal branches the collector
+     *  cannot see. Set to the loader's code watermark, the same line the rewind never crossed. */
+    static long codeSweepFloor;
 
     /** Walk the code-block registry and total the blocks with a bit set. Runs after the trace has drained,
      *  so every reachable code pointer has been seen. */
@@ -522,26 +533,44 @@ final class VMGc
     {
         codeLive = 0L;
         codeUsed = 0L;
+        codeFreed = 0L;
         long i = 0;
         while (i < Heap.codeBlockN)
         {
             long e = Heap.CODE_BLOCKS + i * 16L;
             long start = Magic.load64(e);
             long size = Magic.load64(e + 8L);
+            if ((size & Heap.CODE_FREE) != 0L)
+            {
+                i += 1;                                // already swept: not live, not in use
+                continue;
+            }
             codeUsed = codeUsed + size;
             long b = (start - Heap.CODE_BASE) >> 3;
             long bEnd = b + (size >> 3);
+            int hit = 0;
             while (b < bEnd)
             {
                 if ((Magic.load64(CODE_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
                 {
                     codeLive = codeLive + size;
+                    hit = 1;
                     b = bEnd;                          // one hit makes the whole method live
                 }
                 else
                 {
                     b += 1;
                 }
+            }
+            if (hit == 0 && sweepCode != 0 && start >= codeSweepFloor)
+            {
+                // Unreachable compiled code. Sweeping it needs the JIT unwind entries keyed to its address
+                // range dropped in the same breath: they outlive the method otherwise and would answer for
+                // whatever is compiled at that address next -- the aliasing dropJitTablesAbove prevents
+                // under the batch rewind.
+                VM.dropJitTablesIn(start, start + size);
+                Heap.freeCodeBlock(i);
+                codeFreed = codeFreed + size;
             }
             i += 1;
         }
