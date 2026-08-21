@@ -177,7 +177,20 @@ public final class Heap
                     }
                     lastFromFreeList = 1;
                     zeroPayload(f, aligned);                // Java requires 0/default fields+elements
-                    return f;                               // status already holds the block size
+                    // SPLIT the remainder off rather than handing back the whole block. Without this a
+                    // 64 KiB free block servicing a 32-byte cons cell stays 64 KiB, and the arena's usable
+                    // capacity collapses to "one allocation per freed block" -- invisible while the loader
+                    // rewound the heap every batch (the free list was discarded and allocation was
+                    // essentially pure bump), fatal the moment reclamation is by reachability. The remainder
+                    // must itself be a legal block: at least a {TIB, status} header, so its status word lies
+                    // inside its own extent.
+                    long rest = fsize - (long) aligned;
+                    if (rest >= (long) ObjectModel.HEADER_SIZE)
+                    {
+                        Magic.store64(f + ObjectModel.STATUS_OFFSET, (long) aligned);   // this block's size
+                        addFree(f + (long) aligned, rest);                              // ... and the rest
+                    }
+                    return f;                               // status holds the size actually handed out
                 }
                 prev = f;
                 f = Magic.load64(f);

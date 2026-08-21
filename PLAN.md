@@ -2708,9 +2708,15 @@ back by lowering the bump pointer rather than threading thousands of dead blocks
 (`trimmed=`). It refuses to trim if the walk meets a corrupt size, mirroring the sweep's own guard. The
 ratchet is gone: where increment 1 climbed 3.3 → 4.5 → 7.9 → 7.9 → 9.2 → 12.6 → 18 → 18 MB, the same
 passes with the trim read 3.3 → 4.5 → 7.9 → **4.5** → 6.1 → 9.2 → 14.8 → **11.4** MB — rising *and
-falling* with the live set instead of only rising. Over all 25 batches the peak is **14.8 MB against
-116.6 MB untrimmed**, an eight-fold reduction that puts the heap within a few MB of its live set, and
-`churnMB=625 live=32 intact=32` still holds with zero faults.
+falling* with the live set instead of only rising.
+
+**A correction to the first write-up of this increment.** It claimed a peak of 14.1 MB against 116.6 MB
+untrimmed — an eight-fold cut. That figure was an artifact: the peak was extracted by sorting hex strings
+*lexically*, which mis-orders variable-length values (`EC090` sorts above `1B42768`). Computed numerically
+over the same 25 passes, the trim moves the **median** heap top 27.3 → 18.0 MB and the **peak** 182.9 →
+115.6 MB. The ratchet really is gone and the typical case improves, but the peak is set by the two regex
+closures and GcDemo, which allocate tens of MB inside a single batch and are unaffected by trimming
+*between* batches. `churnMB=625 live=32 intact=32` holds with zero faults.
 
 *The code-root table is load-bearing.* First pass with prompt reuse enabled: **`codeOnly=3`**. Three
 blocks survived only because a code immediate referenced them — pre-arm metadata whose registries were
@@ -2732,6 +2738,28 @@ batches cleanly in about the time the rewind build takes for the *whole* suite, 
 inside `demo/LispDemo`'s 600-eval loop without finishing, and was stopped there. Everything before Lisp
 is measured; the `gc during lisp: collections=` comparison against the rewind's 5 is still unmeasured,
 and belongs to increment 5, where splitting is supposed to fix it.
+
+**Increment 5 — splitting and coalescing. DONE, and it removes the blocker.** `Heap.allocLocked` now
+carves the remainder off a reused free block and returns it to the list (keeping the minimum-block rule:
+a remainder must hold its own `{TIB, status}` header), and `VMGc`'s sweep merges runs of adjacent dead
+blocks into one free block instead of threading them on individually. Splitting without coalescing would
+grind the heap into unusable fragments; together they make free memory actually reusable.
+
+The result is the whole point of the arc so far: **the no-rewind suite completes.** Where increment 4 spent
+80 minutes inside `demo/LispDemo` without finishing, the same configuration now runs
+`lisp: evals=600 result=610 stable=1` with **`gc during lisp: collections=5` — identical to the rewind
+baseline** — reaches `(self-build retired; host writer only)`, and does it in about the time the rewind
+build takes. `churnMB=625 live=32 intact=32`, zero faults, 25 collection passes.
+
+The heap profile improves in the ordinary case and is unchanged in the extremes: median top 18.0 → **3.3
+MB**, peak 115.6 → 104.9 MB. The median is what a long-running program lives in; the peak belongs to the
+batches that allocate tens of MB in one go, which no between-batch policy can lower.
+
+| configuration | median top | peak top | Lisp |
+|---|---|---|---|
+| no trim (inc 1) | 27.3 MB | 182.9 MB | did not finish |
+| trim (inc 4) | 18.0 MB | 115.6 MB | did not finish |
+| **trim + split/coalesce (inc 5)** | **3.3 MB** | 104.9 MB | **completes, 5 collections** |
 
 **Increment 6 — retire the rewinds.** Data first, then code once its buffers have a liveness story;
 the JIT unwind tables follow code's lifetime, since their entries are keyed by code-address ranges.

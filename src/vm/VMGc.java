@@ -92,6 +92,8 @@ final class VMGc
         reclaimed = reclaimed + trimmed;                      //   back by lowering the bump pointer, not
         Magic.store64(Heap.PTR_CELL, stop);                   //   by threading it onto the free list
         long stoppedAt = 0L;
+        long runStart = 0L;                            // a run of adjacent dead blocks, merged when it ends
+        long runSize = 0L;
         while (o < stop)
         {
             long st = Magic.load64(o + 8L);
@@ -106,6 +108,12 @@ final class VMGc
                 walked = walked + 1L;
                 if ((st & 1L) != 0L)
                 {
+                    if (runSize != 0L)                     // a survivor ends the run of dead blocks
+                    {
+                        Heap.addFree(runStart, runSize);
+                        runStart = 0L;
+                        runSize = 0L;
+                    }
                     markedN = markedN + 1L;
                     liveBytes = liveBytes + size;   // what SURVIVED: the number that says whether a high heap
                     Magic.store64(o + 8L, size);    //   water mark is retention or just uncollected garbage
@@ -113,11 +121,19 @@ final class VMGc
                 else
                 {
                     freedN = freedN + 1L;
-                    Heap.addFree(o, size);
                     reclaimed = reclaimed + size;
+                    if (runSize == 0L)                     // COALESCE: adjacent dead blocks become ONE free
+                    {                                      //   block. Splitting (Heap.allocLocked) without
+                        runStart = o;                      //   this would grind the heap into fragments too
+                    }                                      //   small to serve anything, since the sweep
+                    runSize = runSize + size;              //   rebuilt the list one dead block at a time.
                 }
                 o = o + size;
             }
+        }
+        if (runSize != 0L)                             // the heap ended on dead blocks
+        {
+            Heap.addFree(runStart, runSize);
         }
         if (gcLog != 0)
         {
