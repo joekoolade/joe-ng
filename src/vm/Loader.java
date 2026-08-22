@@ -2274,6 +2274,10 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" merged="));      // blocks folded into a neighbour by the last
+                VM.printHex(Heap.codeMergedBlocks);       //   coalescing pass, and the bytes they carried
+                Uart.putc(0x2F);
+                VM.printHex(Heap.codeMergedBytes);
                 Uart.putc(0x0A);
             }
         }
