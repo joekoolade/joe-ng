@@ -92,8 +92,11 @@ public final class Heap
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
         {
+            codeReuseCount = codeReuseCount + 1L;
             return reused;
         }
+        codeBumpCount = codeBumpCount + 1L;             // nothing fit: the arena grows. Against a large free
+        codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -170,6 +173,51 @@ public final class Heap
             i += 1;
         }
         return 0L;
+    }
+
+    /** How many {@link #allocCode} calls were served from the free list, and how many had to grow the arena
+     *  because nothing fit. A high bump count against a large free total is fragmentation, not demand. */
+    public static long codeReuseCount;
+    public static long codeBumpCount;
+    /** Bytes requested by the allocations that had to bump — what fragmentation actually cost in arena. */
+    public static long codeBumpBytes;
+
+    /** Free-list survey, recomputed on demand: how many free blocks, how many bytes they hold, and the
+     *  largest single one. Free bytes far above the largest block means the space is there but unusable —
+     *  the shape that a compactor (or coalescing) fixes and that a bigger arena does not. */
+    public static long codeFreeBlocks;
+    public static long codeFreeBytes;
+    public static long codeFreeMax;
+    /** Free blocks under 256 bytes: too small for most methods, so effectively lost until merged. */
+    public static long codeFreeTiny;
+
+    /** Walk the registry and fill the survey fields. Cheap — the registry is a flat array of pairs. */
+    public static void surveyCodeFree()
+    {
+        codeFreeBlocks = 0L;
+        codeFreeBytes = 0L;
+        codeFreeMax = 0L;
+        codeFreeTiny = 0L;
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L);
+            if ((sz & CODE_FREE) != 0L)
+            {
+                long usable = sz & -8L;
+                codeFreeBlocks = codeFreeBlocks + 1L;
+                codeFreeBytes = codeFreeBytes + usable;
+                if (usable > codeFreeMax)
+                {
+                    codeFreeMax = usable;
+                }
+                if (usable < 256L)
+                {
+                    codeFreeTiny = codeFreeTiny + 1L;
+                }
+            }
+            i += 1;
+        }
     }
 
     /** Mark the registry entry for {@code start} free (the collector swept it). */
