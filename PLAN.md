@@ -2822,21 +2822,29 @@ invisible to the suite — QEMU and the Pi both passed with the drop in place, b
 needs an exception to cross a surviving JIT frame in a *later* batch than the one that compiled it, and no
 demo does that. It is an argument from construction, not a test result.
 
-**Verification (QEMU, whole battery, Pi owed).** 3,211 lines, 0 faults, no `CAP EXCEEDED`, no `STALE
-REGISTRY REF`, `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610 stable=1` with **`gc during
-lisp: collections=5`** — the rewind baseline — ending at `(self-build retired; host writer only)`.
+**PI-VALIDATED (2026-08-21), whole battery.** The suite image with the code rewind retired runs the
+entire demo battery on a real Pi 4: no `FAULT`, no `CAP EXCEEDED`, no `STALE REGISTRY REF` across 24
+batches, `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610 stable=1` with **`gc during lisp:
+collections=5`** — the rewind baseline, so retiring the code rewind costs the allocation-heavy path
+nothing — `ticks/core 50 50 50` with `sched: 89 preemptions`, and the WiFi finale joining WPA2 and
+returning **HTTP 200, 825 bytes**, ending at `(self-build retired; host writer only)`.
 
-| | value |
-|---|---|
-| code arena held | 6.68 MB |
-| `codeUsed` / `codeLive` | 2.51 / 2.44 MB |
-| `codeRoots` peak | 60,785 of 262,144 (23%), 7 decreases across 24 reclaims |
+| | Pi | QEMU |
+|---|---|---|
+| code arena held (`cur - mark`) | 6.68 MB | 6.68 MB |
+| `codeUsed` / `codeLive` | 1.82 / 1.75 MB | 2.51 / 2.44 MB |
+| `codeRoots` peak | 43,332 of 262,144 (16.5%) | 60,785 (23%) |
 
-`codeUsed` sitting a few percent above `codeLive` is the load-bearing reading: the free list is absorbing
-reuse, so the 6.68 MB arena is capacity held against peak demand rather than a leak. The root table both
-rises and falls, so increment 9's ownership is doing its job at the default. Note the root count varies
-run to run (43,272 in the previous suite run, 60,785 here) — it tracks how much code each batch happens to
-compile under a given thread schedule, so treat the cap headroom as ~4×, not ~6×.
+`codeUsed` a few percent above `codeLive` is the load-bearing reading: the free list absorbs reuse, so the
+6.68 MB arena is capacity held against peak demand rather than a leak — and hardware and emulation agree
+on the arena size to the byte. `ExcDemo`'s four-frame trace is correct, which is where the per-range
+`dropJitTablesIn` hygiene shows in output.
+
+The root count is the one number that moves between runs: 43,305 / 43,332 / 43,236 here, matching
+increment 9's Pi run (43,272) and the post-revert QEMU run exactly, while one QEMU run of this image
+measured 60,785. It tracks how much code each batch compiles under a given thread schedule. Hardware sits
+at 16.5% of capacity; the conservative bound from the outlier is 23%, so call the headroom ~4x and not the
+~6x hardware alone suggests.
 
 **One property of the rewind deliberately not preserved.** The rewind zeroed dead code, so a dangling code
 pointer met zeros — `blr 0` is caught — instead of a previous method's instructions. Reclaimed buffers are
