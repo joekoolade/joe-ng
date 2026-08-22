@@ -2657,6 +2657,26 @@ existed when the batch started is all it has, and when that runs out the arena g
 the free list is. Coalescing (like the trim, like compaction) only acts at collection time, so none of
 them can lower a peak set by demand inside a batch.
 
+**PI-VALIDATED (2026-08-22), and hardware recovers TWICE what emulation showed.** Whole battery clean:
+no `FAULT`, no `CAP EXCEEDED`, no `STALE`, and — the check that mattered — **no `code coalesce: unmapped
+block`**, so the address-ordered walk described every block in the arena across 24 batches.
+`churnMB=625 live=32 intact=32`, `gc during lisp: collections=5`, `ExcDemo`'s four frames, WPA2 →
+**HTTP 200, 828 bytes**.
+
+| Pi | before (increment 12) | after |
+|---|---|---|
+| code arena | 6.68 MB | **5.30 MB — a 21% cut, 1.38 MB recovered** |
+| free | — | 4.72 MB in **159 blocks**, largest 2.58 MB, 56 tiny |
+| `codeUsed` / `codeLive` | 1.82 / 1.75 MB | 0.67 / 0.58 MB |
+| reuse / bump / bumped bytes | — | 16,203 / 1,233 / 5.32 MB |
+
+QEMU measured 10%; hardware measures **21%**. The allocation *sequence* is identical on both (16,203 reuses
+and 1,233 bumps to the digit), so the difference is which methods are live when each collection runs, not a
+different workload. Note also that `codeUsed` fell by more than the arena did: exact-size splits out of big
+merged blocks stop carrying the slack that the old crumbs forced allocations to keep. The block-count
+collapse (2,810 → 171) is a QEMU-only comparison — increment 1's survey never ran on hardware before
+coalescing existed — but the Pi's 159 blocks land in the same place.
+
 ⇒ **Compaction is not the lever either, for the same reason the trim was not.** It would produce a tidier
 arena at each collection and could not touch the 1,233 growth events that set the high-water. The remaining
 gap — 5.99 MB arena against 2.54 MB in use — is capacity held against peak in-batch demand, and the levers
