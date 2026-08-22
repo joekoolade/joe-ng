@@ -221,6 +221,33 @@ public final class Loader
      * the read, so {@code lr} still holds the caller's return address; after the fault it is gone, and the
      * raw abort names only the two-line helper that happened to do the load.
      */
+    /**
+     * Walk the arming table and report the first entry whose blob has gone to zero since it was inserted.
+     * Paired with the insertion guard: if the entry was born valid and is zero here, something wrote over
+     * it, and the isolation runs have already ruled out the collector.
+     */
+    private static void verifyDlTab()
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            if (dlTab[k] == null || dlTab[k].blob == 0L)
+            {
+                Uart.write(Magic.bytes("\nDL WENT ZERO at k="));
+                VM.printDec(k);
+                Uart.write(Magic.bytes(" of "));
+                VM.printDec(dlN);
+                Uart.write(Magic.bytes(" null="));
+                VM.printDec(dlTab[k] == null ? 1 : 0);
+                Uart.write(Magic.bytes(" while compiling "));
+                printCurrentClass();
+                Uart.putc(0x0A);
+                while (true) { Magic.wfe(); }
+            }
+            k += 1;
+        }
+    }
+
     private static void badRead(long addr, long lr)
     {
         Uart.write(Magic.bytes("\nSTALE REGISTRY REF (blob "));
@@ -7695,6 +7722,15 @@ public final class Loader
                 Magic.store64(cell, buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
+                if (gbase == 0L)                            // PROBE: born zero, or zeroed later? This is the
+                {                                            //   write site, so the class is still in hand.
+                    Uart.write(Magic.bytes("\nDL BORN ZERO at dlN="));
+                    VM.printDec(dlN);
+                    Uart.write(Magic.bytes(" while compiling "));
+                    printCurrentClass();
+                    Uart.putc(0x0A);
+                    while (true) { Magic.wfe(); }
+                }
                 d.blob = gbase;
                 d.classOff = gThisNameOff;
                 d.nameOff = nameOff;
@@ -7707,6 +7743,7 @@ public final class Loader
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
+        verifyDlTab();                                      // ... and check none went zero since insertion
         Uart.write(Magic.bytes("  phaseA: "));
         VM.printDec(armed);
         Uart.write(Magic.bytes(" cells at structure time for "));

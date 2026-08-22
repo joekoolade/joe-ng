@@ -382,6 +382,39 @@ final class VMGc
      * every round until a round changed nothing. That multiplier was the collector's dominant cost: with
      * three rounds, each live {@code Object[]} registry table was probed three times.
      */
+    /** Re-scan every marked block in {@code [from,to)} — the overflow path's half of the same fix. */
+    private static void scanMarkedIn(long from, long to)
+    {
+        long o = from;
+        while (o < to)
+        {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L || o + size > to || o + size <= o)
+            {
+                o = to;         // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
+            }
+            else
+            {
+                if ((st & 1L) != 0L)
+                {
+                    boolean ignored = scanBlock(o, size);
+                }
+                o = o + size;
+            }
+        }
+    }
+
+    /** One past the last byte of whichever region {@code o} lives in. */
+    private static long regionTopOf(long o)
+    {
+        if (o >= Heap.LARGE_BASE)
+        {
+            return Magic.load64(Heap.LARGE_PTR_CELL);
+        }
+        return Magic.load64(Heap.PTR_CELL);
+    }
+
     private static void drainMarkStack()
     {
         while (markSp > MARK_STACK)
@@ -389,7 +422,11 @@ final class VMGc
             markSp = markSp - 8L;
             long o = Magic.load64(markSp);
             long size = Magic.load64(o + 8L) & -8L;
-            if (size != 0L && o + size <= Magic.load64(Heap.PTR_CELL) && o + size > o)
+            // Bound by the region the object is IN. This guard used to read Heap.PTR_CELL unconditionally,
+            // which is the SMALL region's top: once large objects lived above it, every one of them was
+            // marked and then silently never scanned, so anything reachable only through a large object was
+            // collected while live. That is a whole-heap correctness bug hiding behind a sanity check.
+            if (size != 0L && o + size <= regionTopOf(o) && o + size > o)
             {                                          // same guard the heap walk uses: never scan past a
                 boolean ignored = scanBlock(o, size);  //   corrupt size. Pushes are the real output here;
             }                                          //   the returned flag only matters to the fallback.
@@ -409,25 +446,8 @@ final class VMGc
         {
             markOverflow = 0;                          // a pass that never overflows has closed the set
             markSp = MARK_STACK;
-            long o = Heap.BASE;
-            long top = Magic.load64(Heap.PTR_CELL);
-            while (o < top)
-            {
-                long st = Magic.load64(o + 8L);
-                long size = st & -8L;
-                if (size == 0L || o + size > top || o + size <= o)
-                {
-                    o = top;    // corrupt / out-of-bounds: stop the walk instead of dereferencing garbage
-                }
-                else
-                {
-                    if ((st & 1L) != 0L)
-                    {
-                        boolean ignored = scanBlock(o, size);
-                    }
-                    o = o + size;
-                }
-            }
+            scanMarkedIn(Heap.BASE, Magic.load64(Heap.PTR_CELL));
+            scanMarkedIn(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
             drainMarkStack();                          // anything this pass queued, scanned before re-walking
             if (markOverflow == 0)
             {
