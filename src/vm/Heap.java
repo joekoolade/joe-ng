@@ -89,6 +89,7 @@ public final class Heap
     public static long allocCode(int size)
     {
         int aligned = (size + 7) & -8;
+        noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
         {
@@ -97,6 +98,7 @@ public final class Heap
         }
         codeBumpCount = codeBumpCount + 1L;             // nothing fit: the arena grows. Against a large free
         codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
+        noteBumpCause((long) aligned, 1);               // ... and this says WHICH of the two it was
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -145,6 +147,8 @@ public final class Heap
      */
     private static long takeFreeCode(int aligned)
     {
+        scanFreeBytes = 0L;                            // a scan that runs to the end has surveyed the whole
+        scanFreeMax = 0L;                              //   list, which is exactly when the classification runs
         long i = 0;
         while (i < codeBlockN)
         {
@@ -153,6 +157,11 @@ public final class Heap
             if ((sz & CODE_FREE) != 0L)
             {
                 long usable = sz & -8L;
+                scanFreeBytes = scanFreeBytes + usable;
+                if (usable > scanFreeMax)
+                {
+                    scanFreeMax = usable;
+                }
                 if (usable >= (long) aligned)
                 {
                     long start = Magic.load64(e);
@@ -173,6 +182,107 @@ public final class Heap
             i += 1;
         }
         return 0L;
+    }
+
+    // ----- allocation-shape measurement -----------------------------------------------------------------
+    /**
+     * Request-size histograms and bump-failure classification, in fixed scratch above the coalescing index
+     * map. Two questions this answers, both of which decide whether SIZE CLASSES would help:
+     *
+     * <p>(1) What sizes are actually asked for? Power-of-two classes round every request up, so their cost
+     * is set by the size distribution — cheap if requests already cluster near class boundaries, expensive
+     * if they sit just above one.
+     *
+     * <p>(2) When an allocation has to grow the arena, WHY? If the free list did not hold enough bytes at
+     * all, the space simply was not there and no allocation policy invents it. If it held enough bytes but
+     * no single block was big enough, that is external fragmentation — the failure size classes prevent by
+     * construction. The two are indistinguishable in the arena total, and they point at opposite fixes.
+     */
+    public static final long STATS = 0x0374_0000L;
+    private static final long STATS_DATA = STATS + 128L;      // 16 buckets each, 8 bytes per bucket
+
+    /** Bump-path failures where the free list held FEWER bytes than the request: a genuine shortage. */
+    public static long codeBumpNoSpace;
+    public static long dataBumpNoSpace;
+    /** Bump-path failures where the free list held ENOUGH bytes but no single block fit: fragmentation. */
+    public static long codeBumpWrongShape;
+    public static long dataBumpWrongShape;
+    /** Totals seen by the most recent COMPLETE free-list scan, used to classify the failure that followed. */
+    private static long scanFreeBytes;
+    private static long scanFreeMax;
+
+    /** Bucket a size by power of two: 0 = up to 16 B, 1 = up to 32, ... 15 = 256 KiB and above. */
+    private static long bucketOf(long size)
+    {
+        long b = 0;
+        long v = size >> 4;
+        while (v != 0L && b < 15L)
+        {
+            b = b + 1L;
+            v = v >> 1;
+        }
+        return b;
+    }
+
+    /** Count one request of {@code size} in the histogram at {@code base}. */
+    private static void noteRequest(long base, long size)
+    {
+        long slot = base + bucketOf(size) * 8L;
+        Magic.store64(slot, Magic.load64(slot) + 1L);
+    }
+
+    /** Classify a bump-path allocation against what the free list held when the scan failed. */
+    private static void noteBumpCause(long size, int isCode)
+    {
+        if (scanFreeBytes >= size)
+        {
+            if (isCode != 0) { codeBumpWrongShape = codeBumpWrongShape + 1L; }
+            else { dataBumpWrongShape = dataBumpWrongShape + 1L; }
+        }
+        else
+        {
+            if (isCode != 0) { codeBumpNoSpace = codeBumpNoSpace + 1L; }
+            else { dataBumpNoSpace = dataBumpNoSpace + 1L; }
+        }
+    }
+
+    /** Print a histogram's non-zero buckets as {@code <=16=N <=32=N ...}. */
+    public static void printHist(long base)
+    {
+        long b = 0;
+        while (b < 16L)
+        {
+            long n = Magic.load64(base + b * 8L);
+            if (n != 0L)
+            {
+                board.bcm2711.Uart.putc(0x20);
+                long label = 16L << (int) b;
+                if (label >= 1024L)
+                {
+                    VM.printDec((int) (label >> 10));
+                    board.bcm2711.Uart.putc(0x4B);          // ...K, so a bucket label stays short
+                }
+                else
+                {
+                    VM.printDec((int) label);
+                }
+                board.bcm2711.Uart.putc(0x3D);
+                VM.printDec((int) n);
+            }
+            b += 1L;
+        }
+    }
+
+    /** The code-request histogram base, for reporting. */
+    public static long codeHist()
+    {
+        return STATS;
+    }
+
+    /** The data-request histogram base, for reporting. */
+    public static long dataHist()
+    {
+        return STATS_DATA;
     }
 
     /** How many {@link #allocCode} calls were served from the free list, and how many had to grow the arena
@@ -443,6 +553,7 @@ public final class Heap
             // (it stops at the first size-0 status and sweeps nothing beyond).
             aligned = ObjectModel.HEADER_SIZE;
         }
+        noteRequest(STATS_DATA, (long) aligned);            // the object-size distribution, for size classes
         int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
         long freeCell = FREE_CELL + core * 8L;
         long ptrCell = PTR_CELL + core * 8L;
@@ -451,9 +562,16 @@ public final class Heap
         {
             long prev = 0L;
             long f = Magic.load64(freeCell);
+            scanFreeBytes = 0L;
+            scanFreeMax = 0L;
             while (f != 0L)                                 // first fit in this core's free list
             {
                 long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                scanFreeBytes = scanFreeBytes + fsize;
+                if (fsize > scanFreeMax)
+                {
+                    scanFreeMax = fsize;
+                }
                 if (fsize >= aligned)
                 {
                     long next = Magic.load64(f);
@@ -488,6 +606,7 @@ public final class Heap
             long p = Magic.load64(ptrCell);
             if (p + aligned <= arenaLimit(core))
             {
+                noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
                 Magic.store64(ptrCell, p + aligned);
                 Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
                 lastFromFreeList = 0;

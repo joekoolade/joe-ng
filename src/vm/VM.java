@@ -1772,23 +1772,24 @@ public final class VM
     /** Print {@code v} (0..9999) in decimal, no leading zeros. Uses only / and * (no irem). */
     public static void printDec(int v)
     {
-        int th = v / 1000;
-        int hu = (v - th * 1000) / 100;
-        int te = (v - th * 1000 - hu * 100) / 10;
-        int on = v - th * 1000 - hu * 100 - te * 10;
-        if (th > 0)
+        // Any number of digits. The previous version hardcoded thousands/hundreds/tens/ones, so a value of
+        // 10000 or more printed its leading part as one garbage character (16384 came out as "@384", the
+        // '@' being 16 + '0'). Every counter that outgrew four digits has been misreporting silently.
+        if (v < 0)
         {
-            Uart.putc(0x30 + th);
+            Uart.putc(0x2D);
+            v = -v;
         }
-        if (th > 0 || hu > 0)
+        int div = 1;
+        while (v / div >= 10)
         {
-            Uart.putc(0x30 + hu);
+            div = div * 10;
         }
-        if (th > 0 || hu > 0 || te > 0)
+        while (div > 0)
         {
-            Uart.putc(0x30 + te);
+            Uart.putc(0x30 + (v / div) % 10);
+            div = div / 10;
         }
-        Uart.putc(0x30 + on);
     }
 
     /** Print an unsigned decimal (full range), most-significant digit first. */

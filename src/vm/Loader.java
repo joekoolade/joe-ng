@@ -2279,6 +2279,25 @@ public final class Loader
                 Uart.putc(0x2F);
                 VM.printHex(Heap.codeMergedBytes);
                 Uart.putc(0x0A);
+                // Would size classes help? Two readings decide it. The request histograms say what rounding
+                // to 16/32/64/... would cost, and bumpWhy says whether the allocations that grew an arena
+                // met a genuine shortage (noSpace -- no policy invents bytes) or enough bytes in the wrong
+                // shape (wrongShape -- exactly what size classes prevent by construction).
+                Uart.write(Magic.bytes("  reqCode:"));
+                Heap.printHist(Heap.codeHist());
+                Uart.putc(0x0A);
+                Uart.write(Magic.bytes("  reqData:"));
+                Heap.printHist(Heap.dataHist());
+                Uart.putc(0x0A);
+                Uart.write(Magic.bytes("  bumpWhy code noSpace="));
+                VM.printDec((int) Heap.codeBumpNoSpace);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printDec((int) Heap.codeBumpWrongShape);
+                Uart.write(Magic.bytes(" | data noSpace="));
+                VM.printDec((int) Heap.dataBumpNoSpace);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printDec((int) Heap.dataBumpWrongShape);
+                Uart.putc(0x0A);
             }
         }
     }
