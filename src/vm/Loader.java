@@ -2022,7 +2022,11 @@ public final class Loader
                 // arenas (0x1000_0000), so this never touches live secondary-core data.
                 long z0 = demandHeapMark;
                 long zEnd = demandHeapMark + DEMAND_ZERO_SPAN;
-                if (zEnd > 0x1000_0000L) { zEnd = 0x1000_0000L; }   // never cross into core 1's arena
+                if (zEnd > Heap.LARGE_BASE) { zEnd = Heap.LARGE_BASE; }   // the demand heap is the SMALL
+                                                        // region: this span must stop where the large-object
+                                                        // region begins, or it wipes live tables allocated
+                                                        // there. It was clamped at core 1's arena when core
+                                                        // 0's was one contiguous range.
                 while (z0 < zEnd)
                 {
                     Magic.store64(z0, 0L);
@@ -2274,6 +2278,12 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" largeTop="));    // the large region: how far it has grown, and
+                VM.printHex(Magic.load64(Heap.LARGE_PTR_CELL) - Heap.LARGE_BASE);
+                Uart.write(Magic.bytes(" reuse="));       //   whether requests are finding blocks there
+                VM.printDec((int) Heap.largeReuse);
+                Uart.putc(0x2F);
+                VM.printDec((int) Heap.largeBump);
                 Uart.write(Magic.bytes(" merged="));      // blocks folded into a neighbour by the last
                 VM.printHex(Heap.codeMergedBlocks);       //   coalescing pass, and the bytes they carried
                 Uart.putc(0x2F);

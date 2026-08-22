@@ -142,6 +142,7 @@ final class VMGc
         {
             Heap.addFree(runStart, runSize);
         }
+        sweepLargeRegion();
         if (gcLog != 0)
         {
             Uart.write(Magic.bytes("  [gc walked="));
@@ -485,7 +486,13 @@ final class VMGc
             Magic.store64(cw, Magic.load64(cw) | (1L << (int) (bit & 63L)));   // still reachable
             return false;                               // code is not a heap block; nothing to mark or trace
         }
-        if (w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) && (w & 7L) == 0L && isBlockBase(w))
+        // A heap pointer is now either the small region below the large base, or the large region above it.
+        // Getting this wrong in the permissive direction only over-retains; getting it wrong in the strict
+        // direction sweeps live objects, so the large region MUST be included the moment anything is
+        // allocated there.
+        int inSmall = w >= Heap.BASE && w < Magic.load64(Heap.PTR_CELL) ? 1 : 0;
+        int inLarge = w >= Heap.LARGE_BASE && w < Magic.load64(Heap.LARGE_PTR_CELL) ? 1 : 0;
+        if ((inSmall != 0 || inLarge != 0) && (w & 7L) == 0L && isBlockBase(w))
         {
             long st = Magic.load64(w + 8L);
             if ((st & 1L) == 0L)
@@ -659,14 +666,74 @@ final class VMGc
             Magic.store64(z, 0L);
             z += 8L;
         }
-        long o = Heap.BASE;
-        while (o < stop)
+        markBlockBases(Heap.BASE, stop);
+        markBlockBases(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+    }
+
+    /**
+     * Sweep the large region. Same walk as the small heap — every block carries its size — but dead runs go
+     * back on the large free list, where they stay page multiples and so remain exactly reusable by any
+     * later large request. Coalescing matters here for the same reason it does below, with one difference:
+     * a merged run of page multiples is still a page multiple, so merging cannot produce a size that no
+     * request can land on. That is the whole point of segregating them.
+     */
+    private static void sweepLargeRegion()
+    {
+        long o = Heap.LARGE_BASE;
+        long top = Magic.load64(Heap.LARGE_PTR_CELL);
+        long runStart = 0L;
+        long runSize = 0L;
+        while (o < top)
         {
             long st = Magic.load64(o + 8L);
             long size = st & -8L;
-            if (size == 0L || o + size > stop || o + size <= o)
+            if (size == 0L || o + size > top || o + size <= o)
             {
-                o = stop;                              // corrupt: stop (matches the sweep's guard)
+                o = top;                               // corrupt: stop, as the small sweep does
+            }
+            else
+            {
+                if ((st & 1L) != 0L)
+                {
+                    if (runSize != 0L)
+                    {
+                        Heap.addFreeLarge(runStart, runSize);
+                        runStart = 0L;
+                        runSize = 0L;
+                    }
+                    liveBytes = liveBytes + size;
+                    Magic.store64(o + 8L, size);       // clear the mark
+                }
+                else
+                {
+                    reclaimed = reclaimed + size;
+                    if (runSize == 0L)
+                    {
+                        runStart = o;
+                    }
+                    runSize = runSize + size;
+                }
+                o = o + size;
+            }
+        }
+        if (runSize != 0L)
+        {
+            Heap.addFreeLarge(runStart, runSize);
+        }
+    }
+
+    /** Record the base of every block in {@code [from,to)}. Both regions are walkable the same way: every
+     *  block, allocated or free, carries its size in its status word. */
+    private static void markBlockBases(long from, long to)
+    {
+        long o = from;
+        while (o < to)
+        {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L || o + size > to || o + size <= o)
+            {
+                o = to;                                // corrupt: stop (matches the sweep's guard)
             }
             else
             {
