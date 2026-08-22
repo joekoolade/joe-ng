@@ -495,6 +495,34 @@ final class VMGc
         if ((inSmall != 0 || inLarge != 0) && (w & 7L) == 0L && isBlockBase(w))
         {
             long st = Magic.load64(w + 8L);
+            // GUARD: the block bitmap said this address is a block base. Verify it before writing to it --
+            // setting a mark bit on a word that is NOT a block turns data into data+1, which is exactly the
+            // "blob 0x1" the loader reports much later, with nothing left to say where it came from. Check
+            // here, where the address and its caller are still in hand.
+            long sz = st & -8L;
+            long regionTop = inLarge != 0 ? Magic.load64(Heap.LARGE_PTR_CELL) : Magic.load64(Heap.PTR_CELL);
+            if (sz < 16L || w + sz > regionTop)
+            {
+                if (falseBaseSeen == 0)
+                {
+                    falseBaseSeen = 1;
+                    Uart.write(Magic.bytes("\nFALSE BLOCK BASE addr="));
+                    printHex(w);
+                    Uart.write(Magic.bytes(" status="));
+                    printHex(st);
+                    Uart.write(Magic.bytes(" region="));
+                    printHex(inLarge != 0 ? 1L : 0L);
+                    Uart.write(Magic.bytes(" top="));
+                    printHex(regionTop);
+                    Uart.write(Magic.bytes(" largeTop="));
+                    printHex(Magic.load64(Heap.LARGE_PTR_CELL));
+                    Uart.putc(0x0A);
+                    Uart.write(Magic.bytes("  marked from "));
+                    Loader.printFrameAt(Magic.readLR());   // which scan handed us this word
+                    Uart.putc(0x0A);
+                }
+                return false;                          // refuse to mark it: not a block
+            }
             if ((st & 1L) == 0L)
             {
                 Magic.store64(w + 8L, st + 1L);        // set mark bit
@@ -538,6 +566,9 @@ final class VMGc
      *  the run trampoline are reached from hardware registers and stub-internal branches the collector
      *  cannot see. Set to the loader's code watermark, the same line the rewind never crossed. */
     static long codeSweepFloor;
+
+    /** One-shot latch for the false-block-base report, so a recurring case does not flood the UART. */
+    private static int falseBaseSeen;
 
     /** Walk the code-block registry and total the blocks with a bit set. Runs after the trace has drained,
      *  so every reachable code pointer has been seen. */
