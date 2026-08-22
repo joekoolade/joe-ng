@@ -2582,6 +2582,108 @@ had not been saying, and all four survive in the tree:
   address — the guard is called before the load, while `x30` still identifies the caller, which is how
   bug 3 was found after bugs 1 and 2 had each moved the crash somewhere new.
 
+### Code arena: compaction, or the cheaper thing? (arc started 2026-08-21)
+
+The metadata-lifetime arc ended with one lever untried: the code arena sits at **6.68 MB against 2.44 MB
+live**, and increment 10 established that a trailing-run trim recovers nothing because live methods are
+scattered. The stated next step was compaction — move code, patch every reference to it. That is the
+hardest thing in this area: branch targets, TIB slots, phase-A cells, `long` fields, JIT unwind tables
+keyed by address, **return addresses on the stack**, and the scheduler's saved PCs for parked tasks.
+
+**Increment 1 — measure the gap before building the hard thing.** Compaction is the right tool only if the
+arena is *fragmented*. If the free list is simply holding capacity the program reached at peak demand,
+moving code recovers nothing and the work is wasted. So: per-allocation counters (served from the free
+list vs forced to grow the arena, and the bytes those growths added) plus a free-list survey (blocks,
+bytes, largest block, blocks under 256 B), printed on every reclaim.
+
+**The answer is fragmentation, and it is stark** (QEMU, end of the suite; clean run, 3,211 lines, 0
+faults, `churnMB=625 live=32 intact=32`, `gc during lisp: collections=5`):
+
+| | |
+|---|---|
+| arena / used / live | 6.68 / 2.51 / **2.44 MB** |
+| free list | **4.25 MB in 2,810 blocks** |
+| largest free block | 1.17 MB |
+| free excluding that one | 3.08 MB in 2,809 blocks — **average 1,149 B** |
+| blocks under 256 B | 2,462 = **88% of all free blocks** |
+| allocations served from the list | 16,415 (94%) |
+| allocations that had to grow the arena | **1,021**, average request **6,878 B** |
+| bytes those growths added | **6.70 MB — the entire arena** |
+
+Read the last two rows together: **every byte of the arena was added by an allocation that could not find
+a fit**, while 4.25 MB sat free in crumbs averaging about a kilobyte. The requests that fail are the big
+ones (~6.9 KB); the free space is shaped wrong for them.
+
+**And the cause was already named in this file.** Increment 5 of the previous arc found that splitting
+without coalescing "grinds the heap to fragments" and fixed it — **for the data heap only**. `VMGc`'s data
+sweep merges runs of adjacent dead blocks (`runStart`/`runSize`); the code sweep frees each block
+individually and **never merges neighbours**, while `takeFreeCode` splits every reuse. Same allocator
+mistake, same arena, one side fixed and the other not.
+
+⇒ **Increment 2 is coalescing adjacent free code blocks, not compaction.** It is the fix the evidence
+points at, it is a fraction of the work, and it may remove the need for compaction entirely — if merging
+those 2,809 crumbs back into multi-KB blocks lets the 1,021 failing allocations find fits, the arena stops
+growing at all. Compaction stays on the shelf until a post-coalescing measurement says the *remaining* gap
+justifies moving code. One wrinkle to solve there: the registry is in allocation order and splits append
+out of order, so merging needs an address-ordered view of a headerless arena.
+
+**Increment 2 — coalescing: the fragmentation is gone, and the arena barely moves.** `Heap.coalesceCodeFree`
+merges runs of adjacent free blocks after each sweep, the code-arena counterpart of the data sweep's run
+merging. The obstacle was navigation, not merging: the code arena is headerless, so it cannot be walked
+block by block, and the registry is in allocation order with every split appending its remainder at the
+end, so it is not in address order either. A rebuilt address→index hash map (131,072 slots at
+`0x0364_0000`, half full at worst) supplies what the data heap gets free from its status words; the pass
+then walks the arena in address order — blocks tile it contiguously — folds each free run into its first
+entry, and drops the absorbed entries. It stops rather than guessing if it ever meets an address the
+registry does not describe; across a whole suite it never did.
+
+| | before | after |
+|---|---|---|
+| free blocks | 2,810 | **171** |
+| blocks under 256 B | 2,462 (88%) | **68 (40%)** |
+| largest free block | 1.17 MB | 1.33 MB |
+| free bytes | 4.25 MB | 3.55 MB |
+| **arena** | **6.68 MB** | **5.99 MB** |
+| allocations forced to grow | 1,021 | 1,233 |
+| bytes those growths added | 6.70 MB | 6.01 MB |
+
+**The free list is healthy now — and the arena fell only 10%.** That is the finding, and it is not the one
+the increment-1 measurement predicted. Defragmenting removed 94% of the free blocks without removing the
+growth: allocations still had to extend the arena 1,233 times.
+
+**Why, and what it means for compaction.** The arena's size is a HIGH-WATER mark, and the water rises
+*between* collections. A batch compiles thousands of methods before any sweep runs; whatever free space
+existed when the batch started is all it has, and when that runs out the arena grows — no matter how tidy
+the free list is. Coalescing (like the trim, like compaction) only acts at collection time, so none of
+them can lower a peak set by demand inside a batch.
+
+**PI-VALIDATED (2026-08-22), and hardware recovers TWICE what emulation showed.** Whole battery clean:
+no `FAULT`, no `CAP EXCEEDED`, no `STALE`, and — the check that mattered — **no `code coalesce: unmapped
+block`**, so the address-ordered walk described every block in the arena across 24 batches.
+`churnMB=625 live=32 intact=32`, `gc during lisp: collections=5`, `ExcDemo`'s four frames, WPA2 →
+**HTTP 200, 828 bytes**.
+
+| Pi | before (increment 12) | after |
+|---|---|---|
+| code arena | 6.68 MB | **5.30 MB — a 21% cut, 1.38 MB recovered** |
+| free | — | 4.72 MB in **159 blocks**, largest 2.58 MB, 56 tiny |
+| `codeUsed` / `codeLive` | 1.82 / 1.75 MB | 0.67 / 0.58 MB |
+| reuse / bump / bumped bytes | — | 16,203 / 1,233 / 5.32 MB |
+
+QEMU measured 10%; hardware measures **21%**. The allocation *sequence* is identical on both (16,203 reuses
+and 1,233 bumps to the digit), so the difference is which methods are live when each collection runs, not a
+different workload. Note also that `codeUsed` fell by more than the arena did: exact-size splits out of big
+merged blocks stop carrying the slack that the old crumbs forced allocations to keep. The block-count
+collapse (2,810 → 171) is a QEMU-only comparison — increment 1's survey never ran on hardware before
+coalescing existed — but the Pi's 159 blocks land in the same place.
+
+⇒ **Compaction is not the lever either, for the same reason the trim was not.** It would produce a tidier
+arena at each collection and could not touch the 1,233 growth events that set the high-water. The remaining
+gap — 5.99 MB arena against 2.54 MB in use — is capacity held against peak in-batch demand, and the levers
+that would actually move it are collecting *during* a batch, or compiling less code per batch. Both are
+real options; neither is compaction. **The compaction arc closes here**, with the fragmentation fixed as a
+genuine (if smaller than hoped) win and the reason recorded.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must

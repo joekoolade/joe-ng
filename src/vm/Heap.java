@@ -92,8 +92,11 @@ public final class Heap
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
         {
+            codeReuseCount = codeReuseCount + 1L;
             return reused;
         }
+        codeBumpCount = codeBumpCount + 1L;             // nothing fit: the arena grows. Against a large free
+        codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -170,6 +173,204 @@ public final class Heap
             i += 1;
         }
         return 0L;
+    }
+
+    /** How many {@link #allocCode} calls were served from the free list, and how many had to grow the arena
+     *  because nothing fit. A high bump count against a large free total is fragmentation, not demand. */
+    public static long codeReuseCount;
+    public static long codeBumpCount;
+    /** Bytes requested by the allocations that had to bump — what fragmentation actually cost in arena. */
+    public static long codeBumpBytes;
+
+    /** Free-list survey, recomputed on demand: how many free blocks, how many bytes they hold, and the
+     *  largest single one. Free bytes far above the largest block means the space is there but unusable —
+     *  the shape that a compactor (or coalescing) fixes and that a bigger arena does not. */
+    public static long codeFreeBlocks;
+    public static long codeFreeBytes;
+    public static long codeFreeMax;
+    /** Free blocks under 256 bytes: too small for most methods, so effectively lost until merged. */
+    public static long codeFreeTiny;
+
+    /** Walk the registry and fill the survey fields. Cheap — the registry is a flat array of pairs. */
+    public static void surveyCodeFree()
+    {
+        codeFreeBlocks = 0L;
+        codeFreeBytes = 0L;
+        codeFreeMax = 0L;
+        codeFreeTiny = 0L;
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L);
+            if ((sz & CODE_FREE) != 0L)
+            {
+                long usable = sz & -8L;
+                codeFreeBlocks = codeFreeBlocks + 1L;
+                codeFreeBytes = codeFreeBytes + usable;
+                if (usable > codeFreeMax)
+                {
+                    codeFreeMax = usable;
+                }
+                if (usable < 256L)
+                {
+                    codeFreeTiny = codeFreeTiny + 1L;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    // ----- coalescing adjacent free code (compaction arc, increment 2) ----------------------------------
+    /**
+     * Address → registry-index map, rebuilt each coalescing pass. The code arena has no headers, so unlike
+     * the data heap it cannot be walked block by block; and the registry is in ALLOCATION order, with each
+     * split appending its remainder at the end, so it is not in address order either. This map supplies
+     * what the data heap gets from its status words: given the address a block starts at, which entry
+     * describes it. 131,072 slots of 8 bytes, open-addressed — twice the registry's own capacity, so the
+     * table never runs above half full.
+     */
+    private static final long CODE_INDEX = 0x0364_0000L;
+    private static final long CODE_INDEX_SLOTS = 131072L;
+
+    /** Free blocks merged into a neighbour by the last pass, and the bytes they carried. */
+    public static long codeMergedBlocks;
+    public static long codeMergedBytes;
+
+    /** Scatter every live registry entry into {@link #CODE_INDEX}, keyed by its start address. */
+    private static void indexCodeBlocks()
+    {
+        long z = CODE_INDEX;
+        while (z < CODE_INDEX + CODE_INDEX_SLOTS * 8L)
+        {
+            Magic.store64(z, 0L);
+            z += 8L;
+        }
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long start = Magic.load64(CODE_BLOCKS + i * 16L);
+            if (start != 0L)
+            {
+                long h = codeSlotOf(start);
+                while (Magic.load64(CODE_INDEX + h * 8L) != 0L)   // linear probe; the table is half empty
+                {
+                    h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
+                }
+                Magic.store64(CODE_INDEX + h * 8L, i + 1L);       // +1 so that 0 can mean "empty"
+            }
+            i += 1;
+        }
+    }
+
+    /** Hash an 8-aligned code address to a starting slot. */
+    private static long codeSlotOf(long addr)
+    {
+        long h = addr >> 3;
+        h = h ^ (h >> 15);
+        h = h * 0x9E3779B1L;                              // knuth multiplicative, then take the high bits
+        return (h >> 13) & (CODE_INDEX_SLOTS - 1L);
+    }
+
+    /** The registry index of the block starting at {@code addr}, or -1 if the map has no such block. */
+    private static long lookupCodeBlock(long addr)
+    {
+        long h = codeSlotOf(addr);
+        long v = Magic.load64(CODE_INDEX + h * 8L);
+        while (v != 0L)
+        {
+            if (Magic.load64(CODE_BLOCKS + (v - 1L) * 16L) == addr)
+            {
+                return v - 1L;
+            }
+            h = (h + 1L) & (CODE_INDEX_SLOTS - 1L);
+            v = Magic.load64(CODE_INDEX + h * 8L);
+        }
+        return -1L;
+    }
+
+    /**
+     * Merge runs of adjacent free code blocks into one, the code-arena counterpart of the data sweep's
+     * run merging. Without it, {@link #takeFreeCode}'s splitting has no inverse: every reuse can divide a
+     * block and nothing ever puts the pieces back, so the arena fills with crumbs — measured at 88% of free
+     * blocks under 256 bytes, while the allocations that had to grow the arena averaged 6,878 bytes each.
+     *
+     * <p>Walks the arena in ADDRESS order via {@link #CODE_INDEX} (blocks tile it contiguously, so the next
+     * block always starts where this one ends), accumulating consecutive free blocks. The first entry of a
+     * run takes the whole run's size; the others are marked dead (start 0) and removed by
+     * {@link #compactCodeRegistry}. If the walk ever meets an address the registry does not describe it
+     * stops rather than guessing — the merges already made are each individually sound.
+     */
+    public static void coalesceCodeFree()
+    {
+        codeMergedBlocks = 0L;
+        codeMergedBytes = 0L;
+        if (codeBlockN == 0L)
+        {
+            return;
+        }
+        indexCodeBlocks();
+        long cursor = CODE_BASE;
+        long end = Magic.load64(CODE_PTR_CELL);
+        long runIdx = -1L;                                 // entry that will absorb the current free run
+        while (cursor < end)
+        {
+            long i = lookupCodeBlock(cursor);
+            if (i < 0L)
+            {
+                board.bcm2711.Uart.write(Magic.bytes("code coalesce: unmapped block\n"));
+                runIdx = -1L;                              // an unknown block ends any run in progress
+                break;
+            }
+            long sz = Magic.load64(CODE_BLOCKS + i * 16L + 8L);
+            long usable = sz & -8L;
+            if ((sz & CODE_FREE) != 0L && runIdx >= 0L)
+            {
+                mergeInto(runIdx, i, usable);              // adjacent free: fold this block into the run
+            }
+            else if ((sz & CODE_FREE) != 0L)
+            {
+                runIdx = i;                                // a free block starts a run
+            }
+            else
+            {
+                runIdx = -1L;                              // a live method ends it
+            }
+            cursor += usable;
+        }
+        compactCodeRegistry();
+    }
+
+    /** Fold block {@code i} of {@code usable} bytes into the run headed by {@code head}, and kill its entry. */
+    private static void mergeInto(long head, long i, long usable)
+    {
+        long e = CODE_BLOCKS + head * 16L;
+        Magic.store64(e + 8L, ((Magic.load64(e + 8L) & -8L) + usable) | CODE_FREE);
+        Magic.store64(CODE_BLOCKS + i * 16L, 0L);          // dead entry: compaction drops it
+        Magic.store64(CODE_BLOCKS + i * 16L + 8L, 0L);
+        codeMergedBlocks = codeMergedBlocks + 1L;
+        codeMergedBytes = codeMergedBytes + usable;
+    }
+
+    /** Drop the entries killed by merging, preserving the order of the rest. */
+    private static void compactCodeRegistry()
+    {
+        long dst = 0;
+        long src = 0;
+        while (src < codeBlockN)
+        {
+            long start = Magic.load64(CODE_BLOCKS + src * 16L);
+            if (start != 0L)
+            {
+                if (dst != src)
+                {
+                    Magic.store64(CODE_BLOCKS + dst * 16L, start);
+                    Magic.store64(CODE_BLOCKS + dst * 16L + 8L, Magic.load64(CODE_BLOCKS + src * 16L + 8L));
+                }
+                dst += 1L;
+            }
+            src += 1L;
+        }
+        codeBlockN = dst;
     }
 
     /** Mark the registry entry for {@code start} free (the collector swept it). */

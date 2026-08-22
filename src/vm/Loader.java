@@ -2254,6 +2254,30 @@ public final class Loader
                 VM.printHex(VMGc.codeLive);             //   the ratio that decides whether reclaiming code
                 Uart.putc(0x2F);                        //   is worth building at all
                 VM.printHex(VMGc.codeUsed);
+                // Fragmentation survey: the arena sits ~4x its live set, and the question compaction exists
+                // to answer is WHY. If the free list holds most of the gap but every block is smaller than
+                // what allocations ask for, the space is fragmented and moving code (or merging neighbours)
+                // recovers it. If instead allocations are being served from the free list and the arena
+                // merely reached this size at peak demand, compaction recovers nothing.
+                Heap.surveyCodeFree();
+                Uart.write(Magic.bytes(" free="));       // total free bytes / how many blocks hold them
+                VM.printHex(Heap.codeFreeBytes);
+                Uart.putc(0x2F);
+                VM.printHex(Heap.codeFreeBlocks);
+                Uart.write(Magic.bytes(" maxFree="));    // the largest single free block: free >> maxFree
+                VM.printHex(Heap.codeFreeMax);           //   means the space exists but cannot be handed out
+                Uart.write(Magic.bytes(" tiny="));       // blocks under 256B -- too small for most methods
+                VM.printHex(Heap.codeFreeTiny);
+                Uart.write(Magic.bytes(" reuse="));      // allocations served from the list vs forced to
+                VM.printHex(Heap.codeReuseCount);        //   grow the arena; the bump count IS the cost of
+                Uart.putc(0x2F);                         //   fragmentation, in allocations
+                VM.printHex(Heap.codeBumpCount);
+                Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
+                VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" merged="));      // blocks folded into a neighbour by the last
+                VM.printHex(Heap.codeMergedBlocks);       //   coalescing pass, and the bytes they carried
+                Uart.putc(0x2F);
+                VM.printHex(Heap.codeMergedBytes);
                 Uart.putc(0x0A);
             }
         }

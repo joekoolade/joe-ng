@@ -583,6 +583,14 @@ final class VMGc
             }
             i += 1;
         }
+        if (sweepCode != 0)
+        {
+            // Put the pieces back. takeFreeCode splits on every reuse and nothing was ever its inverse, so
+            // the free list decayed into crumbs; merging adjacent free blocks here is what the data sweep's
+            // run merging does for the heap, and it runs after the sweep so this pass sees every block the
+            // collection freed.
+            Heap.coalesceCodeFree();
+        }
         if (zeroHi != 0L)
         {
             // One I-cache pass over the whole swept span. Heap.publishCode invalidates the entire
