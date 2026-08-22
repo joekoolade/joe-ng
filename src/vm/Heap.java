@@ -207,9 +207,93 @@ public final class Heap
     /** Bump-path failures where the free list held ENOUGH bytes but no single block fit: fragmentation. */
     public static long codeBumpWrongShape;
     public static long dataBumpWrongShape;
+    /** The same two, in BYTES. The arena's high-water is set by bytes, not by how many allocations took the
+     *  bump path, so the counts alone cannot size the win: 287,329 events at 48 bytes and 287,329 events at
+     *  8 KiB are the same count and two orders of magnitude apart in arena. `wrongShapeBytes` is the part a
+     *  size-class or segregated-fit allocator could plausibly have served from the free list instead. */
+    public static long codeNoSpaceBytes;
+    public static long dataNoSpaceBytes;
+    public static long codeWrongShapeBytes;
+    public static long dataWrongShapeBytes;
     /** Totals seen by the most recent COMPLETE free-list scan, used to classify the failure that followed. */
     private static long scanFreeBytes;
     private static long scanFreeMax;
+    private static long scanFreeBlocks;
+
+    /**
+     * Large-allocation failures, sampled at the moment they happen. The cumulative byte split says most of
+     * the arena growth comes from a few thousand LARGE requests that found enough free bytes but no block
+     * big enough — which is the one failure compaction fixes and size classes do not. Cumulative totals
+     * cannot decide whether to build a compactor, though, because the data heap TRIMS its bump pointer
+     * after each collection: re-bumping afterwards is expected and healthy, not waste.
+     *
+     * <p>So sample the state AT each large failure instead: the request, the free list's total and largest
+     * block, how many blocks that total is spread across, and where the arena's top was. A failure with a
+     * big free total, a small largest block, and a high top is compactable arena. A failure with a low top
+     * is just a growing heap doing what it should.
+     */
+    private static final long LARGE_REQ = 16384L;
+    /** Ring of the last 8 large failures: {size, freeTotal, freeMax, top} each. */
+    private static final long LARGE_RING = STATS + 256L;
+    private static long largeRingN;
+    public static long largeFailCount;
+    public static long largeFailBytes;
+    /** The single worst sample: the failure whose free list held the most unusable bytes. */
+    public static long worstFreeTotal;
+    public static long worstFreeMax;
+    public static long worstSize;
+    public static long worstTop;
+
+    /** Record one large bump-path failure and its free-list state. */
+    private static void noteLargeFail(long size, long top)
+    {
+        largeFailCount = largeFailCount + 1L;
+        largeFailBytes = largeFailBytes + size;
+        if (scanFreeBytes > worstFreeTotal)
+        {
+            worstFreeTotal = scanFreeBytes;
+            worstFreeMax = scanFreeMax;
+            worstSize = size;
+            worstTop = top;
+        }
+        long e = LARGE_RING + (largeRingN & 7L) * 32L;
+        Magic.store64(e, size);
+        Magic.store64(e + 8L, scanFreeBytes);
+        Magic.store64(e + 16L, scanFreeMax);
+        Magic.store64(e + 24L, top);
+        largeRingN = largeRingN + 1L;
+    }
+
+    /** Print the sampled large failures: the worst one, then the most recent few. */
+    public static void printLargeFails()
+    {
+        board.bcm2711.Uart.write(Magic.bytes("  largeFail n="));
+        VM.printDec((int) largeFailCount);
+        board.bcm2711.Uart.write(Magic.bytes(" worst: req="));
+        VM.printHex(worstSize);
+        board.bcm2711.Uart.write(Magic.bytes(" free="));
+        VM.printHex(worstFreeTotal);
+        board.bcm2711.Uart.write(Magic.bytes(" max="));
+        VM.printHex(worstFreeMax);
+        board.bcm2711.Uart.write(Magic.bytes(" top="));
+        VM.printHex(worstTop);
+        board.bcm2711.Uart.putc(0x0A);
+        long i = 0;
+        while (i < 8L && i < largeRingN)
+        {
+            long e = LARGE_RING + ((largeRingN - 1L - i) & 7L) * 32L;
+            board.bcm2711.Uart.write(Magic.bytes("    req="));
+            VM.printHex(Magic.load64(e));
+            board.bcm2711.Uart.write(Magic.bytes(" free="));
+            VM.printHex(Magic.load64(e + 8L));
+            board.bcm2711.Uart.write(Magic.bytes(" max="));
+            VM.printHex(Magic.load64(e + 16L));
+            board.bcm2711.Uart.write(Magic.bytes(" top="));
+            VM.printHex(Magic.load64(e + 24L));
+            board.bcm2711.Uart.putc(0x0A);
+            i += 1L;
+        }
+    }
 
     /** Bucket a size by power of two: 0 = up to 16 B, 1 = up to 32, ... 15 = 256 KiB and above. */
     private static long bucketOf(long size)
@@ -236,13 +320,29 @@ public final class Heap
     {
         if (scanFreeBytes >= size)
         {
-            if (isCode != 0) { codeBumpWrongShape = codeBumpWrongShape + 1L; }
-            else { dataBumpWrongShape = dataBumpWrongShape + 1L; }
+            if (isCode != 0)
+            {
+                codeBumpWrongShape = codeBumpWrongShape + 1L;
+                codeWrongShapeBytes = codeWrongShapeBytes + size;
+            }
+            else
+            {
+                dataBumpWrongShape = dataBumpWrongShape + 1L;
+                dataWrongShapeBytes = dataWrongShapeBytes + size;
+            }
         }
         else
         {
-            if (isCode != 0) { codeBumpNoSpace = codeBumpNoSpace + 1L; }
-            else { dataBumpNoSpace = dataBumpNoSpace + 1L; }
+            if (isCode != 0)
+            {
+                codeBumpNoSpace = codeBumpNoSpace + 1L;
+                codeNoSpaceBytes = codeNoSpaceBytes + size;
+            }
+            else
+            {
+                dataBumpNoSpace = dataBumpNoSpace + 1L;
+                dataNoSpaceBytes = dataNoSpaceBytes + size;
+            }
         }
     }
 
@@ -564,10 +664,12 @@ public final class Heap
             long f = Magic.load64(freeCell);
             scanFreeBytes = 0L;
             scanFreeMax = 0L;
+            scanFreeBlocks = 0L;
             while (f != 0L)                                 // first fit in this core's free list
             {
                 long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
                 scanFreeBytes = scanFreeBytes + fsize;
+                scanFreeBlocks = scanFreeBlocks + 1L;
                 if (fsize > scanFreeMax)
                 {
                     scanFreeMax = fsize;
@@ -607,6 +709,10 @@ public final class Heap
             if (p + aligned <= arenaLimit(core))
             {
                 noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
+                if ((long) aligned >= LARGE_REQ)             // and if it was large, snapshot the moment: the
+                {                                            //   cumulative totals cannot separate healthy
+                    noteLargeFail((long) aligned, p);        //   re-bumping after a trim from real waste
+                }
                 Magic.store64(ptrCell, p + aligned);
                 Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
                 lastFromFreeList = 0;

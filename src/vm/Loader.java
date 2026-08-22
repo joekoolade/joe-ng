@@ -2298,6 +2298,21 @@ public final class Loader
                 Uart.write(Magic.bytes(" wrongShape="));
                 VM.printDec((int) Heap.dataBumpWrongShape);
                 Uart.putc(0x0A);
+                // ... and the same split in BYTES, which is what the arena high-water is actually made of.
+                // wrongShapeBytes is the ceiling on what a size-class allocator could have served from the
+                // free list instead of growing the arena.
+                Uart.write(Magic.bytes("  bumpBytes code noSpace="));
+                VM.printHex(Heap.codeNoSpaceBytes);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printHex(Heap.codeWrongShapeBytes);
+                Uart.write(Magic.bytes(" | data noSpace="));
+                VM.printHex(Heap.dataNoSpaceBytes);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printHex(Heap.dataWrongShapeBytes);
+                Uart.putc(0x0A);
+                Heap.printLargeFails();                  // the state AT each large failure -- what a data-heap
+                                                         //   compactor would have had to work with
+
             }
         }
     }
