@@ -100,7 +100,8 @@ public final class Heap
             board.bcm2711.Uart.write(Magic.bytes("code arena OOM\n"));
             while (true)
             {
-                Magic.wfe();                            // should never fire: batches rewind to the code mark
+                Magic.wfe();                            // the sweep + free list are what keep this from firing
+                                                        //   now that batches no longer rewind the arena
             }
         }
         Magic.store64(CODE_PTR_CELL, p + aligned);

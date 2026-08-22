@@ -2795,6 +2795,65 @@ The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand
 uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
 never have tested its absence. A cold power-on on real silicon did.
 
+**Increment 11 — the code rewind is retired: `RECLAIM_CODE_BY_GC` is the default.** The sweep has been
+correct behind the flag since increment 8 and Pi-validated with ownership in increment 9; this makes it the
+shipped path, so both halves of `resetLoader`'s rewind are now gone and a batch's compiled code dies by
+reachability exactly like its metadata.
+
+Flipping the constant was not the whole change. **One line in the reset was written for a world where a
+batch's code always dies with it**:
+
+```java
+VM.dropJitTablesAbove(codeHeapMark);   // frame/handler entries for the dead code would
+                                       //   ALIAS the next batch's reused addresses
+```
+
+Under the rewind that is exactly right — everything above the mark is dead, so every unwind entry above it
+is stale. Under reclamation it is wrong in the dangerous direction: the entries above the mark no longer
+all belong to dead code, and a **surviving** method stripped of its frame size and catch handlers is a
+mis-unwound stack the next time an exception crosses it. The sweep already retires entries per swept range
+(`VM.dropJitTablesIn`), which is the same hygiene at method granularity, so the wholesale drop is now gated
+on the rewind being in use.
+
+Worth naming the shape of that bug, because it is the shape of the whole arc: **the rewind's correctness
+was load-bearing in places that never mentioned it.** Each retirement finds another line whose safety came
+from "nothing survives a batch" rather than from an argument about the object in front of it. This one was
+invisible to the suite — QEMU and the Pi both passed with the drop in place, because a mis-unwound stack
+needs an exception to cross a surviving JIT frame in a *later* batch than the one that compiled it, and no
+demo does that. It is an argument from construction, not a test result.
+
+**PI-VALIDATED (2026-08-21), whole battery.** The suite image with the code rewind retired runs the
+entire demo battery on a real Pi 4: no `FAULT`, no `CAP EXCEEDED`, no `STALE REGISTRY REF` across 24
+batches, `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610 stable=1` with **`gc during lisp:
+collections=5`** — the rewind baseline, so retiring the code rewind costs the allocation-heavy path
+nothing — `ticks/core 50 50 50` with `sched: 89 preemptions`, and the WiFi finale joining WPA2 and
+returning **HTTP 200, 825 bytes**, ending at `(self-build retired; host writer only)`.
+
+| | Pi | QEMU |
+|---|---|---|
+| code arena held (`cur - mark`) | 6.68 MB | 6.68 MB |
+| `codeUsed` / `codeLive` | 1.82 / 1.75 MB | 2.51 / 2.44 MB |
+| `codeRoots` peak | 43,332 of 262,144 (16.5%) | 60,785 (23%) |
+
+`codeUsed` a few percent above `codeLive` is the load-bearing reading: the free list absorbs reuse, so the
+6.68 MB arena is capacity held against peak demand rather than a leak — and hardware and emulation agree
+on the arena size to the byte. `ExcDemo`'s four-frame trace is correct, which is where the per-range
+`dropJitTablesIn` hygiene shows in output.
+
+The root count is the one number that moves between runs: 43,305 / 43,332 / 43,236 here, matching
+increment 9's Pi run (43,272) and the post-revert QEMU run exactly, while one QEMU run of this image
+measured 60,785. It tracks how much code each batch compiles under a given thread schedule. Hardware sits
+at 16.5% of capacity; the conservative bound from the outlier is 23%, so call the headroom ~4x and not the
+~6x hardware alone suggests.
+
+**One property of the rewind deliberately not preserved.** The rewind zeroed dead code, so a dangling code
+pointer met zeros — `blr 0` is caught — instead of a previous method's instructions. Reclaimed buffers are
+not zeroed: the window is small (reuse overwrites the block with real code) but it is not nil, and the
+failure mode for a stale code pointer is now "executes something arbitrary" rather than "traps". Zeroing on
+sweep would restore it at the cost of a pass over dead code plus I-cache maintenance per collection; it is
+recorded here rather than done, because it defends against a bug class the sweep is supposed to make
+impossible rather than one that has been observed.
+
 **Increment 9 — code-root ownership. DONE, PI-VALIDATED.** On hardware `codeRoots` reads 13,579 →
 43,467 → 43,503 → 43,272 — rising *and falling*, matching QEMU — against 216,423-and-climbing before
 ownership. No `CAP EXCEEDED`, `ExcDemo`'s four frames correct, `churnMB=625 live=32 intact=32`, Lisp's 5

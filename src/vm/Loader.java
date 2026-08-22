@@ -1945,27 +1945,34 @@ public final class Loader
      * a batch's garbage was reusable only one allocation per block, and {@code demo/LispDemo} did not
      * finish.
      *
-     * <p>The CODE arena still rewinds per batch: code has no reachability story yet, since its buffers live
-     * outside the managed heap and the addresses pointing at them are {@code long}s the collector
-     * deliberately does not follow off-heap. Setting this to false restores the old whole-heap rewind,
+     * <p>The CODE arena is reclaimed the same way now, under its own switch ({@link #RECLAIM_CODE_BY_GC}):
+     * its buffers live outside the managed heap and the addresses pointing at them are {@code long}s the
+     * collector does not follow, so code reachability is carried by a separate bitmap and the code-root
+     * table rather than by tracing. Setting this to false restores the old whole-heap rewind,
      * which is always safe (it discards everything above the watermark) and is the fallback if metadata
      * lifetime is ever suspect.
      */
     static final boolean RECLAIM_BY_GC = true;
 
     /**
-     * Reclaim the CODE arena by reachability too — the last piece of the batch model. Off by default while
-     * it is measured. With it on, {@link #resetLoader} stops rewinding the code arena and the collector
-     * sweeps unreachable compiled methods into a free list instead ({@code VMGc.sweepCode}), which the
-     * measurement in increment 7 says is worth roughly 70% of everything ever compiled.
+     * Reclaim the CODE arena by reachability too — the last piece of the batch model, and now the default.
+     * {@link #resetLoader} no longer rewinds the code arena; the collector sweeps unreachable compiled
+     * methods into a free list instead ({@code VMGc.sweepCode}), which is worth roughly 70% of everything
+     * ever compiled: {@code codeUsed} tracks {@code codeLive} (1.75/1.82 MB late in the suite) where the
+     * un-swept arena was pinned at 9.51 MB.
      *
-     * <p>Two consequences to keep in view. The code-root table is no longer cleared with the arena, so its
-     * entries accumulate: they only ever over-retain heap objects (never free something live), but the
-     * table is finite and overflow is fatal once reclamation depends on it. And nothing below the loader's
-     * code watermark is ever swept — the boot vector table, the scheduler's switch stubs and the run
-     * trampoline are entered from hardware registers and stub-internal branches no scan can see.
+     * <p>The consequence that shapes the rest of the reset: a batch's code no longer dies with its batch,
+     * so anything keyed by machine ADDRESS must be retired per swept range rather than wholesale. That is
+     * why the code-root drop and {@link VM#dropJitTablesIn} hang off the sweep, and why the unconditional
+     * {@link VM#dropJitTablesAbove} below is gated on this being off — under reclamation it would discard
+     * the unwind entries of methods that are still alive.
+     *
+     * <p>Nothing below the loader's code watermark is ever swept: the boot vector table, the scheduler's
+     * switch stubs and the run trampoline are entered from hardware registers and stub-internal branches
+     * no scan can see. Setting this back to false restores the whole-arena rewind, which is always safe
+     * (it discards everything above the watermark) and is the fallback if code lifetime is ever suspect.
      */
-    static final boolean RECLAIM_CODE_BY_GC = false;
+    static final boolean RECLAIM_CODE_BY_GC = true;
 
     /** Per-batch footprint accounting, printed when {@link #LIFETIME_TRACE} is on: what each batch actually
      *  costs in data and code is the number this arc has to fit inside the arena without a rewind. */
@@ -2084,8 +2091,14 @@ public final class Loader
                     Magic.store64(Heap.CODE_PTR_CELL, codeHeapMark);
                     codeRootN = 0;                                  // the code those roots belonged to is gone
                 }
-                VM.dropJitTablesAbove(codeHeapMark);            // frame/handler entries for the dead code would
-                                                                //   ALIAS the next batch's reused addresses
+                if (RECLAIM_CODE_BY_GC == false)
+                {
+                    VM.dropJitTablesAbove(codeHeapMark);        // frame/handler entries for the dead code would
+                }                                               //   ALIAS the next batch's reused addresses
+                // Under code reclamation this drop must NOT happen: the entries above the mark no longer all
+                // belong to dead code, and a surviving method stripped of its frame size / catch handlers is
+                // a mis-unwound stack the next time an exception crosses it. The sweep retires entries per
+                // swept range instead (VM.dropJitTablesIn), which is the same hygiene at method granularity.
                 // Stale-root hygiene: a still-registered task Thread from a RECLAIMED batch (e.g. a sleeper
                 // that never exited) now points at rewound memory -- as a conservative GC root it would
                 // falsely retain whatever the NEXT batch allocates at that address. Its object is gone
