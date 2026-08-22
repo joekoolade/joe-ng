@@ -218,7 +218,26 @@ public final class Heap
     /** Totals seen by the most recent COMPLETE free-list scan, used to classify the failure that followed. */
     private static long scanFreeBytes;
     private static long scanFreeMax;
+    private static long scanFreeMaxAddr;
     private static long scanFreeBlocks;
+
+    /**
+     * Adjacency sampling: at a large failure, would MERGING the largest free block with its free
+     * neighbours have satisfied the request? The data heap coalesces adjacent dead blocks during the sweep
+     * and never between collections, so a block 32 bytes short of the next request stays 32 bytes short
+     * even when the block beside it is free too. This measures how often that is the whole story — and it
+     * is the difference between a one-page fix (merge at free time) and building a compactor.
+     *
+     * <p>Sampled rather than exhaustive: the free list runs to tens of thousands of blocks and finding a
+     * neighbour means scanning it, so this walks at most {@link #ADJ_HOPS} neighbours for at most
+     * {@link #ADJ_MAX} failures.
+     */
+    private static final long ADJ_HOPS = 8L;
+    private static final long ADJ_MAX = 32L;
+    public static long adjSamples;
+    public static long adjWouldFit;
+    public static long adjMergedMax;
+    public static long adjListLen;
 
     /**
      * Large-allocation failures, sampled at the moment they happen. The cumulative byte split says most of
@@ -243,6 +262,60 @@ public final class Heap
     public static long worstFreeMax;
     public static long worstSize;
     public static long worstTop;
+
+    /** The size the largest free block would reach if merged with the free blocks that follow it. */
+    private static long mergedSizeOf(long start, long len, long head)
+    {
+        long hops = 0;
+        while (hops < ADJ_HOPS)
+        {
+            long f = head;
+            long grew = 0;
+            while (f != 0L)
+            {
+                if (f == start + len)                       // the block immediately after this run is free
+                {
+                    len = len + Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                    grew = 1;
+                    f = 0L;
+                }
+                else
+                {
+                    f = Magic.load64(f);
+                }
+            }
+            if (grew == 0)
+            {
+                return len;
+            }
+            hops += 1L;
+        }
+        return len;
+    }
+
+    /** Start a fresh adjacency sample set, so every batch gets its own budget. */
+    public static void resetAdjSampling()
+    {
+        adjSamples = 0L;
+        adjWouldFit = 0L;
+        adjMergedMax = 0L;
+    }
+
+    /** Sample whether merging would have satisfied this request. */
+    private static void noteAdjacency(long size, long head)
+    {
+        adjSamples = adjSamples + 1L;
+        adjListLen = scanFreeBlocks;
+        long merged = mergedSizeOf(scanFreeMaxAddr, scanFreeMax, head);
+        if (merged > adjMergedMax)
+        {
+            adjMergedMax = merged;
+        }
+        if (merged >= size)
+        {
+            adjWouldFit = adjWouldFit + 1L;                 // one page of allocator, not a compactor
+        }
+    }
 
     /** Record one large bump-path failure and its free-list state. */
     private static void noteLargeFail(long size, long top)
@@ -277,6 +350,17 @@ public final class Heap
         VM.printHex(worstFreeMax);
         board.bcm2711.Uart.write(Magic.bytes(" top="));
         VM.printHex(worstTop);
+        board.bcm2711.Uart.putc(0x0A);
+        // Would merging the largest free block with its free neighbours have satisfied the request? This is
+        // the question that separates a one-page allocator fix from building a compactor.
+        board.bcm2711.Uart.write(Magic.bytes("  adj samples="));
+        VM.printDec((int) adjSamples);
+        board.bcm2711.Uart.write(Magic.bytes(" wouldFitAfterMerge="));
+        VM.printDec((int) adjWouldFit);
+        board.bcm2711.Uart.write(Magic.bytes(" mergedMax="));
+        VM.printHex(adjMergedMax);
+        board.bcm2711.Uart.write(Magic.bytes(" listLen="));
+        VM.printDec((int) adjListLen);
         board.bcm2711.Uart.putc(0x0A);
         long i = 0;
         while (i < 8L && i < largeRingN)
@@ -673,6 +757,7 @@ public final class Heap
                 if (fsize > scanFreeMax)
                 {
                     scanFreeMax = fsize;
+                    scanFreeMaxAddr = f;
                 }
                 if (fsize >= aligned)
                 {
@@ -712,6 +797,10 @@ public final class Heap
                 if ((long) aligned >= LARGE_REQ)             // and if it was large, snapshot the moment: the
                 {                                            //   cumulative totals cannot separate healthy
                     noteLargeFail((long) aligned, p);        //   re-bumping after a trim from real waste
+                    if (scanFreeBytes >= (long) aligned && adjSamples < ADJ_MAX)
+                    {
+                        noteAdjacency((long) aligned, Magic.load64(freeCell));
+                    }
                 }
                 Magic.store64(ptrCell, p + aligned);
                 Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC

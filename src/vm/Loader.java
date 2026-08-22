@@ -2311,7 +2311,10 @@ public final class Loader
                 VM.printHex(Heap.dataWrongShapeBytes);
                 Uart.putc(0x0A);
                 Heap.printLargeFails();                  // the state AT each large failure -- what a data-heap
-                                                         //   compactor would have had to work with
+                Heap.resetAdjSampling();                 //   compactor would have had to work with. Sampling
+                                                         //   restarts per batch: the cap was being spent on
+                                                         //   the early demos, and the interesting failures
+                                                         //   (Lisp's doubling loop) come last.
 
             }
         }
