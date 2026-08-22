@@ -519,6 +519,11 @@ final class VMGc
     static long codeUsed;
     /** Bytes of unreachable compiled code the last collection returned to the code free list. */
     static long codeFreed;
+    /** Lowest and highest-end swept address this collection, so the I-cache maintenance over the zeroed
+     *  buffers can be one pass instead of one per block: {@link Heap#publishCode} invalidates the WHOLE
+     *  instruction cache each call, so calling it per method would be quadratic in nothing useful. */
+    private static long zeroLo;
+    private static long zeroHi;
     /** 1 = actually sweep unreachable code, not merely count it. Off until the code rewind is retired:
      *  while the rewind runs, a batch's code is discarded wholesale and sweeping it would be busywork. */
     static int sweepCode;
@@ -534,6 +539,8 @@ final class VMGc
         codeLive = 0L;
         codeUsed = 0L;
         codeFreed = 0L;
+        zeroLo = 0L;
+        zeroHi = 0L;
         long i = 0;
         while (i < Heap.codeBlockN)
         {
@@ -570,10 +577,52 @@ final class VMGc
                 // under the batch rewind.
                 VM.dropJitTablesIn(start, start + size);
                 Loader.dropCodeRootsIn(start, start + size);   // its baked-in addresses die with it
+                zeroBuffer(start, size);                       // stale instructions are worse than zeros
                 Heap.freeCodeBlock(i);
                 codeFreed = codeFreed + size;
             }
             i += 1;
+        }
+        if (zeroHi != 0L)
+        {
+            // One I-cache pass over the whole swept span. Heap.publishCode invalidates the entire
+            // instruction cache per call, so per-buffer publishing would repeat that thousands of times to
+            // no benefit; the span may also cover live methods, which costs those a refetch and nothing else.
+            Heap.publishCode(zeroLo, zeroHi);
+        }
+    }
+
+    /**
+     * Zero a swept code buffer, so a dangling pointer into it meets zeros rather than a previous method's
+     * instructions. The batch rewind used to give this for free — it zeroed everything above the code
+     * watermark — and losing it was the one property increment 11 did not carry over.
+     *
+     * <p>It narrows a window rather than closing a hole: the buffer is unreachable by the time it is swept,
+     * and reuse overwrites it with real code soon after. What it buys is the FAILURE MODE. A stale code
+     * pointer that survives a collection lands on {@code 0x00000000}, which decodes as UDF and traps into
+     * the fault reporter naming the address; without it the same bug branches into the middle of whatever
+     * method used to live there and runs it, which is unbounded and looks like anything at all.
+     *
+     * <p>Deliberately not conditional on the sweep being right. If the collector ever frees a method that is
+     * still live, this converts a run that limps into one that stops at the instruction that did it — which
+     * is what the arc wants while code reclamation is young.
+     */
+    private static void zeroBuffer(long start, long size)
+    {
+        long z = start;
+        long end = start + size;
+        while (z < end)
+        {
+            Magic.store64(z, 0L);
+            z += 8L;
+        }
+        if (zeroHi == 0L || start < zeroLo)
+        {
+            zeroLo = start;
+        }
+        if (end > zeroHi)
+        {
+            zeroHi = end;
         }
     }
 

@@ -2795,6 +2795,47 @@ The dirty-DRAM worry did not materialise: the rewind used to pre-zero the demand
 uninitialised or out-of-bounds read met a deterministic zero, and QEMU (whose RAM starts zeroed) could
 never have tested its absence. A cold power-on on real silicon did.
 
+**Increment 12 — zero on sweep: the rewind's last property, restored.** The batch rewind used to zero
+every code byte above the watermark, so a dangling code pointer met zeros. Increment 11 retired the rewind
+and did not carry that over; this does, by zeroing each buffer as the sweep frees it.
+
+**What it actually buys is the failure mode, not safety.** A swept buffer is unreachable by definition and
+reuse overwrites it with real code soon after, so the window is narrow. But inside that window the two
+behaviours are very different: a stale code pointer now lands on `0x00000000`, which decodes as UDF and
+traps into the fault reporter naming the address, where before it branched into the middle of whatever
+method used to live there and ran it. One is a bug report; the other is unbounded and looks like anything
+at all. That is worth a pass over dead code.
+
+It is deliberately **not** conditional on the sweep being right. If the collector ever frees a method that
+is still live, zeroing turns a run that limps into one that stops at the instruction that did it — the
+behaviour this arc wants while code reclamation is young.
+
+**One implementation note worth keeping.** `Heap.publishCode` invalidates the *entire* instruction cache
+per call (`ic ialluis`), so publishing per swept buffer would repeat a full I-cache flush thousands of
+times per collection to no benefit. The sweep tracks the lowest and highest swept address instead and
+publishes once over the span. The span may cover live methods between the swept ones; that costs those a
+refetch and nothing else.
+
+**And it turns a construction argument into a test.** Freeing a still-live method used to be survivable —
+the buffer kept its instructions until something reused it, so a wrong sweep could pass the suite. With
+zeroing it cannot: the next call through that method executes zeros and traps. So the suite completing is
+now evidence the sweep frees nothing live across ~40 batches, where before it was evidence of nothing in
+particular.
+
+**PI-VALIDATED (2026-08-21), whole battery.** No `FAULT`, no `CAP EXCEEDED`, no `STALE REGISTRY REF`
+across 24 batches, `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610 stable=1` with `gc during
+lisp: collections=5`, `ExcDemo`'s four frames correct, WPA2 → **HTTP 200, 829 bytes**, ending at
+`(self-build retired; host writer only)`.
+
+The readings are increment 11's to within noise — arena 6.68 MB (7,001,928 bytes vs 7,003,368), `codeUsed`
+1.81 / `codeLive` 1.74 MB, `codeRoots` peak 43,314 (vs 43,332) — so **zeroing costs nothing measurable**
+and reclamation is unchanged. QEMU: 3,211 lines, 0 faults, same readings. Host tests: 323 checks, 0
+failures.
+
+**Hardware is the only place this was actually tested.** QEMU models no instruction cache, so
+`publishCode`'s invalidate is a no-op there and a wrong span would never show. On the Pi the swept-span
+publish is real work, and the run is clean.
+
 **Increment 11 — the code rewind is retired: `RECLAIM_CODE_BY_GC` is the default.** The sweep has been
 correct behind the flag since increment 8 and Pi-validated with ownership in increment 9; this makes it the
 shipped path, so both halves of `resetLoader`'s rewind are now gone and a batch's compiled code dies by
