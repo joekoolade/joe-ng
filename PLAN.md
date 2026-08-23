@@ -2677,12 +2677,91 @@ merged blocks stop carrying the slack that the old crumbs forced allocations to 
 collapse (2,810 → 171) is a QEMU-only comparison — increment 1's survey never ran on hardware before
 coalescing existed — but the Pi's 159 blocks land in the same place.
 
+**PI-VALIDATED (2026-08-23), whole battery.** No `FAULT`, no `STALE`, no `CAP EXCEEDED`: the full demo
+suite, `churnMB=625 live=32 intact=32`, `ExcDemo`'s four frames, `lisp: evals=600 result=610 stable=1`,
+WPA2 → DHCP → DNS → TCP → **HTTP 200, 828 bytes**, ending at `(self-build retired; host writer only)`.
+So the in-flight-buffer fix and the large-object region both hold on silicon.
+
+Through batch 23 hardware tracks emulation digit for digit — 44.7 MB held, `reuse 1301–1353 / bump 284`.
+Three readings differ, and the first is the one that matters:
+
+**CEILING FIXED, Pi-validated (2026-08-23).** With the sweep trimming the region's bump pointer, the Lisp
+phase now reaches **37.1 MB against the same 64 MB reservation** — where it previously pinned at 64.0 MB
+with nothing left. Peak across the run is 44.7 MB, so there is 30% headroom at the worst moment instead of
+zero. `lgTrim` returned **119.0 MB** cumulative and `lgLive` held at **3.72 MB**; hardware and emulation
+agree on both to the byte (`0x7709000` and `0x3B9000`). Whole battery clean: no `FAULT`, no `STALE`,
+`churnMB=625 live=32 intact=32`, `ExcDemo`'s four frames, `gc during lisp: collections=7`, WPA2 → **HTTP
+200, 828 bytes**, ending at `(self-build retired; host writer only)`.
+
+- **(historical) The region hit its ceiling during Lisp.** `largeTop=0x3FFF000` was **64.0 MB — the entire reservation**
+  (`LARGE_LIMIT − LARGE_BASE`), with bump at 574. It did not fail: the sweep kept up and allocation
+  continued out of the free list. But there is no headroom, and `allocLarge` returning 0 twice is a halt.
+  QEMU peaked at 44.7 MB and never showed this. Options, cheapest first: move the split down (96/96 rather
+  than 128/64), or trim the large region's bump past a trailing free run — remembering that increment 10
+  measured trailing-run trims recovering nothing for CODE, and this region may or may not be the same shape.
+- `gc during lisp: collections=7` matches QEMU exactly against the baseline's 5, so those two extra
+  collections are real, not an emulation artifact — most likely the young-buffer grace holding a pass longer.
+- `gc: collections=0` in the churn line where it read 3. That counter tracks PRESSURE-triggered collections
+  in the small arena, and large allocations no longer pressure it; the collections themselves are still
+  visible in the `[gc walked=…]` lines. Believed semantic rather than broken — worth confirming, not
+  assuming.
+
+**A correction to what this section first claimed.** Two Pi runs showed a garbled counter — `reuse=;115/574`
+and later `reuse=:150/1539` — and both times I wrote it off as single-character UART corruption on the
+grounds that "printDec cannot produce a non-digit since the four-digit bug was fixed". That fix was made on
+the `alloc-size-histogram` branch and never merged; this branch came off `main` and still had the old
+four-digit `printDec`, which prints a value ≥ 10000 as one character plus three digits (`':'` is `'0'+10`,
+`';'` is `'0'+11`). The readings were the bug, not noise. Corrected values: **11,115 / 574** and
+**10,150 / 1,539**, not the 1,115 and 150 I read. The fix is now on this branch too.
+
+The lesson is not about `printDec`. It is that "that cannot happen because I fixed it" is worth one command
+to verify, especially when the same anomaly appears twice in the same field.
+
 ⇒ **Compaction is not the lever either, for the same reason the trim was not.** It would produce a tidier
 arena at each collection and could not touch the 1,233 growth events that set the high-water. The remaining
 gap — 5.99 MB arena against 2.54 MB in use — is capacity held against peak in-batch demand, and the levers
 that would actually move it are collecting *during* a batch, or compiling less code per batch. Both are
 real options; neither is compaction. **The compaction arc closes here**, with the fragmentation fixed as a
 genuine (if smaller than hoped) win and the reason recorded.
+
+**Increment 3 — the large-object region. WORKS, one bug open.** The measurements that led here, in order:
+counts said small-object crumbs; bytes said large-object near-misses; peak-time state said *32 bytes short
+with 5.04 MB free*; adjacency said merging cannot reach those blocks (0 of 70 sampled failures); and
+quantising requests in the shared region moved the near-miss up one quantum for 44.8 MB of slack (2,500
+failures → 2,392). Each reading overturned the fix the previous one implied.
+
+**Why the shared region could never work.** Free blocks come from sweep-merged runs and split remainders.
+In a region shared with arbitrary-size small objects, both are arbitrary sizes, so rounding *requests* to a
+lattice the *supply* does not share is futile. Segregate large objects into a region where every block is a
+page multiple and merged runs and remainders are page multiples too: demand and supply share one lattice
+and exact reuse becomes structural. That is what buddy allocators buy with alignment, bought here with
+segregation instead.
+
+Core 0's arena splits at `0x0C00_0000`: small below, ≥16 KiB above, page-quantised, with its own bump
+pointer, free list and sweep (`Heap.allocLarge`, `VMGc.sweepLargeRegion`).
+
+| | baseline | large region |
+|---|---|---|
+| large allocations reusing a block | ~0 | **1,353** |
+| large allocations growing the arena | 2,500 | **284** |
+| worst failure | 5.04 MB free, largest block 32 B short | — the near-miss cannot form |
+
+**The bug it exposed, and the reason it took four isolation runs.** `drainMarkStack` bounded every popped
+object with `o + size <= Heap.PTR_CELL` — the SMALL region's top. Large objects failed that test, so each
+was *marked and then silently never scanned*, and anything reachable only through one was reclaimed while
+live. It reads as a sanity check ("never scan past a corrupt size") and was one, until a second region
+existed; the same bound sat in the fixpoint fallback's walk. Fixed by `regionTopOf(o)` and `scanMarkedIn`.
+
+The isolation that hid the region from the GC faulted *identically*, which is what made the collector look
+innocent — with the region hidden, large objects were never marked at all, so their referents died the same
+way. **One symptom, two causes**, and the isolation could not separate them. Two of those runs were also
+spent on a misread: `blob 0x1` is a flag from `badRead(baseA == 0 ? 0 : 1, ...)`, not an address.
+
+**Open:** with `RECLAIM_CODE_BY_GC` on, the suite faults at 2,990 lines executing zeros in a JIT'd
+`Unsafe.isBigEndian` — the zero-on-sweep signature of a live method reclaimed and called. Code sweep off:
+3,219 lines, clean. So code liveness under-counts under a two-region heap; `markCodeRoots` is not the cause
+(it marks through `tryMark`, which accepts both regions). Also unmeasured until that is fixed: `gc during
+lisp` read 7 collections against the baseline 5 in the code-sweep-off configuration.
 
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 

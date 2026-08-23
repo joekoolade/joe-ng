@@ -1159,6 +1159,10 @@ public final class VM
      */
     static void reportFaultStack(long pc, long sp)
     {
+        if (pc >= Heap.CODE_BASE && pc < Heap.CODE_LIMIT)
+        {
+            VMGc.reportSweptPc(pc);                        // did the collector free the buffer we are in?
+        }
         Uart.write(Magic.bytes("\n  loader was compiling: "));
         Loader.printCurrentClass();
         long cpc = pc;
@@ -1773,8 +1777,11 @@ public final class VM
     public static void printDec(int v)
     {
         // Any number of digits. The previous version hardcoded thousands/hundreds/tens/ones, so a value of
-        // 10000 or more printed its leading part as one garbage character (16384 came out as "@384", the
-        // '@' being 16 + '0'). Every counter that outgrew four digits has been misreporting silently.
+        // 10000 or more printed its leading part as ONE character, since the leading "digit" was the whole
+        // thousands count: 16384 came out as "@384" ('@' is '0'+16), 10150 as ":150", 11115 as ";115".
+        // Every counter that outgrew four digits misreported silently. Two Pi runs showed exactly that in
+        // the large-region reuse counter and were dismissed as UART corruption -- on the strength of this
+        // same fix, which had been made on one branch and not merged into the other.
         if (v < 0)
         {
             Uart.putc(0x2D);
