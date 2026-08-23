@@ -2778,11 +2778,15 @@ spent on a misread: `blob 0x1` is a flag from `badRead(baseA == 0 ? 0 : 1, ...)`
   alarming, check whether the instrument is inside the thing it measures.** Both of this arc's false alarms
   were that: a counter blind to a new code path, and a scanner seeing its own bookkeeping.
 
-**Open:** with `RECLAIM_CODE_BY_GC` on, the suite faults at 2,990 lines executing zeros in a JIT'd
-`Unsafe.isBigEndian` — the zero-on-sweep signature of a live method reclaimed and called. Code sweep off:
-3,219 lines, clean. So code liveness under-counts under a two-region heap; `markCodeRoots` is not the cause
-(it marks through `tryMark`, which accepts both regions). Also unmeasured until that is fixed: `gc during
-lisp` read 7 collections against the baseline 5 in the code-sweep-off configuration.
+**(RESOLVED — this paragraph described the in-flight-buffer fault while it was still open.)** With
+`RECLAIM_CODE_BY_GC` on, the suite used to fault at 2,990 lines executing zeros in a swept buffer. The cause
+was buffers freed while their address was still in flight, fixed by allocate-black (`CODE_YOUNG`), and the
+flag has been **on by default since increment 11** and Pi-validated repeatedly since — most recently a whole
+battery at 3,373 lines, 0 faults, with the code sweep live throughout. Nothing here is open.
+
+It stood as a stale "Open:" for several commits after the fault died, and I repeated it as a remaining item
+in a PR body. A note that describes a bug is worth deleting the moment the bug is fixed; otherwise it reads
+as a live hazard to whoever finds it next.
 
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
