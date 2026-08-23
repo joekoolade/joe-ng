@@ -71,6 +71,7 @@ final class VMGc
         }
         markRange(scanFrom, stackTop);
         markRange(staticsStart, staticsEnd);
+        staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
         int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
         while (sc < 4)                                //   collected, but their tasks hold refs into core 0's
         {                                             //   heap — e.g. spawned Runnable receivers)
@@ -91,11 +92,17 @@ final class VMGc
         // mark: any method reachable only through an object the fixpoint had yet to discover was freed while
         // live, and (since #134) zeroed, so the next call to it executes zeros.
         measureCodeLiveness();                        // how much compiled code is still reachable at all
-        if (sweepCode != 0)
+        if (sweepCode != 0 && STALE_PROBES)
         {
-            Loader.verifyCells();                     // PROBE: did this sweep free something a cell needs?
+            // Off by default: each pass rescans the stack, the statics and the JIT tables per collection,
+            // which roughly doubles a suite run. Turn on to investigate a fault that lands in swept code.
+            Loader.verifyCells();
             findStaleCodeHolders(Heap.BASE, Magic.load64(Heap.PTR_CELL));
             findStaleCodeHolders(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+            findStaleCodeInRaw(scanFrom, STACK_TOP, 1L);                    // the stack
+            findStaleCodeInRaw(staticsStart, staticsEnd, 2L);               // image statics
+            findStaleCodeInRaw(VM.jitFrameTable, VM.jitFrameTable + VM.jitFrameCount * 24L, 3L);
+            findStaleCodeInRaw(VM.jitHandlerTable, VM.jitHandlerTable + VM.jitHandlerCount * 32L, 4L);
         }
                                                       // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
@@ -704,6 +711,36 @@ final class VMGc
      * collector freed a method something still dispatches through, the holder is the object whose scanning
      * failed to keep it alive — which is the fact the fault, minutes later in an unnamed buffer, cannot say.
      */
+    /**
+     * The same question asked of raw memory rather than of heap blocks: does any word in {@code [from,to)}
+     * point INTO a range this sweep just freed? The heap-walking version only ever looked at heap objects,
+     * which is why it came up empty — an interior code address (a return address, a saved handler PC, a
+     * table keyed by machine address) lives on the stack or in the loader's scratch tables, not in an object.
+     */
+    private static void findStaleCodeInRaw(long from, long to, long tag)
+    {
+        long p = from & -8L;
+        while (p < to && freedN2 > 0L)
+        {
+            long w = Magic.load64(p);
+            if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0)
+            {
+                Uart.write(Magic.bytes("\nSTALE CODE PTR in raw region tag="));
+                printHex(tag);
+                Uart.write(Magic.bytes(" at="));
+                printHex(p);
+                Uart.write(Magic.bytes(" target="));
+                printHex(w);
+                Uart.write(Magic.bytes(" stub="));
+                printHex(Loader.stubIdxAt(w));
+                Uart.putc(0x0A);
+                rawStaleSeen = rawStaleSeen + 1L;      // report and CONTINUE: halting here hides whether the
+                return;                                //   fix downstream actually works
+            }
+            p += 8L;
+        }
+    }
+
     private static void findStaleCodeHolders(long from, long to)
     {
         long o = from;
@@ -749,9 +786,16 @@ final class VMGc
         }
     }
 
+    private static long checkedFrees;
+    private static long staticsScans;
+    public static long rawStaleSeen;
+    /** Enable the stale-code-pointer probes. Expensive; see the call site. */
+    static final boolean STALE_PROBES = false;
+
     private static void measureCodeLiveness()
     {
         freedN2 = 0L;
+        checkedFrees = 0L;
         codeLive = 0L;
         codeUsed = 0L;
         codeFreed = 0L;
@@ -762,8 +806,9 @@ final class VMGc
         {
             long e = Heap.CODE_BLOCKS + i * 16L;
             long start = Magic.load64(e);
-            long size = Magic.load64(e + 8L);
-            if ((size & Heap.CODE_FREE) != 0L)
+            long sz = Magic.load64(e + 8L);            // status word: size plus the FREE/YOUNG flags
+            long size = sz & -8L;                      // ... and the size alone, which is what every
+            if ((sz & Heap.CODE_FREE) != 0L)           //   length calculation below must use
             {
                 i += 1;                                // already swept: not live, not in use
                 continue;
@@ -784,6 +829,15 @@ final class VMGc
                 {
                     b += 1;
                 }
+            }
+            if ((sz & Heap.CODE_YOUNG) != 0L)
+            {
+                // Allocated since the last collection: its address may still be in flight, held only in a
+                // register or a half-built structure. Keep it this pass and clear the flag, so the next
+                // collection judges it on reachability like anything else.
+                Magic.store64(e + 8L, sz & ~Heap.CODE_YOUNG);
+                codeLive = codeLive + size;
+                hit = 1;
             }
             if (hit == 0 && Heap.codePinnedIn(start, size) != 0)
             {

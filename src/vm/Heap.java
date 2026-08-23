@@ -241,6 +241,8 @@ public final class Heap
         }
         Magic.store64(CODE_PTR_CELL, p + aligned);
         noteCodeBlock(p, aligned);
+        Magic.store64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L,
+                      Magic.load64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L) | CODE_YOUNG);
         return p;
     }
 
@@ -266,6 +268,23 @@ public final class Heap
     public static final long CODE_FREE = 1L;
 
     /**
+     * Registry flag: this buffer was allocated since the last collection, so the sweep must keep it.
+     *
+     * <p>{@link #allocCode} hands back a buffer that nothing references yet — the compiler fills it and
+     * only afterwards stores its address into a cell, a vtable slot or a static. A collection triggered
+     * inside that window (any heap allocation the compiler makes can call {@code Magic.gc}) sees a buffer
+     * no root reaches, frees it, and zeroes it; the compiler then publishes the address and the first call
+     * through it executes zeros. That is the fault this arc chased for ten cycles: a stub freed at
+     * collection 7 and branched into at 26, with no live holder at the time because the address was still
+     * in flight.
+     *
+     * <p>One collection of grace is enough and is the standard answer (allocate black): a buffer is exempt
+     * for the collection that follows its allocation, by which time it is either published or genuinely
+     * garbage.
+     */
+    public static final long CODE_YOUNG = 2L;
+
+    /**
      * Reuse a swept code buffer of at least {@code aligned} bytes, splitting the remainder into its own
      * free entry when it is worth tracking. First fit over the registry, which doubles as the free list —
      * the code arena has no headers to thread a list through, and the registry already enumerates every
@@ -289,7 +308,7 @@ public final class Heap
                 {
                     long start = Magic.load64(e);
                     long rest = usable - (long) aligned;
-                    Magic.store64(e + 8L, (long) aligned);          // allocated, exact size
+                    Magic.store64(e + 8L, (long) aligned | CODE_YOUNG);   // allocated, exact size
                     if (rest >= 64L)                                // a remainder too small to hold any
                     {                                               //   method is left inside the block
                         noteCodeBlock(start + (long) aligned, (int) rest);
@@ -297,7 +316,7 @@ public final class Heap
                     }
                     else
                     {
-                        Magic.store64(e + 8L, usable);              // keep the slack with the allocation
+                        Magic.store64(e + 8L, usable | CODE_YOUNG);   // keep the slack with the allocation
                     }
                     return start;
                 }
