@@ -2677,6 +2677,31 @@ merged blocks stop carrying the slack that the old crumbs forced allocations to 
 collapse (2,810 → 171) is a QEMU-only comparison — increment 1's survey never ran on hardware before
 coalescing existed — but the Pi's 159 blocks land in the same place.
 
+**PI-VALIDATED (2026-08-23), whole battery.** No `FAULT`, no `STALE`, no `CAP EXCEEDED`: the full demo
+suite, `churnMB=625 live=32 intact=32`, `ExcDemo`'s four frames, `lisp: evals=600 result=610 stable=1`,
+WPA2 → DHCP → DNS → TCP → **HTTP 200, 828 bytes**, ending at `(self-build retired; host writer only)`.
+So the in-flight-buffer fix and the large-object region both hold on silicon.
+
+Through batch 23 hardware tracks emulation digit for digit — 44.7 MB held, `reuse 1301–1353 / bump 284`.
+Three readings differ, and the first is the one that matters:
+
+- **The region hits its ceiling during Lisp.** `largeTop=0x3FFF000` is **64.0 MB — the entire reservation**
+  (`LARGE_LIMIT − LARGE_BASE`), with bump at 574. It did not fail: the sweep kept up and allocation
+  continued out of the free list. But there is no headroom, and `allocLarge` returning 0 twice is a halt.
+  QEMU peaked at 44.7 MB and never showed this. Options, cheapest first: move the split down (96/96 rather
+  than 128/64), or trim the large region's bump past a trailing free run — remembering that increment 10
+  measured trailing-run trims recovering nothing for CODE, and this region may or may not be the same shape.
+- `gc during lisp: collections=7` matches QEMU exactly against the baseline's 5, so those two extra
+  collections are real, not an emulation artifact — most likely the young-buffer grace holding a pass longer.
+- `gc: collections=0` in the churn line where it read 3. That counter tracks PRESSURE-triggered collections
+  in the small arena, and large allocations no longer pressure it; the collections themselves are still
+  visible in the `[gc walked=…]` lines. Believed semantic rather than broken — worth confirming, not
+  assuming.
+
+One reading was garbled — `reuse=;115/574`, where `;` is `'0'+11`. `printDec` cannot produce a non-digit
+since the four-digit bug was fixed, so this reads as single-character UART corruption rather than a counter
+fault.
+
 ⇒ **Compaction is not the lever either, for the same reason the trim was not.** It would produce a tidier
 arena at each collection and could not touch the 1,233 growth events that set the high-water. The remaining
 gap — 5.99 MB arena against 2.54 MB in use — is capacity held against peak in-batch demand, and the levers
