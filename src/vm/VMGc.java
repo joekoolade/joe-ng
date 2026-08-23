@@ -418,6 +418,28 @@ final class VMGc
         }
     }
 
+    /**
+     * Mark CODE reachable from a range of raw memory, without marking anything on the heap. Written to test
+     * whether the image's TIBs (which sit outside the statics root scan) hold the stub address that goes
+     * missing. They do not — scanning the whole image [0x80000, staticsEnd) changed nothing — so the call
+     * is removed and the helper kept, since the next region to suspect will want exactly this shape.
+     */
+    private static void markCodeInRange(long from, long to)
+    {
+        long p = from & -8L;
+        while (p < to)
+        {
+            long w = Magic.load64(p);
+            if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && (w & 3L) == 0L)
+            {
+                long bit = (w - Heap.CODE_BASE) >> 3;
+                long cw = CODE_BITMAP + ((bit >> 6) << 3);
+                Magic.store64(cw, Magic.load64(cw) | (1L << (int) (bit & 63L)));
+            }
+            p += 8L;
+        }
+    }
+
     /** One past the last byte of whichever region {@code o} lives in. */
     private static long regionTopOf(long o)
     {
@@ -634,8 +656,8 @@ final class VMGc
         long i = 0;
         while (i < sweptLogN)
         {
-            long start = Magic.load64(SWEPT_LOG + i * 24L);
-            long end = Magic.load64(SWEPT_LOG + i * 24L + 8L);
+            long start = Magic.load64(SWEPT_LOG + i * 32L);
+            long end = Magic.load64(SWEPT_LOG + i * 32L + 8L);
             if (pc >= start && pc < end)
             {
                 Uart.write(Magic.bytes("  PC IS IN SWEPT CODE: buffer "));
@@ -643,9 +665,15 @@ final class VMGc
                 Uart.putc(0x2D);
                 printHex(end);
                 Uart.write(Magic.bytes(" freed at collection "));
-                VM.printDec((int) Magic.load64(SWEPT_LOG + i * 24L + 16L));
+                VM.printDec((int) Magic.load64(SWEPT_LOG + i * 32L + 16L));
                 Uart.write(Magic.bytes(" of "));
                 VM.printDec((int) collections);
+                long sidx = Magic.load64(SWEPT_LOG + i * 32L + 24L);
+                if (sidx >= 0L)
+                {
+                    Uart.write(Magic.bytes("\n  it was the deferral stub for "));
+                    Loader.printLazyName(sidx);        // the method whose stub this was
+                }
                 Uart.putc(0x0A);
                 return;
             }
@@ -768,12 +796,13 @@ final class VMGc
                 // range dropped in the same breath: they outlive the method otherwise and would answer for
                 // whatever is compiled at that address next -- the aliasing dropJitTablesAbove prevents
                 // under the batch rewind.
-                if (SWEPT_LOG + sweptLogN * 24L + 24L <= SWEPT_LOG_END)
+                if (SWEPT_LOG + sweptLogN * 32L + 32L <= SWEPT_LOG_END)
                 {
-                    Magic.store64(SWEPT_LOG + sweptLogN * 24L, start);
-                    Magic.store64(SWEPT_LOG + sweptLogN * 24L + 8L, start + size);
-                    Magic.store64(SWEPT_LOG + sweptLogN * 24L + 16L, collections);
-                    sweptLogN = sweptLogN + 1L;
+                    Magic.store64(SWEPT_LOG + sweptLogN * 32L, start);
+                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 8L, start + size);
+                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 16L, collections);
+                    Magic.store64(SWEPT_LOG + sweptLogN * 32L + 24L, Loader.stubIdxAt(start));
+                    sweptLogN = sweptLogN + 1L;         // ... and WHICH stub, if it is one
                 }
                 if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe
                 {                                      //   below can ask who still points into one

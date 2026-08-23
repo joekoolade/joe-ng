@@ -7105,9 +7105,61 @@ public final class Loader
     private static int    dlN;
 
     /** Per-method stub: x9 = deferred index, then branch to the shared trampoline. */
+    /**
+     * Stubs, by address: {stub, lazy index}. A stub is 32 bytes of movz/movk/br — its whole purpose is to
+     * be branched to from somewhere else, which is exactly the reference the collector cannot see. Recording
+     * them lets the sweep say WHICH stub it is freeing, and the fault reporter say which method's stub the
+     * PC landed in. 64 KiB = 4,096 entries; recording stops rather than wrapping.
+     */
+    public static final long STUB_TAB = 0x037C_0000L - 0x10000L;   // 64 KiB below the swept log
+    private static final long STUB_TAB_END = 0x037C_0000L;
+    public static long stubTabN;
+
+    /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
+    static void noteStub(long buf, int idx)
+    {
+        if (STUB_TAB + stubTabN * 16L + 16L <= STUB_TAB_END)
+        {
+            Magic.store64(STUB_TAB + stubTabN * 16L, buf);
+            Magic.store64(STUB_TAB + stubTabN * 16L + 8L, (long) idx);
+            stubTabN = stubTabN + 1L;
+        }
+    }
+
+    /** The lazy index of the stub containing {@code addr}, or -1. Stubs are 32 bytes. */
+    public static long stubIdxAt(long addr)
+    {
+        long i = 0;
+        while (i < stubTabN)
+        {
+            long b = Magic.load64(STUB_TAB + i * 16L);
+            if (addr >= b && addr < b + 32L)
+            {
+                return Magic.load64(STUB_TAB + i * 16L + 8L);
+            }
+            i += 1L;
+        }
+        return -1L;
+    }
+
+    /** Name the method a lazy index belongs to, for a diagnostic. */
+    public static void printLazyName(long idx)
+    {
+        int k = (int) idx;
+        if (k < 0 || k >= lzN || lzTab[k] == null)
+        {
+            Uart.write(Magic.bytes("<idx out of range>"));
+            return;
+        }
+        printNameAt(clTab[lzTab[k].reg].base, clTab[lzTab[k].reg].nameOff);
+        Uart.putc(0x2E);
+        writeName(lzTab[k].blob + lzTab[k].nameOff + 2, u2(lzTab[k].blob + lzTab[k].nameOff));
+    }
+
     private static long buildLazyCompileStub(int idx)
     {
         long buf = Heap.allocCode(32);
+        noteStub(buf, idx);
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
