@@ -961,6 +961,7 @@ final class VMGc
      */
     private static void sweepLargeRegion()
     {
+        long liveBefore = liveBytes;                   // the small sweep has already added its own
         long o = Heap.LARGE_BASE;
         long top = Magic.load64(Heap.LARGE_PTR_CELL);
         long runStart = 0L;
@@ -1000,9 +1001,25 @@ final class VMGc
         }
         if (runSize != 0L)
         {
-            Heap.addFreeLarge(runStart, runSize);
+            // The region ended on dead blocks. Hand that tail back by lowering the bump pointer instead of
+            // threading it onto the free list: the bump only ever rose before this, which is why a Pi run
+            // drove the region to 64.0 MB -- its entire reservation -- during Lisp, with no headroom left
+            // and allocLarge's second failure being a halt. Everything below the highest survivor stays on
+            // the free list as before; only the trailing run is returned.
+            //
+            // Increment 10 measured a trailing-run trim recovering NOTHING for the code arena, because live
+            // methods are scattered by construction. This region is a different shape -- a handful of large
+            // objects rather than thousands of small ones -- so the trim is measured here rather than
+            // assumed: largeTrimmed says what it actually returns.
+            Magic.store64(Heap.LARGE_PTR_CELL, runStart);
+            largeTrimmed = largeTrimmed + runSize;
         }
+        largeLive = liveBytes - liveBefore;            // this region's live set alone
     }
+
+    /** Bytes returned to the large region by lowering its bump pointer, and the live set it kept. */
+    public static long largeTrimmed;
+    public static long largeLive;
 
     /** Record the base of every block in {@code [from,to)}. Both regions are walkable the same way: every
      *  block, allocated or free, carries its size in its status word. */

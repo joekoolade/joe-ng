@@ -2371,6 +2371,10 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" lgLive="));     // the region's live set, and what its trim
+                VM.printHex(VMGc.largeLive);         //   has handed back over the run
+                Uart.write(Magic.bytes(" lgTrim="));
+                VM.printHex(VMGc.largeTrimmed);
                 Uart.write(Magic.bytes(" ovf="));
                 VM.printDec((int) VMGc.overflows);
                 Uart.write(Magic.bytes(" largeTop="));    // the large region: how far it has grown, and
