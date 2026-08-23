@@ -226,6 +226,24 @@ public final class Loader
      * Paired with the insertion guard: if the entry was born valid and is zero here, something wrote over
      * it, and the isolation runs have already ruled out the collector.
      */
+    /** Halt NAMED if {@code entry} is a code buffer the collector swept — the initializer is about to be
+     *  called and would execute zeros, reported minutes later from an unnamed address. */
+    private static void checkClinitEntry(long entry, int idx)
+    {
+        if (Heap.codeBlockFreeAt(entry) == 1)
+        {
+            Uart.write(Magic.bytes("\nCLINIT ENTRY WAS SWEPT idx="));
+            VM.printDec(idx);
+            Uart.write(Magic.bytes(" entry="));
+            VM.printHex(entry);
+            Uart.putc(0x0A);
+            VMGc.reportSweptPc(entry);
+            printCurrentClass();
+            Uart.putc(0x0A);
+            while (true) { Magic.wfe(); }
+        }
+    }
+
     /**
      * After a code sweep, every phase-A cell must still point into an ALLOCATED code buffer. A cell whose
      * target has been freed is the exact shape of the fault: the dispatcher branches through the cell into
@@ -590,6 +608,7 @@ public final class Loader
             {
                 Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
             }
+            checkClinitEntry(clinitEntry[clinitFdFirst], clinitFdFirst);
             long unusedFd = Magic.call0(clinitEntry[clinitFdFirst]);
             clinitRan[clinitFdFirst] = 1;
             done[clinitFdFirst] = true;
@@ -619,6 +638,7 @@ public final class Loader
                         writeName(pdBase[cpd] + pdNameOff[cpd] + 2, u2(pdBase[cpd] + pdNameOff[cpd]));
                         Uart.putc(0x0A);
                     }
+                    checkClinitEntry(clinitEntry[i], i);
                     long unused = Magic.call0(clinitEntry[i]);
                     clinitRan[i] = 1;
                     done[i] = true;
@@ -636,6 +656,7 @@ public final class Loader
                 }
                 if (j < clinitN)
                 {
+                    checkClinitEntry(clinitEntry[j], j);
                     long unused = Magic.call0(clinitEntry[j]);
                     clinitRan[j] = 1;
                     done[j] = true;
@@ -755,6 +776,18 @@ public final class Loader
                 Uart.write(Magic.bytes("  clinit-lazy "));
                 printNameAt(clTab[reg].base, clTab[reg].nameOff);
                 Uart.putc(0x0A);
+                if (Heap.codeBlockFreeAt(clinitEntry[i]) == 1)   // GUARD: about to call a SWEPT initializer.
+                {                                                //   Name it here, where the class is in hand.
+                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" entry="));
+                    VM.printHex(clinitEntry[i]);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(i);
+                    Uart.putc(0x0A);
+                    VMGc.reportSweptPc(clinitEntry[i]);
+                    while (true) { Magic.wfe(); }
+                }
                 long unused = Magic.call0(clinitEntry[i]);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 return;

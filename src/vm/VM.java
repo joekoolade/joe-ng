@@ -1159,6 +1159,10 @@ public final class VM
      */
     static void reportFaultStack(long pc, long sp)
     {
+        if (pc >= Heap.CODE_BASE && pc < Heap.CODE_LIMIT)
+        {
+            VMGc.reportSweptPc(pc);                        // did the collector free the buffer we are in?
+        }
         Uart.write(Magic.bytes("\n  loader was compiling: "));
         Loader.printCurrentClass();
         long cpc = pc;

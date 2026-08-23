@@ -99,6 +99,7 @@ final class VMGc
         }
                                                       // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
+        collections = collections + 1L;
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
         liveBytes = 0L;
@@ -611,6 +612,50 @@ final class VMGc
     private static final long FREED_RANGES = 0x0376_0000L;
     private static long freedN2;
 
+    /**
+     * Every code range ever swept, kept for the life of the boot: {start, end, collection}. When a fault
+     * lands in the code arena the reporter looks the PC up here, so "executing zeros at 0x0200EE50" becomes
+     * "that buffer was freed at collection N" — which says whether a swept buffer is the story at all, and
+     * points at the emit site that still held its address. 1 MiB = 43,690 entries; recording stops rather
+     * than wrapping, since the earliest sweeps are the ones a later fault is most likely to blame.
+     */
+    private static final long SWEPT_LOG = 0x037C_0000L;
+    private static final long SWEPT_LOG_END = 0x0380_0000L;
+    public static long sweptLogN;
+    public static long collections;
+
+    /**
+     * Report whether {@code pc} lies in a code buffer some collection swept, and when. Called by the fault
+     * reporter: a PC in a swept range means the collector freed code that was still being dispatched, which
+     * is a different bug from a wild branch and needs to be told apart from one.
+     */
+    public static void reportSweptPc(long pc)
+    {
+        long i = 0;
+        while (i < sweptLogN)
+        {
+            long start = Magic.load64(SWEPT_LOG + i * 24L);
+            long end = Magic.load64(SWEPT_LOG + i * 24L + 8L);
+            if (pc >= start && pc < end)
+            {
+                Uart.write(Magic.bytes("  PC IS IN SWEPT CODE: buffer "));
+                printHex(start);
+                Uart.putc(0x2D);
+                printHex(end);
+                Uart.write(Magic.bytes(" freed at collection "));
+                VM.printDec((int) Magic.load64(SWEPT_LOG + i * 24L + 16L));
+                Uart.write(Magic.bytes(" of "));
+                VM.printDec((int) collections);
+                Uart.putc(0x0A);
+                return;
+            }
+            i += 1L;
+        }
+        Uart.write(Magic.bytes("  PC is NOT in any swept buffer ("));
+        VM.printDec((int) sweptLogN);
+        Uart.write(Magic.bytes(" ranges logged)\n"));
+    }
+
     /** 1 if {@code w} lands in a range this sweep just freed. */
     private static int inFreedRange(long w)
     {
@@ -723,6 +768,13 @@ final class VMGc
                 // range dropped in the same breath: they outlive the method otherwise and would answer for
                 // whatever is compiled at that address next -- the aliasing dropJitTablesAbove prevents
                 // under the batch rewind.
+                if (SWEPT_LOG + sweptLogN * 24L + 24L <= SWEPT_LOG_END)
+                {
+                    Magic.store64(SWEPT_LOG + sweptLogN * 24L, start);
+                    Magic.store64(SWEPT_LOG + sweptLogN * 24L + 8L, start + size);
+                    Magic.store64(SWEPT_LOG + sweptLogN * 24L + 16L, collections);
+                    sweptLogN = sweptLogN + 1L;
+                }
                 if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe
                 {                                      //   below can ask who still points into one
                     Magic.store64(FREED_RANGES + freedN2 * 16L, start);
