@@ -2621,9 +2621,10 @@ exclusive-end entry that merely abuts a freed block.
   88-byte window yields ~1 COINCIDENCE per run, and one duly appeared and was reported as the culprit. It now
   matches a block's ENTRY only. Stub buffers are 32 bytes with 20 written, so their uninitialised tails are a
   reliable source of plausible-looking garbage.
-- `rgTab` (pc -> method, for stack traces) is looked up as "nearest start <= pc" with **no upper bound** and
-  is never pruned when code is swept, so a dead entry names every pc above it. That is why one fault reported
-  `dead method: String.<clinit>+0xC8` for a buffer that was nothing of the sort. **Still open.**
+- The pc -> method lookups behind stack traces take the nearest registered buffer at-or-below the pc with
+  **no upper bound**, so an address in an unregistered buffer borrows the name of whatever sits below it and
+  every bogus pc resolves to the same method. That is why one fault reported `dead method:
+  String.<clinit>+0xC8` for a buffer that was nothing of the sort. FIXED below.
 
 **The reproduction that made it tractable.** The fault was hardware-only for a day: the Pi reaches ~30
 collections over the suite where QEMU reaches ~12, so it simply gets more chances at the window. Dropping
@@ -2633,10 +2634,41 @@ that way and could not have been found by reading the source: every `A64Enc.bl` 
 or routes through `patchRelocsFrom`.
 
 **Still open, and why the allocation-volume trigger is NOT shipped with these fixes.** With stubs pinned, the
-dense schedule surfaces `UNWIND LOST` — an exception unwind walking stale entries, every garbage frame
-symbolised as one method (the `rgTab` defect above). The trigger cuts footprint 34% (11 -> 30 collections) on
-a heap under no memory pressure; it is the only thing surfacing the remaining staleness, so it waits until
-`rgTab` is pruned on sweep. These three fixes stand alone as correctness.
+dense schedule surfaces `UNWIND LOST`: an exception unwind that cannot place its pc. The trigger cuts
+footprint 34% (11 -> 30 collections) on a heap under no memory pressure, and is the only thing surfacing that
+fault, so it waits. These three fixes stand alone as correctness.
+
+### The pc -> method map had no upper bound (2026-08-23)
+
+A correction to the entry above, which named the wrong defect. The garbled fault reports were blamed on
+`rgTab` going STALE — dead entries surviving a sweep — and the fix was to prune them when their code is
+freed. **Measurement refuted it:** the prune fires zero times even at 25+ collections, because no registered
+method's code is ever swept (what the sweep reclaims at this rate is line tables, thunks and stubs, none of
+them registered). The prune was reverted rather than shipped as a no-op.
+
+The real defect was never staleness but the **missing upper bound**, and it predates every recent change.
+`printFrameAt` and `frameToElement` each search TWO registries — `rgTab` and `clinitEntry` — for the nearest
+buffer at-or-below the pc, and stop there. An address in an unregistered buffer (a lambda thunk, a line
+table, a stub) or plain garbage from a derailed unwind therefore borrows the name of whatever method sits
+below it, and since the winner is whichever registered buffer is highest, EVERY bogus pc reports as the same
+method. `rememberLazyBody`'s javadoc had documented the hazard for a while; the response had been to register
+more things rather than to bound the search.
+
+`inSameCodeBlock` bounds all four loops by the code block containing the candidate buffer — a method's buffer
+IS a block, so a pc outside it belongs to something else. An unregistered block (0) is ACCEPTED, which keeps
+image/native addresses resolving as before. The scan is linear over the block registry and runs only on
+faults and stack traces.
+
+Demonstrated both ways: under the dense schedule a garbage frame that read
+`ArrayList.<clinit> [pc=0xD280094B]` now reads `<image/native>`, and at the normal collection rate the
+`ExcDemo` trace still names all seven frames. **Fixing one loop was not enough** — bounding `rgTab` alone
+just moved the name to the `clinitEntry` loop, which reads as "the fix did not work" and is the same trap
+the two stub sites set: repair one path and the symptom reappears wearing a different name.
+
+`UNWIND LOST` is untouched by this and remains open. It survived both the prune and the bound, which is the
+evidence that the garbled names were a symptom standing next to it rather than its cause.
+
+
 
 ### Code arena: compaction, or the cheaper thing? (arc started 2026-08-21)
 
