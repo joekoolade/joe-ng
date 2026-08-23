@@ -5683,6 +5683,10 @@ public final class Loader
                     for (;;) { }
                 }
                 int off = (int) (d >> 2);
+                Heap.pinCodeAt(target);                       // CODE->CODE edge: after this store the only
+                                                              //   record of `target` is a displacement inside
+                                                              //   the caller's instructions, which nothing
+                                                              //   scans -- pin it or the sweep may free it
                 if (rcTail[i] != 0)
                 {
                     Magic.store32(rcAddr[i], A64Enc.b(off));   // lambda/method-ref thunk: tail branch, not a call

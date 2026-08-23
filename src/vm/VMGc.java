@@ -712,6 +712,11 @@ final class VMGc
                     b += 1;
                 }
             }
+            if (hit == 0 && Heap.codePinnedIn(start, size) != 0)
+            {
+                codeLive = codeLive + size;            // branched to directly by another buffer: not free
+                hit = 1;
+            }
             if (hit == 0 && sweepCode != 0 && start >= codeSweepFloor)
             {
                 // Unreachable compiled code. Sweeping it needs the JIT unwind entries keyed to its address

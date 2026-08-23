@@ -66,6 +66,52 @@ public final class Heap
     /** Bump pointer and free-list head for the large region, beside the small region's own cells. */
     public static final long LARGE_PTR_CELL  = 0x03FF_0208L;
     public static final long LARGE_FREE_CELL = 0x03FF_0210L;
+    /**
+     * One bit per 8 bytes of the code arena, marking buffers that another buffer branches to DIRECTLY.
+     *
+     * <p>The collector learns that code is reachable by seeing a code address in a heap or stack word
+     * ({@code tryMark}) or baked into code as a heap reference ({@code CODE_ROOTS}). Neither sees a
+     * CODE->CODE edge: when {@code patchRelocsFrom} rewrites a {@code bl 0} into {@code bl target}, that
+     * address exists only as a 26-bit displacement inside the caller's instruction stream, which nothing
+     * scans. The cell that held it beforehand is then free to die, and the callee looks unreachable while
+     * a live method still branches to it — measured as a fault executing zeros in a swept buffer.
+     *
+     * <p>Pinning rather than tracing the edge: a pinned buffer is never swept, which over-retains (the
+     * callee outlives a caller that itself died) but cannot free something live. Tracing the edges properly
+     * needs an owner-keyed table and a fixpoint over it; that is worth building only if the retention this
+     * costs turns out to matter, which {@code codeLive} against {@code codeUsed} will show.
+     */
+    public static final long CODE_PIN_BITMAP = 0x0378_0000L;
+    private static final long CODE_PIN_END   = 0x037C_0000L;   // 256 KiB = 1 bit per 8 B of a 16 MiB arena
+
+    /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
+    public static void pinCodeAt(long addr)
+    {
+        if (addr < CODE_BASE || addr >= CODE_LIMIT)
+        {
+            return;
+        }
+        long bit = (addr - CODE_BASE) >> 3;
+        long w = CODE_PIN_BITMAP + ((bit >> 6) << 3);
+        Magic.store64(w, Magic.load64(w) | (1L << (int) (bit & 63L)));
+    }
+
+    /** 1 if any address in {@code [start,start+size)} has been pinned. */
+    public static int codePinnedIn(long start, long size)
+    {
+        long b = (start - CODE_BASE) >> 3;
+        long bEnd = b + (size >> 3);
+        while (b < bEnd)
+        {
+            if ((Magic.load64(CODE_PIN_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
+            {
+                return 1;
+            }
+            b += 1L;
+        }
+        return 0;
+    }
+
     /** Large allocations served from the free list vs forced to extend the region. */
     public static long largeReuse;
     public static long largeBump;
@@ -107,6 +153,12 @@ public final class Heap
         Magic.store64(CODE_PTR_CELL, CODE_BASE);
         Magic.store64(LARGE_PTR_CELL, LARGE_BASE);
         Magic.store64(LARGE_FREE_CELL, 0L);
+        long pz = CODE_PIN_BITMAP;
+        while (pz < CODE_PIN_END)
+        {
+            Magic.store64(pz, 0L);                     // the pin bitmap persists across collections, so it
+            pz += 8L;                                  //   is cleared exactly once, here
+        }
     }
 
     /**
