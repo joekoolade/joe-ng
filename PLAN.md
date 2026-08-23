@@ -2582,6 +2582,62 @@ had not been saying, and all four survive in the tree:
   address — the guard is called before the load, while `x30` still identifies the caller, which is how
   bug 3 was found after bugs 1 and 2 had each moved the crash somewhere new.
 
+### Deferral stubs must outlive their own dispatch cell (2026-08-23)
+
+Three code-lifetime bugs, all live on `main` and all of the same shape: **something branches to compiled
+code that nothing points at, so the sweep frees it correctly and the branch then lands in reused memory.**
+
+A lazy method dispatches through a cell that first holds a 32-byte deferral stub; the first call compiles the
+body and re-points the cell at it. From then on the stub is unreachable *by the cell*, and the sweep freed it
+— ~10,400 stubs per suite run. But the cell is not the stub's only caller: stale dispatch copies (an inherited
+TIB slot, an itable entry) still name it, and calling one is harmless BY DESIGN — the stub re-enters
+`lazyCompile` and returns the real body. It is fatal only after the stub has been swept. So a deferral stub is
+pinned at creation, at **both** sites that build one:
+
+- `buildLazyCompileStub` — the first-call dispatch path.
+- `emitDeferredStub` — the batch path, which allocated the same 32-byte stub but called neither `noteStub`
+  nor `pinCodeAt`. Being unregistered is why fault reports read `stubIdx -1` and the buffer looked like an
+  ordinary method body; the hunt lost two cycles to that.
+
+The third is the same class one level up: the lambda/method-ref thunk emits `bl initBuf` / `b implBuf`
+directly when the target is already compiled, with no pin — while the *not-yet-compiled* sibling of each
+edge (`bl 0` + `recordCallReloc`) resolves through `patchRelocsFrom`, which does pin. Identical edge, kept
+alive on one path and danglable on the other.
+
+Also fixed: `compactTableOutside` dropped JIT unwind entries whose `codeStart` fell in the swept range, but
+an entry whose `codeEnd` REACHED INTO it survived and then answered for pcs belonging to whatever was
+compiled there next — a wrong frame size handed to the unwinder. It now drops on range overlap, keeping the
+exclusive-end entry that merely abuts a freed block.
+
+**How they were found, and three ways the instruments lied.** The tools cost more than the fixes:
+
+- A **fault-time report** (`VMGc.reportSweptPc`): the instruction word at the pc, the block's CURRENT
+  free/allocated state, the pin bit, an arena-wide scan for branches into the block, and a holder scan of
+  heap/statics/unwind tables. The instruction word is the discriminator — `0` means the sweep zeroed it,
+  anything else means the space was reused and the fault is not what it looks like.
+- `PC IS IN SWEPT CODE` names a **recycled** range: the swept log is persistent, so an address can appear in
+  several records and only the newest describes the buffer that was actually there.
+- The branch scanner decodes every arena word as a possible `bl`. Scanning ~4M words for a hit anywhere in an
+  88-byte window yields ~1 COINCIDENCE per run, and one duly appeared and was reported as the culprit. It now
+  matches a block's ENTRY only. Stub buffers are 32 bytes with 20 written, so their uninitialised tails are a
+  reliable source of plausible-looking garbage.
+- `rgTab` (pc -> method, for stack traces) is looked up as "nearest start <= pc" with **no upper bound** and
+  is never pruned when code is swept, so a dead entry names every pc above it. That is why one fault reported
+  `dead method: String.<clinit>+0xC8` for a buffer that was nothing of the sort. **Still open.**
+
+**The reproduction that made it tractable.** The fault was hardware-only for a day: the Pi reaches ~30
+collections over the suite where QEMU reaches ~12, so it simply gets more chances at the window. Dropping
+`GC_TRIGGER_BYTES` to 5 MB (diagnostic only, not shipped) makes QEMU collect as often and reproduce the same
+fault — turning a 20-minute flash-and-read cycle into a 6-minute local one. The second stub site was found
+that way and could not have been found by reading the source: every `A64Enc.bl` site in `Loader` either pins
+or routes through `patchRelocsFrom`.
+
+**Still open, and why the allocation-volume trigger is NOT shipped with these fixes.** With stubs pinned, the
+dense schedule surfaces `UNWIND LOST` — an exception unwind walking stale entries, every garbage frame
+symbolised as one method (the `rgTab` defect above). The trigger cuts footprint 34% (11 -> 30 collections) on
+a heap under no memory pressure; it is the only thing surfacing the remaining staleness, so it waits until
+`rgTab` is pruned on sweep. These three fixes stand alone as correctness.
+
 ### Code arena: compaction, or the cheaper thing? (arc started 2026-08-21)
 
 The metadata-lifetime arc ended with one lever untried: the code arena sits at **6.68 MB against 2.44 MB
