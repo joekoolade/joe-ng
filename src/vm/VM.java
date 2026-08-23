@@ -1455,7 +1455,7 @@ public final class VM
         jitHandlerCount = compactTableOutside(jitHandlerTable, jitHandlerCount, 32L, lo, hi);
     }
 
-    /** Keep only entries whose code start falls outside {@code [lo,hi)}; the kept count. */
+    /** Keep only entries whose code RANGE falls outside {@code [lo,hi)}; the kept count. */
     private static long compactTableOutside(long table, long count, long entryBytes, long lo, long hi)
     {
         if (table == 0L)
@@ -1468,7 +1468,12 @@ public final class VM
         {
             long src = table + i * entryBytes;
             long start = Magic.load64(src);
-            if (start < lo || start >= hi)
+            long end = Magic.load64(src + 8L);         // every one of these tables is {codeStart, codeEnd, ...}
+            // Drop an entry whose RANGE OVERLAPS the swept block, not merely one that STARTS inside it. Filtering
+            // on start alone let an entry whose end reached into freed code survive; it then answered for pcs
+            // belonging to whatever was compiled there next, handing the unwinder a wrong frame size. The bound
+            // is exclusive at both ends, so an entry that merely ABUTS the freed block (end == lo) is kept.
+            if (end <= lo || start >= hi)
             {
                 long dst = table + kept * entryBytes;
                 long b = 0L;

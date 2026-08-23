@@ -5398,6 +5398,10 @@ public final class Loader
         lzTab[idx].cache = 0L;
         lzN += 1;
         long buf = mBuf[i];                             // stub-sized buffer allocated by sizeMethod
+        noteStub(buf, idx);                             // ... and make it NAMEABLE: without this a fault landing
+                                                        //   here reports stubIdx -1 and reads as an ordinary body
+        Heap.pinCodeAt(buf);                            // the batch-path twin of buildLazyCompileStub: same stub,
+                                                        //   same lifetime problem, same fix (see the note there)
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
@@ -7207,6 +7211,14 @@ public final class Loader
     {
         long buf = Heap.allocCode(32);
         noteStub(buf, idx);
+        // A deferral stub outlives its own dispatch cell. Once the first call patches the cell to the compiled
+        // body the stub looks unreferenced, and the sweep frees it -- correctly, by reachability. But the cell
+        // is not its only caller: stale dispatch copies (an inherited TIB slot, an itable entry) still name the
+        // stub, and calling one is HARMLESS by design -- it re-enters lazyCompile and returns the real body.
+        // It turns fatal only once the stub has been swept: the space is reused and the branch lands in
+        // whatever data now lives there. So pin it. 32 bytes each, and it is the safety net that makes every
+        // stale dispatch copy correct.
+        Heap.pinCodeAt(buf);
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
@@ -8697,6 +8709,9 @@ public final class Loader
             long h2 = thunk + w * 4L;
             if (initBuf != 0L)
             {
+                // A CODE->CODE edge, pinned for the same reason patchRelocs pins its targets: after this store
+                // the displacement inside the thunk is the ONLY record of initBuf, and nothing scans encodings.
+                Heap.pinCodeAt(initBuf);
                 Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
             }
             else
@@ -8751,7 +8766,8 @@ public final class Loader
         long bAt = thunk + w * 4L;
         if (implBuf != 0L)
         {
-            Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));     // b implBuf (tail call)
+            Heap.pinCodeAt(implBuf);                                        // as above: a tail branch is
+            Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));     //   still a code->code edge
         }
         else
         {
