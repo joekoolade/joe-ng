@@ -2685,7 +2685,15 @@ So the in-flight-buffer fix and the large-object region both hold on silicon.
 Through batch 23 hardware tracks emulation digit for digit — 44.7 MB held, `reuse 1301–1353 / bump 284`.
 Three readings differ, and the first is the one that matters:
 
-- **The region hits its ceiling during Lisp.** `largeTop=0x3FFF000` is **64.0 MB — the entire reservation**
+**CEILING FIXED, Pi-validated (2026-08-23).** With the sweep trimming the region's bump pointer, the Lisp
+phase now reaches **37.1 MB against the same 64 MB reservation** — where it previously pinned at 64.0 MB
+with nothing left. Peak across the run is 44.7 MB, so there is 30% headroom at the worst moment instead of
+zero. `lgTrim` returned **119.0 MB** cumulative and `lgLive` held at **3.72 MB**; hardware and emulation
+agree on both to the byte (`0x7709000` and `0x3B9000`). Whole battery clean: no `FAULT`, no `STALE`,
+`churnMB=625 live=32 intact=32`, `ExcDemo`'s four frames, `gc during lisp: collections=7`, WPA2 → **HTTP
+200, 828 bytes**, ending at `(self-build retired; host writer only)`.
+
+- **(historical) The region hit its ceiling during Lisp.** `largeTop=0x3FFF000` was **64.0 MB — the entire reservation**
   (`LARGE_LIMIT − LARGE_BASE`), with bump at 574. It did not fail: the sweep kept up and allocation
   continued out of the free list. But there is no headroom, and `allocLarge` returning 0 twice is a halt.
   QEMU peaked at 44.7 MB and never showed this. Options, cheapest first: move the split down (96/96 rather
@@ -2698,9 +2706,16 @@ Three readings differ, and the first is the one that matters:
   visible in the `[gc walked=…]` lines. Believed semantic rather than broken — worth confirming, not
   assuming.
 
-One reading was garbled — `reuse=;115/574`, where `;` is `'0'+11`. `printDec` cannot produce a non-digit
-since the four-digit bug was fixed, so this reads as single-character UART corruption rather than a counter
-fault.
+**A correction to what this section first claimed.** Two Pi runs showed a garbled counter — `reuse=;115/574`
+and later `reuse=:150/1539` — and both times I wrote it off as single-character UART corruption on the
+grounds that "printDec cannot produce a non-digit since the four-digit bug was fixed". That fix was made on
+the `alloc-size-histogram` branch and never merged; this branch came off `main` and still had the old
+four-digit `printDec`, which prints a value ≥ 10000 as one character plus three digits (`':'` is `'0'+10`,
+`';'` is `'0'+11`). The readings were the bug, not noise. Corrected values: **11,115 / 574** and
+**10,150 / 1,539**, not the 1,115 and 150 I read. The fix is now on this branch too.
+
+The lesson is not about `printDec`. It is that "that cannot happen because I fixed it" is worth one command
+to verify, especially when the same anomaly appears twice in the same field.
 
 ⇒ **Compaction is not the lever either, for the same reason the trim was not.** It would produce a tidier
 arena at each collection and could not touch the 1,233 growth events that set the high-water. The remaining
