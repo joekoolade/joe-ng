@@ -94,7 +94,15 @@ final class VMUnwind
             Uart.putc(0x20);
             Loader.printFrameAt(pc);
             Uart.putc(0x0A);
-            return;                                    // ... and do NOT captureTrace into a non-object
+            // HALT rather than return. The JIT emits `bl unwind` for athrow on the assumption it never comes
+            // back; returning resumes the throwing method as though nothing was thrown, turning a diagnosable
+            // VM error into silent wrong behaviour further on. "The VM cannot represent this exception" is not
+            // recoverable, so stop here with the report still on the wire -- the same thing the uncaught path
+            // below does.
+            while (true)
+            {
+                Magic.wfe();
+            }
         }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
         if (unwindLocBuf == 0L)
