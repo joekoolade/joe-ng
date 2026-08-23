@@ -2684,6 +2684,45 @@ that would actually move it are collecting *during* a batch, or compiling less c
 real options; neither is compaction. **The compaction arc closes here**, with the fragmentation fixed as a
 genuine (if smaller than hoped) win and the reason recorded.
 
+**Increment 3 — the large-object region. WORKS, one bug open.** The measurements that led here, in order:
+counts said small-object crumbs; bytes said large-object near-misses; peak-time state said *32 bytes short
+with 5.04 MB free*; adjacency said merging cannot reach those blocks (0 of 70 sampled failures); and
+quantising requests in the shared region moved the near-miss up one quantum for 44.8 MB of slack (2,500
+failures → 2,392). Each reading overturned the fix the previous one implied.
+
+**Why the shared region could never work.** Free blocks come from sweep-merged runs and split remainders.
+In a region shared with arbitrary-size small objects, both are arbitrary sizes, so rounding *requests* to a
+lattice the *supply* does not share is futile. Segregate large objects into a region where every block is a
+page multiple and merged runs and remainders are page multiples too: demand and supply share one lattice
+and exact reuse becomes structural. That is what buddy allocators buy with alignment, bought here with
+segregation instead.
+
+Core 0's arena splits at `0x0C00_0000`: small below, ≥16 KiB above, page-quantised, with its own bump
+pointer, free list and sweep (`Heap.allocLarge`, `VMGc.sweepLargeRegion`).
+
+| | baseline | large region |
+|---|---|---|
+| large allocations reusing a block | ~0 | **1,353** |
+| large allocations growing the arena | 2,500 | **284** |
+| worst failure | 5.04 MB free, largest block 32 B short | — the near-miss cannot form |
+
+**The bug it exposed, and the reason it took four isolation runs.** `drainMarkStack` bounded every popped
+object with `o + size <= Heap.PTR_CELL` — the SMALL region's top. Large objects failed that test, so each
+was *marked and then silently never scanned*, and anything reachable only through one was reclaimed while
+live. It reads as a sanity check ("never scan past a corrupt size") and was one, until a second region
+existed; the same bound sat in the fixpoint fallback's walk. Fixed by `regionTopOf(o)` and `scanMarkedIn`.
+
+The isolation that hid the region from the GC faulted *identically*, which is what made the collector look
+innocent — with the region hidden, large objects were never marked at all, so their referents died the same
+way. **One symptom, two causes**, and the isolation could not separate them. Two of those runs were also
+spent on a misread: `blob 0x1` is a flag from `badRead(baseA == 0 ? 0 : 1, ...)`, not an address.
+
+**Open:** with `RECLAIM_CODE_BY_GC` on, the suite faults at 2,990 lines executing zeros in a JIT'd
+`Unsafe.isBigEndian` — the zero-on-sweep signature of a live method reclaimed and called. Code sweep off:
+3,219 lines, clean. So code liveness under-counts under a two-region heap; `markCodeRoots` is not the cause
+(it marks through `tryMark`, which accepts both regions). Also unmeasured until that is fixed: `gc during
+lisp` read 7 collections against the baseline 5 in the code-sweep-off configuration.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
