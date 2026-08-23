@@ -1159,6 +1159,10 @@ public final class VM
      */
     static void reportFaultStack(long pc, long sp)
     {
+        if (pc >= Heap.CODE_BASE && pc < Heap.CODE_LIMIT)
+        {
+            VMGc.reportSweptPc(pc);                        // did the collector free the buffer we are in?
+        }
         Uart.write(Magic.bytes("\n  loader was compiling: "));
         Loader.printCurrentClass();
         long cpc = pc;
@@ -1772,23 +1776,26 @@ public final class VM
     /** Print {@code v} (0..9999) in decimal, no leading zeros. Uses only / and * (no irem). */
     public static void printDec(int v)
     {
-        int th = v / 1000;
-        int hu = (v - th * 1000) / 100;
-        int te = (v - th * 1000 - hu * 100) / 10;
-        int on = v - th * 1000 - hu * 100 - te * 10;
-        if (th > 0)
+        // Any number of digits. The previous version hardcoded thousands/hundreds/tens/ones, so a value of
+        // 10000 or more printed its leading part as ONE character: 10150 came out as ":150" (':' is '0'+10)
+        // and 11115 as ";115". Two Pi runs showed exactly that in the large-region reuse counter and were
+        // dismissed as UART corruption -- on the strength of this same fix, which had been made on a
+        // different branch and never merged here. Any counter that outgrows four digits misreports.
+        if (v < 0)
         {
-            Uart.putc(0x30 + th);
+            Uart.putc(0x2D);
+            v = -v;
         }
-        if (th > 0 || hu > 0)
+        int div = 1;
+        while (v / div >= 10)
         {
-            Uart.putc(0x30 + hu);
+            div = div * 10;
         }
-        if (th > 0 || hu > 0 || te > 0)
+        while (div > 0)
         {
-            Uart.putc(0x30 + te);
+            Uart.putc(0x30 + (v / div) % 10);
+            div = div / 10;
         }
-        Uart.putc(0x30 + on);
     }
 
     /** Print an unsigned decimal (full range), most-significant digit first. */

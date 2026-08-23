@@ -43,6 +43,79 @@ public final class Heap
     public static final long CODE_LIMIT    = 0x0300_0000L;   // 48 MiB (= VM.SEC_STUB) — overflow guard
     public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
 
+    // ----- the large-object region -----------------------------------------------------------------------
+    /**
+     * Core 0's arena is split: small objects below {@link #LARGE_BASE}, objects of {@link #LARGE_REQ} or
+     * more above it, in blocks that are always a multiple of {@link #PAGE}.
+     *
+     * <p>Why a separate region rather than a quantum in the shared one — the previous attempt, which failed.
+     * Rounding large REQUESTS to 4 KiB fixed nothing (2,500 failures became 2,392, for 44.8 MB of slack)
+     * because supply stayed arbitrary: free blocks come from sweep-merged runs of adjacent dead blocks and
+     * from split remainders, and in a region shared with arbitrary-size small objects both are arbitrary
+     * sizes. The request landed on the 4 KiB lattice and the free blocks did not, so the near-miss simply
+     * moved up one quantum — 69,632 needed, 69,600 available, 32 bytes short again.
+     *
+     * <p>In a region where EVERY block is a multiple of the page, merged runs and split remainders are page
+     * multiples too. Demand and supply share one lattice, and exact reuse becomes structural instead of
+     * coincidental. That is the property buddy allocators buy with alignment and this buys with segregation.
+     */
+    public static final long PAGE       = 4096L;
+    public static final long LARGE_REQ  = 16384L;
+    public static final long LARGE_BASE = 0x0C00_0000L;      // top 64 MiB of core 0's arena
+    public static final long LARGE_LIMIT = 0x1000_0000L;
+    /** Bump pointer and free-list head for the large region, beside the small region's own cells. */
+    public static final long LARGE_PTR_CELL  = 0x03FF_0208L;
+    public static final long LARGE_FREE_CELL = 0x03FF_0210L;
+    /**
+     * One bit per 8 bytes of the code arena, marking buffers that another buffer branches to DIRECTLY.
+     *
+     * <p>The collector learns that code is reachable by seeing a code address in a heap or stack word
+     * ({@code tryMark}) or baked into code as a heap reference ({@code CODE_ROOTS}). Neither sees a
+     * CODE->CODE edge: when {@code patchRelocsFrom} rewrites a {@code bl 0} into {@code bl target}, that
+     * address exists only as a 26-bit displacement inside the caller's instruction stream, which nothing
+     * scans. The cell that held it beforehand is then free to die, and the callee looks unreachable while
+     * a live method still branches to it — measured as a fault executing zeros in a swept buffer.
+     *
+     * <p>Pinning rather than tracing the edge: a pinned buffer is never swept, which over-retains (the
+     * callee outlives a caller that itself died) but cannot free something live. Tracing the edges properly
+     * needs an owner-keyed table and a fixpoint over it; that is worth building only if the retention this
+     * costs turns out to matter, which {@code codeLive} against {@code codeUsed} will show.
+     */
+    public static final long CODE_PIN_BITMAP = 0x0378_0000L;
+    private static final long CODE_PIN_END   = 0x037C_0000L;   // 256 KiB = 1 bit per 8 B of a 16 MiB arena
+
+    /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
+    public static void pinCodeAt(long addr)
+    {
+        if (addr < CODE_BASE || addr >= CODE_LIMIT)
+        {
+            return;
+        }
+        long bit = (addr - CODE_BASE) >> 3;
+        long w = CODE_PIN_BITMAP + ((bit >> 6) << 3);
+        Magic.store64(w, Magic.load64(w) | (1L << (int) (bit & 63L)));
+    }
+
+    /** 1 if any address in {@code [start,start+size)} has been pinned. */
+    public static int codePinnedIn(long start, long size)
+    {
+        long b = (start - CODE_BASE) >> 3;
+        long bEnd = b + (size >> 3);
+        while (b < bEnd)
+        {
+            if ((Magic.load64(CODE_PIN_BITMAP + ((b >> 6) << 3)) & (1L << (int) (b & 63L))) != 0L)
+            {
+                return 1;
+            }
+            b += 1L;
+        }
+        return 0;
+    }
+
+    /** Large allocations served from the free list vs forced to extend the region. */
+    public static long largeReuse;
+    public static long largeBump;
+
     /** Fixed scratch base for the JIT unwind tables (frame/local/handler). They must live OUTSIDE the managed
      *  heap [BASE, PTR): they are held only by VM static pointers for the whole run, but the mark-sweep GC
      *  reclaims dead blocks onto the free list and the demand-loader rewinds the bump pointer per batch -- either
@@ -64,7 +137,7 @@ public final class Heap
     /** End of core {@code c}'s arena: core 0 runs up to the secondaries' base; each secondary has 64 MiB. */
     static long arenaLimit(int core)
     {
-        return core == 0 ? 0x1000_0000L : arenaBase(core) + 0x0400_0000L;
+        return core == 0 ? LARGE_BASE : arenaBase(core) + 0x0400_0000L;   // core 0's tail is the large region
     }
 
     /** Seed every core's bump pointer + free list. Call once, early in boot, before any {@code new}. */
@@ -78,6 +151,65 @@ public final class Heap
             c += 1;
         }
         Magic.store64(CODE_PTR_CELL, CODE_BASE);
+        Magic.store64(LARGE_PTR_CELL, LARGE_BASE);
+        Magic.store64(LARGE_FREE_CELL, 0L);
+        long pz = CODE_PIN_BITMAP;
+        while (pz < CODE_PIN_END)
+        {
+            Magic.store64(pz, 0L);                     // the pin bitmap persists across collections, so it
+            pz += 8L;                                  //   is cleared exactly once, here
+        }
+    }
+
+    /**
+     * Allocate from the large region. Page-quantised first fit with splitting; the remainder is a page
+     * multiple by construction, so it can serve any later large request that fits it exactly. Freeing and
+     * coalescing are the sweep's job ({@code VMGc} walks this region like the small one).
+     */
+    private static long allocLarge(long size)
+    {
+        long want = (size + PAGE - 1L) & -PAGE;
+        long prev = 0L;
+        long f = Magic.load64(LARGE_FREE_CELL);
+        while (f != 0L)
+        {
+            long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+            if (fsize >= want)
+            {
+                long next = Magic.load64(f);
+                if (prev == 0L) { Magic.store64(LARGE_FREE_CELL, next); }
+                else { Magic.store64(prev, next); }
+                long rest = fsize - want;
+                if (rest >= PAGE)                          // the remainder is a whole number of pages, so it
+                {                                          //   stays on the same lattice as every request
+                    Magic.store64(f + ObjectModel.STATUS_OFFSET, want);
+                    addFreeLarge(f + want, rest);
+                }
+                largeReuse = largeReuse + 1L;
+                zeroPayload(f, (int) Magic.load64(f + ObjectModel.STATUS_OFFSET));
+                return f;
+            }
+            prev = f;
+            f = Magic.load64(f);
+        }
+        long p = Magic.load64(LARGE_PTR_CELL);
+        if (p + want > LARGE_LIMIT)
+        {
+            return 0L;                                     // caller collects and retries
+        }
+        Magic.store64(LARGE_PTR_CELL, p + want);
+        Magic.store64(p + ObjectModel.STATUS_OFFSET, want);
+        largeBump = largeBump + 1L;
+        zeroPayload(p, (int) want);
+        return p;
+    }
+
+    /** Push a run onto the large region's free list. */
+    public static void addFreeLarge(long addr, long size)
+    {
+        Magic.store64(addr, Magic.load64(LARGE_FREE_CELL));
+        Magic.store64(addr + ObjectModel.STATUS_OFFSET, size);
+        Magic.store64(LARGE_FREE_CELL, addr);
     }
 
     /**
@@ -109,6 +241,8 @@ public final class Heap
         }
         Magic.store64(CODE_PTR_CELL, p + aligned);
         noteCodeBlock(p, aligned);
+        Magic.store64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L,
+                      Magic.load64(CODE_BLOCKS + (codeBlockN - 1) * 16L + 8L) | CODE_YOUNG);
         return p;
     }
 
@@ -134,6 +268,23 @@ public final class Heap
     public static final long CODE_FREE = 1L;
 
     /**
+     * Registry flag: this buffer was allocated since the last collection, so the sweep must keep it.
+     *
+     * <p>{@link #allocCode} hands back a buffer that nothing references yet — the compiler fills it and
+     * only afterwards stores its address into a cell, a vtable slot or a static. A collection triggered
+     * inside that window (any heap allocation the compiler makes can call {@code Magic.gc}) sees a buffer
+     * no root reaches, frees it, and zeroes it; the compiler then publishes the address and the first call
+     * through it executes zeros. That is the fault this arc chased for ten cycles: a stub freed at
+     * collection 7 and branched into at 26, with no live holder at the time because the address was still
+     * in flight.
+     *
+     * <p>One collection of grace is enough and is the standard answer (allocate black): a buffer is exempt
+     * for the collection that follows its allocation, by which time it is either published or genuinely
+     * garbage.
+     */
+    public static final long CODE_YOUNG = 2L;
+
+    /**
      * Reuse a swept code buffer of at least {@code aligned} bytes, splitting the remainder into its own
      * free entry when it is worth tracking. First fit over the registry, which doubles as the free list —
      * the code arena has no headers to thread a list through, and the registry already enumerates every
@@ -157,7 +308,7 @@ public final class Heap
                 {
                     long start = Magic.load64(e);
                     long rest = usable - (long) aligned;
-                    Magic.store64(e + 8L, (long) aligned);          // allocated, exact size
+                    Magic.store64(e + 8L, (long) aligned | CODE_YOUNG);   // allocated, exact size
                     if (rest >= 64L)                                // a remainder too small to hold any
                     {                                               //   method is left inside the block
                         noteCodeBlock(start + (long) aligned, (int) rest);
@@ -165,7 +316,7 @@ public final class Heap
                     }
                     else
                     {
-                        Magic.store64(e + 8L, usable);              // keep the slack with the allocation
+                        Magic.store64(e + 8L, usable | CODE_YOUNG);   // keep the slack with the allocation
                     }
                     return start;
                 }
@@ -373,6 +524,29 @@ public final class Heap
         codeBlockN = dst;
     }
 
+    /**
+     * 1 if {@code addr} falls inside a code block the sweep has freed, 0 if it is inside a live one, -1 if
+     * no block covers it. Lets a caller assert the invariant that matters after a code sweep: every address
+     * something still dispatches through must lie in an allocated buffer.
+     */
+    public static int codeBlockFreeAt(long addr)
+    {
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long e = CODE_BLOCKS + i * 16L;
+            long start = Magic.load64(e);
+            long sz = Magic.load64(e + 8L);
+            long usable = sz & -8L;
+            if (start != 0L && addr >= start && addr < start + usable)
+            {
+                return (sz & CODE_FREE) != 0L ? 1 : 0;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
     /** Mark the registry entry for {@code start} free (the collector swept it). */
     public static void freeCodeBlock(long i)
     {
@@ -444,6 +618,25 @@ public final class Heap
             aligned = ObjectModel.HEADER_SIZE;
         }
         int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
+        if (core == 0 && (long) aligned >= LARGE_REQ)
+        {
+            long big = allocLarge((long) aligned);
+            if (big != 0L)
+            {
+                return big;
+            }
+            Magic.gc();                                     // region full: collect, then try once more
+            big = allocLarge((long) aligned);
+            if (big != 0L)
+            {
+                return big;
+            }
+            board.bcm2711.Uart.write(Magic.bytes("large region OOM\n"));
+            while (true)
+            {
+                Magic.wfe();
+            }
+        }
         long freeCell = FREE_CELL + core * 8L;
         long ptrCell = PTR_CELL + core * 8L;
         int attempt = 0;
@@ -560,7 +753,8 @@ public final class Heap
     static void resetFreeList()
     {
         Magic.store64(FREE_CELL + (int) (Magic.readMPIDR() & 3L) * 8L, 0L);
-    }
+        Magic.store64(LARGE_FREE_CELL, 0L);            // the large sweep rebuilds this list too, and old
+    }                                                  //   entries are re-walked as dead blocks anyway
 
     /** Add a reclaimed block to the current core's free list. */
     static void addFree(long addr, long size)

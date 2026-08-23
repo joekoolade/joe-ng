@@ -221,6 +221,84 @@ public final class Loader
      * the read, so {@code lr} still holds the caller's return address; after the fault it is gone, and the
      * raw abort names only the two-line helper that happened to do the load.
      */
+    /**
+     * Walk the arming table and report the first entry whose blob has gone to zero since it was inserted.
+     * Paired with the insertion guard: if the entry was born valid and is zero here, something wrote over
+     * it, and the isolation runs have already ruled out the collector.
+     */
+    /** Halt NAMED if {@code entry} is a code buffer the collector swept — the initializer is about to be
+     *  called and would execute zeros, reported minutes later from an unnamed address. */
+    private static void checkClinitEntry(long entry, int idx)
+    {
+        if (Heap.codeBlockFreeAt(entry) == 1)
+        {
+            Uart.write(Magic.bytes("\nCLINIT ENTRY WAS SWEPT idx="));
+            VM.printDec(idx);
+            Uart.write(Magic.bytes(" entry="));
+            VM.printHex(entry);
+            Uart.putc(0x0A);
+            VMGc.reportSweptPc(entry);
+            printCurrentClass();
+            Uart.putc(0x0A);
+            while (true) { Magic.wfe(); }
+        }
+    }
+
+    /**
+     * After a code sweep, every phase-A cell must still point into an ALLOCATED code buffer. A cell whose
+     * target has been freed is the exact shape of the fault: the dispatcher branches through the cell into
+     * a buffer the collector zeroed, and executes zeros. Checking here names the entry while the tables are
+     * still intact, instead of leaving a trap in an unnamed buffer minutes later.
+     */
+    public static void verifyCells()
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            if (dlTab[k] != null && dlTab[k].cell != 0L)
+            {
+                long target = Magic.load64(dlTab[k].cell);
+                if (target >= Heap.CODE_BASE && target < Heap.CODE_LIMIT
+                        && Heap.codeBlockFreeAt(target) == 1)
+                {
+                    Uart.write(Magic.bytes("\nCELL -> FREED CODE k="));
+                    VM.printDec(k);
+                    Uart.write(Magic.bytes(" target="));
+                    VM.printHex(target);
+                    Uart.write(Magic.bytes(" cell="));
+                    VM.printHex(dlTab[k].cell);
+                    Uart.write(Magic.bytes("\n  method: "));
+                    printFrameAt(target);
+                    Uart.putc(0x0A);
+                    while (true) { Magic.wfe(); }
+                }
+            }
+            k += 1;
+        }
+    }
+
+    private static void verifyDlTab()
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            if (dlTab[k] == null || dlTab[k].blob == 0L)
+            {
+                Uart.write(Magic.bytes("\nDL WENT ZERO at k="));
+                VM.printDec(k);
+                Uart.write(Magic.bytes(" of "));
+                VM.printDec(dlN);
+                Uart.write(Magic.bytes(" null="));
+                VM.printDec(dlTab[k] == null ? 1 : 0);
+                Uart.write(Magic.bytes(" while compiling "));
+                printCurrentClass();
+                Uart.putc(0x0A);
+                while (true) { Magic.wfe(); }
+            }
+            k += 1;
+        }
+    }
+
     private static void badRead(long addr, long lr)
     {
         Uart.write(Magic.bytes("\nSTALE REGISTRY REF (blob "));
@@ -530,6 +608,7 @@ public final class Loader
             {
                 Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
             }
+            checkClinitEntry(clinitEntry[clinitFdFirst], clinitFdFirst);
             long unusedFd = Magic.call0(clinitEntry[clinitFdFirst]);
             clinitRan[clinitFdFirst] = 1;
             done[clinitFdFirst] = true;
@@ -559,6 +638,7 @@ public final class Loader
                         writeName(pdBase[cpd] + pdNameOff[cpd] + 2, u2(pdBase[cpd] + pdNameOff[cpd]));
                         Uart.putc(0x0A);
                     }
+                    checkClinitEntry(clinitEntry[i], i);
                     long unused = Magic.call0(clinitEntry[i]);
                     clinitRan[i] = 1;
                     done[i] = true;
@@ -576,6 +656,7 @@ public final class Loader
                 }
                 if (j < clinitN)
                 {
+                    checkClinitEntry(clinitEntry[j], j);
                     long unused = Magic.call0(clinitEntry[j]);
                     clinitRan[j] = 1;
                     done[j] = true;
@@ -695,6 +776,18 @@ public final class Loader
                 Uart.write(Magic.bytes("  clinit-lazy "));
                 printNameAt(clTab[reg].base, clTab[reg].nameOff);
                 Uart.putc(0x0A);
+                if (Heap.codeBlockFreeAt(clinitEntry[i]) == 1)   // GUARD: about to call a SWEPT initializer.
+                {                                                //   Name it here, where the class is in hand.
+                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" entry="));
+                    VM.printHex(clinitEntry[i]);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(i);
+                    Uart.putc(0x0A);
+                    VMGc.reportSweptPc(clinitEntry[i]);
+                    while (true) { Magic.wfe(); }
+                }
                 long unused = Magic.call0(clinitEntry[i]);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 return;
@@ -2022,7 +2115,11 @@ public final class Loader
                 // arenas (0x1000_0000), so this never touches live secondary-core data.
                 long z0 = demandHeapMark;
                 long zEnd = demandHeapMark + DEMAND_ZERO_SPAN;
-                if (zEnd > 0x1000_0000L) { zEnd = 0x1000_0000L; }   // never cross into core 1's arena
+                if (zEnd > Heap.LARGE_BASE) { zEnd = Heap.LARGE_BASE; }   // the demand heap is the SMALL
+                                                        // region: this span must stop where the large-object
+                                                        // region begins, or it wipes live tables allocated
+                                                        // there. It was clamped at core 1's arena when core
+                                                        // 0's was one contiguous range.
                 while (z0 < zEnd)
                 {
                     Magic.store64(z0, 0L);
@@ -2274,6 +2371,18 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" lgLive="));     // the region's live set, and what its trim
+                VM.printHex(VMGc.largeLive);         //   has handed back over the run
+                Uart.write(Magic.bytes(" lgTrim="));
+                VM.printHex(VMGc.largeTrimmed);
+                Uart.write(Magic.bytes(" ovf="));
+                VM.printDec((int) VMGc.overflows);
+                Uart.write(Magic.bytes(" largeTop="));    // the large region: how far it has grown, and
+                VM.printHex(Magic.load64(Heap.LARGE_PTR_CELL) - Heap.LARGE_BASE);
+                Uart.write(Magic.bytes(" reuse="));       //   whether requests are finding blocks there
+                VM.printDec((int) Heap.largeReuse);
+                Uart.putc(0x2F);
+                VM.printDec((int) Heap.largeBump);
                 Uart.write(Magic.bytes(" merged="));      // blocks folded into a neighbour by the last
                 VM.printHex(Heap.codeMergedBlocks);       //   coalescing pass, and the bytes they carried
                 Uart.putc(0x2F);
@@ -5611,6 +5720,10 @@ public final class Loader
                     for (;;) { }
                 }
                 int off = (int) (d >> 2);
+                Heap.pinCodeAt(target);                       // CODE->CODE edge: after this store the only
+                                                              //   record of `target` is a displacement inside
+                                                              //   the caller's instructions, which nothing
+                                                              //   scans -- pin it or the sweep may free it
                 if (rcTail[i] != 0)
                 {
                     Magic.store32(rcAddr[i], A64Enc.b(off));   // lambda/method-ref thunk: tail branch, not a call
@@ -6996,9 +7109,61 @@ public final class Loader
     private static int    dlN;
 
     /** Per-method stub: x9 = deferred index, then branch to the shared trampoline. */
+    /**
+     * Stubs, by address: {stub, lazy index}. A stub is 32 bytes of movz/movk/br — its whole purpose is to
+     * be branched to from somewhere else, which is exactly the reference the collector cannot see. Recording
+     * them lets the sweep say WHICH stub it is freeing, and the fault reporter say which method's stub the
+     * PC landed in. 64 KiB = 4,096 entries; recording stops rather than wrapping.
+     */
+    public static final long STUB_TAB = 0x037C_0000L - 0x10000L;   // 64 KiB below the swept log
+    private static final long STUB_TAB_END = 0x037C_0000L;
+    public static long stubTabN;
+
+    /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
+    static void noteStub(long buf, int idx)
+    {
+        if (STUB_TAB + stubTabN * 16L + 16L <= STUB_TAB_END)
+        {
+            Magic.store64(STUB_TAB + stubTabN * 16L, buf);
+            Magic.store64(STUB_TAB + stubTabN * 16L + 8L, (long) idx);
+            stubTabN = stubTabN + 1L;
+        }
+    }
+
+    /** The lazy index of the stub containing {@code addr}, or -1. Stubs are 32 bytes. */
+    public static long stubIdxAt(long addr)
+    {
+        long i = 0;
+        while (i < stubTabN)
+        {
+            long b = Magic.load64(STUB_TAB + i * 16L);
+            if (addr >= b && addr < b + 32L)
+            {
+                return Magic.load64(STUB_TAB + i * 16L + 8L);
+            }
+            i += 1L;
+        }
+        return -1L;
+    }
+
+    /** Name the method a lazy index belongs to, for a diagnostic. */
+    public static void printLazyName(long idx)
+    {
+        int k = (int) idx;
+        if (k < 0 || k >= lzN || lzTab[k] == null)
+        {
+            Uart.write(Magic.bytes("<idx out of range>"));
+            return;
+        }
+        printNameAt(clTab[lzTab[k].reg].base, clTab[lzTab[k].reg].nameOff);
+        Uart.putc(0x2E);
+        writeName(lzTab[k].blob + lzTab[k].nameOff + 2, u2(lzTab[k].blob + lzTab[k].nameOff));
+    }
+
     private static long buildLazyCompileStub(int idx)
     {
         long buf = Heap.allocCode(32);
+        noteStub(buf, idx);
         int w = 0;
         Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
@@ -7685,6 +7850,15 @@ public final class Loader
                 Magic.store64(cell, buildLazyCompileStub(idx));
                 lzN += 1;
                 DynLink d = new DynLink();
+                if (gbase == 0L)                            // PROBE: born zero, or zeroed later? This is the
+                {                                            //   write site, so the class is still in hand.
+                    Uart.write(Magic.bytes("\nDL BORN ZERO at dlN="));
+                    VM.printDec(dlN);
+                    Uart.write(Magic.bytes(" while compiling "));
+                    printCurrentClass();
+                    Uart.putc(0x0A);
+                    while (true) { Magic.wfe(); }
+                }
                 d.blob = gbase;
                 d.classOff = gThisNameOff;
                 d.nameOff = nameOff;
@@ -7697,6 +7871,7 @@ public final class Loader
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
+        verifyDlTab();                                      // ... and check none went zero since insertion
         Uart.write(Magic.bytes("  phaseA: "));
         VM.printDec(armed);
         Uart.write(Magic.bytes(" cells at structure time for "));
