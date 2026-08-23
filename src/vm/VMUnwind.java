@@ -69,6 +69,33 @@ final class VMUnwind
             Loader.reportMethodAt(pc);
             Uart.putc(0x0A);
         }
+        // REFUSE to unwind something that is not a throwable. captureTrace WRITES an 8-slot backtrace into
+        // exc+16.., so a bogus reference here does not merely fail to unwind -- it scribbles 64 bytes over
+        // whatever occupies that address, and the corruption surfaces later somewhere unrelated. A garbage
+        // value reaching athrow is a bug either way; the report names the throwing method while its pc is
+        // still in hand, instead of the walk running to the top and printing UNWIND LOST with the evidence
+        // already gone.
+        long etib = exc > 0x1000L ? Magic.load64(exc) : 0L;
+        if (exc <= 0x1000L || etib <= 0x1000L || etib >= 0x40000000L)
+        {
+            Uart.write(Magic.bytes("\nBAD THROW exc="));
+            printHex(exc);
+            Uart.write(Magic.bytes(" tib="));
+            printHex(etib);
+            if (exc > 0x1000L)
+            {
+                Uart.write(Magic.bytes(" status="));
+                printHex(Magic.load64(exc + 8L));      // size | mark: is this a heap block at all?
+                Uart.write(Magic.bytes(" inHeap="));
+                printHex(exc >= Heap.BASE && exc < Magic.load64(Heap.PTR_CELL) ? 1L : 0L);
+            }
+            Uart.write(Magic.bytes(" thrownAt="));
+            printHex(pc);
+            Uart.putc(0x20);
+            Loader.printFrameAt(pc);
+            Uart.putc(0x0A);
+            return;                                    // ... and do NOT captureTrace into a non-object
+        }
         captureTrace(exc, pc, sp);                     // fill exc's backtrace if not already captured at the throw site
         if (unwindLocBuf == 0L)
         {
