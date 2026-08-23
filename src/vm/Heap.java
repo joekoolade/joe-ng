@@ -84,6 +84,30 @@ public final class Heap
     public static final long CODE_PIN_BITMAP = 0x0378_0000L;
     private static final long CODE_PIN_END   = 0x037C_0000L;   // 256 KiB = 1 bit per 8 B of a 16 MiB arena
 
+    /**
+     * One past the last byte of the code block containing {@code addr}, or 0 if no block does.
+     *
+     * <p>For bounding a pc -> method lookup. A compiled method's buffer IS a code block, so a pc lying in a
+     * DIFFERENT block cannot belong to the method registered at {@code addr}, however close the two are.
+     * Linear over the registry, which is fine: the only callers are fault reporting and stack traces.
+     */
+    public static long codeBlockEndAt(long addr)
+    {
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long e = CODE_BLOCKS + i * 16L;
+            long start = Magic.load64(e);
+            long usable = Magic.load64(e + 8L) & -8L;
+            if (start != 0L && addr >= start && addr < start + usable)
+            {
+                return start + usable;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
     public static void pinCodeAt(long addr)
     {

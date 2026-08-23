@@ -1713,13 +1713,15 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf
+                    && inSameCodeBlock(rgTab[i].buf, pc)) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
-            if (clinitEntry[c] != 0L && clinitEntry[c] <= pc && clinitEntry[c] > bestBuf) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            if (clinitEntry[c] != 0L && clinitEntry[c] <= pc && clinitEntry[c] > bestBuf
+                    && inSameCodeBlock(clinitEntry[c], pc)) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
             c += 1;
         }
         long clsStr = 0L;
@@ -3547,6 +3549,26 @@ public final class Loader
 
     /** Print the ONE demand-compiled method (or {@code <clinit>}) containing {@code addr} as a single line
      *  "class.method +0xoff" -- the printStackTrace frame formatter (compact vs {@link #reportMethodAt}). */
+    /**
+     * Whether {@code pc} lies in the same code block as the compiled buffer {@code buf}.
+     *
+     * <p>The pc -> method lookups pick the nearest registered buffer at-or-below the pc, which has no upper
+     * bound of its own: an address in an UNREGISTERED buffer -- a lambda thunk, a line table, a stub, or
+     * plain garbage from a derailed unwind -- silently borrows the name of whatever method sits below it.
+     * Every bogus pc then reports as the same method (the one with the highest registered buffer), which is
+     * how a fault report came to blame {@code LinkedKeySet.toArray} for addresses that were not code at all,
+     * and {@code String.<clinit>+0xC8} for a buffer that was never String's.
+     *
+     * <p>A method's buffer IS a code block, so the block containing {@code buf} is the method's extent and a
+     * pc outside it belongs to something else. An unregistered block ({@code 0}) is ACCEPTED rather than
+     * rejected: that is the pre-existing behaviour, and image/native addresses must keep resolving.
+     */
+    private static boolean inSameCodeBlock(long buf, long pc)
+    {
+        long end = Heap.codeBlockEndAt(buf);
+        return end == 0L || pc < end;
+    }
+
     static void printFrameAt(long addr)
     {
         long bestBuf = 0L;
@@ -3555,13 +3577,15 @@ public final class Loader
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > bestBuf) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > bestBuf
+                    && inSameCodeBlock(rgTab[i].buf, addr)) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
-            if (clinitEntry[c] != 0L && clinitEntry[c] <= addr && clinitEntry[c] > bestBuf) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            if (clinitEntry[c] != 0L && clinitEntry[c] <= addr && clinitEntry[c] > bestBuf
+                    && inSameCodeBlock(clinitEntry[c], addr)) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
             c += 1;
         }
         if (bestReg < 0 && bestClin < 0)
