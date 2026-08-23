@@ -2388,6 +2388,43 @@ public final class Loader
                 Uart.putc(0x2F);
                 VM.printHex(Heap.codeMergedBytes);
                 Uart.putc(0x0A);
+                // Would size classes help? Two readings decide it. The request histograms say what rounding
+                // to 16/32/64/... would cost, and bumpWhy says whether the allocations that grew an arena
+                // met a genuine shortage (noSpace -- no policy invents bytes) or enough bytes in the wrong
+                // shape (wrongShape -- exactly what size classes prevent by construction).
+                Uart.write(Magic.bytes("  reqCode:"));
+                Heap.printHist(Heap.codeHist());
+                Uart.putc(0x0A);
+                Uart.write(Magic.bytes("  reqData:"));
+                Heap.printHist(Heap.dataHist());
+                Uart.putc(0x0A);
+                Uart.write(Magic.bytes("  bumpWhy code noSpace="));
+                VM.printDec((int) Heap.codeBumpNoSpace);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printDec((int) Heap.codeBumpWrongShape);
+                Uart.write(Magic.bytes(" | data noSpace="));
+                VM.printDec((int) Heap.dataBumpNoSpace);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printDec((int) Heap.dataBumpWrongShape);
+                Uart.putc(0x0A);
+                // ... and the same split in BYTES, which is what the arena high-water is actually made of.
+                // wrongShapeBytes is the ceiling on what a size-class allocator could have served from the
+                // free list instead of growing the arena.
+                Uart.write(Magic.bytes("  bumpBytes code noSpace="));
+                VM.printHex(Heap.codeNoSpaceBytes);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printHex(Heap.codeWrongShapeBytes);
+                Uart.write(Magic.bytes(" | data noSpace="));
+                VM.printHex(Heap.dataNoSpaceBytes);
+                Uart.write(Magic.bytes(" wrongShape="));
+                VM.printHex(Heap.dataWrongShapeBytes);
+                Uart.putc(0x0A);
+                Heap.printLargeFails();                  // the state AT each large failure -- what a data-heap
+                Heap.resetAdjSampling();                 //   compactor would have had to work with. Sampling
+                                                         //   restarts per batch: the cap was being spent on
+                                                         //   the early demos, and the interesting failures
+                                                         //   (Lisp's doubling loop) come last.
+
             }
         }
     }

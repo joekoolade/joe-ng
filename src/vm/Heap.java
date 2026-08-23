@@ -221,6 +221,7 @@ public final class Heap
     public static long allocCode(int size)
     {
         int aligned = (size + 7) & -8;
+        noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
         {
@@ -229,6 +230,7 @@ public final class Heap
         }
         codeBumpCount = codeBumpCount + 1L;             // nothing fit: the arena grows. Against a large free
         codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
+        noteBumpCause((long) aligned, 1);               // ... and this says WHICH of the two it was
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -296,6 +298,8 @@ public final class Heap
      */
     private static long takeFreeCode(int aligned)
     {
+        scanFreeBytes = 0L;                            // a scan that runs to the end has surveyed the whole
+        scanFreeMax = 0L;                              //   list, which is exactly when the classification runs
         long i = 0;
         while (i < codeBlockN)
         {
@@ -304,6 +308,11 @@ public final class Heap
             if ((sz & CODE_FREE) != 0L)
             {
                 long usable = sz & -8L;
+                scanFreeBytes = scanFreeBytes + usable;
+                if (usable > scanFreeMax)
+                {
+                    scanFreeMax = usable;
+                }
                 if (usable >= (long) aligned)
                 {
                     long start = Magic.load64(e);
@@ -324,6 +333,301 @@ public final class Heap
             i += 1;
         }
         return 0L;
+    }
+
+    // ----- allocation-shape measurement -----------------------------------------------------------------
+    /**
+     * Request-size histograms and bump-failure classification, in fixed scratch above the coalescing index
+     * map. Two questions this answers, both of which decide whether SIZE CLASSES would help:
+     *
+     * <p>(1) What sizes are actually asked for? Power-of-two classes round every request up, so their cost
+     * is set by the size distribution — cheap if requests already cluster near class boundaries, expensive
+     * if they sit just above one.
+     *
+     * <p>(2) When an allocation has to grow the arena, WHY? If the free list did not hold enough bytes at
+     * all, the space simply was not there and no allocation policy invents it. If it held enough bytes but
+     * no single block was big enough, that is external fragmentation — the failure size classes prevent by
+     * construction. The two are indistinguishable in the arena total, and they point at opposite fixes.
+     */
+    public static final long STATS = 0x0374_0000L;
+    private static final long STATS_DATA = STATS + 128L;      // 16 buckets each, 8 bytes per bucket
+
+    /** Bump-path failures where the free list held FEWER bytes than the request: a genuine shortage. */
+    public static long codeBumpNoSpace;
+    public static long dataBumpNoSpace;
+    /** Bump-path failures where the free list held ENOUGH bytes but no single block fit: fragmentation. */
+    public static long codeBumpWrongShape;
+    public static long dataBumpWrongShape;
+    /** The same two, in BYTES. The arena's high-water is set by bytes, not by how many allocations took the
+     *  bump path, so the counts alone cannot size the win: 287,329 events at 48 bytes and 287,329 events at
+     *  8 KiB are the same count and two orders of magnitude apart in arena. `wrongShapeBytes` is the part a
+     *  size-class or segregated-fit allocator could plausibly have served from the free list instead. */
+    public static long codeNoSpaceBytes;
+    public static long dataNoSpaceBytes;
+    public static long codeWrongShapeBytes;
+    public static long dataWrongShapeBytes;
+    /** Totals seen by the most recent COMPLETE free-list scan, used to classify the failure that followed. */
+    private static long scanFreeBytes;
+    private static long scanFreeMax;
+    private static long scanFreeMaxAddr;
+    private static long scanFreeBlocks;
+
+    /**
+     * Adjacency sampling: at a large failure, would MERGING the largest free block with its free
+     * neighbours have satisfied the request? The data heap coalesces adjacent dead blocks during the sweep
+     * and never between collections, so a block 32 bytes short of the next request stays 32 bytes short
+     * even when the block beside it is free too. This measures how often that is the whole story — and it
+     * is the difference between a one-page fix (merge at free time) and building a compactor.
+     *
+     * <p>Sampled rather than exhaustive: the free list runs to tens of thousands of blocks and finding a
+     * neighbour means scanning it, so this walks at most {@link #ADJ_HOPS} neighbours for at most
+     * {@link #ADJ_MAX} failures.
+     */
+    private static final long ADJ_HOPS = 8L;
+    private static final long ADJ_MAX = 32L;
+    public static long adjSamples;
+    public static long adjWouldFit;
+    public static long adjMergedMax;
+    public static long adjListLen;
+
+    /**
+     * Large-allocation failures, sampled at the moment they happen. The cumulative byte split says most of
+     * the arena growth comes from a few thousand LARGE requests that found enough free bytes but no block
+     * big enough — which is the one failure compaction fixes and size classes do not. Cumulative totals
+     * cannot decide whether to build a compactor, though, because the data heap TRIMS its bump pointer
+     * after each collection: re-bumping afterwards is expected and healthy, not waste.
+     *
+     * <p>So sample the state AT each large failure instead: the request, the free list's total and largest
+     * block, how many blocks that total is spread across, and where the arena's top was. A failure with a
+     * big free total, a small largest block, and a high top is compactable arena. A failure with a low top
+     * is just a growing heap doing what it should.
+     */
+    // (the threshold is LARGE_REQ above -- the same 16 KiB line that routes an allocation to the large
+    //  region now also decides what counts as a "large failure" worth sampling, which is what we want:
+    //  the instrument and the mechanism should not be able to disagree about what "large" means)
+    /** Ring of the last 8 large failures: {size, freeTotal, freeMax, top} each. */
+    private static final long LARGE_RING = STATS + 256L;
+    private static long largeRingN;
+    public static long largeFailCount;
+    public static long largeFailBytes;
+    /** The single worst sample: the failure whose free list held the most unusable bytes. */
+    public static long worstFreeTotal;
+    public static long worstFreeMax;
+    public static long worstSize;
+    public static long worstTop;
+
+    /** The size the largest free block would reach if merged with the free blocks that follow it. */
+    private static long mergedSizeOf(long start, long len, long head)
+    {
+        long hops = 0;
+        while (hops < ADJ_HOPS)
+        {
+            long f = head;
+            long grew = 0;
+            while (f != 0L)
+            {
+                if (f == start + len)                       // the block immediately after this run is free
+                {
+                    len = len + Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                    grew = 1;
+                    f = 0L;
+                }
+                else
+                {
+                    f = Magic.load64(f);
+                }
+            }
+            if (grew == 0)
+            {
+                return len;
+            }
+            hops += 1L;
+        }
+        return len;
+    }
+
+    /** Start a fresh adjacency sample set, so every batch gets its own budget. */
+    public static void resetAdjSampling()
+    {
+        adjSamples = 0L;
+        adjWouldFit = 0L;
+        adjMergedMax = 0L;
+    }
+
+    /** Sample whether merging would have satisfied this request. */
+    private static void noteAdjacency(long size, long head)
+    {
+        adjSamples = adjSamples + 1L;
+        adjListLen = scanFreeBlocks;
+        long merged = mergedSizeOf(scanFreeMaxAddr, scanFreeMax, head);
+        if (merged > adjMergedMax)
+        {
+            adjMergedMax = merged;
+        }
+        if (merged >= size)
+        {
+            adjWouldFit = adjWouldFit + 1L;                 // one page of allocator, not a compactor
+        }
+    }
+
+    /**
+     * Record one large bump-path failure and its free-list state.
+     *
+     * <p>READS ZERO NOW, and that is the point. This sampler measured large requests failing to find a fit
+     * in the SMALL heap — the 2,500 near-misses that motivated the large-object region. Core 0 no longer
+     * routes such a request through that path at all, so the failure it samples cannot occur; a nonzero
+     * count here would mean the region had been removed or bypassed. Kept as exactly that regression
+     * detector, and because secondary cores (which have no large region) still take the path.
+     */
+    private static void noteLargeFail(long size, long top)
+    {
+        largeFailCount = largeFailCount + 1L;
+        largeFailBytes = largeFailBytes + size;
+        if (scanFreeBytes > worstFreeTotal)
+        {
+            worstFreeTotal = scanFreeBytes;
+            worstFreeMax = scanFreeMax;
+            worstSize = size;
+            worstTop = top;
+        }
+        long e = LARGE_RING + (largeRingN & 7L) * 32L;
+        Magic.store64(e, size);
+        Magic.store64(e + 8L, scanFreeBytes);
+        Magic.store64(e + 16L, scanFreeMax);
+        Magic.store64(e + 24L, top);
+        largeRingN = largeRingN + 1L;
+    }
+
+    /** Print the sampled large failures: the worst one, then the most recent few. */
+    public static void printLargeFails()
+    {
+        board.bcm2711.Uart.write(Magic.bytes("  largeFail n="));
+        VM.printDec((int) largeFailCount);
+        board.bcm2711.Uart.write(Magic.bytes(" worst: req="));
+        VM.printHex(worstSize);
+        board.bcm2711.Uart.write(Magic.bytes(" free="));
+        VM.printHex(worstFreeTotal);
+        board.bcm2711.Uart.write(Magic.bytes(" max="));
+        VM.printHex(worstFreeMax);
+        board.bcm2711.Uart.write(Magic.bytes(" top="));
+        VM.printHex(worstTop);
+        board.bcm2711.Uart.putc(0x0A);
+        // Would merging the largest free block with its free neighbours have satisfied the request? This is
+        // the question that separates a one-page allocator fix from building a compactor.
+        board.bcm2711.Uart.write(Magic.bytes("  adj samples="));
+        VM.printDec((int) adjSamples);
+        board.bcm2711.Uart.write(Magic.bytes(" wouldFitAfterMerge="));
+        VM.printDec((int) adjWouldFit);
+        board.bcm2711.Uart.write(Magic.bytes(" mergedMax="));
+        VM.printHex(adjMergedMax);
+        board.bcm2711.Uart.write(Magic.bytes(" listLen="));
+        VM.printDec((int) adjListLen);
+        board.bcm2711.Uart.putc(0x0A);
+        long i = 0;
+        while (i < 8L && i < largeRingN)
+        {
+            long e = LARGE_RING + ((largeRingN - 1L - i) & 7L) * 32L;
+            board.bcm2711.Uart.write(Magic.bytes("    req="));
+            VM.printHex(Magic.load64(e));
+            board.bcm2711.Uart.write(Magic.bytes(" free="));
+            VM.printHex(Magic.load64(e + 8L));
+            board.bcm2711.Uart.write(Magic.bytes(" max="));
+            VM.printHex(Magic.load64(e + 16L));
+            board.bcm2711.Uart.write(Magic.bytes(" top="));
+            VM.printHex(Magic.load64(e + 24L));
+            board.bcm2711.Uart.putc(0x0A);
+            i += 1L;
+        }
+    }
+
+    /** Bucket a size by power of two: 0 = up to 16 B, 1 = up to 32, ... 15 = 256 KiB and above. */
+    private static long bucketOf(long size)
+    {
+        long b = 0;
+        long v = size >> 4;
+        while (v != 0L && b < 15L)
+        {
+            b = b + 1L;
+            v = v >> 1;
+        }
+        return b;
+    }
+
+    /** Count one request of {@code size} in the histogram at {@code base}. */
+    private static void noteRequest(long base, long size)
+    {
+        long slot = base + bucketOf(size) * 8L;
+        Magic.store64(slot, Magic.load64(slot) + 1L);
+    }
+
+    /** Classify a bump-path allocation against what the free list held when the scan failed. */
+    private static void noteBumpCause(long size, int isCode)
+    {
+        if (scanFreeBytes >= size)
+        {
+            if (isCode != 0)
+            {
+                codeBumpWrongShape = codeBumpWrongShape + 1L;
+                codeWrongShapeBytes = codeWrongShapeBytes + size;
+            }
+            else
+            {
+                dataBumpWrongShape = dataBumpWrongShape + 1L;
+                dataWrongShapeBytes = dataWrongShapeBytes + size;
+            }
+        }
+        else
+        {
+            if (isCode != 0)
+            {
+                codeBumpNoSpace = codeBumpNoSpace + 1L;
+                codeNoSpaceBytes = codeNoSpaceBytes + size;
+            }
+            else
+            {
+                dataBumpNoSpace = dataBumpNoSpace + 1L;
+                dataNoSpaceBytes = dataNoSpaceBytes + size;
+            }
+        }
+    }
+
+    /** Print a histogram's non-zero buckets as {@code <=16=N <=32=N ...}. */
+    public static void printHist(long base)
+    {
+        long b = 0;
+        while (b < 16L)
+        {
+            long n = Magic.load64(base + b * 8L);
+            if (n != 0L)
+            {
+                board.bcm2711.Uart.putc(0x20);
+                long label = 16L << (int) b;
+                if (label >= 1024L)
+                {
+                    VM.printDec((int) (label >> 10));
+                    board.bcm2711.Uart.putc(0x4B);          // ...K, so a bucket label stays short
+                }
+                else
+                {
+                    VM.printDec((int) label);
+                }
+                board.bcm2711.Uart.putc(0x3D);
+                VM.printDec((int) n);
+            }
+            b += 1L;
+        }
+    }
+
+    /** The code-request histogram base, for reporting. */
+    public static long codeHist()
+    {
+        return STATS;
+    }
+
+    /** The data-request histogram base, for reporting. */
+    public static long dataHist()
+    {
+        return STATS_DATA;
     }
 
     /** How many {@link #allocCode} calls were served from the free list, and how many had to grow the arena
@@ -617,6 +921,7 @@ public final class Heap
             // (it stops at the first size-0 status and sweeps nothing beyond).
             aligned = ObjectModel.HEADER_SIZE;
         }
+        noteRequest(STATS_DATA, (long) aligned);            // the object-size distribution, for size classes
         int core = (int) (Magic.readMPIDR() & 3L);          // this core's arena (low 2 bits of MPIDR)
         if (core == 0 && (long) aligned >= LARGE_REQ)
         {
@@ -644,9 +949,19 @@ public final class Heap
         {
             long prev = 0L;
             long f = Magic.load64(freeCell);
+            scanFreeBytes = 0L;
+            scanFreeMax = 0L;
+            scanFreeBlocks = 0L;
             while (f != 0L)                                 // first fit in this core's free list
             {
                 long fsize = Magic.load64(f + ObjectModel.STATUS_OFFSET);
+                scanFreeBytes = scanFreeBytes + fsize;
+                scanFreeBlocks = scanFreeBlocks + 1L;
+                if (fsize > scanFreeMax)
+                {
+                    scanFreeMax = fsize;
+                    scanFreeMaxAddr = f;
+                }
                 if (fsize >= aligned)
                 {
                     long next = Magic.load64(f);
@@ -681,6 +996,15 @@ public final class Heap
             long p = Magic.load64(ptrCell);
             if (p + aligned <= arenaLimit(core))
             {
+                noteBumpCause((long) aligned, 0);            // shortage, or space of the wrong shape?
+                if ((long) aligned >= LARGE_REQ)             // and if it was large, snapshot the moment: the
+                {                                            //   cumulative totals cannot separate healthy
+                    noteLargeFail((long) aligned, p);        //   re-bumping after a trim from real waste
+                    if (scanFreeBytes >= (long) aligned && adjSamples < ADJ_MAX)
+                    {
+                        noteAdjacency((long) aligned, Magic.load64(freeCell));
+                    }
+                }
                 Magic.store64(ptrCell, p + aligned);
                 Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
                 lastFromFreeList = 0;
