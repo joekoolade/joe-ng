@@ -126,7 +126,11 @@ public final class Heap
     public static final long JIT_TABLES = 0x03E0_0000L;
 
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
-    static int  gcPressure;            // collections triggered by allocation pressure (Heap.alloc slow path)
+    /** Collections triggered by allocation pressure, from EITHER arena's slow path. Both count: the demo
+     *  that reports it is asking "did the program have to collect mid-computation?", and which region ran
+     *  out is not part of that question. Missing the large path here read as "collections=0" during a demo
+     *  whose own log showed eleven. */
+    static int  gcPressure;
 
     /** Base of core {@code c}'s arena. Core 0 = {@link #BASE}; secondaries carve 64 MiB slots from 256 MiB up. */
     static long arenaBase(int core)
@@ -930,8 +934,9 @@ public final class Heap
             {
                 return big;
             }
-            Magic.gc();                                     // region full: collect, then try once more
-            big = allocLarge((long) aligned);
+            gcPressure += 1;                                // an allocation-pressure collection like any
+            Magic.gc();                                     //   other: count it, or the churn demo reports
+            big = allocLarge((long) aligned);               //   "collections=0" while collecting elevenfold
             if (big != 0L)
             {
                 return big;

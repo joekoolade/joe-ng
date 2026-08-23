@@ -2757,6 +2757,27 @@ innocent — with the region hidden, large objects were never marked at all, so 
 way. **One symptom, two causes**, and the isolation could not separate them. Two of those runs were also
 spent on a misread: `blob 0x1` is a flag from `badRead(baseA == 0 ? 0 : 1, ...)`, not an address.
 
+**Both of #136's open questions closed — and both were measurement defects, not VM defects.**
+
+- **`gc: collections=0` was a real gap.** `gcPressure` means "collections forced by allocation pressure"
+  and was incremented only in the SMALL arena's slow path; the large region's slow path calls `Magic.gc()`
+  for the identical reason and did not count it. The demo printed 0 while its own log showed eleven. Now
+  counts both and reads **11**. Half the earlier guess was right — GcDemo's churn did move to the large
+  region so the small arena never fills — but the guess stopped one step short of the missing increment.
+  Note 11 against a pre-region baseline of 3 is also a REAL behavioural change: a 64 MB region fills sooner
+  than a 192 MB arena, so the same churn collects more often. Cheaper collections, more of them.
+- **The ~22 stale statics pointers were the probe reporting itself.** Slot `0x110530` is `VMGc.zeroLo` —
+  the collector's own field, holding the low bound of the code span that very sweep zeroed for the I-cache
+  publish. It points into just-freed code BY DEFINITION. Excluding the collector's own span bounds gives
+  **`stale=0/0/0`**: no real stale pointers exist.
+
+  The route there is the useful part. A persist-across-collections test, built expecting "benign transients
+  rewritten before use", returned **19 of 20 persisted, 0 rewritten** — reading as *worse* than feared.
+  Only naming the slot showed it was the SAME address every time, which is what a rotating instrument field
+  looks like and not what scattered stale pointers look like. **When an instrument reports something
+  alarming, check whether the instrument is inside the thing it measures.** Both of this arc's false alarms
+  were that: a counter blind to a new code path, and a scanner seeing its own bookkeeping.
+
 **Open:** with `RECLAIM_CODE_BY_GC` on, the suite faults at 2,990 lines executing zeros in a JIT'd
 `Unsafe.isBigEndian` — the zero-on-sweep signature of a live method reclaimed and called. Code sweep off:
 3,219 lines, clean. So code liveness under-counts under a two-region heap; `markCodeRoots` is not the cause
