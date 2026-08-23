@@ -2788,6 +2788,37 @@ It stood as a stale "Open:" for several commits after the fault died, and I repe
 in a PR body. A note that describes a bug is worth deleting the moment the bug is fixed; otherwise it reads
 as a live hazard to whoever finds it next.
 
+**Compaction, settled — and a third confirmation of the same law.** After the large-object region, the
+data heap's wrong-shape growth (enough free bytes, no block big enough — the failure compaction exists to
+fix) collapsed:
+
+| data heap, same suite | wrong-shape bytes |
+|---|---|
+| before the region | 147.06 MB (71% of all growth) |
+| after | **11.44 MB (46%)** — 13x less |
+
+What remains is 305,135 failures averaging **39 bytes**: the small-object crumb population. Compaction is
+the wrong tool for those — a 39-byte request needs *a block ≥ 39 bytes*, not contiguity.
+
+**So the obvious fix was tried and measured: raise the split floor** from 16 (a legal block) to 64 (a
+*useful* block), keeping sub-floor slack with the allocation instead of listing it as a crumb. Result:
+
+| | floor 16 | floor 64 |
+|---|---|---|
+| bump events | 315,133 | 317,753 (+0.8%) |
+| bumped bytes | 24.94 MB | 25.27 MB (+1.3%) |
+| small-heap peak | 23.3 MB | **23.3 MB — identical** |
+| collections | 11 | 11 |
+
+It only RECLASSIFIED the failures — wrong-shape 305,135 → 362, shortage 9,998 → 317,391 — because slack
+kept with an allocation consumes exactly the bytes that used to sit on the list as crumbs. The crumbs were
+not costing anything; those bytes were unusable at that moment either way. **Reverted.**
+
+That is the third independent confirmation of the same law: **the high-water is set by demand between
+collections, and no collection-time or allocation-policy mechanism reaches it.** The code trim measured it
+(increment 10), coalescing measured it (#135), the split floor measures it here. Compaction is a fourth
+mechanism of the same class, which is why it stays unbuilt.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
