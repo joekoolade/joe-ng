@@ -226,6 +226,39 @@ public final class Loader
      * Paired with the insertion guard: if the entry was born valid and is zero here, something wrote over
      * it, and the isolation runs have already ruled out the collector.
      */
+    /**
+     * After a code sweep, every phase-A cell must still point into an ALLOCATED code buffer. A cell whose
+     * target has been freed is the exact shape of the fault: the dispatcher branches through the cell into
+     * a buffer the collector zeroed, and executes zeros. Checking here names the entry while the tables are
+     * still intact, instead of leaving a trap in an unnamed buffer minutes later.
+     */
+    public static void verifyCells()
+    {
+        int k = 0;
+        while (k < dlN)
+        {
+            if (dlTab[k] != null && dlTab[k].cell != 0L)
+            {
+                long target = Magic.load64(dlTab[k].cell);
+                if (target >= Heap.CODE_BASE && target < Heap.CODE_LIMIT
+                        && Heap.codeBlockFreeAt(target) == 1)
+                {
+                    Uart.write(Magic.bytes("\nCELL -> FREED CODE k="));
+                    VM.printDec(k);
+                    Uart.write(Magic.bytes(" target="));
+                    VM.printHex(target);
+                    Uart.write(Magic.bytes(" cell="));
+                    VM.printHex(dlTab[k].cell);
+                    Uart.write(Magic.bytes("\n  method: "));
+                    printFrameAt(target);
+                    Uart.putc(0x0A);
+                    while (true) { Magic.wfe(); }
+                }
+            }
+            k += 1;
+        }
+    }
+
     private static void verifyDlTab()
     {
         int k = 0;
@@ -2305,6 +2338,8 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" ovf="));
+                VM.printDec((int) VMGc.overflows);
                 Uart.write(Magic.bytes(" largeTop="));    // the large region: how far it has grown, and
                 VM.printHex(Magic.load64(Heap.LARGE_PTR_CELL) - Heap.LARGE_BASE);
                 Uart.write(Magic.bytes(" reuse="));       //   whether requests are finding blocks there

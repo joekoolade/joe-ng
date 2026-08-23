@@ -453,6 +453,29 @@ public final class Heap
         codeBlockN = dst;
     }
 
+    /**
+     * 1 if {@code addr} falls inside a code block the sweep has freed, 0 if it is inside a live one, -1 if
+     * no block covers it. Lets a caller assert the invariant that matters after a code sweep: every address
+     * something still dispatches through must lie in an allocated buffer.
+     */
+    public static int codeBlockFreeAt(long addr)
+    {
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long e = CODE_BLOCKS + i * 16L;
+            long start = Magic.load64(e);
+            long sz = Magic.load64(e + 8L);
+            long usable = sz & -8L;
+            if (start != 0L && addr >= start && addr < start + usable)
+            {
+                return (sz & CODE_FREE) != 0L ? 1 : 0;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
     /** Mark the registry entry for {@code start} free (the collector swept it). */
     public static void freeCodeBlock(long i)
     {

@@ -81,12 +81,24 @@ final class VMGc
         drainMarkStack();                             // trace: scan each newly marked block exactly ONCE
         codeOnly = markCodeRoots();                   // ... then the addresses only compiled code holds
         drainMarkStack();
-        measureCodeLiveness();                        // how much compiled code is still reachable at all                             // (counted AFTER the ordinary trace, so the count is
-                                                      //  exactly "what nothing else kept alive")
         if (markOverflow != 0)
         {
+            overflows = overflows + 1L;
             traceFixpoint();                          // stack ran out: fall back to re-scanning the heap
         }
+        // Code liveness is measured — and unreachable code SWEPT — only once the trace is complete. This
+        // used to run before the overflow fallback, so an overflowed pass swept code against a half-finished
+        // mark: any method reachable only through an object the fixpoint had yet to discover was freed while
+        // live, and (since #134) zeroed, so the next call to it executes zeros.
+        measureCodeLiveness();                        // how much compiled code is still reachable at all
+        if (sweepCode != 0)
+        {
+            Loader.verifyCells();                     // PROBE: did this sweep free something a cell needs?
+            findStaleCodeHolders(Heap.BASE, Magic.load64(Heap.PTR_CELL));
+            findStaleCodeHolders(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
+        }
+                                                      // (counted AFTER the ordinary trace, so the count is
+                                                      //  exactly "what nothing else kept alive")
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
         liveBytes = 0L;
@@ -587,13 +599,86 @@ final class VMGc
      *  cannot see. Set to the loader's code watermark, the same line the rewind never crossed. */
     static long codeSweepFloor;
 
+    /** How many collections exhausted the mark stack and needed the fixpoint fallback. */
+    public static long overflows;
+
     /** One-shot latch for the false-block-base report, so a recurring case does not flood the UART. */
     private static int falseBaseSeen;
 
     /** Walk the code-block registry and total the blocks with a bit set. Runs after the trace has drained,
      *  so every reachable code pointer has been seen. */
+    /** This sweep's freed code ranges, and a scan for anything still pointing into one. */
+    private static final long FREED_RANGES = 0x0376_0000L;
+    private static long freedN2;
+
+    /** 1 if {@code w} lands in a range this sweep just freed. */
+    private static int inFreedRange(long w)
+    {
+        long i = 0;
+        while (i < freedN2)
+        {
+            if (w >= Magic.load64(FREED_RANGES + i * 16L) && w < Magic.load64(FREED_RANGES + i * 16L + 8L))
+            {
+                return 1;
+            }
+            i += 1L;
+        }
+        return 0;
+    }
+
+    /**
+     * Walk the heap for words pointing into code this sweep just freed, and name the first holder. If the
+     * collector freed a method something still dispatches through, the holder is the object whose scanning
+     * failed to keep it alive — which is the fact the fault, minutes later in an unnamed buffer, cannot say.
+     */
+    private static void findStaleCodeHolders(long from, long to)
+    {
+        long o = from;
+        while (o < to && freedN2 > 0L)
+        {
+            long st = Magic.load64(o + 8L);
+            long size = st & -8L;
+            if (size == 0L || o + size > to || o + size <= o)
+            {
+                o = to;
+            }
+            else if ((st & 1L) == 0L)
+            {
+                o = o + size;                          // dead holder: a dead cell pointing at dead code is
+            }                                          //   exactly what reclamation is supposed to produce
+            else
+            {
+                long z = o + 16L;
+                while (z < o + size)
+                {
+                    long w = Magic.load64(z);
+                    if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0)
+                    {
+                        Uart.write(Magic.bytes("\nSTALE CODE PTR holder="));
+                        printHex(o);
+                        Uart.write(Magic.bytes(" at+"));
+                        printHex(z - o);
+                        Uart.write(Magic.bytes(" tib="));
+                        printHex(Magic.load64(o));
+                        Uart.write(Magic.bytes(" size="));
+                        printHex(size);
+                        Uart.write(Magic.bytes(" target="));
+                        printHex(w);
+                        Uart.write(Magic.bytes("\n  freed method: "));
+                        Loader.printFrameAt(w);
+                        Uart.putc(0x0A);
+                        while (true) { Magic.wfe(); }
+                    }
+                    z += 8L;
+                }
+                o = o + size;
+            }
+        }
+    }
+
     private static void measureCodeLiveness()
     {
+        freedN2 = 0L;
         codeLive = 0L;
         codeUsed = 0L;
         codeFreed = 0L;
@@ -633,6 +718,12 @@ final class VMGc
                 // range dropped in the same breath: they outlive the method otherwise and would answer for
                 // whatever is compiled at that address next -- the aliasing dropJitTablesAbove prevents
                 // under the batch rewind.
+                if (freedN2 < 32L)                     // remember this sweep's freed ranges, so the probe
+                {                                      //   below can ask who still points into one
+                    Magic.store64(FREED_RANGES + freedN2 * 16L, start);
+                    Magic.store64(FREED_RANGES + freedN2 * 16L + 8L, start + size);
+                    freedN2 = freedN2 + 1L;
+                }
                 VM.dropJitTablesIn(start, start + size);
                 Loader.dropCodeRootsIn(start, start + size);   // its baked-in addresses die with it
                 zeroBuffer(start, size);                       // stale instructions are worse than zeros
