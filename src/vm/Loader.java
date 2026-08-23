@@ -2371,6 +2371,12 @@ public final class Loader
                 VM.printHex(Heap.codeBumpCount);
                 Uart.write(Magic.bytes(" bumpB="));      // and in bytes of arena those allocations added
                 VM.printHex(Heap.codeBumpBytes);
+                Uart.write(Magic.bytes(" stale="));      // slots caught pointing at freed code, split by
+                VM.printDec((int) VMGc.rawStaleSeen);     //   whether they were still stale a collection later
+                Uart.putc(0x2F);
+                VM.printDec((int) VMGc.stalePersisted);
+                Uart.putc(0x2F);
+                VM.printDec((int) VMGc.staleRewritten);
                 Uart.write(Magic.bytes(" lgLive="));     // the region's live set, and what its trim
                 VM.printHex(VMGc.largeLive);         //   has handed back over the run
                 Uart.write(Magic.bytes(" lgTrim="));

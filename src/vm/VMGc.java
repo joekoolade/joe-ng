@@ -57,6 +57,10 @@ final class VMGc
                 t += 1;
             }
         }
+        if (STALE_PROBES)
+        {
+            recheckStaleSlots();                      // ... before this collection changes anything
+        }
         long cz = CODE_BITMAP;                        // clear the code-reachability bitmap for this pass
         while (cz < CODE_BITMAP_END)
         {
@@ -723,8 +727,13 @@ final class VMGc
         while (p < to && freedN2 > 0L)
         {
             long w = Magic.load64(p);
-            if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0)
+            if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT && inFreedRange(w) != 0
+                    && w != zeroLo && w != zeroHi)
             {
+                // Skip the collector's OWN span bounds. zeroLo/zeroHi are statics holding the low and high
+                // address of the code this very sweep zeroed, so they point into freed code by definition.
+                // Every one of the ~20 "stale slots" this probe reported was one of them: the instrument
+                // was scanning its own bookkeeping and reporting itself.
                 Uart.write(Magic.bytes("\nSTALE CODE PTR in raw region tag="));
                 printHex(tag);
                 Uart.write(Magic.bytes(" at="));
@@ -735,7 +744,13 @@ final class VMGc
                 printHex(Loader.stubIdxAt(w));
                 Uart.putc(0x0A);
                 rawStaleSeen = rawStaleSeen + 1L;      // report and CONTINUE: halting here hides whether the
-                return;                                //   fix downstream actually works
+                if (staleTabN < 64L)                   //   fix downstream actually works. Remember the slot
+                {                                      //   so the NEXT collection can ask whether it is
+                    Magic.store64(STALE_TAB + staleTabN * 16L, p);        // still there.
+                    Magic.store64(STALE_TAB + staleTabN * 16L + 8L, w);
+                    staleTabN = staleTabN + 1L;
+                }
+                return;
             }
             p += 8L;
         }
@@ -789,6 +804,51 @@ final class VMGc
     private static long checkedFrees;
     private static long staticsScans;
     public static long rawStaleSeen;
+    /**
+     * Slots caught holding a pointer into just-freed code, carried to the NEXT collection to answer the
+     * question the count alone cannot: is this a transient slot that gets rewritten before anyone reads it,
+     * or a dangling pointer sitting in memory waiting to be called? {slotAddr, target} pairs.
+     */
+    private static final long STALE_TAB = 0x0374_0400L;
+    private static long staleTabN;
+    /** Slots that STILL held the same freed pointer one collection later — the ones that are not benign. */
+    public static long stalePersisted;
+    /** Slots that had been overwritten by then — transient, and harmless. */
+    public static long staleRewritten;
+
+    /** Re-examine last collection's stale slots before this one disturbs anything. */
+    private static void recheckStaleSlots()
+    {
+        long i = 0;
+        while (i < staleTabN)
+        {
+            long slot = Magic.load64(STALE_TAB + i * 16L);
+            long was = Magic.load64(STALE_TAB + i * 16L + 8L);
+            if (Magic.load64(slot) == was)
+            {
+                stalePersisted = stalePersisted + 1L;  // still pointing at code the collector freed
+                if (stalePersisted <= 4L)              // name the first few: which slot, and what it was
+                {
+                    Uart.write(Magic.bytes("  PERSISTED STALE slot="));
+                    printHex(slot);
+                    Uart.write(Magic.bytes(" target="));
+                    printHex(was);
+                    Uart.write(Magic.bytes(" nowFree="));
+                    printHex((long) Heap.codeBlockFreeAt(was));
+                    Uart.write(Magic.bytes(" stubIdx="));
+                    printHex(Loader.stubIdxAt(was));
+                    Uart.putc(0x0A);
+                    reportSweptPc(was);                // ... and which buffer it was, from the swept log
+                }
+            }
+            else
+            {
+                staleRewritten = staleRewritten + 1L;  // republished before anyone could call it
+            }
+            i += 1L;
+        }
+        staleTabN = 0L;
+    }
     /** Enable the stale-code-pointer probes. Expensive; see the call site. */
     static final boolean STALE_PROBES = false;
 
