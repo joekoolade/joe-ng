@@ -100,6 +100,20 @@ final class CodeCompact
     static long explainedRefs;
     static long unexplainedRefs;
 
+    /**
+     * Composition of the conservative hits -- the measurement that says whether a tighter reference test can
+     * pay. A hit is only a plausible live reference if it is 4-aligned (A64 code addresses always are) AND
+     * lands inside an ALLOCATED block (a value pointing into swept or unregistered space cannot be followed).
+     * Those two filters are sound with no judgement required. The entry/interior split is the interesting
+     * one: every table that holds a code address -- STUB_TAB, TIB slots, dispatch cells, rgTab -- holds an
+     * ENTRY; only return addresses point into the middle of a method, and those live on the stack.
+     */
+    static long refsUnaligned;
+    static long refsNoBlock;
+    static long refsDead;
+    static long refsEntry;
+    static long refsInterior;
+
     /** Live blocks something OTHER than a census edge might point at -- they must not move. */
     static long immovable;
     /** Live blocks the safe rule permits moving, and the bytes that would recover. */
@@ -246,6 +260,7 @@ final class CodeCompact
         }
         copyBlocks();
         patchEdges();
+        rewriteHolders();   // enumeration and rewriting land together, always
         long i = 0L;
         while (i < planN)                                // registry: a block's start is now its destination
         {
@@ -393,6 +408,11 @@ final class CodeCompact
         immovable = 0L;
         explainedRefs = 0L;
         unexplainedRefs = 0L;
+        refsUnaligned = 0L;
+        refsNoBlock = 0L;
+        refsDead = 0L;
+        refsEntry = 0L;
+        refsInterior = 0L;
         scanRange(Heap.BASE, Magic.load64(Heap.PTR_CELL));            // data heap: TIBs, cells, itables
         scanRange(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));// large-object region
         scanRange(VM.staticsStart, VM.staticsEnd);                    // image statics
@@ -420,7 +440,69 @@ final class CodeCompact
         {
             return (slot - Loader.STUB_TAB) % 16L == 0L ? 1 : 0;
         }
+        if (explainedCell(slot) != 0)
+        {
+            return 1;
+        }
         return ENUM_TIB ? explainedTib(slot) : 0;
+    }
+
+    /**
+     * 1 if {@code slot} is a lazy method's dispatch CELL -- one 8-byte heap word holding first the deferral
+     * stub, then the compiled buffer after first call ({@code Loader.lazyCellAt}). Entry pointers, one per
+     * lazy method, and {@link #rewriteHolders} patches them, so explaining them is sound.
+     *
+     * <p>Linear over {@code lzN} per arena-pointing word, which is the honest cost of finding out whether
+     * this class is worth optimising for. If it pays, the lookup becomes a sorted table.
+     */
+    private static int explainedCell(long slot)
+    {
+        int n = Loader.lazyCount();
+        int i = 0;
+        while (i < n)
+        {
+            if (Loader.lazyCellAt(i) == slot)
+            {
+                return 1;
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Rewrite every ENUMERATED holder to its block's new address. Must cover exactly the classes
+     * {@link #explained} claims, or a block gets unpinned whose reference then dangles -- #146 on purpose.
+     * Called from {@link #move} after the bytes have been copied.
+     */
+    private static void rewriteHolders()
+    {
+        long k = 0L;
+        while (k < Loader.stubTabN)                      // STUB_TAB rows: {buf, idx} at a 16-byte stride
+        {
+            long e = Loader.STUB_TAB + k * 16L;
+            long na = newAddrOf(Magic.load64(e));
+            if (na != 0L)
+            {
+                Magic.store64(e, na);
+            }
+            k += 1L;
+        }
+        int n = Loader.lazyCount();
+        int i = 0;
+        while (i < n)
+        {
+            long cell = Loader.lazyCellAt(i);
+            if (cell != 0L)
+            {
+                long na = newAddrOf(Magic.load64(cell));
+                if (na != 0L)
+                {
+                    Magic.store64(cell, na);
+                }
+            }
+            i += 1;
+        }
     }
 
     /** Total enumerable TIB vtable slots -- 0 means the registry is empty when the report runs. */
@@ -468,6 +550,48 @@ final class CodeCompact
         return 0;
     }
 
+    /**
+     * Decide what one arena-valued word at {@code slot} actually is, and pin only if it could be a live
+     * reference. The two filters applied before pinning are sound without judgement: a non-4-aligned value
+     * is not an A64 code address, and a value in a free or unregistered block points at nothing that can be
+     * called. Entry and interior hits still pin -- the split is recorded so the next tightening can be
+     * argued from data instead of intuition.
+     */
+    private static void classify(long slot, long w)
+    {
+        if ((w & 3L) != 0L)
+        {
+            refsUnaligned += 1L;                         // not an instruction address: cannot be a reference
+            return;
+        }
+        long k = indexOf(w);
+        if (k < 0L)
+        {
+            refsNoBlock += 1L;                           // inside no registered block
+            return;
+        }
+        if (Magic.load64(PLAN_TAB + k * 16L + 8L) == 0L)
+        {
+            refsDead += 1L;                              // inside a block the sweep freed
+            return;
+        }
+        if (Magic.load64(PLAN_TAB + k * 16L) == w)
+        {
+            refsEntry += 1L;
+        }
+        else
+        {
+            refsInterior += 1L;
+        }
+        if (explained(slot) != 0)
+        {
+            explainedRefs += 1L;                         // a slot we can name and would rewrite: no pin
+            return;
+        }
+        unexplainedRefs += 1L;
+        pin(w);
+    }
+
     /** Pin every live block a word in {@code [lo,hi)} points into. */
     private static void scanRange(long lo, long hi)
     {
@@ -481,15 +605,7 @@ final class CodeCompact
             long w = Magic.load64(p);
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
             {
-                if (explained(p) != 0)
-                {
-                    explainedRefs += 1L;                 // a slot we can name and would rewrite: no pin
-                }
-                else
-                {
-                    unexplainedRefs += 1L;
-                    pin(w);
-                }
+                classify(p, w);
             }
             p += 8L;
         }
@@ -657,6 +773,18 @@ final class CodeCompact
         VM.printDec((int) explainedRefs);
         Uart.write(Magic.bytes(" refsUNKNOWN="));
         VM.printDec((int) unexplainedRefs);
+        Uart.write(Magic.bytes(" unal="));
+        VM.printDec((int) refsUnaligned);
+        Uart.write(Magic.bytes(" noblk="));
+        VM.printDec((int) refsNoBlock);
+        Uart.write(Magic.bytes(" dead="));
+        VM.printDec((int) refsDead);
+        Uart.write(Magic.bytes(" entry="));
+        VM.printDec((int) refsEntry);
+        Uart.write(Magic.bytes(" interior="));
+        VM.printDec((int) refsInterior);
+        Uart.write(Magic.bytes(" lazyN="));
+        VM.printDec(Loader.lazyCount());
         Uart.write(Magic.bytes(" classes="));
         VM.printDec(Loader.classRegCount());
         Uart.write(Magic.bytes(" tibSlots="));

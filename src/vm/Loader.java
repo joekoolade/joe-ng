@@ -1969,6 +1969,17 @@ public final class Loader
         codeRootN = kept;
     }
 
+    /** Lazy-method count and the dispatch cell of entry {@code i} (0 if it has none), for CodeCompact. */
+    static int lazyCount()
+    {
+        return lzN;
+    }
+
+    static long lazyCellAt(int i)
+    {
+        return lzTab == null || i < 0 || i >= lzTab.length || lzTab[i] == null ? 0L : lzTab[i].slot;
+    }
+
     /** Registered class-record count, for {@link CodeCompact}'s precise reference enumeration. */
     static int classRegCount()
     {
