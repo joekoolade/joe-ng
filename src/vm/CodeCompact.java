@@ -46,7 +46,7 @@ final class CodeCompact
      * near-miss into core 1's stack at 0x0380_0000, STATS left uninitialised because a neighbour scribbled
      * it). Check a candidate against EVERY table in the 0x0300_0000+ band, not just the nearest one.
      */
-    private static final long PLAN_TAB = 0x030C_0000L;
+    static final long PLAN_TAB = 0x030C_0000L;        // package-visible so ScratchMap can register it
     private static final long PLAN_CAP = 16384L;
 
     /** Entries written by the last {@link #plan}. */
