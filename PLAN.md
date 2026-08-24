@@ -2779,7 +2779,12 @@ Two traps, both caught only by measuring a quantity against a baseline rather th
 
 The code arena not moving re-confirms the law from the fragmentation arc below: its high-water is one burst
 of demand *between* collections, not steady accumulation, so no collection-time mechanism reaches it. The
-data heaps are what collecting sooner reaches. Compaction remains the only untried lever on the arena.
+data heaps are what collecting sooner reaches. **This is the fifth confirmation of that law, and the
+cleanest:** the arena high-water came out byte-identical on QEMU and hardware (`0x28053A0` both) while
+collections went 11 -> 41 and both data heaps halved. Note that this makes the trigger a *collection-time*
+mechanism like the trim, coalescing and the split floor before it — so it does not license compaction,
+which is a mechanism of the same class. The untried levers remain the two named below: collecting DURING a
+batch, or compiling less code per batch.
 
 **Pi-validated on merged `main` (8468aad), 2026-08-24** — the shipped 16 MB configuration, full demo suite,
 clean end to end: `words=25 distinct=16`, `churnMB=625 live=32 intact=32`, Lisp `evals=600 result=610

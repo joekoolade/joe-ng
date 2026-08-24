@@ -7251,8 +7251,24 @@ public final class Loader
     // The new region is also 4x larger: at 16 bytes an entry the old 64 KiB held 4,096 stubs while a suite
     // run creates 10,000+, so stubIdxAt silently returned -1 for most of them -- which is why the
     // "it was the deferral stub for ..." diagnostics and the stub-mislink check kept coming back empty.
-    public static final long STUB_TAB = 0x0374_0000L;
-    private static final long STUB_TAB_END = 0x0378_0000L;         // 256 KiB = 16,384 stubs
+    // Fixed scratch at 0x0306_0000, in the free band between Bcm2711.MBOX_BUFFER (0x0305_0000, a few
+    // hundred bytes) and Loader.CODE_ROOTS (0x0310_0000); 0x030A_0000..0x0310_0000 stays free after it.
+    //
+    // TWO homes were wrong before this one, both from picking an address that LOOKED unused:
+    //   0x0374_0000 (#145) overlays THREE tables -- Heap.STATS (histograms; STATS+128 is stub entry 8),
+    //     VMGc.STALE_TAB (STATS+0x400 = entry 64) and VMGc.FREED_RANGES (0x0376_0000 = entry 8192). A suite
+    //     run creates 10,000+ stubs, so all three were overwritten with stub buffer addresses. Visible in
+    //     every boot log since as `reqCode: 16=33563776` -- 0x2002480, a code-arena pointer sitting where an
+    //     allocation count belongs.
+    //   0x0380_0000 is NOT the free hole below MARK_BITMAP it appears to be: VM.SEC_STACK_HI puts the
+    //     secondary core stacks there, tops at 0x0390/0x03A0/0x03B0_0000 growing DOWN, so core 1's stack
+    //     occupies exactly that address.
+    // These are diagnostic tables, so nothing miscomputes -- but FREED_RANGES is what makes a swept-pc fault
+    // readable (it is what diagnosed #146) and the histograms are the measurement the arena work is steered
+    // by, so a corrupted one costs a whole investigation. Check a candidate address against EVERY table in
+    // the 0x0300_0000+ band, not just the one being cleared.
+    public static final long STUB_TAB = 0x0306_0000L;
+    private static final long STUB_TAB_END = 0x030A_0000L;         // 256 KiB = 16,384 stubs
     public static long stubTabN;
 
     /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
