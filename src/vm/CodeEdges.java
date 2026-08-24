@@ -35,7 +35,9 @@ final class CodeEdges
 {
     /** Fixed scratch, in the free band left above {@code Loader.STUB_TAB} and below {@code CODE_ROOTS}. */
     static final long TAB = 0x030A_0000L;
-    static final long TAB_END = 0x0310_0000L;            // 384 KiB = 24,576 entries at 16 bytes
+    static final long TAB_END = 0x030C_0000L;            // 128 KiB = 8,192 entries at 16 bytes (obs. peak 3,182).
+                                                         // Halved to make room for CodeCompact.PLAN_TAB above;
+                                                         // `dropped` catches exhaustion if a workload grows.
 
     /** Edges recorded (arena -> arena only). */
     static long n;

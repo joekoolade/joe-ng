@@ -810,6 +810,18 @@ public final class Heap
         return -1L;
     }
 
+    /** Rebuild the address->index map, so a caller can walk the arena in ADDRESS order (blocks tile it). */
+    static void indexBlocksForWalk()
+    {
+        indexCodeBlocks();
+    }
+
+    /** Registry index of the block STARTING at {@code start}, or -1. Needs {@link #indexBlocksForWalk} first. */
+    static long blockIndexAt(long start)
+    {
+        return lookupCodeBlock(start);
+    }
+
     /**
      * Merge runs of adjacent free code blocks into one, the code-arena counterpart of the data sweep's
      * run merging. Without it, {@link #takeFreeCode}'s splitting has no inverse: every reuse can divide a
