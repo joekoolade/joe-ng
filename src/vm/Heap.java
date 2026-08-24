@@ -442,6 +442,8 @@ public final class Heap
      * <p>Buckets are powers of four from 16 KiB, so one line separates "just swept" from "long since swept".
      */
     public static long codeAllocSinceSweep;
+    /** Set when the arena grows more than 1 MiB after a sweep -- the windows inc 1 could not rule out. */
+    public static long lateGrowthSeen;
     public static final long GROWTH_BUCKETS = 8L;
     private static final long GROWTH_TAB = 0x0306_0000L - 128L;   // tail of the MBOX_BUFFER slot, unused
 
@@ -456,6 +458,10 @@ public final class Heap
             b += 1L;
         }
         Magic.store64(GROWTH_TAB + b * 8L, Magic.load64(GROWTH_TAB + b * 8L) + 1L);
+        if (codeAllocSinceSweep > 0x100000L)
+        {
+            lateGrowthSeen = 1L;
+        }
     }
 
     /** Print the growth-age histogram: how long since a sweep, each time the arena was forced to grow. */
@@ -469,6 +475,19 @@ public final class Heap
             VM.printDec((int) Magic.load64(GROWTH_TAB + b * 8L));
             b += 1L;
         }
+        board.bcm2711.Uart.putc(0x0A);
+        board.bcm2711.Uart.write(Magic.bytes("  codeGarbage sweeps="));
+        VM.printDec((int) VMGc.sweepsTotal);
+        board.bcm2711.Uart.write(Magic.bytes(" zeroFreed="));
+        VM.printDec((int) VMGc.sweepsZeroFreed);
+        board.bcm2711.Uart.write(Magic.bytes(" freedTotal="));
+        VM.printHex(VMGc.codeFreedTotal);
+        board.bcm2711.Uart.write(Magic.bytes(" bumped="));
+        VM.printHex(codeBumpBytes);
+        board.bcm2711.Uart.write(Magic.bytes(" lateSweeps="));
+        VM.printDec((int) VMGc.lateSweeps);
+        board.bcm2711.Uart.write(Magic.bytes(" lateFreed="));
+        VM.printHex(VMGc.lateFreed);
         board.bcm2711.Uart.putc(0x0A);
     }
 

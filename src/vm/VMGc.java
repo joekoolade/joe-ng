@@ -626,6 +626,19 @@ final class VMGc
     static long codeUsed;
     /** Bytes of unreachable compiled code the last collection returned to the code free list. */
     static long codeFreed;
+
+    /**
+     * Whether code SWEEPS ACTUALLY FIND ANYTHING, which is the second half of the collect-during-a-batch
+     * question. Inc 1 showed 75% of arena growth happens within 64 KiB of a sweep -- no room to collect
+     * sooner. These answer the remaining 12%: at windows where growth DID happen long after a sweep, did
+     * the next sweep free anything? {@code lateFreed} is the bytes it found; if that stays near zero, the
+     * garbage a mid-batch collection would look for does not exist, and the lever is closed.
+     */
+    static long codeFreedTotal;
+    static long sweepsTotal;
+    static long sweepsZeroFreed;
+    static long lateFreed;
+    static long lateSweeps;
     /** Lowest and highest-end swept address this collection, so the I-cache maintenance over the zeroed
      *  buffers can be one pass instead of one per block: {@link Heap#publishCode} invalidates the WHOLE
      *  instruction cache each call, so calling it per method would be quadratic in nothing useful. */
@@ -885,6 +898,18 @@ final class VMGc
         checkedFrees = 0L;
         codeLive = 0L;
         codeUsed = 0L;
+        codeFreedTotal = codeFreedTotal + codeFreed;   // roll up the PREVIOUS pass before clearing
+        sweepsTotal = sweepsTotal + 1L;
+        if (codeFreed == 0L)
+        {
+            sweepsZeroFreed = sweepsZeroFreed + 1L;
+        }
+        if (Heap.lateGrowthSeen != 0L)                 // this window contained growth long after a sweep
+        {
+            lateFreed = lateFreed + codeFreed;
+            lateSweeps = lateSweeps + 1L;
+            Heap.lateGrowthSeen = 0L;
+        }
         codeFreed = 0L;
         zeroLo = 0L;
         zeroHi = 0L;
