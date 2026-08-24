@@ -74,6 +74,17 @@ final class CodeCompact
     /** Largest distance any one block would move. */
     static long maxDelta;
 
+    /**
+     * Conservative hits that a PRECISE enumeration can name and would rewrite, versus those it cannot.
+     *
+     * <p>This is how "is the enumeration complete?" becomes a counted quantity rather than an assertion --
+     * the same move as {@code UNMAPPED} and {@code DANGLING}. The conservative scan finds every candidate
+     * slot; enumeration has to explain them. Only an UNEXPLAINED slot pins its block, so `unexplainedRefs`
+     * falling to 0 is exactly the condition under which the mover becomes generally useful.
+     */
+    static long explainedRefs;
+    static long unexplainedRefs;
+
     /** Live blocks something OTHER than a census edge might point at -- they must not move. */
     static long immovable;
     /** Live blocks the safe rule permits moving, and the bytes that would recover. */
@@ -363,6 +374,8 @@ final class CodeCompact
     private static void markImmovable()
     {
         immovable = 0L;
+        explainedRefs = 0L;
+        unexplainedRefs = 0L;
         scanRange(Heap.BASE, Magic.load64(Heap.PTR_CELL));            // data heap: TIBs, cells, itables
         scanRange(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));// large-object region
         scanRange(VM.staticsStart, VM.staticsEnd);                    // image statics
@@ -370,6 +383,27 @@ final class CodeCompact
         scanRange(Heap.JIT_TABLES, Heap.JIT_TABLES + 0x50000L);       // JIT frame/handler/local tables
         scanRange(Loader.CODE_ROOTS, Loader.CODE_ROOTS_END);          // per-buffer baked heap roots
         scanRange(Loader.STUB_TAB, CodeEdges.TAB);                    // deferral-stub table
+    }
+
+    /**
+     * 1 if {@code slot} belongs to a structure whose layout we know well enough to rewrite in place.
+     *
+     * <p>Enumerated so far: {@code Loader.STUB_TAB}, whose rows are {@code {buf, idx}} at a 16-byte stride --
+     * a code address lives at every offset 0 (mod 16) below {@code stubTabN}. Roughly 10k deferral stubs are
+     * registered there, which is why it is first.
+     *
+     * <p>Still unenumerated, and therefore still pinning: TIB vtable slots, phase-A dispatch cells, itable
+     * entries, {@code rgTab}/{@code clinitEntry} rows, JIT unwind ranges, and return addresses on the stack.
+     * The stack is the one class that can never be enumerated precisely -- those blocks stay pinned by
+     * construction, which is fine: hardware measured only 3 such references.
+     */
+    private static int explained(long slot)
+    {
+        if (slot >= Loader.STUB_TAB && slot < Loader.STUB_TAB + Loader.stubTabN * 16L)
+        {
+            return (slot - Loader.STUB_TAB) % 16L == 0L ? 1 : 0;
+        }
+        return 0;
     }
 
     /** Pin every live block a word in {@code [lo,hi)} points into. */
@@ -385,7 +419,15 @@ final class CodeCompact
             long w = Magic.load64(p);
             if (w >= Heap.CODE_BASE && w < Heap.CODE_LIMIT)
             {
-                pin(w);
+                if (explained(p) != 0)
+                {
+                    explainedRefs += 1L;                 // a slot we can name and would rewrite: no pin
+                }
+                else
+                {
+                    unexplainedRefs += 1L;
+                    pin(w);
+                }
             }
             p += 8L;
         }
@@ -551,6 +593,10 @@ final class CodeCompact
         VM.printDec((int) movable);
         Uart.write(Magic.bytes(" safeRecover="));
         VM.printHex(safeRecovered);
+        Uart.write(Magic.bytes(" refsOk="));
+        VM.printDec((int) explainedRefs);
+        Uart.write(Magic.bytes(" refsUNKNOWN="));
+        VM.printDec((int) unexplainedRefs);
         Uart.putc(0x0A);
     }
 }
