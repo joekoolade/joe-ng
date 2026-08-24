@@ -208,6 +208,17 @@ public final class Heap
             Magic.store64(pz, 0L);                     // the pin bitmap persists across collections, so it
             pz += 8L;                                  //   is cleared exactly once, here
         }
+        // STATS is raw scratch that noteRequest read-modify-writes, and nothing ever initialised it. QEMU
+        // hands out zeroed RAM so it looked right there; the Pi's DRAM comes up ALL-ONES, so every bucket
+        // started at -1 and each count read one low, with an untouched bucket printing `16=-1`. Invisible
+        // until #149: STUB_TAB used to overlay these exact words, so the corruption masked the omission.
+        // Covers both histograms (STATS, STATS+128) and LARGE_RING (STATS+256, 8 entries x 32 bytes).
+        long sz = STATS;
+        while (sz < STATS + 512L)
+        {
+            Magic.store64(sz, 0L);
+            sz += 8L;
+        }
     }
 
     /**
