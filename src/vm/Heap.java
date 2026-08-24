@@ -872,11 +872,6 @@ public final class Heap
             cursor += usable;
         }
         compactCodeRegistry();
-        if (CodeCompact.planFresh == 0 && Loader.classRegCount() > 0)
-        {
-            CodeCompact.plan();      // AFTER the sweep and this merge -- the state compaction would face,
-            CodeCompact.planFresh = 1;   //   and with the loader registries still live (see CodeCompact)
-        }
     }
 
     /** Fold block {@code i} of {@code usable} bytes into the run headed by {@code head}, and kill its entry. */

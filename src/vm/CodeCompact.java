@@ -72,9 +72,6 @@ final class CodeCompact
     private static final long LIVE = -1L;
     private static final long IMMOVABLE = -2L;
 
-    /** 1 once a plan has been taken since the last report -- see {@link #plan} on WHEN it must run. */
-    static int planFresh;
-
     static long planN;
     /** 0 if the walk met an address the registry does not describe, or overflowed the table. */
     static long planOk;
@@ -744,7 +741,6 @@ final class CodeCompact
     /** One line: what compaction would move, what it would recover, and whether every reference maps. */
     static void report()
     {
-        planFresh = 0;                                   // re-arm: the next collection takes a fresh plan
         Uart.write(Magic.bytes("  compactPlan ok="));
         VM.printDec((int) planOk);
         Uart.write(Magic.bytes(" live="));

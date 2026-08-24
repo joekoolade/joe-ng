@@ -2121,6 +2121,12 @@ public final class Loader
 
     private static void resetLoader()
     {
+        CodeCompact.plan();          // ONE plan per batch, taken HERE: the previous batch's class/method
+                                     //   registries are still live (this method is about to clear them) and
+                                     //   the arena reflects everything that batch compiled. Taking it from a
+                                     //   collection instead was opportunistic -- batches whose collections
+                                     //   found no live registry silently reprinted the PREVIOUS plan, which
+                                     //   read as MOVABLE=0 for 19 batches then an identical 1,439 five times.
         if (reclaimArmed != 0)
         {
             if (demandHeapMark == 0L)
