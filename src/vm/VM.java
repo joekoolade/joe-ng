@@ -72,6 +72,8 @@ public final class VM
 
         Heap.init();
         Uart.init();
+        ScratchMap.check();                // halt loudly if two fixed-scratch tables overlap -- four bugs in
+                                           //   one session came from hand-picked addresses colliding
         installFaultVectors();             // turn a CPU fault into a printed report, not a silent hang
         initClasses();                     // run static initializers (writer-generated body)
         run();
