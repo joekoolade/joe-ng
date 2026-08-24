@@ -27,8 +27,12 @@ final class VMGc
      * Object sizes come from the status word — no per-type maps, and objects aren't
      * moved (so no precise stack maps are needed). May over-retain (false roots).
      */
+    /** SP at the last collection -- the stack bottom compaction would have to work from. */
+    static long lastScanFrom;
+
     static void gcCollect(long scanFrom)
     {
+        lastScanFrom = scanFrom;
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
         probes = 0L;                                  // precision metrics for this collection (gcLog)
