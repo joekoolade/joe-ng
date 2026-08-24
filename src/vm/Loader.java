@@ -7243,8 +7243,16 @@ public final class Loader
      * them lets the sweep say WHICH stub it is freeing, and the fault reporter say which method's stub the
      * PC landed in. 64 KiB = 4,096 entries; recording stops rather than wrapping.
      */
-    public static final long STUB_TAB = 0x037C_0000L - 0x10000L;   // 64 KiB below the swept log
-    private static final long STUB_TAB_END = 0x037C_0000L;
+    // Placed in the free 256 KiB between CODE_INDEX's end (0x0374_0000) and CODE_PIN_BITMAP (0x0378_0000).
+    // It used to be "64 KiB below the swept log" -- 0x037B_0000 -- which is INSIDE CODE_PIN_BITMAP
+    // [0x0378_0000, 0x037C_0000): the two overlapped exactly, so stub-table writes clobbered the pin bits
+    // for the arena's top 4 MiB and pin writes clobbered stub entries. Nothing detected it because a lost
+    // pin only matters if that code is later swept, and a corrupted stub entry only makes stubIdxAt lie.
+    // The new region is also 4x larger: at 16 bytes an entry the old 64 KiB held 4,096 stubs while a suite
+    // run creates 10,000+, so stubIdxAt silently returned -1 for most of them -- which is why the
+    // "it was the deferral stub for ..." diagnostics and the stub-mislink check kept coming back empty.
+    public static final long STUB_TAB = 0x0374_0000L;
+    private static final long STUB_TAB_END = 0x0378_0000L;         // 256 KiB = 16,384 stubs
     public static long stubTabN;
 
     /** Note that {@code buf} is the deferral stub for lazy method {@code idx}. */
