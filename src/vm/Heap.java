@@ -213,6 +213,12 @@ public final class Heap
         // started at -1 and each count read one low, with an untouched bucket printing `16=-1`. Invisible
         // until #149: STUB_TAB used to overlay these exact words, so the corruption masked the omission.
         // Covers both histograms (STATS, STATS+128) and LARGE_RING (STATS+256, 8 entries x 32 bytes).
+        long gz = GROWTH_TAB;
+        while (gz < GROWTH_TAB + GROWTH_BUCKETS * 8L)
+        {
+            Magic.store64(gz, 0L);
+            gz += 8L;
+        }
         long sz = STATS;
         while (sz < STATS + 512L)
         {
@@ -288,6 +294,7 @@ public final class Heap
     public static long allocCode(int size)
     {
         int aligned = (size + 7) & -8;
+        codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
         noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
@@ -298,6 +305,7 @@ public final class Heap
         codeBumpCount = codeBumpCount + 1L;             // nothing fit: the arena grows. Against a large free
         codeBumpBytes = codeBumpBytes + (long) aligned; //   total this is fragmentation, not real demand.
         noteBumpCause((long) aligned, 1);               // ... and this says WHICH of the two it was
+        noteGrowthAge();                                // ... and HOW LONG since a sweep -- see codeAllocSinceSweep
         long p = Magic.load64(CODE_PTR_CELL);
         if (p + aligned > CODE_LIMIT)
         {
@@ -420,6 +428,50 @@ public final class Heap
     private static final long STATS_DATA = STATS + 128L;      // 16 buckets each, 8 bytes per bucket
 
     /** Bump-path failures where the free list held FEWER bytes than the request: a genuine shortage. */
+    /**
+     * Code bytes allocated since the last code sweep, and a histogram of that value SAMPLED AT EVERY ARENA
+     * GROWTH EVENT.
+     *
+     * <p>This is the whole test for "collect during a batch". The arena grows when nothing on the free list
+     * fits; a collection at that instant helps only if there is uncollected garbage to find. If growth
+     * clusters at LOW values -- shortly after a sweep -- then nothing had died yet and collecting sooner
+     * cannot help, which is the same wall the trim, coalescing, the split floor, the volume trigger and
+     * compaction all hit. If it clusters HIGH, garbage accumulated before the arena was forced to grow, and
+     * collecting sooner reclaims real space.
+     *
+     * <p>Buckets are powers of four from 16 KiB, so one line separates "just swept" from "long since swept".
+     */
+    public static long codeAllocSinceSweep;
+    public static final long GROWTH_BUCKETS = 8L;
+    private static final long GROWTH_TAB = 0x0306_0000L - 128L;   // tail of the MBOX_BUFFER slot, unused
+
+    /** Bucket the bytes-since-sweep at one growth event. */
+    private static void noteGrowthAge()
+    {
+        long v = codeAllocSinceSweep >> 14;             // 16 KiB granularity
+        long b = 0L;
+        while (b + 1L < GROWTH_BUCKETS && v > 0L)
+        {
+            v = v >> 2;
+            b += 1L;
+        }
+        Magic.store64(GROWTH_TAB + b * 8L, Magic.load64(GROWTH_TAB + b * 8L) + 1L);
+    }
+
+    /** Print the growth-age histogram: how long since a sweep, each time the arena was forced to grow. */
+    public static void printGrowthAges()
+    {
+        board.bcm2711.Uart.write(Magic.bytes("  growthAge(16K,64K,256K,1M,4M,16M,64M,+):"));
+        long b = 0L;
+        while (b < GROWTH_BUCKETS)
+        {
+            board.bcm2711.Uart.putc(0x20);
+            VM.printDec((int) Magic.load64(GROWTH_TAB + b * 8L));
+            b += 1L;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+    }
+
     public static long codeBumpNoSpace;
     public static long dataBumpNoSpace;
     /** Bump-path failures where the free list held ENOUGH bytes but no single block fit: fragmentation. */
@@ -872,6 +924,7 @@ public final class Heap
             cursor += usable;
         }
         compactCodeRegistry();
+        codeAllocSinceSweep = 0L;                      // the sweep+merge just ran: the clock restarts here
     }
 
     /** Fold block {@code i} of {@code usable} bytes into the run headed by {@code head}, and kill its entry. */

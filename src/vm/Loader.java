@@ -2476,6 +2476,7 @@ public final class Loader
                 Uart.putc(0x0A);
                 CodeEdges.report();                      // the code->code edge set compaction must rewrite,
                                                          //   re-decoded and checked against what was emitted
+                Heap.printGrowthAges();
                 CodeCompact.report();                    // ... and what moving it would recover, plus whether
                                                          //   every reference to it could be rewritten
                 Heap.printLargeFails();                  // the state AT each large failure -- what a data-heap
