@@ -2638,6 +2638,10 @@ dense schedule surfaces `UNWIND LOST`: an exception unwind that cannot place its
 footprint 34% (11 -> 30 collections) on a heap under no memory pressure, and is the only thing surfacing that
 fault, so it waits. These three fixes stand alone as correctness.
 
+> **RESOLVED.** `UNWIND LOST` was root-caused (`Loader.newExc`, PR #143/#144) and the underlying
+> code-liveness hole was found in `MetalSymbols.call` (PR #146). The trigger shipped in #147. See
+> "The root cause: compile-time-resolved call targets were never pinned" below.
+
 ### The pc -> method map had no upper bound (2026-08-23)
 
 A correction to the entry above, which named the wrong defect. The garbled fault reports were blamed on
@@ -2666,9 +2670,148 @@ just moved the name to the `clinitEntry` loop, which reads as "the fix did not w
 the two stub sites set: repair one path and the symptom reappears wearing a different name.
 
 `UNWIND LOST` is untouched by this and remains open. It survived both the prune and the bound, which is the
-evidence that the garbled names were a symptom standing next to it rather than its cause.
+evidence that the garbled names were a symptom standing next to it rather than its cause. *(Closed in #143/
+#144 — the next section.)*
 
 
+
+### `UNWIND LOST`: a 16-byte husk with a null TIB (2026-08-23)
+
+`Loader.newExc` is the whole story. When the JIT's implicit bounds/null check fires, it asks the loader for
+an exception object by name — and when that class is not loaded in the current batch, `newExc` allocated 16
+bytes, stored `tib = 0`, and returned the husk anyway:
+
+```java
+int i = classIndexByName(name);
+long tib = i >= 0 ? clTab[i].tib : 0L;
+long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
+Magic.store64(obj + 0L, tib);        // 0 when the class is not loaded
+```
+
+The chain: a genuine out-of-bounds fires the check, `newExc` cannot find `ArrayIndexOutOfBoundsException`,
+the husk goes into the global `$exception` slot, `athrow` hands `unwind` a non-throwable, and the unwinder
+cannot place it. Every symptom chased for hours falls out of that one `else` — the missing `class=`, the
+16-byte size, `tib=0`, the object not being on the free list, and `reqData: 16=-1` making that size look
+impossible for an allocation to have produced.
+
+Three fixes, in order:
+
+- **#142/#143 — `VM.unwind` refuses a non-throwable.** `captureTrace` writes 8 backtrace slots into
+  `exc+16..`, so a garbage `athrow` operand was scribbling 64 bytes over unrelated heap. The guard prints
+  `BAD THROW exc= tib= status= inHeap= thrownAt=` and then **halts**. #142 shipped it returning instead —
+  and the JIT emits `bl unwind` for `athrow` assuming it never comes back, so the throwing method resumed as
+  if nothing had been thrown and the run hung at a fixed line. *A guard on a broken path needs its own
+  verification: it changes the failure mode, and the new mode has to be re-run for.*
+- **#144 — `ensureImplicitExcBlobs`** pulls the four implicit-check classes (NPE, AIOOBE, ArithmeticException,
+  ArrayStoreException) into each batch beside `ensureObjectBlob`, gated on `java/lang/Throwable` already
+  being present so the tiny guest-only demo closures stay untouched. It **must run after `markReachable`** —
+  that is what pulls the closure the gate asks about. Called before it, the gate never fires and the change
+  is completely inert; it shipped inert once, and that was caught only by *counting registrations* (AIOOBE
+  now registers in 15 batches, ArrayStoreException in 14), never by the run looking clean.
+- **#145 — `STUB_TAB` overlapped `CODE_PIN_BITMAP`.** Found while instrumenting a hypothesis that turned out
+  to be wrong: the stub table was sized so that writing a high stub index corrupted the pin bitmap. Moved to
+  `0x0374_0000`–`0x0378_0000` (256 KiB = 16,384 stubs). A real memory-corruption bug, banked from a dead end.
+
+With real exception classes the same fault stopped halting the VM and started reporting as an ordinary Java
+exception — which is what made the next section findable.
+
+### The root cause: compile-time-resolved call targets were never pinned (#146, 2026-08-24)
+
+`MetalSymbols.call` has two branches, and only one of them pinned:
+
+```java
+long target = Loader.resolveCallBuf(methodCp);
+if (target == 0L)
+{
+    Loader.recordCallReloc(...);     // deferred -> patchRelocsFrom -> PINS
+}
+else
+{
+    Heap.pinCodeAt(target);          // ADDED: resolved now -> direct bl -> was NEVER PINNED
+}
+emitBl(cb, target);
+```
+
+Once `emitBl` runs, the only record of `target` is an encoded displacement inside those instruction words,
+and **nothing scans encodings**. So any method reachable *only* through a compile-time-resolved call was
+collectable; the sweep took it and zeroed it under a live caller, which then executed zeros.
+
+This is the third instance of the asymmetry #140 fixed twice in the lambda thunks — the late-bound path pins,
+its immediate twin does not — and this time on the most travelled call path in the system. That is why the
+victim moved with every build: *every* compile-time-resolved call was exposed, so which method died depended
+only on layout and collection timing.
+
+Diagnosed in a single run once `VMGc.reportSweptPc` was enriched (instruction word + pin bit + the block's
+current state) and wired into the trap -> `InternalError` path:
+
+```
+TRAP ec=0 elr=0x206DD98
+  insn at pc = 0x0  pinned=0x0  block now FREE
+  PC IS IN SWEPT CODE: buffer 0x206DD98-0x206DDD8 freed at collection 21 of 22
+    @0x206DD48 (+0x50) sun/nio/cs/US_ASCII.<clinit>
+```
+
+**This retires the mis-link and nested-lazy-compile theories.** The three stub-mislink checks that reported
+nothing were *right* — there was no mis-link. The `Unsafe.<clinit>` -> `LinkedKeySet.toArray` reading was
+over-fitted to one build. Do not re-open that line.
+
+### The allocation-volume GC trigger (#147, shipped)
+
+Held back deliberately through #140–#146, because it was the only thing surfacing those bugs. With the root
+cause fixed it ships: `Heap.allocSinceGc` accumulates, and `volumeTrigger()` collects once it passes
+`GC_TRIGGER_BYTES` (16 MB). Measured against the identical build minus the trigger:
+
+| | before | after |
+|---|---|---|
+| peak small heap | 23.38 MB | **12.16 MB** (−48%) |
+| peak large region | 44.74 MB | **16.96 MB** (−62%) |
+| collections | 11 | 41 |
+| code arena high-water | 0x28053A0 | **unchanged** |
+
+Two traps, both caught only by measuring a quantity against a baseline rather than by a clean run:
+
+1. **Hooking only the small path leaves it inert.** `allocLarge` carries most of the volume, so
+   `allocSinceGc` never reached the threshold. The first version produced a run identical to baseline — same
+   11 collections, same high-water — while reading as entirely correct.
+2. **It must fire BEFORE serving a request, never after.** A block handed out and then collected within the
+   same call is live only in a register the sweep may not scan — allocate-black, the very bug class this
+   whole arc was about.
+
+The code arena not moving re-confirms the law from the fragmentation arc below: its high-water is one burst
+of demand *between* collections, not steady accumulation, so no collection-time mechanism reaches it. The
+data heaps are what collecting sooner reaches. Compaction remains the only untried lever on the arena.
+
+**Pi-validated on merged `main` (8468aad), 2026-08-24** — the shipped 16 MB configuration, full demo suite,
+clean end to end: `words=25 distinct=16`, `churnMB=625 live=32 intact=32`, Lisp `evals=600 result=610
+stable=1`, WiFi bring-up -> WPA2-PSK join -> DHCP -> DNS -> **HTTP 200 OK** from example.com, with no
+`TRAP` / `FAULT` / `InternalError` / `BAD THROW` anywhere. The hardware numbers matched the QEMU projection
+to the digit (`top=0xC297E0`, `largeTop=0x10F7000`, `collections=41`, `high=0x28053A0`).
+
+`compileInFlight` from the earlier WIP was **not** shipped: its justification ("a 12 KB `String.getBytes`
+body freed at collection 7 and executed at collection 30") is #146's signature, and dense testing at 5 MB —
+four times harder than the shipped 16 MB — passes on QEMU and hardware without it.
+
+### What this arc is really about (2026-08-24)
+
+One sentence covers all eight PRs: **a `bl` displacement is not a pointer, so the collector cannot see it.**
+`Heap.pinCodeAt` is the sole compensation, and it had exactly one caller (`patchRelocsFrom`) when the arc
+started. Every bug was a path that emitted a branch without pinning while its late-bound twin pinned
+correctly — the two stub build sites, both lambda-thunk edges, and finally `MetalSymbols.call`.
+
+Two working rules earned here, both expensive:
+
+- **A clean probe result means nothing until you have asked whether the probe can see its subject.** Five
+  instances this arc — a range test that excluded its own hit, an `rgTab` prune that fired zero times, an
+  inert `ensureImplicitExcBlobs`, a mislink check blind three ways (unregistered methods, one resolution
+  path, and comparing a name that deferral entries leave empty), and a trigger hooked to the wrong
+  allocator. Every one was caught by comparing a *quantity* against a baseline.
+- **Fixing one site moves the victim rather than removing it**, which reads exactly like "the fix did not
+  work". True for the two stub sites, the two bounded lookup loops, and the whole #146 hunt.
+
+Claims raised during the hunt and since **retracted**, recorded so they are not re-opened: the backtrace did
+not fabricate a caller (a raw stack scan showed the frame genuinely present); the block registry did not
+overflow (`codeBlockN=10298, overflow=0`); there was no `bl` past a buffer end (the target decoded as a
+normal deferral stub, `movz x9,#1479`); and there was no stub mis-link.
 
 ### Code arena: compaction, or the cheaper thing? (arc started 2026-08-21)
 
