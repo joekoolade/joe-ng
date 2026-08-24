@@ -1969,6 +1969,29 @@ public final class Loader
         codeRootN = kept;
     }
 
+    /** Lazy-method count and the dispatch cell of entry {@code i} (0 if it has none), for CodeCompact. */
+    static int lazyCount()
+    {
+        return lzN;
+    }
+
+    static long lazyCellAt(int i)
+    {
+        return lzTab == null || i < 0 || i >= lzTab.length || lzTab[i] == null ? 0L : lzTab[i].slot;
+    }
+
+    /** Registered class-record count, for {@link CodeCompact}'s precise reference enumeration. */
+    static int classRegCount()
+    {
+        return clCount;
+    }
+
+    /** The class record at {@code i}, or null. Package-visible for the same reason. */
+    static RVMClass classRegAt(int i)
+    {
+        return clTab == null || i < 0 || i >= clTab.length ? null : clTab[i];
+    }
+
     /**
      * Record a code -> code edge the JIT is about to encode, for {@link CodeEdges}. Gated exactly like
      * {@link #noteCodeRoot} and for the same reason: the SIZING pass emits the same branches into a throwaway
@@ -2098,6 +2121,12 @@ public final class Loader
 
     private static void resetLoader()
     {
+        CodeCompact.plan();          // ONE plan per batch, taken HERE: the previous batch's class/method
+                                     //   registries are still live (this method is about to clear them) and
+                                     //   the arena reflects everything that batch compiled. Taking it from a
+                                     //   collection instead was opportunistic -- batches whose collections
+                                     //   found no live registry silently reprinted the PREVIOUS plan, which
+                                     //   read as MOVABLE=0 for 19 batches then an identical 1,439 five times.
         if (reclaimArmed != 0)
         {
             if (demandHeapMark == 0L)
