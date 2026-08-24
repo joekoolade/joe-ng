@@ -3055,6 +3055,86 @@ collections, and no collection-time or allocation-policy mechanism reaches it.**
 (increment 10), coalescing measured it (#135), the split floor measures it here. Compaction is a fourth
 mechanism of the same class, which is why it stays unbuilt.
 
+### Code-arena compaction — the foundation (arc started 2026-08-24)
+
+Started at the user's explicit direction, **against** this file's own evidence: the trim, coalescing, the
+split floor and the large-object region all measured the same law -- the arena high-water is set by demand
+BETWEEN collections, so no collection-time mechanism reaches it -- and #147's volume trigger made it five.
+Compaction is a mechanism of that class. The concern is recorded rather than relitigated; increments 0-3
+build the foundation the mover needs, and all four are Pi-validated on `a018677`.
+
+**One reading partly rehabilitates it.** Split per region, the two heaps have OPPOSITE shapes:
+
+| growth cause | code arena | data heap |
+|---|---|---|
+| no space at all | 4.55 MB / 2,079 ev | 8.38 MB / 7,007 ev |
+| **wrong shape** | **1.72 MB / 1,944 ev** | 6.48 MB / 108,440 ev |
+| **avg wrong-shape request** | **929 B** | **63 B** |
+
+The dismissal above ("a 39-byte request needs a block >= 39 bytes, not contiguity") is sound for the DATA
+heap and was generalised. In the code arena a 929-byte average failing against the 171 free blocks that
+survive coalescing is exactly what compaction addresses. This was always readable -- `bumpWhy`/`bumpBytes`
+are Java statics and were never corrupted -- it had simply never been separated by region. It bounds the
+prize at ~1.72 MB against an 8.02 MB arena and says the target is real, not that the law is wrong.
+
+**Increment 0 (#149) -- repair the instruments.** `STUB_TAB`, moved to `0x0374_0000` by #145, overlaid
+`Heap.STATS`, `VMGc.STALE_TAB` and `VMGc.FREED_RANGES`. The corruption pattern is arithmetic: a stub entry
+is 16 bytes `{buf, idx}` and bucket *b* sits at `STATS_DATA + 8b`, so EVEN buckets received a code address
+and ODD buckets an index that reads as a plausible count. Only entries 8-15 reach the 16-bucket table, so it
+was ONE early overwrite that the counters then incremented from -- stable and self-consistent, which is why
+`reqCode: 16=33563776` sat in every boot log for nine PRs unnoticed. New home `0x0306_0000`.
+`0x0380_0000` was tried first and is WRONG for a non-obvious reason: it looks like the hole below
+`MARK_BITMAP`, but `VM.SEC_STACK_HI` puts core 1's stack there, growing down.
+
+**Increment 1 (#150) -- the edge census** (`vm/CodeEdges`). Compaction's hard half is this arc's own lesson
+inverted: a `bl` displacement is not a pointer, so "it moved -- rewrite every branch naming it" needs the
+edge SET, which did not exist (only DEFERRED calls were recorded; compile-time-resolved ones emitted a `bl`
+with nothing but a pin -- that asymmetry was #146). Records `{site, target}` for every arena->arena branch
+and re-decodes each site to verify it. **3,182 edges, `dropped=0`** against 24,576 slots.
+
+Only INTER-buffer branches count: `Baseline`'s intra-method `b`s are self-relative and survive a whole-buffer
+move untouched. **The four recording sites are exactly the four that call `pinCodeAt` on a TARGET** -- every
+place the collector needed a pin is a place compaction needs a patch. Everything else the mover must fix
+(TIB slots, dispatch cells, itables, unwind tables, return addresses) is an ordinary pointer word.
+
+**Increment 2 (#151) -- prune at free time, and check the pin invariant.** After the fact a dead edge in
+REUSED memory is indistinguishable from a live mis-linked one: the registry says ALLOCATED either way. So
+`CodeEdges.pruneRange` runs from `Heap.freeCodeBlock`, the one moment the range is exact. Compaction needs
+this regardless -- a compactor must never consult a dead edge. `DANGLING` then asserts, every batch, that no
+LIVE edge targets a freed block: the #146 signature exactly, now checked continuously instead of surfacing as
+an `InternalError` twenty batches later.
+
+**Increment 3 (#152) -- zero `Heap.STATS` at boot.** Hardware-only. `STATS` is raw scratch that
+`noteRequest` read-modify-writes and **nothing ever initialised it**; QEMU hands out zeroed RAM, the Pi's
+DRAM comes up all-ones, so every count read one low and an untouched bucket printed `-1`. Not caused by
+#149 -- EXPOSED by it, since `STUB_TAB` had been overwriting those exact words. Second time in the arc that
+a repair revealed a pre-existing defect it did not cause. **QEMU cannot validate this fix** (its RAM is
+already zero); hardware is ground truth here because it is *less* forgiving, not because of peripherals.
+
+**Pi-validated, `a018677`:** `edges n=3182 ok=731 pruned=2451 DANGLING=0 WRONGTGT=0 nonArena=81 dropped=0`
+across 25 batches, matching QEMU to the digit; histograms matching QEMU bucket-for-bucket; `churnMB=625
+live=32 intact=32`, `collections=41`, arena high `0x28053A0`, `lisp: evals=600 result=610 stable=1`,
+WPA2 -> DHCP -> DNS -> HTTP 200.
+
+**Three traps, each caught by a quantity rather than a green run:**
+
+1. **The sizing pass forges edges.** The loader compiles each method twice, so an ungated census recorded one
+   phantom per real edge -- a perfect 50/50 `ok`/`MISMATCH` split. `Loader.noteCodeRoot` guards the identical
+   hazard with the identical flag; edges now route through `Loader.noteCodeEdge`.
+2. **`WRONGTGT` went `0` x16 then `1,1,1,1,2,4,49,23,4`** -- it RISES AND FALLS, and a live mis-link cannot
+   heal, so it was counting dead callers in recycled memory. Same reused-range trap that made `PC IS IN SWEPT
+   CODE` misleading in #146.
+3. **`grep` silently matches nothing on the serial captures** -- they carry control bytes, so it treats them
+   as binary. Three false "zero matches". Use `grep -a`.
+
+**Retracted:** the single `WRONGTGT` sample was claimed to be a re-patch (`patchRelocs` does
+`patchRelocsFrom(0, 0)`, three times per batch). `retiredCount=0` all run disproves it; the keyed-by-site
+change stays as defence but explained nothing observed.
+
+**Open, before or soon after the mover:** `pruneRange` is O(edges) per freed block and runs in the allocation
+path, not under `LIFETIME_TRACE` (QEMU suite 320s -> 445s; not perceptible on hardware). The O(edges x freed)
+shape wants bucketing by block.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
