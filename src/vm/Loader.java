@@ -4534,6 +4534,60 @@ public final class Loader
         }
     }
 
+    /**
+     * Pull the exception classes the JIT can throw from an IMPLICIT check: bounds, null deref, divide-by-zero
+     * and array store. NOTHING in the guest bytecode names them -- the compiler synthesises those throws -- so
+     * dependency discovery never reaches them. When one is missing {@link #newExc} has no TIB to give the
+     * object and hands back a 16-byte husk with {@code tib=0}, which the JIT stores into {@code $exception}
+     * and throws; the unwinder then gets a non-throwable and halts (BAD THROW). That is how a genuine
+     * out-of-bounds in {@code LinkedKeySet.toArray} presented as an unreadable UNWIND LOST.
+     *
+     * <p>Gated on {@code java/lang/Throwable} ALREADY being in this batch, which is the cheap way to say "this
+     * batch compiles java.base-shaped code where an implicit check can fire". Batches that load no exception
+     * hierarchy at all (the early single-class guest demos) keep their tiny closures untouched, and for the
+     * batches that do, the supers are present already -- only the leaves are added. Must therefore run AFTER
+     * {@code markReachable} has pulled the closure: called before it, the gate sees only the demo's own blobs
+     * and never fires (which is exactly how the first version of this shipped inert).
+     */
+    private static void ensureImplicitExcBlobs()
+    {
+        if (!hasBlobNamed(Magic.bytes("java/lang/Throwable")))
+        {
+            return;
+        }
+        pullClass(Magic.bytes("java/lang/NullPointerException"));
+        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+        pullClass(Magic.bytes("java/lang/ArithmeticException"));
+        pullClass(Magic.bytes("java/lang/ArrayStoreException"));
+    }
+
+    /** Whether this batch already holds the classDir blob for {@code name} (compared by blob address). */
+    private static boolean hasBlobNamed(byte[] name)
+    {
+        long scratch = Heap.allocData(name.length + 8);
+        int i = 0;
+        while (i < name.length)
+        {
+            Magic.store8(scratch + i, name[i]);
+            i += 1;
+        }
+        long bytes = VM.dirBytes(scratch, name.length);
+        if (bytes == 0L)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < pdCount)
+        {
+            if (pdBase[k] == bytes)
+            {
+                return true;
+            }
+            k += 1;
+        }
+        return false;
+    }
+
     private static void addBlob(long bytes, int len)
     {
         int i = 0;
@@ -4568,6 +4622,9 @@ public final class Loader
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
             markReachable();
         }
+        ensureImplicitExcBlobs();                        // AFTER the closure is pulled -- the gate asks whether
+                                                         //   this batch has Throwable, which markReachable is what
+                                                         //   brings in; before it, the answer is always no
         probeAll();                                      // this_class + super + interfaces + dep list over the final set
 
         // PHASE A: register every class's STRUCTURE, super/interface-first. That graph is acyclic, so linkReady
