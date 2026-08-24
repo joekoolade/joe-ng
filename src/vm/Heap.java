@@ -108,6 +108,27 @@ public final class Heap
         return 0L;
     }
 
+    /**
+     * Bytes handed out since the last collection, and the volume at which to collect anyway.
+     *
+     * <p>Collections already happen mid-batch -- but only when an arena is EXHAUSTED, which is exactly why
+     * the bump pointer ratchets: nothing asks for a collection until nothing is left. Triggering on
+     * allocation VOLUME instead attacks the one quantity three earlier mechanisms could not touch. The code
+     * trim, coalescing and the split floor all act at collection time or in placement policy, and the law
+     * those three established is that **the high-water is set by demand BETWEEN collections** -- so no
+     * collection-time mechanism reaches it. This one does, by collecting sooner.
+     *
+     * <p>Set to 0 to disable.
+     */
+    public static long allocSinceGc;
+    private static final long GC_TRIGGER_BYTES = 16L * 1024L * 1024L;
+
+    /** True if enough has been allocated since the last collection to be worth collecting on volume. */
+    private static boolean volumeTrigger()
+    {
+        return GC_TRIGGER_BYTES != 0L && allocSinceGc >= GC_TRIGGER_BYTES;
+    }
+
     /** Mark the code at {@code addr} as branched-to directly, so the sweep must keep it. */
     public static void pinCodeAt(long addr)
     {
@@ -197,6 +218,13 @@ public final class Heap
     private static long allocLarge(long size)
     {
         long want = (size + PAGE - 1L) & -PAGE;
+        if (volumeTrigger())                               // LARGE allocations are most of the volume, so
+        {                                                  //   the trigger has to see them or it never
+            allocSinceGc = 0L;                             //   fires during the churn and Lisp phases --
+            gcPressure += 1;                               //   measured: hooking only the small path left
+            Magic.gc();                                    //   collections and the high-water UNCHANGED
+        }
+        allocSinceGc = allocSinceGc + want;
         long prev = 0L;
         long f = Magic.load64(LARGE_FREE_CELL);
         while (f != 0L)
@@ -976,7 +1004,14 @@ public final class Heap
         int attempt = 0;
         while (attempt < 2)
         {
-            long prev = 0L;
+            if (core == 0 && volumeTrigger())               // collect on VOLUME, not on running out: the
+            {                                               //   ratchet exists because nothing asks for a
+                allocSinceGc = 0L;                          //   collection until the arena is exhausted.
+                gcPressure += 1;                            // BEFORE serving, never after: a block handed
+                Magic.gc();                                 //   out and then collected in the same call is
+            }                                               //   live only in a register the sweep may not
+            long prev = 0L;                                 //   scan -- the caller would get freed memory
+
             long f = Magic.load64(freeCell);
             scanFreeBytes = 0L;
             scanFreeMax = 0L;
@@ -1038,6 +1073,7 @@ public final class Heap
                 Magic.store64(p + ObjectModel.STATUS_OFFSET, aligned);   // record size for the GC
                 lastFromFreeList = 0;
                 zeroPayload(p, aligned);
+                allocSinceGc = allocSinceGc + (long) aligned;
                 return p;
             }
             if (core != 0 || attempt == 1)

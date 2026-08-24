@@ -111,6 +111,8 @@ final class VMGc
                                                       // (counted AFTER the ordinary trace, so the count is
                                                       //  exactly "what nothing else kept alive")
         collections = collections + 1L;
+        Heap.allocSinceGc = 0L;                        // ANY collection resets the volume trigger, or a
+                                                       //   boundary collection leaves it armed and refires
         Heap.resetFreeList();                          // sweep
         reclaimed = 0L;
         liveBytes = 0L;
