@@ -1969,6 +1969,18 @@ public final class Loader
         codeRootN = kept;
     }
 
+    /** Registered class-record count, for {@link CodeCompact}'s precise reference enumeration. */
+    static int classRegCount()
+    {
+        return clCount;
+    }
+
+    /** The class record at {@code i}, or null. Package-visible for the same reason. */
+    static RVMClass classRegAt(int i)
+    {
+        return clTab == null || i < 0 || i >= clTab.length ? null : clTab[i];
+    }
+
     /**
      * Record a code -> code edge the JIT is about to encode, for {@link CodeEdges}. Gated exactly like
      * {@link #noteCodeRoot} and for the same reason: the SIZING pass emits the same branches into a throwaway

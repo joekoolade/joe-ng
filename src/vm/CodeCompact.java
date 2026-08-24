@@ -42,6 +42,18 @@ final class CodeCompact
     static final boolean COMPACT_CODE = false;
 
     /**
+     * A/B switch for the TIB-slot class, left OFF because it was MEASURED worthless: at a fixed plan point
+     * it explained 171 of 144,158 unexplained references -- 0.12%. TIB vtables are not where the references
+     * are.
+     *
+     * <p><b>DANGER, and the reason this cannot simply be turned on.</b> {@link #explained} means "a slot we
+     * would rewrite", and {@link #move} rewrites ONLY census edges. Explaining a class without also
+     * rewriting it unpins blocks whose references then dangle -- #146, caused deliberately. Enumeration and
+     * rewriting must land in the same increment, for every class.
+     */
+    static final boolean ENUM_TIB = false;
+
+    /**
      * {start, newBase} per walked block, in ADDRESS order. 256 KiB between {@link CodeEdges#TAB_END} and
      * {@code Loader.CODE_ROOTS}; 16,384 entries covers the observed peak of ~14,305 blocks.
      *
@@ -59,6 +71,9 @@ final class CodeCompact
     /** newBase sentinels: 0 = free block, LIVE = live and unplaced, IMMOVABLE = live and pinned. */
     private static final long LIVE = -1L;
     private static final long IMMOVABLE = -2L;
+
+    /** 1 once a plan has been taken since the last report -- see {@link #plan} on WHEN it must run. */
+    static int planFresh;
 
     static long planN;
     /** 0 if the walk met an address the registry does not describe, or overflowed the table. */
@@ -134,6 +149,8 @@ final class CodeCompact
         recovered = arenaTop - dst;
         markImmovable();                                 // pin anything a non-edge reference points at
         assign();                                        // ... then slide only what is left
+        verifyEdges();
+        countStackRefs(VMGc.lastScanFrom, VM.STACK_TOP);
     }
 
     /** Record one walked block and return the next destination cursor. Split out to stay under the local cap. */
@@ -403,6 +420,51 @@ final class CodeCompact
         {
             return (slot - Loader.STUB_TAB) % 16L == 0L ? 1 : 0;
         }
+        return ENUM_TIB ? explainedTib(slot) : 0;
+    }
+
+    /** Total enumerable TIB vtable slots -- 0 means the registry is empty when the report runs. */
+    private static long tibSlots()
+    {
+        long t = 0L;
+        int n = Loader.classRegCount();
+        int i = 0;
+        while (i < n)
+        {
+            RVMClass c = Loader.classRegAt(i);
+            if (c != null && c.tib != 0L)
+            {
+                t += c.vtCount;
+            }
+            i += 1;
+        }
+        return t;
+    }
+
+    /**
+     * 1 if {@code slot} is a vtable entry in some registered class's TIB.
+     *
+     * <p>TIB layout is {@code [0] Type, [1..] vtable}, so slot k of a class with {@code vtCount} virtuals
+     * lives at {@code tib + 8 + k*8}. Every one holds a code address and every one is rewritable in place,
+     * which makes this the second-largest tractable class after {@code STUB_TAB}.
+     *
+     * <p>Linear over the class registry (~160 records) per arena-pointing word. That is ~24M comparisons a
+     * report, which the measurement can afford; a sorted range table would be the optimisation if the mover
+     * ever runs for real.
+     */
+    private static int explainedTib(long slot)
+    {
+        int n = Loader.classRegCount();
+        int i = 0;
+        while (i < n)
+        {
+            RVMClass c = Loader.classRegAt(i);
+            if (c != null && c.tib != 0L && slot >= c.tib + 8L && slot < c.tib + 8L + (long) c.vtCount * 8L)
+            {
+                return 1;
+            }
+            i += 1;
+        }
         return 0;
     }
 
@@ -566,9 +628,7 @@ final class CodeCompact
     /** One line: what compaction would move, what it would recover, and whether every reference maps. */
     static void report()
     {
-        plan();
-        verifyEdges();
-        countStackRefs(VMGc.lastScanFrom, VM.STACK_TOP);
+        planFresh = 0;                                   // re-arm: the next collection takes a fresh plan
         Uart.write(Magic.bytes("  compactPlan ok="));
         VM.printDec((int) planOk);
         Uart.write(Magic.bytes(" live="));
@@ -597,6 +657,10 @@ final class CodeCompact
         VM.printDec((int) explainedRefs);
         Uart.write(Magic.bytes(" refsUNKNOWN="));
         VM.printDec((int) unexplainedRefs);
+        Uart.write(Magic.bytes(" classes="));
+        VM.printDec(Loader.classRegCount());
+        Uart.write(Magic.bytes(" tibSlots="));
+        VM.printDec((int) tibSlots());
         Uart.putc(0x0A);
     }
 }
