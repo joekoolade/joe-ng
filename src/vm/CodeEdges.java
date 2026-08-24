@@ -45,6 +45,8 @@ final class CodeEdges
     static long nonArena;
     /** Entries superseded by a later patch of the same site (see {@link #note}). */
     static long retiredCount;
+    /** Entries dropped because the sweep freed the block their site lived in (lifetime total). */
+    static long prunedCount;
 
     /** Last {@link #verify} pass: sites whose decoded target still matches what was recorded. */
     static long okCount;
@@ -71,6 +73,13 @@ final class CodeEdges
      * read this counter as "dead edges not caught by the reused test", not as a fault.
      */
     static long wrongTargetCount;
+
+    /**
+     * LIVE edges whose TARGET sits in a block the sweep has freed. This is the #146 signature exactly -- a
+     * caller still branching to code that was reclaimed under it -- and should always be 0, because every one
+     * of the four recording sites pins its target. A non-zero reading is a pin that did not hold.
+     */
+    static long danglingCount;
 
     /** First wrong-target site of the last pass, for investigation ({@code 0} if there was none). */
     static long wtSite;
@@ -124,6 +133,36 @@ final class CodeEdges
         n += 1;
     }
 
+    /**
+     * Drop every edge whose SITE lies in {@code [lo,hi)} -- called as the sweep frees that block, which is the
+     * one moment the range is known exactly.
+     *
+     * <p>Pruning at free time rather than classifying at verify time is what makes the answer sound. After the
+     * fact a freed block is indistinguishable from a live one once it has been reallocated: the registry says
+     * ALLOCATED either way, so a dead edge whose memory now holds unrelated code cannot be told apart from a
+     * live edge that is genuinely mis-linked. That ambiguity is what inc 1 measured as a {@code WRONGTGT}
+     * count that rose and fell (0 for sixteen batches, then 1,1,1,1,2,4,49,23,4) instead of a fault.
+     *
+     * <p>Compaction needs this regardless: a compactor must never consult a dead edge, or it will rewrite a
+     * branch inside a buffer that no longer belongs to the caller that recorded it.
+     */
+    static void pruneRange(long lo, long hi)
+    {
+        long i = 0;
+        while (i < n)
+        {
+            long e = TAB + i * 16L;
+            long site = Magic.load64(e);
+            if (site >= lo && site < hi)
+            {
+                Magic.store64(e, 0L);                    // site 0 = dead slot; verify and findSite skip it
+                Magic.store64(e + 8L, 0L);
+                prunedCount += 1;
+            }
+            i += 1;
+        }
+    }
+
     /** Address of the entry for {@code site}, or -1. Linear; n stays in the low thousands. */
     private static long findSite(long site)
     {
@@ -131,7 +170,7 @@ final class CodeEdges
         while (i < n)
         {
             long e = TAB + i * 16L;
-            if (Magic.load64(e) == site)
+            if (Magic.load64(e) == site && site != 0L)
             {
                 return e;
             }
@@ -169,6 +208,7 @@ final class CodeEdges
     {
         okCount = 0;
         retiredCount = 0;
+        danglingCount = 0;
         staleCount = 0;
         reusedCount = 0;
         wrongTargetCount = 0;
@@ -178,7 +218,12 @@ final class CodeEdges
         {
             long site = Magic.load64(TAB + i * 16L);
             long want = Magic.load64(TAB + i * 16L + 8L);
-            long got = decodeTarget(site);
+            long got = site == 0L ? 0L : decodeTarget(site);
+            if (site == 0L)
+            {
+                i += 1;                                  // pruned slot: its block was freed, edge is gone
+                continue;
+            }
             if (want == 0L)
             {
                 retiredCount += 1;                       // superseded by a later patch of the same site
@@ -186,6 +231,10 @@ final class CodeEdges
             else if (got == want)
             {
                 okCount += 1;
+                if (Heap.codeBlockFreeAt(want) == 1)
+                {
+                    danglingCount += 1;                  // live caller -> freed callee: the #146 signature
+                }
             }
             else if (Heap.codeBlockFreeAt(site) == 1)
             {
@@ -217,6 +266,10 @@ final class CodeEdges
         VM.printDec((int) n);
         Uart.write(Magic.bytes(" ok="));
         VM.printDec((int) okCount);
+        Uart.write(Magic.bytes(" pruned="));
+        VM.printDec((int) prunedCount);
+        Uart.write(Magic.bytes(" DANGLING="));
+        VM.printDec((int) danglingCount);
         Uart.write(Magic.bytes(" retired="));
         VM.printDec((int) retiredCount);
         Uart.write(Magic.bytes(" stale="));

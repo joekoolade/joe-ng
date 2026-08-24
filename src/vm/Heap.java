@@ -911,8 +911,10 @@ public final class Heap
     public static void freeCodeBlock(long i)
     {
         long e = CODE_BLOCKS + i * 16L;
-        Magic.store64(e + 8L, Magic.load64(e + 8L) | CODE_FREE);
-    }
+        long sz = Magic.load64(e + 8L);
+        Magic.store64(e + 8L, sz | CODE_FREE);
+        CodeEdges.pruneRange(Magic.load64(e), Magic.load64(e) + (sz & -8L));   // edges FROM this block die here:
+    }                                                                          //   the one moment the range is exact
 
     private static void noteCodeBlock(long start, int size)
     {
