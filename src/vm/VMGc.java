@@ -664,6 +664,27 @@ final class VMGc
      */
     public static void reportSweptPc(long pc)
     {
+        // The instruction word at the pc is the discriminator: 0 means we are executing memory the sweep
+        // zeroed, anything else means the space was reused and the fault is not what it looks like. The
+        // block's CURRENT state and pin bit say whether the collector could have taken it at all.
+        Uart.write(Magic.bytes("  insn at pc = "));
+        printHex(Magic.load64(pc) & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes("  pinned="));
+        printHex((long) Heap.codePinnedIn(pc & -8L, 8L));
+        Uart.write(Magic.bytes("  block now "));
+        int st = Heap.codeBlockFreeAt(pc);
+        if (st < 0)
+        {
+            Uart.write(Magic.bytes("UNREGISTERED\n"));
+        }
+        else if (st == 1)
+        {
+            Uart.write(Magic.bytes("FREE\n"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("ALLOCATED\n"));
+        }
         long i = 0;
         while (i < sweptLogN)
         {
