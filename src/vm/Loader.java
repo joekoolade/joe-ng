@@ -1969,6 +1969,24 @@ public final class Loader
         codeRootN = kept;
     }
 
+    /**
+     * Record a code -> code edge the JIT is about to encode, for {@link CodeEdges}. Gated exactly like
+     * {@link #noteCodeRoot} and for the same reason: the SIZING pass emits the same branches into a throwaway
+     * buffer, so without this every real edge is accompanied by a phantom whose site never receives a branch.
+     * The first census run showed it as a perfect 50/50 ok/MISMATCH split (ok=3 MISMATCH=3, ok=7 MISMATCH=7).
+     *
+     * <p>Only the JIT's compile-time-resolved branch needs the gate. {@code patchRelocsFrom} runs AFTER the
+     * emit pass (with the flag already cleared) and the lambda thunks are built once, so both record directly.
+     */
+    static void noteCodeEdge(long site, long target)
+    {
+        if (relocRecording == 0)
+        {
+            return;
+        }
+        CodeEdges.note(site, target);
+    }
+
     /** Record a heap address being baked into the instruction stream. Image and statics addresses are
      *  permanent and need no root; only the managed heap is collectable. */
     static void noteCodeRoot(long addr)
@@ -2427,6 +2445,8 @@ public final class Loader
                 Uart.write(Magic.bytes(" wrongShape="));
                 VM.printHex(Heap.dataWrongShapeBytes);
                 Uart.putc(0x0A);
+                CodeEdges.report();                      // the code->code edge set compaction must rewrite,
+                                                         //   re-decoded and checked against what was emitted
                 Heap.printLargeFails();                  // the state AT each large failure -- what a data-heap
                 Heap.resetAdjSampling();                 //   compactor would have had to work with. Sampling
                                                          //   restarts per batch: the cap was being spent on
@@ -5852,6 +5872,8 @@ public final class Loader
                                                               //   record of `target` is a displacement inside
                                                               //   the caller's instructions, which nothing
                                                               //   scans -- pin it or the sweep may free it
+                CodeEdges.note(rcAddr[i], target);            // ... and record the edge, so compaction can
+                                                              //   find and rewrite it when `target` moves
                 if (rcTail[i] != 0)
                 {
                     Magic.store32(rcAddr[i], A64Enc.b(off));   // lambda/method-ref thunk: tail branch, not a call
@@ -8817,6 +8839,7 @@ public final class Loader
                 // A CODE->CODE edge, pinned for the same reason patchRelocs pins its targets: after this store
                 // the displacement inside the thunk is the ONLY record of initBuf, and nothing scans encodings.
                 Heap.pinCodeAt(initBuf);
+                CodeEdges.note(h2, initBuf);
                 Magic.store32(h2, A64Enc.bl((int) ((initBuf - h2) / 4L)));                        // <init>(obj, args)
             }
             else
@@ -8871,7 +8894,8 @@ public final class Loader
         long bAt = thunk + w * 4L;
         if (implBuf != 0L)
         {
-            Heap.pinCodeAt(implBuf);                                        // as above: a tail branch is
+            Heap.pinCodeAt(implBuf);
+            CodeEdges.note(bAt, implBuf);                                        // as above: a tail branch is
             Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));     //   still a code->code edge
         }
         else

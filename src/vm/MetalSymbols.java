@@ -44,6 +44,7 @@ final class MetalSymbols implements Symbols
             // not. Symptom: `US_ASCII.<clinit>+0x50` calling a 64-byte buffer freed at the previous
             // collection, executing zeros, reported as InternalError.
             Heap.pinCodeAt(target);
+            Loader.noteCodeEdge(cb.base() + (long) cb.wordCount() * 4L, target);
         }
         emitBl(cb, target);
     }
