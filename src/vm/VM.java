@@ -1000,6 +1000,15 @@ public final class VM
             Uart.write(Magic.bytes(" far="));
             printHex(Magic.readFAR_EL1());
             Uart.putc(0x0A);
+            if (elr >= Heap.CODE_BASE && elr < Heap.CODE_LIMIT)
+            {
+                // An undefined instruction inside the code arena is almost always "we are executing a buffer
+                // the sweep zeroed". Report it HERE: once this becomes a Java exception and unwinds, the
+                // block state and swept-log history are no longer meaningful.
+                VMGc.reportSweptPc(elr);
+                Loader.printFrameAt(elr);
+                Uart.putc(0x0A);
+            }
             exc = newInternalError();
         }
         if (exc <= 0x1000L || Magic.load64(exc) == 0L)                  // exception class not loaded (TIB 0): can't

@@ -34,6 +34,17 @@ final class MetalSymbols implements Symbols
         {                                               // record the bl for patchRelocs to fix after loadAll
             Loader.recordCallReloc(cb.base() + (long) cb.wordCount() * 4L, methodCp);
         }
+        else
+        {
+            // CODE->CODE edge: once emitBl runs, the only record of `target` is a displacement inside these
+            // instructions, and nothing scans encodings. The DEFERRED path above is pinned for us by
+            // patchRelocsFrom; this one -- resolved at compile time, emitted immediately -- was not, so a
+            // buffer reachable only through such a call was swept and zeroed under a live caller. Same
+            // asymmetry the lambda thunks had before it was fixed: late-bound path pins, immediate path did
+            // not. Symptom: `US_ASCII.<clinit>+0x50` calling a 64-byte buffer freed at the previous
+            // collection, executing zeros, reported as InternalError.
+            Heap.pinCodeAt(target);
+        }
         emitBl(cb, target);
     }
 
