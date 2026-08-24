@@ -3135,6 +3135,69 @@ change stays as defence but explained nothing observed.
 path, not under `LIFETIME_TRACE` (QEMU suite 320s -> 445s; not perceptible on hardware). The O(edges x freed)
 shape wants bucketing by block.
 
+### Code-arena compaction — the mover, and why the arc stopped (increments 6-11, 2026-08-24)
+
+Tag **`compaction-decision-point`** (`703e344`) marks the state to revisit from. Increments 6-11 are QEMU
+only; 0-5 are Pi-validated.
+
+**Increment 6 (#156) -- the mover**, behind `COMPACT_CODE = false`, off like `RECLAIM_CODE_BY_GC` was: this
+is the first change in the arc that can corrupt a RUNNING VM, so enabling it should be a configuration
+change rather than a rebuild. It slides live blocks down, rewrites the census edges, and verifies last,
+halting on a bad branch. Order matters -- bytes first (ascending: a destination is always BELOW its source,
+and that space is already vacated), then edges, registry, bump pointer, I-cache publish.
+
+It is sound without a precise pointer map because of one rule: **a block may move only if every reference to
+it is a census edge.** A conservative scan pins anything else, so no pointer word ever needs rewriting.
+Conservative costs recovery, never correctness.
+
+    live=10706  pinned=10458 (97.7%)  MOVABLE=21  safeRecover=0
+    (against 4.06 MB "recoverable" with no soundness rule at all)
+
+**Increments 7-11 (#157, #158) -- precise reference enumeration**, to convert pins into movability. The
+device that makes it honest: the conservative scan finds every candidate slot, and enumeration must
+**explain** them. Only an unexplained slot pins, so `refsUNKNOWN -> 0` is exactly the condition under which
+the mover becomes useful — completeness as a counted quantity, not a claim.
+
+| class | refs explained | pins removed | Δ MOVABLE | Δ safeRecover |
+|---|---|---|---|---|
+| `STUB_TAB` | 13,437 | 10,458 → 1,973 | +2,976 | **0** |
+| TIB vtable slots | 171 (0.12%) | ~0 | 0 | **0** |
+| dispatch cells | 785 (0.65%) | −728 (35%) | **0** | **0** |
+
+**Why it stopped.** Recovery is `arenaTop - dst`: **one pinned block near the top cancels every movable
+block beneath it.** Pins fell 10,458 → 1,368 and `safeRecover` never left zero. The dispatch-cell A/B is the
+sharpest statement — it unpinned 728 blocks and changed movability by *exactly nothing*. Enumeration works
+as designed and converges on the wrong thing: the blocks it frees are not the ones blocking recovery.
+
+That is the same geometry recorded above for increment 10's trailing-run trim, and it has now survived
+coalescing, the large-object region, the split floor, the volume trigger, and three reference classes — six
+independent measurements of the between-collections law.
+
+**Composition finding worth keeping.** Of ~157k conservative hits: `entry=131,477` land exactly on a block
+START versus `interior=2,756`. Random data would give roughly a thousand entry hits, so these are REAL
+structural references, not noise — an earlier write-up claimed the opposite and was wrong. Meanwhile the
+"provably sound" filters bought nothing (`unal=12`, `noblk=6`): **a tightening that sounds rigorous can
+still be worthless, and only measurement separates the two.**
+
+**A trap fixed, and a rule from it.** `explained()` means "a slot we would rewrite", but `move()` rewrote
+only census edges. Explaining a class without rewriting it unpins blocks whose references then dangle —
+#146 on purpose. `rewriteHolders()` now covers `STUB_TAB` and the cells. **Enumeration and rewriting must
+land in the same increment, every time.**
+
+**Harness lesson, which cost two wrong numbers.** The plan ran opportunistically from a collection, so
+batches without a qualifying one silently REPRINTED the previous plan — visible as `MOVABLE=0` for 19
+batches then an identical 1,439 five times. Stale readings that look exactly like measurements. It produced
+a reported "−76% from dispatch cells" that was really −0.65%. Fixed by taking one plan per batch at the top
+of `resetLoader`, the only point where that batch's registries are still live. The process failure was
+sequencing: the harness was flagged unreliable in the same message that quoted its output, and a flag like
+that should block the quote.
+
+**If revisited:** the remaining ~120,000 unexplained references are real, structural and at block entries,
+so they are findable — but the payoff stays gated on the *topmost* blocks becoming movable, each class costs
+a build/run cycle plus a rewriter that must land in lockstep, and three classes in the trend is not
+converging. The levers this file names for the high-water are still **collecting DURING a batch** and
+**compiling less code per batch**. Neither is compaction.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
