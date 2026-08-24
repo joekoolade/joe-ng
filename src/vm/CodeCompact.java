@@ -53,6 +53,9 @@ final class CodeCompact
      */
     static final boolean ENUM_TIB = false;
 
+    /** A/B switch for the dispatch-cell class, so its contribution is measured against the FIXED harness. */
+    static final boolean ENUM_CELL = false;
+
     /**
      * {start, newBase} per walked block, in ADDRESS order. 256 KiB between {@link CodeEdges#TAB_END} and
      * {@code Loader.CODE_ROOTS}; 16,384 entries covers the observed peak of ~14,305 blocks.
@@ -437,7 +440,7 @@ final class CodeCompact
         {
             return (slot - Loader.STUB_TAB) % 16L == 0L ? 1 : 0;
         }
-        if (explainedCell(slot) != 0)
+        if (ENUM_CELL && explainedCell(slot) != 0)
         {
             return 1;
         }
