@@ -133,6 +133,10 @@ defines the minimum the assembler must encode.
     jar with `defineClass`. `sun/security/` + `JarVerifier` are denylisted (an unsigned jar
     never runs them; verifying would pull the whole provider closure) — construct
     `new JarInputStream(in, false)`.
+  - **Int shift COUNTS now mask to 5 bits** (`Baseline.maskShiftCount`), as the JVM specifies —
+    the 64-bit shift instructions use 6, so `x << 32` answered 0 instead of `x`, and
+    `Integer.rotateLeft(x, 32)` (the hashing rotate idiom at distance 0) returned 0. Long forms
+    are already correct and emit nothing. `demo/ShiftDemo` pins it.
   - **Three real VM bugs it uncovered** (all pre-existing, all fixed; PLAN.md "Jar / zip on
     metal" has the detail): int arithmetic did not stay sign-extended on OVERFLOW, so
     `idiv`/`irem` (64-bit SDIVs) saw huge positives — `Math.floorMod(String.hashCode(), n)`
@@ -159,7 +163,7 @@ defines the minimum the assembler must encode.
     from the 1st. `Class.forName`'s incremental path deliberately keeps the old behaviour (its
     comment records that eager seeding there blew the closure and corrupted the heap).
   - **Known gaps:** a virtual call inside a `Class.forName`-loaded class nothing else reaches
-    still finds a zero slot (see above); int shift COUNTS mask to 6 bits, not 5.
+    still finds a zero slot (see above).
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
     classes in a jar batch, ALL denylisted classes on never-taken branches, so a compile-time

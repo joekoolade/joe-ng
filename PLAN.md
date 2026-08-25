@@ -3839,6 +3839,17 @@ the demo constructs `new JarInputStream(in, false)`.
 
 **Three VM bugs the arc uncovered, each real and each pre-existing.**
 
+*Int shift COUNTS masked to 6 bits, not 5.* The companion to the canonicalization bug below, and the last
+arithmetic deviation left. AArch64's 64-bit shift instructions take the low SIX bits of the count register;
+the JVM specifies `s & 0x1f` for the int forms. So `x << 32` shifted an int clean out of its register and
+answered 0 where Java answers `x` unchanged. Invisible for the ordinary constant shift, and precisely wrong
+for the rotate idiom `(x << n) | (x >>> (32 - n))` at `n == 0` -- which is how hashing code is written:
+`Integer.rotateLeft(x, 32)` returned 0. `Baseline.maskShiftCount` emits an `AND Xn, Xn, #31` before the int
+forms (`ishl`/`ishr`/`iushr`); the LONG forms emit nothing, since `s & 0x3f` is exactly what the instruction
+already does. `demo/ShiftDemo` pins all of it, with the long shifts as a control. The `AND` encodings were
+verified against an assembler, not just against my own derivation -- `A64.andLowBits(0, 0, 5)` is
+`92401000`, which is what clang emits for `and x0, x0, #0x1f`.
+
 *Int arithmetic did not stay canonical.* The baseline compiler's stated invariant is that an int lives
 sign-extended in its 64-bit register — `iushr` and `i2l`/`l2i` depend on it — but `iadd`/`isub`/`imul`/
 `ishl`/`ineg`/`iinc` emitted plain 64-bit ops, so an int that OVERFLOWED kept its bits above 31. Everything

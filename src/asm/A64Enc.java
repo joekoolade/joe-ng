@@ -247,6 +247,16 @@ public final class A64Enc
         return 0x8B00_0000 | (rm << 16) | (shift << 10) | (rn << 5) | rd;
     }
     /** {@code AND Xd, Xn, Xm}. */
+    /**
+     * {@code AND Xd, Xn, #((1 << lowBits) - 1)} — mask off all but the low {@code lowBits} bits, using the
+     * logical-immediate form (no scratch register). Encoded as N=1, immr=0, imms={@code lowBits - 1}, which is
+     * the bitmask-immediate for a run of {@code lowBits} consecutive low ones (ARM ARM C4.1.4 "Logical
+     * (immediate)"). {@code lowBits} must be 1..63.
+     */
+    public static int andLowBits(int rd, int rn, int lowBits)
+    {
+        return 0x9240_0000 | (1 << 22) | ((lowBits - 1) << 10) | (rn << 5) | rd;
+    }
     public static int andReg(int rd, int rn, int rm)
     {
         return 0x8A00_0000 | (rm << 16) | (rn << 5) | rd;

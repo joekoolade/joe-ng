@@ -450,6 +450,16 @@ public final class A64
         return A64Enc.sxth(reg(rd), reg(rn));
     }
     /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
+    /** {@code AND Xd, Xn, #((1<<lowBits)-1)} — keep only the low {@code lowBits} bits (1..63). */
+    public static int andLowBits(int rd, int rn, int lowBits)
+    {
+        if (lowBits < 1 || lowBits > 63)
+        {
+            throw new IllegalArgumentException("andLowBits out of range: " + lowBits);
+        }
+        return A64Enc.andLowBits(reg(rd), reg(rn), lowBits);
+    }
+
     /** {@code SXTW Xd, Wn} — sign-extend the low 32 bits (an int's canonical form in a 64-bit register). */
     public static int sxtw(int rd, int rn)
     {
