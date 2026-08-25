@@ -149,7 +149,7 @@ defines the minimum the assembler must encode.
     beside the baked copies. `demo/ZipDemo` too: every entry's CRC, computed on the Pi over bytes our
     inflater produced (drained through a 37-byte buffer, so the decode resumes mid-block/mid-LZ-copy
     constantly), matches `unzip -v` byte-for-byte. WHOLE ARC PI-VALIDATED.
-  - **defineClass vtable hole FIXED (`Loader.rootBlob`).** `defineFromBytes` seeded reachability
+  - **defineClass vtable hole FIXED (`Loader.rootBlob`), Pi-validated.** `defineFromBytes` seeded reachability
     from `<clinit>` alone, so a class without one had EVERY method pruned by RTA and `fillTib`
     filled a vtable of zeros — the first virtual call inside it hit the null-vtable guard as a
     bare AIOOBE (reflection still worked, since that goes through the method registry). A blob

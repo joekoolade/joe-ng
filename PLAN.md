@@ -3887,6 +3887,13 @@ method is seeded, and the class is flagged instantiated — the second half matt
 instantiation from a `new` site, and the only `new` for a defined class is a later reflective one it cannot
 see; without it the INHERITED virtuals it calls up its superclass chain stay unmarked.
 
+**Pi-validated (2026-08-25, `core 166MHz`):** `Greeting.text() = hello, jar (5 consonants)` and
+`hello, reflectively (11 consonants)`, with the two `lifecycle OK 172` / `173` lines making the batch
+boundary visible -- `app/Main` registered in a batch of its own, calling into `app/Greeting` from the
+previous one. Both consonant counts are hand-checkable (h,l,l,j,r and h,l,l,r,f,l,c,t,v,l,y), which is why
+the demo dispatches through a counting method rather than a bare getter: a mis-dispatch cannot land on the
+right number by accident.
+
 That also closed the cross-batch gap for free. `app/Main` defined in a SECOND `defineClass` batch now does
 `new Greeting(...)` and calls it virtually against a class from the FIRST batch: `hello, reflectively
 (11 consonants)`. Nothing about batch linking needed changing — the earlier failure was this same empty
