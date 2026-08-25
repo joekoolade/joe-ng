@@ -5656,11 +5656,14 @@ public final class Loader
         Heap.pinCodeAt(buf);                            // the batch-path twin of buildLazyCompileStub: same stub,
                                                         //   same lifetime problem, same fix (see the note there)
         int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
-        Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
-        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.br(10));                                              w += 1;
+        // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
+        // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
+        // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
         Heap.publishCode(buf, buf + w * 4L);
     }
 
@@ -7507,11 +7510,14 @@ public final class Loader
         // stale dispatch copy correct.
         Heap.pinCodeAt(buf);
         int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.movz(9, idx & 0xFFFF, 0));                            w += 1;  // x9 = idx
-        Magic.store32(buf + w * 4L, A64Enc.movz(10, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x10 = tramp
-        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(10, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.br(10));                                              w += 1;
+        // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
+        // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
+        // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
         Heap.publishCode(buf, buf + w * 4L);
         return buf;
     }
@@ -7524,35 +7530,36 @@ public final class Loader
      */
     private static void buildLazyTramp()
     {
-        long buf = Heap.allocCode(128);
+        long buf = Heap.allocCode(256);
         long ca = VM.lazyCompileAddr;
         int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 80));  w += 1;   // sub sp,sp,#80
-        Magic.store32(buf + w * 4L, A64Enc.strx(0, 31, 0));      w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(1, 31, 8));      w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(2, 31, 16));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(3, 31, 24));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(4, 31, 32));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(5, 31, 40));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(6, 31, 48));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(7, 31, 56));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 64));    w += 1;   // save LR
-        Magic.store32(buf + w * 4L, A64Enc.addImm(0, 9, 0));     w += 1;   // x0 = idx
+        // Preserve x0..x15, not x0..x7. lazyCompile runs the WHOLE compiler between the entry to this
+        // trampoline and the tail-branch, so every argument register the callee will read must survive it.
+        // Saving only x0..x7 silently dropped the 9th argument onward -- garbage that shifted whenever
+        // compilation order changed, which is exactly how demo deep10 printed a different wrong answer each
+        // time the loader changed. The 16 extra loads/stores happen once per method, on its first call.
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 144)); w += 1;   // sub sp,sp,#144
+        int r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.movReg(0, 17));       w += 1;   // x0 = idx (the stub put it in x17)
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ca & 0xFFFF), 0));         w += 1;  // x16 = lazyCompile
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 16) & 0xFFFF), 1)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 32) & 0xFFFF), 2)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = fresh buffer
-        Magic.store32(buf + w * 4L, A64Enc.addImm(16, 0, 0));    w += 1;   // x16 = x0
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(0, 31, 0));      w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(1, 31, 8));      w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(2, 31, 16));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(3, 31, 24));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(4, 31, 32));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(5, 31, 40));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(6, 31, 48));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(7, 31, 56));     w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 64));    w += 1;   // restore LR
-        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 80));  w += 1;   // add sp,sp,#80
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;   // restore LR
+        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;   // add sp,sp,#144
         Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the fresh method
         Heap.publishCode(buf, buf + w * 4L);
         lazyTrampAddr = buf;

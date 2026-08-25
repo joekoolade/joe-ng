@@ -2100,9 +2100,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         int idx = stubIndex.get(key);
         IntVec w = new IntVec();
         BaselineCompiler.Relocations relocs = new BaselineCompiler.Relocations();
-        w.add(A64.subImm(31, 31, 96));
+        // Preserve x0..x15, not x0..x7: VM.bakeResolve demand-loads a whole class between the save and the
+        // tail-branch, so every argument register the resolved method will read must survive it. Saving only
+        // x0..x7 silently dropped the 9th argument onward -- the same defect the loader's lazy trampoline had
+        // (see Loader.buildLazyTramp), and the one behind demo deep10's wrong answer.
+        w.add(A64.subImm(31, 31, 144));
         w.add(A64.strx(30, 31, 0));
-        for (int r = 0; r <= 7; r++)
+        for (int r = 0; r <= 15; r++)
         {
             w.add(A64.strx(r, 31, 8 + r * 8));
         }
@@ -2110,15 +2114,15 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         relocs.callSites().add(new BaselineCompiler.CallSite(w.size(), BAKE_RESOLVE));
         w.add(A64.bl(0));
         w.add(A64.movReg(16, 0));
-        for (int r = 0; r <= 7; r++)
+        for (int r = 0; r <= 15; r++)
         {
             w.add(A64.ldrx(r, 31, 8 + r * 8));
         }
         w.add(A64.ldrx(30, 31, 0));
-        w.add(A64.addImm(31, 31, 96));
+        w.add(A64.addImm(31, 31, 144));
         w.add(A64.br(16));
         Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
-        return new CompiledMethod(w.toArray(), relocs, 96, handlers, null);
+        return new CompiledMethod(w.toArray(), relocs, 144, handlers, null);
     }
 
     /** Whether {@code cls}'s {@code <clinit>} never runs (neither at build time nor boot): explicitly

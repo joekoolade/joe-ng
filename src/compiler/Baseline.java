@@ -17,6 +17,11 @@ import objectmodel.ObjectModel;
 public final class Baseline
 {
     private static final int OP_BASE = 9;    // operand stack -> x9..x15
+    // Arguments go in x0..x(nargs-1). x16/x17 are scratch and x19.. are locals, so x15 is the last
+    // usable argument register -- and every dispatch trampoline must preserve all 16 across its own
+    // call (see Loader.buildLazyTramp). Beyond this a call would silently pass garbage, which is what
+    // demo deep10 did for as long as the trampolines saved only x0..x7; fail loudly instead.
+    private static final int MAX_ARG_REGS = 16;
     private static final int OP_MAX = 7;
     private static final int LOC_BASE = 19;  // locals -> x19..x28
     private static final int LOC_MAX = 10;   // beyond this a local lives in the frame
@@ -1969,6 +1974,10 @@ public final class Baseline
     private void emitCall(CodeBuffer cb, int paramCount, boolean returnsValue, boolean hasReceiver, int symKind, int symArg)
     {
         int nargs = paramCount + (hasReceiver ? 1 : 0);
+        if (nargs > MAX_ARG_REGS)
+        {
+            symbols.fail(Symbols.FAIL_ARG_COUNT, nargs, 0);      // no register to pass it in -- do not guess
+        }
         if (deepStack)
         {
             marshalArgsFromMemory(cb, nargs);                    // load args straight from canonical memory
@@ -3203,6 +3212,10 @@ public final class Baseline
         int p = descOff + 2 + 1;                         // past u2 length and '('
         while (ClassReader.u1(classBytes, p) != ')')
         {
+            if (arg >= MAX_ARG_REGS)
+            {
+                symbols.fail(Symbols.FAIL_ARG_COUNT, arg + 1, 1);  // the callee half of the same limit
+            }
             cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), arg)
                                 : A64Enc.strx(arg, 31, localMem(slot)));
             arg++;

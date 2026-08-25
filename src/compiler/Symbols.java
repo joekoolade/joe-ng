@@ -175,6 +175,7 @@ public interface Symbols
     int FAIL_STACK_OVERFLOW = 8;    // operand stack too deep
     int FAIL_STACK_UNDERFLOW = 9;   // operand stack underflow
     int FAIL_BL_RANGE = 10;         // a = call-site addr >>12, b = target addr >>12 (bl exceeds +-128 MiB)
+    int FAIL_ARG_COUNT = 11;        // a = argument count (more args than there are argument registers)
 
     // Sites for FAIL_STACK_NOT_EMPTY's b argument.
     int SITE_NEW = 0;
