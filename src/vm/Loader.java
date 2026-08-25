@@ -1605,14 +1605,21 @@ public final class Loader
         VM.gcLog = 0;                                   // scoped to this batch: later demos just count collections
     }
 
-    /** Evidence line for the code-arena rewind: cur (mark + one batch) far below high (max batch ever). */
+    /**
+     * Evidence line for the code-arena rewind. {@code peak} is the real high-water; {@code zeroBound} is
+     * {@code codeHeapHigh}, which is NOT a peak -- it is seeded to {@code mark + CODE_ZERO_SPAN} (8 MiB)
+     * because it bounds the rewind path's re-zeroing loop. It was previously printed as "high", and every
+     * "high-water unchanged" conclusion in the GC arcs was reading that constant.
+     */
     static void printCodeArena()
     {
         Uart.write(Magic.bytes("code arena: mark="));
         VM.printHex(codeHeapMark);
         Uart.write(Magic.bytes(" cur="));
         VM.printHex(Magic.load64(Heap.CODE_PTR_CELL));
-        Uart.write(Magic.bytes(" high="));
+        Uart.write(Magic.bytes(" peak="));
+        VM.printHex(Heap.codePeak);
+        Uart.write(Magic.bytes(" zeroBound="));
         VM.printHex(codeHeapHigh);
         Uart.putc(0x0A);
     }

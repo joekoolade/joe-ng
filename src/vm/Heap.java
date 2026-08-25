@@ -295,6 +295,11 @@ public final class Heap
     {
         int aligned = (size + 7) & -8;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
+        long cp = Magic.load64(CODE_PTR_CELL);
+        if (cp > codePeak)
+        {
+            codePeak = cp;                             // the arena's real high-water, sampled where it grows
+        }
         noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
         long bb = CODE_BYTES + bucketOf((long) aligned) * 8L;
         Magic.store64(bb, Magic.load64(bb) + (long) aligned);   // ... and how many BYTES each class costs
@@ -453,6 +458,20 @@ public final class Heap
      *
      * <p>Buckets are powers of four from 16 KiB, so one line separates "just swept" from "long since swept".
      */
+    /**
+     * True running maximum of the code bump pointer -- the arena's ACTUAL peak, with no floor.
+     *
+     * <p>{@code Loader.codeHeapHigh} was reported as "high (max batch ever)" and is not one: it is seeded to
+     * {@code codeHeapMark + CODE_ZERO_SPAN} (8 MiB) because it doubles as the upper bound of the rewind
+     * path's re-zeroing loop, so it reads {@code mark + 8 MiB} whenever the real peak is below that -- which
+     * it always was. Every "arena high-water unchanged" reading in this project's GC arcs came from that
+     * constant, including the one headlined for #147 as byte-identical across QEMU and hardware. It was
+     * identical because it is the same constant on both.
+     *
+     * <p>That field keeps its job. This one is the measurement.
+     */
+    public static long codePeak;
+
     public static long codeAllocSinceSweep;
     /** Set when the arena grows more than 1 MiB after a sweep -- the windows inc 1 could not rule out. */
     public static long lateGrowthSeen;
