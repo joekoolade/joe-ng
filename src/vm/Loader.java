@@ -4514,9 +4514,10 @@ public final class Loader
                 else
                 {
                     addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
-                    // Everything else that is not an initializer takes the other route to the same engine: a
-                    // deferral stub standing in for the body (statics went the cell way above). Only <init>
-                    // and <clinit> are still compiled here, because loading a class runs them.
+                    // Everything else takes the other route to the same engine: a deferral stub standing in
+                    // for the body (statics went the cell way above). Only <init> is still compiled here --
+                    // <clinit> now defers too, since lazy initialization means loading a class no longer runs
+                    // it (see notInit).
                     boolean defer = stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]);
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
@@ -5506,10 +5507,23 @@ public final class Loader
     }
 
     /** True if {@code nameOff} is neither {@code <clinit>} nor {@code <init>} (the initializers must run at load). */
+    /**
+     * True if this method may take the deferral route -- everything except {@code <init>}.
+     *
+     * <p>{@code <clinit>} USED to be excluded too, on the stated grounds that "loading a class runs them".
+     * The lazy-initialization arc (#114-#117) retired that premise: classes now initialize on first active
+     * use, the eager list is empty, and initializers reach the engine through {@code ensureClinit} like any
+     * other call. An eagerly compiled initializer for a class that never initializes is pure waste, and it
+     * was expensive waste -- {@code java/lang/Character$UnicodeScript.<clinit>} compiles to 1.17 MB, was
+     * emitted once per batch that loaded the class, and NEVER RAN. Four instances, ~4.7 MB, in an 8 MB
+     * arena: roughly 70% of every code byte the VM emitted.
+     *
+     * <p>{@code <init>} stays eager. Constructors are reached through {@code invokespecial} on paths that
+     * assume a compiled body, and they are small; the measured cost was entirely in {@code <clinit>}.
+     */
     private static boolean notInit(int nameOff)
     {
-        return !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>"))
-                && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
+        return !utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
     }
 
     /**
