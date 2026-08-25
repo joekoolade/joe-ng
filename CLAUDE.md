@@ -110,7 +110,7 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
-- **Jar/zip DONE — a program can ship as a jar and the VM runs it.** `/etc/init` gained
+- **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated (classpath route).** `/etc/init` gained
   `classpath=<path>`: the named RAMFS archive goes on the class path, and any class the
   writer-baked directory lacks is inflated out of it on demand (`vm/JarFs` behind
   `VM.dirBytes`/`dirLen`, positively AND negatively cached). `main=app/Main
@@ -141,6 +141,10 @@ defines the minimum the assembler must encode.
     time when the lazy-init collector is off (`new ZipInputStream` read a null
     `UTF_8.INSTANCE`); and a NATIVE instance method left a 0 vtable slot, so `String.intern()`
     hit the null-vtable guard as a nameless AIOOBE.
+  - **Pi run (2026-08-25, `core 166MHz`):** `classpath /lib/app.jar entries=5` → `launch app/Main`
+    → `load app/Greeting` → `hello from a jar` / `hello, world (7 consonants)` / `sum 0..10 = 55`
+    → `[main returned normally]`, boot battery clean. `demo/ZipDemo`/`demo/JarDemo` (the stock-API
+    overlays) are still QEMU-only.
   - **Known gaps:** a `defineClass`'d class does not get its own vtable slots filled (a
     virtual self-call inside it hits the null-vtable guard; reflection and the `classpath=`
     route are fine); two classes defined in SEPARATE `defineClass` batches cannot link a

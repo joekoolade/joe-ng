@@ -3780,7 +3780,18 @@ the boot stubs were never at risk in this run.
 ## Jar / zip on metal (2026-08-25)
 
 **The goal, in the user's words: read jar and zip files with the classes in `java.util.jar`/`java.util.zip`,
-and load classes out of a jar.** Both work. A program can ship as an ordinary jar on the RAMFS, and the VM
+and load classes out of a jar.** Both work.
+
+**Pi-validated (2026-08-25) for the classpath route.** A real Pi 4 at `core 166MHz` boots the image, prints
+`classpath /lib/app.jar entries=5`, `launch app/Main`, pulls `load app/Greeting` out of the archive, and runs
+the program: `hello from a jar` / `hello, world (7 consonants)` / `sum 0..10 = 55` / `[main returned
+normally]`. Neither class is embedded anywhere in the image -- both were DEFLATE-compressed inside the jar
+until the loader inflated them on the metal. The boot battery is clean (`vtparity`/`itparity`/`typeadopt` all
+OK, `lifecycle OK 48`), and its array probes -- `new Integer[2] instanceof Integer[],Number[],Long[]=1,1,0`
+and `Integer[][] as Number[][]=1` -- independently exercise the covariance fix below. That run is also the
+broadest evidence for `canonInt`, which now touches every int add/sub/mul/shift in every compiled method.
+STILL QEMU-ONLY: `demo/ZipDemo` and `demo/JarDemo`, i.e. the stock-API overlays, the `Attributes$Name` /
+`ImmutableCollections` initializer allowances, the `String.intern` vtable link, and the `Map.copyOf` path. A program can ship as an ordinary jar on the RAMFS, and the VM
 runs it: `/etc/init`'s `classpath=/lib/app.jar` line puts the archive on the class path, and `main=app/Main`
 launches straight out of it — the classes are inflated on the metal by joe-ng's own DEFLATE decoder, JIT'd,
 and run, with `app/Greeting` resolved out of the same archive as part of `app/Main`'s closure. Separately,
