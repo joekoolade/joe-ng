@@ -160,10 +160,15 @@ defines the minimum the assembler must encode.
     handed to `defineClass` is now a root in its entirety: every method seeded, and the class
     flagged instantiated so its INHERITED virtuals get marked too. This also closed the
     cross-batch gap for free — a class defined in a 2nd batch now `new`s and virtually calls one
-    from the 1st. `Class.forName`'s incremental path deliberately keeps the old behaviour (its
-    comment records that eager seeding there blew the closure and corrupted the heap).
-  - **Known gaps:** a virtual call inside a `Class.forName`-loaded class nothing else reaches
-    still finds a zero slot (see above).
+    from the 1st. `Class.forName`'s incremental path is fixed too, but DIFFERENTLY
+    (`Loader.stubBlob`): eager seeding there blew the closure and corrupted the heap, so its own
+    virtuals get deferral STUBS without being marked reachable — a full vtable and a pulled
+    closure turn out to be independent, and only RTA marking conflated them. A stub pulls
+    nothing; the body compiles on first call. Pi-validated: `demo/ForNameVirtualDemo` pins both,
+    and `forName("java.util.regex.Pattern")` registers 54 static cells + stubs its virtuals while
+    pulling just TWO extra classes (its `<clinit>`'s own deps) — seeding would have pulled the
+    regex engine.
+  - **Known gaps:** none of the three recorded during the jar arc remain.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
     classes in a jar batch, ALL denylisted classes on never-taken branches, so a compile-time
