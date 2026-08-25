@@ -73,10 +73,19 @@ public class JarDemo
         System.out.println("loaded " + greeting.getName() + " from the jar");
         Object g = greeting.getDeclaredConstructor(String.class).newInstance("jar");
         Method text = greeting.getDeclaredMethod("text");
-        System.out.println("Greeting.text() = " + text.invoke(g));
-        // (Greeting.consonants() is NOT called here: it dispatches text() virtually on itself, and a class
-        //  materialised by defineClass does not yet get its own vtable slots filled -- see PLAN.md. The same
-        //  class reached through the `classpath=` route dispatches fine.)
+        // consonants() dispatches text() VIRTUALLY on itself -- the call that used to hit the null-vtable
+        // guard, because RTA pruned every method of a defineClass'd class as unreachable and fillTib then
+        // filled a vtable of zeros. It is the regression test for the root-blob fix.
+        Method consonants = greeting.getDeclaredMethod("consonants");
+        System.out.println("Greeting.text() = " + text.invoke(g)
+                + " (" + consonants.invoke(g) + " consonants)");
+
+        // A SECOND defineClass batch, referring back to the first: app.Main does `new Greeting(...)` and
+        // calls it virtually, across the batch boundary. Its main is then invoked reflectively.
+        Class<?> main = loader.loadFromJar(mainClass);
+        Method entryPoint = main.getDeclaredMethod("main", String[].class);
+        System.out.println("--- running " + mainClass + " (2nd defineClass batch) ---");
+        entryPoint.invoke(null, (Object) new String[] { "reflectively" });
 
         // Running the jar's OWN main is the other route: /etc/init's `classpath=<jar>` puts the archive on the
         // VM's class path, and `main=app/Main` then launches straight out of it, closure and all.
