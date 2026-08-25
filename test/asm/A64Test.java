@@ -123,6 +123,11 @@ public final class A64Test
         T.eqWord("SXTH x0,w0",   0x93403C00, A64.sxth(0, 0));
         T.eqWord("UXTH w0,w0",   0x53003C00, A64.uxth(0, 0));
         // SXTW = SBFM Xd,Xn,#0,#31 -- how an overflowed int is put back into its canonical sign-extended form.
+        // AND (immediate), bitmask form: N=1, immr=0, imms=lowBits-1 -- a run of low ones. Masking an int
+        // shift COUNT to 5 bits is the JVM's `s & 0x1f` (a 64-bit shift instruction would use 6).
+        T.eqWord("AND x0,x0,#31",  0x92401000, A64.andLowBits(0, 0, 5));
+        T.eqWord("AND x9,x9,#31",  0x92401129, A64.andLowBits(9, 9, 5));
+        T.eqWord("AND x0,x0,#63",  0x92401400, A64.andLowBits(0, 0, 6));
         T.eqWord("SXTW x0,w0",   0x93407C00, A64.sxtw(0, 0));
         T.eqWord("SXTW x9,w9",   0x93407D29, A64.sxtw(9, 9));
         T.eqWord("CSET x0,EQ",   0x9A9F17E0, A64.cset(0, A64.EQ));

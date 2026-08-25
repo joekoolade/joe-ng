@@ -511,17 +511,20 @@ public final class Baseline
         }  // ineg/lneg
         else if (op == 0x78 || op == 0x79)
         {
+            maskShiftCount(cb, op == 0x78);
             binop(cb, BIN_SHL);
             canonInt(cb, op == 0x78);
             return 1;
         }  // ishl/lshl
         else if (op == 0x7A || op == 0x7B)
         {
+            maskShiftCount(cb, op == 0x7A);              // asrv on a canonical int stays canonical: no canonInt
             binop(cb, BIN_ASR);
             return 1;
         }  // ishr/lshr
         else if (op == 0x7C)
         {
+            maskShiftCount(cb, true);
             iushr(cb);                                   // int >>> : zero-extend the (maybe sign-extended) 32-bit value first
             canonInt(cb, true);                          // ... and re-sign-extend: `-1 >>> 0` is the int -1
             return 1;
@@ -960,6 +963,25 @@ public final class Baseline
     }
 
     /**
+     * Mask an INT shift COUNT to 5 bits, which is what the JVM specifies ({@code s & 0x1f}) and what the
+     * 64-bit shift instructions do NOT do -- they use 6, so {@code x << 32} shifted the value clean out and
+     * answered 0 where Java answers {@code x}. Invisible for the ordinary constant shift, and precisely wrong
+     * for the rotate idiom {@code (x << n) | (x >>> (32 - n))} at {@code n == 0}, which is how hashing code is
+     * written; {@code Integer.rotateLeft(x, 32)} returned 0 rather than {@code x}.
+     *
+     * <p>The LONG forms pass {@code isInt = false} and emit nothing: {@code s & 0x3f} is exactly the 6 bits
+     * the instruction already uses.
+     */
+    private void maskShiftCount(CodeBuffer cb, boolean isInt)
+    {
+        if (isInt)
+        {
+            int r = opSlot(sp - 1);                      // the count is on top; the value is below it
+            cb.emit(A64Enc.andLowBits(r, r, 5));
+        }
+    }
+
+    /**
      * Re-establish the "an int lives sign-extended in its 64-bit register" invariant after an int operation
      * that can overflow 32 bits ({@code iadd}/{@code isub}/{@code imul}/{@code ishl}/{@code ineg}, and
      * {@code iushr}, whose zero-extended result may have bit 31 set).
@@ -973,8 +995,8 @@ public final class Baseline
      *
      * <p>The long forms of the same opcodes pass {@code isInt = false} and emit nothing.
      *
-     * <p>Not fixed here: an int shift COUNT is masked to 6 bits by the 64-bit shift instructions where the JVM
-     * masks to 5, so {@code x << 32} still answers 0 rather than {@code x}.
+     * <p>The companion problem -- an int shift COUNT masked to 6 bits rather than 5 -- is handled by
+     * {@link #maskShiftCount}.
      */
     private void canonInt(CodeBuffer cb, boolean isInt)
     {
