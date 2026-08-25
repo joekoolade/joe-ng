@@ -133,7 +133,7 @@ defines the minimum the assembler must encode.
     jar with `defineClass`. `sun/security/` + `JarVerifier` are denylisted (an unsigned jar
     never runs them; verifying would pull the whole provider closure) — construct
     `new JarInputStream(in, false)`.
-  - **Int shift COUNTS now mask to 5 bits** (`Baseline.maskShiftCount`), as the JVM specifies —
+  - **Int shift COUNTS now mask to 5 bits** (`Baseline.maskShiftCount`), Pi-validated, as the JVM specifies —
     the 64-bit shift instructions use 6, so `x << 32` answered 0 instead of `x`, and
     `Integer.rotateLeft(x, 32)` (the hashing rotate idiom at distance 0) returned 0. Long forms
     are already correct and emit nothing. `demo/ShiftDemo` pins it.
