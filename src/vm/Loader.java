@@ -353,10 +353,19 @@ public final class Loader
                 clDepStart[clinitN] = clDepTop;
             scanClinitDeps(code, gcodeLen);
                 clDepN[clinitN] = clDepTop - clDepStart[clinitN];
-            // Compile now (with this class's statics block live and cross-class calls recorded as relocs), but
-            // ENQUEUE the entry — a <clinit> that calls another class (e.g. ArraysSupport -> SharedSecrets) would
-            // hit an unpatched `bl 0` if run here mid-load. runClinits() runs the queue after patchRelocs.
-            clinitEntry[clinitN] = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+            // CAPTURE the body; do not compile it. Initialization already happens on demand (JVMS 5.5, the
+            // lazy-init arc), but the COMPILE stayed here at load time, so an initializer the program never
+            // touches still cost its full A64 body -- twice over, since each batch that loads the class
+            // recompiles it. java/lang/Character$UnicodeScript is the extreme case: 32K of bytecode -> ~1.2 MB
+            // of code, emitted in two batches and executed in neither, which was 3.5 MB of a 4.0 MB arena.
+            // clinitEntryOf compiles on the first ACTUAL run, and its own relocs are patched there (the
+            // batch-wide patchRelocs is long past by then) exactly as lazyCompile does for deferred bodies.
+            clinitCode[clinitN] = code;
+            clinitCodeLen[clinitN] = gcodeLen;
+            clinitDescOff[clinitN] = gFoundDescOff;
+            clinitStatic[clinitN] = gFoundStatic;
+            clinitLocals[clinitN] = gMaxLocals;
+            clinitEntry[clinitN] = 0L;              // uncompiled: clinitCode[] is now the "enqueued" marker
                 clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
             if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
@@ -364,6 +373,73 @@ public final class Loader
             }                              // that NativeDispatcher/NioSocketImpl <clinit>s read via SharedSecrets
             clinitN += 1;
         }
+    }
+
+    /**
+     * The compiled entry of initializer {@code i}, compiling its captured body on first request.
+     *
+     * <p>This is the whole point of deferring: an initializer that never runs never gets an A64 body. The
+     * shape mirrors {@link #lazyCompile} because the situation is identical — a body captured during one
+     * batch, compiled at an arbitrary later moment when the batch's compile context is long gone. So it
+     * restores that context from the class registry, keeps the class's already-filled TIB, and patches its
+     * OWN reloc sites, since the batch-wide {@code patchRelocs} has already run and will not run again for
+     * these. Without that last step a cross-class call in the initializer stays a {@code bl 0}.
+     *
+     * <p>Memoized into {@code clinitEntry[i]}, which is also what keeps the buffer alive: the array is a
+     * heap {@code long[]}, so the conservative root scan sees the entry address and pins the block. An
+     * uncompiled slot holds 0 and pins nothing, which is correct — there is nothing to keep.
+     */
+    private static long clinitEntryOf(int i)
+    {
+        if (clinitEntry[i] != 0L)
+        {
+            return clinitEntry[i];                      // already compiled (or run once before)
+        }
+        if (clinitCode[i] == 0L)
+        {
+            return 0L;                                  // empty slot: nothing was enqueued here
+        }
+        int pd = clinitPd[i];
+        int reg = clinitRegOf(i);
+        if (pd < 0 || reg < 0)
+        {
+            capHalt(Magic.bytes("clinit-compile-ctx"), i);   // no blob/class to compile against -- name it, don't guess
+        }
+        restoreCtxForCompile(pdBase[pd], pdLen[pd], reg);
+        gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
+        compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
+        int rcMark = rcCount;                           // this compile's own reloc sites start here
+        int rsMark = rsCount;
+        long buf = compile(clinitCode[i], clinitCodeLen[i], clinitDescOff[i], clinitStatic[i]);
+        compileReuseTib = false;
+        patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
+        if (buf == 0L)
+        {
+            capHalt(Magic.bytes("clinit-compile-null"), i);  // about to call address 0 -- halt with an index instead
+        }
+        clinitEntry[i] = buf;
+        return buf;
+    }
+
+    /** The class-registry index of initializer {@code i}'s owner, matched by blob base (as ensureClinit does). */
+    private static int clinitRegOf(int i)
+    {
+        int pd = clinitPd[i];
+        if (pd < 0 || clTab == null)
+        {
+            return -1;
+        }
+        long base = pdBase[pd];
+        int r = 0;
+        while (r < clCount)
+        {
+            if (clTab[r] != null && clTab[r].base == base)
+            {
+                return r;
+            }
+            r += 1;
+        }
+        return -1;
     }
 
     /**
@@ -556,7 +632,12 @@ public final class Loader
      * these (provideKnownStatics / seedIntegerCache). Grows as new unrunnable stock initializers surface.
      */
     /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
-    private static long[] clinitEntry;
+    private static long[] clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
+    private static long[] clinitCode;    // its BYTECODE (captured at load); non-zero == this slot is enqueued
+    private static int[] clinitCodeLen;
+    private static int[] clinitDescOff;
+    private static int[] clinitStatic;
+    private static int[] clinitLocals;
     private static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
     private static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
@@ -608,8 +689,9 @@ public final class Loader
             {
                 Uart.write(Magic.bytes("  clinit(fd-first) java/io/FileDescriptor\n"));
             }
-            checkClinitEntry(clinitEntry[clinitFdFirst], clinitFdFirst);
-            long unusedFd = Magic.call0(clinitEntry[clinitFdFirst]);
+            long fdEntry = clinitEntryOf(clinitFdFirst);
+            checkClinitEntry(fdEntry, clinitFdFirst);
+            long unusedFd = Magic.call0(fdEntry);
             clinitRan[clinitFdFirst] = 1;
             done[clinitFdFirst] = true;
             remaining -= 1;
@@ -638,8 +720,9 @@ public final class Loader
                         writeName(pdBase[cpd] + pdNameOff[cpd] + 2, u2(pdBase[cpd] + pdNameOff[cpd]));
                         Uart.putc(0x0A);
                     }
-                    checkClinitEntry(clinitEntry[i], i);
-                    long unused = Magic.call0(clinitEntry[i]);
+                    long entry = clinitEntryOf(i);   // compiled HERE, on the run that actually needs it
+                    checkClinitEntry(entry, i);
+                    long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
                     done[i] = true;
                     remaining -= 1;
@@ -656,8 +739,9 @@ public final class Loader
                 }
                 if (j < clinitN)
                 {
-                    checkClinitEntry(clinitEntry[j], j);
-                    long unused = Magic.call0(clinitEntry[j]);
+                    long cyEntry = clinitEntryOf(j);
+                    checkClinitEntry(cyEntry, j);
+                    long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
                     done[j] = true;
                     remaining -= 1;
@@ -770,25 +854,26 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitEntry[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
             {
                 clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
                 Uart.write(Magic.bytes("  clinit-lazy "));
                 printNameAt(clTab[reg].base, clTab[reg].nameOff);
                 Uart.putc(0x0A);
-                if (Heap.codeBlockFreeAt(clinitEntry[i]) == 1)   // GUARD: about to call a SWEPT initializer.
+                long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
+                if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
                 {                                                //   Name it here, where the class is in hand.
                     Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
                     printNameAt(clTab[reg].base, clTab[reg].nameOff);
                     Uart.write(Magic.bytes(" entry="));
-                    VM.printHex(clinitEntry[i]);
+                    VM.printHex(entry);
                     Uart.write(Magic.bytes(" idx="));
                     VM.printDec(i);
                     Uart.putc(0x0A);
-                    VMGc.reportSweptPc(clinitEntry[i]);
+                    VMGc.reportSweptPc(entry);
                     while (true) { Magic.wfe(); }
                 }
-                long unused = Magic.call0(clinitEntry[i]);
+                long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 return;
             }
@@ -879,7 +964,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitEntry[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
             {
                 return true;
             }
@@ -2300,6 +2385,11 @@ public final class Loader
         rsName = new int[MAXRELOC];
         rsCount = 0;
         clinitEntry = new long[MAXBLOB];
+        clinitCode = new long[MAXBLOB];
+        clinitCodeLen = new int[MAXBLOB];
+        clinitDescOff = new int[MAXBLOB];
+        clinitStatic = new int[MAXBLOB];
+        clinitLocals = new int[MAXBLOB];
         clinitPd = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];

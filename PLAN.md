@@ -3198,6 +3198,56 @@ a build/run cycle plus a rewriter that must land in lockstep, and three classes 
 converging. The levers this file names for the high-water are still **collecting DURING a batch** and
 **compiling less code per batch**. Neither is compaction.
 
+### Compiling less per batch: the `<clinit>` compile was never deferred (2026-08-24)
+
+Of the two levers the compaction arc named for the arena high-water, **compiling less per batch** is the one
+that paid. It came in two steps, and the second is a correction to the first.
+
+**Step one (shipped, Pi-validated in `cbb8bb3`)** deferred `<clinit>` in the per-method loop
+(`Loader.notInit` now excludes only `<init>`), taking the arena from ~6.07 MB to 3.98 MB. That was read as
+"lazy `<clinit>` is done", and the two surviving 1.2 MB compiles of `java/lang/Character$UnicodeScript` were
+attributed to `stage2Gated` declining them.
+
+**That attribution was wrong.** `<clinit>` never went through that loop at all. It has its own route —
+`Loader.runClinit` seeks `<clinit>()V`, compiles it immediately, and enqueues the resulting *entry address*
+for `runClinits` to call later. So the lazy-init arc made initializers **run** on demand (the `clinit-lazy`
+boot lines) while their **compilation** stayed eager at load. An initializer the program never touches still
+cost its full A64 body, once per batch that loaded the class.
+
+`Character$UnicodeScript.<clinit>` is the extreme case: **32,176 bytes of bytecode** (the next largest method
+in the class is 1,272), compiling to ~1.2 MB of A64, emitted in two batches and executed in neither — no
+`clinit-lazy` line for it appears anywhere in a full run.
+
+**The fix** enqueues the BYTECODE (`clinitCode`/`clinitCodeLen`/`clinitDescOff`/`clinitStatic`/`clinitLocals`)
+instead of a compiled entry, and `clinitEntryOf(i)` compiles on the first ACTUAL run, memoizing into
+`clinitEntry[i]`. The shape mirrors `lazyCompile` because the problem is identical — a body captured in one
+batch, compiled much later with that batch's context gone: restore the context from the class registry, reuse
+the class's already-filled TIB, and patch its OWN reloc sites, since the batch-wide `patchRelocs` has long
+since run. `clinitCode[i] != 0` replaces `clinitEntry[i] != 0` as the "enqueued" test; the pc→method lookups
+keep testing `clinitEntry[i]`, which is exactly right — they want compiled entries only.
+
+Lifetime is unchanged and needs no new pin: `clinitEntry` is a heap `long[]`, so the conservative root scan
+sees the entry address and keeps the block. An uncompiled slot holds 0 and pins nothing, which is correct.
+
+**Result (QEMU full suite, 24 batches):**
+
+| | before | after |
+|---|---|---|
+| arena peak | `0x23E0338` (3.88 MB) | `0x211EAA0` (1.12 MB) — **−71%** |
+| `HUGE body` lines | 2 | 0 |
+| code allocs ≥32K | 5/5/2/4/8 | 1/1/0/2/0 |
+| `collections` | 41 | 41 |
+
+Everything else is unchanged: all 24 batches, `words=25 distinct=16`, `churnMB=625 live=32 intact=32`,
+`lisp: evals=600 result=610 stable=1`, `DANGLING=0`/`WRONGTGT=0` and `compactPlan ok=1`/`UNMAPPED=0` in every
+batch, zero halts, ending at `(self-build retired; host writer only)`.
+
+**Worth keeping:** identical `collections` is the load-bearing number. It says the win is fewer code bytes
+emitted, not a different allocation rhythm — the arena fell while GC behaviour stayed put. And the process
+lesson repeats one this file already records: a measurement can be right (the arena did fall 36%) while the
+*explanation* for what remains is wrong, and here the wrong explanation named a mechanism (`stage2Gated`)
+that the code in question never consults. Reading the actual call path cost one grep.
+
 ### GC of live metadata — retiring the batch reclaim (arc started 2026-08-20)
 
 M8's "hard problems" named this one: reified metadata becomes permanent heap state the collector must
