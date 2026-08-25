@@ -3939,6 +3939,14 @@ The closure stress case is in `demo/ForNameVirtualDemo`: `Class.forName("java.ut
 canonical big one — grows the batch from 64 classes to 66, no `CAP EXCEEDED`, which is the direct evidence
 that stubbing is not seeding.
 
+**Pi-validated (2026-08-25, `core 166MHz`)**, and the hardware log makes the argument better than QEMU's did:
+`consonants() = 6` (the virtual self-call that used to fault), then `phaseA: 54 cells at structure time for
+java/util/regex/Pattern` and `lifecycle OK 64` → `66`. Pattern registered fifty-four static cells and took
+deferral stubs across its virtuals while pulling exactly TWO extra classes — `Pattern$Node` and
+`Pattern$LastNode`, which are its `<clinit>`'s dependencies, not its methods'. A seeding fix would have
+pulled the regex engine. That single pair of numbers is what separates this change from the one that
+corrupted the heap.
+
 **The `emitNew` fallback, fixed by measuring it first.** `objectSizeOf`/`tibOfClass` fell back to the CURRENT
 class when a `new`'s target was not registered, so a missing class produced an object carrying an unrelated
 class's TIB — it passed the wrong `instanceof` and dispatched into the wrong vtable, silently. That is how a

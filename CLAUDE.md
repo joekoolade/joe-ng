@@ -164,8 +164,10 @@ defines the minimum the assembler must encode.
     (`Loader.stubBlob`): eager seeding there blew the closure and corrupted the heap, so its own
     virtuals get deferral STUBS without being marked reachable — a full vtable and a pulled
     closure turn out to be independent, and only RTA marking conflated them. A stub pulls
-    nothing; the body compiles on first call. `demo/ForNameVirtualDemo` pins both, including
-    `forName("java.util.regex.Pattern")` growing the batch 64 -> 66 classes.
+    nothing; the body compiles on first call. Pi-validated: `demo/ForNameVirtualDemo` pins both,
+    and `forName("java.util.regex.Pattern")` registers 54 static cells + stubs its virtuals while
+    pulling just TWO extra classes (its `<clinit>`'s own deps) — seeding would have pulled the
+    regex engine.
   - **Known gaps:** none of the three recorded during the jar arc remain.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
