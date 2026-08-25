@@ -2585,6 +2585,7 @@ public final class Loader
         pdLen = new int[MAXBLOB];
         gEntryBlob = 0L;                                 // no reachability mark unless a caller sets an entry
         gRootBlob = 0L;
+        gStubBlob = 0L;
         markActive = 0;
         reachCode = new long[MAXREACH];
         reachN = 0;
@@ -2716,6 +2717,7 @@ public final class Loader
     private static final int MAXREACH = 8192;
     private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
     private static long gRootBlob;                       // a defineClass'd blob: EVERY method is a root (see rootBlob)
+    private static long gStubBlob;                       // an incrementally loaded blob: STUB its virtuals (see stubBlob)
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
     private static long[] reachCode;                     // bytecode addresses of the reachable methods
@@ -2741,6 +2743,27 @@ public final class Loader
     static void rootBlob(long blobBytes)
     {
         gRootBlob = blobBytes;
+    }
+
+    /**
+     * Give a blob's own virtual methods DEFERRAL STUBS even where reachability analysis prunes them, so its
+     * vtable has no holes — without marking them reachable, which is the part that matters.
+     *
+     * <p>This is the weaker sibling of {@link #rootBlob}, and the difference is the whole point.
+     * {@code Class.forName} loads by NAME into a live program, so RTA marks nothing in the class (it seeds
+     * from a {@code <clinit>} most classes do not have) and {@link #compileClass} skips every method — leaving
+     * the class's own vtable slots 0 while REFLECTION still worked, because that resolves through the method
+     * registry and compiles on demand. A virtual call inside such a class then hit the null-vtable guard.
+     *
+     * <p>Seeding them reachable instead, as {@code rootBlob} does, is what an earlier attempt did and it
+     * "pulled a huge closure into the 2nd (incremental) batch and corrupted the heap" — an arbitrary
+     * java.base class named at runtime drags in everything it mentions. A deferral stub pulls NOTHING: it is
+     * a few instructions that route the first call into {@link #lazyCompile}, which compiles the body then
+     * and resolves its own relocs, exactly as reflection's on-demand path already does.
+     */
+    static void stubBlob(long blobBytes)
+    {
+        gStubBlob = blobBytes;
     }
 
     /**
@@ -3819,6 +3842,7 @@ public final class Loader
         // compiled + run, and the class's structure/Type/mirror is registered by loadStructure regardless. The
         // class's OTHER methods are compiled LAZILY when reflectively invoked (M2) — eagerly seeding them all
         // pulled a huge closure into the 2nd (incremental) batch and corrupted the heap.
+        stubBlob(blob);                                 // vtable-complete without pulling its closure (see stubBlob)
         entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // may be absent (addReach(0) is a no-op)
         loadAll();
         int ci = classIndexByName(slash);
@@ -4786,7 +4810,11 @@ public final class Loader
         {
             int attrs = u2(p + 6);
             long code = findCode(bytes, p + 8, attrs);
-            if (code != 0L && (markActive == 0 || isReach(code)))   // reachability-pruned when a mark ran
+            // A stub-blob's own virtual methods are kept even when RTA prunes them, so the class's vtable has
+            // no holes -- but STUB ONLY, so nothing of theirs is pulled into this batch (see stubBlob).
+            boolean stubOnly = gbase == gStubBlob && gStubBlob != 0L && code != 0L
+                    && !isReach(code) && isVirtual(u2(p), gcp[u2(p + 2)]);
+            if (code != 0L && (markActive == 0 || isReach(code) || stubOnly))
             {
                 int isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
                 if (phaseACelled(gcp[u2(p + 2)], gcp[u2(p + 4)]))
@@ -4801,7 +4829,8 @@ public final class Loader
                     // for the body (statics went the cell way above). Only <init> is still compiled here --
                     // <clinit> now defers too, since lazy initialization means loading a class no longer runs
                     // it (see notInit).
-                    boolean defer = stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]);
+                    boolean defer = stubOnly                    // a stub-blob virtual: NEVER compile the body here
+                            || (stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]));
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -5100,6 +5129,7 @@ public final class Loader
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         gRootBlob = 0L;
+        gStubBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
         pendClass = null;
         pendName = null;

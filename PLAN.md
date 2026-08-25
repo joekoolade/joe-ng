@@ -3919,12 +3919,25 @@ That also closed the cross-batch gap for free. `app/Main` defined in a SECOND `d
 vtable, seen from the other side. It also settles a question the jar arc left open: reflective
 `main(String[])` invocation with a non-empty array was never broken; `args[0]` arrives correctly.
 
-**The asymmetry that remains, deliberately.** `Class.forName`'s incremental path (`loadClassIncremental`)
-seeds the same way and keeps the same hole, and its comment records why eager seeding was rejected there:
-"eagerly seeding them all pulled a huge closure into the 2nd (incremental) batch and corrupted the heap".
-A defineClass blob is program-supplied and small, so rooting all of it is cheap; an arbitrary java.base class
-pulled by name is not. A virtual call inside a forName-loaded class that nothing else reaches would still
-find a zero slot.
+**The `Class.forName` asymmetry, closed by separating two things that were conflated.** `forName`'s
+incremental path had the same hole, and the obvious fix was ruled out by the comment already sitting there:
+eager seeding "pulled a huge closure into the 2nd (incremental) batch and corrupted the heap". An arbitrary
+java.base class named at runtime drags in everything it mentions.
+
+The way through is that a full vtable and a pulled closure are INDEPENDENT, and only reachability marking
+conflated them. `compileClass`'s RTA filter skipped a pruned method entirely — no body, and no deferral
+STUB either — so the class's own slots stayed 0 while reflection still worked, because that resolves through
+the method registry and compiles on demand. A stub pulls nothing: it is a few instructions routing the first
+call into `lazyCompile`, which compiles the body then and resolves its own relocs, exactly as reflection's
+on-demand path already does. `Loader.stubBlob` marks the incrementally loaded blob, and its own virtuals get
+stubs even when RTA prunes them — `rootBlob`'s weaker sibling, and the difference between them is the point.
+
+The instrumentation is what made this tractable: probing the filled vtable showed the inherited `Object`
+slots (`getClass`, `hashCode`, `equals`, `toString`, `clone`) populated and the class's OWN two slots at 0,
+which ruled out a wrong slot INDEX and pointed at the missing stub. Guessing would have gone the other way.
+The closure stress case is in `demo/ForNameVirtualDemo`: `Class.forName("java.util.regex.Pattern")` — the
+canonical big one — grows the batch from 64 classes to 66, no `CAP EXCEEDED`, which is the direct evidence
+that stubbing is not seeding.
 
 **The `emitNew` fallback, fixed by measuring it first.** `objectSizeOf`/`tibOfClass` fell back to the CURRENT
 class when a `new`'s target was not registered, so a missing class produced an object carrying an unrelated
