@@ -3932,6 +3932,12 @@ line; unreached, it costs nothing:
 `demo/UnresolvedNewDemo` is the regression test, and it is manifest-only by necessity — it is expected to
 HALT, so it can never join the boot suite; the pass condition is the message, not a clean exit. The suite and
 the jar demos run unchanged with all 18 traps armed, which is the evidence that none of them is live.
+
+**Pi-validated (2026-08-25) as a NEGATIVE test**, which is the unusual part: `demo/JarDemo` on a real Pi 4
+with every trap armed produced output byte-identical to the pre-fix run, down to
+`gc: collections=1 ... lastReclaimed=0x0000000000A4B440`, and no `UNRESOLVED NEW` line. Those eighteen
+branches are dead on hardware too, not merely un-exercised by QEMU — the one thing emulation could not have
+settled.
 The writer side needed no change: its `objectSize` resolves through `ClassResolver` and already threw.
 
 **Debug aid added:** `JOENG_SYMMAP=1` makes the writer print every image method's `[start,end)`, so a bare PC

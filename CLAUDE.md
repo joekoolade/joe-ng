@@ -160,14 +160,15 @@ defines the minimum the assembler must encode.
     comment records that eager seeding there blew the closure and corrupted the heap).
   - **Known gaps:** a virtual call inside a `Class.forName`-loaded class nothing else reaches
     still finds a zero slot (see above); int shift COUNTS mask to 6 bits, not 5.
-  - **`emitNew` fallback FIXED.** A `new` whose class isn't registered used to take the CURRENT
+  - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
     classes in a jar batch, ALL denylisted classes on never-taken branches, so a compile-time
     halt would have broken working boots. Instead `objectSize` returns `-(site+1)` and
     `Baseline.lowerNew` emits the `NEW_UNRESOLVED` helper in place of the allocation: reached, it
     halts naming the class AND source line; unreached, it costs nothing. The same-class case (a
     class `new`ing itself pre-registration) keeps the old fallback. `demo/UnresolvedNewDemo` is
-    the regression — manifest-only, since it is EXPECTED to halt.
+    the regression — manifest-only, since it is EXPECTED to halt. Pi-validated as a NEGATIVE test:
+    JarDemo on hardware with all 18 traps armed is byte-identical to the pre-fix run, no trap fired.
   - **Debug aid:** `JOENG_SYMMAP=1 make image` prints every image method's `[start,end)`, so
     a bare PC from a QEMU `info registers` can be named — a constant PC is a `checkCast`/
     `capHalt` spin.
