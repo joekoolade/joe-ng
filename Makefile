@@ -55,6 +55,7 @@ test: build
 	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
+	$(JAVA) -cp $(OUT) zip.ZipTest
 
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
@@ -73,7 +74,20 @@ PLUGINSRC := $(shell find plugins-src -name '*.java' 2>/dev/null)
 plugins:
 	@if [ -n "$(PLUGINSRC)" ]; then mkdir -p ramfs/plugins && $(JAVAC) -d ramfs/plugins $(PLUGINSRC); fi
 
-image: build jdktests plugins
+# The classpath jar: an ordinary Java program compiled OUTSIDE the classDir (out/) and packaged with the seed
+# JDK's `jar` tool into ramfs/lib/app.jar. It is deliberately NOT embedded as a class -- on the metal it exists
+# only inside the archive, and /etc/init's `classpath=` line is what makes it loadable (vm/JarFs).
+JARSRC := $(shell find jarsrc -name '*.java' 2>/dev/null)
+JARCLASSES := $(OUT)/../.appjar
+.PHONY: appjar
+appjar: guest
+	@if [ -n "$(JARSRC)" ]; then \
+	  rm -rf $(JARCLASSES) && mkdir -p $(JARCLASSES) ramfs/lib && \
+	  $(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(JARCLASSES) $(JARSRC) && \
+	  jar --create --file ramfs/lib/app.jar --main-class app.Main -C $(JARCLASSES) . && \
+	  ls -l ramfs/lib/app.jar; fi
+
+image: build jdktests plugins appjar
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 
@@ -81,4 +95,4 @@ qemu: image
 	sh scripts/qemu-check.sh $(IMG)
 
 clean:
-	rm -rf $(OUT) $(IMG)
+	rm -rf $(OUT) $(IMG) $(JARCLASSES)

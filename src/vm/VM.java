@@ -867,11 +867,41 @@ public final class VM
         long al = Heap.allocData(256);
         int alen = manifestValue(conf, flen, Magic.bytes("args"), al, 250);
         byte[] argsLine = heapBytes(al, alen);              // raw space-separated args; argv built after loadAll
+        openClasspath(conf, flen);                          // classpath=<jar>: classes the image lacks come from it
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
         Loader.launch(mainClass, argsLine);
         return true;
+    }
+
+    /**
+     * Open the {@code classpath=<path>} jar named by the init manifest, if any. From here on any class the
+     * writer-baked directory lacks is looked for in the jar ({@link VM#dirBytes}), so a program can ship as an
+     * ordinary jar on the RAMFS instead of being embedded in the image.
+     */
+    private static void openClasspath(long conf, int flen)
+    {
+        long cp = Heap.allocData(256);
+        int n = manifestValue(conf, flen, Magic.bytes("classpath"), cp, 250);
+        if (n == 0)
+        {
+            return;
+        }
+        byte[] path = heapBytes(cp, n);
+        boolean ok = JarFs.open(path);
+        Uart.write(Magic.bytes("classpath "));
+        Uart.write(path);
+        if (ok)
+        {
+            Uart.write(Magic.bytes(" entries="));
+            printDec(JarFs.count());
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" UNREADABLE"));
+        }
+        Uart.putc(0x0A);
     }
 
     /** True if the /etc/init manifest requests networking ({@code net=1}) -- the OS then brings the WiFi
@@ -1284,7 +1314,16 @@ public final class VM
             long elemTarget = Magic.load64(targetType + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
             if (elemType != 0L && elemTarget != 0L)    // both reference-element arrays: covariant on the element
             {
-                return typeAssignable(elemType, elemTarget);
+                if (typeAssignable(elemType, elemTarget))
+                {
+                    return true;
+                }
+                // Every reference element widens to Object, so S[] is always an Object[]. The walk above
+                // cannot show that when S is an INTERFACE: an interface Type is a chain dead end (depth -1,
+                // no display, no superclass link), so it never reaches Object. Map.Entry[] -> Object[] is
+                // the live case -- AbstractCollection.toArray(T[]) casts exactly that, which is how
+                // Map.copyOf(...) (java.util.jar.Attributes$Name's initializer) reached a checkCast spin.
+                return elemTarget == Loader.objectTypeAddr();
             }
             // a primitive element on either side is invariant: only the exact-match below can succeed
         }
@@ -2685,10 +2724,17 @@ public final class VM
         return (int) (aLen - bLen);
     }
 
-    /** Class-directory lookup for the on-metal {@link Loader}: bytes address for [namePtr,len), or 0. */
+    /** Class-directory lookup for the on-metal {@link Loader}: bytes address for [namePtr,len), or 0. The
+     *  writer-baked directory answers first; a class it doesn't hold falls through to the classpath jar
+     *  ({@code /etc/init}'s {@code classpath=}), so jar classes resolve everywhere embedded ones do. */
     static long dirBytes(long namePtr, long len)
     {
-        return findClass(namePtr, len);
+        long b = findClass(namePtr, len);
+        if (b == 0L)
+        {
+            b = JarFs.classBytes(namePtr, len);
+        }
+        return b;
     }
 
     /** Companion to {@link #dirBytes}: the embedded class's byte length for [namePtr,len), or 0. */
@@ -2704,7 +2750,7 @@ public final class VM
             }
             i = i + 1L;
         }
-        return 0L;
+        return JarFs.classLen(namePtr, len);           // not embedded: the classpath jar may still hold it
     }
 
     /** Whether {@code len} bytes at {@code a} equal those at {@code b}. */

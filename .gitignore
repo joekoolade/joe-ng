@@ -13,3 +13,7 @@ ramfs/etc/wifi.conf
 
 # M4: generated plugin classes (compiled from plugins-src/ into ramfs at build time)
 ramfs/plugins/
+
+# The classpath jar + its staging dir (built from jarsrc/ at image time)
+ramfs/lib/app.jar
+.appjar/

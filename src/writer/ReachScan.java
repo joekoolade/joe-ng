@@ -42,6 +42,9 @@ public final class ReachScan
         // security-property read->Properties/stream), reached only at throw sites; IPAddressUtil =
         // link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress()==false.
         "jdk/internal/util/Exceptions", "sun/net/util/IPAddressUtil",
+        // jar signature verification: JarVerifier pulls the whole sun.security provider closure for a path
+        // an unsigned jar never takes (see Loader.isDenylisted).
+        "sun/security/", "java/util/jar/JarVerifier",
         "jdk/internal/logger/", "java/lang/reflect/", "jdk/internal/reflect/",
         "jdk/internal/module/", "java/lang/module/", "java/text/spi/",
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT

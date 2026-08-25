@@ -11,10 +11,12 @@ import magic.Magic;
  * table and returns the directory entry address {nameAddr, nameLen, bytesAddr@+16, bytesLen@+24}; every
  * read then walks the content bytes directly via {@code Magic.load8/load64} — pure Java, no descriptor.
  *
- * <p>Read-only and always "regular": no {@code write}, no {@code File}/{@code FileDescriptor} objects.
- * Extends nothing (the stock super {@code InputStream} would pull its closure); demos hold it directly.
+ * <p>Read-only and always "regular": no {@code write}, no {@code File}/{@code FileDescriptor} objects. It
+ * DOES extend the stock {@code java.io.InputStream}, so it can be handed to anything that takes one — which
+ * is what lets {@code new ZipInputStream(new FileInputStream("/lib/app.jar"))} work with the stock zip
+ * classes. (The stock super is small and its unreached methods never compile, so the closure cost is nil.)
  */
-public class FileInputStream
+public class FileInputStream extends InputStream
 {
     private long entry;                                  // RAMFS dir entry, 0 = closed/absent
     private int pos;                                     // read cursor into the content bytes
@@ -32,6 +34,7 @@ public class FileInputStream
     private static native long open0(String name);
 
     /** The next content byte (0..255), or -1 at end of file. */
+    @Override
     public int read()
     {
         if (entry == 0L || pos >= (int) Magic.load64(entry + 24L))
@@ -43,12 +46,14 @@ public class FileInputStream
         return b;
     }
 
+    @Override
     public int read(byte[] buf)
     {
         return read(buf, 0, buf.length);
     }
 
     /** Fill {@code buf[off..off+len)} from the cursor; the count actually read, or -1 at end of file. */
+    @Override
     public int read(byte[] buf, int off, int len)
     {
         if (entry == 0L)
@@ -73,6 +78,7 @@ public class FileInputStream
     }
 
     /** Bytes remaining from the cursor to end of file. */
+    @Override
     public int available()
     {
         if (entry == 0L)
@@ -84,6 +90,7 @@ public class FileInputStream
     }
 
     /** The rest of the file as a fresh array (the whole file when nothing has been read yet). */
+    @Override
     public byte[] readAllBytes()
     {
         int n = available();
@@ -96,6 +103,7 @@ public class FileInputStream
     }
 
     /** Advance the cursor up to {@code n} bytes; the count actually skipped. */
+    @Override
     public long skip(long n)
     {
         int step = (int) n;
@@ -112,6 +120,7 @@ public class FileInputStream
         return step;
     }
 
+    @Override
     public void close()
     {
         entry = 0L;

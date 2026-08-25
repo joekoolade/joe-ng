@@ -56,6 +56,9 @@ public final class CompilerTest
         addWant.add(A64.movReg(9, 19));                  // iload_0
         addAll(addWant, A64.loadImm64(10, 1));            // iconst_1
         addWant.add(A64.addReg(9, 9, 10));               // iadd
+        addWant.add(A64.sxtw(9, 9));                     // ... canonicalised: an int stays sign-extended in
+                                                         //     its 64-bit register even when it overflows,
+                                                         //     which is what idiv/irem read (Baseline.canonInt)
         addWant.add(A64.movReg(0, 9));                   // ireturn: result -> x0
         addWant.add(A64.ldrx(19, 31, 0));                // restore x19
         addWant.add(A64.addImm(31, 31, 16));             // add sp,sp,#16

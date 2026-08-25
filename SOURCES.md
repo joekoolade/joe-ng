@@ -66,6 +66,24 @@ logs what informed each piece so encodings and boot facts are auditable.
   spec; the object layout (`objectmodel`), the calling convention, and the
   `magic.Magic` intrinsic set + A64 lowering are ours.
 
+## Zip / jar / DEFLATE (zip/Inflate.java, zip/Huff.java, zip/ZipDir.java, zip/Crc32.java)
+
+- **RFC 1951 — DEFLATE Compressed Data Format Specification version 1.3.** The
+  block structure (stored / fixed-Huffman / dynamic-Huffman), the canonical
+  Huffman code construction, the length/distance code tables (§3.2.5) and the
+  code-length alphabet ordering (§3.2.7). `zip/Inflate` is written from this
+  document; it is a streaming, resumable decoder of our own design (mark/rewind
+  of the bit position, 32 KiB mirror window), not a port.
+- **PKWARE .ZIP File Format Specification (APPNOTE.TXT)** — the End Of Central
+  Directory record, the central-directory file header, and the local file header
+  layouts `zip/ZipDir` parses. Zip64 and encryption are deliberately unsupported.
+- **IEEE 802.3 / ITU-T V.42 CRC-32** — the reflected polynomial `0xEDB88320` and
+  the standard `0xCBF43926` check value for `"123456789"`, both pinned in
+  `test/zip/ZipTest`.
+- Cross-validation, not code: `test/zip/ZipTest` builds archives with the seed
+  JDK's `java.util.zip`/`java.util.jar` writers and compares our reader against
+  them byte-for-byte.
+
 ## Concepts (not code) referenced
 
 - **Jikes RVM** and **JOE / bare-metal JVM** writeups — *ideas only* for the
@@ -75,3 +93,6 @@ logs what informed each piece so encodings and boot facts are auditable.
   mark-sweep: scan the stack/registers/statics for anything that looks like a
   heap pointer, no precise stack maps, non-moving. Our collector is written from
   scratch (size-in-status heap walk, free-list reuse).
+- **jzlib** (a pure-Java zlib) — *pointer only, no code read or ported.* joe-ng's
+  rule is that every line is ours (CLAUDE.md), so `zip/Inflate` is written from
+  RFC 1951; jzlib is noted here as a cross-check should a stream ever disagree.
