@@ -3797,8 +3797,13 @@ mid-demo. Its load list is the evidence that every piece ran on silicon rather t
 `clinit-lazy java/util/jar/Attributes$Name` and `clinit-lazy java/util/ImmutableCollections` (both tag-7
 allowances) fired, `ImmutableCollections$MapN` loaded (the `Map.copyOf` path that needed `canonInt`), and the
 guest-world `zip/{Inflate,Huff,ZipDir,Crc32}` demand-loaded alongside the image-baked copies -- the two-worlds
--one-source arrangement, live. Only `demo/ZipDemo`'s explicit per-entry CRC walk remains QEMU-only, and
-`ZipInputStream` itself is exercised here underneath `JarInputStream`. A program can ship as an ordinary jar on the RAMFS, and the VM
+-one-source arrangement, live. **`demo/ZipDemo` closes it: the decoder is byte-exact on hardware.** Every entry's CRC, computed ON THE PI by
+stock `java.util.zip.CRC32` over bytes our own inflater produced, matches `unzip -v` on the host --
+`META-INF/MANIFEST.MF` 78/`294d779e`, `app/Greeting.class` 1101/`86caf830`, `app/Main.class`
+1233/`da5812a8` -- and the manifest reads back as text. The demo drains each entry through a deliberately
+awkward 37-byte buffer, so that decode stopped and resumed mid-block and mid-LZ-copy dozens of times per
+entry: the mark/rewind and mirror-window machinery is what those CRCs are actually testing, and it is the
+one corner of the engine no other run stressed. The whole arc is now Pi-validated. A program can ship as an ordinary jar on the RAMFS, and the VM
 runs it: `/etc/init`'s `classpath=/lib/app.jar` line puts the archive on the class path, and `main=app/Main`
 launches straight out of it — the classes are inflated on the metal by joe-ng's own DEFLATE decoder, JIT'd,
 and run, with `app/Greeting` resolved out of the same archive as part of `app/Main`'s closure. Separately,

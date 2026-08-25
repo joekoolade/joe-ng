@@ -146,7 +146,9 @@ defines the minimum the assembler must encode.
     → `[main returned normally]`, boot battery clean. `demo/JarDemo` Pi-validated in the same session:
     `manifest mainClass=app.Main`, `crc=86caf830` (matches `unzip -v`), `Greeting.text() = hello, jar`,
     with `Attributes$Name`/`ImmutableCollections` clinits firing and the guest-world `zip/*` demand-loaded
-    beside the baked copies. Only `demo/ZipDemo`'s per-entry CRC walk is still QEMU-only.
+    beside the baked copies. `demo/ZipDemo` too: every entry's CRC, computed on the Pi over bytes our
+    inflater produced (drained through a 37-byte buffer, so the decode resumes mid-block/mid-LZ-copy
+    constantly), matches `unzip -v` byte-for-byte. WHOLE ARC PI-VALIDATED.
   - **Known gaps:** a `defineClass`'d class does not get its own vtable slots filled (a
     virtual self-call inside it hits the null-vtable guard; reflection and the `classpath=`
     route are fine); two classes defined in SEPARATE `defineClass` batches cannot link a
