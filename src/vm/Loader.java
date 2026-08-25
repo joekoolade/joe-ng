@@ -548,6 +548,25 @@ public final class Loader
         {
             return true;
         }
+        // java/util/jar/Attributes$Name.<clinit> ldc's Attributes$Name.class to hand to
+        // CDS.initializeFromArchive (overlaid to a no-op here -- metal has no class-data archive), which trips
+        // the tag-7 gate. It MUST run: it builds KNOWN_NAMES, the map every manifest attribute name is looked
+        // up in, and Name.of dereferences it unguarded -- a skipped initializer is an NPE on the first
+        // manifest header. The rest of the body is plain `new Name(...)` + HashMap + Map.copyOf.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/jar/Attributes$Name")))
+        {
+            return true;
+        }
+        // java/util/ImmutableCollections.<clinit> ldc's its own class for CDS.initializeFromArchive (a no-op
+        // overlay here) -- the tag-7 gate again. It MUST run: it seeds SALT32L (the hash mixer every MapN/SetN
+        // probe uses) from System.nanoTime and builds the EMPTY_* singletons. Skipped, SALT32L stays 0 and the
+        // EMPTY singletons stay null, and Map.copyOf(...) -- which java.util.jar.Attributes$Name's initializer
+        // calls -- spins in MapN's probe loop instead of failing. Everything it needs is wired: nanoTime is a
+        // provided native, CDS is overlaid.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/ImmutableCollections")))
+        {
+            return true;
+        }
         // A pervasive idiom is a <clinit> that ONLY disables assertions: `ldc X.class; invokevirtual
         // desiredAssertionStatus; ...; putstatic $assertionsDisabled` (many java.util.stream classes). Its lone
         // tag-7 ldc trips the gate below, so those <clinit>s were skipped -> $assertionsDisabled stayed false ->
@@ -838,8 +857,13 @@ public final class Loader
      */
     private static void ensureClinit(int reg)
     {
-        if (reg < 0 || clTab == null || clTab[reg] == null || clTab[reg].state >= RVMClass.ST_INITIALIZED)
+        if (reg < 0 || clTab == null || clTab[reg] == null)
         {
+            return;
+        }
+        if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
+        {
+            drainCtorInit(reg);                         // already initialized -- but see drainCtorInit
             return;
         }
         if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
@@ -875,9 +899,93 @@ public final class Loader
                 }
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
+                break;
+            }
+            i += 1;
+        }
+        drainCtorInit(reg);                             // ... then whatever its constructors actively use
+    }
+
+    // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
+    // notInit), so lzCompiling is false while they compile and the collection above never sees their
+    // getstatic/new sites -- which is how `new ZipInputStream(...)` reached `UTF_8.INSTANCE` before
+    // sun/nio/cs/UTF_8 had initialized, and read null. Recorded per OWNING class and fired when that class
+    // is initialized, walking the superclass chain: `new C` runs C's constructor AND every super
+    // constructor above it, so their active uses come due at the same moment.
+    private static final boolean CTOR_TRACE = false;
+    private static final int MAXCTORINIT = 8192;
+    private static int[] ctorOwner;
+    private static int[] ctorNeed;
+    private static int ctorInitN;
+
+    /** Record that the constructor being compiled (of the class currently in {@code g*}) uses {@code reg}. */
+    private static void noteCtorInit(int reg)
+    {
+        if (ctorOwner == null || gbase == 0L)
+        {
+            return;
+        }
+        if (ctorInitN >= MAXCTORINIT)
+        {
+            capHalt(Magic.bytes("MAXCTORINIT"), ctorInitN);   // silently dropping an edge = a null static later
+        }
+        int owner = classRegByName(gThisNameOff);
+        if (owner < 0 || owner == reg)
+        {
+            return;
+        }
+        int i = 0;
+        while (i < ctorInitN)
+        {
+            if (ctorOwner[i] == owner && ctorNeed[i] == reg)
+            {
                 return;
             }
             i += 1;
+        }
+        ctorOwner[ctorInitN] = owner;
+        ctorNeed[ctorInitN] = reg;
+        ctorInitN += 1;
+        if (CTOR_TRACE)
+        {
+            Uart.write(Magic.bytes("  ctorinit "));
+            printNameAt(clTab[owner].base, clTab[owner].nameOff);
+            Uart.write(Magic.bytes(" -> "));
+            printNameAt(clTab[reg].base, clTab[reg].nameOff);
+            Uart.putc(0x0A);
+        }
+    }
+
+    /** Initialize what {@code reg}'s constructors -- and those of every superclass -- actively use. Entries
+     *  are consumed as they fire, which is also what keeps the mutual recursion with {@link #ensureClinit}
+     *  finite. */
+    private static void drainCtorInit(int reg)
+    {
+        if (ctorOwner == null)
+        {
+            return;
+        }
+        int c = reg;
+        while (c >= 0 && clTab != null && clTab[c] != null)
+        {
+            if (CTOR_TRACE)
+            {
+                Uart.write(Magic.bytes("  ctordrain "));
+                printNameAt(clTab[c].base, clTab[c].nameOff);
+                Uart.putc(0x0A);
+            }
+            int i = 0;
+            while (i < ctorInitN)
+            {
+                if (ctorOwner[i] == c)
+                {
+                    int need = ctorNeed[i];
+                    ctorOwner[i] = -1;                  // consume BEFORE recursing
+                    ensureClinit(need);
+                }
+                i += 1;
+            }
+            c = clTab[c].superReg;
         }
     }
 
@@ -894,8 +1002,18 @@ public final class Loader
      *  before that method runs (JVMS 5.5: a static access or a {@code new} is an active use). */
     static void noteInitNeeded(int reg)
     {
-        if (!lzCompiling || reg < 0 || clTab == null || clTab[reg] == null
-                || clTab[reg].state >= RVMClass.ST_INITIALIZED || lzInitN >= MAXPENDINIT)
+        // NOT gated on the class's own state: a class with no <clinit> reaches ST_INITIALIZED at load, yet
+        // its constructors' active uses (recorded below) still come due the first time it is instantiated.
+        if (reg < 0 || clTab == null || clTab[reg] == null)
+        {
+            return;
+        }
+        if (!lzCompiling)
+        {
+            noteCtorInit(reg);                          // a load-time <init> compile: due when its class is used
+            return;
+        }
+        if (lzInitN >= MAXPENDINIT)
         {
             return;
         }
@@ -2393,6 +2511,9 @@ public final class Loader
         clinitPd = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
+        ctorOwner = new int[MAXCTORINIT];
+        ctorNeed = new int[MAXCTORINIT];
+        ctorInitN = 0;
         lzInitN = 0;
         clDepOff = new int[MAXDEP];
         clDepStart = new int[MAXBLOB];
@@ -3412,6 +3533,13 @@ public final class Loader
                 // = link-local scoped-address cache (ConcurrentHashMap), reached only under isLinkLocalAddress().
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/Exceptions"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/util/IPAddressUtil"))
+                // Jar signature verification: joe-ng reads archives, it does not authenticate them. Left
+                // loadable, JarInputStream's default verifying constructor drags in JarVerifier -> the whole
+                // sun.security provider closure (SunEC, BigDecimal, regex, streams) -- hundreds of classes for
+                // a code path an unsigned jar never runs. Denied, so `new JarInputStream(in, false)` works and
+                // a verifying one traps loudly instead of exploding the closure.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/jar/JarVerifier"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/logger/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/"))
@@ -6186,6 +6314,13 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
+        {
+            // There is no intern table on metal: every String is its own canonical instance, so intern() is
+            // identity. Callers use it to shrink allocation (java.util.jar.Attributes$Name) or to compare by
+            // ==; the latter would be wrong here, and no reached java.base code does it.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("intern")))             { return VM.identityAddr; }
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
@@ -8524,6 +8659,14 @@ public final class Loader
         {
             return gvTab[s].implBuf;                         // inherited from a superclass
         }
+        if (gvTab[s].implCode == 0L)
+        {
+            // No Code attribute: a NATIVE instance method. Its slot would stay 0 and a call through it would
+            // hit the null-vtable guard (an AIOOBE with no hint of what was missing) -- which is what
+            // `new Attributes$Name(...)` -> `String.intern()` did. Provided natives already have VM helpers;
+            // link one here so a VIRTUAL call reaches it, as invokestatic/invokespecial already do.
+            return nativeBufAt(gbase, gThisNameOff, gvTab[s].base, gvTab[s].name);
+        }
         return bufOf(gvTab[s].implCode);                     // this class's own method
     }
 
@@ -9259,7 +9402,7 @@ public final class Loader
     // @0 instead — untyped, never checkcast, distinguished by magnitude (<= MAX_RAW_ARRAY_TIB).
 
     /** java/lang/Object's Type (array super), or 0 if Object isn't loaded yet. */
-    private static long objectTypeAddr()
+    static long objectTypeAddr()
     {
         int i = 0;
         while (i < clCount)

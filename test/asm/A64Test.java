@@ -122,6 +122,9 @@ public final class A64Test
         T.eqWord("SXTB x0,w0",   0x93401C00, A64.sxtb(0, 0));
         T.eqWord("SXTH x0,w0",   0x93403C00, A64.sxth(0, 0));
         T.eqWord("UXTH w0,w0",   0x53003C00, A64.uxth(0, 0));
+        // SXTW = SBFM Xd,Xn,#0,#31 -- how an overflowed int is put back into its canonical sign-extended form.
+        T.eqWord("SXTW x0,w0",   0x93407C00, A64.sxtw(0, 0));
+        T.eqWord("SXTW x9,w9",   0x93407D29, A64.sxtw(9, 9));
         T.eqWord("CSET x0,EQ",   0x9A9F17E0, A64.cset(0, A64.EQ));
         T.eqWord("CSINV x0,x0,xzr,GE", 0xDA9FA000, A64.csinv(0, 0, 31, A64.GE));
 

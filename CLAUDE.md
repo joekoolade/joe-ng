@@ -110,6 +110,52 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
+- **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated.** `/etc/init` gained
+  `classpath=<path>`: the named RAMFS archive goes on the class path, and any class the
+  writer-baked directory lacks is inflated out of it on demand (`vm/JarFs` behind
+  `VM.dirBytes`/`dirLen`, positively AND negatively cached). `main=app/Main
+  classpath=/lib/app.jar` runs a program whose classes exist ONLY inside the archive.
+  - **Engine (`zip/`, JDK-free, written from RFC 1951 + APPNOTE.TXT):** `Inflate` is a
+    STREAMING, RESUMABLE raw-DEFLATE decoder (32 KiB mirror window so back-references
+    survive the caller taking the bytes; mark/rewind of the bit position so a half-read
+    Huffman code re-reads once more input arrives), `Huff` the canonical code table,
+    `ZipDir` the central-directory reader, `Crc32` the checksum. The SAME source is baked
+    into the image (for the loader) AND demand-loaded into the guest world (for the
+    overlays) — one decoder, no bridging native. `zip/` is on the demand-loadable prefix
+    list in `ImageBuilder.demandLoadable` for exactly that reason.
+  - **Stock API on top:** UNMODIFIED `ZipInputStream`/`InflaterInputStream`/`ZipEntry`/
+    `JarInputStream`/`JarEntry`/`Manifest`/`Attributes` run on metal. Overlaid only where
+    the stock class is a shell over native zlib or `java.nio.file`/`RandomAccessFile`:
+    `java/util/zip/{Inflater,CRC32,ZipUtils,ZipCoder,ZipFile}`, `java/util/jar/JarFile`,
+    `jdk/internal/misc/CDS`. `java/io/FileInputStream` now extends stock `InputStream`.
+    `demo/ZipDemo` walks a jar entry-by-entry with CRCs matching the host byte-for-byte;
+    `demo/JarDemo` does `JarInputStream`+`JarFile`+`Manifest` and loads a class out of the
+    jar with `defineClass`. `sun/security/` + `JarVerifier` are denylisted (an unsigned jar
+    never runs them; verifying would pull the whole provider closure) — construct
+    `new JarInputStream(in, false)`.
+  - **Three real VM bugs it uncovered** (all pre-existing, all fixed; PLAN.md "Jar / zip on
+    metal" has the detail): int arithmetic did not stay sign-extended on OVERFLOW, so
+    `idiv`/`irem` (64-bit SDIVs) saw huge positives — `Math.floorMod(String.hashCode(), n)`
+    went negative and `Map.copyOf` walked off `MapN`'s table (`Baseline.canonInt`);
+    constructor-time active uses were never initialized, because `<init>` compiles at load
+    time when the lazy-init collector is off (`new ZipInputStream` read a null
+    `UTF_8.INSTANCE`); and a NATIVE instance method left a 0 vtable slot, so `String.intern()`
+    hit the null-vtable guard as a nameless AIOOBE.
+  - **Pi run (2026-08-25, `core 166MHz`):** `classpath /lib/app.jar entries=5` → `launch app/Main`
+    → `load app/Greeting` → `hello from a jar` / `hello, world (7 consonants)` / `sum 0..10 = 55`
+    → `[main returned normally]`, boot battery clean. `demo/JarDemo` Pi-validated in the same session:
+    `manifest mainClass=app.Main`, `crc=86caf830` (matches `unzip -v`), `Greeting.text() = hello, jar`,
+    with `Attributes$Name`/`ImmutableCollections` clinits firing and the guest-world `zip/*` demand-loaded
+    beside the baked copies. `demo/ZipDemo` too: every entry's CRC, computed on the Pi over bytes our
+    inflater produced (drained through a 37-byte buffer, so the decode resumes mid-block/mid-LZ-copy
+    constantly), matches `unzip -v` byte-for-byte. WHOLE ARC PI-VALIDATED.
+  - **Known gaps:** a `defineClass`'d class does not get its own vtable slots filled (a
+    virtual self-call inside it hits the null-vtable guard; reflection and the `classpath=`
+    route are fine); two classes defined in SEPARATE `defineClass` batches cannot link a
+    cross-batch `new`/`invokevirtual`; int shift COUNTS mask to 6 bits, not 5.
+  - **Debug aid:** `JOENG_SYMMAP=1 make image` prints every image method's `[start,end)`, so
+    a bare PC from a QEMU `info registers` can be named — a constant PC is a `checkCast`/
+    `capHalt` spin.
 - **World-unification arc DONE (PRs #85–#94, all Pi-validated).** The two
   parallel java.base worlds — writer-baked (image TIBs/Types/statics) vs
   loader-demand-loaded (metal-built) — are collapsed into ONE class identity per

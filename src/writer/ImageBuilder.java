@@ -1158,6 +1158,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, w + 6, addr(symSrcWord[i]));
             writeLong(image, w + 8, addr(symLineWord[i]));
         }
+        // Debug aid (working agreements: "dump and diff image layouts"): with JOENG_SYMMAP set, print every
+        // image method's [start,end) so a bare PC from a QEMU `info registers` -- the only evidence a spin in
+        // image code leaves -- can be named without guessing.
+        if (System.getenv("JOENG_SYMMAP") != null)
+        {
+            for (int i = 0; i < symCount; i++)
+            {
+                String k = sizeWords.keyAt(i);
+                int base = wordOffset.get(k);
+                System.out.println(String.format("  symmap %08x %08x %s",
+                        addr(base), addr(base + sizeWords.get(k)), k));
+            }
+        }
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
@@ -1957,6 +1970,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             // (e.g. GenerifyStackTraces) runs as the manifest main. All VM-internal classes carry a package.
             if (n.startsWith("java/") || n.startsWith("jdk/") || n.startsWith("sun/") || n.startsWith("demo/")
                     || n.startsWith("org/")               // JUnit-lite shims (org/junit/...) for the JDK tests
+                    // zip/* is dual-world by design: the image-baked copy backs the class loader's jar
+                    // reading, and the SAME source is demand-loaded into the guest world so the
+                    // java.util.zip overlays can delegate to it. Ordinary bytecode, no intrinsics.
+                    || n.startsWith("zip/")
                     || !n.contains("/"))
             {
                 out.add(n);

@@ -475,16 +475,19 @@ public final class Baseline
         else if (op == 0x60 || op == 0x61)
         {
             binop(cb, BIN_ADD);
+            canonInt(cb, op == 0x60);
             return 1;
         }
         else if (op == 0x64 || op == 0x65)
         {
             binop(cb, BIN_SUB);
+            canonInt(cb, op == 0x64);
             return 1;
         }
         else if (op == 0x68 || op == 0x69)
         {
             binop(cb, BIN_MUL);
+            canonInt(cb, op == 0x68);
             return 1;
         }
         else if (op == 0x6C || op == 0x6D)
@@ -503,11 +506,13 @@ public final class Baseline
         {
             int r = opSlot(sp - 1);
             cb.emit(A64Enc.subReg(r, A64Enc.XZR, r));
+            canonInt(cb, op == 0x74);                     // -INT_MIN overflows back to INT_MIN
             return 1;
         }  // ineg/lneg
         else if (op == 0x78 || op == 0x79)
         {
             binop(cb, BIN_SHL);
+            canonInt(cb, op == 0x78);
             return 1;
         }  // ishl/lshl
         else if (op == 0x7A || op == 0x7B)
@@ -518,6 +523,7 @@ public final class Baseline
         else if (op == 0x7C)
         {
             iushr(cb);                                   // int >>> : zero-extend the (maybe sign-extended) 32-bit value first
+            canonInt(cb, true);                          // ... and re-sign-extend: `-1 >>> 0` is the int -1
             return 1;
         }  // iushr
         else if (op == 0x7D)
@@ -943,12 +949,40 @@ public final class Baseline
         {
             int r = localReg(slot);
             cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
+            cb.emit(A64Enc.sxtw(r, r));                    // iinc is an int op: keep it sign-extended (canonInt)
             return;
         }
         int r = SCRATCH;                                   // read-modify-write in the frame
         cb.emit(A64Enc.ldrx(r, 31, localMem(slot)));
         cb.emit(delta >= 0 ? A64Enc.addImm(r, r, delta) : A64Enc.subImm(r, r, -delta));
+        cb.emit(A64Enc.sxtw(r, r));
         cb.emit(A64Enc.strx(r, 31, localMem(slot)));
+    }
+
+    /**
+     * Re-establish the "an int lives sign-extended in its 64-bit register" invariant after an int operation
+     * that can overflow 32 bits ({@code iadd}/{@code isub}/{@code imul}/{@code ishl}/{@code ineg}, and
+     * {@code iushr}, whose zero-extended result may have bit 31 set).
+     *
+     * <p>Without this the invariant silently held only for values that never overflowed. Everything that masks
+     * -- {@code Integer.toString}, {@code &}, the 32-bit compares -- still looked right, so the breakage stayed
+     * invisible until something read the whole register: {@code idiv}/{@code irem} are 64-bit SDIVs, so an
+     * overflowed int arrived as a huge POSITIVE number instead of a negative one. {@code String.hashCode}
+     * overflows by construction, which made {@code Math.floorMod(hash, n)} return a negative index and sent
+     * {@code ImmutableCollections.MapN.probe} (under {@code Map.copyOf}) off the end of its table.
+     *
+     * <p>The long forms of the same opcodes pass {@code isInt = false} and emit nothing.
+     *
+     * <p>Not fixed here: an int shift COUNT is masked to 6 bits by the 64-bit shift instructions where the JVM
+     * masks to 5, so {@code x << 32} still answers 0 rather than {@code x}.
+     */
+    private void canonInt(CodeBuffer cb, boolean isInt)
+    {
+        if (isInt)
+        {
+            int r = opSlot(sp - 1);
+            cb.emit(A64Enc.sxtw(r, r));
+        }
     }
 
     /**

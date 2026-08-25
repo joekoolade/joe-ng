@@ -450,6 +450,12 @@ public final class A64
         return A64Enc.sxth(reg(rd), reg(rn));
     }
     /** {@code UXTH Wd, Wn} — zero-extend halfword (i2c). */
+    /** {@code SXTW Xd, Wn} — sign-extend the low 32 bits (an int's canonical form in a 64-bit register). */
+    public static int sxtw(int rd, int rn)
+    {
+        return A64Enc.sxtw(reg(rd), reg(rn));
+    }
+
     public static int uxth(int rd, int rn)
     {
         return A64Enc.uxth(reg(rd), reg(rn));

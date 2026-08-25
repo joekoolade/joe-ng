@@ -3777,6 +3777,117 @@ the likeliest thing to bite a longer-running program, and the honest fix is per-
 sweep floor's necessity is likewise asserted, not tested: nothing below the watermark was ever swept, so
 the boot stubs were never at risk in this run.
 
+## Jar / zip on metal (2026-08-25)
+
+**The goal, in the user's words: read jar and zip files with the classes in `java.util.jar`/`java.util.zip`,
+and load classes out of a jar.** Both work.
+
+**Pi-validated (2026-08-25) for the classpath route.** A real Pi 4 at `core 166MHz` boots the image, prints
+`classpath /lib/app.jar entries=5`, `launch app/Main`, pulls `load app/Greeting` out of the archive, and runs
+the program: `hello from a jar` / `hello, world (7 consonants)` / `sum 0..10 = 55` / `[main returned
+normally]`. Neither class is embedded anywhere in the image -- both were DEFLATE-compressed inside the jar
+until the loader inflated them on the metal. The boot battery is clean (`vtparity`/`itparity`/`typeadopt` all
+OK, `lifecycle OK 48`), and its array probes -- `new Integer[2] instanceof Integer[],Number[],Long[]=1,1,0`
+and `Integer[][] as Number[][]=1` -- independently exercise the covariance fix below. That run is also the
+broadest evidence for `canonInt`, which now touches every int add/sub/mul/shift in every compiled method.
+**`demo/JarDemo` is Pi-validated too**, and it is the run that covers the rest: `JarInputStream manifest
+mainClass=app.Main`, `JarFile getJarEntry app/Greeting.class size=1101 crc=86caf830` (matching `unzip -v`),
+`loaded app.Greeting from the jar`, `Greeting.text() = hello, jar`, `[main returned normally]`, with one GC
+mid-demo. Its load list is the evidence that every piece ran on silicon rather than being merely compiled in:
+`clinit-lazy java/util/jar/Attributes$Name` and `clinit-lazy java/util/ImmutableCollections` (both tag-7
+allowances) fired, `ImmutableCollections$MapN` loaded (the `Map.copyOf` path that needed `canonInt`), and the
+guest-world `zip/{Inflate,Huff,ZipDir,Crc32}` demand-loaded alongside the image-baked copies -- the two-worlds
+-one-source arrangement, live. **`demo/ZipDemo` closes it: the decoder is byte-exact on hardware.** Every entry's CRC, computed ON THE PI by
+stock `java.util.zip.CRC32` over bytes our own inflater produced, matches `unzip -v` on the host --
+`META-INF/MANIFEST.MF` 78/`294d779e`, `app/Greeting.class` 1101/`86caf830`, `app/Main.class`
+1233/`da5812a8` -- and the manifest reads back as text. The demo drains each entry through a deliberately
+awkward 37-byte buffer, so that decode stopped and resumed mid-block and mid-LZ-copy dozens of times per
+entry: the mark/rewind and mirror-window machinery is what those CRCs are actually testing, and it is the
+one corner of the engine no other run stressed. The whole arc is now Pi-validated. A program can ship as an ordinary jar on the RAMFS, and the VM
+runs it: `/etc/init`'s `classpath=/lib/app.jar` line puts the archive on the class path, and `main=app/Main`
+launches straight out of it — the classes are inflated on the metal by joe-ng's own DEFLATE decoder, JIT'd,
+and run, with `app/Greeting` resolved out of the same archive as part of `app/Main`'s closure. Separately,
+the stock streaming and random-access APIs run unmodified on top of the same engine.
+
+**The engine (`zip/`), written from RFC 1951 and APPNOTE.TXT.** `zip/Inflate` is a streaming, RESUMABLE raw
+DEFLATE decoder: compressed bytes arrive through `input()`, `inflate()` fills the caller's buffer and stops
+anywhere — mid-block, mid-symbol, mid-LZ-copy. Two mechanisms carry that: a 32 KiB mirror window, so a
+back-reference still resolves after the caller has taken the bytes away, and a mark/rewind of the bit
+position, so a Huffman code that ran out of input is simply re-read once more arrives. `zip/Huff` is the
+canonical code table (counts + symbols, walked one bit at a time — which is what makes stopping mid-code
+possible). `zip/ZipDir` parses the End Of Central Directory record and the central directory and serves
+entries by name; `zip/Crc32` is the checksum. All four are strictly JDK-free, so the SAME source both
+compiles into the image (for the class loader) and demand-loads into the guest world (for the overlays) —
+one decoder implementation, not two, and no VM native to bridge them. `test/zip/ZipTest` cross-validates
+against the seed JDK's own `java.util.zip`/`java.util.jar` writers: 61 checks, including 1-byte-in/1-byte-out
+streaming, stored blocks, HUFFMAN_ONLY, and data past the 32 KiB window.
+
+**What is overlaid and what is stock.** Stock and unmodified, demand-loaded from the embedded java.base:
+`ZipInputStream`, `InflaterInputStream`, `ZipEntry`, `ZipException`, `JarInputStream`, `JarEntry`,
+`Manifest`, `Attributes`. Overlaid, because the stock class is a shell over native zlib or over
+`java.nio.file`/`RandomAccessFile`: `java/util/zip/{Inflater,CRC32,ZipUtils,ZipCoder,ZipFile}`,
+`java/util/jar/JarFile`, plus `jdk/internal/misc/CDS` (no class-data archive here). `ZipUtils` is overlaid
+not for zlib but because its accessors read through `Unsafe.getIntUnaligned` and its initializer binds a
+`JavaNioAccess`; its DOS timestamps are read as UTC, since metal has no timezone database.
+`java/io/FileInputStream` now extends the stock `InputStream`, which is what lets
+`new ZipInputStream(new FileInputStream("/lib/app.jar"))` typecheck and run.
+
+**Signature verification is denylisted.** `new JarInputStream(in)` verifies by default, and `JarVerifier`
+drags in the whole `sun.security` provider closure — SunEC, BigDecimal, regex, streams, hundreds of classes
+for a path an unsigned jar never runs. `sun/security/` and `java/util/jar/JarVerifier` join the denylist, and
+the demo constructs `new JarInputStream(in, false)`.
+
+**Three VM bugs the arc uncovered, each real and each pre-existing.**
+
+*Int arithmetic did not stay canonical.* The baseline compiler's stated invariant is that an int lives
+sign-extended in its 64-bit register — `iushr` and `i2l`/`l2i` depend on it — but `iadd`/`isub`/`imul`/
+`ishl`/`ineg`/`iinc` emitted plain 64-bit ops, so an int that OVERFLOWED kept its bits above 31. Everything
+that masks still looked right (`Integer.toString`, `&`, the 32-bit compares), which is why this survived so
+long; `idiv`/`irem` are 64-bit SDIVs and saw a huge positive number instead of a negative int.
+`String.hashCode` overflows by construction, so `Math.floorMod(hash, n)` returned a NEGATIVE index and
+`ImmutableCollections.MapN.probe` — under `Map.copyOf`, under `java.util.jar.Attributes$Name`'s initializer —
+walked off its table. `Baseline.canonInt` now re-establishes the invariant after every int op that can
+overflow. Measured directly by `demo/DivDemo`: `(1<<30)+(1<<30)` printed as garbage with `% 60 = 8`; it now
+prints `-2147483648` with `% 60 = -8`, and `"Manifest-Version".hashCode()` reads 1003645754 with
+`floorMod(...,60) = 14` instead of `-14`. The remaining known gap: an int shift COUNT is masked to 6 bits by
+the 64-bit shift instructions where the JVM masks to 5, so `x << 32` answers 0 rather than `x`.
+
+*A constructor's active uses were never initialized.* `<init>` bodies compile at LOAD time (deliberately —
+see `notInit`), so `lzCompiling` is false while they compile and the collection that drives lazy
+initialization never saw their `getstatic`/`new` sites. `new ZipInputStream(...)` therefore read
+`sun/nio/cs/UTF_8.INSTANCE` before that class had initialized, and got null. Constructor-time uses are now
+recorded per OWNING class and fired when that class is instantiated, walking the superclass chain (a `new C`
+runs C's constructor and every super constructor above it). The subtle part: this must NOT be gated on the
+class's own init state — a class with no `<clinit>` reaches INITIALIZED at load, and gating there is what
+made the first version of the fix work for `new ZipInputStream` and fail for `new JarInputStream`.
+
+*A native instance method left a hole in the vtable.* A method with no Code attribute got a 0 vtable slot,
+and calling it hit the null-vtable guard — an `ArrayIndexOutOfBoundsException` naming nothing.
+`new Attributes$Name(...)` → `String.intern()` is the case that surfaced it. `slotBuf` now links provided
+natives into virtual slots the way `invokestatic`/`invokespecial` resolution already did; `String.intern` is
+identity here, there being no intern table.
+
+**Two initializers were let past the tag-7 `ldc Class` gate**, both for the same reason and both required:
+`java/util/jar/Attributes$Name` (it builds `KNOWN_NAMES`, which `Name.of` dereferences unguarded) and
+`java/util/ImmutableCollections` (it seeds `SALT32L` and the `EMPTY_*` singletons; skipped, `Map.copyOf`
+spins in `MapN`'s probe loop). Both only tripped the gate by handing their own class literal to
+`CDS.initializeFromArchive`, which the overlay makes a no-op.
+
+**Known limitations, in the order they should be fixed.** A class materialised by `defineClass` does not get
+its own vtable slots filled, so a virtual call inside it — `Greeting.consonants()` calling `text()` — hits
+the null-vtable guard; reflection into the same class works, and the same class reached through
+`classpath=` dispatches correctly, so this is specific to the defineClass path. Defining two classes in
+SEPARATE `defineClass` batches leaves a cross-batch `new`/`invokevirtual` between them unresolved. And
+`emitNew` silently falls back to the CURRENT class when its target is not registered yet, which turns a
+missing class into a wrong-typed object rather than an error — that is how a `zip/Inflate` that had not been
+made demand-loadable came back as an `Inflater`-shaped object and recursed until it NPE'd.
+
+**Debug aid added:** `JOENG_SYMMAP=1` makes the writer print every image method's `[start,end)`, so a bare PC
+from a QEMU `info registers` can be named. A constant PC in image code is usually a `checkCast` or `capHalt`
+spin; this arc's was `VM.checkCast`, from `Map.Entry[]` failing to widen to `Object[]` (an interface Type is
+a chain dead end — depth -1, no display, no superclass link — so the covariance walk could never reach
+Object). `typeAssignable` now answers that case directly.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
