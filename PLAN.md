@@ -3986,6 +3986,35 @@ spin; this arc's was `VM.checkCast`, from `Map.Entry[]` failing to widen to `Obj
 a chain dead end — depth -1, no display, no superclass link — so the covariance walk could never reach
 Object). `typeAssignable` now answers that case directly.
 
+## Full demo suite on hardware, after the jar arc (2026-08-25)
+
+The five changes of the jar/zip arc — the jar/zip engine (#169), the defineClass vtable fix (#170), the
+unresolvable-`new` trap (#171), the int shift-count mask (#172) and the forName stub fix (#173) — were each
+Pi-validated on their own demo. This is them together, on the whole battery: no `/etc/init`, so `VM.run`
+drives every demo, and on real silicon the WiFi finale runs too (QEMU has no CYW43, so that half has never
+been under emulation at all).
+
+**Clean, end to end, `core 166MHz`.** Zero `FAULT`, `CAP EXCEEDED`, `UNRESOLVED NEW`, `DENYLIST TRAP` or
+`STALE REGISTRY REF` across ~25 demands. SMP brought up 4 of 4 cores with 89 preemptions; the philosophers
+ran to `P4 done`; `ExcDemo`'s trace came back `79 -> 74 -> 69 -> 58` with correct line numbers; `WordCount`
+gave `words=25 distinct=16` with `the 5 / dog 3 / brown 2`. The GC markers match the values from before the
+arc exactly — `churnMB=625 live=32 intact=32`, `gc: collections=41`, `lisp: evals=600 result=610 stable=1`
+with 10 collections — ending at `(self-build retired; host writer only)`.
+
+**What this run tests that the per-change runs could not.** Every method in every demo is now compiled by a
+`Baseline` that emits `sxtw` after each int op and `AND #31` before each int shift; the four small demos
+exercised a handful of methods, this exercises thousands. Two results in the battery are the arithmetic
+changes checked against known-good values rather than against themselves: `Math.floorMod(-7,3) = 2` and
+`floorMod(7,-3) = -2` (canonicalization), and `Integer.rotateLeft(1,4) = 0x10  PASS` (shift masking).
+`Math.deep10(1..10) = 385` also still holds, which is the >8-argument path from #167.
+
+**And the WiFi finale, which is the part emulation cannot reach.** Firmware upload, scan, WPA2-PSK join, the
+full four-way handshake (`eapol msg1` -> `ptk derived` -> `msg2 sent` -> `msg3 MIC ok` -> `GTK unwrapped` ->
+`msg4 sent` -> `keys installed`), DHCP to 192.168.1.247, ARP, ping, DNS, TCP, and `HTTP/1.1 200 OK` with the
+full 828-byte body. The WPA2 supplicant is our own crypto stack running through the same recompiled
+arithmetic as everything else — a PTK derived with a mis-masked shift would fail the MIC check, so `msg3 MIC
+ok` is a real test of the shift fix, not merely a demo that happens to pass.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
