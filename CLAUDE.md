@@ -110,7 +110,7 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
-- **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated (classpath route).** `/etc/init` gained
+- **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated.** `/etc/init` gained
   `classpath=<path>`: the named RAMFS archive goes on the class path, and any class the
   writer-baked directory lacks is inflated out of it on demand (`vm/JarFs` behind
   `VM.dirBytes`/`dirLen`, positively AND negatively cached). `main=app/Main
@@ -143,8 +143,10 @@ defines the minimum the assembler must encode.
     hit the null-vtable guard as a nameless AIOOBE.
   - **Pi run (2026-08-25, `core 166MHz`):** `classpath /lib/app.jar entries=5` → `launch app/Main`
     → `load app/Greeting` → `hello from a jar` / `hello, world (7 consonants)` / `sum 0..10 = 55`
-    → `[main returned normally]`, boot battery clean. `demo/ZipDemo`/`demo/JarDemo` (the stock-API
-    overlays) are still QEMU-only.
+    → `[main returned normally]`, boot battery clean. `demo/JarDemo` Pi-validated in the same session:
+    `manifest mainClass=app.Main`, `crc=86caf830` (matches `unzip -v`), `Greeting.text() = hello, jar`,
+    with `Attributes$Name`/`ImmutableCollections` clinits firing and the guest-world `zip/*` demand-loaded
+    beside the baked copies. Only `demo/ZipDemo`'s per-entry CRC walk is still QEMU-only.
   - **Known gaps:** a `defineClass`'d class does not get its own vtable slots filled (a
     virtual self-call inside it hits the null-vtable guard; reflection and the `classpath=`
     route are fine); two classes defined in SEPARATE `defineClass` batches cannot link a

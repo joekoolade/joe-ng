@@ -3790,8 +3790,15 @@ until the loader inflated them on the metal. The boot battery is clean (`vtparit
 OK, `lifecycle OK 48`), and its array probes -- `new Integer[2] instanceof Integer[],Number[],Long[]=1,1,0`
 and `Integer[][] as Number[][]=1` -- independently exercise the covariance fix below. That run is also the
 broadest evidence for `canonInt`, which now touches every int add/sub/mul/shift in every compiled method.
-STILL QEMU-ONLY: `demo/ZipDemo` and `demo/JarDemo`, i.e. the stock-API overlays, the `Attributes$Name` /
-`ImmutableCollections` initializer allowances, the `String.intern` vtable link, and the `Map.copyOf` path. A program can ship as an ordinary jar on the RAMFS, and the VM
+**`demo/JarDemo` is Pi-validated too**, and it is the run that covers the rest: `JarInputStream manifest
+mainClass=app.Main`, `JarFile getJarEntry app/Greeting.class size=1101 crc=86caf830` (matching `unzip -v`),
+`loaded app.Greeting from the jar`, `Greeting.text() = hello, jar`, `[main returned normally]`, with one GC
+mid-demo. Its load list is the evidence that every piece ran on silicon rather than being merely compiled in:
+`clinit-lazy java/util/jar/Attributes$Name` and `clinit-lazy java/util/ImmutableCollections` (both tag-7
+allowances) fired, `ImmutableCollections$MapN` loaded (the `Map.copyOf` path that needed `canonInt`), and the
+guest-world `zip/{Inflate,Huff,ZipDir,Crc32}` demand-loaded alongside the image-baked copies -- the two-worlds
+-one-source arrangement, live. Only `demo/ZipDemo`'s explicit per-entry CRC walk remains QEMU-only, and
+`ZipInputStream` itself is exercised here underneath `JarInputStream`. A program can ship as an ordinary jar on the RAMFS, and the VM
 runs it: `/etc/init`'s `classpath=/lib/app.jar` line puts the archive on the class path, and `main=app/Main`
 launches straight out of it — the classes are inflated on the metal by joe-ng's own DEFLATE decoder, JIT'd,
 and run, with `app/Greeting` resolved out of the same archive as part of `app/Main`'s closure. Separately,
