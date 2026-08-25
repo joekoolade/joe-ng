@@ -3246,12 +3246,30 @@ deterministic; it is the data heap and GC timing that vary between the two.
 
 **A pre-existing bug this surfaced: `demo/MathIntDemo.deep10` never worked.** Its printed value moved
 (`338371485` -> `338444365`) and neither is the 385 its own source comment specifies (`sum k*k, k=1..10`).
-The loader convention passes int args in x1..x8, so `deep10`'s NINTH and TENTH arguments are never passed and
-the method sums whatever those registers hold; changing when bodies compile changed the garbage. Its
-neighbours confirm the diagnosis -- `deep8(1..8) = 204` and `deepExpr(3) = 1224` are both exactly right, and
-only the 10-arg case is wrong. The demo asserts nothing, so it printed a stable-looking wrong answer whose
-stability was an accident of compilation order. Fix is independent of this arc: either extend the calling
-convention past 8 int args, or make the demo check 385 and fail loudly.
+Its neighbours localise it -- `deep8(1..8) = 204` and `deepExpr(3) = 1224` are both exactly right, so only
+the 10-arg case is wrong. The demo asserts nothing, so it printed a stable-looking wrong answer whose
+stability was an accident of compilation order.
+
+**The first explanation recorded here was wrong** and is corrected below, because getting it wrong is the
+instructive part. It said: "the loader convention passes int args in x1..x8, so the 9th and 10th are never
+passed." That reads plausibly -- it even predicts why `deep8` works and `deep10` does not -- and it is false.
+The convention passes args in x0..x15 and is fine. What broke was the LAZY DISPATCH PATH corrupting it:
+
+* the deferral stub emitted `x9 = idx`, `x10 = tramp`, `br x10`, destroying the 10th argument *before the
+  trampoline ran*; and
+* `Loader.buildLazyTramp` saved only x0..x7 while running the WHOLE compiler before its tail-branch, so
+  arguments 9 and up did not survive. `ImageBuilder.stubMethod` had the identical defect around
+  `VM.bakeResolve`.
+
+8 is where the trampolines' SAVE SET ended, not where the convention ended -- which is why the wrong
+explanation fit the evidence exactly. Fixed in PR #167 (Pi-validated): stub scratch moved to x16/x17,
+both trampolines preserve x0..x15, and `MAX_ARG_REGS = 16` with `FAIL_ARG_COUNT` now fails at compile time
+on both the caller and callee side instead of computing garbage. `deep10 = 385` on hardware; arena peak
+`0x211EAA0` -> `0x211EAC8`, the larger trampoline, once.
+
+**The lesson, twice over in one arc:** a mechanism that explains the evidence is not thereby the mechanism.
+Both times the fix came from reading the actual call path rather than reasoning from a plausible model --
+here `buildLazyTramp`, earlier `runClinit`.
 
 **Worth keeping:** identical `collections` is the load-bearing number. It says the win is fewer code bytes
 emitted, not a different allocation rhythm — the arena fell while GC behaviour stayed put. And the process
