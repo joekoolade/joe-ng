@@ -2766,7 +2766,7 @@ cause fixed it ships: `Heap.allocSinceGc` accumulates, and `volumeTrigger()` col
 | peak small heap | 23.38 MB | **12.16 MB** (−48%) |
 | peak large region | 44.74 MB | **16.96 MB** (−62%) |
 | collections | 11 | 41 |
-| code arena high-water | 0x28053A0 | **unchanged** |
+| ~~code arena high-water~~ | ~~0x28053A0~~ | ~~unchanged~~ (VOID — see below) |
 
 Two traps, both caught only by measuring a quantity against a baseline rather than by a clean run:
 
@@ -2777,20 +2777,47 @@ Two traps, both caught only by measuring a quantity against a baseline rather th
    same call is live only in a register the sweep may not scan — allocate-black, the very bug class this
    whole arc was about.
 
-The code arena not moving re-confirms the law from the fragmentation arc below: its high-water is one burst
-of demand *between* collections, not steady accumulation, so no collection-time mechanism reaches it. The
-data heaps are what collecting sooner reaches. **This is the fifth confirmation of that law, and the
-cleanest:** the arena high-water came out byte-identical on QEMU and hardware (`0x28053A0` both) while
-collections went 11 -> 41 and both data heaps halved. Note that this makes the trigger a *collection-time*
-mechanism like the trim, coalescing and the split floor before it — so it does not license compaction,
-which is a mechanism of the same class. The untried levers remain the two named below: collecting DURING a
-batch, or compiling less code per batch.
+**CORRECTION (2026-08-24): the arena row above was never a measurement.** `Loader.codeHeapHigh` is not a
+peak — it is seeded to `codeHeapMark + CODE_ZERO_SPAN` (8 MiB) as the re-zeroing bound and only rises if the
+arena exceeds 8 MiB, which it never has. `0x28053A0` is exactly `0x20053A0 + 8 MiB`. Both sides of that row
+were the same constant whatever the arena did. Three claims rested on it and are withdrawn:
+
+* the row itself ("unchanged");
+* "**the fifth confirmation of that law, and the cleanest** ... byte-identical on QEMU and hardware" — a
+  constant is byte-identical on every platform by construction, so this was not weak evidence but *no*
+  evidence, and calling it the cleanest inverted the truth;
+* "the hardware numbers matched the QEMU projection to the digit (`high=0x28053A0`)" — that digit was free.
+
+Trap 1 below survives at half strength: the inert first version was caught by *collections* staying at 11;
+the "same high-water" half of that observation was vacuous.
+
+**The experiment, actually run (2026-08-24, `Heap.codePeak` now real).** Identical build, one knob:
+
+| | trigger off | trigger 16 MB |
+|---|---|---|
+| collections | 11 | **41** |
+| arena peak | `0x21201A0` (1,158,528 B) | **`0x211EAC8`** (1,152,680 B) |
+| final large region | `0x2401000` (37.8 MB) | **`0xB75000`** (11.5 MB) |
+| `zeroBound` (the old `high`) | `0x2805420` | `0x2805420` |
+
+**3.7x the collections moves the arena high-water by 0.50%, while the large region falls 70%.** That is the
+law — its high-water is one burst of demand *between* collections, so no collection-time mechanism reaches
+it; the data heaps are what collecting sooner reaches. It is now measured rather than assumed, and the old
+"unchanged" was directionally right for the wrong reason: the true delta is small but nonzero, and exact
+equality was an artifact of reading a constant. The identical `zeroBound` across both runs is the direct
+proof of what that field actually tracks.
+
+Note this makes the trigger a *collection-time* mechanism like the trim, coalescing and the split floor
+before it — so it does not license compaction, which is of the same class. The untried levers remain the two
+named below: collecting DURING a batch, or compiling less code per batch. (Since settled: the second one
+paid, twice — see the `<clinit>` section above.)
 
 **Pi-validated on merged `main` (8468aad), 2026-08-24** — the shipped 16 MB configuration, full demo suite,
 clean end to end: `words=25 distinct=16`, `churnMB=625 live=32 intact=32`, Lisp `evals=600 result=610
 stable=1`, WiFi bring-up -> WPA2-PSK join -> DHCP -> DNS -> **HTTP 200 OK** from example.com, with no
 `TRAP` / `FAULT` / `InternalError` / `BAD THROW` anywhere. The hardware numbers matched the QEMU projection
-to the digit (`top=0xC297E0`, `largeTop=0x10F7000`, `collections=41`, `high=0x28053A0`).
+to the digit (`top=0xC297E0`, `largeTop=0x10F7000`, `collections=41`) — but NOT `high=0x28053A0`, which was
+the constant described in the correction above and agreed for free.
 
 `compileInFlight` from the earlier WIP was **not** shipped: its justification ("a 12 KB `String.getBytes`
 body freed at collection 7 and executed at collection 30") is #146's signature, and dense testing at 5 MB —
