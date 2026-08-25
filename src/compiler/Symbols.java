@@ -76,6 +76,7 @@ public interface Symbols
     int UNPARK = 40;            // vm/VM.unpark(J)V             — LockSupport.unpark
     int NEW_ASE = 41;           // vm/VM.newAse()J    — a java/lang/ArrayStoreException (aastore type mismatch)
     int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(JJ)I — 1 if a value may be aastore'd into an array, else 0
+    int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)V — `new` of a class the loader cannot resolve (halts)
 
     /** Emit a {@code BL} to the method at Methodref/InterfaceMethodref index {@code methodCp}. */
     void call(CodeBuffer cb, int methodCp);
@@ -193,6 +194,12 @@ public interface Symbols
     int fieldOffset(int fieldCp);
 
     /** Scalar allocation size (bytes) of an instance of the class at {@code classCp} (for {@code new}). */
+    /**
+     * Scalar instance size of the class at {@code classCp}, or a NEGATIVE value when the class cannot be
+     * resolved: {@code -(site + 1)}, where {@code site} identifies the unresolved `new` for
+     * {@link #NEW_UNRESOLVED} to name at runtime. Returning a size for an unresolvable class is what let a
+     * `new` quietly produce an object carrying the WRONG class's TIB (see Baseline.lowerNew).
+     */
     int objectSize(int classCp);
 
     /** Vtable slot of the virtual method at Methodref index {@code methodCp}. */

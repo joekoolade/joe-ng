@@ -10021,13 +10021,92 @@ public final class Loader
     {
         int r = classRegOf(classIdx);
         noteInitNeeded(r);                              // `new C` is an active use of C (JVMS 5.5)
-        return r >= 0 ? clTab[r].tib : gTib;
+        return r >= 0 ? clTab[r].tib : gTib;            // unregistered => the SELF case (objectSizeOf traps the rest)
     }
 
-    /** Scalar instance size (header + one 8-byte slot per field) of class {@code classIdx}. */
+    /** True if the {@code Class} entry {@code classIdx} names the class being compiled. */
+    private static boolean selfClassAt(int classIdx)
+    {
+        return utf8Eq(gcp[u2(gbase + gcp[classIdx])], gThisNameOff);
+    }
+
+    // Unresolved-`new` sites: a class named by a `new` that is neither registered nor the class being
+    // compiled. Recorded (not halted on) because every real instance is a DENYLISTED class on a branch that
+    // is never taken; the site index is baked into the trap call so the runtime can name the class if the
+    // branch ever IS taken. Small by construction -- a whole jar batch produces about five.
+    private static final int MAXUNRES = 256;
+    private static long[] unresBase;
+    private static int[] unresOff;
+    private static int unresN;
+
+    /** Record the class named by {@code classIdx} as an unresolved `new` target; its site index. */
+    private static int unresolvedNewSite(int classIdx)
+    {
+        int off = gcp[u2(gbase + gcp[classIdx])];
+        if (unresBase == null)
+        {
+            unresBase = new long[MAXUNRES];
+            unresOff = new int[MAXUNRES];
+            unresN = 0;
+        }
+        int i = 0;
+        while (i < unresN)
+        {
+            if (unresBase[i] == gbase && unresOff[i] == off)
+            {
+                return i;
+            }
+            i += 1;
+        }
+        if (unresN >= MAXUNRES)
+        {
+            return 0;                                   // full: the trap still fires, it just names site 0
+        }
+        unresBase[unresN] = gbase;
+        unresOff[unresN] = off;
+        unresN += 1;
+        return unresN - 1;
+    }
+
+    /**
+     * The {@code NEW_UNRESOLVED} trap fired: a `new` whose class the loader could not resolve was actually
+     * EXECUTED. Name the class and the calling method, then halt -- there is no correct object to return, and
+     * the old behaviour (an instance carrying an unrelated class's TIB) corrupts silently instead.
+     */
+    static void reportUnresolvedNew(long site, long pc)
+    {
+        Uart.write(Magic.bytes("\nUNRESOLVED NEW: "));
+        int i = (int) site;
+        if (unresBase != null && i >= 0 && i < unresN)
+        {
+            printNameAt(unresBase[i], unresOff[i]);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<site "));
+            VM.printDec(i);
+            Uart.write(Magic.bytes(">"));
+        }
+        Uart.write(Magic.bytes("\n  at "));
+        printFrameAt(pc);
+        Uart.putc(0x0A);
+        while (true) { Magic.wfe(); }
+    }
+
+    /**
+     * Scalar instance size (header + one 8-byte slot per field) of class {@code classIdx}, or
+     * {@code -(site + 1)} when the class is neither registered nor the class being compiled -- see
+     * {@link Symbols#objectSize}. The unregistered-but-SELF case is real (a class `new`ing itself before its
+     * own registration completes) and keeps the {@code gifCount} size; anything else used to take that same
+     * path and silently produce an object of the wrong type.
+     */
     static int objectSizeOf(int classIdx)
     {
         int r = classRegOf(classIdx);
+        if (r < 0 && !selfClassAt(classIdx))
+        {
+            return -(unresolvedNewSite(classIdx) + 1);
+        }
         int fields = r >= 0 ? clTab[r].fieldCount : gifCount;
         return 16 + fields * 8;
     }

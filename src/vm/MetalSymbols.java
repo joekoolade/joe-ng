@@ -447,6 +447,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.arrayStoreOkAddr;
         }
+        if (helper == Symbols.NEW_UNRESOLVED)
+        {
+            return VM.newUnresolvedAddr;
+        }
         return VM.unwindAddr;                       // UNWIND
     }
 

@@ -460,6 +460,20 @@ public final class VM
      * untyped/raw array, a primitive-element array, or {@code value} is an instance of the array's element
      * type), 0 = no (the JIT then throws {@link #newAse}). Mirrors the JVM's covariant array-store check.
      */
+    /**
+     * {@code NEW_UNRESOLVED}: a `new` of a class the loader could not resolve was executed. Delegates to the
+     * loader, which holds the site table and can name the class; it does not return.
+     */
+    static void newUnresolved(long site)
+    {
+        long lr = Magic.readLR();                      // FIRST op: x30 = the `new` site + 4 (denylistTrap's idiom)
+        if (site < 0L)
+        {
+            return;                                    // boot force-compile probe: make the helper reachable only
+        }
+        Loader.reportUnresolvedNew(site, lr - 4L);
+    }
+
     static int arrayStoreOk(long array, long value)
     {
         if (value == 0L)
@@ -637,6 +651,7 @@ public final class VM
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
+        if (newUnresolvedAddr == 0L) { newUnresolved(-1L); }          // `new` of an unresolvable class (halts)
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
@@ -1780,6 +1795,7 @@ public final class VM
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
+    static long newUnresolvedAddr;     // VM.newUnresolved(J)V — an executed `new` of an unresolvable class
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
