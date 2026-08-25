@@ -3907,9 +3907,32 @@ A defineClass blob is program-supplied and small, so rooting all of it is cheap;
 pulled by name is not. A virtual call inside a forName-loaded class that nothing else reaches would still
 find a zero slot.
 
-**Also still open:** `emitNew` silently falls back to the CURRENT class when its target is not registered
-yet, which turns a missing class into a wrong-typed object rather than an error — that is how a `zip/Inflate`
-that had not been made demand-loadable came back as an `Inflater`-shaped object and recursed until it NPE'd.
+**The `emitNew` fallback, fixed by measuring it first.** `objectSizeOf`/`tibOfClass` fell back to the CURRENT
+class when a `new`'s target was not registered, so a missing class produced an object carrying an unrelated
+class's TIB — it passed the wrong `instanceof` and dispatched into the wrong vtable, silently. That is how a
+`zip/Inflate` which had not yet been made demand-loadable came back as an `Inflater`-shaped object and
+recursed into itself until it NPE'd.
+
+The obvious fix — halt at compile time — would have been wrong, and a measurement said so before any code
+changed. Instrumenting the fallback across a full jar batch found **18 sites over 5 classes, every one a
+DENYLISTED class on a branch that is never taken**: `MalformedInputException`/`UnmappableCharacterException`
+in `String` (the charset coder fallback), `AssertionError` in `StrictMath`, `JarVerifier` and
+`ManifestEntryVerifier` in `JarInputStream`. Those sites are correct as they stand; failing the compile
+would have killed boots that work.
+
+So the failure moved to where the information is *and* where it is safe: the unresolved case is now
+distinguished from the legitimate one (a class `new`ing ITSELF before its own registration completes, which
+keeps the old fallback), `objectSize` returns `-(site + 1)` for it, and `Baseline.lowerNew` emits a call to
+the new `NEW_UNRESOLVED` helper in place of the allocation. Reached, it halts naming the class and the source
+line; unreached, it costs nothing:
+
+    UNRESOLVED NEW: java/nio/charset/MalformedInputException
+      at demo/UnresolvedNewDemo.main(UnresolvedNewDemo.java:21)
+
+`demo/UnresolvedNewDemo` is the regression test, and it is manifest-only by necessity — it is expected to
+HALT, so it can never join the boot suite; the pass condition is the message, not a clean exit. The suite and
+the jar demos run unchanged with all 18 traps armed, which is the evidence that none of them is live.
+The writer side needed no change: its `objectSize` resolves through `ClassResolver` and already threw.
 
 **Debug aid added:** `JOENG_SYMMAP=1` makes the writer print every image method's `[start,end)`, so a bare PC
 from a QEMU `info registers` can be named. A constant PC in image code is usually a `checkCast` or `capHalt`

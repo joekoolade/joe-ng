@@ -1283,6 +1283,19 @@ public final class Baseline
             expectEmpty(Symbols.SITE_NEW);                                   // frameless: nowhere to spill
         }
         int size = symbols.objectSize(classIndex);
+        if (size < 0)
+        {
+            // The class cannot be resolved. Allocating anyway is what the loader used to do -- it fell back to
+            // the CURRENT class's TIB, so `new Missing()` returned an object of an unrelated type that passed
+            // the wrong instanceof checks and dispatched into the wrong vtable, with nothing said. Every such
+            // site in practice is a `new` of a DENYLISTED class on a branch that is never taken (a charset
+            // coder exception, an AssertionError, a jar verifier), so failing here at COMPILE time would kill
+            // boots that are correct; this traps only if the site is actually reached, and names the class.
+            cb.emitAll(A64Enc.loadImm64(0, -size - 1));              // x0 = the site the loader recorded
+            symbols.callHelper(cb, Symbols.NEW_UNRESOLVED);          // does not return
+            cb.emit(A64Enc.movReg(pushReg(), 0));                    // unreachable; keeps the operand stack shape
+            return;
+        }
         cb.emitAll(A64Enc.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
         spillLive(cb);                                            // Heap.alloc clobbers x9..
         symbols.callHelper(cb, Symbols.HEAP_ALLOC);               // x0 = object base
