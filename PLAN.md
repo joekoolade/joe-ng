@@ -3229,7 +3229,7 @@ keep testing `clinitEntry[i]`, which is exactly right — they want compiled ent
 Lifetime is unchanged and needs no new pin: `clinitEntry` is a heap `long[]`, so the conservative root scan
 sees the entry address and keeps the block. An uncompiled slot holds 0 and pins nothing, which is correct.
 
-**Result (QEMU full suite, 24 batches):**
+**Result (full suite, 24 batches — QEMU and then Pi-validated, PR #165):**
 
 | | before | after |
 |---|---|---|
@@ -3240,7 +3240,18 @@ sees the entry address and keeps the block. An uncompiled slot holds 0 and pins 
 
 Everything else is unchanged: all 24 batches, `words=25 distinct=16`, `churnMB=625 live=32 intact=32`,
 `lisp: evals=600 result=610 stable=1`, `DANGLING=0`/`WRONGTGT=0` and `compactPlan ok=1`/`UNMAPPED=0` in every
-batch, zero halts, ending at `(self-build retired; host writer only)`.
+batch, zero halts, ending at `(self-build retired; host writer only)`. The Pi run reproduces the arena peak
+to the byte (`0x211EAA0`) and `edges n=858` exactly — unsurprising once stated, since what gets compiled is
+deterministic; it is the data heap and GC timing that vary between the two.
+
+**A pre-existing bug this surfaced: `demo/MathIntDemo.deep10` never worked.** Its printed value moved
+(`338371485` -> `338444365`) and neither is the 385 its own source comment specifies (`sum k*k, k=1..10`).
+The loader convention passes int args in x1..x8, so `deep10`'s NINTH and TENTH arguments are never passed and
+the method sums whatever those registers hold; changing when bodies compile changed the garbage. Its
+neighbours confirm the diagnosis -- `deep8(1..8) = 204` and `deepExpr(3) = 1224` are both exactly right, and
+only the 10-arg case is wrong. The demo asserts nothing, so it printed a stable-looking wrong answer whose
+stability was an accident of compilation order. Fix is independent of this arc: either extend the calling
+convention past 8 int args, or make the demo check 385 and fail loudly.
 
 **Worth keeping:** identical `collections` is the load-bearing number. It says the win is fewer code bytes
 emitted, not a different allocation rhythm — the arena fell while GC behaviour stayed put. And the process
