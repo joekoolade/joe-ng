@@ -2584,6 +2584,7 @@ public final class Loader
         dpOff = new int[MAXDEP];
         pdLen = new int[MAXBLOB];
         gEntryBlob = 0L;                                 // no reachability mark unless a caller sets an entry
+        gRootBlob = 0L;
         markActive = 0;
         reachCode = new long[MAXREACH];
         reachN = 0;
@@ -2714,6 +2715,7 @@ public final class Loader
     // parseInt's String.format paths, ...). Without an entry set, everything compiles (unchanged behaviour).
     private static final int MAXREACH = 8192;
     private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
+    private static long gRootBlob;                       // a defineClass'd blob: EVERY method is a root (see rootBlob)
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
     private static long[] reachCode;                     // bytecode addresses of the reachable methods
@@ -2725,6 +2727,20 @@ public final class Loader
         gEntryBlob = blobBytes;
         gEntryName = name;
         gEntryDesc = desc;
+    }
+
+    /**
+     * Mark a whole blob as a reachability ROOT: every method it declares is seeded, and the class counts as
+     * instantiated. This is what {@code ClassLoader.defineClass} means -- the bytes come from the program, so
+     * nothing already loaded calls into the class and RTA has no way to see who will. Marked from the entry
+     * method only, the closure reaches NONE of it, {@link #compileClass} prunes every method, and
+     * {@link #fillTib} then fills a vtable of zeros: the class loads, reflection into it works (that resolves
+     * through the method registry), and the first virtual call inside it hits the null-vtable guard as a
+     * bare {@code ArrayIndexOutOfBoundsException}.
+     */
+    static void rootBlob(long blobBytes)
+    {
+        gRootBlob = blobBytes;
     }
 
     /**
@@ -2814,6 +2830,7 @@ public final class Loader
         instN = 0;
         parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
         addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
+        seedRootBlob();                                 // a defineClass'd class: all of it is a root
         seedAllNamed(Magic.bytes("run"), Magic.bytes("()V"));   // trampoline entry (Runnable.run)
         // Each round is two bounded passes over the blobs (so the const pool is parsed O(blobs) times, not
         // per-ref): collect the call-site refs of every reachable method, then mark each ref's target(s).
@@ -3289,6 +3306,45 @@ public final class Loader
             parseForMethods(pdBase[b], pdLen[b]);
             grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
             b += 1;
+        }
+        return grew;
+    }
+
+    /**
+     * Seed every method of the {@link #rootBlob root blob} (a class defined from supplied bytes), and flag it
+     * instantiated. Both halves are needed: seeding the methods is what gives them deferral stubs and so a
+     * filled vtable, and the instantiated flag is what lets {@link #resolveVirtuals} mark the INHERITED
+     * virtuals it calls up its superclass chain -- RTA infers instantiation from a `new` site, and the only
+     * `new` for a defined class is a later reflective one it cannot see.
+     */
+    private static boolean seedRootBlob()
+    {
+        if (gRootBlob == 0L)
+        {
+            return false;
+        }
+        boolean grew = false;
+        parseForMethods(gRootBlob, blobLenOf(gRootBlob));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            grew = addReach(findCode(gbase, p + 8, attrs)) || grew;   // 0 for a native/abstract method
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        int i = 0;
+        while (i < pdCount)
+        {
+            if (pdBase[i] == gRootBlob && !pdInstantiated[i])
+            {
+                pdInstantiated[i] = true;
+                grew = true;
+            }
+            i += 1;
         }
         return grew;
     }
@@ -3796,7 +3852,9 @@ public final class Loader
             i += 1;
         }
         addBlob(blob, len);
-        entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // seed reachability root (may be absent)
+        rootBlob(blob);                                 // EVERY method is a root: nothing loaded calls into a
+                                                        //   class the program just handed us (see rootBlob)
+        entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // enables the mark; <clinit> may be absent
         loadAll();
         int ci = 0;                                     // find the class we just added by its unique blob base
         while (ci < clCount)
@@ -5041,6 +5099,7 @@ public final class Loader
                                                         //   checkcast/clone a concat String's value
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
+        gRootBlob = 0L;
         pendBase = null;                                // free the mark's large scratch arrays for the GC
         pendClass = null;
         pendName = null;

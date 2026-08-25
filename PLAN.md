@@ -3873,14 +3873,36 @@ identity here, there being no intern table.
 spins in `MapN`'s probe loop). Both only tripped the gate by handing their own class literal to
 `CDS.initializeFromArchive`, which the overlay makes a no-op.
 
-**Known limitations, in the order they should be fixed.** A class materialised by `defineClass` does not get
-its own vtable slots filled, so a virtual call inside it — `Greeting.consonants()` calling `text()` — hits
-the null-vtable guard; reflection into the same class works, and the same class reached through
-`classpath=` dispatches correctly, so this is specific to the defineClass path. Defining two classes in
-SEPARATE `defineClass` batches leaves a cross-batch `new`/`invokevirtual` between them unresolved. And
-`emitNew` silently falls back to the CURRENT class when its target is not registered yet, which turns a
-missing class into a wrong-typed object rather than an error — that is how a `zip/Inflate` that had not been
-made demand-loadable came back as an `Inflater`-shaped object and recursed until it NPE'd.
+**The defineClass vtable hole, and why one fix closed two gaps.** A class materialised by `defineClass` came
+back with a vtable of zeros, so the first virtual call inside it hit the null-vtable guard as a bare
+`ArrayIndexOutOfBoundsException` — `Greeting.consonants()` calling `text()` on itself. The cause is a clean
+one: `defineFromBytes` seeded reachability from the class's `<clinit>`, and a class without one (most
+classes) has NOTHING marked, so `compileClass`'s `markActive` filter pruned every method, `fillTib` filled
+nothing, and the TIB stayed zero. Reflection into the same class still worked — that resolves through the
+method registry, not the vtable — which is exactly why the hole read as mysterious.
+
+RTA is the wrong tool here, and the fix says so: a blob handed to `defineClass` is a **root in its entirety**
+(`Loader.rootBlob`), because the bytes come from the program and nothing already loaded calls into them. Every
+method is seeded, and the class is flagged instantiated — the second half matters because RTA infers
+instantiation from a `new` site, and the only `new` for a defined class is a later reflective one it cannot
+see; without it the INHERITED virtuals it calls up its superclass chain stay unmarked.
+
+That also closed the cross-batch gap for free. `app/Main` defined in a SECOND `defineClass` batch now does
+`new Greeting(...)` and calls it virtually against a class from the FIRST batch: `hello, reflectively
+(11 consonants)`. Nothing about batch linking needed changing — the earlier failure was this same empty
+vtable, seen from the other side. It also settles a question the jar arc left open: reflective
+`main(String[])` invocation with a non-empty array was never broken; `args[0]` arrives correctly.
+
+**The asymmetry that remains, deliberately.** `Class.forName`'s incremental path (`loadClassIncremental`)
+seeds the same way and keeps the same hole, and its comment records why eager seeding was rejected there:
+"eagerly seeding them all pulled a huge closure into the 2nd (incremental) batch and corrupted the heap".
+A defineClass blob is program-supplied and small, so rooting all of it is cheap; an arbitrary java.base class
+pulled by name is not. A virtual call inside a forName-loaded class that nothing else reaches would still
+find a zero slot.
+
+**Also still open:** `emitNew` silently falls back to the CURRENT class when its target is not registered
+yet, which turns a missing class into a wrong-typed object rather than an error — that is how a `zip/Inflate`
+that had not been made demand-loadable came back as an `Inflater`-shaped object and recursed until it NPE'd.
 
 **Debug aid added:** `JOENG_SYMMAP=1` makes the writer print every image method's `[start,end)`, so a bare PC
 from a QEMU `info registers` can be named. A constant PC in image code is usually a `checkCast` or `capHalt`

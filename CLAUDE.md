@@ -149,10 +149,19 @@ defines the minimum the assembler must encode.
     beside the baked copies. `demo/ZipDemo` too: every entry's CRC, computed on the Pi over bytes our
     inflater produced (drained through a 37-byte buffer, so the decode resumes mid-block/mid-LZ-copy
     constantly), matches `unzip -v` byte-for-byte. WHOLE ARC PI-VALIDATED.
-  - **Known gaps:** a `defineClass`'d class does not get its own vtable slots filled (a
-    virtual self-call inside it hits the null-vtable guard; reflection and the `classpath=`
-    route are fine); two classes defined in SEPARATE `defineClass` batches cannot link a
-    cross-batch `new`/`invokevirtual`; int shift COUNTS mask to 6 bits, not 5.
+  - **defineClass vtable hole FIXED (`Loader.rootBlob`).** `defineFromBytes` seeded reachability
+    from `<clinit>` alone, so a class without one had EVERY method pruned by RTA and `fillTib`
+    filled a vtable of zeros — the first virtual call inside it hit the null-vtable guard as a
+    bare AIOOBE (reflection still worked, since that goes through the method registry). A blob
+    handed to `defineClass` is now a root in its entirety: every method seeded, and the class
+    flagged instantiated so its INHERITED virtuals get marked too. This also closed the
+    cross-batch gap for free — a class defined in a 2nd batch now `new`s and virtually calls one
+    from the 1st. `Class.forName`'s incremental path deliberately keeps the old behaviour (its
+    comment records that eager seeding there blew the closure and corrupted the heap).
+  - **Known gaps:** a virtual call inside a `Class.forName`-loaded class nothing else reaches
+    still finds a zero slot (see above); int shift COUNTS mask to 6 bits, not 5; `emitNew` falls
+    back to the CURRENT class when its target isn't registered, turning a missing class into a
+    wrong-typed object instead of an error.
   - **Debug aid:** `JOENG_SYMMAP=1 make image` prints every image method's `[start,end)`, so
     a bare PC from a QEMU `info registers` can be named — a constant PC is a `checkCast`/
     `capHalt` spin.
