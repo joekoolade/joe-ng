@@ -5454,7 +5454,16 @@ public final class Loader
             mBuf[i] = Heap.allocCode(32);               // just the stub -> no dry-run compile at load (genuine defer)
             return;
         }
-        mBuf[i] = Heap.allocCode(compileMethod(i, 0L).length * 4);
+        int sz0 = compileMethod(i, 0L).length * 4;
+        if (sz0 >= 0x80000)
+        {
+            Uart.write(Magic.bytes("  HUGE body bytes="));
+            VM.printHex((long) sz0);
+            Uart.write(Magic.bytes(" for "));
+            printCurrentClass();
+            Uart.putc(0x0A);
+        }
+        mBuf[i] = Heap.allocCode(sz0);
     }
 
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
@@ -5617,6 +5626,14 @@ public final class Loader
                 }
             }
             bci += 1;
+        }
+        if (4 + n * 8 >= 0x80000)
+        {
+            Uart.write(Magic.bytes("  HUGE lineTable n="));
+            VM.printDec(n);
+            Uart.write(Magic.bytes(" for "));
+            printCurrentClass();
+            Uart.putc(0x0A);
         }
         long tab = Heap.allocCode(4 + n * 8);
         Magic.store32(tab, n);

@@ -220,7 +220,7 @@ public final class Heap
             gz += 8L;
         }
         long sz = STATS;
-        while (sz < STATS + 512L)
+        while (sz < STATS + 640L)
         {
             Magic.store64(sz, 0L);
             sz += 8L;
@@ -296,6 +296,9 @@ public final class Heap
         int aligned = (size + 7) & -8;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
         noteRequest(STATS, (long) aligned);            // what sizes the JIT actually asks for
+        long bb = CODE_BYTES + bucketOf((long) aligned) * 8L;
+        Magic.store64(bb, Magic.load64(bb) + (long) aligned);   // ... and how many BYTES each class costs
+
         long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
         if (reused != 0L)
         {
@@ -425,6 +428,15 @@ public final class Heap
      * construction. The two are indistinguishable in the arena total, and they point at opposite fixes.
      */
     public static final long STATS = 0x0374_0000L;
+    /**
+     * BYTES per code size-class, beside the existing COUNT histogram. Counts alone cannot say where the
+     * arena's bytes are: 14,399 sixty-four-byte stubs and 8 half-megabyte buffers look nothing alike by
+     * count and may be worlds apart by volume. Peak simultaneous liveness is a byte quantity, so if the
+     * lever is "compile less per batch" this says what to compile less OF. Inside the STATS reservation
+     * (1 KiB claimed, 512 bytes used), so the scratch map is unchanged.
+     */
+    private static final long CODE_BYTES = STATS + 512L;
+
     private static final long STATS_DATA = STATS + 128L;      // 16 buckets each, 8 bytes per bucket
 
     /** Bump-path failures where the free list held FEWER bytes than the request: a genuine shortage. */
@@ -474,6 +486,21 @@ public final class Heap
             board.bcm2711.Uart.putc(0x20);
             VM.printDec((int) Magic.load64(GROWTH_TAB + b * 8L));
             b += 1L;
+        }
+        board.bcm2711.Uart.putc(0x0A);
+        board.bcm2711.Uart.write(Magic.bytes("  codeBytes:"));
+        long cb = 0L;
+        while (cb < 16L)
+        {
+            long v = Magic.load64(CODE_BYTES + cb * 8L);
+            if (v != 0L)
+            {
+                board.bcm2711.Uart.putc(0x20);
+                VM.printDec((int) cb);
+                board.bcm2711.Uart.putc(0x3D);
+                VM.printHex(v);
+            }
+            cb += 1L;
         }
         board.bcm2711.Uart.putc(0x0A);
         board.bcm2711.Uart.write(Magic.bytes("  codeGarbage sweeps="));
