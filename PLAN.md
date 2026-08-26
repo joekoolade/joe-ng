@@ -4210,6 +4210,20 @@ delivers no timer PPI to the secondaries (`ticks/core: c1=0 c2=0 c3=0`), so ever
 voluntary yield; the same run on hardware also preempts. No `FAULT`, no `STW TIMEOUT`, the philosophers and
 the lisp fixpoint unchanged, suite ending normally at `(self-build retired; host writer only)`.
 
+**PI-VALIDATED (2026-08-26, `core 166MHz`).** `demo/SmpDemo` on real hardware, with the secondaries taking
+real timer PPIs rather than QEMU's voluntary-yield-only path:
+
+```
+core 0 steps 262   core 1 steps 42   core 2 steps 318   core 3 steps 178
+total 800 of 800
+[main returned normally]
+```
+
+Four ordinary `java.lang.Thread`s, every core non-zero, the total exact — so the cross-core `synchronized`
+lost no increment — and the whole demand-load prologue (54 classes, every `vtparity`/`itparity`/`typeadopt`
+assertion OK) ran while four cores were scheduling. It took three boots, and the two failures in between
+were both bugs QEMU is structurally unable to show.
+
 **First hardware bug: the lock word nobody zeroed.** The first Pi boot stopped dead one line after
 `SMP: 4 of 4 cores up`, with no fault and no further output. `SCHED_LOCK` is raw scratch RAM
 (`0x0302_0040`), not a Java field, and nothing ever initialised it — while `Magic.spinLock` spins *while
@@ -4224,6 +4238,27 @@ elements (a block off the free list carries whatever the dead object left), so `
 zeroes is luck, not a guarantee. `taskIdle`, `coreSched` and `gcParked` are now filled explicitly — garbage
 in them would have made `pickNext` skip real tasks as "idle" and, worse, made `stopTheWorld` believe cores
 were parked when they were running.
+
+**Second hardware bug: JIT'd code published to one I-cache out of four.** The next boot got all the way
+into cross-core scheduling and then faulted `ESR EC=0` — an undefined instruction — at offset **+0** of
+`java/lang/Thread.sleep`, a method that reads back perfectly in memory. `Heap.publishCode` ended with
+`IC IALLU`, which invalidates only the CALLING PE's instruction cache. That was correct while core 0 was
+the only core that ever ran JIT'd code; it is fatal the moment another core executes a method core 0
+compiled, because the code arena REUSES swept buffers — so the other core's I-cache genuinely holds stale
+(or zeroed) lines for that exact address, and executes them.
+
+Cache maintenance **by virtual address** is broadcast to the whole Inner Shareable domain; the "all"
+flavours are not. The publish sequence is now the standard one — `DC CVAU` per line, `DSB`, `IC IVAU` per
+line, `DSB`, `ISB` — with a new `IC IVAU` intrinsic (`SYS #3,c7,c5,#1` = `0xD50B7520|Rt`). The other cores
+get their `ISB` for free: a task only reaches new code through an `ERET`, which is context-synchronizing.
+The previous commit listed this as a known gap *for the vector table*; it is in fact every method the JIT
+publishes, and it is precisely the class of bug an emulator cannot show, because its I-cache is not the
+hardware's.
+
+**And a console lock, because the report that diagnosed it arrived shredded.** Two cores were printing at
+once and the fault trace interleaved byte by byte. `Uart.lock()/unlock()` (raw word at `0x0302_0080`,
+owner-by-core, recursive, armed only while more than one core schedules) is taken by `reportFault` and
+`reportNestedFault` and never released — those cores halt, so their trace prints whole.
 
 **Not done yet (the next increments).**
 
