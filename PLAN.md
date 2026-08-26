@@ -4073,7 +4073,28 @@ passes, so the fault needs the larger `Manifest`/`Attributes` batch to appear. B
 the boundary of what is known to work, and the next attempt should start by widening `LinkedMapDemo` toward
 that batch rather than by re-deriving the search space.
 
-**Not fixed.** The diagnosis above is where the investigation stands.
+**The dispatch-target guard, and what it immediately found.** There was already a guard on both dispatch
+paths, and it did not fire — because its ceiling was `addr >> 28 == 0`, i.e. `0x1000_0000`, which is
+`Heap.LARGE_LIMIT`: the top of the LARGE-OBJECT region, not the top of CODE. Every ordinary heap pointer
+passed it. The real bound is `Heap.CODE_LIMIT` (`0x0300_0000`): image code sits below `0x0200_0000`, the JIT
+arena spans `[0x0200_0000, 0x0300_0000)`, and the data heap starts at `0x0400_0000`. The check is now a top-
+byte compare against `Symbols.CODE_TOP_BYTE_MAX`, and the two copies of the sequence (virtual and interface)
+are one `dispatchTargetGuard` helper.
+
+That converted the wild branch into a named exception at a source line on the first run:
+
+    Exception in thread "main" java/lang/ArrayIndexOutOfBoundsException
+      at TestAttrsNL.test(TestAttrsNL.java:115)
+
+Line 115 is `attrs.forEach(...)`, and that is the whole answer: `Attributes` does not override `forEach`, so
+this is an INTERFACE DEFAULT method reached through the itable — and the trace shows `java/util/Map.forEach`
+had already been compiled nine lines earlier for a DIFFERENT implementor (`ImmutableCollections.MapN`, at
+line 106). So the fault is an imap slot for a default method on the second implementor to reach it: the
+"slot past a short imap" case the guard's own comment had anticipated but could not catch. Not a `Map.of`
+bug, not a `LinkedHashMap` bug — an interface-default dispatch bug, and now localised to one call.
+
+**The underlying imap bug is not fixed**; the guard turns it from a silent wild branch into a reported
+exception naming the call, which is what the next attempt needs to start from.
 
 ## 5. Design decisions to lock day one
 

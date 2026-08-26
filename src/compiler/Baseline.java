@@ -1452,6 +1452,39 @@ public final class Baseline
         lowerCall(cpIndex, cb, false);
     }
 
+    /**
+     * Guard the resolved dispatch target in x16 before {@code blr}-ing it: it must be non-null, 4-aligned, and
+     * BELOW the top of the code arena ({@link Symbols#CODE_TOP_BYTE_MAX}). Anything else — most often a vtable
+     * or itable slot that was never filled, or a slot index read past the end of a short TIB into adjacent
+     * heap DATA — becomes an {@code ArrayIndexOutOfBoundsException} at this PC, reported with the call's own
+     * source line, instead of a wild branch into memory that faults as an instruction abort or silently
+     * reboots. Clobbers x17, which both callers have already freed.
+     *
+     * <p>Metal JIT only: trusted image code ({@code implicitChecks() == false}) stays check-free, like
+     * {@code nullCheck}.
+     */
+    private void dispatchTargetGuard(CodeBuffer cb, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            return;
+        }
+        int b0 = cb.emit(A64Enc.tbnz(16, 0, 0));        // misaligned (bit 0)
+        int b1 = cb.emit(A64Enc.tbnz(16, 1, 0));        // misaligned (bit 1)
+        cb.emit(A64Enc.lsrImm(17, 16, 24));             // x17 = the target's top byte
+        cb.emit(A64Enc.cmpImm(17, Symbols.CODE_TOP_BYTE_MAX + 1));
+        int b2 = cb.emit(A64Enc.bcond(A64Enc.HS, 0));   // at or above the code ceiling -> heap/large/unmapped
+        int b3 = cb.emit(A64Enc.cbz(16, 0));            // null slot (unresolved / uncompiled)
+        int ok = cb.emit(A64Enc.b(0));
+        int throwAt = cb.wordCount();
+        cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
+        cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
+        cb.set(b2, A64Enc.bcond(A64Enc.HS, throwAt - b2));
+        cb.set(b3, A64Enc.cbz(16, throwAt - b3));
+        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);     // a bad slot -> AIOOBE (distinct from a null-receiver NPE)
+        cb.set(ok, A64Enc.b(cb.wordCount() - ok));
+    }
+
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
     private void lowerInvokeVirtual(int cpIndex, CodeBuffer cb, int pos)
     {
@@ -1527,28 +1560,7 @@ public final class Baseline
         // globalVtableSlot's name+desc fallback matched an unrelated class's slot (see Loader ~1864). Left as a
         // bare `blr 0` it wild-branches to 0x0 -> the boot trampoline -> a SILENT REBOOT that looks like a reset.
         // Trap it as an NPE at this PC (same shape as the itable-scan sentinel) so it's reported, not a reboot.
-        if (symbols.implicitChecks())
-        {
-            // The resolved code word (x16) must be a plausible metal code address: 4-aligned, below the code
-            // ceiling (0x1000_0000), and non-zero. A garbage word -- e.g. a vtable slot index past a SHORT guest
-            // vtable (a minimal exception overlay, or an array's tiny TIB) reading adjacent heap DATA as a code
-            // pointer -- fails these, so we throw an NPE at this PC instead of a wild `blr` into unmapped memory
-            // (which faults as an instruction-abort / silent reboot). Only the metal JIT emits this; trusted image
-            // code (implicitChecks()==false) stays check-free. (#43)
-            int b0 = cb.emit(A64Enc.tbnz(16, 0, 0));    // misaligned (bit 0 set)
-            int b1 = cb.emit(A64Enc.tbnz(16, 1, 0));    // misaligned (bit 1 set)
-            cb.emit(A64Enc.lsrImm(17, 16, 28));         // x17 = x16 >> 28  (nonzero => x16 >= 0x1000_0000)
-            int b2 = cb.emit(A64Enc.cbnz(17, 0));       // above the code ceiling
-            int b3 = cb.emit(A64Enc.cbz(16, 0));        // null slot (unresolved)
-            int ok = cb.emit(A64Enc.b(0));              // all good -> skip the throw
-            int throwAt = cb.wordCount();
-            cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
-            cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
-            cb.set(b2, A64Enc.cbnz(17, throwAt - b2));
-            cb.set(b3, A64Enc.cbz(16, throwAt - b3));
-            throwImplicit(cb, pos, Symbols.NEW_AIOOBE);   // OOB vtable slot -> AIOOBE (distinct from a null-receiver NPE)
-            cb.set(ok, A64Enc.b(cb.wordCount() - ok));
-        }
+        dispatchTargetGuard(cb, pos);
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
@@ -1617,22 +1629,7 @@ public final class Baseline
         // compiled, or a slot past a short imap -- otherwise `blr`s into arbitrary memory (a silent-reboot wild
         // branch). x17 is free here (the itable was already dereferenced into x16). Throw AIOOBE at this PC so it
         // is reported with the call's source line, not a reboot. Metal JIT only (trusted image code is check-free).
-        if (symbols.implicitChecks())
-        {
-            int b0 = cb.emit(A64Enc.tbnz(16, 0, 0));    // misaligned (bit 0)
-            int b1 = cb.emit(A64Enc.tbnz(16, 1, 0));    // misaligned (bit 1)
-            cb.emit(A64Enc.lsrImm(17, 16, 28));         // x17 = x16 >> 28  (nonzero => >= 0x1000_0000)
-            int b2 = cb.emit(A64Enc.cbnz(17, 0));       // above the code ceiling
-            int b3 = cb.emit(A64Enc.cbz(16, 0));        // null slot (unresolved / uncompiled)
-            int ok = cb.emit(A64Enc.b(0));
-            int throwAt = cb.wordCount();
-            cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
-            cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
-            cb.set(b2, A64Enc.cbnz(17, throwAt - b2));
-            cb.set(b3, A64Enc.cbz(16, throwAt - b3));
-            throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
-            cb.set(ok, A64Enc.b(cb.wordCount() - ok));
-        }
+        dispatchTargetGuard(cb, pos);
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
