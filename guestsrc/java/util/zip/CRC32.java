@@ -32,6 +32,7 @@ public class CRC32 implements Checksum
     @Override
     public void update(byte[] b, int off, int len)
     {
+        Deflater.checkBounds(b, off, len);           // stock range-checks before touching the array
         crc = Crc32.update(crc, b, off, len);
     }
 

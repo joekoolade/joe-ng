@@ -48,7 +48,7 @@ else
 fi
 
 echo "== build image =="
-java -cp out writer.BuildRuntimeImage out /tmp/jdktest.img >/dev/null
+java --add-opens java.base/java.lang=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/jdktest.img >/dev/null
 
 if [ "$KEEP" != "--keep" ] && [ "$ARGS" != "--keep" ]; then
     cp /tmp/init.saved.$$ ramfs/etc/init

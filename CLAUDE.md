@@ -110,6 +110,13 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
+- **Write side too: `zip/Deflate` (STORED blocks) + `Deflater`/`Adler32` overlays.** A stored
+  block is a first-class DEFLATE type, so the output is valid, conforming, and simply not
+  smaller; that buys `Deflater`/`DeflaterOutputStream`/`ZipOutputStream` for a fraction of an
+  LZ77+Huffman implementation. Proof is the JDK's OWN `Inflater` decoding our output (raw and
+  zlib-wrapped, any buffer size) in `test/zip/ZipTest`. `ZipOutputStream.<clinit>` is
+  `clinitBlocked` (it only reads a system property). Stock OpenJDK jtreg tests from
+  `java/util/{jar,zip}`: 15 of the 19 runnable ones pass.
 - **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated.** `/etc/init` gained
   `classpath=<path>`: the named RAMFS archive goes on the class path, and any class the
   writer-baked directory lacks is inflated out of it on demand (`vm/JarFs` behind

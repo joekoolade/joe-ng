@@ -4015,6 +4015,66 @@ full 828-byte body. The WPA2 supplicant is our own crypto stack running through 
 arithmetic as everything else — a PTK derived with a mis-masked shift would fail the MIC check, so `msg3 MIC
 ok` is a real test of the shift fix, not merely a demo that happens to pass.
 
+## Stock OpenJDK jar/zip tests on metal (2026-08-25)
+
+Running the unmodified jtreg tests from `test/jdk/java/util/{jar,zip}` as joe-ng guest programs — the
+`javautil-test-arc` loop, pointed at the area the jar/zip work just built.
+
+**The pool.** 132 test files; 41 are testng/JUnit (no harness on metal), and of the rest only 19 compile
+against the guest java.base overlay. The compile survey is the cheap filter and it is worth running first: it
+costs seconds per test and rules out anything referencing a class we do not have. Two of its failures were
+themselves findings — `File cannot be converted to String` says the `ZipFile`/`JarFile` overlays take only a
+`String` path, and `ChecksumBase` wants `ByteBuffer.wrap`, which the overlay lacks.
+
+**8 of 19 passed at first run. Now 15.** The failures fell into four groups, and three of them were fixable:
+
+*Seven traps, two causes.* Four were `Deflater.<init>` and three were `ZipOutputStream.<clinit>` — every test
+that BUILDS an archive before testing anything. `ZipOutputStream`'s whole initializer is
+`Boolean.getBoolean("jdk.util.zip.inhibitZip64")`, a property read, so it joins `clinitBlocked` (skipping
+leaves the correct default). `Deflater` needed a real compressor: `zip/Deflate` emits STORED blocks, which is
+a first-class DEFLATE block type — valid, conforming output that simply does not shrink. That buys the entire
+write-side API for a fraction of what an LZ77 matcher plus dynamic Huffman tables would cost, and the ratio is
+the only thing given up. Validated the way that counts: the JDK's OWN `Inflater` decodes our output, raw and
+zlib-wrapped, at every buffer size down to one byte. Checking it against our own `Inflate` would only have
+proved the two agree with each other.
+
+*`System.in` was null*, so `new ZipInputStream(System.in)` died in a null check before reaching the thing it
+meant to test. Seeded as an empty `ByteArrayInputStream` — there is no console on metal, but empty is honest
+and null is not.
+
+*`StandardCharsets` was uninitialised*, and fixing it found a real VM bug worth more than the test. Stock's
+initializer builds all nine standard charsets, six of them UTF-16/32 instances whose constructors pull the
+denylisted coder machinery, so it traps; an overlay binding the three we support to the same singletons
+`Charset.forName` returns fixes that. But the overlay STILL came out null: its initializer read
+`sun.nio.cs.UTF_8.INSTANCE` before that class had initialized. `ensureClinit` compiled the initializer
+(recording its cross-class uses), RAN it, and only then drained those uses. The drain now happens before the
+call — **a class initializer's own active uses must be initialized before it runs, not after** — which
+applies to any initializer that reads another class's statics, not just this one.
+
+**What remains, and a hypothesis that did not survive contact.** `ScanSignedJar` reads
+`System.getProperty("test.src")` in its initializer: jtreg infrastructure, and a signed-jar test besides, so
+out of scope twice over. The other two, `TestAttrsNL` and `PutAndPutAll`, looked like a single `Map.of` bug —
+both are `Attributes` tests, both fail near `ImmutableCollections`, and the jar arc had already found one
+fault under `Map.copyOf`. Two cheap checks killed that reading:
+
+- `demo/MapOfDemo` exercises `Map.of` at every arity from one pair to four (`Map1` and `MapN` both) and
+  **passes**. `Map.of` is not broken.
+- `PutAndPutAll` does not call `Map.of` at all. It tests that `Attributes.put`/`putAll` reject wrongly-typed
+  arguments. The two failures share nothing but a directory.
+
+`TestAttrsNL`'s actual fault is a wild branch into the DATA heap (`elr=0x04161D80`, deterministic across
+runs) firing immediately after `java/util/LinkedHashMap.get(Object)` is compiled for the first time — a
+`blr` through a slot holding a data pointer, which is the signature of reading PAST the end of a TIB rather
+than of a slot that is merely empty. The lazy-compile trace is what localised it, and the ordering in that
+trace is the clue worth keeping: an INHERITED method on the same receiver (`containsKey`, inherited by
+`LinkedHashMap` from `HashMap`) had just run fine, and it was the OVERRIDDEN one that trapped.
+`demo/LinkedMapDemo` drives `LinkedHashMap.get` — directly, through the `Map` interface, hit and miss — and
+passes, so the fault needs the larger `Manifest`/`Attributes` batch to appear. Both demos are kept: they are
+the boundary of what is known to work, and the next attempt should start by widening `LinkedMapDemo` toward
+that batch rather than by re-deriving the search space.
+
+**Not fixed.** The diagnosis above is where the investigation stands.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

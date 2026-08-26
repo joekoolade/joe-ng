@@ -897,13 +897,20 @@ public final class Loader
                     VMGc.reportSweptPc(entry);
                     while (true) { Magic.wfe(); }
                 }
+                // BEFORE running it: initialize what the initializer ITSELF reads. Compiling the body just
+                // recorded its cross-class getstatic/new sites (lzCompiling is false here, so they land in
+                // the ctor-init table), and running it first would read those classes' statics while they
+                // are still null. That is exactly what made an overlaid StandardCharsets useless -- its
+                // initializer copied `sun.nio.cs.UTF_8.INSTANCE` into UTF_8 before sun/nio/cs/UTF_8 had
+                // initialized, so the field came out null and `s.getBytes(UTF_8)` threw a bare NPE.
+                drainCtorInit(reg);
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 break;
             }
             i += 1;
         }
-        drainCtorInit(reg);                             // ... then whatever its constructors actively use
+        drainCtorInit(reg);                             // ... and whatever its constructors actively use
     }
 
     // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
@@ -1179,7 +1186,11 @@ public final class Loader
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/stream/Tripwire"))
                 // java/util/Tripwire is the same debug-flag class as the stream one (ENABLED = Boolean.getBoolean),
                 // pulled by the java.util.stream spliterator machinery. Same safe skip (ENABLED false, never taken).
-                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Tripwire"));
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Tripwire"))
+                // java/util/zip/ZipOutputStream.<clinit> is one field: inhibitZip64 = Boolean.getBoolean(
+                // "jdk.util.zip.inhibitZip64"), a system-property read (denied on metal). Skipping leaves it
+                // FALSE, which is the correct default -- Zip64 stays enabled. Same shape as Tripwire above.
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/zip/ZipOutputStream"));
     }
 
     /** Compile+run a two-int-arg static method matching the seek key, with args {@code a,b}. */
@@ -1526,6 +1537,7 @@ public final class Loader
         VM.unwindLog = 1;                               // #43: log exception throw-stacks during this batch (also the printStackTrace() mechanism)
         loadAll();
         seedSystemStreams();                            // M2: install System.out/err (PrintStream overlay -> UART)
+        seedSystemIn();                                 // ... and System.in as an empty stream, never null
         long buf = globalMethodBuf(Magic.bytes("demo/StrOpsDemo"), Magic.bytes("main"), Magic.bytes("()V"));
         if (buf != 0L)
         {
@@ -1593,6 +1605,9 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
+        // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
+        pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
         // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
         // works (System.<clinit> which normally registers the JLA is skipped). Pulled always -- tiny, and only
         // reached when something builds an EnumMap (e.g. java.util.stream's StreamOpFlag).
@@ -1605,6 +1620,7 @@ public final class Loader
         pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
+        seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
                                                             //   trampoline (needs Runnable loaded by loadAll;
@@ -5593,6 +5609,61 @@ public final class Loader
             Magic.store64(ps + 0L, ptib);
             Magic.store64(errSlot, ps);
         }
+    }
+
+    /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
+     *  The byte[]-name sibling of {@link #vhFieldOffset} (which keys on a raw pointer + a TIB). */
+    private static long instanceFieldOffset(int classIdx, byte[] fname)
+    {
+        int j = 0;
+        while (j < fldCount)
+        {
+            if (utf8EqAt(clTab[classIdx].base, clTab[classIdx].nameOff, fldTab[j].base, fldTab[j].classOff)
+                    && utf8IsAtBase(fldTab[j].base, fldTab[j].nameOff, fname))
+            {
+                return 16L + fldTab[j].slot * 8L;
+            }
+            j += 1;
+        }
+        return -1L;
+    }
+
+    /**
+     * Install {@code System.in} as an EMPTY stream — a {@code java.io.ByteArrayInputStream} over a zero-length
+     * array, so it reads as immediate end-of-file. There is no console input on metal, but the field being
+     * NULL is worse than it being empty: stock code passes {@code System.in} straight into a constructor that
+     * null-checks it, so a test doing {@code new ZipInputStream(System.in)} died with a bare
+     * NullPointerException before reaching anything it meant to test (java/util/zip/ZipInputStream/Skip).
+     *
+     * <p>Seeded rather than constructed, like {@link #seedSystemStreams}: the fields are filled directly at
+     * their registered offsets, so no {@code <init>} has to run. Reading answers -1 without ever touching the
+     * buffer, since {@code count} is 0.
+     */
+    static void seedSystemIn()
+    {
+        long inSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
+        if (inSlot == 0L)
+        {
+            return;
+        }
+        int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
+        if (bi < 0)
+        {
+            return;                                     // not in this batch: leave the slot as it was
+        }
+        long bufOff = instanceFieldOffset(bi, Magic.bytes("buf"));
+        long posOff = instanceFieldOffset(bi, Magic.bytes("pos"));
+        long cntOff = instanceFieldOffset(bi, Magic.bytes("count"));
+        if (bufOff < 0L || posOff < 0L || cntOff < 0L)
+        {
+            return;
+        }
+        long obj = Heap.alloc(16 + clTab[bi].fieldCount * 8);
+        Magic.store64(obj + 0L, clTab[bi].tib);
+        Magic.store64(obj + bufOff, Heap.allocArray(0, 1));   // empty byte[]; never read (count == 0)
+        Magic.store64(obj + posOff, 0L);
+        Magic.store64(obj + cntOff, 0L);
+        Magic.store64(inSlot, obj);
     }
 
     /**
