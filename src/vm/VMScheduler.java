@@ -265,6 +265,7 @@ public final class VMScheduler
         taskCore[id] = core;                               // pinned: only this core may resume this stack
         taskIdle[id] = 1;                                  // never picked as work -- only as this core's fallback
         taskPrio[id] = PRIO_MIN;                           // ... and at the floor, so it can never outrank work
+        taskBasePrio[id] = PRIO_MIN;
         taskDone[id] = 0;
         taskWake[id] = 0L;
         taskWaitOn[id] = 0;
@@ -380,6 +381,66 @@ public final class VMScheduler
         }
         prioOrder[prioDone] = id;                          // single-core demo: no race on prioDone
         prioDone = prioDone + 1;
+        taskExit();
+    }
+
+    /**
+     * Work for {@code ms} milliseconds, offering the core back once per millisecond. The yield is what makes
+     * this demo mean the same thing everywhere: a task that never yields can only lose the core to a timer
+     * tick, and QEMU delivers none -- so on the emulator LOW would run start to finish and release the
+     * monitor before HIGH ever woke, printing a healthy-looking result that tested nothing. Yielding puts a
+     * scheduling decision every millisecond, and then only the priority rule decides who continues.
+     */
+    static void pipSpin(int ms)
+    {
+        int n = 0;
+        while (n < ms)
+        {
+            pauseMs1();
+            taskYield();
+            n = n + 1;
+        }
+    }
+
+    /**
+     * The priority-inversion demo's three tasks, the textbook scenario:
+     *
+     * <ul>
+     *   <li>LOW (0) takes the monitor immediately and holds it across a long stretch of work.
+     *   <li>MED (1) wakes shortly after and burns CPU. It never touches the monitor -- it is simply work
+     *       that outranks LOW, which is exactly what makes the inversion unbounded.
+     *   <li>HIGH (2) wakes later still and asks for the monitor LOW is holding.
+     * </ul>
+     *
+     * <p>Without inheritance, HIGH is stuck until MED finishes: LOW cannot run to release the monitor,
+     * because MED outranks it. Finish order would be MED, HIGH, LOW. With inheritance LOW is lent HIGH's
+     * priority, outruns MED, releases, and drops back -- finish order HIGH, MED, LOW. The FIRST letter is
+     * the whole test, and {@code pipBlockedMs} says how long HIGH actually waited.
+     */
+    static void pipTask(int id)
+    {
+        if (id == 0)
+        {
+            monEnter(pipLock);                             // LOW: grab it before anyone else is awake
+            pipSpin(40);
+            monExit(pipLock);
+            pipSpin(10);
+        }
+        else if (id == 1)
+        {
+            sleep(10);                                     // MED: pure CPU, never touches the monitor
+            pipSpin(60);
+        }
+        else
+        {
+            sleep(20);                                     // HIGH: wants what LOW is holding
+            long t0 = Magic.readCNTPCT_EL0();
+            monEnter(pipLock);
+            pipBlockedMs = (int) ((Magic.readCNTPCT_EL0() - t0) * 1000L / Magic.readCNTFRQ_EL0());
+            monExit(pipLock);
+        }
+        pipOrder[pipDone] = id;                            // single-core demo: no race on pipDone
+        pipDone = pipDone + 1;
         taskExit();
     }
 
@@ -554,6 +615,70 @@ public final class VMScheduler
     }
 
     /**
+     * Priority inheritance: lend {@code prio} to the task holding a monitor we are about to block on, and on
+     * down the chain if that holder is itself blocked on a monitor someone else holds. Without this, a low
+     * task holding the monitor can be preempted by an unrelated MIDDLE task and never run to release it, so
+     * the high waiter is stuck behind work it outranks -- and for as long as that middle task cares to run,
+     * which is what makes classic inversion UNBOUNDED rather than merely unfair.
+     *
+     * <p>Walking the chain is what makes nested monitors work: H waits on L, L waits on K, so K must be
+     * raised too or the chain stalls one link further down. The hop cap terminates the walk if the ownership
+     * graph has a cycle -- that is a deadlock, and diagnosing it is not this function's job.
+     *
+     * <p>Called with {@link VM#SCHED_LOCK} held.
+     */
+    static void inherit(int owner, int prio)
+    {
+        int t = owner;
+        int hops = 0;
+        while (t >= 0 && hops < MAX_TASKS)
+        {
+            if (taskPrio[t] >= prio)
+            {
+                return;                                    // already at least this urgent: so is everyone below
+            }
+            taskPrio[t] = prio;
+            if (taskState[t] != TASK_BLOCKED || taskMonWait[t] == 0L)
+            {
+                return;                                    // not itself waiting on a monitor: chain ends here
+            }
+            int s = monSlotOf(taskMonWait[t]);
+            if (s < 0)
+            {
+                return;
+            }
+            t = monOwner[s];
+            hops += 1;
+        }
+    }
+
+    /**
+     * Recompute task {@code t}'s effective priority: its base, raised again by any monitor it STILL holds
+     * that an urgent task is still waiting on. Called when a monitor is released -- giving the boost back
+     * wholesale would be wrong, because one task can hold several contended monitors at once.
+     *
+     * <p>Called with {@link VM#SCHED_LOCK} held.
+     */
+    static void recomputePrio(int t)
+    {
+        int p = taskBasePrio[t];
+        int w = 0;
+        while (w < taskCount)
+        {
+            if (taskState[w] == TASK_BLOCKED && taskMonWait[w] != 0L && taskPrio[w] > p)
+            {
+                int s = monSlotOf(taskMonWait[w]);
+                if (s >= 0 && monOwner[s] == t)
+                {
+                    p = taskPrio[w];                       // still lending, for a different monitor
+                }
+            }
+            w += 1;
+        }
+        taskPrio[t] = p;
+    }
+
+    /**
      * Set task {@code t}'s scheduling priority, clamped to PRIO_MIN..PRIO_MAX. It takes effect at the next
      * scheduling point; a task that just LOWERED its own priority yields immediately, since it may have put
      * itself below someone already waiting. (Raising it needs no reschedule -- we are already running.)
@@ -567,7 +692,9 @@ public final class VMScheduler
         int p = clampPrio(prio);
         long daif = schedLock();
         int old = taskPrio[t];
-        taskPrio[t] = p;
+        taskBasePrio[t] = p;
+        recomputePrio(t);                                  // a live boost outranks a lowered base, and must
+        p = taskPrio[t];                                   //   survive it -- so re-derive rather than assign
         schedUnlock(daif);
         if (t == curTask() && p < old)
         {
@@ -587,10 +714,16 @@ public final class VMScheduler
     static int getPriority(long threadObj)
     {
         int t = threadTaskOf(threadObj);
-        if (taskPrio == null || t < 0)
+        if (taskBasePrio == null || t < 0)
         {
             return PRIO_NORM;
         }
+        return taskBasePrio[t];                            // the base: a transient inherited boost is not
+    }                                                      //   something the thread asked for, so not reported
+
+    /** The EFFECTIVE priority task {@code t} is scheduled at -- its base, or an inherited boost above it. */
+    static int effectivePrio(int t)
+    {
         return taskPrio[t];
     }
     /**
@@ -1080,6 +1213,7 @@ public final class VMScheduler
             taskMonWait[me] = obj;
             taskWaitOn[me] = -2;                            // a monitor-acquire waiter
             taskState[me] = TASK_BLOCKED;
+            inherit(monOwner[s], taskPrio[me]);             // lend our urgency to the holder, and down its chain
             schedUnlock(daif);
             taskYield();
             daif = schedLock();
@@ -1105,16 +1239,21 @@ public final class VMScheduler
         }
         long daif = schedLock();
         int woken = -1;
+        int me = curTask();
         int s = monSlotOf(obj);
         if (s >= 0)
         {
             monCount[s] -= 1;
             if (monCount[s] <= 0)
             {
-                monObj[s] = 0L;
-                monOwner[s] = -1;
+                monObj[s] = 0L;                            // cleared BEFORE the recompute, so the monitor we
+                monOwner[s] = -1;                          //   just released no longer counts as lent-to
                 monCount[s] = 0;
                 woken = wakeMonWaiter(obj);
+                if (taskPrio[me] != taskBasePrio[me])      // only a boosted task can owe anything back, and
+                {                                          //   that guard keeps the common exit free
+                    recomputePrio(me);
+                }
             }
         }
         schedUnlock(daif);
@@ -1148,6 +1287,10 @@ public final class VMScheduler
             monOwner[s] = -1;
             monCount[s] = 0;
             wakeMonWaiter(obj);
+            if (taskPrio[me] != taskBasePrio[me])
+            {
+                recomputePrio(me);                         // wait() releases the monitor: give the boost back
+            }
         }
         taskWaitObj[me] = obj;
         taskWaitOn[me] = -1;                               // an object monitor, not a semaphore
@@ -1421,7 +1564,8 @@ public final class VMScheduler
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
         taskMonWait[id] = 0L;
-        taskPrio[id] = taskPrio[curTask()];                // inherit the creator's priority (Thread semantics)
+        taskBasePrio[id] = taskBasePrio[curTask()];        // inherit the creator's OWN priority (Thread
+        taskPrio[id] = taskBasePrio[id];                   //   semantics) -- never a boost it merely borrowed
         taskState[id] = TASK_READY;                        // now runnable
         return id;
     }

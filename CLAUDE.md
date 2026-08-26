@@ -133,8 +133,23 @@ defines the minimum the assembler must encode.
     `Thread` + `synchronized` only, six threads started ASCENDING, funnelled through one monitor so the
     result is core-count independent) prints `finish order = 10 8 6 5 3 1` — the exact reverse of start
     order — with `getPriority` round-tripping before start and while running.
-  - **Gaps:** no ageing (starvation permanent); no priority INHERITANCE, so classic inversion is still
-    possible (a low-priority monitor holder is not boosted); the per-switch scan is O(taskCount).
+  - **PRIORITY INHERITANCE (QEMU-validated with a negative control; needs a Pi run).** Two priorities per
+    task: `taskBasePrio` (asked for, what getPriority reports) and `taskPrio` (what the scheduler uses =
+    base raised to the most urgent waiter on a monitor this task holds). `inherit()` in `monEnter` lends
+    down the ownership CHAIN (nested monitors stall one link further down otherwise; a hop cap breaks
+    cycles); `recomputePrio()` on release re-derives rather than resetting, because one task can hold
+    several contended monitors — guarded on `taskPrio != taskBasePrio` so an uncontended `monExit` pays
+    nothing. `setTaskPriority` sets the base and re-derives (a live boost survives a lowered base); spawn
+    inherits the creator's BASE, never a borrowed boost.
+    - **Negative control, the part that makes it evidence:** with the one `inherit` call commented out the
+      demo prints `MHL / HIGH blocked 80ms` (MED's whole run); restored, `HML / 30ms` (just LOW's critical
+      section).
+    - **`pipSpin` yields once per ms on purpose:** a non-yielding task can only be preempted by a timer
+      tick and **QEMU delivers none**, so LOW ran to completion and released before HIGH woke — printing
+      `LHM / 0ms`, a healthy-looking result that tested nothing.
+  - **Gaps:** no ageing (starvation permanent); inheritance covers monitors only, not semaphores (no single
+    owner to boost); it is basic inheritance, not priority CEILING, so it bounds blocking without
+    preventing deadlock; the per-switch scan is O(taskCount).
 
 - **SMP scheduling — one run queue, four cores. PI-VALIDATED BOTH PATHS (2026-08-26, `core 166MHz`):
   suite `smp sched: 4 of 4 cores on the run queue`, `steps/core: c0=61 c1=60 c2=60 c3=59` under REAL

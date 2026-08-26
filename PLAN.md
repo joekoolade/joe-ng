@@ -4378,11 +4378,52 @@ want         = 10 8 6 5 3 1
 the exact reverse of the start order, with `getPriority` round-tripping both before `start()` and while
 running.
 
+### Priority inheritance
+
+Strict priority alone has a hole, and it is the one that flew to Mars. LOW holds a monitor. HIGH blocks on
+it. MED — which outranks LOW and never touches the monitor — is runnable, so MED runs, LOW never gets the
+core to release, and HIGH waits behind work it outranks **for as long as MED cares to run**. The inversion
+is not merely unfair, it is unbounded.
+
+Each task now carries two priorities: `taskBasePrio` (what it asked for, and what `getPriority` reports)
+and `taskPrio` (what the scheduler uses — the base, raised to the priority of the most urgent task waiting
+on a monitor this task holds). The scheduler itself is unchanged; only the events that can change the
+relationship touch it.
+
+- **`inherit(owner, prio)`**, called from `monEnter` under the lock just before blocking, lends the
+  blocker's priority to the holder — and **walks the ownership chain**, because with nested monitors H waits
+  on L, L waits on K, and raising only L stalls the chain one link further down. A hop cap terminates the
+  walk if the graph has a cycle; that is a deadlock, and diagnosing it is not this function's job.
+- **`recomputePrio(t)`** on release re-derives the base plus whatever the task is *still* lending for. A
+  wholesale reset would be wrong: one task can hold several contended monitors at once. `monExit` and
+  `objWait` (which also releases) both call it, guarded on `taskPrio != taskBasePrio` so an uncontended
+  exit — the overwhelmingly common one — pays nothing.
+- **`setTaskPriority`** now sets the base and re-derives, so a live boost survives a lowered base; **spawn**
+  inherits the creator's *base*, never a boost it merely borrowed.
+
+**Evidence, with a negative control** (QEMU; needs Pi validation). `pipDemo` is the textbook scenario: LOW
+takes a monitor, MED wakes and burns CPU, HIGH wakes and wants the monitor. Run with the one `inherit` call
+commented out, then restored:
+
+| | finish order | HIGH blocked |
+|---|---|---|
+| inheritance on | `HML` | **30 ms** — the rest of LOW's critical section |
+| inheritance off | `MHL` | **80 ms** — MED's entire run |
+
+The control is the point: without it the demo shows only that the output matched what was hoped for, not
+that it can tell the two worlds apart.
+
+**A note on the demo's spin.** `pipSpin` yields once per millisecond rather than spinning solid. A task that
+never yields can only lose the core to a timer tick, and **QEMU delivers none** — so on the emulator LOW ran
+start to finish and released before HIGH ever woke, printing `LHM ... blocked 0ms`: a healthy-looking result
+that tested nothing. Yielding puts a scheduling decision every millisecond, and then only the priority rule
+decides who continues, identically on emulator and hardware.
+
 **Not done yet.** No ageing/decay, so starvation is permanent — a `nice`-style fairness mode would be a
-separate policy. No priority inheritance on monitors, so classic priority inversion is still possible: a
-low-priority task holding a monitor that a high-priority task wants is not boosted, it is merely woken
-first once the monitor is free. The per-switch scan is linear; a per-priority ready bitmap would make it
-O(1) if `MAX_TASKS` ever grows past a few dozen.
+separate policy. Inheritance covers monitors only, not semaphores (`semWait` has no single owner to boost).
+It is basic inheritance, not the priority-ceiling protocol, so it bounds blocking without preventing
+deadlock. The per-switch scan is linear; a per-priority ready bitmap would make it O(1) if `MAX_TASKS` ever
+grows past a few dozen.
 
 ## 5. Design decisions to lock day one
 
