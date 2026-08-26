@@ -310,6 +310,7 @@ public final class VMScheduler
         }
         smpStop = 0;
         Magic.store32(SCHED_LOCK, 0);                      // free before anyone can take it (raw scratch RAM)
+        Uart.armLock(1);                                   // more than one core can print now: lock reports
         Magic.dsb();
         smpSched = 1;                                      // the table is shared now: take the lock around it
         Magic.dsb();
@@ -346,6 +347,7 @@ public final class VMScheduler
         {
         }
         smpSched = 0;                                      // back to one core in the table: no lock needed
+        Uart.armLock(0);
         schedGo = 0;                                       // secondaries loop back to waiting for the next round
         smpStop = 0;
         Magic.dsb();

@@ -400,10 +400,20 @@ public final class A64Enc
     {
         return 0xD50B_7A20 | (rt & 0x1F);
     }
-    /** {@code IC IALLU} — invalidate all instruction cache to the point of unification. */
+    /** {@code IC IALLU} — invalidate all instruction cache to the point of unification. LOCAL to this PE:
+     *  it does NOT reach the other cores' instruction caches (see {@link #icIvau}). */
     public static int icIallu()
     {
         return 0xD508_751F;
+    }
+    /**
+     * {@code IC IVAU, Xt} — invalidate the instruction-cache line by VA to PoU (SYS #3,c7,c5,#1). Unlike
+     * {@code IC IALLU}, maintenance BY VIRTUAL ADDRESS is broadcast to the whole Inner Shareable domain, so
+     * this is the one that reaches the other cores — what publishing JIT'd code on an SMP system requires.
+     */
+    public static int icIvau(int rt)
+    {
+        return 0xD50B_7520 | (rt & 0x1F);
     }
     /** {@code DC CIVAC, Xt} — clean AND invalidate data cache line by VA to PoC (SYS #3,c7,c14,#1). Used to
      *  read a reply an uncached agent (DMA/mailbox firmware) wrote after our request write cleaned the line. */

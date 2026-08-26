@@ -1218,6 +1218,8 @@ public final class VM
     {
         long rcv = Magic.readX0();                         // FIRST ops: capture the faulting blr's receiver (x0) and
         long lr = Magic.readLR();                          // return addr (x30) before anything clobbers them
+        Uart.lock();                                       // and never release: this core halts at the end of the
+                                                           //   report, so its trace prints whole, not interleaved
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
         long far = Magic.readFAR_EL1();
@@ -1398,6 +1400,7 @@ public final class VM
      *  faults (the original is the real bug; the nested one shows where the unwind broke) and halt. */
     static void reportNestedFault(long esr, long elr, long far)
     {
+        Uart.lock();                                       // halts at the end: hold the console for the whole report
         Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: esr="));
         printHex(fault0Esr);
         Uart.write(Magic.bytes(" elr="));

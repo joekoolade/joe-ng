@@ -2345,6 +2345,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.icIallu());
         }
+        else if (id == Intrinsics.IC_IVAU)
+        {
+            cb.emit(A64Enc.icIvau(popReg()));      // invalidate the I-cache line at the address arg, all cores
+        }
         else if (id == Intrinsics.DC_CIVAC)
         {
             cb.emit(A64Enc.dcCivac(popReg()));     // clean+invalidate the D-cache line to PoC at the address arg

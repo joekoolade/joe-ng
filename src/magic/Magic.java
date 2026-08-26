@@ -98,6 +98,17 @@ public final class Magic
     }
 
     /** {@code IC IALLU} — invalidate the whole instruction cache to the point of unification. */
+    /**
+     * {@code IC IVAU} — invalidate the instruction-cache line covering {@code addr}, to the point of
+     * unification, ACROSS EVERY CORE. Cache maintenance by virtual address is broadcast to the Inner
+     * Shareable domain; {@link #icIALLU()} is local to the calling core and so cannot publish code that
+     * another core will execute.
+     */
+    public static void icIVAU(long addr)
+    {
+        throw intrinsic();
+    }
+
     public static void icIALLU()
     {
         throw intrinsic();

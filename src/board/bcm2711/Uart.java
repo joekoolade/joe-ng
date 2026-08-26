@@ -74,6 +74,63 @@ public final class Uart
         Magic.store8(Bcm2711.AUX_MU_IO_REG, c);
     }
 
+    // ----- console lock ---------------------------------------------------------------------------
+    // With four cores scheduling, two of them can print at once and the bytes interleave -- which is
+    // survivable for a log line and ruinous for a fault report, the one output that has to be readable.
+    // A report takes the console for its whole multi-call sequence. Ownership is by CORE and the lock is
+    // recursive, so a reporter that locks once still calls write()/putc() inside. Armed only while more
+    // than one core schedules: LDAXR/STLXR needs the cacheable MMU map that early boot does not have.
+
+    /** Raw scratch word, 0 = free. A different cache line from the scheduler's and the job demo's locks. */
+    private static final long UART_LOCK = 0x0302_0080L;
+    private static int lockArmed;                        // 1 once more than one core can print
+    private static int lockOwner;                        // core holding the console (armLock sets -1 = free;
+                                                         //   no initialiser -- that would need a <clinit>,
+                                                         //   which runs later than Uart.init())
+    private static int lockDepth;
+
+    /** Free the lock word (raw scratch RAM -- nothing else zeroes it) and arm or disarm cross-core locking. */
+    public static void armLock(int on)
+    {
+        Magic.store32(UART_LOCK, 0);
+        lockOwner = -1;
+        lockDepth = 0;
+        lockArmed = on;
+    }
+
+    /** Take the console for one whole message. Recursive for this core; a no-op before the lock is armed. */
+    public static void lock()
+    {
+        if (lockArmed == 0)
+        {
+            return;
+        }
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (lockOwner == core)
+        {
+            lockDepth += 1;
+            return;
+        }
+        Magic.spinLock(UART_LOCK);
+        lockOwner = core;
+        lockDepth = 1;
+    }
+
+    /** Release one level of the console lock. */
+    public static void unlock()
+    {
+        if (lockArmed == 0 || lockOwner != (int) (Magic.readMPIDR() & 3L))
+        {
+            return;
+        }
+        lockDepth -= 1;
+        if (lockDepth <= 0)
+        {
+            lockOwner = -1;
+            Magic.spinUnlock(UART_LOCK);
+        }
+    }
+
     /** Write every byte of {@code s} (a real heap byte[], e.g. an interned string literal). */
     public static void write(byte[] s)
     {

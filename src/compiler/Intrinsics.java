@@ -96,4 +96,5 @@ public final class Intrinsics
     public static final int READ_LR = 59;            // read x30 (link register) — caller return addr, for trap diagnostics
     public static final int READ_X0 = 60;            // read x0 — the faulting call's receiver, for trap diagnostics
     public static final int DC_CIVAC = 61;           // clean+invalidate D-cache line to PoC (read DMA/mailbox replies)
+    public static final int IC_IVAU = 78;            // invalidate I-cache line by VA to PoU -- BROADCAST to every core
 }
