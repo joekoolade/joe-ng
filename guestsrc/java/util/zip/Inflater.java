@@ -59,6 +59,7 @@ public class Inflater
     /** Hand the decoder more compressed bytes; it keeps whatever it cannot consume yet. */
     public void setInput(byte[] input, int off, int len)
     {
+        Deflater.checkBounds(input, off, len);
         if (ended || len <= 0)
         {
             return;
@@ -84,6 +85,7 @@ public class Inflater
     /** Decompress into {@code output[off..off+len)}; the count produced, 0 when more input is needed. */
     public int inflate(byte[] output, int off, int len) throws DataFormatException
     {
+        Deflater.checkBounds(output, off, len);      // stock range-checks before touching the array
         if (ended)
         {
             return 0;

@@ -27,6 +27,7 @@ public final class ZipTest
         crc32();
         inflateRoundTrip();
         inflateStreaming();
+        deflateRoundTrip();
         zipDirectory();
         jarArchive();
         malformed();
@@ -141,6 +142,86 @@ public final class ZipTest
         System.arraycopy(got, 0, trimmed, 0, have);
         T.eqBytes("stream " + name, data, trimmed);
         T.eq("stream " + name + " bytesWritten", data.length, z.bytesWritten());
+    }
+
+    // ---------------------------------------------------------------- DEFLATE (compress)
+
+    /**
+     * Our compressor's output decoded by the JDK's OWN {@code Inflater}. That direction is the one that
+     * matters: a stored-block stream is only useful if a conforming inflater accepts the framing, and
+     * checking it against our own {@link Inflate} would only prove the two agree with each other.
+     */
+    private static void deflateRoundTrip() throws Exception
+    {
+        deflateOne("empty", new byte[0]);
+        deflateOne("short", ascii("hello from joe-ng"));
+        deflateOne("one block boundary", pseudo(8192, 3));
+        deflateOne("just over a block", pseudo(8193, 4));
+        deflateOne("many blocks", pseudo(70000, 5));
+        deflateOne("repetitive", repeat(ascii("joe-ng "), 4000));
+    }
+
+    private static void deflateOne(String name, byte[] data) throws Exception
+    {
+        // raw (what a zip entry stores), decoded by the JDK
+        byte[] raw = compress(data, true, 1);
+        T.eqBytes("deflate raw " + name, data, jdkInflate(raw, true, data.length));
+        // zlib-wrapped, decoded by the JDK -- exercises the header and the Adler-32 trailer
+        byte[] wrapped = compress(data, false, 1);
+        T.eqBytes("deflate zlib " + name, data, jdkInflate(wrapped, false, data.length));
+        // and a one-byte-at-a-time drain, since the caller's buffer size must not affect framing
+        byte[] dribbled = compress(data, true, 1_000_000);
+        T.eqBytes("deflate drip " + name, raw, dribbled);
+        // finally our own inflater, closing the loop both ways
+        byte[] back = new byte[data.length];
+        int n = Inflate.inflate(raw, 0, raw.length, back, 0, back.length);
+        T.eq("deflate self " + name + " length", data.length, n);
+        T.eqBytes("deflate self " + name, data, back);
+    }
+
+    /** Compress with our Deflate, draining at most {@code chunk} bytes per call. */
+    private static byte[] compress(byte[] data, boolean nowrap, int chunk)
+    {
+        Deflate d = new Deflate();
+        d.reset(nowrap);
+        d.input(data, 0, data.length);
+        d.finish();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[chunk < 4096 ? chunk : 4096];
+        int guard = 0;
+        while (!d.finished() && guard < 10_000_000)
+        {
+            guard += 1;
+            int n = d.deflate(buf, 0, chunk < buf.length ? chunk : buf.length);
+            if (n <= 0)
+            {
+                break;
+            }
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
+    }
+
+    /** Decode with the JDK's Inflater — the reference implementation. */
+    private static byte[] jdkInflate(byte[] compressed, boolean nowrap, int expected) throws Exception
+    {
+        java.util.zip.Inflater inf = new java.util.zip.Inflater(nowrap);
+        inf.setInput(compressed);
+        byte[] out = new byte[expected == 0 ? 1 : expected];
+        int total = 0;
+        while (!inf.finished() && total < out.length)
+        {
+            int n = inf.inflate(out, total, out.length - total);
+            if (n == 0)
+            {
+                break;
+            }
+            total += n;
+        }
+        inf.end();
+        byte[] exact = new byte[total];
+        System.arraycopy(out, 0, exact, 0, total);
+        return exact;
     }
 
     // ---------------------------------------------------------------- zip archives
