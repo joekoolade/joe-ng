@@ -4096,6 +4096,36 @@ tail rate the remaining closure would take many minutes per test. Two consequenc
 The runners are validated the way that makes them evidence: the same `ZipJUnitAll` passes 22/22 on the host
 JDK 26 with nothing but the shim on the classpath, so a joe-ng failure is a joe-ng finding.
 
+**Pi run (2026-08-26, `core 166MHz`): 15 of 22, and the 7 failures were one bug.** `DeflaterClose` 3/3,
+`InflaterClose` 3/3, `GZIPInputStreamAvailable`, both `DataDescriptor` tests and `CloseWrappedStream` 6/6 all
+passed — the board loaded the full ~460-class closure and ran the lot, which QEMU could not do at any
+timeout. `CloseWrappedStream` is the one to notice: the log shows `baked java/lang/Throwable.addSuppressed`
+and `getSuppressed` firing, so the two tests that need suppressed exceptions are the ones exercising the
+support this arc added.
+
+All 7 `Zip64DataDescriptor` methods failed with a bare `NullPointerException`, identically, which pointed at
+their shared `@BeforeEach` — whose first statement is `HexFormat.of().parseHex(hex.replaceAll("\n", ""))`.
+A four-line probe (small closure, so QEMU runs it in a minute) isolated it immediately:
+
+```
+HexFormat.of() null? 1
+Exception in thread "main" java/lang/NullPointerException
+```
+
+**`HexFormat`'s initializer was being skipped, silently.** Its `<clinit>` opens with the assertion idiom
+(`ldc HexFormat.class; desiredAssertionStatus`) and then does real work — `SharedSecrets.getJavaLangAccess()`,
+the digit tables, the `HEX_FORMAT` singleton. `clinitCompilable` allows the idiom ONLY when it is the whole
+initializer (`if (sawAssertIdiom && risky) return false`), on the stated assumption that an initializer doing
+idiom-plus-real-work is `clinitBlocked` or seeded instead. `HexFormat` is neither, so it fell in the gap
+between the two policies: no capture, no entry in the clinit table, no `clinit-lazy` line, `HEX_FORMAT` null.
+Allowlisted like `Pattern`/`Socket`/`ImmutableCollections` — its body is runnable here, and `jla` is only
+dereferenced by the formatting methods, not `parseHex`.
+
+**The general lesson is the silence, not the class.** A rejected initializer is indistinguishable from one
+that ran: the class loads, gets its static cells, reports as lazy-init pending, and then answers null
+forever. That is why the first symptom was seven identical NPEs three call levels away from the cause. The
+harness now prints a stack trace on failure, which would have named the frame on the first boot.
+
 **A parity note worth keeping.** Adding `addSuppressed`/`getSuppressed` widened `java/lang/Throwable`'s vtable
 from 12 slots to 14 — and the boot asserts `vtparity java/lang/Throwable OK 14`, because the writer-baked and
 loader-built worlds both derive from the same overlay. Adding a method to a baked class is safe precisely

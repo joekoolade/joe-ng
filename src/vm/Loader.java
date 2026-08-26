@@ -567,6 +567,17 @@ public final class Loader
         {
             return true;
         }
+        // java/util/HexFormat.<clinit> is the assertion idiom PLUS real work, which the rule below rejects --
+        // and the rejection is SILENT, so HEX_FORMAT simply stayed null and HexFormat.of() returned null. That
+        // rule's comment assumes such classes are clinitBlocked or seeded instead; HexFormat is neither, so it
+        // fell in the gap between the two. Its body is runnable here: SharedSecrets.getJavaLangAccess() is
+        // seeded with a MetalJavaLangAccess (seedJavaLangAccess), the digit tables are plain newarray/bastore,
+        // and the singletons are `new HexFormat(...)` over String literals. `jla` is only dereferenced by the
+        // FORMATTING methods (uncheckedNewStringWithLatin1Bytes), not by parseHex.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/HexFormat")))
+        {
+            return true;
+        }
         // A pervasive idiom is a <clinit> that ONLY disables assertions: `ldc X.class; invokevirtual
         // desiredAssertionStatus; ...; putstatic $assertionsDisabled` (many java.util.stream classes). Its lone
         // tag-7 ldc trips the gate below, so those <clinit>s were skipped -> $assertionsDisabled stayed false ->

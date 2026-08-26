@@ -253,8 +253,16 @@ defines the minimum the assembler must encode.
   header constants. Plus `Collections.enumeration`, found by a DENYLIST TRAP whose backtrace named it
   outright: `GZIPInputStream.readTrailer` builds a `SequenceInputStream`, whose 2-arg ctor is
   `this(Collections.enumeration(Arrays.asList(...)))`, and the overlay had only sort/unmodifiableSet/
-  emptySet. QEMU results: `DeflaterClose` 3/3, `InflaterClose` 3/3, `GZIPInputStreamAvailable` 1/1 after the
-  fix. **A `ZipOutputStream` closure is ~500 classes and load time is super-linear (302 classes in 35 s, +70
+  emptySet. **PI-VALIDATED 15/22** (2026-08-26): DeflaterClose 3/3, InflaterClose 3/3,
+  GZIPInputStreamAvailable, both DataDescriptor tests, CloseWrappedStream 6/6 (its log shows
+  `baked java/lang/Throwable.addSuppressed`/`getSuppressed` — the tests that need suppressed exceptions are
+  the ones exercising the new support). The 7 `Zip64DataDescriptor` failures were ONE bug:
+  **`HexFormat.of()` returned null because its `<clinit>` was SILENTLY skipped.** `clinitCompilable` allows
+  the `desiredAssertionStatus` idiom only when it is the WHOLE initializer; HexFormat does the idiom PLUS
+  real work, and the rule's premise (such classes are clinitBlocked/seeded anyway) did not hold for it — so
+  it fell between the two policies. Allowlisted like Pattern/Socket/ImmutableCollections. **The lesson is the
+  SILENCE: a rejected initializer is indistinguishable from one that ran — the class loads, gets static
+  cells, reports lazy-init pending, and answers null forever.** **A `ZipOutputStream` closure is ~500 classes and load time is super-linear (302 classes in 35 s, +70
   in the next 115 s), so QEMU cannot finish those four — ONE combined image (`ZipJUnitAll`, wired into
   `JDKTESTS`) plus a Pi boot is the only practical harness. Adding methods to Throwable widened its vtable
   12 → 14 and `vtparity java/lang/Throwable OK 14` still holds, because both worlds derive from the overlay.**

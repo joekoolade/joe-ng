@@ -37,6 +37,7 @@ public class ZipJUnitAll
         catch (Throwable e)
         {
             System.out.println("  FAIL " + name + " : " + e);
+            e.printStackTrace();                       // the frame is the diagnosis; a bare NPE is not
             fails += 1;
         }
     }
