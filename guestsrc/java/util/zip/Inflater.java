@@ -17,7 +17,7 @@ import zip.Inflate;
  * the 2-byte zlib header and ignoring the trailing Adler-32; {@link #getAdler} therefore answers 0. Preset
  * dictionaries are not supported (nothing in the zip/jar path uses them).
  */
-public class Inflater
+public class Inflater implements AutoCloseable
 {
     private final Inflate engine = new Inflate();
     private boolean nowrap;
@@ -46,6 +46,15 @@ public class Inflater
     }
 
     /** Release the decoder. There is no native resource here, so this only latches the closed state. */
+    /**
+     * JDK 24 made {@code Inflater} {@link AutoCloseable} so it can be a try-with-resources resource; close()
+     * is specified as end(), and end() is idempotent, so repeated closes are harmless.
+     */
+    public void close()
+    {
+        end();
+    }
+
     public void end()
     {
         ended = true;

@@ -241,7 +241,23 @@ defines the minimum the assembler must encode.
   LZ77+Huffman implementation. Proof is the JDK's OWN `Inflater` decoding our output (raw and
   zlib-wrapped, any buffer size) in `test/zip/ZipTest`. `ZipOutputStream.<clinit>` is
   `clinitBlocked` (it only reads a system property). Stock OpenJDK jtreg tests from
-  `java/util/{jar,zip}`: 15 of the 19 runnable ones pass.
+  `java/util/{jar,zip}`: 15 of the 19 runnable ones pass. **The JUnit half too** (2026-08-26): of the 32
+  `@run junit` zip tests, 21 need `java.nio.file` (they write a temp archive) and 7 run on metal via a
+  hand-written runner — joe-ng cannot host the JUnit engine, so a main() calls each `@Test` on a fresh
+  instance. Needed a bigger `org.junit.jupiter` shim (assertEquals/assertNotNull/assertArrayEquals/
+  assertSame, `@BeforeEach`, `params`) and five REAL java.base gaps: `Throwable.addSuppressed`/
+  `getSuppressed` (**javac lowers EVERY try-with-resources into `addSuppressed` — a language feature was
+  unimplemented and nothing had noticed**), `Inflater`/`Deflater` not `AutoCloseable` (JDK 24 added
+  `close()`), `ByteBuffer` absolute accessors + `wrap` + settable `ByteOrder` (zip headers are little-endian,
+  the ByteBuffer default is big-endian — silent when wrong), a missing `java/nio/ByteOrder`, and `ZipFile`'s
+  header constants. Plus `Collections.enumeration`, found by a DENYLIST TRAP whose backtrace named it
+  outright: `GZIPInputStream.readTrailer` builds a `SequenceInputStream`, whose 2-arg ctor is
+  `this(Collections.enumeration(Arrays.asList(...)))`, and the overlay had only sort/unmodifiableSet/
+  emptySet. QEMU results: `DeflaterClose` 3/3, `InflaterClose` 3/3, `GZIPInputStreamAvailable` 1/1 after the
+  fix. **A `ZipOutputStream` closure is ~500 classes and load time is super-linear (302 classes in 35 s, +70
+  in the next 115 s), so QEMU cannot finish those four — ONE combined image (`ZipJUnitAll`, wired into
+  `JDKTESTS`) plus a Pi boot is the only practical harness. Adding methods to Throwable widened its vtable
+  12 → 14 and `vtparity java/lang/Throwable OK 14` still holds, because both worlds derive from the overlay.**
 - **Jar/zip DONE — a program can ship as a jar and the VM runs it. Pi-validated.** `/etc/init` gained
   `classpath=<path>`: the named RAMFS archive goes on the class path, and any class the
   writer-baked directory lacks is inflated out of it on demand (`vm/JarFs` behind

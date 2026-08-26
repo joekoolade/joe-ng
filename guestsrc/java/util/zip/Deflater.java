@@ -14,7 +14,7 @@ import zip.Deflate;
  * Preset dictionaries are unsupported; {@link #setDictionary} still bounds-checks its arguments first, which
  * is what stock does and what {@code java/util/zip/Bounds} tests.
  */
-public class Deflater
+public class Deflater implements AutoCloseable
 {
     public static final int DEFLATED = 8;
     public static final int NO_COMPRESSION = 0;
@@ -56,6 +56,15 @@ public class Deflater
     }
 
     /** Release the compressor. There is no native resource here, so this only latches the closed state. */
+    /**
+     * JDK 24 made {@code Deflater} {@link AutoCloseable} so it can be a try-with-resources resource; close()
+     * is specified as end(), and end() is idempotent, so repeated closes are harmless.
+     */
+    public void close()
+    {
+        end();
+    }
+
     public void end()
     {
         ended = true;
