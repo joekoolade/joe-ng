@@ -9154,6 +9154,12 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/ArrayStoreException"));
     }
 
+    /** Allocate a mini {@code java/lang/ClassCastException} — the JIT's failed-checkcast helper. */
+    static long newCce()
+    {
+        return newExc(Magic.bytes("java/lang/ClassCastException"));
+    }
+
     /** Allocate a mini {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected trap. */
     static long newInternalError()
     {

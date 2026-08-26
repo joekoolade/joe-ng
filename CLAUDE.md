@@ -208,8 +208,21 @@ defines the minimum the assembler must encode.
     `lisp evals=600 result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK (828 bytes).
     **Lesson worth keeping:** a name-winning overlay silently drops the stock class's INTERFACES, and
     nothing complains until some stock code dispatches through one.
-  - **Known gaps:** `java/util/jar/Attributes/PutAndPutAll` hangs in `java/lang/StrictMath.<clinit>`
-    (measured: zero log progress over 90 s) — unrelated to dispatch or to the overlay's interfaces.
+  - **A failed `checkcast` throws `ClassCastException` now — it used to SPIN.** `VM.checkCast` ended a
+    failing cast in `while (true) Magic.wfe()`, a leftover from before exceptions existed. That is the whole
+    of the `PutAndPutAll` "hang": the test's first action is a deliberately-failing cast. A VM helper cannot
+    throw for its caller (it has its own frame, so the handler search starts one frame too deep), so the
+    helper became a PREDICATE — `VM.castOk(ref,type)` → 1/0, exactly `checkCast`'s logic with the halt
+    replaced by a return — and `Baseline.checkCast` branches on it and throws INLINE via the existing
+    `throwImplicit`, putting the casting method's pc/sp in front of the unwinder like the null/bounds/aastore
+    checks already do. Metal JIT only; the writer stays check-free (`implicitChecks()`), so the self-hosting
+    fixpoint is untouched. `java/lang/ClassCastException` was ALREADY pulled and flagged instantiated — the
+    infrastructure had been prepared, only the throw was never wired. `demo/CastDemo` pins six shapes incl.
+    cross-frame unwind and catching as `RuntimeException` (proving the thrown object has a real TIB).
+  - **The `clinit-lazy java/lang/StrictMath` line was a red herring**, and worth remembering as one: it was
+    merely the last thing PRINTED before the wedge, not the fault site. `demo/StrictMathDemo` runs that
+    initializer to completion on its own. The last log line names where output stopped, not where control did.
+  - **Known gaps:** none in `java/util/jar` — `PutAndPutAll` and `TestAttrsNL` both pass now.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
     classes in a jar batch, ALL denylisted classes on never-taken branches, so a compile-time

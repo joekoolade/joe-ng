@@ -448,6 +448,40 @@ public final class VM
         return Loader.newArith();
     }
 
+    /** Allocate a mini {@code java/lang/ClassCastException} — the JIT calls this on a failed {@code checkcast}. */
+    static long newCce()
+    {
+        return Loader.newCce();
+    }
+
+    /**
+     * {@code checkcast} predicate: 1 if the cast holds (the JIT falls through), 0 if it must throw a
+     * {@link #newCce ClassCastException}. Exactly {@link #checkCast}'s logic with the halt replaced by a
+     * return, because a VM helper cannot throw on the caller's behalf -- it has its own frame, so the
+     * handler search would start in the wrong place. The JIT branches on this and throws INLINE instead,
+     * which is what puts the caller's pc/sp in front of the unwinder.
+     */
+    static int castOk(long ref, long targetType)
+    {
+        if (targetType == 0L)
+        {
+            return 1;      // unresolved target (e.g. an array type "[B"): trust the class-file verifier
+        }
+        if (ref == 0L)
+        {
+            return 1;      // null casts to anything
+        }
+        if (instanceOf(ref, targetType) != 0)
+        {
+            return 1;
+        }
+        if (Magic.load64(ref) <= ObjectModel.MAX_RAW_ARRAY_TIB && isArrayType(targetType))
+        {
+            return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
+        }
+        return 0;
+    }
+
     /** Allocate a mini {@code java/lang/ArrayStoreException} — the JIT calls this when an {@code aastore}
      *  stores a value not assignable to the array's element type. */
     static long newAse()
@@ -651,6 +685,8 @@ public final class VM
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
+        if (newCceAddr == 0L) { long u = newCce(); }                  // ClassCastException (failed checkcast)
+        if (castOkAddr == 0L) { int u = castOk(0L, 0L); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { newUnresolved(-1L); }          // `new` of an unresolvable class (halts)
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
@@ -1795,6 +1831,8 @@ public final class VM
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
+    static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
+    static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)V — an executed `new` of an unresolvable class
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)

@@ -455,6 +455,14 @@ final class MetalSymbols implements Symbols
         {
             return VM.newAseAddr;
         }
+        if (helper == Symbols.NEW_CCE)
+        {
+            return VM.newCceAddr;
+        }
+        if (helper == Symbols.CAST_OK)
+        {
+            return VM.castOkAddr;
+        }
         if (helper == Symbols.ARRAY_STORE_OK)
         {
             return VM.arrayStoreOkAddr;
