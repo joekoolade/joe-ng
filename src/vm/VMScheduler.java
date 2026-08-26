@@ -38,8 +38,16 @@ public final class VMScheduler
         Gic.end(id);
         if (pcStop != 0)
         {
-            Magic.writeCNTP_CTL_EL0(0);                    // demo over: stop the timer, resume current so it can exit
-            return curSp;
+            // Demo over: stop this core's timer and resume TASK 0 -- always, whichever task we interrupted.
+            // Resuming the current task (what this used to do) strands the core whenever the stop lands while
+            // task 1 is running: task 1's exit path is an unconditional WFE park, and the tick that was
+            // supposed to "switch to task 0 later" is the very tick we just disabled. A stranded core never
+            // returns from pcCoreMain, so it never joins the shared run queue afterwards. Invisible on QEMU,
+            // which delivers no timer PPI to a secondary at all, so its cores never leave task 0.
+            Magic.writeCNTP_CTL_EL0(0);
+            pcTaskSp[core * 2 + pcCur[core]] = curSp;      // save whoever we interrupted ...
+            pcCur[core] = 0;
+            return pcTaskSp[core * 2];                     // ... and hand the core back to task 0, which exits
         }
         int slot = pcCur[core];
         pcTaskSp[core * 2 + slot] = curSp;                 // save the task we interrupted
@@ -58,8 +66,8 @@ public final class VMScheduler
         }
         while (true)
         {
-            Magic.wfe();                                   // a later tick switches to task 0, which exits
-        }
+            Magic.wfe();                                   // the stop tick hands this core back to task 0, which
+        }                                                  //   exits pcCoreMain; this task is simply never run again
     }
 
     /**

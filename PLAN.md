@@ -4260,6 +4260,16 @@ once and the fault trace interleaved byte by byte. `Uart.lock()/unlock()` (raw w
 owner-by-core, recursive, armed only while more than one core schedules) is taken by `reportFault` and
 `reportNestedFault` and never released — those cores halt, so their trace prints whole.
 
+**Third hardware bug: the set-piece demo stranded the cores it was supposed to hand back.** The full suite
+on hardware reported `smp sched: 1 of 4 cores on the run queue` and `steps/core: c0=240 c1=0 c2=0 c3=0` --
+no secondary joined -- while the same image under QEMU said 4 of 4. `pcSchedule`'s stop path disabled the
+core's timer and resumed *whichever* task it had interrupted. If that was `pcTask1`, whose exit is an
+unconditional `WFE` park, the core stranded there: the tick that was meant to "switch to task 0 later" is
+the very tick just disabled. A stranded core never returns from `pcCoreMain`, so it never reaches the
+shared run queue. It is a coin flip per core on hardware and IMPOSSIBLE on QEMU, which delivers no timer
+PPI to a secondary at all, so its cores never leave task 0. The stop path now always hands the core back to
+task 0, which exits.
+
 **Not done yet (the next increments).**
 
 - Reflection-driven loading (`Class.forName`, `defineClass`) reaches the loader WITHOUT the loader lock —

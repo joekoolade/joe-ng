@@ -165,6 +165,13 @@ defines the minimum the assembler must encode.
     they only reach new code through an `ERET`. A console lock (`Uart.lock/unlock`, owner-by-core,
     recursive, armed with SMP) was needed to read the report at all — two cores' traces had interleaved
     byte by byte.
+  - **Third hardware bug — the set-piece demo STRANDED the cores.** Full suite on hardware said
+    `smp sched: 1 of 4 cores on the run queue`, `steps/core: c0=240 c1=0 c2=0 c3=0`, where QEMU said 4 of 4.
+    `pcSchedule`'s stop path disabled the timer and resumed WHICHEVER task it interrupted; if that was
+    `pcTask1` (whose exit is an unconditional `WFE` park) the core stranded, because the tick meant to
+    "switch to task 0 later" was the one just disabled — so it never returned from `pcCoreMain` and never
+    joined the run queue. A coin flip per core on hardware, impossible on QEMU (no timer PPI reaches a
+    secondary there, so its cores never leave task 0). Stop now always resumes task 0.
   - **Known gaps:** reflection-driven loading (`forName`/`defineClass`) is not under the loader lock;
     secondary arenas are still never collected; the queue is plain round robin with no balancing or
     priorities; ordinary log output is still unlocked (only fault reports take the console).
