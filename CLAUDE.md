@@ -190,7 +190,9 @@ defines the minimum the assembler must encode.
     across the two worlds, so the call is ROUTED through the itable instead
     (`Symbols.defaultDispatch`; `Baseline.itableDispatch` is now shared with `invokeinterface`).
     `demo/DefaultIfaceDemo` pins it, including the two shapes that always worked (a `Map`-typed
-    receiver, and `LinkedHashMap`, which overrides `forEach`).
+    receiver, and `LinkedHashMap`, which overrides `forEach`). **Pi-validated on the full demo suite**
+    (2026-08-25): all parity assertions OK, 41 GC collections over `churnMB=625`, `lisp evals=600
+    result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK.
   - **Known gaps:** none of the three recorded during the jar arc remain.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5

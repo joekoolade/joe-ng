@@ -4113,6 +4113,13 @@ that demonstrably worked all along.
 `Matcher.appendExpandedReplacement` — a regex gap, unrelated. `PutAndPutAll` still hangs, and was never
 related to any of this.
 
+**Pi-validated (2026-08-25, `core 166MHz`), full demo suite.** This rewrites `invokevirtual` resolution for
+every call the VM compiles, so the whole suite was the gate rather than the reproducer. Clean end to end:
+every `vtparity`/`itparity`/`typeadopt`/`staticadopt` assertion OK, no `FAULT` / `CAP EXCEEDED` /
+`DENYLIST TRAP`, GC `collections=41` under `churnMB=625 live=32 intact=32`, `lisp: evals=600 result=610
+stable=1`, and the WiFi finale all the way through — WPA2-PSK 4-way, DHCP `192.168.1.247`, DNS, TCP, and
+**HTTP 200 OK, 827 bytes** from example.com — ending at `(self-build retired; host writer only)`.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code
