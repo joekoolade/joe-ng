@@ -19,6 +19,14 @@ public class Thread implements Runnable
     Object[] tlKeys;            // @32 — ThreadLocal keys for this thread's thread-local map (null until first put)
     Object[] tlVals;            // @40 — parallel values
     int tlN;                    // @48 — number of entries
+    private int priority;       // @56 — the Java 1..10 value setPriority was given; 0 = never set
+
+    /** The lowest priority a thread may have. */
+    public static final int MIN_PRIORITY = 1;
+    /** The default. */
+    public static final int NORM_PRIORITY = 5;
+    /** The highest priority a thread may have. */
+    public static final int MAX_PRIORITY = 10;
 
     /** No-arg ctor: a Thread subclass overrides run() (its own body is the task); there is no separate target. */
     public Thread()
@@ -132,6 +140,45 @@ public class Thread implements Runnable
     public void start()
     {
         Magic.spawn(this);
+        if (priority != 0)
+        {
+            Magic.setprio(this, vmPriority(priority));   // apply what was set before this thread had a task
+        }
+    }
+
+    /**
+     * java.lang.Thread schedules on 1..10; the VM schedules on 0..1024. Map linearly, so MIN_PRIORITY lands
+     * exactly on the VM floor and MAX_PRIORITY exactly on its ceiling. The VM scale is the finer one and is
+     * reachable directly through {@code magic.Magic.setprio} for code that wants all 1025 levels.
+     */
+    private static int vmPriority(int javaPriority)
+    {
+        return (javaPriority - MIN_PRIORITY) * 1024 / (MAX_PRIORITY - MIN_PRIORITY);
+    }
+
+    /**
+     * Set this thread's priority. Scheduling is STRICT: a runnable thread of higher priority always runs
+     * first, so a busy high-priority thread starves lower ones. Setting it before {@code start()} is
+     * remembered and applied when the thread is started.
+     */
+    public final void setPriority(int newPriority)
+    {
+        if (newPriority < MIN_PRIORITY || newPriority > MAX_PRIORITY)
+        {
+            throw new IllegalArgumentException();
+        }
+        priority = newPriority;
+        Magic.setprio(this, vmPriority(newPriority));    // a no-op while this thread has no task yet
+    }
+
+    /** This thread's priority on the 1..10 scale. Unset threads report what they will actually be given. */
+    public final int getPriority()
+    {
+        if (priority != 0)
+        {
+            return priority;
+        }
+        return MIN_PRIORITY + (Magic.getprio(this) * (MAX_PRIORITY - MIN_PRIORITY) + 512) / 1024;
     }
 
     /** The Thread of the calling task (the started Thread itself, or a lazy wrapper for VM-created tasks). */

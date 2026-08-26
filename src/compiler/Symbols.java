@@ -79,6 +79,8 @@ public interface Symbols
     int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)V — `new` of a class the loader cannot resolve (halts)
     int CAST_OK = 44;           // vm/VM.castOk(JJ)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
     int NEW_CCE = 45;           // vm/VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
+    int SET_PRIO = 46;          // vm/VMScheduler.setPriority(JI)V — Thread.setPriority (0..1024 scale)
+    int GET_PRIO = 47;          // vm/VMScheduler.getPriority(J)I  — Thread.getPriority (0..1024 scale)
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.

@@ -10468,6 +10468,8 @@ public final class Loader
         if (isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
         if (isName(gbase, n, 0x726561644C52L, 6))    { return Intrinsics.READ_LR; }     // "readLR" (getCallerClass)
         if (isName(gbase, n, 0x6D70696472L, 5))      { return Intrinsics.READ_MPIDR; }  // "mpidr" (which core am I?)
+        if (isName(gbase, n, 0x7365747072696FL, 7))  { return Intrinsics.SET_PRIO; }    // "setprio"
+        if (isName(gbase, n, 0x6765747072696FL, 7))  { return Intrinsics.GET_PRIO; }    // "getprio"
         return -1;
     }
 

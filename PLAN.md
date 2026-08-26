@@ -4307,6 +4307,83 @@ and can equally mean "they joined and there was nothing left to take."**
 - The run queue is a plain round robin with no load balancing or priorities, and `MAX_TASKS` (40) now also
   budgets one idle task per core.
 
+## Priority scheduling — 0..1024, strict (2026-08-26)
+
+The SMP scheduler above picked the next READY task by round robin: every task equal, whoever was next in
+rotation. This adds priorities, on a **0..1024 scale where HIGHER IS MORE URGENT** — the `java.lang.Thread`
+convention, in which `MIN_PRIORITY < MAX_PRIORITY`. `PRIO_NORM` is 512 and every task starts there.
+
+**Strict, with round robin only among equals.** `pickNext` now takes the highest-priority runnable task; a
+lower one runs only when nothing above it can. That is the defining property, and its consequence is
+**starvation by design**: a busy high-priority task keeps the core forever, with no ageing or decay to
+rescue anyone below. The demo makes the point rather than hiding it — task 0 drops itself to the floor and
+visibly makes no progress until all three demo tasks are finished.
+
+The mechanism is a single scan. The loop starts at `cur+1`, visits the current task LAST, and a candidate
+must beat the incumbent *strictly* — so the highest priority always wins, and among several at that
+priority the one furthest from its last turn does. It costs one full O(taskCount) pass per switch where the
+old round robin could stop at the first hit; at `MAX_TASKS` = 40 that is a handful of compares.
+
+**Priority is nothing without preemption latency.** Picking correctly at the next scheduling point still
+leaves up to a full 10 ms quantum of inversion when a high-priority task is woken by a low-priority one.
+So every task-context wake — `semPost`, `monExit`, `notify`, `notifyAll`, `unpark`, `interrupt` — now ends
+in `preemptFor(woken)`: an O(1) compare that yields the core immediately if the wakee outranks the waker.
+The waker already knows which task it woke, so no scan is needed. `semPostRaw` deliberately does NOT
+preempt — it is the ISR path, and it only *returns* the woken task so its task-context callers can decide.
+
+**Contended resources go up the priority order too.** A scheduler that picks the best task but hands a
+released monitor to the lowest-numbered waiter is only half a priority scheduler. `semPostRaw`,
+`wakeMonWaiter` and `objNotify` now wake the *most urgent* waiter rather than the first one found.
+
+**Both APIs.** VM-internal `VMScheduler.setTaskPriority(task, prio)` takes the raw 0..1024 scale (and
+yields when a task lowers its own, since it may have just put itself below someone waiting). Guest code
+gets the stock `java.lang.Thread.setPriority`/`getPriority` on Java's 1..10 scale, mapped linearly
+(`(p-1) * 1024 / 9`, so MIN lands on 0 and MAX on 1024), plus `magic.Magic.setprio`/`getprio` for anything
+that wants all 1025 levels. A priority set BEFORE `start()` is remembered in the `Thread` and applied when
+the thread is started — the case that is easy to get wrong, because there is no task to retarget yet.
+Spawned tasks otherwise inherit their creator's priority, as `java.lang.Thread` does.
+
+**PI-VALIDATED (2026-08-26, `core 166MHz`)** for the guest API, which is the path with all the new
+machinery in it — the `setprio`/`getprio` intrinsics through the metal JIT (magic-name match, lowering,
+stashed helper addresses), `getPriority` round-tripping both before `start()` and from inside the running
+thread, priority-ordered monitor handoff, and `preemptFor`. `demo/PrioDemo` on hardware:
+
+```
+finish order = 10 8 6 5 3 1
+want         = 10 8 6 5 3 1
+[main returned normally]
+```
+
+**PI-VALIDATED, BOTH DEMOS (2026-08-26, `core 166MHz`).** The full suite on hardware, under REAL timer
+preemption (`ticks/core: c1=50 c2=50 c3=50`, `sched: 89 preemptions`), with the whole regression gate
+unmoved around it — philosophers (now on priority-ordered semaphore handoff), `churnMB=625 live=32
+intact=32` over 41 collections, `lisp: evals=600 result=610 stable=1`, `steps/core: c0=61 c1=59 c2=60
+c3=60`, and WiFi WPA2 → DHCP → DNS → TCP → **HTTP 200 OK**. No `FAULT`, no `TRAP`, no `STW TIMEOUT`.
+
+The VM-level demo spawns three tasks LOW first, then MED, then HIGH, so FIFO or round robin would finish
+them in spawn order:
+
+```
+priority (0-1024, higher first; spawned LOW first): finish HML (want HML)  steps L/M/H = 20/20/20
+```
+
+and `demo/PrioDemo` proves the same through the stock guest API only — six threads started in ASCENDING
+priority order, all funnelled through one monitor so the result is deterministic on any core count:
+
+```
+finish order = 10 8 6 5 3 1
+want         = 10 8 6 5 3 1
+```
+
+the exact reverse of the start order, with `getPriority` round-tripping both before `start()` and while
+running.
+
+**Not done yet.** No ageing/decay, so starvation is permanent — a `nice`-style fairness mode would be a
+separate policy. No priority inheritance on monitors, so classic priority inversion is still possible: a
+low-priority task holding a monitor that a high-priority task wants is not boosted, it is merely woken
+first once the monitor is free. The per-switch scan is linear; a per-priority ready bitmap would make it
+O(1) if `MAX_TASKS` ever grows past a few dozen.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

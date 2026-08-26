@@ -280,6 +280,23 @@ public final class Magic
         throw intrinsic();
     }
 
+    /**
+     * Set the scheduling priority of the task behind thread {@code t}, on the VM's 0..1024 scale where
+     * HIGHER IS MORE URGENT. Scheduling is strict: a runnable task at a higher priority always wins, so a
+     * busy high-priority thread starves everything below it. Values are clamped; an unstarted thread is a
+     * no-op (the guest {@code Thread} holds the value until {@code start()}).
+     */
+    public static void setprio(Object t, int prio)
+    {
+        throw intrinsic();
+    }
+
+    /** The 0..1024 scheduling priority of the task behind thread {@code t} (the default if not started). */
+    public static int getprio(Object t)
+    {
+        throw intrinsic();
+    }
+
     /** Allocate a fresh counting semaphore initialised to {@code initial}; returns its index. */
     public static int newSem(int initial)
     {
