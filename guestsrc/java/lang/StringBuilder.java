@@ -6,7 +6,7 @@ package java.lang;
  * {@code System.arraycopy} native). Fixed initial capacity (grown lazily) — enough for demand-loaded
  * demos. Compiled as a {@code java.base} patch.
  */
-public final class StringBuilder
+public final class StringBuilder implements Appendable
 {
     private byte[] value;
     private int count;
@@ -62,6 +62,20 @@ public final class StringBuilder
     public StringBuilder append(CharSequence cs)
     {
         return append(cs == null ? "null" : cs.toString());
+    }
+
+    /** {@code Appendable}'s three-arg form. Stock {@code Matcher.appendExpandedReplacement} reaches for it
+     *  on the {@code $n} group path, and implementing {@code Appendable} obliges us to have it. */
+    public StringBuilder append(CharSequence cs, int start, int end)
+    {
+        CharSequence s = cs == null ? "null" : cs;
+        int i = start;
+        while (i < end)
+        {
+            put(s.charAt(i));
+            i = i + 1;
+        }
+        return this;
     }
 
     public StringBuilder append(long v)

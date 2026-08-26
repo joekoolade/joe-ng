@@ -193,7 +193,23 @@ defines the minimum the assembler must encode.
     receiver, and `LinkedHashMap`, which overrides `forEach`). **Pi-validated on the full demo suite**
     (2026-08-25): all parity assertions OK, 41 GC collections over `churnMB=625`, `lisp evals=600
     result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK.
-  - **Known gaps:** none of the three recorded during the jar arc remain.
+  - **`StringBuilder` implements `Appendable` now — `String.replaceAll` works.** The overlay
+    `guestsrc/java/lang/StringBuilder` was `public final class StringBuilder` implementing NOTHING, while
+    stock implements `Appendable, CharSequence`. Stock `Matcher.appendExpandedReplacement` declares its
+    sink as `Appendable` and does `app.append(nextChar)` — an `invokeinterface` onto an object whose class
+    had no such interface, so there was no itable to find and it surfaced as an NPE inside the Matcher
+    frame. javac states the gap directly when compiling against the guest overlay: *"StringBuilder cannot
+    be converted to Appendable"*. Fixed by implementing the interface (javac generates the three covariant
+    bridges) plus the `append(CharSequence,int,int)` the interface requires and the `$n` group path uses.
+    `vtparity java/lang/StringBuilder` 19 → 23, both worlds agreeing. `demo/RegexReplaceDemo` pins it, and
+    the stock jtreg `jar/Attributes/TestAttrsNL` now PASSES (it was the test that reported the NPE).
+    **Pi-validated on the full demo suite** (2026-08-25, `core 166MHz`): `vtparity java/lang/StringBuilder
+    OK 23` in every batch, `load java/lang/Appendable` alongside it, 41 GC collections over `churnMB=625`,
+    `lisp evals=600 result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK (828 bytes).
+    **Lesson worth keeping:** a name-winning overlay silently drops the stock class's INTERFACES, and
+    nothing complains until some stock code dispatches through one.
+  - **Known gaps:** `java/util/jar/Attributes/PutAndPutAll` hangs in `java/lang/StrictMath.<clinit>`
+    (measured: zero log progress over 90 s) — unrelated to dispatch or to the overlay's interfaces.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
     classes in a jar batch, ALL denylisted classes on never-taken branches, so a compile-time
