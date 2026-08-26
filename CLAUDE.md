@@ -110,7 +110,10 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
-- **SMP scheduling — one run queue, four cores. PI-VALIDATED (2026-08-26, `core 166MHz`).** The real scheduler (the one behind
+- **SMP scheduling — one run queue, four cores. PI-VALIDATED BOTH PATHS (2026-08-26, `core 166MHz`):
+  suite `smp sched: 4 of 4 cores on the run queue`, `steps/core: c0=61 c1=60 c2=60 c3=59` under REAL
+  preemption (`ticks/core c1=50 c2=50 c3=50`), with philosophers + 41 GC collections + lisp fixpoint +
+  WiFi HTTP 200 OK all unmoved and no STW TIMEOUT; launch path `demo/SmpDemo` 800/800 across four cores.** The real scheduler (the one behind
   `Thread.start`, monitors, `Object.wait`, `LockSupport`) now runs on ALL FOUR A72s, not just core 0. The
   four cores were already awake; they ran two fixed set pieces (`smpWork`, `pcCoreMain`) and parked while
   Java threads time-sliced core 0. Now: one shared task table, `curTask` is per-core (`coreTask[core]`),

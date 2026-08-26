@@ -4210,8 +4210,21 @@ delivers no timer PPI to the secondaries (`ticks/core: c1=0 c2=0 c3=0`), so ever
 voluntary yield; the same run on hardware also preempts. No `FAULT`, no `STW TIMEOUT`, the philosophers and
 the lisp fixpoint unchanged, suite ending normally at `(self-build retired; host writer only)`.
 
-**PI-VALIDATED (2026-08-26, `core 166MHz`).** `demo/SmpDemo` on real hardware, with the secondaries taking
-real timer PPIs rather than QEMU's voluntary-yield-only path:
+**PI-VALIDATED, BOTH PATHS (2026-08-26, `core 166MHz`).** The full demo suite, with the secondaries taking
+real timer PPIs (`ticks/core: c1=50 c2=50 c3=50`, `sched: 89 preemptions`) rather than QEMU's
+voluntary-yield-only path:
+
+```
+smp sched: 4 of 4 cores on the run queue
+steps/core: c0=61  c1=60  c2=60  c3=59        (240 total)
+```
+
+and the standing regression gate around it is unmoved: philosophers, `churnMB=625 live=32 intact=32` over
+**41 collections** (so stop-the-world parked three genuinely-mutating cores 41 times without one timeout),
+`lisp: evals=600 result=610 stable=1`, and WiFi WPA2 → DHCP → DNS → TCP → **HTTP 200 OK**. No `FAULT`, no
+`TRAP`, no `STW TIMEOUT`.
+
+And the launch path, `demo/SmpDemo` — four ordinary `java.lang.Thread`s:
 
 ```
 core 0 steps 262   core 1 steps 42   core 2 steps 318   core 3 steps 178
