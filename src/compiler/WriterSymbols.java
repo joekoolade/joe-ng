@@ -261,8 +261,10 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "dcCVAC(J)V" -> Intrinsics.DC_CVAC;
         case "dcCIVAC(J)V" -> Intrinsics.DC_CIVAC;
         case "icIALLU()V" -> Intrinsics.IC_IALLU;
+        case "icIVAU(J)V" -> Intrinsics.IC_IVAU;
         case "readCurrentEL()J" -> Intrinsics.READ_CURRENT_EL;
         case "readMPIDR()J" -> Intrinsics.READ_MPIDR;
+        case "mpidr()J" -> Intrinsics.READ_MPIDR;         // the guest-callable (short-named) spelling
         case "readCNTFRQ_EL0()J" -> Intrinsics.READ_CNTFRQ_EL0;
         case "readCNTPCT_EL0()J" -> Intrinsics.READ_CNTPCT_EL0;
         case "writeCNTP_TVAL_EL0(J)V" -> Intrinsics.WRITE_CNTP_TVAL_EL0;

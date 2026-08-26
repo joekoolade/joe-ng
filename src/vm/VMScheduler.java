@@ -38,8 +38,16 @@ public final class VMScheduler
         Gic.end(id);
         if (pcStop != 0)
         {
-            Magic.writeCNTP_CTL_EL0(0);                    // demo over: stop the timer, resume current so it can exit
-            return curSp;
+            // Demo over: stop this core's timer and resume TASK 0 -- always, whichever task we interrupted.
+            // Resuming the current task (what this used to do) strands the core whenever the stop lands while
+            // task 1 is running: task 1's exit path is an unconditional WFE park, and the tick that was
+            // supposed to "switch to task 0 later" is the very tick we just disabled. A stranded core never
+            // returns from pcCoreMain, so it never joins the shared run queue afterwards. Invisible on QEMU,
+            // which delivers no timer PPI to a secondary at all, so its cores never leave task 0.
+            Magic.writeCNTP_CTL_EL0(0);
+            pcTaskSp[core * 2 + pcCur[core]] = curSp;      // save whoever we interrupted ...
+            pcCur[core] = 0;
+            return pcTaskSp[core * 2];                     // ... and hand the core back to task 0, which exits
         }
         int slot = pcCur[core];
         pcTaskSp[core * 2 + slot] = curSp;                 // save the task we interrupted
@@ -58,8 +66,8 @@ public final class VMScheduler
         }
         while (true)
         {
-            Magic.wfe();                                   // a later tick switches to task 0, which exits
-        }
+            Magic.wfe();                                   // the stop tick hands this core back to task 0, which
+        }                                                  //   exits pcCoreMain; this task is simply never run again
     }
 
     /**
@@ -209,18 +217,173 @@ public final class VMScheduler
         enableMmuThisCore();                               // caches on: coherent with the primary + the lock
         Magic.store64(CORE_FLAGS + core * 8L, core);       // report in (the primary counts these)
         Magic.dsb();
-        while (Magic.load64(CORE_FLAGS) == 0L)             // wait for the primary's GO (slot 0)
+        if (smpDemo != 0)                                  // the demo-suite boot runs the two SMP set pieces first
+        {
+            while (Magic.load64(CORE_FLAGS) == 0L)         // wait for the primary's GO (slot 0)
+            {
+            }
+            smpWork(core);                                 // pull jobs from the shared queue under the lock
+            while (pcGo2 == 0)                             // wait for the per-core-timer demo to start
+            {
+            }
+            pcCoreMain(core);                              // this core runs its own preemptive timer
+        }
+        while (true)                                       // then serve the REAL scheduler, round after round
+        {
+            while (schedGo == 0)                           // core 0 opens the shared run queue ...
+            {
+                Magic.wfe();                               // (WFE, not a hot spin: core 0 has real work to do)
+            }
+            smpSchedulerMain(core);                        // ... this core schedules from it until the drain
+            while (schedGo != 0)                           // ... and waits for the next round to open
+            {
+                Magic.wfe();
+            }
+        }
+    }
+
+    /**
+     * A secondary core joining the SHARED run queue -- the real scheduler, not the fixed two-task set piece
+     * above. It brings up ITS banked GIC PPI 30 + CPU interface, points VBAR at core 0's context-switch
+     * vectors (one table, one switch stub: the scheduler is the same code on every core), and claims a task
+     * slot for the flow it is already running. That slot becomes this core's IDLE task: pinned here (its
+     * stack is this core's fixed SEC stack, not a heap block) and never handed out as work. Then it yields
+     * forever, and every yield is a trip through {@link #pickNext} -- so the core picks up whatever is READY
+     * in the shared table, and its own timer preempts whatever it picked. Returns on the drain.
+     */
+    static void smpSchedulerMain(int core)
+    {
+        Gic.init(Gic.PPI_CNTPNS);                          // this core's banked PPI 30 + its GICC/PMR
+        Magic.writeVBAR_EL1(vbarBase);                     // core 0's vectors: the shared context-switch stub
+        Magic.isb();
+        long daif = schedLock();
+        int id = taskCount;
+        taskCount = id + 1;
+        taskSp[id] = 0L;                                   // filled by the first switch out of this flow
+        taskStackBase[id] = 0L;                            // a fixed per-core stack, not a heap object
+        taskState[id] = TASK_RUNNING;                      // this flow IS the task, and it is running now
+        taskCore[id] = core;                               // pinned: only this core may resume this stack
+        taskIdle[id] = 1;                                  // never picked as work -- only as this core's fallback
+        taskDone[id] = 0;
+        taskWake[id] = 0L;
+        taskWaitOn[id] = 0;
+        taskWaitObj[id] = 0L;
+        taskThreadObj[id] = 0L;
+        taskInterrupted[id] = 0;
+        taskPermit[id] = 0;
+        taskMonWait[id] = 0L;
+        coreIdle[core] = id;
+        coreTask[core] = id;
+        coreSched[core] = 1;                               // core 0 counts these to know everyone joined
+        schedUnlock(daif);
+        Magic.writeCNTP_TVAL_EL0(timerReload);             // this core's own preemption tick
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();
+        while (smpStop == 0)
+        {
+            taskYield();                                   // offer this core to the run queue FIRST -- a core
+            pauseMs1();                                    //   that pauses before its first ask can miss a
+        }                                                  //   short burst of work entirely; then back off
+        Magic.writeCNTP_CTL_EL0(0);                        // drained: stop this core's timer and leave the table
+        Magic.disableIrq();
+        daif = schedLock();
+        coreSched[core] = 0;
+        coreIdle[core] = -1;
+        taskState[id] = TASK_EMPTY;
+        taskIdle[id] = 0;
+        taskDone[id] = 1;                                  // the slot is recyclable if SMP starts another round
+        schedUnlock(daif);
+    }
+
+    /** ~1 ms of wall clock. How long an idle core backs off between asks, and how long one demo step takes. */
+    static void pauseMs1()
+    {
+        long end = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 1000L;
+        while (Magic.readCNTPCT_EL0() < end)
         {
         }
-        smpWork(core);                                     // pull jobs from the shared queue under the lock
-        while (pcGo2 == 0)                                 // wait for the per-core-timer demo to start
+    }
+
+    /**
+     * Open the shared run queue to the secondary cores: from here the task table is cross-core state (so
+     * {@link #schedLock} really locks), and cores 1-3 leave their park and start pulling READY tasks out of
+     * it. Prints how many cores actually joined. Core 0 must already have the scheduler up (task table,
+     * switch vectors, timer) -- the secondaries adopt ITS vectors and tick length.
+     */
+    static void startSmpScheduling()
+    {
+        if (!SMP_ENABLED || coreTask == null)
+        {
+            return;
+        }
+        smpStop = 0;
+        Magic.store32(SCHED_LOCK, 0);                      // free before anyone can take it (raw scratch RAM)
+        Uart.armLock(1);                                   // more than one core can print now: lock reports
+        Magic.dsb();
+        smpSched = 1;                                      // the table is shared now: take the lock around it
+        Magic.dsb();
+        schedGo = 1;                                       // release cores 1-3 into smpSchedulerMain
+        Magic.dsb();
+        Magic.sev();
+        int up = 0;
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 2L;
+        while (up < 3 && Magic.readCNTPCT_EL0() < deadline)
+        {
+            up = coreSched[1] + coreSched[2] + coreSched[3];
+        }
+        Uart.write(Magic.bytes("smp sched: "));
+        printDec(up + 1);                                  // + the primary
+        Uart.write(Magic.bytes(" of 4 cores on the run queue\n"));
+    }
+
+    /**
+     * Close the shared run queue: the secondaries take no more work (so each falls back to its idle task
+     * within a quantum), leave the table, and park. Only then is the table single-core state again -- which
+     * is what makes {@link VM#resetTaskTable} safe to call afterwards.
+     */
+    static void stopSmpScheduling()
+    {
+        if (smpSched == 0)
+        {
+            return;
+        }
+        smpStop = 1;
+        Magic.dsb();
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0();
+        while (Magic.readCNTPCT_EL0() < deadline
+               && coreSched[1] + coreSched[2] + coreSched[3] != 0)
         {
         }
-        pcCoreMain(core);                                  // this core runs its own preemptive timer
-        while (true)                                       // done: park
+        smpSched = 0;                                      // back to one core in the table: no lock needed
+        Uart.armLock(0);
+        schedGo = 0;                                       // secondaries loop back to waiting for the next round
+        smpStop = 0;
+        Magic.dsb();
+        Magic.sev();                                       // wake them out of their WFE wait
+    }
+
+    /**
+     * The SMP threading demo's task: step, note WHICH CORE the step ran on, work briefly, yield, repeat.
+     * The tasks are unpinned, so each step can land on a different core -- the per-core tally core 0 prints
+     * afterwards is the evidence that one shared run queue is feeding all four A72s.
+     *
+     * <p>Each step spends ~1 ms, and that is load-bearing rather than decorative. With a bare
+     * bump-and-yield the whole run is 240 context switches, which core 0 finishes in well under a
+     * millisecond -- before a secondary, backing off between asks, has offered itself even once. The tally
+     * then reads c0=240 and zeroes, which looks exactly like "the secondaries never joined" and is not.
+     * Giving each step real duration spreads the run across the demo's window, where sharing can show.
+     */
+    static void smpTask()
+    {
+        int n = 0;
+        while (n < 40)
         {
-            Magic.wfe();
+            smpRan[(int) (Magic.readMPIDR() & 3L)] += 1;   // each core touches only its OWN counter
+            n = n + 1;
+            pauseMs1();                                    // ... and hold the core long enough to be shared
+            taskYield();
         }
+        taskExit();
     }
 
     /**
@@ -321,14 +484,103 @@ public final class VMScheduler
     }
 
     /**
+     * Enter the scheduler's critical section: mask IRQs on this core (so this core cannot be preempted while
+     * holding the lock) and take the cross-core lock. Returns the previous DAIF so {@link #schedUnlock} can
+     * restore it -- a caller that was already masked (the IRQ/SVC stubs, the collector) stays masked on the
+     * way out. The lock itself is only taken once the secondaries are actually scheduling: before that this
+     * is the only core in the table, and LDAXR/STLXR needs the cacheable MMU map to work at all.
+     */
+    static long schedLock()
+    {
+        long daif = Magic.readDaif();
+        Magic.disableIrq();
+        if (smpSched != 0)
+        {
+            Magic.spinLock(SCHED_LOCK);
+        }
+        return daif;
+    }
+
+    /** Leave the scheduler's critical section, restoring the IRQ mask {@link #schedLock} found. */
+    static void schedUnlock(long daif)
+    {
+        if (smpSched != 0)
+        {
+            Magic.spinUnlock(SCHED_LOCK);
+        }
+        if ((daif & 0x80L) == 0L)                          // the caller had IRQs on: give them back
+        {
+            Magic.enableIrq();
+        }
+    }
+
+    /**
+     * True if {@code core} may claim task {@code t}. Two things disqualify it. It may be PINNED elsewhere --
+     * a core's idle task runs on that core's fixed stack, and task 0 owns the boot flow's. And it may still
+     * be IN TRANSIT: a task that blocks publishes TASK_BLOCKED (and a waker publishes TASK_READY) before the
+     * switch stub has saved its context, so in that window its saved frame is stale and it is still some
+     * core's {@code coreTask}. Resuming that frame on a second core would run one task on two cores at once
+     * -- the sharpest edge in the whole SMP switch, and invisible until it corrupts something far away.
+     */
+    private static boolean claimable(int t, int core)
+    {
+        if (taskCore[t] >= 0 && taskCore[t] != core)
+        {
+            return false;                                  // pinned to another core
+        }
+        int c = 0;
+        while (c < 4)
+        {
+            if (c != core && coreSched[c] != 0 && coreTask[c] == t)
+            {
+                return false;                              // another core has not switched off it yet
+            }
+            c += 1;
+        }
+        return true;
+    }
+
+    /**
+     * Park this core for a stop-the-world collection: publish the interrupted task's context (the collector
+     * traces task stacks, so the SP must be saved before we stop), report parked, and spin until core 0
+     * clears {@link VM#gcStop}. Reached only from {@link #pickNext} -- the timer tick and the idle yield are
+     * the two points every core passes through -- so a collection waits at most one quantum for a core.
+     */
+    private static long gcPark(int core, long curSp)
+    {
+        taskSp[coreTask[core]] = curSp;
+        gcParked[core] = 1;
+        Magic.dsb();
+        while (gcStop != 0)
+        {
+        }
+        gcParked[core] = 0;
+        Magic.dsb();
+        return curSp;                                      // the world restarts exactly where it stopped
+    }
+
+    /**
      * The heart of the switcher, shared by the timer path ({@link #schedule}) and the yield path
-     * ({@link #yieldPick}): save the interrupted task's frame pointer, wake any sleeper whose deadline
-     * has passed, then round-robin to the next READY task and return its saved frame (the stub loads it
-     * as SP before restoring). Task 0 never sleeps, so one task is always ready. Runs with IRQs masked.
+     * ({@link #yieldPick}) on EVERY core: save the interrupted task's frame pointer, wake any sleeper whose
+     * deadline has passed, then take the next READY task off the SHARED run queue and return its saved frame
+     * (the stub loads it as SP before restoring). Runs with IRQs masked and, once the secondaries have
+     * joined, under {@link VM#SCHED_LOCK} -- a task is marked TASK_RUNNING the moment a core claims it, so
+     * no two cores can ever resume the same stack.
      */
     static long pickNext(long curSp)
     {
-        taskSp[curTask] = curSp;                            // save the interrupted/yielding task
+        int core = (int) (Magic.readMPIDR() & 3L);
+        if (gcStop != 0 && core != 0)
+        {
+            return gcPark(core, curSp);                    // core 0 is collecting: nobody else touches the heap
+        }
+        long daif = schedLock();
+        int cur = coreTask[core];
+        taskSp[cur] = curSp;                                // save the interrupted/yielding task
+        if (taskState[cur] == TASK_RUNNING)
+        {
+            taskState[cur] = TASK_READY;                   // release our claim: any core may take it next
+        }
         long now = Magic.readCNTPCT_EL0();
         int i = 0;
         while (i < taskCount)                              // wake expired sleepers + timed-out blocked waiters
@@ -345,20 +597,36 @@ public final class VMScheduler
             }
             i = i + 1;
         }
-        int n = curTask;
-        int k = 0;
-        while (k < taskCount)                              // pick the next READY task, round-robin
+        if (smpStop == 0 || core == 0)                     // draining the secondaries: they take idle only
         {
-            n = n + 1;
-            if (n >= taskCount) { n = 0; }
-            if (taskState[n] == TASK_READY)
+            int n = cur;
+            int k = 0;
+            while (k < taskCount)                          // pick the next READY task, round-robin
             {
-                curTask = n;
-                return taskSp[n];
+                n = n + 1;
+                if (n >= taskCount) { n = 0; }
+                if (taskState[n] == TASK_READY && taskIdle[n] == 0 && claimable(n, core))
+                {
+                    taskState[n] = TASK_RUNNING;           // claimed by THIS core until it yields back
+                    coreTask[core] = n;
+                    schedUnlock(daif);
+                    return taskSp[n];
+                }
+                k = k + 1;
             }
-            k = k + 1;
         }
-        return curSp;                                      // nothing else ready: resume the current task
+        int fall = cur;                                    // no other work: stay on the current task ...
+        if (taskState[cur] != TASK_READY && coreIdle[core] >= 0)
+        {
+            fall = coreIdle[core];                         // ... unless it can't continue -- then idle this core
+        }
+        if (taskState[fall] == TASK_READY)
+        {
+            taskState[fall] = TASK_RUNNING;
+        }
+        coreTask[core] = fall;
+        schedUnlock(daif);
+        return taskSp[fall];                               // (fall == cur => taskSp[cur] == curSp: resume it)
     }
 
     /**
@@ -418,7 +686,7 @@ public final class VMScheduler
      */
     static void sleep(long ms)
     {
-        int me = curTask;
+        int me = curTask();
         long freq = Magic.readCNTFRQ_EL0();
         if (ms > 9223372036854775807L / freq)              // freq*ms would overflow: never time out, only interrupt
         {                                                  //   (Thread.sleep(Long.MAX_VALUE) waits until interrupted)
@@ -428,12 +696,16 @@ public final class VMScheduler
         {
             taskWake[me] = Magic.readCNTPCT_EL0() + freq * ms / 1000L;
         }
+        long daif = schedLock();
         taskState[me] = TASK_SLEEPING;
+        schedUnlock(daif);
         while (taskState[me] == TASK_SLEEPING)
         {
             if (taskInterrupted[me] != 0)                  // Thread.interrupt(): wake early (Thread.sleep then throws)
             {
+                daif = schedLock();
                 taskState[me] = TASK_READY;
+                schedUnlock(daif);
                 return;
             }
             taskYield();
@@ -448,13 +720,13 @@ public final class VMScheduler
         {
             return;
         }
-        Magic.disableIrq();
+        long daif = schedLock();
         taskInterrupted[tid] = 1;
         if (taskState[tid] == TASK_SLEEPING || taskState[tid] == TASK_BLOCKED)
         {
             taskState[tid] = TASK_READY;                   // let it observe the interrupt (sleep returns / wait wakes)
         }
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** {@code Thread.isInterrupted()}: the interrupt flag of {@code threadObj} (does NOT clear it). */
@@ -467,8 +739,9 @@ public final class VMScheduler
     /** Read + CLEAR the current task's interrupt flag — Thread.sleep uses this to throw InterruptedException once. */
     static int checkClearInterrupt()
     {
-        int r = taskInterrupted[curTask];
-        taskInterrupted[curTask] = 0;
+        int me = curTask();
+        int r = taskInterrupted[me];
+        taskInterrupted[me] = 0;
         return r;
     }
 
@@ -502,9 +775,9 @@ public final class VMScheduler
         long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * millis / 1000L;
         while (Magic.readCNTPCT_EL0() < deadline)
         {
-            if (taskInterrupted[curTask] != 0)
+            if (taskInterrupted[curTask()] != 0)
             {
-                taskInterrupted[curTask] = 0;              // join clears the interrupt status when it throws
+                taskInterrupted[curTask()] = 0;            // join clears the interrupt status when it throws
                 return 2;
             }
             if (taskDone[tid] != 0)
@@ -519,18 +792,18 @@ public final class VMScheduler
     /** {@code LockSupport.park()}: block the current task until a permit is available (an {@link #unpark}). */
     static void park()
     {
-        Magic.disableIrq();
-        int me = curTask;
+        long daif = schedLock();
+        int me = curTask();
         while (taskPermit[me] == 0)
         {
             taskWaitOn[me] = -3;                           // a park waiter
             taskState[me] = TASK_BLOCKED;
-            Magic.enableIrq();
+            schedUnlock(daif);
             taskYield();
-            Magic.disableIrq();
+            daif = schedLock();
         }
         taskPermit[me] = 0;                                // consume the permit
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** {@code LockSupport.unpark(t)}: make a permit available for {@code threadObj} and wake it if parked. */
@@ -541,13 +814,13 @@ public final class VMScheduler
         {
             return;
         }
-        Magic.disableIrq();
+        long daif = schedLock();
         taskPermit[tid] = 1;
         if (taskState[tid] == TASK_BLOCKED && taskWaitOn[tid] == -3)
         {
             taskState[tid] = TASK_READY;
         }
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /**
@@ -558,18 +831,19 @@ public final class VMScheduler
      */
     public static void semWait(int s)
     {
-        Magic.disableIrq();
-        taskWake[curTask] = 0L;                            // no deadline: pickNext must not spuriously wake us
+        long daif = schedLock();
+        int me = curTask();
+        taskWake[me] = 0L;                                 // no deadline: pickNext must not spuriously wake us
         while (semCount[s] <= 0)
         {
-            taskState[curTask] = TASK_BLOCKED;
-            taskWaitOn[curTask] = s;
-            Magic.enableIrq();
+            taskState[me] = TASK_BLOCKED;
+            taskWaitOn[me] = s;
+            schedUnlock(daif);
             taskYield();                                   // blocked: the scheduler skips us until posted
-            Magic.disableIrq();
+            daif = schedLock();
         }
         semCount[s] = semCount[s] - 1;
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /**
@@ -582,25 +856,26 @@ public final class VMScheduler
     public static boolean semWaitTimeout(int s, long ms)
     {
         long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * ms / 1000L;
-        Magic.disableIrq();
+        long daif = schedLock();
+        int me = curTask();
         while (semCount[s] <= 0)
         {
             if (Magic.readCNTPCT_EL0() >= deadline)
             {
-                taskWake[curTask] = 0L;
-                Magic.enableIrq();
+                taskWake[me] = 0L;
+                schedUnlock(daif);
                 return false;                              // timed out with no token
             }
-            taskState[curTask] = TASK_BLOCKED;
-            taskWaitOn[curTask] = s;
-            taskWake[curTask] = deadline;                  // also become ready at the deadline
-            Magic.enableIrq();
+            taskState[me] = TASK_BLOCKED;
+            taskWaitOn[me] = s;
+            taskWake[me] = deadline;                       // also become ready at the deadline
+            schedUnlock(daif);
             taskYield();
-            Magic.disableIrq();
+            daif = schedLock();
         }
-        taskWake[curTask] = 0L;                            // got a token: drop the deadline marker
+        taskWake[me] = 0L;                                 // got a token: drop the deadline marker
         semCount[s] = semCount[s] - 1;
-        Magic.enableIrq();
+        schedUnlock(daif);
         return true;
     }
 
@@ -626,9 +901,9 @@ public final class VMScheduler
     /** Post (signal) semaphore {@code s} from task context: add a token and wake one waiter. */
     static void semPost(int s)
     {
-        Magic.disableIrq();
+        long daif = schedLock();
         semPostRaw(s);
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** Index of {@code obj}'s live monitor slot, or -1. */
@@ -691,27 +966,28 @@ public final class VMScheduler
         {
             return;                                        // the JIT null-checked before the call
         }
-        Magic.disableIrq();
+        long daif = schedLock();
+        int me = curTask();
         int s = monSlotOf(obj);
-        while (s >= 0 && monOwner[s] != curTask)           // held by another task: block until it is released
+        while (s >= 0 && monOwner[s] != me)                // held by another task: block until it is released
         {
-            taskMonWait[curTask] = obj;
-            taskWaitOn[curTask] = -2;                       // a monitor-acquire waiter
-            taskState[curTask] = TASK_BLOCKED;
-            Magic.enableIrq();
+            taskMonWait[me] = obj;
+            taskWaitOn[me] = -2;                            // a monitor-acquire waiter
+            taskState[me] = TASK_BLOCKED;
+            schedUnlock(daif);
             taskYield();
-            Magic.disableIrq();
+            daif = schedLock();
             s = monSlotOf(obj);
         }
-        taskMonWait[curTask] = 0L;
+        taskMonWait[me] = 0L;
         if (s < 0)                                         // unowned: take a fresh slot
         {
             s = monAlloc(obj);
-            monOwner[s] = curTask;
+            monOwner[s] = me;
             monCount[s] = 0;
         }
         monCount[s] += 1;                                  // acquire / recurse
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** monitorexit {@code obj}: release one level; on the final release free the slot and wake one acquire-waiter. */
@@ -721,7 +997,7 @@ public final class VMScheduler
         {
             return;
         }
-        Magic.disableIrq();
+        long daif = schedLock();
         int s = monSlotOf(obj);
         if (s >= 0)
         {
@@ -734,16 +1010,16 @@ public final class VMScheduler
                 wakeMonWaiter(obj);
             }
         }
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** {@code Thread.holdsLock(obj)}: 1 if the current task owns {@code obj}'s monitor, else 0. */
     static int holdsLock(long obj)
     {
-        Magic.disableIrq();
+        long daif = schedLock();
         int s = monSlotOf(obj);
-        int r = (s >= 0 && monOwner[s] == curTask) ? 1 : 0;
-        Magic.enableIrq();
+        int r = (s >= 0 && monOwner[s] == curTask()) ? 1 : 0;
+        schedUnlock(daif);
         return r;
     }
 
@@ -754,8 +1030,8 @@ public final class VMScheduler
      */
     static void objWait(long obj, long ms)
     {
-        Magic.disableIrq();
-        int me = curTask;
+        long daif = schedLock();
+        int me = curTask();
         int s = monSlotOf(obj);                            // release the monitor we hold (if any)
         int saved = (s >= 0 && monOwner[s] == me) ? monCount[s] : 0;
         if (saved > 0)
@@ -776,7 +1052,7 @@ public final class VMScheduler
             taskWake[me] = 0L;                             // no deadline: only notify wakes us
         }
         taskState[me] = TASK_BLOCKED;
-        Magic.enableIrq();
+        schedUnlock(daif);
         taskYield();                                       // parked until objNotify/objNotifyAll flips us READY
         taskWaitObj[me] = 0L;
         taskWake[me] = 0L;
@@ -790,7 +1066,7 @@ public final class VMScheduler
     /** {@code obj.notify()}: wake ONE task waiting on {@code obj}. */
     static void objNotify(long obj)
     {
-        Magic.disableIrq();
+        long daif = schedLock();
         int i = 0;
         while (i < taskCount)
         {
@@ -804,13 +1080,13 @@ public final class VMScheduler
                 i = i + 1;
             }
         }
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. */
     static void objNotifyAll(long obj)
     {
-        Magic.disableIrq();
+        long daif = schedLock();
         int i = 0;
         while (i < taskCount)
         {
@@ -820,7 +1096,7 @@ public final class VMScheduler
             }
             i = i + 1;
         }
-        Magic.enableIrq();
+        schedUnlock(daif);
     }
 
     /** The task id whose java/lang/Thread object is {@code threadObj}, or -1 if none is live. */
@@ -862,7 +1138,7 @@ public final class VMScheduler
     static long threadStackTrace(long threadObj, long pc, long sp)
     {
         int tid = threadTaskOf(threadObj);
-        if (tid == curTask || tid < 0)                     // the calling thread (or unknown): walk from here
+        if (tid == curTask() || tid < 0)                   // the calling thread (or unknown): walk from here
         {
             return Loader.buildTrace(pc, sp, 0L);
         }
@@ -982,7 +1258,7 @@ public final class VMScheduler
     static int spawn(long entry)
     {
         int id;
-        Magic.disableIrq();
+        long daif = schedLock();
         if (taskCount < MAX_TASKS)
         {
             id = taskCount;                                // fast path: a fresh slot (unchanged for <=MAX_TASKS threads)
@@ -993,15 +1269,17 @@ public final class VMScheduler
             id = reuseSlot();                              // table full: recycle a terminated task's slot + stack
             while (id < 0)
             {
-                Magic.enableIrq();                         // nothing done yet: let a task run to taskExit, then retry
+                schedUnlock(daif);                         // nothing done yet: let a task run to taskExit, then retry
                 taskYield();
-                Magic.disableIrq();
+                daif = schedLock();
                 id = reuseSlot();
             }
         }
         taskDone[id] = 0;                                  // claim: no longer reusable, and
         taskState[id] = TASK_BLOCKED;                      //   not runnable until fully set up below
-        Magic.enableIrq();
+        taskCore[id] = -1;                                 //   and free to run on ANY core once it is
+        taskIdle[id] = 0;
+        schedUnlock(daif);
         long stk = taskStackBase[id];
         if (stk == 0L)
         {
@@ -1062,11 +1340,12 @@ public final class VMScheduler
     /** End the current task: park it BLOCKED on a never-posted semaphore so the scheduler skips it forever. */
     static void taskExit()
     {
-        Magic.disableIrq();
-        taskDone[curTask] = 1;                             // Thread.join() waiters observe this
-        taskState[curTask] = TASK_BLOCKED;
-        taskWaitOn[curTask] = 3;                           // the dead park semaphore (never posted)
-        Magic.enableIrq();
+        long daif = schedLock();
+        int me = curTask();
+        taskDone[me] = 1;                                  // Thread.join() waiters observe this
+        taskState[me] = TASK_BLOCKED;
+        taskWaitOn[me] = 3;                                // the dead park semaphore (never posted)
+        schedUnlock(daif);
         while (true)
         {
             taskYield();                                   // never rescheduled; yields the CPU permanently

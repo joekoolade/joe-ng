@@ -4120,6 +4120,193 @@ every `vtparity`/`itparity`/`typeadopt`/`staticadopt` assertion OK, no `FAULT` /
 stable=1`, and the WiFi finale all the way through — WPA2-PSK 4-way, DHCP `192.168.1.247`, DNS, TCP, and
 **HTTP 200 OK, 827 bytes** from example.com — ending at `(self-build retired; host writer only)`.
 
+## SMP scheduling — one run queue, four cores (2026-08-26)
+
+Until now the four A72s were *awake* but not *scheduling*: `bringUpSecondaries` released cores 1-3 from the
+armstub spin table, they ran a shared job-counter demo and then a fixed two-task-per-core set piece
+(`pcCoreMain`/`pcSchedule`), and parked. The real scheduler — the one that runs `Thread.start()`, monitors,
+`Object.wait`, `LockSupport.park` — lived entirely on core 0. Java threads time-sliced ONE core while three
+sat in `WFE`.
+
+This increment puts the real scheduler on all four. There is one task table, one run queue, and the same
+`pickNext` runs on whichever core took the interrupt.
+
+**What changed, and why each piece is needed.**
+
+- **"The current task" became per-core.** `VM.curTask` (one int) is now `coreTask[core]`, read through
+  `VM.curTask()` / `setCurTask()`. Everything else in the table stays shared — that IS the run queue.
+- **A task is claimed, not merely READY.** `TASK_RUNNING` marks the task a core is executing; `pickNext`
+  sets it when it claims one and hands it back as READY when it switches away. Without it two cores pick
+  the same task and run one stack twice.
+- **`SCHED_LOCK`, a real cross-core lock.** Every task-table transition — block, wake, spawn, monitor
+  enter/exit, `notify`, `taskExit` — used to be protected by masking IRQs, which only stops *this* core.
+  They now go through `schedLock()`/`schedUnlock(daif)`: mask IRQs (so we can't be preempted holding it)
+  and take the `LDAXR/STLXR` lock, restoring the caller's mask on the way out. The lock is skipped entirely
+  while `smpSched == 0`, so the single-core path is unchanged and nothing takes a lock before the MMU is on.
+- **Affinity, for the two stacks that cannot move.** `taskCore[t]` pins task 0 (the boot flow, on the image
+  stack) to core 0 and each core's idle task to its own core. Everything else is `-1`: any core, and a task
+  migrates freely, because its whole context is its own heap stack and the MMU maps RAM coherently.
+- **Each secondary joins as an idle task.** `smpSchedulerMain(core)` brings up that core's banked GIC PPI 30,
+  points `VBAR_EL1` at core 0's context-switch vectors (one table, one stub — the scheduler is the same code
+  everywhere), claims a task slot for the flow it is already running, and then pauses ~1 ms and yields,
+  forever. Every yield is a trip through `pickNext`, so the core picks up whatever is READY; its own timer
+  preempts whatever it picked. Idle tasks are never handed out as work (`taskIdle`), only used as their own
+  core's fallback when nothing else is runnable.
+
+**The sharpest bug in the design, found by reading rather than by running.** A task that blocks publishes
+`TASK_BLOCKED` and *then* traps to the switch stub; a waker publishes `TASK_READY` from another core. In the
+window between the state change and the stub actually saving the context, the task's `taskSp` is STALE — and
+another core that sees it READY would resume that stale frame while the first core is still executing the
+task. One task, two cores, two stacks. The fix needs no new state: a task is claimable only when no OTHER
+scheduling core still has it as its `coreTask` (`VMScheduler.claimable`), which is exactly "has switched off
+it". Plain preemption never had the window — there the save happens inside `pickNext`, under the lock.
+
+**Stop-the-world, because the collector is not concurrent.** `VMGc.gcCollect` moves nothing, so a concurrent
+*reader* would be harmless, but a concurrent *mutator* is not: it allocates into the arena being swept, and
+it can publish the only reference to an object into a place the mark has already scanned. `stopTheWorld()`
+raises `gcStop`; every other core parks in `pickNext` (its timer tick or its idle yield — the two points
+every core passes through) with its context already saved, which is also how the trace still sees everything
+it was holding. `startTheWorld()` releases them. A core that never reaches the scheduler cannot be parked, so
+the wait gives up after ~1 s, counts `stwTimeouts` and says so out loud: marking against a live mutator
+surfaces arbitrarily far away, and a loud line beats a silent corruption.
+
+**A loader mutex, because the JIT is one shared context.** The on-metal loader keeps its whole compile state
+in statics (methods are capped at ten register locals, so state is threaded through fields) and the code
+arena is one bump pointer with no atomic behind it. Two cores compiling at once interleave into each other.
+`VM.loaderLock()/loaderUnlock()` guard `Loader.lazyCompile`, `VM.bakeResolve` and `Heap.allocCode`. It is a
+MUTEX, not a spinlock — the holder can be preempted, and a spinning waiter would hold the very core the
+holder needs — built on `SCHED_LOCK` plus `taskYield()`. Ownership is by TASK, not by core, because a
+compiling task can migrate mid-compile, and it is recursive because a `<clinit>` run inside a compile
+re-enters the loader.
+
+**Where it is switched on.**
+
+- **Launched programs (the product path):** `bringUpSecondaries` + `startSmpScheduling` now run BEFORE
+  `launchInit`, so a program's threads are scheduled across all four cores. `/etc/init`'s `smp=` line
+  controls it; absent means ON, `smp=0` is the escape hatch.
+- **The demo suite:** unchanged through the two existing SMP set pieces (`smpDemo` gates them), then
+  `smpThreadsDemo` opens the shared queue and spawns six unpinned tasks that step-and-yield for ~0.5 s,
+  each step tallying the core it ran on. `stopSmpScheduling` drains the secondaries back out before the
+  table is reset for the later phases.
+
+**The evidence, from GUEST Java.** `demo/SmpDemo` (a manifest main) is the demo that answers the actual
+question: four ordinary `java.lang.Thread`s, each stepping 200 times, recording which core each step ran on
+and incrementing a shared counter inside `synchronized`, then `join`ed. Under QEMU:
+
+```
+core 0 steps 280 | core 1 steps 179 | core 2 steps 166 | core 3 steps 175 | total 800 of 800
+[main returned normally]
+```
+
+Nothing in it is SMP-specific except `Magic.mpidr()` — a thread's way of asking where it is, added because
+the on-metal JIT's magic table packs a name into a long, so `readMPIDR` (nine characters) cannot be matched
+there and `mpidr` can. Every step is accounted for, the monitor is genuinely contended across cores, and the
+JIT compiled the same class from more than one core under the loader lock.
+
+**QEMU (test aid, not truth).** Launch path: `SMP: 4 of 4 cores up` then `smp sched: 4 of 4 cores on the run
+queue`, with NetDemo still reaching its expected `DENYLIST TRAP` at `NioSocketImpl.connect`. Demo suite:
+`steps/core: c0=144 c1=35 c2=27 c3=34` — all 240 steps accounted for, spread over all four cores. QEMU
+delivers no timer PPI to the secondaries (`ticks/core: c1=0 c2=0 c3=0`), so every switch there is a
+voluntary yield; the same run on hardware also preempts. No `FAULT`, no `STW TIMEOUT`, the philosophers and
+the lisp fixpoint unchanged, suite ending normally at `(self-build retired; host writer only)`.
+
+**PI-VALIDATED, BOTH PATHS (2026-08-26, `core 166MHz`).** The full demo suite, with the secondaries taking
+real timer PPIs (`ticks/core: c1=50 c2=50 c3=50`, `sched: 89 preemptions`) rather than QEMU's
+voluntary-yield-only path:
+
+```
+smp sched: 4 of 4 cores on the run queue
+steps/core: c0=61  c1=60  c2=60  c3=59        (240 total)
+```
+
+and the standing regression gate around it is unmoved: philosophers, `churnMB=625 live=32 intact=32` over
+**41 collections** (so stop-the-world parked three genuinely-mutating cores 41 times without one timeout),
+`lisp: evals=600 result=610 stable=1`, and WiFi WPA2 → DHCP → DNS → TCP → **HTTP 200 OK**. No `FAULT`, no
+`TRAP`, no `STW TIMEOUT`.
+
+And the launch path, `demo/SmpDemo` — four ordinary `java.lang.Thread`s:
+
+```
+core 0 steps 262   core 1 steps 42   core 2 steps 318   core 3 steps 178
+total 800 of 800
+[main returned normally]
+```
+
+Four ordinary `java.lang.Thread`s, every core non-zero, the total exact — so the cross-core `synchronized`
+lost no increment — and the whole demand-load prologue (54 classes, every `vtparity`/`itparity`/`typeadopt`
+assertion OK) ran while four cores were scheduling. It took three boots, and the two failures in between
+were both bugs QEMU is structurally unable to show.
+
+**First hardware bug: the lock word nobody zeroed.** The first Pi boot stopped dead one line after
+`SMP: 4 of 4 cores up`, with no fault and no further output. `SCHED_LOCK` is raw scratch RAM
+(`0x0302_0040`), not a Java field, and nothing ever initialised it — while `Magic.spinLock` spins *while
+the word is non-zero*. QEMU hands out zeroed DRAM, so the lock read as free there; a real Pi's DRAM is full
+of firmware leftovers, so the very first `schedLock()` after `smpSched = 1` (core 0's own timer tick, ~10 ms
+later, entering `pickNext` with IRQs already masked) never returned. `bringUpSecondaries` had always zeroed
+`LOCK_ADDR` for the job-queue demo; the new lock simply never got the same line. It is now zeroed in
+`allocTaskTables` and again in `startSmpScheduling` before `smpSched` is raised.
+
+The same reading found a second QEMU accident in the same code: `Heap.allocArray` does NOT zero its
+elements (a block off the free list carries whatever the dead object left), so `new int[4]` reading as
+zeroes is luck, not a guarantee. `taskIdle`, `coreSched` and `gcParked` are now filled explicitly — garbage
+in them would have made `pickNext` skip real tasks as "idle" and, worse, made `stopTheWorld` believe cores
+were parked when they were running.
+
+**Second hardware bug: JIT'd code published to one I-cache out of four.** The next boot got all the way
+into cross-core scheduling and then faulted `ESR EC=0` — an undefined instruction — at offset **+0** of
+`java/lang/Thread.sleep`, a method that reads back perfectly in memory. `Heap.publishCode` ended with
+`IC IALLU`, which invalidates only the CALLING PE's instruction cache. That was correct while core 0 was
+the only core that ever ran JIT'd code; it is fatal the moment another core executes a method core 0
+compiled, because the code arena REUSES swept buffers — so the other core's I-cache genuinely holds stale
+(or zeroed) lines for that exact address, and executes them.
+
+Cache maintenance **by virtual address** is broadcast to the whole Inner Shareable domain; the "all"
+flavours are not. The publish sequence is now the standard one — `DC CVAU` per line, `DSB`, `IC IVAU` per
+line, `DSB`, `ISB` — with a new `IC IVAU` intrinsic (`SYS #3,c7,c5,#1` = `0xD50B7520|Rt`). The other cores
+get their `ISB` for free: a task only reaches new code through an `ERET`, which is context-synchronizing.
+The previous commit listed this as a known gap *for the vector table*; it is in fact every method the JIT
+publishes, and it is precisely the class of bug an emulator cannot show, because its I-cache is not the
+hardware's.
+
+**And a console lock, because the report that diagnosed it arrived shredded.** Two cores were printing at
+once and the fault trace interleaved byte by byte. `Uart.lock()/unlock()` (raw word at `0x0302_0080`,
+owner-by-core, recursive, armed only while more than one core schedules) is taken by `reportFault` and
+`reportNestedFault` and never released — those cores halt, so their trace prints whole.
+
+**Third hardware bug: the set-piece demo stranded the cores it was supposed to hand back.** The full suite
+on hardware reported `smp sched: 1 of 4 cores on the run queue` and `steps/core: c0=240 c1=0 c2=0 c3=0` --
+no secondary joined -- while the same image under QEMU said 4 of 4. `pcSchedule`'s stop path disabled the
+core's timer and resumed *whichever* task it had interrupted. If that was `pcTask1`, whose exit is an
+unconditional `WFE` park, the core stranded there: the tick that was meant to "switch to task 0 later" is
+the very tick just disabled. A stranded core never returns from `pcCoreMain`, so it never reaches the
+shared run queue. It is a coin flip per core on hardware and IMPOSSIBLE on QEMU, which delivers no timer
+PPI to a secondary at all, so its cores never leave task 0. The stop path now always hands the core back to
+task 0, which exits.
+
+**And the fourth finding was not a bug at all — the demo outran itself.** With the strand fixed, hardware
+reported `smp sched: 4 of 4 cores on the run queue` and still `steps/core: c0=240 c1=0 c2=0 c3=0`. The
+scheduler was fine. `smpTask` did no work per step — a counter bump and a yield — so the entire run is 240
+context switches, which core 0 finishes in well under a millisecond, while each secondary sits in a 1 ms
+back-off before offering itself even once. Core 0 drained the queue before anyone else asked. QEMU hid it
+from the other direction: its counter advances near real time while execution is far slower, so 1 ms of
+counter time still leaves plenty of work to share. Two changes: the idle loop now YIELDS FIRST and backs off
+after (a core that pauses before its first ask can miss a short burst entirely), and each demo step spends
+~1 ms so the run spans the window. QEMU then reads `c0=61 c1=59 c2=60 c3=60`. **Worth keeping as a
+measurement lesson: a tally of `c0=everything` and zeroes looks exactly like "the secondaries never joined"
+and can equally mean "they joined and there was nothing left to take."**
+
+**Not done yet (the next increments).**
+
+- Reflection-driven loading (`Class.forName`, `defineClass`) reaches the loader WITHOUT the loader lock —
+  only the JIT entry points are guarded so far.
+- `installSchedVectors` rewrites the vector table core 0 published; `Heap.publishCode` invalidates only the
+  LOCAL I-cache (`IC IALLU`, not `IALLUIS`), so rebuilding vectors while secondaries schedule is unsafe. No
+  path does it today, but it needs `IALLUIS` before one does.
+- Secondary arenas are still never collected (they are root ranges), so a thread that allocates heavily on
+  core 1 leaks. Per-core arenas need to become collectable, or allocation needs to route to core 0's.
+- The run queue is a plain round robin with no load balancing or priorities, and `MAX_TASKS` (40) now also
+  budgets one idle task per core.
+
 ## 5. Design decisions to lock day one
 
 - **Compile-only, no interpreter.** With no OS/interpreter beneath, the first code

@@ -279,12 +279,14 @@ final class MetalWriterSymbols implements Symbols
         if (utf8Is(n, Magic.bytes("dcCVAU"))) { return Intrinsics.DC_CVAU; }
         if (utf8Is(n, Magic.bytes("dcCVAC"))) { return Intrinsics.DC_CVAC; }
         if (utf8Is(n, Magic.bytes("icIALLU"))) { return Intrinsics.IC_IALLU; }
+        if (utf8Is(n, Magic.bytes("icIVAU"))) { return Intrinsics.IC_IVAU; }
         if (utf8Is(n, Magic.bytes("writeVBAR_EL1"))) { return Intrinsics.WRITE_VBAR_EL1; }
         if (utf8Is(n, Magic.bytes("readESR_EL1"))) { return Intrinsics.READ_ESR_EL1; }
         if (utf8Is(n, Magic.bytes("readELR_EL1"))) { return Intrinsics.READ_ELR_EL1; }
         if (utf8Is(n, Magic.bytes("readFAR_EL1"))) { return Intrinsics.READ_FAR_EL1; }
         if (utf8Is(n, Magic.bytes("readCurrentEL"))) { return Intrinsics.READ_CURRENT_EL; }
         if (utf8Is(n, Magic.bytes("readMPIDR"))) { return Intrinsics.READ_MPIDR; }
+        if (utf8Is(n, Magic.bytes("mpidr"))) { return Intrinsics.READ_MPIDR; }
         if (utf8Is(n, Magic.bytes("readCNTFRQ_EL0"))) { return Intrinsics.READ_CNTFRQ_EL0; }
         if (utf8Is(n, Magic.bytes("readCNTPCT_EL0"))) { return Intrinsics.READ_CNTPCT_EL0; }
         if (utf8Is(n, Magic.bytes("writeCNTP_TVAL_EL0"))) { return Intrinsics.WRITE_CNTP_TVAL_EL0; }

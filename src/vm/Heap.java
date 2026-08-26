@@ -293,6 +293,15 @@ public final class Heap
      */
     public static long allocCode(int size)
     {
+        VM.loaderLock();                               // SMP: one bump pointer, and no atomic behind it
+        long buf = allocCodeLocked(size);
+        VM.loaderUnlock();
+        return buf;
+    }
+
+    /** {@link #allocCode}'s body, run under the loader lock (which the JIT paths already hold). */
+    private static long allocCodeLocked(int size)
+    {
         int aligned = (size + 7) & -8;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
         long cp = Magic.load64(CODE_PTR_CELL);
@@ -1079,16 +1088,28 @@ public final class Heap
      */
     public static void publishCode(long start, long end)
     {
+        // Both maintenance ops are BY VIRTUAL ADDRESS, which is what makes them broadcast to the whole
+        // Inner Shareable domain -- i.e. to the other three cores. This used to end in IC IALLU, which is
+        // local to the calling PE: fine while only core 0 ever ran JIT'd code, fatal the moment another core
+        // executes a method core 0 compiled. The code arena REUSES swept buffers, so the other core's
+        // I-cache genuinely holds stale (or zeroed) lines for that exact address, and it faults with
+        // ESR EC=0 -- an undefined instruction -- at the entry of a method that looks perfectly good in
+        // memory. Found on the first Pi boot that scheduled guest threads across all four cores.
         long a = start & ~63L;                 // Cortex-A72 cache line = 64 bytes
         while (a < end)
         {
-            Magic.dcCVAU(a);                   // clean the D-cache line to PoU
+            Magic.dcCVAU(a);                   // clean the D-cache line to PoU (broadcast)
             a += 64L;
         }
-        Magic.dsb();                           // the cleans reach unified memory
-        Magic.icIALLU();                       // drop stale I-cache lines
-        Magic.dsb();                           // the invalidate completes
-        Magic.isb();                           // refetch past this point
+        Magic.dsb();                           // the cleans reach unified memory, everywhere
+        a = start & ~63L;
+        while (a < end)
+        {
+            Magic.icIVAU(a);                   // drop that line from EVERY core's I-cache
+            a += 64L;
+        }
+        Magic.dsb();                           // the invalidates complete
+        Magic.isb();                           // this core refetches past this point (others: their ERET)
     }
 
     /** Allocate {@code size} bytes: reuse a freed block if one fits, else bump; on core 0, an exhausted

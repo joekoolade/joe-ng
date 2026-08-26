@@ -289,6 +289,7 @@ public final class VM
     static final int  TASK_READY = 1;
     static final int  TASK_SLEEPING = 2;    // waiting on a CNTPCT deadline (sleep)
     static final int  TASK_BLOCKED = 3;     // waiting on a semaphore (an event another task/ISR posts)
+    static final int  TASK_RUNNING = 4;     // picked by a core RIGHT NOW: no other core may pick it (SMP)
 
     // The task table (parallel arrays, index = task id). Task 0 is the boot flow; VMScheduler.spawn() adds more.
     static long[] taskSp;                   // saved context frame (SP) — the task's whole context
@@ -304,7 +305,235 @@ public final class VM
     static long[] taskMonWait;              // for a task BLOCKED on monitorenter: the object it is trying to lock (0 = none)
     static int[]  semCount;                 // counting-semaphore values
     static int    taskCount;                // number of live task slots
-    static int    curTask;                  // the task currently running
+
+    // ----- SMP scheduling: one run queue, four cores ------------------------------------------------
+    // The task table above is SHARED by every core, so "the task currently running" is per-CORE, not a
+    // single global. A task is picked by exactly one core at a time (TASK_RUNNING marks it taken, under
+    // SCHED_LOCK) and may run on a different core each time it is scheduled -- its whole context lives in
+    // its own heap stack, and the MMU identity-maps all of RAM coherently, so migration is free.
+    static int[]  coreTask;                 // index = core: the task that core is running (see curTask())
+    static int[]  taskCore;                 // per-task affinity: -1 = any core, else the core it is pinned to
+    static int[]  taskIdle;                 // 1 = this task is a core's idle loop (never picked as real work)
+    static int[]  coreIdle;                 // index = core: that core's idle task id (-1 = none, i.e. core 0)
+    static int    smpSched;                 // 1 once the secondaries have joined the shared run queue
+    static int    schedGo;                  // released by startSmpScheduling(): secondaries enter the scheduler
+    static int    smpStop;                  // 1 = drain: the secondaries take no more work and leave the queue
+    static int    smpDemo;                  // 1 = the demo-suite boot: secondaries run the two SMP set pieces first
+    static int[]  smpRan;                   // index = core: steps of the SMP threading demo that ran there
+    static int[]  coreSched;                // index = core: 1 once that core is scheduling from the run queue
+    static long   smpTaskAddr;              // VMScheduler.smpTask()V -- the "which core ran me" demo task
+    // Stop-the-world. The collector runs on core 0 and moves nothing, but it sweeps -- so no other core may
+    // MUTATE the heap while it marks. Core 0 raises gcStop; every other core parks in the scheduler (the one
+    // place every core passes through, on its own timer tick or its idle yield) with its context already
+    // saved to its task's stack, so the collector can trace it. gcParked[c] = 1 while core c is parked.
+    static int    gcStop;                   // 1 = every core but the collector must park in pickNext
+    static int[]  gcParked;                 // index = core: 1 while that core is parked for the collection
+    static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
+    /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
+     *  across task-table updates -- never across a UART write or an allocation. A different cache line from
+     *  {@link #LOCK_ADDR} so the SMP job-queue demo and the scheduler don't false-share. */
+    static final long SCHED_LOCK = 0x0302_0040L;
+
+    // The LOADER lock. The on-metal JIT keeps its whole compile context in statics (methods are capped at
+    // ten register locals, so the loader threads its state through fields), and the code arena is one bump
+    // pointer -- so two cores compiling at once would interleave into each other's context and hand out the
+    // same buffer twice. It is a MUTEX, not a spinlock: the holder can be preempted, and a waiter that spun
+    // would keep the core the holder needs. Ownership is by TASK, not by core, because a compiling task can
+    // migrate mid-compile; it is recursive because a <clinit> run inside a compile re-enters the loader.
+    static int    loaderOwner = -1;         // task id holding the loader lock (-1 = free)
+    static int    loaderDepth;              // ... and how many nested acquisitions deep it is
+
+    /** Take the loader lock (recursively, if this task already holds it), yielding while another task has it. */
+    static void loaderLock()
+    {
+        if (smpSched == 0)
+        {
+            return;                                     // one core in the table: no other compiler to race
+        }
+        int me = curTask();
+        if (loaderOwner == me)
+        {
+            loaderDepth = loaderDepth + 1;              // re-entry: a <clinit> compiling inside a compile
+            return;
+        }
+        while (true)
+        {
+            long daif = VMScheduler.schedLock();
+            if (loaderOwner < 0)
+            {
+                loaderOwner = me;
+                loaderDepth = 1;
+                VMScheduler.schedUnlock(daif);
+                return;
+            }
+            VMScheduler.schedUnlock(daif);
+            VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
+        }
+    }
+
+    /** Release one level of the loader lock. */
+    static void loaderUnlock()
+    {
+        if (smpSched == 0 || loaderOwner != curTask())
+        {
+            return;
+        }
+        loaderDepth = loaderDepth - 1;
+        if (loaderDepth <= 0)
+        {
+            long daif = VMScheduler.schedLock();
+            loaderDepth = 0;
+            loaderOwner = -1;
+            VMScheduler.schedUnlock(daif);
+        }
+    }
+
+    /** The task this core is running. Per-core: the run queue is shared, the current task is not. */
+    static int curTask()
+    {
+        if (coreTask == null)
+        {
+            return 0;                       // before the scheduler exists there is only the boot flow
+        }
+        return coreTask[(int) (Magic.readMPIDR() & 3L)];
+    }
+
+    /** Make {@code t} the task this core is running. */
+    static void setCurTask(int t)
+    {
+        coreTask[(int) (Magic.readMPIDR() & 3L)] = t;
+    }
+
+    /**
+     * Allocate the shared task/monitor/semaphore tables plus the per-core scheduler state, and install the
+     * running boot flow as task 0. Task 0 is PINNED to core 0: it runs on the image stack and owns the
+     * hardware bring-up, so it must not migrate. Every other task defaults to "any core" -- the run queue
+     * is shared, and a task's whole context is its own heap stack, so which core resumes it is free.
+     */
+    static void allocTaskTables()
+    {
+        taskSp = new long[MAX_TASKS];
+        taskStackBase = new long[MAX_TASKS];
+        taskThreadObj = new long[MAX_TASKS];
+        taskState = new int[MAX_TASKS];
+        taskWake = new long[MAX_TASKS];
+        taskWaitOn = new int[MAX_TASKS];
+        taskWaitObj = new long[MAX_TASKS];
+        taskDone = new int[MAX_TASKS];
+        taskMonWait = new long[MAX_TASKS];
+        taskInterrupted = new int[MAX_TASKS];
+        taskPermit = new int[MAX_TASKS];
+        taskCore = new int[MAX_TASKS];
+        taskIdle = new int[MAX_TASKS];
+        monObj = new long[MAX_MON];
+        monOwner = new int[MAX_MON];
+        monCount = new int[MAX_MON];
+        semCount = new int[NUM_SEM];
+        coreTask = new int[4];
+        coreIdle = new int[4];
+        coreSched = new int[4];
+        gcParked = new int[4];
+        // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
+        // free list carries whatever the dead object left), and on real hardware DRAM starts full of
+        // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
+        int t = 0;
+        while (t < MAX_TASKS)
+        {
+            taskCore[t] = -1;                               // no affinity: any core may pick it up
+            taskIdle[t] = 0;                                // ... and it is real work, not a core's idle loop
+            t += 1;
+        }
+        int c = 0;
+        while (c < 4)
+        {
+            coreIdle[c] = -1;                               // no idle task until a core joins the run queue
+            coreTask[c] = 0;
+            coreSched[c] = 0;
+            gcParked[c] = 0;
+            c += 1;
+        }
+        // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
+        // spins while it is non-zero. Leave it and the first schedLock() on hardware never returns.
+        Magic.store32(SCHED_LOCK, 0);                       // 0 = free
+        taskState[0] = TASK_READY;
+        taskCore[0] = 0;                                    // the boot flow never leaves core 0
+        taskCount = 1;
+        coreSched[0] = 1;                                   // core 0 is always scheduling; 1-3 join later
+    }
+
+    /**
+     * SMP threading demo: ONE run queue, four cores. Cores 1-3 join the queue (each as an idle task pinned
+     * to itself), then six ordinary spawned tasks -- unpinned, so whichever core asks next claims one --
+     * step and yield for ~0.5 s. Every step tallies the core it ran on, so the printed line is the evidence
+     * that the tasks were spread across all four A72s and migrated between them. On QEMU the secondaries
+     * get no timer IRQ, but their idle loop yields through the same {@code pickNext}, so work still
+     * distributes there (with fewer steps, since only voluntary yields switch).
+     */
+    static void smpThreadsDemo()
+    {
+        if (!SMP_ENABLED)
+        {
+            return;
+        }
+        installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
+        resetTaskTable();                                  // fresh table: task 0 (us), then the demo tasks
+        smpRan = new int[4];
+        int z = 0;
+        while (z < 4)
+        {
+            smpRan[z] = 0;                                  // allocArray does not zero: say so explicitly
+            z += 1;
+        }
+        Uart.write(Magic.bytes("smp threads (one run queue, four cores):\n"));
+        VMScheduler.startSmpScheduling();
+        int t = 0;
+        while (t < 6)
+        {
+            VMScheduler.spawn(smpTaskAddr);                // unpinned: any core may run these
+            t += 1;
+        }
+        Magic.writeCNTP_TVAL_EL0(timerReload);
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();                                 // core 0 preempts too -- here it is just another core
+        long d0 = Magic.readCNTPCT_EL0();
+        while (Magic.readCNTPCT_EL0() < d0 + Magic.readCNTFRQ_EL0() / 2L)   // ~0.5 s
+        {
+            VMScheduler.taskYield();                       // task 0 keeps offering core 0 to the queue
+        }
+        stopTimerTick();
+        VMScheduler.stopSmpScheduling();                   // the secondaries leave the table before we reset it
+        Uart.write(Magic.bytes("steps/core: "));
+        int c = 0;
+        while (c < 4)
+        {
+            Uart.putc((byte) 0x63);                        // 'c'
+            Uart.putc((byte) (0x30 + c));
+            Uart.putc((byte) 0x3D);                        // '='
+            printDec(smpRan[c]);
+            Uart.putc((byte) 0x20);
+            c += 1;
+        }
+        Uart.putc(0x0A);
+        resetTaskTable();
+    }
+
+    /**
+     * Drop every task but the boot flow -- what the demo phases that rebuild the scheduler from scratch do
+     * between runs. Only valid while the secondaries are OUT of the run queue: each holds an idle task slot
+     * of its own, and renumbering the table under a running core would hand it another task's stack.
+     */
+    static void resetTaskTable()
+    {
+        taskCount = 1;
+        taskState[0] = TASK_READY;
+        int c = 0;
+        while (c < 4)
+        {
+            coreTask[c] = 0;
+            coreIdle[c] = -1;
+            c += 1;
+        }
+    }
 
     // Object monitors (real, ownership-tracking + recursive). A side table indexed by locked object; a slot is
     // live while its object is held (monCount >= 1) and freed on the final monitorExit, so it holds only the
@@ -647,6 +876,7 @@ public final class VM
         if (taskBAddr == 0L) { VMScheduler.taskB(); }
         if (taskCAddr == 0L) { VMScheduler.taskC(); }
         if (taskRAddr == 0L) { VMScheduler.taskR(); }
+        if (smpTaskAddr == 0L) { VMScheduler.smpTask(); }                      // the SMP threading demo's task
         // Dead calls: the mini java.base runtime reaches these only via writer-stashed addresses (from
         // JIT'd guest code), so force the writer to compile them. Guarded on their stashed addr, so they
         // never actually run on metal (the addr is non-zero there).
@@ -723,24 +953,7 @@ public final class VM
 
         installSchedVectors();
 
-        taskSp = new long[MAX_TASKS];
-        taskStackBase = new long[MAX_TASKS];
-        taskThreadObj = new long[MAX_TASKS];
-        taskState = new int[MAX_TASKS];
-        taskWake = new long[MAX_TASKS];
-        taskWaitOn = new int[MAX_TASKS];
-        taskWaitObj = new long[MAX_TASKS];
-        taskDone = new int[MAX_TASKS];
-        taskMonWait = new long[MAX_TASKS];
-        taskInterrupted = new int[MAX_TASKS];
-        taskPermit = new int[MAX_TASKS];
-        monObj = new long[MAX_MON];
-        monOwner = new int[MAX_MON];
-        monCount = new int[MAX_MON];
-        semCount = new int[NUM_SEM];
-        taskState[0] = TASK_READY;                          // task 0 = the boot flow (SP saved on tick 1)
-        taskCount = 1;
-        curTask = 0;
+        allocTaskTables();                                  // task 0 = the boot flow (SP saved on tick 1)
         VMScheduler.spawn(taskAAddr);                                  // task 1 (yield)
         VMScheduler.spawn(taskBAddr);                                  // task 2 (producer: posts sem 0)
         VMScheduler.spawn(taskCAddr);                                  // task 3 (consumer: blocks on sem 0)
@@ -765,24 +978,7 @@ public final class VM
         if (scheduleAddr == 0L) { scheduleAddr = VMScheduler.schedule(0L); }   // dead calls: force schedule/yieldPick
         if (yieldPickAddr == 0L) { yieldPickAddr = VMScheduler.yieldPick(0L); } // compiled + stashed for the vector stubs
         installSchedVectors();
-        taskSp = new long[MAX_TASKS];
-        taskStackBase = new long[MAX_TASKS];
-        taskThreadObj = new long[MAX_TASKS];
-        taskState = new int[MAX_TASKS];
-        taskWake = new long[MAX_TASKS];
-        taskWaitOn = new int[MAX_TASKS];
-        taskWaitObj = new long[MAX_TASKS];
-        taskDone = new int[MAX_TASKS];
-        taskMonWait = new long[MAX_TASKS];
-        taskInterrupted = new int[MAX_TASKS];
-        taskPermit = new int[MAX_TASKS];
-        monObj = new long[MAX_MON];
-        monOwner = new int[MAX_MON];
-        monCount = new int[MAX_MON];
-        semCount = new int[NUM_SEM];
-        taskState[0] = TASK_READY;                          // task 0 = the WiFi boot flow
-        taskCount = 1;
-        curTask = 0;
+        allocTaskTables();                                  // task 0 = the WiFi boot flow
         Gic.init(Gic.PPI_CNTPNS);
         timerReload = Magic.readCNTFRQ_EL0() / 100L;        // ~10 ms tick (deadline wakes for semWaitTimeout)
         Magic.writeCNTP_TVAL_EL0(timerReload);
@@ -971,6 +1167,30 @@ public final class VM
         return n >= 1 && (Magic.load8(v) & 0xFF) == 0x31;   // "1"
     }
 
+    /**
+     * Whether a launched program gets the other three cores: {@code /etc/init}'s {@code smp=} line, default
+     * ON. A program's threads then run on all four A72s instead of time-slicing core 0. {@code smp=0} is the
+     * escape hatch for a program that wants the single-core scheduler back (and there must BE a manifest --
+     * with none, the demo suite below drives SMP itself).
+     */
+    static boolean launchSmp()
+    {
+        if (!SMP_ENABLED)
+        {
+            return false;
+        }
+        long e = fileFind(Magic.bytes("/etc/init"));
+        if (e == 0L)
+        {
+            return false;                                  // no manifest: the demo suite runs its own SMP phases
+        }
+        long conf = Magic.load64(e + 16L);
+        int flen = (int) Magic.load64(e + 24L);
+        long v = Heap.allocData(16);
+        int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
+        return n < 1 || (Magic.load8(v) & 0xFF) != 0x30;    // absent = on; "0" = off
+    }
+
 
 
     // ----- M3 socket natives: stock java.net / sun.nio.ch over net.Tcp. A FileDescriptor's fd int (first
@@ -998,6 +1218,8 @@ public final class VM
     {
         long rcv = Magic.readX0();                         // FIRST ops: capture the faulting blr's receiver (x0) and
         long lr = Magic.readLR();                          // return addr (x30) before anything clobbers them
+        Uart.lock();                                       // and never release: this core halts at the end of the
+                                                           //   report, so its trace prints whole, not interleaved
         long esr = Magic.readESR_EL1();
         long elr = Magic.readELR_EL1();
         long far = Magic.readFAR_EL1();
@@ -1163,8 +1385,10 @@ public final class VM
         {
             return memo;
         }
+        loaderLock();                                   // demand-loads a class: one compiler at a time
         long buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
         Magic.store64(e + 24L, buf);
+        loaderUnlock();
         return buf;
     }
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
@@ -1176,6 +1400,7 @@ public final class VM
      *  faults (the original is the real bug; the nested one shows where the unwind broke) and halt. */
     static void reportNestedFault(long esr, long elr, long far)
     {
+        Uart.lock();                                       // halts at the end: hold the console for the whole report
         Uart.write(Magic.bytes("\nNESTED FAULT (unwind re-faulted; halting to avoid a reboot loop)\n  original: esr="));
         printHex(fault0Esr);
         Uart.write(Magic.bytes(" elr="));
@@ -2338,6 +2563,15 @@ public final class VM
             startWifiScheduler();
         }
 
+        // SMP: release cores 1-3 and put them on the SHARED run queue before the program starts, so a
+        // launched main()'s threads are scheduled across all four A72s rather than time-slicing core 0.
+        // (Ahead of launchInit, unlike the demo suite's own SMP phases below, which the launch never reaches.)
+        if (launchSmp())
+        {
+            VMScheduler.bringUpSecondaries();
+            VMScheduler.startSmpScheduling();
+        }
+
         // OS-like program launch: /etc/init (RAMFS) names the main() program this image runs. If present,
         // run it and stop -- the image behaves like a JVM running one application, not a demo script. Falls
         // through to the demo suite when no manifest is present (transitional).
@@ -2359,6 +2593,7 @@ public final class VM
         }
 
         // SMP: release cores 1-3 from the armstub spin table; each reports in and then waits for GO.
+        smpDemo = 1;                                       // ... and runs the two set pieces below before scheduling
         VMScheduler.bringUpSecondaries();
         // Per-core scheduling: all four cores pull jobs from a shared run queue, coordinated by a real
         // hardware spinlock (LDAXR/STLXR, working now that the MMU maps RAM cacheable/coherent). Each
@@ -2523,9 +2758,7 @@ public final class VM
         // fork ordering. Then stop the tick so the self-build fixpoint below runs undisturbed.
         Uart.write(Magic.bytes("dining philosophers (demand-loaded from embedded java.base):\n"));
         installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
-        taskCount = 1;                                     // fresh scheduler table: just task 0 (the boot flow)
-        curTask = 0;
-        taskState[0] = TASK_READY;
+        resetTaskTable();                                  // fresh scheduler table: just task 0 (the boot flow)
         Loader.loadAndRun();                               // JIT + spawn the philosopher tasks (IRQs masked)
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);
@@ -2538,6 +2771,8 @@ public final class VM
         }
         stopTimerTick();
         Uart.putc(0x0A);
+
+        smpThreadsDemo();
 
         // Philosophers (the one demo with persistent scheduler tasks on the heap) is done; from here on it is
         // safe to reclaim the demand-load heap between batches so it stays within the A64 bl reach.
@@ -2709,9 +2944,7 @@ public final class VM
         if (WIFI_ENABLED && board.bcm2711.Uart.coreHz > 10000000)
         {
             installSchedVectors();                         // rebuild the switch stubs the GC/JIT demos freed
-            taskCount = 1;                                 // fresh table: only task 0 -- no demo tasks to spew
-            curTask = 0;
-            taskState[0] = TASK_READY;
+            resetTaskTable();                              // fresh table: only task 0 -- no demo tasks to spew
             Magic.writeCNTP_TVAL_EL0(timerReload);
             Magic.writeCNTP_CTL_EL0(1);                    // re-arm the periodic timer tick
             Magic.enableIrq();                             // IRQs on: SDIO SPI 158 + timer deadline wakes

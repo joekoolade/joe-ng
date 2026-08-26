@@ -98,6 +98,17 @@ public final class Magic
     }
 
     /** {@code IC IALLU} — invalidate the whole instruction cache to the point of unification. */
+    /**
+     * {@code IC IVAU} — invalidate the instruction-cache line covering {@code addr}, to the point of
+     * unification, ACROSS EVERY CORE. Cache maintenance by virtual address is broadcast to the Inner
+     * Shareable domain; {@link #icIALLU()} is local to the calling core and so cannot publish code that
+     * another core will execute.
+     */
+    public static void icIVAU(long addr)
+    {
+        throw intrinsic();
+    }
+
     public static void icIALLU()
     {
         throw intrinsic();
@@ -159,6 +170,16 @@ public final class Magic
 
     /** {@code MRS MPIDR_EL1} — this core's affinity; low 2 bits are the core id on BCM2711. */
     public static long readMPIDR()
+    {
+        throw intrinsic();
+    }
+
+    /**
+     * The same {@code MRS MPIDR_EL1} as {@link #readMPIDR()}, under a name short enough for the on-metal
+     * JIT's magic table (it packs a name into a long, so eight characters is the ceiling). This is the one
+     * a demand-loaded guest class can call to ask which core it is running on.
+     */
+    public static long mpidr()
     {
         throw intrinsic();
     }

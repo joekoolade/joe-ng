@@ -110,6 +110,81 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
+- **SMP scheduling — one run queue, four cores. PI-VALIDATED BOTH PATHS (2026-08-26, `core 166MHz`):
+  suite `smp sched: 4 of 4 cores on the run queue`, `steps/core: c0=61 c1=60 c2=60 c3=59` under REAL
+  preemption (`ticks/core c1=50 c2=50 c3=50`), with philosophers + 41 GC collections + lisp fixpoint +
+  WiFi HTTP 200 OK all unmoved and no STW TIMEOUT; launch path `demo/SmpDemo` 800/800 across four cores.** The real scheduler (the one behind
+  `Thread.start`, monitors, `Object.wait`, `LockSupport`) now runs on ALL FOUR A72s, not just core 0. The
+  four cores were already awake; they ran two fixed set pieces (`smpWork`, `pcCoreMain`) and parked while
+  Java threads time-sliced core 0. Now: one shared task table, `curTask` is per-core (`coreTask[core]`),
+  `TASK_RUNNING` marks a task claimed, and every table transition goes through `schedLock()`/`schedUnlock()`
+  (mask IRQs + the `LDAXR/STLXR` `SCHED_LOCK`) instead of IRQ masking alone — which only ever stopped the
+  local core. Each secondary joins via `smpSchedulerMain`: its own banked PPI 30, core 0's vectors, a task
+  slot for the flow it is running (its per-core IDLE task, pinned), then pause-and-yield forever, so every
+  yield is a `pickNext` that pulls whatever is READY. `taskCore[]` pins only what cannot move: task 0 (image
+  stack) and each idle task. Everything else migrates freely.
+  - **The sharp edge, found by reading not running:** a task publishes `TASK_BLOCKED` (or a waker publishes
+    `TASK_READY`) BEFORE the switch stub saves its context, so in that window `taskSp` is stale and another
+    core seeing it READY would resume a stale frame — one task, two cores. `VMScheduler.claimable` fixes it
+    with no new state: a task is claimable only when no other scheduling core still has it as its
+    `coreTask`. Plain preemption never had the window (the save is inside `pickNext`, under the lock).
+  - **Stop-the-world**, because the collector is not concurrent: `gcStop` → every other core parks in
+    `pickNext` (timer tick or idle yield) with its context already saved (which is also how the trace still
+    sees what it held) → mark/sweep → release. A core that never parks within ~1 s counts `stwTimeouts` and
+    says so out loud, rather than marking against a live mutator.
+  - **A loader MUTEX**, because the on-metal JIT keeps its compile context in statics and the code arena is
+    one unguarded bump pointer: `VM.loaderLock()/loaderUnlock()` guard `Loader.lazyCompile`, `VM.bakeResolve`
+    and `Heap.allocCode`. Not a spinlock (a waiter would hold the core the holder needs) — it is built on
+    `SCHED_LOCK` + `taskYield()`, owned by TASK (a compiling task can migrate) and recursive (a `<clinit>`
+    inside a compile re-enters).
+  - **On by default for launched programs**: `bringUpSecondaries` + `startSmpScheduling` now run BEFORE
+    `launchInit`, gated by `/etc/init`'s `smp=` (absent = on, `smp=0` = off). The demo suite keeps its two
+    set pieces and adds `smpThreadsDemo`.
+  - **Pi-validated (2026-08-26, `core 166MHz`):** `demo/SmpDemo` — four ordinary `java.lang.Thread`s,
+    `synchronized` on a shared counter, `join` — prints `core 0 steps 262 | core 1 42 | core 2 318 |
+    core 3 178`, `total 800 of 800`, `[main returned normally]`. Every core non-zero and the total EXACT
+    (the cross-core monitor lost nothing), with the whole 54-class demand-load prologue running while four
+    cores scheduled. QEMU suite: `smp sched: 4 of 4 cores on the run queue`, `steps/core: c0=144 c1=35
+    c2=27 c3=34`, no FAULT/STW TIMEOUT, philosophers + lisp fixpoint unchanged. `Magic.mpidr()` was added
+    as the guest-callable spelling of `readMPIDR` (the metal JIT's magic table packs a name into a long,
+    so nine characters cannot match).
+  - **First hardware bug — the lock word nobody zeroed.** The first Pi boot stopped dead one line after
+    `SMP: 4 of 4 cores up`: `SCHED_LOCK` is raw scratch RAM (`0x0302_0040`), not a Java field, and
+    `Magic.spinLock` spins WHILE THE WORD IS NON-ZERO. QEMU hands out zeroed DRAM so it read as free;
+    a real Pi's DRAM is firmware leftovers, so core 0's next timer tick entered `pickNext` → `schedLock`
+    with IRQs already masked and never returned. `bringUpSecondaries` had always zeroed `LOCK_ADDR` for
+    the job demo; the new lock just never got the same line. **Lesson: a raw-memory lock/flag needs an
+    explicit initialiser — and `Heap.allocArray` does NOT zero elements either**, so `new int[4]` reading
+    as zeroes is a QEMU accident too (`taskIdle`/`coreSched`/`gcParked` are now filled explicitly; garbage
+    there would have made `stopTheWorld` believe a running core was parked).
+  - **Second hardware bug — JIT'd code published to ONE I-cache out of four.** The next boot reached
+    cross-core scheduling and faulted `ESR EC=0` (undefined instruction) at offset **+0** of
+    `java/lang/Thread.sleep`, a method that reads back perfectly in memory. `Heap.publishCode` ended with
+    `IC IALLU` — LOCAL to the calling PE. Fine while only core 0 ran JIT'd code; fatal once another core
+    runs a method core 0 compiled, because the code arena REUSES swept buffers, so that core's I-cache
+    holds stale/zeroed lines for that exact address. **Maintenance BY VA is broadcast to the Inner
+    Shareable domain; "all" flavours are not** — publish is now `DC CVAU`/`DSB`/`IC IVAU`/`DSB`/`ISB` per
+    line (new `IC IVAU` intrinsic, `SYS #3,c7,c5,#1` = `0xD50B7520|Rt`). The other cores' `ISB` is free:
+    they only reach new code through an `ERET`. A console lock (`Uart.lock/unlock`, owner-by-core,
+    recursive, armed with SMP) was needed to read the report at all — two cores' traces had interleaved
+    byte by byte.
+  - **Third hardware bug — the set-piece demo STRANDED the cores.** Full suite on hardware said
+    `smp sched: 1 of 4 cores on the run queue`, `steps/core: c0=240 c1=0 c2=0 c3=0`, where QEMU said 4 of 4.
+    `pcSchedule`'s stop path disabled the timer and resumed WHICHEVER task it interrupted; if that was
+    `pcTask1` (whose exit is an unconditional `WFE` park) the core stranded, because the tick meant to
+    "switch to task 0 later" was the one just disabled — so it never returned from `pcCoreMain` and never
+    joined the run queue. A coin flip per core on hardware, impossible on QEMU (no timer PPI reaches a
+    secondary there, so its cores never leave task 0). Stop now always resumes task 0.
+  - **Fourth finding: NOT a bug — the demo outran itself.** With the strand fixed, hardware said
+    `smp sched: 4 of 4` and still `steps/core: c0=240 c1=0 c2=0 c3=0`. `smpTask` did no work per step, so
+    the whole run is 240 context switches — core 0 finishes them in well under a millisecond, while each
+    secondary sits in a 1 ms back-off before offering itself once. QEMU hid it the other way (counter near
+    real time, execution ~100x slower, so 1 ms leaves plenty to share). Idle now YIELDS FIRST then backs
+    off, and each step spends ~1 ms. QEMU: `c0=61 c1=59 c2=60 c3=60`. **Lesson: `c0=everything` + zeroes
+    reads exactly like "the secondaries never joined" and can equally mean "nothing was left to take."**
+  - **Known gaps:** reflection-driven loading (`forName`/`defineClass`) is not under the loader lock;
+    secondary arenas are still never collected; the queue is plain round robin with no balancing or
+    priorities; ordinary log output is still unlocked (only fault reports take the console).
 - **Write side too: `zip/Deflate` (STORED blocks) + `Deflater`/`Adler32` overlays.** A stored
   block is a first-class DEFLATE type, so the output is valid, conforming, and simply not
   smaller; that buys `Deflater`/`DeflaterOutputStream`/`ZipOutputStream` for a fraction of an
