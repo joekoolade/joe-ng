@@ -219,6 +219,10 @@ defines the minimum the assembler must encode.
     fixpoint is untouched. `java/lang/ClassCastException` was ALREADY pulled and flagged instantiated — the
     infrastructure had been prepared, only the throw was never wired. `demo/CastDemo` pins six shapes incl.
     cross-frame unwind and catching as `RuntimeException` (proving the thrown object has a real TIB).
+    **Pi-validated on the full demo suite** (2026-08-26, `core 166MHz`): the instanceof/checkcast demo still
+    prints `YNW` (the `W` is a SUCCEEDING checkcast, so the new predicate path doesn't throw on a good cast),
+    both exception demos still print `E`/`U`, 41 GC collections over `churnMB=625`, `lisp evals=600
+    result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK (828 bytes).
   - **The `clinit-lazy java/lang/StrictMath` line was a red herring**, and worth remembering as one: it was
     merely the last thing PRINTED before the wedge, not the fault site. `demo/StrictMathDemo` runs that
     initializer to completion on its own. The last log line names where output stopped, not where control did.
