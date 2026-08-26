@@ -172,6 +172,13 @@ defines the minimum the assembler must encode.
     "switch to task 0 later" was the one just disabled — so it never returned from `pcCoreMain` and never
     joined the run queue. A coin flip per core on hardware, impossible on QEMU (no timer PPI reaches a
     secondary there, so its cores never leave task 0). Stop now always resumes task 0.
+  - **Fourth finding: NOT a bug — the demo outran itself.** With the strand fixed, hardware said
+    `smp sched: 4 of 4` and still `steps/core: c0=240 c1=0 c2=0 c3=0`. `smpTask` did no work per step, so
+    the whole run is 240 context switches — core 0 finishes them in well under a millisecond, while each
+    secondary sits in a 1 ms back-off before offering itself once. QEMU hid it the other way (counter near
+    real time, execution ~100x slower, so 1 ms leaves plenty to share). Idle now YIELDS FIRST then backs
+    off, and each step spends ~1 ms. QEMU: `c0=61 c1=59 c2=60 c3=60`. **Lesson: `c0=everything` + zeroes
+    reads exactly like "the secondaries never joined" and can equally mean "nothing was left to take."**
   - **Known gaps:** reflection-driven loading (`forName`/`defineClass`) is not under the loader lock;
     secondary arenas are still never collected; the queue is plain round robin with no balancing or
     priorities; ordinary log output is still unlocked (only fault reports take the console).

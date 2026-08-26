@@ -281,9 +281,9 @@ public final class VMScheduler
         Magic.enableIrq();
         while (smpStop == 0)
         {
-            idlePause();                                   // don't hammer the shared lock while there is no work
-            taskYield();                                   // ... then offer this core to the run queue again
-        }
+            taskYield();                                   // offer this core to the run queue FIRST -- a core
+            pauseMs1();                                    //   that pauses before its first ask can miss a
+        }                                                  //   short burst of work entirely; then back off
         Magic.writeCNTP_CTL_EL0(0);                        // drained: stop this core's timer and leave the table
         Magic.disableIrq();
         daif = schedLock();
@@ -295,8 +295,8 @@ public final class VMScheduler
         schedUnlock(daif);
     }
 
-    /** ~1 ms: how long an idle core waits before asking the run queue for work again. */
-    static void idlePause()
+    /** ~1 ms of wall clock. How long an idle core backs off between asks, and how long one demo step takes. */
+    static void pauseMs1()
     {
         long end = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() / 1000L;
         while (Magic.readCNTPCT_EL0() < end)
@@ -363,9 +363,15 @@ public final class VMScheduler
     }
 
     /**
-     * The SMP threading demo's task: step, note WHICH CORE the step ran on, yield, repeat. The tasks are
-     * unpinned, so each step can land on a different core -- the per-core tally core 0 prints afterwards is
-     * the evidence that one shared run queue is feeding all four A72s.
+     * The SMP threading demo's task: step, note WHICH CORE the step ran on, work briefly, yield, repeat.
+     * The tasks are unpinned, so each step can land on a different core -- the per-core tally core 0 prints
+     * afterwards is the evidence that one shared run queue is feeding all four A72s.
+     *
+     * <p>Each step spends ~1 ms, and that is load-bearing rather than decorative. With a bare
+     * bump-and-yield the whole run is 240 context switches, which core 0 finishes in well under a
+     * millisecond -- before a secondary, backing off between asks, has offered itself even once. The tally
+     * then reads c0=240 and zeroes, which looks exactly like "the secondaries never joined" and is not.
+     * Giving each step real duration spreads the run across the demo's window, where sharing can show.
      */
     static void smpTask()
     {
@@ -374,6 +380,7 @@ public final class VMScheduler
         {
             smpRan[(int) (Magic.readMPIDR() & 3L)] += 1;   // each core touches only its OWN counter
             n = n + 1;
+            pauseMs1();                                    // ... and hold the core long enough to be shared
             taskYield();
         }
         taskExit();

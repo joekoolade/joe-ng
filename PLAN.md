@@ -4270,6 +4270,18 @@ shared run queue. It is a coin flip per core on hardware and IMPOSSIBLE on QEMU,
 PPI to a secondary at all, so its cores never leave task 0. The stop path now always hands the core back to
 task 0, which exits.
 
+**And the fourth finding was not a bug at all — the demo outran itself.** With the strand fixed, hardware
+reported `smp sched: 4 of 4 cores on the run queue` and still `steps/core: c0=240 c1=0 c2=0 c3=0`. The
+scheduler was fine. `smpTask` did no work per step — a counter bump and a yield — so the entire run is 240
+context switches, which core 0 finishes in well under a millisecond, while each secondary sits in a 1 ms
+back-off before offering itself even once. Core 0 drained the queue before anyone else asked. QEMU hid it
+from the other direction: its counter advances near real time while execution is far slower, so 1 ms of
+counter time still leaves plenty of work to share. Two changes: the idle loop now YIELDS FIRST and backs off
+after (a core that pauses before its first ask can miss a short burst entirely), and each demo step spends
+~1 ms so the run spans the window. QEMU then reads `c0=61 c1=59 c2=60 c3=60`. **Worth keeping as a
+measurement lesson: a tally of `c0=everything` and zeroes looks exactly like "the secondaries never joined"
+and can equally mean "they joined and there was nothing left to take."**
+
 **Not done yet (the next increments).**
 
 - Reflection-driven loading (`Class.forName`, `defineClass`) reaches the loader WITHOUT the loader lock —
