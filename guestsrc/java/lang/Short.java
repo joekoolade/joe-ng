@@ -10,6 +10,8 @@ public final class Short extends Number implements Comparable<Short>
 {
     public static final short MIN_VALUE = -32768;
     public static final short MAX_VALUE = 32767;
+    public static final int SIZE = 16;
+    public static final int BYTES = SIZE / Byte.SIZE;
 
     private final short value;
 

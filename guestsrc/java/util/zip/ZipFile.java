@@ -26,6 +26,58 @@ import zip.ZipDir;
  */
 public class ZipFile implements Closeable
 {
+    // The zip header layout constants. In the JDK these are inherited from the package-private interface
+    // java.util.zip.ZipConstants, which makes them readable as ZipFile.LOCHDR etc. from any package -- a
+    // form stock zip code and its tests both use, so the overlay has to carry them too.
+
+    /** Local file header: signature, then fixed size, and field offsets within it. */
+    public static final long LOCSIG = 0x04034b50L;
+    public static final int LOCHDR = 30;
+    public static final int LOCVER = 4;
+    public static final int LOCFLG = 6;
+    public static final int LOCHOW = 8;
+    public static final int LOCTIM = 10;
+    public static final int LOCCRC = 14;
+    public static final int LOCSIZ = 18;
+    public static final int LOCLEN = 22;
+    public static final int LOCNAM = 26;
+    public static final int LOCEXT = 28;
+
+    /** Data descriptor (written after the entry when sizes were not known up front). */
+    public static final long EXTSIG = 0x08074b50L;
+    public static final int EXTHDR = 16;
+    public static final int EXTCRC = 4;
+    public static final int EXTSIZ = 8;
+    public static final int EXTLEN = 12;
+
+    /** Central directory entry. */
+    public static final long CENSIG = 0x02014b50L;
+    public static final int CENHDR = 46;
+    public static final int CENVEM = 4;
+    public static final int CENVER = 6;
+    public static final int CENFLG = 8;
+    public static final int CENHOW = 10;
+    public static final int CENTIM = 12;
+    public static final int CENCRC = 16;
+    public static final int CENSIZ = 20;
+    public static final int CENLEN = 24;
+    public static final int CENNAM = 28;
+    public static final int CENEXT = 30;
+    public static final int CENCOM = 32;
+    public static final int CENDSK = 34;
+    public static final int CENATT = 36;
+    public static final int CENATX = 38;
+    public static final int CENOFF = 42;
+
+    /** End of central directory record. */
+    public static final long ENDSIG = 0x06054b50L;
+    public static final int ENDHDR = 22;
+    public static final int ENDSUB = 8;
+    public static final int ENDTOT = 10;
+    public static final int ENDSIZ = 12;
+    public static final int ENDOFF = 16;
+    public static final int ENDCOM = 20;
+
     /** Mode flag kept for API compatibility; this overlay is always read-only. */
     public static final int OPEN_READ = 0x1;
 

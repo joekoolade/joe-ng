@@ -51,6 +51,55 @@ public class Throwable
     }
 
     /** The detail message string, or {@code null}. */
+    /**
+     * Suppressed exceptions. javac lowers every try-with-resources into a call to {@code addSuppressed},
+     * so without these a guest t-w-r whose body AND close() both throw has no method to resolve — this is
+     * part of the language, not just of the Throwable API.
+     */
+    private Throwable[] suppressed;
+    private int suppressedCount;
+
+    public final void addSuppressed(Throwable exception)
+    {
+        if (exception == this)
+        {
+            throw new IllegalArgumentException("self-suppression");
+        }
+        if (exception == null)
+        {
+            throw new NullPointerException();
+        }
+        if (suppressed == null)
+        {
+            suppressed = new Throwable[4];
+        }
+        if (suppressedCount == suppressed.length)
+        {
+            Throwable[] bigger = new Throwable[suppressed.length * 2];
+            int k = 0;
+            while (k < suppressedCount)
+            {
+                bigger[k] = suppressed[k];
+                k = k + 1;
+            }
+            suppressed = bigger;
+        }
+        suppressed[suppressedCount] = exception;
+        suppressedCount = suppressedCount + 1;
+    }
+
+    public final Throwable[] getSuppressed()
+    {
+        Throwable[] out = new Throwable[suppressedCount];
+        int k = 0;
+        while (k < suppressedCount)
+        {
+            out[k] = suppressed[k];
+            k = k + 1;
+        }
+        return out;
+    }
+
     public String getMessage()
     {
         return detailMessage;

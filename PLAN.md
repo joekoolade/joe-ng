@@ -4015,6 +4015,128 @@ full 828-byte body. The WPA2 supplicant is our own crypto stack running through 
 arithmetic as everything else — a PTK derived with a mis-masked shift would fail the MIC check, so `msg3 MIC
 ok` is a real test of the shift fix, not merely a demo that happens to pass.
 
+## Stock OpenJDK zip JUnit tests on metal (2026-08-26)
+
+The earlier jar/zip pass took the `@run main` tests and set the 41 `testng`/`junit` ones aside as "no harness
+on metal". This pass goes back for the JUnit half of `java/util/zip` — 32 files, the largest JUnit cluster in
+`java/util` after `Locale`.
+
+**Triage before running anything.** 21 of the 32 build a temp archive through `java.nio.file` (`Files`,
+`Path`), which joe-ng has no overlay for and no writable filesystem under: those are blocked on a filesystem,
+not on zip. One more (`CenSizeTooLarge`) writes a multi-gigabyte sparse file through `FileChannel`. That
+leaves **8 candidates** operating entirely on `byte[]` in memory — and in-memory is the right shape for this
+VM anyway.
+
+**The harness.** joe-ng cannot host the JUnit engine (annotation scanning, ServiceLoader, reflective
+discovery), so each test gets a hand-written `<Name>Run` main that calls its `@Test` methods directly, in a
+FRESH instance per method the way the engine does. The test source itself is byte-for-byte unmodified. The
+same runners pass on the host JDK 26 with only the shim on the classpath, which is what makes them evidence:
+a joe-ng failure is then a joe-ng finding, not a harness artifact.
+
+**What the JUnit shim needed.** `guestsrc/org/junit/jupiter/` had `@Test`, `assertTrue/False`, `fail` and a
+void `assertThrows`. Added: `assertEquals` (primitive and reference overloads, so a failing int comparison
+does not depend on boxing), `assertNotNull`/`assertNull`/`assertSame`/`assertNotSame`/`assertInstanceOf`,
+`assertArrayEquals` for `byte[]`/`int[]`/`Object[]` reporting the first differing index, `assertDoesNotThrow`,
+the lifecycle markers `@BeforeEach`/`@AfterEach`/`@BeforeAll`/`@AfterAll`, and `org.junit.jupiter.params`
+(`@ParameterizedTest`, `@MethodSource`, `@ValueSource`, `Arguments`). `assertThrows` now RETURNS the caught
+throwable, because tests routinely bind it and assert on its message.
+
+**Five genuine `java.base` gaps, found by compiling and fixed in the overlays** — none of them test-only:
+
+- **`Throwable.addSuppressed`/`getSuppressed` were missing entirely.** This is not a Throwable nicety: javac
+  lowers EVERY try-with-resources into an `addSuppressed` call, so any guest t-w-r whose body and `close()`
+  both throw had no method to resolve. A language feature was partially unimplemented and nothing had
+  noticed.
+- **`Inflater`/`Deflater` were not `AutoCloseable`.** JDK 24 added `close()` (specified as `end()`, and
+  `end()` is idempotent); the overlays predated it, so stock code using them as t-w-r resources would not
+  compile.
+- **`ByteBuffer` had only the socket path** — relative bulk `get`/`put` and `address()`. Added `wrap`
+  (sharing the array, which is the point: patch a header through the buffer, feed the same array to
+  `ZipInputStream`), `array`/`arrayOffset`, absolute and relative accessors for byte/short/int/long, absolute
+  bulk transfers, and a settable `ByteOrder`. The byte order matters more than it looks: zip headers are
+  little-endian and `ByteBuffer`'s documented default is big-endian, so getting it wrong is silent.
+- **`java.nio.ByteOrder` did not exist.** Stock's initializer asks `Unsafe`/`Bits` for platform endianness;
+  the overlay answers little-endian directly (AArch64 EL1, `SCTLR_EL1.EE = 0`).
+- **`ZipFile` lacked the header-layout constants** (`LOCHDR`, `CENHDR`, `ENDHDR`, `CENOFF`, …). In the JDK
+  they are inherited from the package-private `ZipConstants` interface, which makes them readable as
+  `ZipFile.LOCHDR` from any package — a form both stock zip code and its tests use.
+- Plus `Byte.SIZE`/`BYTES` and `Short.SIZE`/`BYTES`.
+
+With those, **all 8 candidates compile** — and 7 are runnable (the 8th, `BasicGZIPInputStreamTest`, draws
+its parameters from `private static Stream<Arguments>` factories: reachable only through reflection AND a
+`Stream` pipeline, which is the one area with an open corruption bug).
+
+**On the metal: 7 of 7 methods that got to run, passed — and the one failure was a real find.**
+`DeflaterClose` 3/3 and `InflaterClose` 3/3 passed first time. `GZIPInputStreamAvailable` hit a
+`DENYLIST TRAP` with a backtrace that named the cause outright:
+
+```
+at java/io/SequenceInputStream.<init>(SequenceInputStream.java:83)
+at java/util/zip/GZIPInputStream.readTrailer(GZIPInputStream.java:281)
+```
+
+`SequenceInputStream(s1, s2)` is `this(Collections.enumeration(Arrays.asList(s1, s2)))`, and the guest
+`Collections` overlay had `sort`, `unmodifiableSet` and `emptySet` — no `enumeration`, so the call resolved
+to nothing. Adding it (backed by the collection's own iterator, through a NAMED nested class rather than an
+anonymous one, to stay clear of the captured-field bug) turned that test green. This is the missing-overlay-
+method pattern again, and the trapwire backtrace remains the cheapest diagnosis in the VM.
+
+**Why the other four could not be run on QEMU, which is itself the finding.** Every test that touches
+`ZipOutputStream` drags a demand-load closure that reaches `java.time`, `GregorianCalendar`,
+`JapaneseImperialCalendar`, `Formatter`, `BigInteger` and `ForkJoinPool` — the host JVM loads 870 classes for
+one of these programs. Worse than the size is the SHAPE of the cost: 302 classes in the first 35 s, then only
+70 more in the next 115 s. Load time is badly super-linear, so a longer timeout does not rescue it; at the
+tail rate the remaining closure would take many minutes per test. Two consequences:
+
+- The right unit is ONE image running every test (`test/jdk/java/util/zip/ZipJUnitAll.java`), so the closure
+  is paid once rather than seven times. That is what is wired into `JDKTESTS`.
+- Hardware is not merely the ground truth here, it is the only practical harness: the Pi runs this ~100x
+  faster than the emulator. The four `ZipOutputStream` tests are pending a Pi boot.
+
+The runners are validated the way that makes them evidence: the same `ZipJUnitAll` passes 22/22 on the host
+JDK 26 with nothing but the shim on the classpath, so a joe-ng failure is a joe-ng finding.
+
+**PI-VALIDATED 22/22 (2026-08-26, `core 166MHz`) — every stock `java/util/zip` JUnit test joe-ng can host
+passes on the metal.** The confirming boot shows `clinit-lazy java/util/HexFormat` at the head of the
+`Zip64DataDescriptor` group and all seven of its methods green, with the other six classes byte-identical to
+the run before: the fix did what it claimed and nothing else. The first boot of this arc is recorded below
+because the failure it found is the more useful half.
+
+**First Pi run: 15 of 22, and the 7 failures were one bug.** `DeflaterClose` 3/3,
+`InflaterClose` 3/3, `GZIPInputStreamAvailable`, both `DataDescriptor` tests and `CloseWrappedStream` 6/6 all
+passed — the board loaded the full ~460-class closure and ran the lot, which QEMU could not do at any
+timeout. `CloseWrappedStream` is the one to notice: the log shows `baked java/lang/Throwable.addSuppressed`
+and `getSuppressed` firing, so the two tests that need suppressed exceptions are the ones exercising the
+support this arc added.
+
+All 7 `Zip64DataDescriptor` methods failed with a bare `NullPointerException`, identically, which pointed at
+their shared `@BeforeEach` — whose first statement is `HexFormat.of().parseHex(hex.replaceAll("\n", ""))`.
+A four-line probe (small closure, so QEMU runs it in a minute) isolated it immediately:
+
+```
+HexFormat.of() null? 1
+Exception in thread "main" java/lang/NullPointerException
+```
+
+**`HexFormat`'s initializer was being skipped, silently.** Its `<clinit>` opens with the assertion idiom
+(`ldc HexFormat.class; desiredAssertionStatus`) and then does real work — `SharedSecrets.getJavaLangAccess()`,
+the digit tables, the `HEX_FORMAT` singleton. `clinitCompilable` allows the idiom ONLY when it is the whole
+initializer (`if (sawAssertIdiom && risky) return false`), on the stated assumption that an initializer doing
+idiom-plus-real-work is `clinitBlocked` or seeded instead. `HexFormat` is neither, so it fell in the gap
+between the two policies: no capture, no entry in the clinit table, no `clinit-lazy` line, `HEX_FORMAT` null.
+Allowlisted like `Pattern`/`Socket`/`ImmutableCollections` — its body is runnable here, and `jla` is only
+dereferenced by the formatting methods, not `parseHex`.
+
+**The general lesson is the silence, not the class.** A rejected initializer is indistinguishable from one
+that ran: the class loads, gets its static cells, reports as lazy-init pending, and then answers null
+forever. That is why the first symptom was seven identical NPEs three call levels away from the cause. The
+harness now prints a stack trace on failure, which would have named the frame on the first boot.
+
+**A parity note worth keeping.** Adding `addSuppressed`/`getSuppressed` widened `java/lang/Throwable`'s vtable
+from 12 slots to 14 — and the boot asserts `vtparity java/lang/Throwable OK 14`, because the writer-baked and
+loader-built worlds both derive from the same overlay. Adding a method to a baked class is safe precisely
+because that invariant is checked every boot rather than assumed.
+
 ## Stock OpenJDK jar/zip tests on metal (2026-08-25)
 
 Running the unmodified jtreg tests from `test/jdk/java/util/{jar,zip}` as joe-ng guest programs — the

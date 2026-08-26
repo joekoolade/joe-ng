@@ -1,7 +1,8 @@
 package java.util;
 
 /**
- * A JDK-free, mini {@code java/util/Collections}: just a static {@code sort(List)} for the probe. Operates on
+ * A JDK-free, mini {@code java/util/Collections}: the handful of statics stock code on metal actually
+ * reaches. {@code sort(List)} operates on
  * any {@link List} through the interface (get/set/size are invokeinterface, so it sorts an ArrayList or a
  * LinkedList alike), comparing elements GENERICALLY via {@link Comparable} -- {@code ((Comparable) x).compareTo(y)}
  * is invokeinterface {@code Comparable.compareTo(Object)}, which for a String element dispatches through the
@@ -69,6 +70,40 @@ public final class Collections
                 j = j + 1;
             }
             i = i + 1;
+        }
+    }
+
+    /**
+     * The {@link Enumeration} view stock code still asks for -- {@code SequenceInputStream(s1, s2)} is
+     * {@code this(Collections.enumeration(Arrays.asList(s1, s2)))}, which is how GZIPInputStream reads its
+     * trailer. Backed by the collection's own iterator, so it works for any List or Set.
+     *
+     * <p>Deliberately a NAMED nested class rather than an anonymous one: an anonymous class capturing a
+     * local becomes a synthetic {@code val$} field, and captured-field initialisation inside a deep JDK
+     * hierarchy is the one shape with an open corruption bug (see the stream notes in PLAN.md).
+     */
+    public static <T> Enumeration<T> enumeration(Collection<T> c)
+    {
+        return new IteratorEnumeration<T>(c.iterator());
+    }
+
+    private static final class IteratorEnumeration<T> implements Enumeration<T>
+    {
+        private final Iterator<T> it;
+
+        IteratorEnumeration(Iterator<T> it)
+        {
+            this.it = it;
+        }
+
+        public boolean hasMoreElements()
+        {
+            return it.hasNext();
+        }
+
+        public T nextElement()
+        {
+            return it.next();
         }
     }
 }
