@@ -253,7 +253,8 @@ defines the minimum the assembler must encode.
   header constants. Plus `Collections.enumeration`, found by a DENYLIST TRAP whose backtrace named it
   outright: `GZIPInputStream.readTrailer` builds a `SequenceInputStream`, whose 2-arg ctor is
   `this(Collections.enumeration(Arrays.asList(...)))`, and the overlay had only sort/unmodifiableSet/
-  emptySet. **PI-VALIDATED 15/22** (2026-08-26): DeflaterClose 3/3, InflaterClose 3/3,
+  emptySet. **PI-VALIDATED 22/22** (2026-08-26) — every stock `java/util/zip` JUnit test joe-ng can host passes on
+  hardware (`zip junit: ran 22, failures 0`). The first boot was 15/22: DeflaterClose 3/3, InflaterClose 3/3,
   GZIPInputStreamAvailable, both DataDescriptor tests, CloseWrappedStream 6/6 (its log shows
   `baked java/lang/Throwable.addSuppressed`/`getSuppressed` — the tests that need suppressed exceptions are
   the ones exercising the new support). The 7 `Zip64DataDescriptor` failures were ONE bug:

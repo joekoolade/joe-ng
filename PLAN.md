@@ -4096,7 +4096,13 @@ tail rate the remaining closure would take many minutes per test. Two consequenc
 The runners are validated the way that makes them evidence: the same `ZipJUnitAll` passes 22/22 on the host
 JDK 26 with nothing but the shim on the classpath, so a joe-ng failure is a joe-ng finding.
 
-**Pi run (2026-08-26, `core 166MHz`): 15 of 22, and the 7 failures were one bug.** `DeflaterClose` 3/3,
+**PI-VALIDATED 22/22 (2026-08-26, `core 166MHz`) — every stock `java/util/zip` JUnit test joe-ng can host
+passes on the metal.** The confirming boot shows `clinit-lazy java/util/HexFormat` at the head of the
+`Zip64DataDescriptor` group and all seven of its methods green, with the other six classes byte-identical to
+the run before: the fix did what it claimed and nothing else. The first boot of this arc is recorded below
+because the failure it found is the more useful half.
+
+**First Pi run: 15 of 22, and the 7 failures were one bug.** `DeflaterClose` 3/3,
 `InflaterClose` 3/3, `GZIPInputStreamAvailable`, both `DataDescriptor` tests and `CloseWrappedStream` 6/6 all
 passed — the board loaded the full ~460-class closure and ran the lot, which QEMU could not do at any
 timeout. `CloseWrappedStream` is the one to notice: the log shows `baked java/lang/Throwable.addSuppressed`
