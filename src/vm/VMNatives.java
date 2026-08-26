@@ -281,11 +281,12 @@ final class VMNatives
      */
     static long currentThreadObj()
     {
-        long t = taskThreadObj[curTask];
+        int me = curTask();
+        long t = taskThreadObj[me];
         if (t == 0L)
         {
             t = Loader.allocThreadObj();                   // 0 if java/lang/Thread isn't in the loaded batch
-            taskThreadObj[curTask] = t;
+            taskThreadObj[me] = t;
         }
         return t;
     }

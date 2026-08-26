@@ -163,6 +163,16 @@ public final class Magic
         throw intrinsic();
     }
 
+    /**
+     * The same {@code MRS MPIDR_EL1} as {@link #readMPIDR()}, under a name short enough for the on-metal
+     * JIT's magic table (it packs a name into a long, so eight characters is the ceiling). This is the one
+     * a demand-loaded guest class can call to ask which core it is running on.
+     */
+    public static long mpidr()
+    {
+        throw intrinsic();
+    }
+
     // ----- scheduler ops for JIT-loaded guest code (the mini java.base runtime) -----
     /** Start a task running {@code r}'s {@code run()} (java/lang/Runnable) on its own stack. */
     public static void spawn(Object r)

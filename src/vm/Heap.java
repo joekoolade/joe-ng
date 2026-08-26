@@ -293,6 +293,15 @@ public final class Heap
      */
     public static long allocCode(int size)
     {
+        VM.loaderLock();                               // SMP: one bump pointer, and no atomic behind it
+        long buf = allocCodeLocked(size);
+        VM.loaderUnlock();
+        return buf;
+    }
+
+    /** {@link #allocCode}'s body, run under the loader lock (which the JIT paths already hold). */
+    private static long allocCodeLocked(int size)
+    {
         int aligned = (size + 7) & -8;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
         long cp = Magic.load64(CODE_PTR_CELL);

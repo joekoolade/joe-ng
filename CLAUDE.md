@@ -110,6 +110,43 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
+- **SMP scheduling — one run queue, four cores (in progress).** The real scheduler (the one behind
+  `Thread.start`, monitors, `Object.wait`, `LockSupport`) now runs on ALL FOUR A72s, not just core 0. The
+  four cores were already awake; they ran two fixed set pieces (`smpWork`, `pcCoreMain`) and parked while
+  Java threads time-sliced core 0. Now: one shared task table, `curTask` is per-core (`coreTask[core]`),
+  `TASK_RUNNING` marks a task claimed, and every table transition goes through `schedLock()`/`schedUnlock()`
+  (mask IRQs + the `LDAXR/STLXR` `SCHED_LOCK`) instead of IRQ masking alone — which only ever stopped the
+  local core. Each secondary joins via `smpSchedulerMain`: its own banked PPI 30, core 0's vectors, a task
+  slot for the flow it is running (its per-core IDLE task, pinned), then pause-and-yield forever, so every
+  yield is a `pickNext` that pulls whatever is READY. `taskCore[]` pins only what cannot move: task 0 (image
+  stack) and each idle task. Everything else migrates freely.
+  - **The sharp edge, found by reading not running:** a task publishes `TASK_BLOCKED` (or a waker publishes
+    `TASK_READY`) BEFORE the switch stub saves its context, so in that window `taskSp` is stale and another
+    core seeing it READY would resume a stale frame — one task, two cores. `VMScheduler.claimable` fixes it
+    with no new state: a task is claimable only when no other scheduling core still has it as its
+    `coreTask`. Plain preemption never had the window (the save is inside `pickNext`, under the lock).
+  - **Stop-the-world**, because the collector is not concurrent: `gcStop` → every other core parks in
+    `pickNext` (timer tick or idle yield) with its context already saved (which is also how the trace still
+    sees what it held) → mark/sweep → release. A core that never parks within ~1 s counts `stwTimeouts` and
+    says so out loud, rather than marking against a live mutator.
+  - **A loader MUTEX**, because the on-metal JIT keeps its compile context in statics and the code arena is
+    one unguarded bump pointer: `VM.loaderLock()/loaderUnlock()` guard `Loader.lazyCompile`, `VM.bakeResolve`
+    and `Heap.allocCode`. Not a spinlock (a waiter would hold the core the holder needs) — it is built on
+    `SCHED_LOCK` + `taskYield()`, owned by TASK (a compiling task can migrate) and recursive (a `<clinit>`
+    inside a compile re-enters).
+  - **On by default for launched programs**: `bringUpSecondaries` + `startSmpScheduling` now run BEFORE
+    `launchInit`, gated by `/etc/init`'s `smp=` (absent = on, `smp=0` = off). The demo suite keeps its two
+    set pieces and adds `smpThreadsDemo`.
+  - **QEMU (not truth — needs Pi validation):** `demo/SmpDemo` — four ordinary `java.lang.Thread`s,
+    `synchronized` on a shared counter, `join` — prints `core 0 steps 280 | core 1 179 | core 2 166 |
+    core 3 175 | total 800 of 800` and `[main returned normally]`. Suite: `smp sched: 4 of 4 cores on the
+    run queue`, `steps/core: c0=144 c1=35 c2=27 c3=34`, no FAULT/STW TIMEOUT, philosophers + lisp fixpoint
+    unchanged. `Magic.mpidr()` was added as the guest-callable spelling of `readMPIDR` (the metal JIT's
+    magic table packs a name into a long, so nine characters cannot match).
+  - **Known gaps:** reflection-driven loading (`forName`/`defineClass`) is not under the loader lock;
+    `Heap.publishCode` invalidates only the LOCAL I-cache, so rebuilding the vector table while secondaries
+    schedule would need `IC IALLUIS`; secondary arenas are still never collected; the queue is plain round
+    robin with no balancing or priorities.
 - **Write side too: `zip/Deflate` (STORED blocks) + `Deflater`/`Adler32` overlays.** A stored
   block is a first-class DEFLATE type, so the output is valid, conforming, and simply not
   smaller; that buys `Deflater`/`DeflaterOutputStream`/`ZipOutputStream` for a fraction of an

@@ -7954,6 +7954,19 @@ public final class Loader
         {
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
+        VM.loaderLock();                                // SMP: the compile context is static -- one compiler at a time
+        long done = lazyCompileLocked(idx);
+        VM.loaderUnlock();
+        return done;
+    }
+
+    /** {@link #lazyCompile}'s body, run under the loader lock. */
+    private static long lazyCompileLocked(int idx)
+    {
+        if (lzTab[idx].cache != 0L)
+        {
+            return lzTab[idx].cache;                    // another core compiled it while we waited for the lock
+        }
         ensureClinit(lzTab[idx].reg);                   // JVMS 5.5 barrier: first call into the class initializes it.
                                                         // BEFORE restoreCtxForCompile -- the initializer re-enters here
                                                         // and each nested compile clobbers the g* context.
@@ -10454,6 +10467,7 @@ public final class Loader
         if (isName(gbase, n, 0x7061726BL, 4))        { return Intrinsics.PARK; }        // "park"
         if (isName(gbase, n, 0x756E7061726BL, 6))    { return Intrinsics.UNPARK; }      // "unpark"
         if (isName(gbase, n, 0x726561644C52L, 6))    { return Intrinsics.READ_LR; }     // "readLR" (getCallerClass)
+        if (isName(gbase, n, 0x6D70696472L, 5))      { return Intrinsics.READ_MPIDR; }  // "mpidr" (which core am I?)
         return -1;
     }
 

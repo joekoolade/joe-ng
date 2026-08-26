@@ -35,6 +35,7 @@ final class VMGc
         lastScanFrom = scanFrom;
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
+        stopTheWorld();                               // ... and no MUTATION on another core, for the same reason
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
         markSp = MARK_STACK;                          // the trace worklist starts empty
@@ -73,9 +74,10 @@ final class VMGc
         }
         buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
-        if (taskStackBase != null && curTask != 0 && taskStackBase[curTask] != 0L)
+        int me = curTask();
+        if (taskStackBase != null && me != 0 && taskStackBase[me] != 0L)
         {
-            stackTop = taskStackBase[curTask] + 0x8000L;   // a spawned task: its stack is a heap object
+            stackTop = taskStackBase[me] + 0x8000L;        // a spawned task: its stack is a heap object
         }
         markRange(scanFrom, stackTop);
         markRange(staticsStart, staticsEnd);
@@ -209,10 +211,56 @@ final class VMGc
             printHex(stoppedAt);                       // non-zero = the size walk hit a corrupt status
             Uart.write(Magic.bytes("]\n"));
         }
+        startTheWorld();                              // the heap is consistent again: let the other cores run
         if ((daif & 0x80L) == 0L)
         {
             Magic.enableIrq();                        // restore: only unmask if the caller had IRQs on
         }
+    }
+
+    /**
+     * Stop the world: every core but this one parks before the mark begins. The collector moves nothing, so
+     * a concurrent READER would be harmless -- but a concurrent MUTATOR is not: it allocates into the arena
+     * being swept, and it can publish the only reference to an object into a place this pass has already
+     * scanned, so the object is swept while live. Cores park in {@link VMScheduler#pickNext} (their timer
+     * tick or their idle yield), with the interrupted task's SP already saved to its stack -- which is how
+     * the trace still sees everything they were holding.
+     *
+     * <p>A core that never reaches the scheduler cannot be parked; rather than mark against a running
+     * mutator we give up after ~1 s, count it in {@code stwTimeouts} and say so, because a silent
+     * corruption here surfaces arbitrarily far away.
+     */
+    private static void stopTheWorld()
+    {
+        if (smpSched == 0)
+        {
+            return;                                   // single core in the table: the world is already stopped
+        }
+        gcStop = 1;
+        Magic.dsb();
+        long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0();
+        int parked = 0;
+        while (parked < 3 && Magic.readCNTPCT_EL0() < deadline)
+        {
+            parked = gcParked[1] + gcParked[2] + gcParked[3];
+        }
+        if (parked < 3)
+        {
+            stwTimeouts = stwTimeouts + 1L;
+            Uart.write(Magic.bytes("\nGC: STW TIMEOUT (a core never parked)\n"));
+        }
+    }
+
+    /** Release the parked cores: the heap is consistent again. */
+    private static void startTheWorld()
+    {
+        if (gcStop == 0)
+        {
+            return;
+        }
+        gcStop = 0;
+        Magic.dsb();
+        Magic.sev();
     }
 
     /** Candidate words examined by the LAST collection. Conservative scanning probes every payload word of
