@@ -4093,8 +4093,25 @@ line 106). So the fault is an imap slot for a default method on the second imple
 "slot past a short imap" case the guard's own comment had anticipated but could not catch. Not a `Map.of`
 bug, not a `LinkedHashMap` bug — an interface-default dispatch bug, and now localised to one call.
 
-**The underlying imap bug is not fixed**; the guard turns it from a silent wild branch into a reported
-exception naming the call, which is what the next attempt needs to start from.
+**The bug the guard named, and its fix.** It was never an imap bug either. `attrs.forEach(...)` has a
+CLASS-typed receiver, so javac emits `invokevirtual`, not `invokeinterface` — and `Attributes` neither
+declares `forEach` nor inherits it from a superclass. It inherits it as an interface DEFAULT. Neither
+flattener puts interface defaults in a class vtable, this one or the writer's, so there is no slot to
+resolve; `globalVtableSlot`'s name+descriptor fallback then returned a slot belonging to an UNRELATED class,
+an index past the end of `Attributes`' TIB, read as a code pointer. `demo/DefaultIfaceDemo` is the
+reproducer, and it is exact about the boundary: the same call works on a `Map`-typed receiver (invokeinterface
+→ itable) and on `LinkedHashMap` (which OVERRIDES `forEach`, so it has a real slot).
+
+The obvious repair — add defaults to both flatteners — would renumber vtables across both worlds, and vtable
+numbering is asserted equal between them on every boot (`vtparity`). So the call is ROUTED instead: an
+`invokevirtual` whose target the receiver class has no slot for, but which an interface in its closure
+declares, dispatches through the ITABLE (`Symbols.defaultDispatch`, `Baseline.itableDispatch` — now shared
+with `invokeinterface` rather than duplicated). No vtable changes, no parity risk, and it reuses the path
+that demonstrably worked all along.
+
+`TestAttrsNL` now runs PAST line 115 and fails at line 75 instead, inside `String.replaceAll` →
+`Matcher.appendExpandedReplacement` — a regex gap, unrelated. `PutAndPutAll` still hangs, and was never
+related to any of this.
 
 ## 5. Design decisions to lock day one
 

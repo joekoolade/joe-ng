@@ -189,6 +189,23 @@ final class MetalWriterSymbols implements Symbols
         byte[] field = utf8Copy(ClassReader.refNameOff(classBytes, cpOff, fieldCp));
         return MetalClassModel.instanceFieldOffset(owner, field);
     }
+    /** The writer resolves against a closed world where every virtual target is known, so an inherited
+     *  interface default never reaches the vtable fallback that makes this necessary on metal. */
+    public boolean defaultDispatch(int methodCp)
+    {
+        return false;
+    }
+
+    public void defaultIfaceType(CodeBuffer cb, int reg, int methodCp)
+    {
+        throw new UnsupportedOperationException("default-method dispatch is metal-only");
+    }
+
+    public int defaultIfaceSlot(int methodCp)
+    {
+        return 0;
+    }
+
     public int objectSize(int classCp)
     {
         byte[] cls = utf8Copy(ClassReader.classNameOff(classBytes, cpOff, classCp));

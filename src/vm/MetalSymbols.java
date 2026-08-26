@@ -155,6 +155,18 @@ final class MetalSymbols implements Symbols
     {
         return Loader.fieldOffsetOf(fieldCp);
     }
+    public boolean defaultDispatch(int methodCp)
+    {
+        return Loader.defaultDispatch(methodCp);
+    }
+    public void defaultIfaceType(CodeBuffer cb, int reg, int methodCp)
+    {
+        emitAddr(cb, reg, Loader.defaultIfaceTypeOf(methodCp));
+    }
+    public int defaultIfaceSlot(int methodCp)
+    {
+        return Loader.defaultIfaceSlotOf(methodCp);
+    }
     public int objectSize(int classCp)
     {
         return Loader.objectSizeOf(classCp);

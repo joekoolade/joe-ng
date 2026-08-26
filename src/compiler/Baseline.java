@@ -1532,6 +1532,15 @@ public final class Baseline
             }
             return;
         }
+        if (symbols.defaultDispatch(cpIndex))
+        {
+            // The receiver class has no vtable slot for this method -- it inherits it as an interface
+            // DEFAULT -- so dispatch through the itable instead. See Symbols.defaultDispatch.
+            marshalReceiverAndArgs(cb, pos, paramCount(cpIndex) + 1);
+            symbols.defaultIfaceType(cb, 16, cpIndex);
+            itableDispatch(cb, pos, symbols.defaultIfaceSlot(cpIndex), cpIndex);
+            return;
+        }
         int slot = symbols.vtableSlot(cpIndex);
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
         if (deepStack)
@@ -1577,12 +1586,19 @@ public final class Baseline
      */
     private void lowerInvokeInterface(int cpIndex, CodeBuffer cb, int pos)
     {
-        int slot = symbols.interfaceSlot(cpIndex);
-        int nargs = paramCount(cpIndex) + 1;    // receiver + params
+        marshalReceiverAndArgs(cb, pos, paramCount(cpIndex) + 1);
+        symbols.interfaceType(cb, 16, cpIndex);                       // x16 = &interfaceType
+        itableDispatch(cb, pos, symbols.interfaceSlot(cpIndex), cpIndex);
+    }
+
+    /** Move the receiver to x0 and the arguments after it, null-checking the receiver. Shared by every
+     *  dispatching call shape (vtable, itable, and an inherited interface default). */
+    private void marshalReceiverAndArgs(CodeBuffer cb, int pos, int nargs)
+    {
         if (deepStack)
         {
             marshalArgsFromMemory(cb, nargs);   // receiver -> x0
-            nullCheck(cb, 0, pos);              // interface dispatch on null -> NPE
+            nullCheck(cb, 0, pos);              // dispatch on null -> NPE
         }
         else
         {
@@ -1591,15 +1607,25 @@ public final class Baseline
             {
                 src[k] = popReg();
             }
-            nullCheck(cb, src[nargs - 1], pos);     // receiver (deepest); interface dispatch on null -> NPE
+            nullCheck(cb, src[nargs - 1], pos);     // receiver (deepest); dispatch on null -> NPE
             for (int k = 0; k < nargs; k++)
             {
                 cb.emit(A64Enc.movReg(nargs - 1 - k, src[k]));    // x0 = receiver
             }
             spillLive(cb);
         }
+    }
 
-        symbols.interfaceType(cb, 16, cpIndex);                                     // x16 = &interfaceType
+    /**
+     * Dispatch through the receiver's itable, given the target interface's Type already in x16: walk the
+     * itable directory for that Type, index the found table by {@code slot}, guard the target, call.
+     *
+     * <p>Used both by {@code invokeinterface} and by an {@code invokevirtual} naming a method the receiver
+     * class inherits as an interface DEFAULT ({@link Symbols#defaultDispatch}) — the latter has no vtable
+     * slot to dispatch through at all.
+     */
+    private void itableDispatch(CodeBuffer cb, int pos, int slot, int cpIndex)
+    {
         cb.emit(A64Enc.ldrx(17, 0, ObjectModel.TIB_OFFSET));                           // x17 = receiver.tib
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.tibSlotOffset(ObjectModel.TIB_TYPE_SLOT))); // x17 = Type
         cb.emit(A64Enc.ldrx(17, 17, ObjectModel.TYPE_ITABLE_DIR_OFFSET));              // x17 = itable dir

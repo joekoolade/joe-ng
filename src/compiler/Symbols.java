@@ -214,6 +214,29 @@ public interface Symbols
      * {@link #NEW_UNRESOLVED} to name at runtime. Returning a size for an unresolvable class is what let a
      * `new` quietly produce an object carrying the WRONG class's TIB (see Baseline.lowerNew).
      */
+    /**
+     * True when an {@code invokevirtual} must dispatch through the ITABLE rather than the vtable: the receiver
+     * class has no vtable slot of its own for the method but inherits it as an interface DEFAULT.
+     *
+     * <p>Neither flattener puts interface defaults in a class vtable (this one or the writer's), which is
+     * consistent between them — and fine until a class-typed receiver names such a method. javac emits
+     * {@code invokevirtual} then, resolution finds no slot, and the name+descriptor fallback returns a slot
+     * belonging to an UNRELATED class: an index past the end of this receiver's TIB, read as a code pointer.
+     * That is the wild branch behind {@code java/util/jar/Attributes/TestAttrsNL} — {@code attrs.forEach(...)},
+     * where {@code Attributes} implements {@code Map} without overriding {@code forEach}.
+     *
+     * <p>Routing the call through the itable fixes it without renumbering a single vtable, which is what
+     * adding defaults to both flatteners would have required — and vtable numbering is asserted equal between
+     * the two worlds on every boot ({@code vtparity}).
+     */
+    boolean defaultDispatch(int methodCp);
+
+    /** Load the Type of the interface declaring the inherited default named by {@code methodCp} into {@code reg}. */
+    void defaultIfaceType(CodeBuffer cb, int reg, int methodCp);
+
+    /** The method's slot within that interface's flattened method list. */
+    int defaultIfaceSlot(int methodCp);
+
     int objectSize(int classCp);
 
     /** Vtable slot of the virtual method at Methodref index {@code methodCp}. */

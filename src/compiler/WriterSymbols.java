@@ -189,6 +189,23 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         ClassFile owner = resolve(ref.owner());
         return ObjectModel.fieldOffset(chainBase(ref.owner()) + owner.instanceFieldIndex(ref.name()));
     }
+    /** The writer resolves against a closed world where every virtual target is known, so an inherited
+     *  interface default never reaches the vtable fallback that makes this necessary on metal. */
+    public boolean defaultDispatch(int methodCp)
+    {
+        return false;
+    }
+
+    public void defaultIfaceType(CodeBuffer cb, int reg, int methodCp)
+    {
+        throw new UnsupportedOperationException("default-method dispatch is metal-only");
+    }
+
+    public int defaultIfaceSlot(int methodCp)
+    {
+        return 0;
+    }
+
     public int objectSize(int classCp)
     {
         String cls = cf.classAt(classCp);

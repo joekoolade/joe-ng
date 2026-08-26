@@ -181,7 +181,16 @@ defines the minimum the assembler must encode.
     `Symbols.CODE_TOP_BYTE_MAX` (code lives below `Heap.CODE_LIMIT` `0x0300_0000`; the heap starts
     at `0x0400_0000`), shared by the virtual and interface sites. It immediately turned a nameless
     hardware trap into `AIOOBE at TestAttrsNL.test:115` — an interface DEFAULT method (`Map.forEach`)
-    on the second implementor to reach it, i.e. a short-imap slot. That imap bug is still open.
+    on the second implementor to reach it. FIXED below.
+  - **Interface DEFAULT methods now dispatch from a class-typed receiver.** `attrs.forEach(...)`
+    is an `invokevirtual` (class-typed receiver), but a class inherits a default from an INTERFACE,
+    and neither flattener puts defaults in a class vtable — so resolution fell through to a
+    name+descriptor match on an unrelated class, giving an index past the end of the receiver's TIB.
+    Adding defaults to both flatteners would renumber every vtable and `vtparity` asserts those equal
+    across the two worlds, so the call is ROUTED through the itable instead
+    (`Symbols.defaultDispatch`; `Baseline.itableDispatch` is now shared with `invokeinterface`).
+    `demo/DefaultIfaceDemo` pins it, including the two shapes that always worked (a `Map`-typed
+    receiver, and `LinkedHashMap`, which overrides `forEach`).
   - **Known gaps:** none of the three recorded during the jar arc remain.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5

@@ -6925,6 +6925,85 @@ public final class Loader
     static int logClinit;                                     // #43 diagnostic: when != 0, name each <clinit> as it runs
     static int logTrapWire;                                  // #43 diagnostic: when != 0, dump each patchRelocs trap-wired callee
 
+    /**
+     * The vtable slot for Methodref {@code idx} resolved ONLY against the class the ref names — no name+
+     * descriptor fallback. -1 when that class has no such slot, which is the question
+     * {@link #defaultDispatch} needs answered honestly: {@link #globalVtableSlot}'s fallback would hand back
+     * an unrelated class's slot rather than admit the miss.
+     */
+    private static int exactVtableSlot(int idx)
+    {
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff))     // the class being compiled: its own flattened vtable
+        {
+            int own = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));
+            if (own >= 0)
+            {
+                return own;
+            }
+        }
+        int classOff = refClassNameOff(idx);
+        int nameOff = mrefNameOff(idx);
+        int descOff = mrefDescOff(idx);
+        int i = 0;
+        while (i < vtCount)
+        {
+            if (utf8EqAt(gbase, classOff, vtClassBase[i], vtClassOff[i])
+                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
+                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
+            {
+                return vtSlot[i];
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Registry index of the interface in the ref CLASS's transitive closure that declares Methodref
+     * {@code idx}'s name+descriptor, or -1. Only consulted once {@link #exactVtableSlot} has missed, so the
+     * closure walk costs nothing on the ordinary path.
+     */
+    private static int defaultIfaceRegOf(int idx)
+    {
+        int rc = classRegByName(refClassNameOff(idx));
+        if (rc < 0 || clTab[rc] == null || clTab[rc].isIface)
+        {
+            return -1;
+        }
+        int n = ifaceClosureOf(rc);
+        int i = 0;
+        while (i < n)
+        {
+            int ir = ifClosureBuf[i];
+            if (ifmSlotIn(ir, gbase, mrefNameOff(idx), mrefDescOff(idx)) >= 0)
+            {
+                return ir;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /** True if this {@code invokevirtual} must go through the itable -- see {@link Symbols#defaultDispatch}. */
+    static boolean defaultDispatch(int idx)
+    {
+        return exactVtableSlot(idx) < 0 && defaultIfaceRegOf(idx) >= 0;
+    }
+
+    /** Type node of the interface declaring the inherited default named by Methodref {@code idx}, or 0. */
+    static long defaultIfaceTypeOf(int idx)
+    {
+        int ir = defaultIfaceRegOf(idx);
+        return ir < 0 ? 0L : clTab[ir].type;
+    }
+
+    /** Slot of Methodref {@code idx} within that interface's flattened method list. */
+    static int defaultIfaceSlotOf(int idx)
+    {
+        int ir = defaultIfaceRegOf(idx);
+        return ir < 0 ? 0 : ifmSlotIn(ir, gbase, mrefNameOff(idx), mrefDescOff(idx));
+    }
+
     private static int globalVtableSlot(int idx)
     {
         int classOff = refClassNameOff(idx);
