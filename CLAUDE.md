@@ -203,6 +203,9 @@ defines the minimum the assembler must encode.
     bridges) plus the `append(CharSequence,int,int)` the interface requires and the `$n` group path uses.
     `vtparity java/lang/StringBuilder` 19 → 23, both worlds agreeing. `demo/RegexReplaceDemo` pins it, and
     the stock jtreg `jar/Attributes/TestAttrsNL` now PASSES (it was the test that reported the NPE).
+    **Pi-validated on the full demo suite** (2026-08-25, `core 166MHz`): `vtparity java/lang/StringBuilder
+    OK 23` in every batch, `load java/lang/Appendable` alongside it, 41 GC collections over `churnMB=625`,
+    `lisp evals=600 result=610 stable=1`, WiFi WPA2 → DHCP → DNS → TCP → HTTP 200 OK (828 bytes).
     **Lesson worth keeping:** a name-winning overlay silently drops the stock class's INTERFACES, and
     nothing complains until some stock code dispatches through one.
   - **Known gaps:** `java/util/jar/Attributes/PutAndPutAll` hangs in `java/lang/StrictMath.<clinit>`
