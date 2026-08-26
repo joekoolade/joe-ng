@@ -133,7 +133,9 @@ defines the minimum the assembler must encode.
     `Thread` + `synchronized` only, six threads started ASCENDING, funnelled through one monitor so the
     result is core-count independent) prints `finish order = 10 8 6 5 3 1` — the exact reverse of start
     order — with `getPriority` round-tripping before start and while running.
-  - **PRIORITY INHERITANCE (QEMU-validated with a negative control; needs a Pi run).** Two priorities per
+  - **PRIORITY INHERITANCE — PI-VALIDATED with a negative control (2026-08-26, `core 166MHz`, full suite:
+    `priority inversion ... finish HML ... HIGH blocked 30ms`, same order and latency as QEMU, with
+    everything around it unmoved).** Two priorities per
     task: `taskBasePrio` (asked for, what getPriority reports) and `taskPrio` (what the scheduler uses =
     base raised to the most urgent waiter on a monitor this task holds). `inherit()` in `monEnter` lends
     down the ownership CHAIN (nested monitors stall one link further down otherwise; a hop cap breaks
@@ -147,6 +149,13 @@ defines the minimum the assembler must encode.
     - **`pipSpin` yields once per ms on purpose:** a non-yielding task can only be preempted by a timer
       tick and **QEMU delivers none**, so LOW ran to completion and released before HIGH woke — printing
       `LHM / 0ms`, a healthy-looking result that tested nothing.
+    - **A boot can predate the flash.** The first Pi log of this change printed NOTHING from `pipDemo` —
+      not even its unconditional header — while the calls on either side of it ran. Impossible for code
+      that is present, and it was simply a boot from the card's pre-flash contents. Two checks settle that
+      class of question before theorising: `cmp` the mounted card against `sdcard/kernel8.img`, and prove
+      the method is compiled AND called — `JOENG_SYMMAP=1 make image` prints every method's `[start,end)`,
+      and scanning the image for `BL` words targeting that range names the call sites (`pipDemo <- 0x823c4`,
+      wedged between its two neighbours' `BL`s, so no execution path can skip it).
   - **Gaps:** no ageing (starvation permanent); inheritance covers monitors only, not semaphores (no single
     owner to boost); it is basic inheritance, not priority CEILING, so it bounds blocking without
     preventing deadlock; the per-switch scan is O(taskCount).

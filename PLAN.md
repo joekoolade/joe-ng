@@ -4401,7 +4401,7 @@ relationship touch it.
 - **`setTaskPriority`** now sets the base and re-derives, so a live boost survives a lowered base; **spawn**
   inherits the creator's *base*, never a boost it merely borrowed.
 
-**Evidence, with a negative control** (QEMU; needs Pi validation). `pipDemo` is the textbook scenario: LOW
+**Evidence, with a negative control.** `pipDemo` is the textbook scenario: LOW
 takes a monitor, MED wakes and burns CPU, HIGH wakes and wants the monitor. Run with the one `inherit` call
 commented out, then restored:
 
@@ -4412,6 +4412,34 @@ commented out, then restored:
 
 The control is the point: without it the demo shows only that the output matched what was hoped for, not
 that it can tell the two worlds apart.
+
+**Pi-validated** (2026-08-26, `core 166MHz`, full demo suite): the board prints
+
+```
+priority inversion (LOW holds a monitor, MED hogs the cpu, HIGH wants it): finish HML (want HML, HML=inherited / MHL=inverted)  HIGH blocked 30ms
+```
+
+— the same order and the same 30 ms as the emulator, which matters because hardware differs on both halves
+of the mechanism: the timer really ticks (so preemption competes with the per-ms yields) and four cores are
+awake. Everything around it is unmoved: `priority ... finish HML`, `ticks/core c1=50 c2=50 c3=50`,
+`sched: 89 preemptions`, `smp sched: 4 of 4 cores on the run queue`, `steps/core c0=61 c1=60 c2=60 c3=59`,
+philosophers, 41 collections over `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+WPA2 → DHCP → DNS → TCP → HTTP 200 OK (829 bytes), no FAULT/TRAP/STW TIMEOUT.
+
+**One process lesson from getting there.** The first Pi log of this change printed *nothing at all* from
+`pipDemo` — no header, no result — while the calls on either side of it clearly ran. That is impossible for
+code that is present, and the temptation was to hunt a hardware-only silent-output bug. It was a boot that
+had read the card before the flash landed. Two checks settle that class of question in seconds and are worth
+reaching for first: compare the mounted card against `sdcard/kernel8.img` (`cmp`), and prove the method is
+both compiled and *called* — `JOENG_SYMMAP=1 make image` gives every method's `[start,end)`, and scanning the
+image for `BL` words whose target is that range names the call sites:
+
+```
+symmap 0008b1b0 0008b538 vm/VM.pipDemo()V      BL scan: pipDemo <- 0x823c4  (between prioDemo 0x823c0 and smpThreadsDemo 0x823c8)
+```
+
+Consecutive `BL`s cannot execute the first and third but skip the middle, so the image was never the
+suspect.
 
 **A note on the demo's spin.** `pipSpin` yields once per millisecond rather than spinning solid. A task that
 never yields can only lose the core to a timer tick, and **QEMU delivers none** — so on the emulator LOW ran
