@@ -762,7 +762,7 @@ public final class Baseline
         }  // athrow
         else if (op == 0xC0)
         {
-            typeCheck(cb, u2(code, pos + 1), Symbols.CHECK_CAST);
+            checkCast(cb, u2(code, pos + 1), pos);
             return 3;
         }  // checkcast
         else if (op == 0xC1)
@@ -1260,6 +1260,36 @@ public final class Baseline
     }
 
     /** instanceof/checkcast: push the target class's Type address, call the VM helper. */
+    /**
+     * {@code checkcast}: on the metal JIT, test with {@code VM.castOk(objref, targetType)} and throw a real
+     * {@link Symbols#NEW_CCE ClassCastException} INLINE when it fails, leaving the objref on the stack when it
+     * holds. The predicate exists because a VM helper cannot throw for its caller -- it has its own frame, so
+     * the handler search would begin one frame too deep; throwing here puts the casting method's pc/sp in
+     * front of the unwinder, exactly as the null/bounds/aastore checks already do.
+     *
+     * <p>The image writer keeps the old {@link Symbols#CHECK_CAST} call: its code is check-free by design
+     * (see {@link Symbols#implicitChecks}), and adding a throw path would perturb the self-hosting fixpoint.
+     */
+    private void checkCast(CodeBuffer cb, int classIndex, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            typeCheck(cb, classIndex, Symbols.CHECK_CAST);
+            return;
+        }
+        int t = pushReg();
+        symbols.type(cb, t, classIndex);                         // t = target Type addr
+        popReg();                                                // the objref stays on the stack; t is scratch
+        cb.emit(A64Enc.movReg(0, opSlot(sp - 1)));               // x0 = objref
+        cb.emit(A64Enc.movReg(1, t));                            // x1 = target Type
+        spillLive(cb);                                           // preserve the operand stack across the call
+        symbols.callHelper(cb, Symbols.CAST_OK);                 // x0 = 1 (holds) / 0 (throw)
+        reloadLive(cb);
+        int skip = cb.emit(A64Enc.cbnz(0, 0));                   // holds -> skip the throw
+        throwImplicit(cb, pos, Symbols.NEW_CCE);                 // else ClassCastException at this bytecode
+        cb.set(skip, A64Enc.cbnz(0, cb.wordCount() - skip));
+    }
+
     private void typeCheck(CodeBuffer cb, int classIndex, int helper)
     {
         int r = pushReg();                                       // objref stays below; push targetType addr

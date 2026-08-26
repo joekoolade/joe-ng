@@ -1298,6 +1298,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newArith()J",       "vm/VM.newArithAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.newAse()J",          "vm/VM.newAseAddr");     // ArrayStoreException
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(JJ)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
+        stashHelper(image, staticWord, wordOffset, "vm/VM.newCce()J",          "vm/VM.newCceAddr");     // ClassCastException
+        stashHelper(image, staticWord, wordOffset, "vm/VM.castOk(JJ)I",        "vm/VM.castOkAddr");     // checkcast predicate
         stashHelper(image, staticWord, wordOffset, "vm/VM.newUnresolved(J)V", "vm/VM.newUnresolvedAddr"); // unresolvable `new`
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0

@@ -77,6 +77,8 @@ public interface Symbols
     int NEW_ASE = 41;           // vm/VM.newAse()J    — a java/lang/ArrayStoreException (aastore type mismatch)
     int ARRAY_STORE_OK = 42;    // vm/VM.arrayStoreOk(JJ)I — 1 if a value may be aastore'd into an array, else 0
     int NEW_UNRESOLVED = 43;    // vm/VM.newUnresolved(J)V — `new` of a class the loader cannot resolve (halts)
+    int CAST_OK = 44;           // vm/VM.castOk(JJ)I  — 1 if a checkcast holds, else 0 (the JIT then throws)
+    int NEW_CCE = 45;           // vm/VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
