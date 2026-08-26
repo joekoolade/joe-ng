@@ -4343,8 +4343,19 @@ that wants all 1025 levels. A priority set BEFORE `start()` is remembered in the
 the thread is started — the case that is easy to get wrong, because there is no task to retarget yet.
 Spawned tasks otherwise inherit their creator's priority, as `java.lang.Thread` does.
 
-**Evidence (QEMU; needs Pi validation).** The VM-level demo spawns three tasks LOW first, then MED, then
-HIGH, so FIFO or round robin would finish them in spawn order:
+**PI-VALIDATED (2026-08-26, `core 166MHz`)** for the guest API, which is the path with all the new
+machinery in it — the `setprio`/`getprio` intrinsics through the metal JIT (magic-name match, lowering,
+stashed helper addresses), `getPriority` round-tripping both before `start()` and from inside the running
+thread, priority-ordered monitor handoff, and `preemptFor`. `demo/PrioDemo` on hardware:
+
+```
+finish order = 10 8 6 5 3 1
+want         = 10 8 6 5 3 1
+[main returned normally]
+```
+
+**Evidence (QEMU for the VM-level demo; the suite still needs a Pi run).** It spawns three tasks LOW first,
+then MED, then HIGH, so FIFO or round robin would finish them in spawn order:
 
 ```
 priority (0-1024, higher first; spawned LOW first): finish HML (want HML)  steps L/M/H = 20/20/20
