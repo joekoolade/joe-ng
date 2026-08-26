@@ -2635,6 +2635,14 @@ public final class Baseline
         {
             emitCall(cb, 1, false, false, SYM_HELPER, Symbols.INTERRUPT);   // (thread) -> void
         }
+        else if (id == Intrinsics.SET_PRIO)
+        {
+            emitCall(cb, 2, false, false, SYM_HELPER, Symbols.SET_PRIO);    // (thread, prio) -> void
+        }
+        else if (id == Intrinsics.GET_PRIO)
+        {
+            emitCall(cb, 1, true, false, SYM_HELPER, Symbols.GET_PRIO);     // (thread) -> int
+        }
         else if (id == Intrinsics.IS_INTR)
         {
             emitCall(cb, 1, true, false, SYM_HELPER, Symbols.IS_INTERRUPTED);  // (thread) -> int

@@ -291,6 +291,30 @@ public final class VM
     static final int  TASK_BLOCKED = 3;     // waiting on a semaphore (an event another task/ISR posts)
     static final int  TASK_RUNNING = 4;     // picked by a core RIGHT NOW: no other core may pick it (SMP)
 
+    // ----- priorities -------------------------------------------------------------------------------
+    // 0..1024, HIGHER IS MORE URGENT (the java.lang.Thread convention, where MIN_PRIORITY < MAX_PRIORITY).
+    // Scheduling is STRICT: pickNext always takes the highest-priority runnable task, and only rotates
+    // round-robin among tasks of EQUAL priority. That is the defining property of a priority scheduler and
+    // it also means a busy high-priority task STARVES every lower one -- by design, not by accident. There
+    // is no ageing or decay; if a workload needs fairness across priorities it must yield or block.
+    static final int  PRIO_MIN  = 0;        // lowest: runs only when nothing else can
+    static final int  PRIO_NORM = 512;      // the default every task starts at
+    static final int  PRIO_MAX  = 1024;     // highest: preempts everything below it
+
+    /** Clamp {@code p} into {@link #PRIO_MIN}..{@link #PRIO_MAX}. */
+    static int clampPrio(int p)
+    {
+        if (p < PRIO_MIN)
+        {
+            return PRIO_MIN;
+        }
+        if (p > PRIO_MAX)
+        {
+            return PRIO_MAX;
+        }
+        return p;
+    }
+
     // The task table (parallel arrays, index = task id). Task 0 is the boot flow; VMScheduler.spawn() adds more.
     static long[] taskSp;                   // saved context frame (SP) — the task's whole context
     static long[] taskStackBase;            // its heap stack's object base (a GC root keeps the stack alive)
@@ -314,14 +338,21 @@ public final class VM
     static int[]  coreTask;                 // index = core: the task that core is running (see curTask())
     static int[]  taskCore;                 // per-task affinity: -1 = any core, else the core it is pinned to
     static int[]  taskIdle;                 // 1 = this task is a core's idle loop (never picked as real work)
+    static int[]  taskPrio;                 // scheduling priority, PRIO_MIN..PRIO_MAX (see below)
     static int[]  coreIdle;                 // index = core: that core's idle task id (-1 = none, i.e. core 0)
     static int    smpSched;                 // 1 once the secondaries have joined the shared run queue
     static int    schedGo;                  // released by startSmpScheduling(): secondaries enter the scheduler
     static int    smpStop;                  // 1 = drain: the secondaries take no more work and leave the queue
     static int    smpDemo;                  // 1 = the demo-suite boot: secondaries run the two SMP set pieces first
     static int[]  smpRan;                   // index = core: steps of the SMP threading demo that ran there
+    static int[]  prioSteps;                // index = demo task: steps it completed (priority demo)
+    static int[]  prioOrder;                // finish order of the priority demo's tasks
+    static int    prioDone;                 // how many have finished so far (index into prioOrder)
     static int[]  coreSched;                // index = core: 1 once that core is scheduling from the run queue
     static long   smpTaskAddr;              // VMScheduler.smpTask()V -- the "which core ran me" demo task
+    static long   prioTaskAddr;             // VMScheduler.prioTask(I)V -- the priority demo's task
+    static long   setPrioAddr;              // VMScheduler.setPriority(JI)V -- Thread.setPriority (guest-called)
+    static long   getPrioAddr;              // VMScheduler.getPriority(J)I  -- Thread.getPriority (guest-called)
     // Stop-the-world. The collector runs on core 0 and moves nothing, but it sweeps -- so no other core may
     // MUTATE the heap while it marks. Core 0 raises gcStop; every other core parks in the scheduler (the one
     // place every core passes through, on its own timer tick or its idle yield) with its context already
@@ -425,6 +456,7 @@ public final class VM
         taskPermit = new int[MAX_TASKS];
         taskCore = new int[MAX_TASKS];
         taskIdle = new int[MAX_TASKS];
+        taskPrio = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -441,6 +473,7 @@ public final class VM
         {
             taskCore[t] = -1;                               // no affinity: any core may pick it up
             taskIdle[t] = 0;                                // ... and it is real work, not a core's idle loop
+            taskPrio[t] = PRIO_NORM;                        // ... at the default priority
             t += 1;
         }
         int c = 0;
@@ -459,6 +492,75 @@ public final class VM
         taskCore[0] = 0;                                    // the boot flow never leaves core 0
         taskCount = 1;
         coreSched[0] = 1;                                   // core 0 is always scheduling; 1-3 join later
+    }
+
+    /**
+     * Priority demo, deliberately SINGLE-CORE -- the secondaries are not on the run queue yet, and with four
+     * cores and three tasks everything runs at once and priority proves nothing. Three tasks are spawned LOW
+     * first, then MED, then HIGH, so a FIFO or round-robin scheduler would finish them in SPAWN order; under
+     * strict priority they must finish HIGH, MED, LOW. None of them yields voluntarily, so only the priority
+     * rule decides who makes progress.
+     *
+     * <p>Task 0 drops itself to the floor for the duration, which is the starvation property on display
+     * rather than a trick: it makes no progress at all until every higher-priority task has finished.
+     */
+    static void prioDemo()
+    {
+        installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
+        resetTaskTable();
+        prioSteps = new int[3];
+        prioOrder = new int[3];
+        int z = 0;
+        while (z < 3)
+        {
+            prioSteps[z] = 0;                              // allocArray does not zero: say so explicitly
+            prioOrder[z] = -1;
+            z += 1;
+        }
+        prioDone = 0;
+        Uart.write(Magic.bytes("priority (0-1024, higher first; spawned LOW first): "));
+        int lo = VMScheduler.spawnArg(prioTaskAddr, 0L);   // IRQs are still masked here, so no task can run
+        VMScheduler.setTaskPriority(lo, 100);              //   before all three are set up
+        int md = VMScheduler.spawnArg(prioTaskAddr, 1L);
+        VMScheduler.setTaskPriority(md, 700);
+        int hi = VMScheduler.spawnArg(prioTaskAddr, 2L);
+        VMScheduler.setTaskPriority(hi, PRIO_MAX);
+        Magic.writeCNTP_TVAL_EL0(timerReload);
+        Magic.writeCNTP_CTL_EL0(1);
+        Magic.enableIrq();                                 // preemption live: nobody has to cooperate
+        setTaskPrioAndWait();
+        stopTimerTick();
+        Uart.write(Magic.bytes("finish "));
+        int i = 0;
+        while (i < 3)
+        {
+            int id = prioOrder[i];
+            if (id == 2)      { Uart.putc((byte) 0x48); }  // 'H'
+            else if (id == 1) { Uart.putc((byte) 0x4D); }  // 'M'
+            else if (id == 0) { Uart.putc((byte) 0x4C); }  // 'L'
+            else              { Uart.putc((byte) 0x3F); }  // '?' -- did not finish
+            i += 1;
+        }
+        Uart.write(Magic.bytes(" (want HML)  steps L/M/H = "));
+        printDec(prioSteps[0]);
+        Uart.putc((byte) 0x2F);
+        printDec(prioSteps[1]);
+        Uart.putc((byte) 0x2F);
+        printDec(prioSteps[2]);
+        Uart.putc(0x0A);
+        resetTaskTable();
+    }
+
+    /** Step aside to the priority floor and come back only once the three demo tasks are done (1 s cap). */
+    static void setTaskPrioAndWait()
+    {
+        VMScheduler.setTaskPriority(0, PRIO_MIN);          // yields: we do not run again until they finish
+        long d0 = Magic.readCNTPCT_EL0();
+        while (prioDone < 3 && Magic.readCNTPCT_EL0() < d0 + Magic.readCNTFRQ_EL0())
+        {
+            VMScheduler.taskYield();                       // safety net if something never finishes
+        }
+        VMScheduler.setTaskPriority(0, PRIO_NORM);
     }
 
     /**
@@ -877,6 +979,9 @@ public final class VM
         if (taskCAddr == 0L) { VMScheduler.taskC(); }
         if (taskRAddr == 0L) { VMScheduler.taskR(); }
         if (smpTaskAddr == 0L) { VMScheduler.smpTask(); }                      // the SMP threading demo's task
+        if (prioTaskAddr == 0L) { VMScheduler.prioTask(0); }                   // the priority demo's task
+        if (setPrioAddr == 0L) { VMScheduler.setPriority(0L, 0); }             // Thread.setPriority/getPriority
+        if (getPrioAddr == 0L) { int u = VMScheduler.getPriority(0L); }        //   (JIT'd guest reaches these by addr)
         // Dead calls: the mini java.base runtime reaches these only via writer-stashed addresses (from
         // JIT'd guest code), so force the writer to compile them. Guarded on their stashed addr, so they
         // never actually run on metal (the addr is non-zero there).
@@ -2772,6 +2877,7 @@ public final class VM
         stopTimerTick();
         Uart.putc(0x0A);
 
+        prioDemo();
         smpThreadsDemo();
 
         // Philosophers (the one demo with persistent scheduler tasks on the heap) is done; from here on it is

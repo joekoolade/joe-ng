@@ -196,7 +196,8 @@ final class MetalSymbols implements Symbols
             || id == Intrinsics.STACK_TRACE || id == Intrinsics.ALL_THREADS
             || id == Intrinsics.HOLDS_LOCK || id == Intrinsics.INTR || id == Intrinsics.IS_INTR
             || id == Intrinsics.WAS_INTR || id == Intrinsics.IS_ALIVE
-            || id == Intrinsics.JOIN_TIMED || id == Intrinsics.PARK || id == Intrinsics.UNPARK;
+            || id == Intrinsics.JOIN_TIMED || id == Intrinsics.PARK || id == Intrinsics.UNPARK
+            || id == Intrinsics.SET_PRIO || id == Intrinsics.GET_PRIO;
     }
     public int intrinsicId(int methodCp)
     {
@@ -370,6 +371,14 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.UNPARK)
         {
             return VM.unparkAddr;
+        }
+        if (helper == Symbols.SET_PRIO)
+        {
+            return VM.setPrioAddr;
+        }
+        if (helper == Symbols.GET_PRIO)
+        {
+            return VM.getPrioAddr;
         }
         if (helper == Symbols.STACK_TRACE)
         {

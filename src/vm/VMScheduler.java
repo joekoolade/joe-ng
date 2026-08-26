@@ -264,6 +264,7 @@ public final class VMScheduler
         taskState[id] = TASK_RUNNING;                      // this flow IS the task, and it is running now
         taskCore[id] = core;                               // pinned: only this core may resume this stack
         taskIdle[id] = 1;                                  // never picked as work -- only as this core's fallback
+        taskPrio[id] = PRIO_MIN;                           // ... and at the floor, so it can never outrank work
         taskDone[id] = 0;
         taskWake[id] = 0L;
         taskWaitOn[id] = 0;
@@ -360,6 +361,26 @@ public final class VMScheduler
         smpStop = 0;
         Magic.dsb();
         Magic.sev();                                       // wake them out of their WFE wait
+    }
+
+    /**
+     * The priority demo's task: do a fixed amount of work, then record the order in which it FINISHED.
+     * Three of these run at different priorities; under strict priority the highest must finish first, the
+     * lowest last, whatever order they were spawned in. It never yields voluntarily -- the timer preempts it
+     * -- so nothing but the priority rule decides who makes progress.
+     */
+    static void prioTask(int id)
+    {
+        int n = 0;
+        while (n < 20)
+        {
+            prioSteps[id] += 1;
+            n = n + 1;
+            pauseMs1();
+        }
+        prioOrder[prioDone] = id;                          // single-core demo: no race on prioDone
+        prioDone = prioDone + 1;
+        taskExit();
     }
 
     /**
@@ -515,6 +536,64 @@ public final class VMScheduler
     }
 
     /**
+     * A task just became READY. If it outranks the task running here, hand the core over NOW instead of
+     * letting it wait for the next tick -- up to a full 10 ms quantum of priority inversion, which is the
+     * difference between a priority scheduler and one that eventually notices. O(1): the waker already
+     * knows which task it woke, so this is a single compare.
+     *
+     * <p>TASK CONTEXT ONLY. Never call it from an ISR (which is why {@link #semPostRaw} merely RETURNS the
+     * woken task and leaves the decision to its caller), and never while holding {@link VM#SCHED_LOCK} --
+     * every call site does its wake under the lock and preempts after releasing it.
+     */
+    static void preemptFor(int woken)
+    {
+        if (woken >= 0 && taskPrio[woken] > taskPrio[curTask()])
+        {
+            taskYield();
+        }
+    }
+
+    /**
+     * Set task {@code t}'s scheduling priority, clamped to PRIO_MIN..PRIO_MAX. It takes effect at the next
+     * scheduling point; a task that just LOWERED its own priority yields immediately, since it may have put
+     * itself below someone already waiting. (Raising it needs no reschedule -- we are already running.)
+     */
+    static void setTaskPriority(int t, int prio)
+    {
+        if (taskPrio == null || t < 0 || t >= taskCount)
+        {
+            return;
+        }
+        int p = clampPrio(prio);
+        long daif = schedLock();
+        int old = taskPrio[t];
+        taskPrio[t] = p;
+        schedUnlock(daif);
+        if (t == curTask() && p < old)
+        {
+            taskYield();                                   // we may have just demoted ourselves below someone
+        }
+    }
+
+    /** {@code Thread.setPriority} on the VM's 0..1024 scale: retarget the task behind {@code threadObj}.
+     *  A thread that has not been started yet has no task; the guest side holds the value until start(). */
+    static void setPriority(long threadObj, int prio)
+    {
+        setTaskPriority(threadTaskOf(threadObj), prio);
+    }
+
+    /** {@code Thread.getPriority} on the VM's 0..1024 scale. An unstarted thread reports the default, which
+     *  is what it will actually get unless the guest sets otherwise. */
+    static int getPriority(long threadObj)
+    {
+        int t = threadTaskOf(threadObj);
+        if (taskPrio == null || t < 0)
+        {
+            return PRIO_NORM;
+        }
+        return taskPrio[t];
+    }
+    /**
      * True if {@code core} may claim task {@code t}. Two things disqualify it. It may be PINNED elsewhere --
      * a core's idle task runs on that core's fixed stack, and task 0 owns the boot flow's. And it may still
      * be IN TRANSIT: a task that blocks publishes TASK_BLOCKED (and a waker publishes TASK_READY) before the
@@ -599,20 +678,34 @@ public final class VMScheduler
         }
         if (smpStop == 0 || core == 0)                     // draining the secondaries: they take idle only
         {
+            // STRICT PRIORITY, round-robin among equals. The scan starts at cur+1 and visits cur LAST, and
+            // a candidate must beat the incumbent STRICTLY -- so the highest priority always wins, and among
+            // several tasks at that priority the one furthest from its last turn does. The current task is
+            // visited last for the same reason: it keeps the core only if nothing ties or beats it.
+            // The scan can no longer stop at the first hit, so it is O(taskCount) every switch rather than
+            // O(distance to the next runnable). At MAX_TASKS = 40 that is a handful of compares.
+            int best = -1;
+            int bestPrio = -1;
             int n = cur;
             int k = 0;
-            while (k < taskCount)                          // pick the next READY task, round-robin
+            while (k < taskCount)
             {
                 n = n + 1;
                 if (n >= taskCount) { n = 0; }
-                if (taskState[n] == TASK_READY && taskIdle[n] == 0 && claimable(n, core))
+                if (taskState[n] == TASK_READY && taskIdle[n] == 0 && taskPrio[n] > bestPrio
+                    && claimable(n, core))
                 {
-                    taskState[n] = TASK_RUNNING;           // claimed by THIS core until it yields back
-                    coreTask[core] = n;
-                    schedUnlock(daif);
-                    return taskSp[n];
+                    best = n;
+                    bestPrio = taskPrio[n];
                 }
                 k = k + 1;
+            }
+            if (best >= 0)
+            {
+                taskState[best] = TASK_RUNNING;            // claimed by THIS core until it yields back
+                coreTask[core] = best;
+                schedUnlock(daif);
+                return taskSp[best];
             }
         }
         int fall = cur;                                    // no other work: stay on the current task ...
@@ -721,12 +814,15 @@ public final class VMScheduler
             return;
         }
         long daif = schedLock();
+        int woken = -1;
         taskInterrupted[tid] = 1;
         if (taskState[tid] == TASK_SLEEPING || taskState[tid] == TASK_BLOCKED)
         {
             taskState[tid] = TASK_READY;                   // let it observe the interrupt (sleep returns / wait wakes)
+            woken = tid;
         }
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /** {@code Thread.isInterrupted()}: the interrupt flag of {@code threadObj} (does NOT clear it). */
@@ -815,12 +911,15 @@ public final class VMScheduler
             return;
         }
         long daif = schedLock();
+        int woken = -1;
         taskPermit[tid] = 1;
         if (taskState[tid] == TASK_BLOCKED && taskWaitOn[tid] == -3)
         {
             taskState[tid] = TASK_READY;
+            woken = tid;
         }
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /**
@@ -880,30 +979,34 @@ public final class VMScheduler
     }
 
     /** The core of {@link #semPost}, without touching IRQ masking — safe to call from an ISR. */
-    static void semPostRaw(int s)
+    static int semPostRaw(int s)
     {
         semCount[s] = semCount[s] + 1;
-        int i = 0;
-        while (i < taskCount)
-        {
-            if (taskState[i] == TASK_BLOCKED && taskWaitOn[i] == s)
-            {
-                taskState[i] = TASK_READY;                 // woken; it re-checks the count when it runs
-                i = taskCount;                             // wake just one waiter
+        int woken = -1;                                    // returned so a task-context caller can decide
+        int i = 0;                                         //   whether the wakee outranks it (preemptFor)
+        while (i < taskCount)                              // wake ONE waiter -- the most urgent one. Taking
+        {                                                  //   the lowest-numbered would hand the token to a
+            if (taskState[i] == TASK_BLOCKED && taskWaitOn[i] == s                       // low-priority task
+                && (woken < 0 || taskPrio[i] > taskPrio[woken]))                         // while an urgent
+            {                                                                            // one still waits.
+                woken = i;
             }
-            else
-            {
-                i = i + 1;
-            }
+            i = i + 1;
         }
+        if (woken >= 0)
+        {
+            taskState[woken] = TASK_READY;                 // it re-checks the count when it runs
+        }
+        return woken;
     }
 
     /** Post (signal) semaphore {@code s} from task context: add a token and wake one waiter. */
     static void semPost(int s)
     {
         long daif = schedLock();
-        semPostRaw(s);
+        int woken = semPostRaw(s);
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /** Index of {@code obj}'s live monitor slot, or -1. */
@@ -942,21 +1045,24 @@ public final class VMScheduler
     }
 
     /** Wake ONE task blocked in monitorenter for {@code obj}. */
-    private static void wakeMonWaiter(long obj)
+    private static int wakeMonWaiter(long obj)
     {
+        int woken = -1;
         int i = 0;
-        while (i < taskCount)
-        {
-            if (taskState[i] == TASK_BLOCKED && taskMonWait[i] == obj)
+        while (i < taskCount)                              // just one, and it is the most urgent waiter:
+        {                                                  //   a released monitor goes UP the priority order
+            if (taskState[i] == TASK_BLOCKED && taskMonWait[i] == obj
+                && (woken < 0 || taskPrio[i] > taskPrio[woken]))
             {
-                taskState[i] = TASK_READY;
-                i = taskCount;                             // just one
+                woken = i;
             }
-            else
-            {
-                i = i + 1;
-            }
+            i = i + 1;
         }
+        if (woken >= 0)
+        {
+            taskState[woken] = TASK_READY;
+        }
+        return woken;
     }
 
     /** monitorenter {@code obj}: acquire its monitor -- recursive for the owner, blocking while another task holds it. */
@@ -998,6 +1104,7 @@ public final class VMScheduler
             return;
         }
         long daif = schedLock();
+        int woken = -1;
         int s = monSlotOf(obj);
         if (s >= 0)
         {
@@ -1007,10 +1114,11 @@ public final class VMScheduler
                 monObj[s] = 0L;
                 monOwner[s] = -1;
                 monCount[s] = 0;
-                wakeMonWaiter(obj);
+                woken = wakeMonWaiter(obj);
             }
         }
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /** {@code Thread.holdsLock(obj)}: 1 if the current task owns {@code obj}'s monitor, else 0. */
@@ -1067,36 +1175,45 @@ public final class VMScheduler
     static void objNotify(long obj)
     {
         long daif = schedLock();
+        int woken = -1;
         int i = 0;
-        while (i < taskCount)
+        while (i < taskCount)                              // just one, and it is the most urgent waiter
         {
-            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj)
+            if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj
+                && (woken < 0 || taskPrio[i] > taskPrio[woken]))
             {
-                taskState[i] = TASK_READY;
-                i = taskCount;                             // just one
+                woken = i;
             }
-            else
-            {
-                i = i + 1;
-            }
+            i = i + 1;
+        }
+        if (woken >= 0)
+        {
+            taskState[woken] = TASK_READY;
         }
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /** {@code obj.notifyAll()}: wake EVERY task waiting on {@code obj}. */
     static void objNotifyAll(long obj)
     {
         long daif = schedLock();
+        int woken = -1;
         int i = 0;
         while (i < taskCount)
         {
             if (taskState[i] == TASK_BLOCKED && taskWaitObj[i] == obj)
             {
                 taskState[i] = TASK_READY;
+                if (woken < 0 || taskPrio[i] > taskPrio[woken])
+                {
+                    woken = i;                             // the most urgent of the batch decides preemption
+                }
             }
             i = i + 1;
         }
         schedUnlock(daif);
+        preemptFor(woken);
     }
 
     /** The task id whose java/lang/Thread object is {@code threadObj}, or -1 if none is live. */
@@ -1304,6 +1421,7 @@ public final class VMScheduler
         taskInterrupted[id] = 0;
         taskPermit[id] = 0;
         taskMonWait[id] = 0L;
+        taskPrio[id] = taskPrio[curTask()];                // inherit the creator's priority (Thread semantics)
         taskState[id] = TASK_READY;                        // now runnable
         return id;
     }

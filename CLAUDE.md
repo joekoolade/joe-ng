@@ -110,6 +110,29 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
+- **Priority scheduling — 0..1024, strict, higher is more urgent (QEMU-validated; needs a Pi run).**
+  `pickNext` takes the highest-priority runnable task and only rotates round-robin among EQUALS (the scan
+  starts at `cur+1`, visits `cur` last, and must beat the incumbent strictly). `PRIO_NORM` = 512 is the
+  default; spawned tasks inherit their creator's. **Starvation is by design** — no ageing or decay.
+  - **Preemption latency is the other half.** Every task-context wake (`semPost`, `monExit`, `notify`,
+    `notifyAll`, `unpark`, `interrupt`) ends in `preemptFor(woken)`: an O(1) compare that yields the core
+    at once if the wakee outranks the waker, instead of losing up to a 10 ms quantum to inversion.
+    `semPostRaw` deliberately does NOT preempt (ISR path) — it only RETURNS the woken task.
+  - **Contended resources go up the priority order too:** `semPostRaw`/`wakeMonWaiter`/`objNotify` wake the
+    MOST URGENT waiter, not the lowest-numbered. Picking the best task but handing a released monitor to
+    whoever is first in the table is only half a priority scheduler.
+  - **APIs:** `VMScheduler.setTaskPriority(task,prio)` raw 0..1024 (yields when a task lowers its own);
+    stock `Thread.setPriority`/`getPriority` on Java's 1..10 mapped linearly `(p-1)*1024/9`; and
+    `Magic.setprio`/`getprio` for all 1025 levels. A priority set BEFORE `start()` is remembered in the
+    `Thread` and applied at start — there is no task to retarget yet, and dropping it silently is the easy
+    bug.
+  - **QEMU:** VM demo `finish HML (want HML)` with tasks spawned LOW first; `demo/PrioDemo` (stock
+    `Thread` + `synchronized` only, six threads started ASCENDING, funnelled through one monitor so the
+    result is core-count independent) prints `finish order = 10 8 6 5 3 1` — the exact reverse of start
+    order — with `getPriority` round-tripping before start and while running.
+  - **Gaps:** no ageing (starvation permanent); no priority INHERITANCE, so classic inversion is still
+    possible (a low-priority monitor holder is not boosted); the per-switch scan is O(taskCount).
+
 - **SMP scheduling — one run queue, four cores. PI-VALIDATED BOTH PATHS (2026-08-26, `core 166MHz`):
   suite `smp sched: 4 of 4 cores on the run queue`, `steps/core: c0=61 c1=60 c2=60 c3=59` under REAL
   preemption (`ticks/core c1=50 c2=50 c3=50`), with philosophers + 41 GC collections + lisp fixpoint +
