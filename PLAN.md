@@ -4051,12 +4051,29 @@ denylisted coder machinery, so it traps; an overlay binding the three we support
 call — **a class initializer's own active uses must be initialized before it runs, not after** — which
 applies to any initializer that reads another class's statics, not just this one.
 
-**What remains.** `ScanSignedJar` reads `System.getProperty("test.src")` in its initializer: jtreg
-infrastructure, and a signed-jar test besides, so out of scope twice over. `TestAttrsNL` and `PutAndPutAll`
-are the real ones, and they look like a single bug: both are `Attributes` tests built on `Map.of`, both fail
-in `ImmutableCollections` territory — one wild-branches into the data heap at a fixed address
-(`elr=0x04161D80`), the other hangs silently after `lifecycle OK`. That is the same neighbourhood as the
-`Map.copyOf` fault the jar arc opened with, and it deserves one investigation rather than two.
+**What remains, and a hypothesis that did not survive contact.** `ScanSignedJar` reads
+`System.getProperty("test.src")` in its initializer: jtreg infrastructure, and a signed-jar test besides, so
+out of scope twice over. The other two, `TestAttrsNL` and `PutAndPutAll`, looked like a single `Map.of` bug —
+both are `Attributes` tests, both fail near `ImmutableCollections`, and the jar arc had already found one
+fault under `Map.copyOf`. Two cheap checks killed that reading:
+
+- `demo/MapOfDemo` exercises `Map.of` at every arity from one pair to four (`Map1` and `MapN` both) and
+  **passes**. `Map.of` is not broken.
+- `PutAndPutAll` does not call `Map.of` at all. It tests that `Attributes.put`/`putAll` reject wrongly-typed
+  arguments. The two failures share nothing but a directory.
+
+`TestAttrsNL`'s actual fault is a wild branch into the DATA heap (`elr=0x04161D80`, deterministic across
+runs) firing immediately after `java/util/LinkedHashMap.get(Object)` is compiled for the first time — a
+`blr` through a slot holding a data pointer, which is the signature of reading PAST the end of a TIB rather
+than of a slot that is merely empty. The lazy-compile trace is what localised it, and the ordering in that
+trace is the clue worth keeping: an INHERITED method on the same receiver (`containsKey`, inherited by
+`LinkedHashMap` from `HashMap`) had just run fine, and it was the OVERRIDDEN one that trapped.
+`demo/LinkedMapDemo` drives `LinkedHashMap.get` — directly, through the `Map` interface, hit and miss — and
+passes, so the fault needs the larger `Manifest`/`Attributes` batch to appear. Both demos are kept: they are
+the boundary of what is known to work, and the next attempt should start by widening `LinkedMapDemo` toward
+that batch rather than by re-deriving the search space.
+
+**Not fixed.** The diagnosis above is where the investigation stands.
 
 ## 5. Design decisions to lock day one
 
