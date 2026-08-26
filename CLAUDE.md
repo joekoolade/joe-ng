@@ -175,6 +175,13 @@ defines the minimum the assembler must encode.
     and `forName("java.util.regex.Pattern")` registers 54 static cells + stubs its virtuals while
     pulling just TWO extra classes (its `<clinit>`'s own deps) — seeding would have pulled the
     regex engine.
+  - **Dispatch-target guard (`Baseline.dispatchTargetGuard`).** Both dispatch paths already
+    guarded the resolved target, but the ceiling was `>> 28` (`0x1000_0000` = `Heap.LARGE_LIMIT`),
+    so every heap pointer passed and a bad slot still wild-branched. Now a top-byte compare against
+    `Symbols.CODE_TOP_BYTE_MAX` (code lives below `Heap.CODE_LIMIT` `0x0300_0000`; the heap starts
+    at `0x0400_0000`), shared by the virtual and interface sites. It immediately turned a nameless
+    hardware trap into `AIOOBE at TestAttrsNL.test:115` — an interface DEFAULT method (`Map.forEach`)
+    on the second implementor to reach it, i.e. a short-imap slot. That imap bug is still open.
   - **Known gaps:** none of the three recorded during the jar arc remain.
   - **`emitNew` fallback FIXED, Pi-validated.** A `new` whose class isn't registered used to take the CURRENT
     class's TIB — a wrong-typed object, silently. Measuring first found 18 such sites over 5
