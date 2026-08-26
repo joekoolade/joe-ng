@@ -110,9 +110,10 @@ defines the minimum the assembler must encode.
     unmodified image before concluding a regression (one such "regression" was a
     dropped SYN). `LAZY_TRACE = true` in `vm/Loader` prints a per-method `jitc`
     line and is the tool that resolved both of this arc's hard bugs.
-- **Priority scheduling — 0..1024, strict, higher is more urgent. GUEST API PI-VALIDATED
-  (2026-08-26, `core 166MHz`): `demo/PrioDemo` prints `finish order = 10 8 6 5 3 1` — the exact reverse of
-  the start order — with no FAIL lines; the suite's VM-level demo is QEMU-only so far.**
+- **Priority scheduling — 0..1024, strict, higher is more urgent. PI-VALIDATED, BOTH DEMOS
+  (2026-08-26, `core 166MHz`): `demo/PrioDemo` prints `finish order = 10 8 6 5 3 1` (exact reverse of start
+  order, no FAIL lines), and the suite's VM-level demo prints `finish HML (want HML)` under REAL preemption
+  with philosophers + 41 GC collections + lisp fixpoint + WiFi HTTP 200 OK all unmoved.**
   `pickNext` takes the highest-priority runnable task and only rotates round-robin among EQUALS (the scan
   starts at `cur+1`, visits `cur` last, and must beat the incumbent strictly). `PRIO_NORM` = 512 is the
   default; spawned tasks inherit their creator's. **Starvation is by design** — no ageing or decay.

@@ -4354,8 +4354,14 @@ want         = 10 8 6 5 3 1
 [main returned normally]
 ```
 
-**Evidence (QEMU for the VM-level demo; the suite still needs a Pi run).** It spawns three tasks LOW first,
-then MED, then HIGH, so FIFO or round robin would finish them in spawn order:
+**PI-VALIDATED, BOTH DEMOS (2026-08-26, `core 166MHz`).** The full suite on hardware, under REAL timer
+preemption (`ticks/core: c1=50 c2=50 c3=50`, `sched: 89 preemptions`), with the whole regression gate
+unmoved around it — philosophers (now on priority-ordered semaphore handoff), `churnMB=625 live=32
+intact=32` over 41 collections, `lisp: evals=600 result=610 stable=1`, `steps/core: c0=61 c1=59 c2=60
+c3=60`, and WiFi WPA2 → DHCP → DNS → TCP → **HTTP 200 OK**. No `FAULT`, no `TRAP`, no `STW TIMEOUT`.
+
+The VM-level demo spawns three tasks LOW first, then MED, then HIGH, so FIFO or round robin would finish
+them in spawn order:
 
 ```
 priority (0-1024, higher first; spawned LOW first): finish HML (want HML)  steps L/M/H = 20/20/20
