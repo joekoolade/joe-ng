@@ -433,10 +433,14 @@ public final class VM
         coreIdle = new int[4];
         coreSched = new int[4];
         gcParked = new int[4];
+        // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
+        // free list carries whatever the dead object left), and on real hardware DRAM starts full of
+        // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
         int t = 0;
         while (t < MAX_TASKS)
         {
             taskCore[t] = -1;                               // no affinity: any core may pick it up
+            taskIdle[t] = 0;                                // ... and it is real work, not a core's idle loop
             t += 1;
         }
         int c = 0;
@@ -444,8 +448,13 @@ public final class VM
         {
             coreIdle[c] = -1;                               // no idle task until a core joins the run queue
             coreTask[c] = 0;
+            coreSched[c] = 0;
+            gcParked[c] = 0;
             c += 1;
         }
+        // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
+        // spins while it is non-zero. Leave it and the first schedLock() on hardware never returns.
+        Magic.store32(SCHED_LOCK, 0);                       // 0 = free
         taskState[0] = TASK_READY;
         taskCore[0] = 0;                                    // the boot flow never leaves core 0
         taskCount = 1;
@@ -469,6 +478,12 @@ public final class VM
         installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
         resetTaskTable();                                  // fresh table: task 0 (us), then the demo tasks
         smpRan = new int[4];
+        int z = 0;
+        while (z < 4)
+        {
+            smpRan[z] = 0;                                  // allocArray does not zero: say so explicitly
+            z += 1;
+        }
         Uart.write(Magic.bytes("smp threads (one run queue, four cores):\n"));
         VMScheduler.startSmpScheduling();
         int t = 0;

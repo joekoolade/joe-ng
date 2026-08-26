@@ -309,6 +309,8 @@ public final class VMScheduler
             return;
         }
         smpStop = 0;
+        Magic.store32(SCHED_LOCK, 0);                      // free before anyone can take it (raw scratch RAM)
+        Magic.dsb();
         smpSched = 1;                                      // the table is shared now: take the lock around it
         Magic.dsb();
         schedGo = 1;                                       // release cores 1-3 into smpSchedulerMain

@@ -143,6 +143,15 @@ defines the minimum the assembler must encode.
     run queue`, `steps/core: c0=144 c1=35 c2=27 c3=34`, no FAULT/STW TIMEOUT, philosophers + lisp fixpoint
     unchanged. `Magic.mpidr()` was added as the guest-callable spelling of `readMPIDR` (the metal JIT's
     magic table packs a name into a long, so nine characters cannot match).
+  - **First hardware bug — the lock word nobody zeroed.** The first Pi boot stopped dead one line after
+    `SMP: 4 of 4 cores up`: `SCHED_LOCK` is raw scratch RAM (`0x0302_0040`), not a Java field, and
+    `Magic.spinLock` spins WHILE THE WORD IS NON-ZERO. QEMU hands out zeroed DRAM so it read as free;
+    a real Pi's DRAM is firmware leftovers, so core 0's next timer tick entered `pickNext` → `schedLock`
+    with IRQs already masked and never returned. `bringUpSecondaries` had always zeroed `LOCK_ADDR` for
+    the job demo; the new lock just never got the same line. **Lesson: a raw-memory lock/flag needs an
+    explicit initialiser — and `Heap.allocArray` does NOT zero elements either**, so `new int[4]` reading
+    as zeroes is a QEMU accident too (`taskIdle`/`coreSched`/`gcParked` are now filled explicitly; garbage
+    there would have made `stopTheWorld` believe a running core was parked).
   - **Known gaps:** reflection-driven loading (`forName`/`defineClass`) is not under the loader lock;
     `Heap.publishCode` invalidates only the LOCAL I-cache, so rebuilding the vector table while secondaries
     schedule would need `IC IALLUIS`; secondary arenas are still never collected; the queue is plain round

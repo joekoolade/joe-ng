@@ -4210,6 +4210,21 @@ delivers no timer PPI to the secondaries (`ticks/core: c1=0 c2=0 c3=0`), so ever
 voluntary yield; the same run on hardware also preempts. No `FAULT`, no `STW TIMEOUT`, the philosophers and
 the lisp fixpoint unchanged, suite ending normally at `(self-build retired; host writer only)`.
 
+**First hardware bug: the lock word nobody zeroed.** The first Pi boot stopped dead one line after
+`SMP: 4 of 4 cores up`, with no fault and no further output. `SCHED_LOCK` is raw scratch RAM
+(`0x0302_0040`), not a Java field, and nothing ever initialised it — while `Magic.spinLock` spins *while
+the word is non-zero*. QEMU hands out zeroed DRAM, so the lock read as free there; a real Pi's DRAM is full
+of firmware leftovers, so the very first `schedLock()` after `smpSched = 1` (core 0's own timer tick, ~10 ms
+later, entering `pickNext` with IRQs already masked) never returned. `bringUpSecondaries` had always zeroed
+`LOCK_ADDR` for the job-queue demo; the new lock simply never got the same line. It is now zeroed in
+`allocTaskTables` and again in `startSmpScheduling` before `smpSched` is raised.
+
+The same reading found a second QEMU accident in the same code: `Heap.allocArray` does NOT zero its
+elements (a block off the free list carries whatever the dead object left), so `new int[4]` reading as
+zeroes is luck, not a guarantee. `taskIdle`, `coreSched` and `gcParked` are now filled explicitly — garbage
+in them would have made `pickNext` skip real tasks as "idle" and, worse, made `stopTheWorld` believe cores
+were parked when they were running.
+
 **Not done yet (the next increments).**
 
 - Reflection-driven loading (`Class.forName`, `defineClass`) reaches the loader WITHOUT the loader lock —
