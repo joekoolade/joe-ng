@@ -72,6 +72,30 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Late link resolution — the call sites RTA cannot see (2026-08-27, PI-VALIDATED).** RTA marks a method
+  reachable then walks its body to mark what IT calls; reflection breaks that chain. A method reached only
+  through `Method.invoke` compiles on demand, but nothing statically reachable names it, so its OWN callees
+  are never marked and their classes never pulled — and `patchRelocs` pointed every one of its call sites at
+  `VM.denylistTrap`. Right for a genuinely pruned class, wrong for one merely absent from a closure computed
+  without ever reading this body. An unresolved site whose callee is NOT denylisted now gets a **link stub**:
+  on FIRST call (so only if the site is actually reached) it demand-loads the class and resolves through the
+  same three-tier lookup `resolveBakeStub` uses for the baked world, memoized. A cold site costs one 32-byte
+  stub and never runs.
+  - The trampoline is the twin of the lazy-compile one and preserves x0..x15 for the same reason (a whole
+    demand-load runs between entry and the tail-branch). **Restoring LR before branching is what keeps the
+    fallback honest:** an unresolvable callee still lands in `denylistTrap` with its x30-keyed trapwire index
+    and stack walk reading exactly as they do for a direct call.
+  - **The gap is an unpulled CLASS, not an unmarked method.** `demo/ReflectRtaDemo`'s third arm is the
+    control: also reflective, but calling a class the direct arm pulled — it resolves at patch time with no
+    late link at all, because a registered class already stubs every one of its methods. That corrected a
+    wrong assumption mid-implementation.
+  - **Pi (`core 166MHz`, full suite):** the batch's `load` list contains `demo/RtaSeen` and never mentions
+    `demo/RtaUnseen`; then `linkresolve demo/RtaUnseen.tag` + `phaseA: 1 cells ... for demo/RtaUnseen` mid-run
+    and `reflective = unseen`. Negative control (link-stub path disabled): the direct arm still passes and the
+    reflective arm ends in a DENYLIST TRAP at `ReflectRtaDemo.viaReflectionOnly` naming `RtaUnseen.tag`.
+  - Retires `ZipJUnitAll.seedFactoryClosure`, the harness-level workaround for exactly this (calling
+    `Stream.of`/`Arguments.of` from reachable code so RTA pulled what the reflectively-reached `@MethodSource`
+    factories needed) — fragile because seeding had to match the DESCRIPTOR, not the name.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
