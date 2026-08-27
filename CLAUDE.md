@@ -72,6 +72,12 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27).** The last scheduler set piece with
+  no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`, `VMScheduler.pipSpin`/
+  `pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads on purpose:**
+  inversion needs contention for a cpu, and the VM version was single-core only because it ran before the
+  secondaries joined the run queue — a launched program must out-number the cores instead. QEMU with the
+  negative control: `HML` / 55 ms with inheritance, `MHL` / 203 ms without.
 - **The demo suite runs demos as PROGRAMS (2026-08-27, PI-VALIDATED).** Every boot-suite demo is started by
   `Loader.launch(name, args)` — pulled from the classDir by name, `main(String[])`, argv, seeded
   `System.out/err/in`, run trampoline, `[main returned normally]` — instead of one of 24 bespoke

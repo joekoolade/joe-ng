@@ -351,17 +351,12 @@ public final class VM
     static int    smpStop;                  // 1 = drain: the secondaries take no more work and leave the queue
     static int    smpDemo;                  // 1 = the demo-suite boot: secondaries run the two SMP set pieces first
     static int[]  smpRan;                   // index = core: steps of the SMP threading demo that ran there
-    static long   pipLock;                  // the contended monitor in the priority-inversion demo
-    static int[]  pipOrder;                 // finish order of its three tasks
-    static int    pipDone;                  // how many have finished (index into pipOrder)
-    static int    pipBlockedMs;             // how long HIGH actually waited for the monitor
     static int[]  prioSteps;                // index = demo task: steps it completed (priority demo)
     static int[]  prioOrder;                // finish order of the priority demo's tasks
     static int    prioDone;                 // how many have finished so far (index into prioOrder)
     static int[]  coreSched;                // index = core: 1 once that core is scheduling from the run queue
     static long   smpTaskAddr;              // VMScheduler.smpTask()V -- the "which core ran me" demo task
     static long   prioTaskAddr;             // VMScheduler.prioTask(I)V -- the priority demo's task
-    static long   pipTaskAddr;              // VMScheduler.pipTask(I)V -- the priority-inversion demo's task
     static long   setPrioAddr;              // VMScheduler.setPriority(JI)V -- Thread.setPriority (guest-called)
     static long   getPrioAddr;              // VMScheduler.getPriority(J)I  -- Thread.getPriority (guest-called)
     // Stop-the-world. The collector runs on core 0 and moves nothing, but it sweeps -- so no other core may
@@ -507,61 +502,6 @@ public final class VM
         coreSched[0] = 1;                                   // core 0 is always scheduling; 1-3 join later
     }
 
-    /**
-     * Priority-inversion demo: the textbook three-task scenario, single-core so the ordering is forced.
-     * LOW holds a monitor, MED (which outranks LOW and never touches the monitor) burns CPU, HIGH wants the
-     * monitor. Without inheritance HIGH waits for MED to finish -- unbounded inversion -- and the order is
-     * MED, HIGH, LOW. With it, LOW is lent HIGH's priority, outruns MED, releases, drops back: HIGH, MED,
-     * LOW. The first letter is the whole test.
-     */
-    static void pipDemo()
-    {
-        installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
-        resetTaskTable();
-        pipLock = Heap.alloc(ObjectModel.HEADER_SIZE);     // any address is a monitor key; this one is ours
-        pipOrder = new int[3];
-        int z = 0;
-        while (z < 3)
-        {
-            pipOrder[z] = -1;                              // allocArray does not zero: say so explicitly
-            z += 1;
-        }
-        pipDone = 0;
-        pipBlockedMs = 0;
-        Uart.write(Magic.bytes("priority inversion (LOW holds a monitor, MED hogs the cpu, HIGH wants it): "));
-        int lo = VMScheduler.spawnArg(pipTaskAddr, 0L);    // IRQs still masked: nobody runs mid-setup
-        VMScheduler.setTaskPriority(lo, 100);
-        int md = VMScheduler.spawnArg(pipTaskAddr, 1L);
-        VMScheduler.setTaskPriority(md, 700);
-        int hi = VMScheduler.spawnArg(pipTaskAddr, 2L);
-        VMScheduler.setTaskPriority(hi, PRIO_MAX);
-        Magic.writeCNTP_TVAL_EL0(timerReload);
-        Magic.writeCNTP_CTL_EL0(1);
-        Magic.enableIrq();
-        VMScheduler.setTaskPriority(0, PRIO_MIN);          // step aside; we run again once they are all done
-        long d0 = Magic.readCNTPCT_EL0();
-        while (pipDone < 3 && Magic.readCNTPCT_EL0() < d0 + Magic.readCNTFRQ_EL0() * 2L)
-        {
-            VMScheduler.taskYield();                       // safety net
-        }
-        VMScheduler.setTaskPriority(0, PRIO_NORM);
-        stopTimerTick();
-        Uart.write(Magic.bytes("finish "));
-        int i = 0;
-        while (i < 3)
-        {
-            int id = pipOrder[i];
-            if (id == 2)      { Uart.putc((byte) 0x48); }  // 'H'
-            else if (id == 1) { Uart.putc((byte) 0x4D); }  // 'M'
-            else if (id == 0) { Uart.putc((byte) 0x4C); }  // 'L'
-            else              { Uart.putc((byte) 0x3F); }  // '?' -- did not finish
-            i += 1;
-        }
-        Uart.write(Magic.bytes(" (want HML, HML=inherited / MHL=inverted)  HIGH blocked "));
-        printDec(pipBlockedMs);
-        Uart.write(Magic.bytes("ms\n"));
-        resetTaskTable();
-    }
 
     /**
      * Priority demo, deliberately SINGLE-CORE -- the secondaries are not on the run queue yet, and with four
@@ -1049,7 +989,6 @@ public final class VM
         if (taskRAddr == 0L) { VMScheduler.taskR(); }
         if (smpTaskAddr == 0L) { VMScheduler.smpTask(); }                      // the SMP threading demo's task
         if (prioTaskAddr == 0L) { VMScheduler.prioTask(0); }                   // the priority demo's task
-        if (pipTaskAddr == 0L) { VMScheduler.pipTask(0); }                     // the inversion demo's task
         if (setPrioAddr == 0L) { VMScheduler.setPriority(0L, 0); }             // Thread.setPriority/getPriority
         if (getPrioAddr == 0L) { int u = VMScheduler.getPriority(0L); }        //   (JIT'd guest reaches these by addr)
         // Dead calls: the mini java.base runtime reaches these only via writer-stashed addresses (from
@@ -2924,7 +2863,7 @@ public final class VM
         Uart.putc(0x0A);
 
         prioDemo();
-        pipDemo();
+        Loader.launch(Magic.bytes("demo/PipDemo"), Magic.bytes(""));
         smpThreadsDemo();
 
         // Philosophers (the one demo with persistent scheduler tasks on the heap) is done; from here on it is

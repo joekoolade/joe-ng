@@ -4015,6 +4015,31 @@ full 828-byte body. The WPA2 supplicant is our own crypto stack running through 
 arithmetic as everything else — a PTK derived with a mis-masked shift would fail the MIC check, so `msg3 MIC
 ok` is a real test of the shift fix, not merely a demo that happens to pass.
 
+## The priority-inversion demo is a guest program now (2026-08-27)
+
+`pipDemo` was the last scheduler set piece with no guest equivalent: it drove `VMScheduler` directly —
+`spawnArg`, `setTaskPriority`, raw `monEnter`/`monExit` on a `Heap.alloc`'d monitor key, its own timer
+window. `demo/PipDemo` replaces it with stock `Thread`, `setPriority` and `synchronized`, launched like every
+other demo, and `VM.pipDemo`, `VMScheduler.pipSpin`/`pipTask`, the five `pip*` statics and the writer's
+`pipTask` stash are gone (58 lines out of VMScheduler alone).
+
+**The one thing the conversion had to solve: inversion needs CONTENTION for a cpu.** The VM-internal version
+sidestepped that by running before the secondary cores joined the run queue, so it was single-core by
+construction. A launched program cannot do that — with four cores and three threads LOW just runs on an idle
+one and there is nothing to observe. So MED is now FOUR threads, out-numbering the cores: every core is busy
+with a thread that outranks LOW, and LOW makes progress only if it is boosted. That also makes the demo
+core-count independent rather than accidentally single-core.
+
+**Evidence, with the negative control** (QEMU, `main=demo/PipDemo`):
+
+| | finish order | HIGH blocked |
+|---|---|---|
+| inheritance on | `HML` | **55 ms** — the rest of LOW's 60 ms critical section |
+| inheritance off (one `inherit` call commented out) | `MHL` | **203 ms** — MED's entire 200 ms run |
+
+`burn()` yields each time round for the reason `pipSpin` did: a non-yielding thread can only lose the core to
+a timer tick and QEMU delivers none, so the emulator would show a healthy-looking result that tested nothing.
+
 ## The demo suite runs as programs, not as VM set pieces (2026-08-27)
 
 Every demo in the boot suite is now started the way `java demo/Foo` starts one: `Loader.launch(name, args)`
