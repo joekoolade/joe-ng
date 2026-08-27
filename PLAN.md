@@ -4015,6 +4015,38 @@ full 828-byte body. The WPA2 supplicant is our own crypto stack running through 
 arithmetic as everything else — a PTK derived with a mis-masked shift would fail the MIC check, so `msg3 MIC
 ok` is a real test of the shift fix, not merely a demo that happens to pass.
 
+## The demo suite runs as programs, not as VM set pieces (2026-08-27)
+
+Every demo in the boot suite is now started the way `java demo/Foo` starts one: `Loader.launch(name, args)`
+pulls the class from the classDir BY NAME and calls `main(String[])`, with argv, seeded `System.out/err/in`,
+the `Thread.start` trampoline, the implicit-check exception classes preloaded, and a `[main returned
+normally]` epilogue. Before, 24 bespoke `Loader.loadXxx()` methods each `addBlob`'d a privately embedded copy
+of one demo and called a no-arg `main()`.
+
+This finishes something the code already declared: `launch`'s own javadoc calls itself "the generalization of
+the ~25 bespoke `loadX()` demos". So the 24 loaders are gone, and with them 24 `VM.xDemoBytes` blobs — each
+demo had been embedded TWICE, once as a VM blob and once in the classDir. Image: −62 KB.
+
+`WordCount` and `LispDemo` now receive `/data/sample.txt 3` and `/data/prog.lisp 600` as a real command line
+that `buildArgv` tokenises, instead of hand-built `String[]`s.
+
+**Deliberately left as they were:** `demo/NetDemo` (the manifest default); `prioDemo`/`pipDemo`/
+`smpThreadsDemo`, which are VM-internal scheduler set pieces driving `VMScheduler` directly rather than guest
+programs (guest `demo/PrioDemo` and `demo/SmpDemo` already exist and launch via manifest); and
+`loadParseInt`/`loadIntegerFull`, which are probes of `java/lang/Integer`, not demo mains. Eleven `java.base`
+blob statics the bespoke loaders pre-added are now unreferenced but kept — they may be the only embedding of
+those classes, and proving otherwise is a separate change.
+
+**PI-VALIDATED (2026-08-27, `core 166MHz`):** every demo prints `[main returned normally]` and every output
+is unchanged — philosophers `P0..P4 done`, `finish HML` twice, `smp 4 of 4` with `steps/core 61/60/60/59`,
+`value=42 k=7`, `apply(5)=105`, `words=25 distinct=16`, `churnMB=625 live=32 intact=32`, `lisp evals=600
+result=610 stable=1`, WiFi → HTTP 200 OK. `ExcDemo`'s stack trace now reads `demo/ExcDemo.main` →
+`vm/Loader.launch` → `vm/VM.run`, which is the plumbing showing through.
+
+**The cost is real and is the point:** each launch reloads the base closure (Object/String/Integer/…) instead
+of sharing one, so the suite is markedly slower and QEMU gets through only ~7 demos in a 250 s window. That
+makes hardware the only harness that sees the whole suite.
+
 ## Stock OpenJDK zip JUnit tests on metal (2026-08-26)
 
 The earlier jar/zip pass took the `@run main` tests and set the 41 `testng`/`junit` ones aside as "no harness

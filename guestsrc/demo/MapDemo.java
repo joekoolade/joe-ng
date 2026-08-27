@@ -14,7 +14,7 @@ import magic.Magic;
  */
 public class MapDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         Map map = new HashMap();                        // static type is the interface: all calls invokeinterface
         map.put("one", "1");

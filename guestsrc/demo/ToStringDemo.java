@@ -11,7 +11,7 @@ import magic.Magic;
  */
 public class ToStringDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         show(0);
         show(42);

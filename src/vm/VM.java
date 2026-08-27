@@ -2098,16 +2098,10 @@ public final class VM
     static long threadBytes, threadLen;             // java/lang/Thread
     static long semBytes, semLen;                   // java/util/concurrent/Semaphore
     static long philosopherBytes, philosopherLen;   // demo/Philosopher (a Runnable)
-    static long philBytes, philLen;     // demo/DiningPhilosophers.class blob (the demand-loaded program root)
     static long stringBytes, stringLen;             // java/lang/String (result of string concat, M-B slice 1)
-    static long concatDemoBytes, concatDemoLen;     // demo/ConcatDemo (the invokedynamic-concat program)
-    static long lambdaDemoBytes, lambdaDemoLen;     // demo/LambdaDemo (the invokedynamic-lambda program, 1c)
     static long intOpBytes, intOpLen;               // demo/IntOp (a SAM-with-arg functional interface, 1d)
     static long integerBytes, integerLen;           // java/lang/Integer — a real, unmodified java.base class
-    static long floatDemoBytes, floatDemoLen;       // demo/FloatDemo (verifies float/double support)
-    static long nativeDemoBytes, nativeDemoLen;     // demo/NativeDemo (verifies provided java.base natives)
     static long stringBuilderBytes, stringBuilderLen; // java/lang/StringBuilder (real-shaped)
-    static long strDemoBytes, strDemoLen;           // demo/StrDemo (verifies String + StringBuilder)
     // Mini exception hierarchy + the implicit-exception demo (null-deref NPE / array-bounds AIOOBE).
     static long throwableBytes, throwableLen;       // java/lang/Throwable
     static long exceptionBytes, exceptionLen;       // java/lang/Exception
@@ -2115,7 +2109,6 @@ public final class VM
     static long npeBytes, npeLen;                   // java/lang/NullPointerException
     static long ioobeBytes, ioobeLen;               // java/lang/IndexOutOfBoundsException
     static long aioobeBytes, aioobeLen;             // java/lang/ArrayIndexOutOfBoundsException
-    static long excDemoBytes, excDemoLen;           // demo/ExcDemo
     // Mini collections.
     static long arrayListBytes, arrayListLen;       // java/util/ArrayList
     static long listBytes, listLen;                 // java/util/List (interface ArrayList implements)
@@ -2139,39 +2132,22 @@ public final class VM
     static long streamBytes, streamLen;              // demo/Stream (mini pipeline)
     static long binaryOpBytes, binaryOpLen;          // java/util/function/BinaryOperator (reduce accumulator)
     static long biConsumerBytes, biConsumerLen;      // java/util/function/BiConsumer (Map.forEach action)
-    static long listDemoBytes, listDemoLen;         // demo/ListDemo
     static long objectBytes, objectLen;             // java/lang/Object (root: hashCode/equals slots for HashMap)
     static long hashMapBytes, hashMapLen;           // java/util/HashMap
-    static long mapDemoBytes, mapDemoLen;           // demo/MapDemo
     static long longBytes, longLen;                 // java/lang/Long — a real, unmodified java.base class (probe)
     // Dep/native surface for real Integer.parseInt: mini Character.digit + the NumberFormatException hierarchy.
     static long characterBytes, characterLen;       // java/lang/Character (digit)
     static long illegalArgBytes, illegalArgLen;     // java/lang/IllegalArgumentException
     static long numberFmtBytes, numberFmtLen;       // java/lang/NumberFormatException
-    static long parseAllDemoBytes, parseAllDemoLen;  // demo/ParseAllDemo (real Integer via reachable loadAll)
     // Real Integer.toString surface: mini StringLatin1 + DecimalDigits + the demo (String gained byte[]+coder).
     static long stringLatin1Bytes, stringLatin1Len; // java/lang/StringLatin1
     static long decimalDigitsBytes, decimalDigitsLen; // jdk/internal/util/DecimalDigits
-    static long toStringDemoBytes, toStringDemoLen; // demo/ToStringDemo
-    static long hexLongDemoBytes, hexLongDemoLen;   // demo/HexLongDemo (Integer.toHexString + Long.toString)
-    static long longMoreDemoBytes, longMoreDemoLen; // demo/LongMoreDemo (Long.parseLong + Long.toHexString)
     static long arithExcBytes, arithExcLen;         // java/lang/ArithmeticException (Math.addExact overflow)
-    static long mathIntDemoBytes, mathIntDemoLen;   // demo/MathIntDemo (floorDiv/floorMod/addExact)
     static long objectsBytes, objectsLen;           // java/util/Objects — a real, unmodified java.base class
-    static long objectsDemoBytes, objectsDemoLen;   // demo/ObjectsDemo
     static long arraysBytes, arraysLen;             // java/util/Arrays — a real, unmodified java.base class
     static long arraysSupportBytes, arraysSupportLen; // jdk/internal/util/ArraysSupport (mini mismatch)
-    static long arraysDemoBytes, arraysDemoLen;     // demo/ArraysDemo
     static long numberBytes, numberLen;             // java/lang/Number (Integer's super, for the vtable chain)
     static long integerCacheBytes, integerCacheLen; // java/lang/Integer$IntegerCache (statics read 0, clinit skipped)
-    static long boxingDemoBytes, boxingDemoLen;     // demo/BoxingDemo (Integer.valueOf boxing via HashMap)
-    static long strOpsDemoBytes, strOpsDemoLen;     // demo/StrOpsDemo (String indexOf/substring)
-    static long fileDemoBytes, fileDemoLen;         // demo/FileDemo (M3: FileInputStream over the RAMFS)
-    static long reflectDemoBytes, reflectDemoLen;   // demo/ReflectDemo (M4: Thread + Class reflection)
-    static long wordCountBytes, wordCountLen;       // demo/WordCount (real-program milestone: main(String[]))
-    static long gcDemoBytes, gcDemoLen;             // demo/GcDemo (GC milestone: churn >> arena size)
-    static long lispDemoBytes, lispDemoLen;         // demo/LispDemo (long-running Lisp interpreter)
-    static long charsetDemoBytes, charsetDemoLen;   // demo/CharsetDemo (new String(byte[]) / getBytes)
     // ----- self-build input: the compile-reachable class set, name-indexed (M5.5c step 2) -----
     static long classDir;               // directory of {nameAddr, nameLen, bytesAddr, bytesLen} entries
     static long classCount;             // number of directory entries
@@ -2934,7 +2910,7 @@ public final class VM
         Uart.write(Magic.bytes("dining philosophers (demand-loaded from embedded java.base):\n"));
         installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
         resetTaskTable();                                  // fresh scheduler table: just task 0 (the boot flow)
-        Loader.loadAndRun();                               // JIT + spawn the philosopher tasks (IRQs masked)
+        Loader.launch(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes(""));                               // JIT + spawn the philosopher tasks (IRQs masked)
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);
         Magic.enableIrq();                                 // preemption starts; the philosopher tasks run now
@@ -2959,13 +2935,13 @@ public final class VM
         // invokedynamic StringConcatFactory.makeConcatWithConstants. The metal JIT intrinsifies it into a
         // byte[] build wrapped in a mini java/lang/String (demand-loaded from classDir), then prints it.
         Uart.write(Magic.bytes("invokedynamic string concat (demand-loaded):\n"));
-        Loader.loadConcat();
+        Loader.launch(Magic.bytes("demo/ConcatDemo"), Magic.bytes(""));
 
         // M-B slice 1c: invokedynamic lambdas. demo/LambdaDemo's () -> ... sites lower to
         // invokedynamic LambdaMetafactory.metafactory; the metal JIT synthesises a lambda class per site
         // (captured fields + an itable thunk into the lambda body), so r.run() dispatches into the body.
         Uart.write(Magic.bytes("invokedynamic lambdas (demand-loaded):\n"));
-        Loader.loadLambda();
+        Loader.launch(Magic.bytes("demo/LambdaDemo"), Magic.bytes(""));
 
         // Experiment: compile + run methods from a REAL, unmodified java.base class (java/lang/Integer).
         // First two pure methods (should just work), then a full-class load to see where the reach ends.
@@ -2980,31 +2956,31 @@ public final class VM
 
         // Float/double support: a demand-loaded class doing float+double arithmetic, conversions, compare.
         Uart.write(Magic.bytes("float/double (demand-loaded):\n"));
-        Loader.loadFloat();
+        Loader.launch(Magic.bytes("demo/FloatDemo"), Magic.bytes(""));
 
         // Provided java.base natives: a demand-loaded class calls real java.lang native methods (no
         // bytecode) that the loader wires to VM helpers.
         Uart.write(Magic.bytes("java.base natives (demand-loaded):\n"));
-        Loader.loadNative();
+        Loader.launch(Magic.bytes("demo/NativeDemo"), Magic.bytes(""));
 
         // Real-shaped String + StringBuilder: build a string with an append-chain, then call String
         // methods on it (length/charAt/equals/hashCode). String literals are now real String objects.
         Uart.write(Magic.bytes("String + StringBuilder (demand-loaded):\n"));
-        Loader.loadStr();
+        Loader.launch(Magic.bytes("demo/StrDemo"), Magic.bytes(""));
 
         // Implicit (JVM-synthesised) exceptions: the JIT emits null/bounds checks that throw a real mini
         // exception object; catch clauses catch it (main-local and via cross-method unwind).
         Uart.write(Magic.bytes("implicit exceptions (demand-loaded):\n"));
-        Loader.loadExc();
+        Loader.launch(Magic.bytes("demo/ExcDemo"), Magic.bytes(""));
 
         // Mini collections: a real-shaped java/util/ArrayList (Object[] + grow via arraycopy).
         Uart.write(Magic.bytes("java/util/ArrayList (demand-loaded):\n"));
-        Loader.loadList();
+        Loader.launch(Magic.bytes("demo/ListDemo"), Magic.bytes(""));
 
         // java/util/HashMap: String keys hashed/compared via their real hashCode/equals, dispatched
         // through the mini java/lang/Object root's vtable slots.
         Uart.write(Magic.bytes("java/util/HashMap (demand-loaded):\n"));
-        Loader.loadMap();
+        Loader.launch(Magic.bytes("demo/MapDemo"), Magic.bytes(""));
 
         // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
         // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
@@ -3040,69 +3016,69 @@ public final class VM
         // run parseInt -- loadAll now compiles only the methods the entry reaches, so real Integer's
         // unreachable methods (toString/format) don't drag in unbuilt deps.
         Uart.write(Magic.bytes("real Integer via reachable loadAll:\n"));
-        Loader.loadIntegerReachable();
+        Loader.launch(Magic.bytes("demo/ParseAllDemo"), Magic.bytes(""));
 
         // Real Integer.toString: the produce-a-String direction -- real toString builds its result via
         // DecimalDigits + the real byte[]+coder String constructor.
         Uart.write(Magic.bytes("real Integer.toString (unmodified JDK + mini deps):\n"));
-        Loader.loadIntegerToString();
+        Loader.launch(Magic.bytes("demo/ToStringDemo"), Magic.bytes(""));
 
         // Real Integer.toHexString (formatUnsignedInt + the loader-seeded Integer.digits) and Long.toString
         // (the DecimalDigits long overloads).
         Uart.write(Magic.bytes("real Integer.toHexString + Long.toString (unmodified JDK):\n"));
-        Loader.loadHexLong();
+        Loader.launch(Magic.bytes("demo/HexLongDemo"), Magic.bytes(""));
 
         // Real Long.parseLong + Long.toHexString.
         Uart.write(Magic.bytes("real Long.parseLong + Long.toHexString (unmodified JDK):\n"));
-        Loader.loadLongMore();
+        Loader.launch(Magic.bytes("demo/LongMoreDemo"), Magic.bytes(""));
 
         // Real integer Math: floorDiv/floorMod (pure) + addExact (real ArithmeticException on overflow).
         Uart.write(Magic.bytes("real Math floorDiv/floorMod/addExact (unmodified JDK):\n"));
-        Loader.loadMathInt();
+        Loader.launch(Magic.bytes("demo/MathIntDemo"), Magic.bytes(""));
 
         // Real java.util.Objects: equals/hashCode via the Object root's vtable, requireNonNull's NPE.
         Uart.write(Magic.bytes("real java.util.Objects (unmodified JDK):\n"));
-        Loader.loadObjects();
+        Loader.launch(Magic.bytes("demo/ObjectsDemo"), Magic.bytes(""));
 
         // Real java.util.Arrays: fill/equals/binarySearch on int[].
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
-        Loader.loadArrays();
+        Loader.launch(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
 
         // Real Integer.valueOf autoboxing: boxed Integer keys in a HashMap (real hashCode/equals dispatch).
         Uart.write(Magic.bytes("real Integer.valueOf boxing via HashMap (unmodified JDK):\n"));
-        Loader.loadBoxing();
+        Loader.launch(Magic.bytes("demo/BoxingDemo"), Magic.bytes(""));
 
         // String indexOf/substring on the real-shaped mini String.
         Uart.write(Magic.bytes("String indexOf/substring (demand-loaded):\n"));
-        Loader.loadStrOps();
+        Loader.launch(Magic.bytes("demo/StrOpsDemo"), Magic.bytes(""));
 
         // M3: java.io -- the guest FileInputStream overlay reading the embedded read-only RAMFS.
         Uart.write(Magic.bytes("java.io FileInputStream (embedded RAMFS):\n"));
-        Loader.loadFileIo();
+        Loader.launch(Magic.bytes("demo/FileDemo"), Magic.bytes(""));
 
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
-        Loader.loadReflect();
+        Loader.launch(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
 
         // The real-program milestone: ordinary stock-Java WordCount from main(String[]) -- must match
         // the host JDK's output byte-for-byte on the same input file.
         Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
-        Loader.loadWordCount();
+        Loader.launch(Magic.bytes("demo/WordCount"), Magic.bytes("/data/sample.txt 3"));
 
         // The charset closure: stock new String(byte[]) + getBytes() via the UTF-8 fast path.
         Uart.write(Magic.bytes("charset: new String(byte[]) / getBytes() (stock, UTF-8 fast path):\n"));
-        Loader.loadCharset();
+        Loader.launch(Magic.bytes("demo/CharsetDemo"), Magic.bytes(""));
 
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
-        Loader.loadGcDemo();
+        Loader.launch(Magic.bytes("demo/GcDemo"), Magic.bytes(""));
         Loader.printCodeArena();                           // code-arena rewind evidence: cur far below high
 
         // The long-running-program milestone: a Lisp interpreter whose churn forces collections
         // mid-computation -- every evaluation afterwards must still be correct.
         Uart.write(Magic.bytes("Lisp interpreter (long-running, stock java.base):\n"));
-        Loader.loadLisp();
+        Loader.launch(Magic.bytes("demo/LispDemo"), Magic.bytes("/data/prog.lisp 600"));
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry

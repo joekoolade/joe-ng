@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class FloatDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         float a = 3.5f;
         float b = 2.0f;

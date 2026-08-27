@@ -11,7 +11,7 @@ import magic.Magic;
  */
 public class ExcDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         int npe = 0;
         String n = null;

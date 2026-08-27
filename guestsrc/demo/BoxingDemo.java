@@ -12,7 +12,7 @@ import magic.Magic;
  */
 public class BoxingDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         HashMap map = new HashMap();
         map.put(Integer.valueOf(5), "five");                                 // cached

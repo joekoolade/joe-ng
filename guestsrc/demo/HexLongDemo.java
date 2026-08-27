@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class HexLongDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         showHex(255);                                   // ff
         showHex(0xDEADBEEF);                            // deadbeef

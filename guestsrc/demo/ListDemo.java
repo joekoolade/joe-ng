@@ -17,7 +17,7 @@ import magic.Magic;
  */
 public class ListDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         List list = new ArrayList();                    // static type is the interface: all calls are invokeinterface
         int i = 0;

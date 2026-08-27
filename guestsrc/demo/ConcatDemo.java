@@ -13,7 +13,7 @@ import magic.Magic;
  */
 public class ConcatDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         int n = 42;
         int k = 7;

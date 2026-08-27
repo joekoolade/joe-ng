@@ -10,7 +10,7 @@ package demo;
  */
 public class CharsetDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         byte[] ascii = new byte[] { 104, 101, 108, 108, 111 };          // "hello"
         String s = new String(ascii);

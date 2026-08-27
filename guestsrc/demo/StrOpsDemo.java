@@ -9,7 +9,7 @@ import magic.Magic;
  */
 public class StrOpsDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         String s = "hello world";
         showInt("indexOf(\"world\")", s.indexOf("world"));                 // 6

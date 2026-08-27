@@ -9,7 +9,7 @@ import magic.Magic;
  */
 public class StrDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         StringBuilder sb = new StringBuilder();
         sb.append("count=").append(42).append(" ok=").append(true);
