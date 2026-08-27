@@ -4096,8 +4096,43 @@ tail rate the remaining closure would take many minutes per test. Two consequenc
 The runners are validated the way that makes them evidence: the same `ZipJUnitAll` passes 22/22 on the host
 JDK 26 with nothing but the shim on the classpath, so a joe-ng failure is a joe-ng finding.
 
-**PI-VALIDATED 22/22 (2026-08-26, `core 166MHz`) — every stock `java/util/zip` JUnit test joe-ng can host
-passes on the metal.** The confirming boot shows `clinit-lazy java/util/HexFormat` at the head of the
+**PI-VALIDATED 29/29 (2026-08-26, `core 166MHz`) — every stock `java/util/zip` JUnit test joe-ng can host
+passes on the metal, `BasicGZIPInputStreamTest` included.** The parameterized one was written off earlier in
+this section as needing "reflection AND a Stream pipeline"; that was wrong on the second count. joe-ng's open
+Stream bug is in `map`/`collect`, and `Stream.of(...).iterator()` never goes near it. A four-line probe
+settled it in one boot: `Class.getDeclaredMethod` resolves a PRIVATE static, `setAccessible(true)` +
+`invoke(null)` returns the stream, and iterating it yields its elements. So `ZipJUnitAll.runParameterized`
+reaches the `@MethodSource` factory the way the engine does -- reflectively -- and consumes the stream with
+`iterator()` rather than `toList()` (which pulls `ImmutableCollections$Access$1` and a good deal more for no
+gain). Seven cases, 22 -> 29.
+
+Getting there cost two boots and found two more bugs, one of them VM-wide:
+
+**A lambda was not an instance of `Object`.** `finishLambdaClass` built every lambda's Type with
+`superType = 0`, commented "superType=Object(0)" -- but 0 means NO superclass, and `typeAssignable` walks
+self -> itable dir -> superType. The walk ended at the lambda's own interfaces, so `typeAssignable(lambda,
+Object)` was false and EVERY `aastore` of a lambda into an `Object[]` threw `ArrayStoreException`. That is
+not an exotic path: it is every varargs call taking a lambda, `Arguments.of((Executable) () -> ...)` being
+one. Nothing had hit it because the existing lambda demos pass lambdas as typed parameters, never through
+varargs. One line: `superType = objectTypeAddr()`. The probe states the before and after plainly --
+`D lambda instanceof Object = 0` then `= 1`, with stores into `Object[]`, into an interface array, and
+through varargs all working after.
+
+**RTA cannot see through reflection, and the call sites trap.** With the lambda fixed, the same line then hit
+a `DENYLIST TRAP`. `logTrapWire = 1` named the callees: `Arguments.of` and `Stream.of`. A factory reached
+ONLY via `Method.invoke` is compiled on demand, but nothing statically reachable mentions what it calls, so
+those bodies are never pulled and each of its static call sites is trap-wired. The probe demonstrates it in
+one file: identical code, direct call passes, reflective call traps.
+
+The workaround here is at the HARNESS level and should be recognised as one: `seedFactoryClosure()` calls the
+same methods from statically reachable code so RTA pulls them. It is fragile in a way worth knowing --
+seeding `Stream.of(T)` does NOT satisfy a `Stream.of(T...)` call site, because resolution is per descriptor,
+not per name; that cost a probe cycle. **The principled fix is late resolution at the trap site**, and the
+machinery already exists for baked methods (`resolveBakeStub` demand-loads the class and memoizes). Pointing
+an unresolved loader call site at the same path would close the whole class of problem instead of one test.
+Not built.
+
+**First Pi run of the 22-case suite: 15 of 22, and the 7 failures were one bug.** The confirming boot shows `clinit-lazy java/util/HexFormat` at the head of the
 `Zip64DataDescriptor` group and all seven of its methods green, with the other six classes byte-identical to
 the run before: the fix did what it claimed and nothing else. The first boot of this arc is recorded below
 because the failure it found is the more useful half.

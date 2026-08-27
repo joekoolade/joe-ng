@@ -9529,11 +9529,17 @@ public final class Loader
         }
         Magic.store64(dir + e * 16L + 0L, 0L);           // sentinel: interfaceType 0 ends the directory
         Magic.store64(dir + e * 16L + 8L, 0L);
-        // Type { instanceSize, superType=Object(0), itableDir } -- no depth/display (a lambda is
+        // Type { instanceSize, superType=Object, itableDir } -- no depth/display (a lambda is
         // only ever type-checked through its interface dir, so the walk fallback covers it).
+        //
+        // superType MUST be Object's Type, not 0. typeAssignable walks self -> itable dir -> superType, so a
+        // 0 super ends the walk at the lambda's own interfaces: `lambda instanceof Object` answered FALSE,
+        // and every aastore of a lambda into an Object[] threw ArrayStoreException. That is not an obscure
+        // path -- it is EVERY varargs call taking a lambda, e.g. Arguments.of((Executable) () -> ...) in the
+        // stock BasicGZIPInputStreamTest, whose argument array is an Object[].
         long type = Heap.allocData(ObjectModel.TYPE_SIZE);
         Magic.store64(type + 0L, 16 + nc * 8);
-        Magic.store64(type + 8L, 0L);
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());
         Magic.store64(type + 16L, dir);
         Magic.store64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET, 0L);
         Magic.store64(type + ObjectModel.TYPE_DEPTH_OFFSET, 0L);
