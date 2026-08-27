@@ -384,65 +384,7 @@ public final class VMScheduler
         taskExit();
     }
 
-    /**
-     * Work for {@code ms} milliseconds, offering the core back once per millisecond. The yield is what makes
-     * this demo mean the same thing everywhere: a task that never yields can only lose the core to a timer
-     * tick, and QEMU delivers none -- so on the emulator LOW would run start to finish and release the
-     * monitor before HIGH ever woke, printing a healthy-looking result that tested nothing. Yielding puts a
-     * scheduling decision every millisecond, and then only the priority rule decides who continues.
-     */
-    static void pipSpin(int ms)
-    {
-        int n = 0;
-        while (n < ms)
-        {
-            pauseMs1();
-            taskYield();
-            n = n + 1;
-        }
-    }
 
-    /**
-     * The priority-inversion demo's three tasks, the textbook scenario:
-     *
-     * <ul>
-     *   <li>LOW (0) takes the monitor immediately and holds it across a long stretch of work.
-     *   <li>MED (1) wakes shortly after and burns CPU. It never touches the monitor -- it is simply work
-     *       that outranks LOW, which is exactly what makes the inversion unbounded.
-     *   <li>HIGH (2) wakes later still and asks for the monitor LOW is holding.
-     * </ul>
-     *
-     * <p>Without inheritance, HIGH is stuck until MED finishes: LOW cannot run to release the monitor,
-     * because MED outranks it. Finish order would be MED, HIGH, LOW. With inheritance LOW is lent HIGH's
-     * priority, outruns MED, releases, and drops back -- finish order HIGH, MED, LOW. The FIRST letter is
-     * the whole test, and {@code pipBlockedMs} says how long HIGH actually waited.
-     */
-    static void pipTask(int id)
-    {
-        if (id == 0)
-        {
-            monEnter(pipLock);                             // LOW: grab it before anyone else is awake
-            pipSpin(40);
-            monExit(pipLock);
-            pipSpin(10);
-        }
-        else if (id == 1)
-        {
-            sleep(10);                                     // MED: pure CPU, never touches the monitor
-            pipSpin(60);
-        }
-        else
-        {
-            sleep(20);                                     // HIGH: wants what LOW is holding
-            long t0 = Magic.readCNTPCT_EL0();
-            monEnter(pipLock);
-            pipBlockedMs = (int) ((Magic.readCNTPCT_EL0() - t0) * 1000L / Magic.readCNTFRQ_EL0());
-            monExit(pipLock);
-        }
-        pipOrder[pipDone] = id;                            // single-core demo: no race on pipDone
-        pipDone = pipDone + 1;
-        taskExit();
-    }
 
     /**
      * The SMP threading demo's task: step, note WHICH CORE the step ran on, work briefly, yield, repeat.
