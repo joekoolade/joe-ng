@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class ParseAllDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         show("42", Integer.parseInt("42"));
         show("12345", Integer.parseInt("12345"));

@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class ArraysDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         int[] a = new int[5];
         Arrays.fill(a, 7);

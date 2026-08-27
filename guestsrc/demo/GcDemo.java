@@ -10,14 +10,8 @@ package demo;
  */
 public class GcDemo
 {
-    /** Manifest entry point ({@code main=demo/GcDemo}): the launcher only calls {@code main(String[])},
-     *  while the boot demo suite calls {@code main()} directly. Both run the same churn. */
-    public static void main(String[] args)
-    {
-        main();
-    }
 
-    public static void main()
+    public static void main(String[] args)
     {
         int block = 65536;                              // 64 KB per allocation
         int rounds = 10000;                             // ~640 MB total churn

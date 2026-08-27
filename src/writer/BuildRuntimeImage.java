@@ -126,20 +126,14 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.threadBytes",      "vm/VM.threadLen",      "java/lang/Thread",               registry.rawBytes("java/lang/Thread"));
         ib.addBlob("vm/VM.semBytes",         "vm/VM.semLen",         "java/util/concurrent/Semaphore", registry.rawBytes("java/util/concurrent/Semaphore"));
         ib.addBlob("vm/VM.philosopherBytes", "vm/VM.philosopherLen", "demo/Philosopher",               registry.rawBytes("demo/Philosopher"));
-        ib.addBlob("vm/VM.philBytes",        "vm/VM.philLen",        "demo/DiningPhilosophers",        registry.rawBytes("demo/DiningPhilosophers"));
         // invokedynamic slice 1: a mini java/lang/String (concat result) + the concat demo program.
         ib.addBlob("vm/VM.stringBytes",      "vm/VM.stringLen",      "java/lang/String",               registry.rawBytes("java/lang/String"));
-        ib.addBlob("vm/VM.concatDemoBytes",  "vm/VM.concatDemoLen",  "demo/ConcatDemo",                registry.rawBytes("demo/ConcatDemo"));
         // invokedynamic slice 1c/1d: the lambda demo program + a SAM-with-arg functional interface.
-        ib.addBlob("vm/VM.lambdaDemoBytes",  "vm/VM.lambdaDemoLen",  "demo/LambdaDemo",                registry.rawBytes("demo/LambdaDemo"));
         ib.addBlob("vm/VM.intOpBytes",       "vm/VM.intOpLen",       "demo/IntOp",                     registry.rawBytes("demo/IntOp"));
         // Experiment: a real, unmodified java.base class (java/lang/Integer) to map the loader's reach.
         ib.addBlob("vm/VM.integerBytes",     "vm/VM.integerLen",     "java/lang/Integer",              registry.rawBytes("java/lang/Integer"));
-        ib.addBlob("vm/VM.floatDemoBytes",   "vm/VM.floatDemoLen",   "demo/FloatDemo",                 registry.rawBytes("demo/FloatDemo"));
-        ib.addBlob("vm/VM.nativeDemoBytes",  "vm/VM.nativeDemoLen",  "demo/NativeDemo",                registry.rawBytes("demo/NativeDemo"));
         // real-shaped String + StringBuilder + their demo.
         ib.addBlob("vm/VM.stringBuilderBytes", "vm/VM.stringBuilderLen", "java/lang/StringBuilder",     registry.rawBytes("java/lang/StringBuilder"));
-        ib.addBlob("vm/VM.strDemoBytes",     "vm/VM.strDemoLen",     "demo/StrDemo",                   registry.rawBytes("demo/StrDemo"));
         // implicit exceptions: the mini exception hierarchy (Type chain for catch) + the demo. Order matches VM.blobClass.
         ib.addBlob("vm/VM.throwableBytes",   "vm/VM.throwableLen",   "java/lang/Throwable",                     registry.rawBytes("java/lang/Throwable"));
         ib.addBlob("vm/VM.exceptionBytes",   "vm/VM.exceptionLen",   "java/lang/Exception",                     registry.rawBytes("java/lang/Exception"));
@@ -147,14 +141,11 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.npeBytes",         "vm/VM.npeLen",         "java/lang/NullPointerException",          registry.rawBytes("java/lang/NullPointerException"));
         ib.addBlob("vm/VM.ioobeBytes",       "vm/VM.ioobeLen",       "java/lang/IndexOutOfBoundsException",     registry.rawBytes("java/lang/IndexOutOfBoundsException"));
         ib.addBlob("vm/VM.aioobeBytes",      "vm/VM.aioobeLen",      "java/lang/ArrayIndexOutOfBoundsException", registry.rawBytes("java/lang/ArrayIndexOutOfBoundsException"));
-        ib.addBlob("vm/VM.excDemoBytes",     "vm/VM.excDemoLen",     "demo/ExcDemo",                            registry.rawBytes("demo/ExcDemo"));
         // mini collections: java/util/ArrayList + its demo. Order matches VM.blobClass.
         ib.addBlob("vm/VM.arrayListBytes",   "vm/VM.arrayListLen",   "java/util/ArrayList",                     registry.rawBytes("java/util/ArrayList"));
-        ib.addBlob("vm/VM.listDemoBytes",    "vm/VM.listDemoLen",    "demo/ListDemo",                           registry.rawBytes("demo/ListDemo"));
         // java/util/HashMap + the mini java/lang/Object root (its hashCode/equals slots) + the demo.
         ib.addBlob("vm/VM.objectBytes",      "vm/VM.objectLen",      "java/lang/Object",                        registry.rawBytes("java/lang/Object"));
         ib.addBlob("vm/VM.hashMapBytes",     "vm/VM.hashMapLen",     "java/util/HashMap",                       registry.rawBytes("java/util/HashMap"));
-        ib.addBlob("vm/VM.mapDemoBytes",     "vm/VM.mapDemoLen",     "demo/MapDemo",                            registry.rawBytes("demo/MapDemo"));
         // real-java.base probe: a second unmodified class (java/lang/Long); Integer is already embedded above.
         ib.addBlob("vm/VM.longBytes",        "vm/VM.longLen",        "java/lang/Long",                          registry.rawBytes("java/lang/Long"));
         // dep/native surface for real Integer.parseInt: mini Character.digit + NumberFormatException hierarchy.
@@ -162,32 +153,23 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.illegalArgBytes",  "vm/VM.illegalArgLen",  "java/lang/IllegalArgumentException",      registry.rawBytes("java/lang/IllegalArgumentException"));
         ib.addBlob("vm/VM.numberFmtBytes",   "vm/VM.numberFmtLen",   "java/lang/NumberFormatException",         registry.rawBytes("java/lang/NumberFormatException"));
         // reachable-loadAll demo: loads the real Integer via the closure path and calls parseInt.
-        ib.addBlob("vm/VM.parseAllDemoBytes","vm/VM.parseAllDemoLen","demo/ParseAllDemo",                       registry.rawBytes("demo/ParseAllDemo"));
         // real Integer.toString surface: mini StringLatin1 + DecimalDigits + the demo.
         ib.addBlob("vm/VM.stringLatin1Bytes","vm/VM.stringLatin1Len","java/lang/StringLatin1",                  registry.rawBytes("java/lang/StringLatin1"));
         ib.addBlob("vm/VM.decimalDigitsBytes","vm/VM.decimalDigitsLen","jdk/internal/util/DecimalDigits",       registry.rawBytes("jdk/internal/util/DecimalDigits"));
-        ib.addBlob("vm/VM.toStringDemoBytes","vm/VM.toStringDemoLen","demo/ToStringDemo",                       registry.rawBytes("demo/ToStringDemo"));
         // Integer.toHexString + Long.toString demo (real Integer.digits seeded by the loader; DecimalDigits long overloads).
-        ib.addBlob("vm/VM.hexLongDemoBytes", "vm/VM.hexLongDemoLen", "demo/HexLongDemo",                        registry.rawBytes("demo/HexLongDemo"));
         // Long.parseLong + Long.toHexString demo (formatUnsignedLong0 also indexes the seeded Integer.digits).
-        ib.addBlob("vm/VM.longMoreDemoBytes","vm/VM.longMoreDemoLen","demo/LongMoreDemo",                       registry.rawBytes("demo/LongMoreDemo"));
         // integer Math methods (floorDiv/floorMod/addExact) + the ArithmeticException addExact throws on overflow.
         ib.addBlob("vm/VM.arithExcBytes",    "vm/VM.arithExcLen",    "java/lang/ArithmeticException",           registry.rawBytes("java/lang/ArithmeticException"));
-        ib.addBlob("vm/VM.mathIntDemoBytes", "vm/VM.mathIntDemoLen", "demo/MathIntDemo",                        registry.rawBytes("demo/MathIntDemo"));
         // real java.util.Objects (equals/hashCode dispatch through the Object root; requireNonNull) + its demo.
         ib.addBlob("vm/VM.objectsBytes",     "vm/VM.objectsLen",     "java/util/Objects",                       registry.rawBytes("java/util/Objects"));
-        ib.addBlob("vm/VM.objectsDemoBytes", "vm/VM.objectsDemoLen", "demo/ObjectsDemo",                        registry.rawBytes("demo/ObjectsDemo"));
         // real java.util.Arrays (fill/equals/binarySearch) + mini ArraysSupport.mismatch (for equals) + demo.
         ib.addBlob("vm/VM.arraysBytes",      "vm/VM.arraysLen",      "java/util/Arrays",                        registry.rawBytes("java/util/Arrays"));
         ib.addBlob("vm/VM.arraysSupportBytes","vm/VM.arraysSupportLen","jdk/internal/util/ArraysSupport",        registry.rawBytes("jdk/internal/util/ArraysSupport"));
-        ib.addBlob("vm/VM.arraysDemoBytes",  "vm/VM.arraysDemoLen",  "demo/ArraysDemo",                         registry.rawBytes("demo/ArraysDemo"));
         // Integer.valueOf autoboxing via HashMap: mini java/lang/Number (Integer's super) + real
         // Integer$IntegerCache (its statics read as 0 with <clinit> skipped -> valueOf takes new Integer) + demo.
         ib.addBlob("vm/VM.numberBytes",      "vm/VM.numberLen",      "java/lang/Number",                        registry.rawBytes("java/lang/Number"));
         ib.addBlob("vm/VM.integerCacheBytes","vm/VM.integerCacheLen","java/lang/Integer$IntegerCache",           registry.rawBytes("java/lang/Integer$IntegerCache"));
-        ib.addBlob("vm/VM.boxingDemoBytes",  "vm/VM.boxingDemoLen",  "demo/BoxingDemo",                         registry.rawBytes("demo/BoxingDemo"));
         // String indexOf/substring (methods added to the mini String) + its demo.
-        ib.addBlob("vm/VM.strOpsDemoBytes",  "vm/VM.strOpsDemoLen",  "demo/StrOpsDemo",                         registry.rawBytes("demo/StrOpsDemo"));
         ib.addBlob("vm/VM.listBytes",        "vm/VM.listLen",        "java/util/List",                          registry.rawBytes("java/util/List"));
         ib.addBlob("vm/VM.iterableBytes",    "vm/VM.iterableLen",    "java/lang/Iterable",                      registry.rawBytes("java/lang/Iterable"));
         ib.addBlob("vm/VM.iteratorBytes",    "vm/VM.iteratorLen",    "java/util/Iterator",                      registry.rawBytes("java/util/Iterator"));
@@ -208,17 +190,11 @@ public final class BuildRuntimeImage
         ib.addBlob("vm/VM.binaryOpBytes",    "vm/VM.binaryOpLen",    "java/util/function/BinaryOperator",       registry.rawBytes("java/util/function/BinaryOperator"));
         ib.addBlob("vm/VM.biConsumerBytes",  "vm/VM.biConsumerLen",  "java/util/function/BiConsumer",           registry.rawBytes("java/util/function/BiConsumer"));
         // M3: java.io demo (guest FileInputStream overlay over the embedded RAMFS).
-        ib.addBlob("vm/VM.fileDemoBytes",    "vm/VM.fileDemoLen",    "demo/FileDemo",                           registry.rawBytes("demo/FileDemo"));
         // M4: Thread identity + Class reflection demo.
-        ib.addBlob("vm/VM.reflectDemoBytes", "vm/VM.reflectDemoLen", "demo/ReflectDemo",                        registry.rawBytes("demo/ReflectDemo"));
         // Real-program milestone: WordCount from main(String[]).
-        ib.addBlob("vm/VM.wordCountBytes",   "vm/VM.wordCountLen",   "demo/WordCount",                          registry.rawBytes("demo/WordCount"));
         // GC milestone: allocation churn far beyond the arena size.
-        ib.addBlob("vm/VM.gcDemoBytes",      "vm/VM.gcDemoLen",      "demo/GcDemo",                             registry.rawBytes("demo/GcDemo"));
         // Charset closure: stock new String(byte[]) / getBytes() via the UTF-8 fast path.
-        ib.addBlob("vm/VM.charsetDemoBytes", "vm/VM.charsetDemoLen", "demo/CharsetDemo",                        registry.rawBytes("demo/CharsetDemo"));
         // Long-running-program milestone: the Lisp interpreter.
-        ib.addBlob("vm/VM.lispDemoBytes",    "vm/VM.lispDemoLen",    "demo/LispDemo",                           registry.rawBytes("demo/LispDemo"));
         embedRamfs(ib);
         return ib.build(ENTRY);
     }

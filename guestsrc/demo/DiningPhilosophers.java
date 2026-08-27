@@ -17,7 +17,7 @@ public class DiningPhilosophers
 {
     static final int N = 5;
 
-    public static void main()
+    public static void main(String[] args)
     {
         Semaphore[] forks = new Semaphore[N];
         int i = 0;

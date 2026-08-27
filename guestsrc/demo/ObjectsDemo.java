@@ -11,7 +11,7 @@ import magic.Magic;
  */
 public class ObjectsDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         showBool("equals(\"ab\",\"ab\")", Objects.equals("ab", "ab"));      // 1 (content equals)
         showBool("equals(\"ab\",\"cd\")", Objects.equals("ab", "cd"));      // 0

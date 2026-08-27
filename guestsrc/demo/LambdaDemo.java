@@ -12,7 +12,7 @@ import magic.Magic;
  */
 public class LambdaDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         Runnable a = () -> Magic.printStr("lambda A ran\n");    // no capture
         a.run();

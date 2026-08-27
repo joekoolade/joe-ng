@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class NativeDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         int bits = Float.floatToRawIntBits(1.5f);       // native -> IEEE-754 bits of 1.5f = 0x3FC00000
         Magic.printStr("Float.floatToRawIntBits(1.5f) = " + bits + "\n");

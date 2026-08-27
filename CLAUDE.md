@@ -72,6 +72,15 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **The demo suite runs demos as PROGRAMS (2026-08-27, PI-VALIDATED).** Every boot-suite demo is started by
+  `Loader.launch(name, args)` — pulled from the classDir by name, `main(String[])`, argv, seeded
+  `System.out/err/in`, run trampoline, `[main returned normally]` — instead of one of 24 bespoke
+  `Loader.loadXxx()` methods calling a no-arg `main()` on a privately embedded blob. Those loaders and their
+  24 duplicate demo blobs are gone (each demo had been embedded twice; image −62 KB). NetDemo, the
+  VM-internal scheduler set pieces (`prioDemo`/`pipDemo`/`smpThreadsDemo`) and the two `Integer` probes are
+  unchanged. **Cost, and the point: each launch reloads the base closure, so QEMU manages ~7 demos in 250 s
+  and hardware is the only harness that sees the whole suite.**
+
 - **Phase: M8 metacircular bootstrap — the writer-baked stock java.base and the
   on-metal demand loader are ONE VM** (shared vtable numbering, Types, statics,
   and a lazy cross-world link bridge). Earlier: M4 done, M5 started (shared

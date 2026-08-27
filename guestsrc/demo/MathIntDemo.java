@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class MathIntDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         show("floorDiv(7,3)", Math.floorDiv(7, 3));         // 2
         show("floorDiv(-7,3)", Math.floorDiv(-7, 3));       // -3 (floors toward -inf, not 0)

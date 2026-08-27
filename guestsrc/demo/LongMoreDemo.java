@@ -10,7 +10,7 @@ import magic.Magic;
  */
 public class LongMoreDemo
 {
-    public static void main()
+    public static void main(String[] args)
     {
         showParse("12345");                             // 12345
         showParse("-9999999999");                       // -9999999999 (> 32 bits)
