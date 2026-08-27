@@ -1441,6 +1441,7 @@ public final class VM
 
     static long throwFromFaultAddr;    // VM.throwFromFault(J)V — hardware fault -> Java exception (address trap -> NPE)
     static long lazyCompileAddr;       // Loader.lazyCompile(I)J — M8 1b compile-on-first-call trampoline target
+    static long resolveLinkStubAddr;   // Loader.resolveLinkStub(I)J — late link resolution for RTA-invisible sites
     static long utf16GetBytesAddr;     // baked stock java/lang/StringUTF16.getBytes([BII[BI)V — M8 static-state probe target
     static long formatUnsignedIntAddr; // baked stock java/lang/Integer.formatUnsignedInt(II[BI)V — M8 object-statics probe target
     static long integerIntValueAddr;   // baked stock java/lang/Integer.intValue()I — reads a baked object's field directly
@@ -2998,6 +2999,10 @@ public final class VM
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
         Loader.launch(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
+
+        // Late link resolution: a method reached only through Method.invoke calls a class RTA never pulled.
+        Uart.write(Magic.bytes("reflective call into an unpulled class (late link resolution):\n"));
+        Loader.launch(Magic.bytes("demo/ReflectRtaDemo"), Magic.bytes(""));
 
         // The real-program milestone: ordinary stock-Java WordCount from main(String[]) -- must match
         // the host JDK's output byte-for-byte on the same input file.

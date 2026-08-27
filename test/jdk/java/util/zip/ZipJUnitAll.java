@@ -56,24 +56,6 @@ public class ZipJUnitAll
     }
 
     /**
-     * Calls, from STATICALLY REACHABLE code, everything the reflectively-reached {@code @MethodSource}
-     * factories call. RTA cannot see through reflection: those factories are invoked only via
-     * {@code Method.invoke}, so nothing reachable from main mentions the {@code Stream.of} /
-     * {@code Arguments.of} they use, those bodies are never pulled, and each of their call sites becomes a
-     * DENYLIST TRAP naming the callee. Seeding has to match the exact DESCRIPTOR, not just the name --
-     * {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are different call sites, and seeding
-     * the wrong one leaves the trap in place.
-     */
-    static void seedFactoryClosure()
-    {
-        Iterator<Arguments> it = Stream.of(Arguments.of("seed"), Arguments.of("seed")).iterator();
-        while (it.hasNext())
-        {
-            it.next();
-        }
-    }
-
-    /**
      * Runs a {@code @ParameterizedTest} whose arguments come from a {@code @MethodSource} factory. The
      * factory is PRIVATE and static, exactly as the JUnit engine expects to find it, so it is reached the
      * same way the engine reaches it: reflectively, with setAccessible.
@@ -141,7 +123,6 @@ public class ZipJUnitAll
         run("shouldIgnoreTrucatedZip64Extra", () -> { Zip64DataDescriptor t = new Zip64DataDescriptor(); t.setup(); t.shouldIgnoreTrucatedZip64Extra(); });
 
         group("BasicGZIPInputStreamTest");
-        seedFactoryClosure();
         runParameterized("testNPEFromConstructors", "npeFromConstructors",
                          (t, e) -> t.testNPEFromConstructors(e));
         runParameterized("testIAEFromConstructors", "iaeFromConstructors",
