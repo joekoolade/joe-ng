@@ -1,3 +1,10 @@
+import java.lang.reflect.Method;
+import java.util.Iterator;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.api.function.Executable;
+import org.junit.jupiter.params.provider.Arguments;
+
 /*
  * One runner for every stock java/util/zip JUnit test joe-ng can host, so a single image and a single boot
  * covers all of them. That matters more than tidiness here: the demand-load closure of a program that
@@ -14,6 +21,12 @@ public class ZipJUnitAll
     interface Body
     {
         void run() throws Throwable;
+    }
+
+    /** One @ParameterizedTest case: the test instance and the argument the engine would have spread into it. */
+    interface Case
+    {
+        void run(BasicGZIPInputStreamTest t, Executable arg) throws Throwable;
     }
 
     static int ran = 0;
@@ -39,6 +52,49 @@ public class ZipJUnitAll
             System.out.println("  FAIL " + name + " : " + e);
             e.printStackTrace();                       // the frame is the diagnosis; a bare NPE is not
             fails += 1;
+        }
+    }
+
+    /**
+     * Calls, from STATICALLY REACHABLE code, everything the reflectively-reached {@code @MethodSource}
+     * factories call. RTA cannot see through reflection: those factories are invoked only via
+     * {@code Method.invoke}, so nothing reachable from main mentions the {@code Stream.of} /
+     * {@code Arguments.of} they use, those bodies are never pulled, and each of their call sites becomes a
+     * DENYLIST TRAP naming the callee. Seeding has to match the exact DESCRIPTOR, not just the name --
+     * {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are different call sites, and seeding
+     * the wrong one leaves the trap in place.
+     */
+    static void seedFactoryClosure()
+    {
+        Iterator<Arguments> it = Stream.of(Arguments.of("seed"), Arguments.of("seed")).iterator();
+        while (it.hasNext())
+        {
+            it.next();
+        }
+    }
+
+    /**
+     * Runs a {@code @ParameterizedTest} whose arguments come from a {@code @MethodSource} factory. The
+     * factory is PRIVATE and static, exactly as the JUnit engine expects to find it, so it is reached the
+     * same way the engine reaches it: reflectively, with setAccessible.
+     *
+     * <p>The stream is consumed with {@code iterator()} rather than {@code toList()} on purpose --
+     * toList() pulls ImmutableCollections$Access$1 and a good deal more closure for no gain here.
+     */
+    static void runParameterized(String testName, String factory, Case c) throws Exception
+    {
+        Method f = BasicGZIPInputStreamTest.class.getDeclaredMethod(factory);
+        f.setAccessible(true);
+        Stream<Arguments> src = (Stream<Arguments>) f.invoke(null);
+        Iterator<Arguments> it = src.iterator();
+        int i = 0;
+        while (it.hasNext())
+        {
+            Object[] a = it.next().get();
+            Executable arg = (Executable) a[0];
+            BasicGZIPInputStreamTest t = new BasicGZIPInputStreamTest();
+            run(testName + "[" + i + "]", () -> c.run(t, arg));
+            i += 1;
         }
     }
 
@@ -83,6 +139,15 @@ public class ZipJUnitAll
         run("shouldIgnoreExcessiveExtraSize", () -> { Zip64DataDescriptor t = new Zip64DataDescriptor(); t.setup(); t.shouldIgnoreExcessiveExtraSize(); });
         run("shouldIgnoreNoMagicMarkers", () -> { Zip64DataDescriptor t = new Zip64DataDescriptor(); t.setup(); t.shouldIgnoreNoMagicMarkers(); });
         run("shouldIgnoreTrucatedZip64Extra", () -> { Zip64DataDescriptor t = new Zip64DataDescriptor(); t.setup(); t.shouldIgnoreTrucatedZip64Extra(); });
+
+        group("BasicGZIPInputStreamTest");
+        seedFactoryClosure();
+        runParameterized("testNPEFromConstructors", "npeFromConstructors",
+                         (t, e) -> t.testNPEFromConstructors(e));
+        runParameterized("testIAEFromConstructors", "iaeFromConstructors",
+                         (t, e) -> t.testIAEFromConstructors(e));
+        runParameterized("testIOEFromConstructors", "ioeFromConstructors",
+                         (t, e) -> t.testIOEFromConstructors(e));
 
         System.out.println("zip junit: ran " + ran + ", failures " + fails);
         if (fails == 0)

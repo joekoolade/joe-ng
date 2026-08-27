@@ -11,6 +11,7 @@
 #   make test     run the unit tests
 #   make image    emit kernel8.img (multi-class runtime, compiled from bytecode)
 #   make qemu     boot the image in QEMU and assert the banner (test aid, not truth)
+#   make junit    download the JUnit console-standalone jar into jars/ (host tooling)
 #   make clean    remove build artifacts
 
 JAVAC   ?= javac
@@ -25,7 +26,7 @@ SOURCES := $(shell find src test -name '*.java' -not -path 'test/jdk/*')
 # --add-reads lets the patched java.base see magic.Magic (the scheduler intrinsics).
 GUESTSRC := $(shell find guestsrc -name '*.java')
 
-.PHONY: all build test image qemu clean
+.PHONY: all build test image qemu junit clean
 
 all: test image
 
@@ -60,7 +61,7 @@ test: build
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
-JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java test/jdk/java/lang/Thread/ITLConstructor.java test/jdk/java/lang/Thread/JoinWithDuration.java test/jdk/java/lang/Thread/JoinWithDurationRun.java test/jdk/java/lang/Thread/MainThreadTest.java test/jdk/java/lang/Thread/NullStackTrace.java test/jdk/java/lang/Thread/SleepSanity.java test/jdk/java/lang/Thread/SleepSanityRun.java test/jdk/java/lang/Thread/SleepWithDuration.java test/jdk/java/lang/Thread/SleepWithDurationRun.java test/jdk/java/lang/Compare.java test/jdk/testlib/RandomFactory.java test/jdk/java/lang/Long/BitTwiddle.java test/jdk/java/util/concurrent/atomic/Lazy.java test/jdk/java/util/concurrent/atomic/AtomicUpdaters.java test/jdk/java/util/concurrent/ConcurrentMap/ConcurrentModification.java test/jdk/java/util/zip/DeflaterClose.java test/jdk/java/util/zip/InflaterClose.java test/jdk/java/util/zip/DataDescriptorIgnoreCrcAndSizeFields.java test/jdk/java/util/zip/DataDescriptorSignatureMissing.java test/jdk/java/util/zip/GZIP/GZIPInputStreamAvailable.java test/jdk/java/util/zip/ZipOutputStream/CloseWrappedStream.java test/jdk/java/util/zip/ZipInputStream/Zip64DataDescriptor.java test/jdk/java/util/zip/ZipJUnitAll.java
+JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java test/jdk/java/lang/Thread/ITLConstructor.java test/jdk/java/lang/Thread/JoinWithDuration.java test/jdk/java/lang/Thread/JoinWithDurationRun.java test/jdk/java/lang/Thread/MainThreadTest.java test/jdk/java/lang/Thread/NullStackTrace.java test/jdk/java/lang/Thread/SleepSanity.java test/jdk/java/lang/Thread/SleepSanityRun.java test/jdk/java/lang/Thread/SleepWithDuration.java test/jdk/java/lang/Thread/SleepWithDurationRun.java test/jdk/java/lang/Compare.java test/jdk/testlib/RandomFactory.java test/jdk/java/lang/Long/BitTwiddle.java test/jdk/java/util/concurrent/atomic/Lazy.java test/jdk/java/util/concurrent/atomic/AtomicUpdaters.java test/jdk/java/util/concurrent/ConcurrentMap/ConcurrentModification.java test/jdk/java/util/zip/DeflaterClose.java test/jdk/java/util/zip/InflaterClose.java test/jdk/java/util/zip/DataDescriptorIgnoreCrcAndSizeFields.java test/jdk/java/util/zip/DataDescriptorSignatureMissing.java test/jdk/java/util/zip/GZIP/GZIPInputStreamAvailable.java test/jdk/java/util/zip/GZIP/BasicGZIPInputStreamTest.java test/jdk/java/util/zip/ZipOutputStream/CloseWrappedStream.java test/jdk/java/util/zip/ZipInputStream/Zip64DataDescriptor.java test/jdk/java/util/zip/ZipJUnitAll.java
 
 .PHONY: jdktests
 jdktests: guest
@@ -93,6 +94,44 @@ image: build jdktests plugins appjar
 
 qemu: image
 	sh scripts/qemu-check.sh $(IMG)
+
+# ----- JUnit (HOST-side test tooling) -------------------------------------------------------------
+# The console-standalone jar bundles the Jupiter API + engine + a runner in one file, so host tests
+# need no build tool. Downloaded on demand into jars/ (gitignored) rather than vendored: it is a 3 MB
+# binary and this repo deliberately carries no third-party jars.
+#
+# It is HOST-ONLY, and must never reach the guest classpath: guestsrc/org/junit/jupiter/* are our own
+# stubs under the SAME fully-qualified names (a duplicate org.junit.jupiter.api.Test would shadow
+# whichever came first), and the real Jupiter engine drives discovery through java.lang.invoke, which
+# Loader denies (CLAUDE.md: the `java/lang/invoke/` deny list). Guest-side JUnit stays the stubs.
+#
+# Overriding JUNIT_VERSION requires overriding JUNIT_SHA256 to match -- the pin is per-version. Set
+# JUNIT_SHA256= (empty) to skip verification entirely.
+JUNIT_VERSION ?= 6.1.3
+JUNIT_SHA256  ?= e62b96ac475dbcde8599ea905d088f65d90778f86e259b856a49fa5c4ea256ec
+JUNIT_JAR     := jars/junit-platform-console-standalone-$(JUNIT_VERSION).jar
+JUNIT_URL     := https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/$(JUNIT_VERSION)/junit-platform-console-standalone-$(JUNIT_VERSION).jar
+
+.PHONY: junit
+junit: $(JUNIT_JAR)
+
+# Download to a .tmp and only rename after the checksum matches, so an interrupted or tampered
+# fetch never leaves a jar make would treat as up to date on the next run.
+$(JUNIT_JAR):
+	@mkdir -p jars
+	curl -fsSL -o $@.tmp $(JUNIT_URL)
+	@if [ -n "$(JUNIT_SHA256)" ]; then \
+	  if command -v shasum >/dev/null 2>&1; then a=`shasum -a 256 $@.tmp | cut -d' ' -f1`; \
+	  else a=`sha256sum $@.tmp | cut -d' ' -f1`; fi; \
+	  if [ "$$a" != "$(JUNIT_SHA256)" ]; then \
+	    rm -f $@.tmp; \
+	    echo "junit: SHA-256 mismatch"; echo "  expected $(JUNIT_SHA256)"; echo "  actual   $$a"; \
+	    exit 1; \
+	  fi; \
+	  echo "junit: SHA-256 verified"; \
+	fi
+	@mv $@.tmp $@
+	@ls -l $@
 
 clean:
 	rm -rf $(OUT) $(IMG) $(JARCLASSES)
