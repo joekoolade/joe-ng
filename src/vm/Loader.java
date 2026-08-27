@@ -3276,11 +3276,53 @@ public final class Loader
         {
             return 0L;                                 // unembedded root (Object/Magic), or already pulled this pass
         }
+        long t0 = Magic.readCNTPCT_EL0();
         addBlob(bytes, (int) VM.dirLen(namePtr, len));
+        long us = elapsedUs(t0);
         Uart.write(Magic.bytes("  load "));
         writeName(namePtr, len);
+        Uart.putc(0x20);
+        printDur(us);
         Uart.putc(0x0A);
         return bytes;
+    }
+
+    /**
+     * Microseconds since the {@code CNTPCT_EL0} reading {@code t0}. The counter is free-running and
+     * independent of the timer tick, so this reads correctly whether or not preemption is armed.
+     */
+    static long elapsedUs(long t0)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return (Magic.readCNTPCT_EL0() - t0) * 1000000L / f;
+    }
+
+    /** A duration in microseconds, as {@code NNNus} under a millisecond and {@code N.NNNms} above it. */
+    static void printDur(long us)
+    {
+        if (us < 1000L)
+        {
+            VM.printDec((int) us);
+            Uart.write(Magic.bytes("us"));
+            return;
+        }
+        VM.printDec((int) (us / 1000L));
+        Uart.putc(0x2E);                                // '.', then the microsecond remainder, zero-padded
+        long r = us % 1000L;
+        if (r < 100L)
+        {
+            Uart.putc(0x30);
+        }
+        if (r < 10L)
+        {
+            Uart.putc(0x30);
+        }
+        VM.printDec((int) r);
+        Uart.write(Magic.bytes("ms"));
     }
 
     /** True if a blob at address {@code bytes} is already pending/loaded. */
@@ -7582,7 +7624,84 @@ public final class Loader
         {
             buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find
         }
+        if (buf == 0L)
+        {
+            buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
+        }
         return buf;
+    }
+
+    /**
+     * Compile one method of an already structure-loaded class, chosen by name AND descriptor, and return its
+     * buffer. The last resort for a link stub: {@link #bufBySigU}'s three tiers all answer through a DISPATCH
+     * table (a registered buffer, a static cell, a vtable slot), and a method can be perfectly callable while
+     * appearing in none of them.
+     *
+     * <p>The case that forced this is a <b>static method on an interface</b>. {@code registerInterface} walks
+     * only {@code isVirtual} methods, to give them itable indices; a static one gets no itable index, no
+     * vtable slot and no static cell, so it is registered nowhere at all. {@code Arguments.of} in the JUnit
+     * shim is exactly that, and it is what a reflectively-reached {@code @MethodSource} factory calls. The
+     * older reflective path ({@link #compileMethodOnDemand}) refuses interfaces outright for the same reason
+     * it has no TIB to reuse — but {@code compileReuseTib} already means we never touch one.
+     *
+     * <p>Matching on the DESCRIPTOR as well as the name is not optional here: {@code of(T)} and the varargs
+     * {@code of(T...)} are different methods at the same name, and compiling the wrong one links the call
+     * site to a body with the wrong signature. Returns 0 if there is no such method or it has no Code.
+     */
+    private static long compileSigOnDemand(long clsU, long nameU, long descU)
+    {
+        int reg = regBySigU(clsU);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long blob = clTab[reg].base;
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
+        parseFields();                                  //   does, minus the TIB fill)
+        gStatics = clTab[reg].statics;                  // reuse the phase-A statics block
+        findBootstrapMethods();
+        parseVtable(blob);
+        gType = clTab[reg].type;
+        gTib = clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
+        parseForMethods(blob, len);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        long code = 0L;
+        int descOff = 0;
+        int isStatic = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(blob, gcp[u2(p + 2)], nameU, 0)
+                    && utf8EqAt(blob, gcp[u2(p + 4)], descU, 0))
+            {
+                long c = findCode(blob, p + 8, attrs);  // sets gcodeLen + gMaxLocals
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = gcp[u2(p + 4)];
+                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return 0L;                                  // no such signature, or abstract/native (no Code)
+        }
+        int rcMark = rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
+        int rsMark = rsCount;
+        compileReuseTib = true;
+        compile(code, gcodeLen, descOff, isStatic);
+        compileReuseTib = false;
+        registerAll();
+        patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
+        return bufBySigU(clsU, nameU, descU);
     }
 
     /**

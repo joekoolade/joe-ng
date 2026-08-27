@@ -30,6 +30,13 @@ public class ReflectRtaDemo
         Method h = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionSameClass");
         h.setAccessible(true);
         System.out.println("samepruned = " + h.invoke(null));
+
+        RtaIface inst = () -> "iface-instance";        // pulls RtaIface, exactly as the zip harness pulls
+        System.out.println("ifaceinst  = " + inst.describe());   //   Arguments through its signatures
+
+        Method i = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceStatic");
+        i.setAccessible(true);
+        System.out.println("ifacestat  = " + i.invoke(null));
     }
 
     /** Statically reachable from main: RTA walks this and pulls {@code RtaSeen}. */
@@ -42,6 +49,16 @@ public class ReflectRtaDemo
     static String viaReflectionOnly()
     {
         return RtaUnseen.tag();
+    }
+
+    /**
+     * A static method on a LOADED interface, named only from here. The interface is pulled (the lambda above
+     * does it), but a static interface method lands in no dispatch table at all, so resolution has to fall
+     * through to compiling the body from the class's own blob. This is the zip harness's {@code Arguments.of}.
+     */
+    static String viaReflectionIfaceStatic()
+    {
+        return RtaIface.tag();
     }
 
     /**
