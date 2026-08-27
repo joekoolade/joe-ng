@@ -15,6 +15,20 @@ package demo;
  * queue, so it was single-core by construction. A launched program has no such luxury — with four cores and
  * three threads LOW simply runs on an idle one and there is nothing to observe. So MED out-numbers the
  * cores: every core is busy with a thread that outranks LOW, and LOW makes progress only if it is boosted.
+ *
+ * <p><b>Why the roles hand off through {@link #gate} instead of just starting.</b> Two failure modes, both
+ * of which produce a healthy-LOOKING result that tested nothing, and both of which were observed:
+ * <ul>
+ *   <li>A critical section measured in wall-clock from the moment LOW acquires the lock has already expired
+ *       by the time the other five threads are created — HIGH then finds the lock free and the demo prints
+ *       {@code LHM / 0ms}. So LOW takes the lock and BLOCKS, burning nothing, until everyone is in place.</li>
+ *   <li>The signal to begin must come from HIGH, immediately before HIGH blocks on the lock. Under strict
+ *       priority HIGH cannot be preempted between the two (LOW is 2, HIGH is 10), so the section provably
+ *       starts with HIGH already contending.</li>
+ * </ul>
+ * Every wait here is a real {@code Object.wait} rather than a yield loop, because it must also work with NO
+ * preemption: inside the boot suite the timer is stopped, and a spin at one priority level simply locks the
+ * others out.
  */
 public class PipDemo
 {
@@ -23,6 +37,9 @@ public class PipDemo
 
     /** A SECOND monitor for the finish-order string, so bookkeeping never perturbs the contended one. */
     static final Object tally = new Object();
+
+    /** The handoff monitor: LOW parks on it holding the lock; HIGH releases it just before contending. */
+    static final Object gate = new Object();
 
     static final StringBuilder order = new StringBuilder();
 
@@ -34,7 +51,8 @@ public class PipDemo
     static final int PRIO_MED = 5;
     static final int PRIO_HIGH = 10;
 
-    static boolean lowHasLock;
+    static boolean lowHasLock;                     // LOW holds the monitor and is parked on the gate
+    static boolean go;                             // HIGH is about to contend: LOW may start its section
     static boolean medRecorded;
     static long highBlockedMs = -1;
 
@@ -42,11 +60,13 @@ public class PipDemo
     {
         Thread low = new Thread(new Low());
         low.setPriority(PRIO_LOW);
-        low.start();
-
-        while (!lowHasLock)                        // sleep, not spin: main must not be a fourth cpu hog
+        synchronized (gate)
         {
-            Thread.sleep(1);
+            low.start();
+            while (!lowHasLock)
+            {
+                gate.wait();                       // BLOCK, don't spin: LOW is below us and gets the cpu
+            }
         }
 
         Thread[] med = new Thread[MED_THREADS];
@@ -62,6 +82,15 @@ public class PipDemo
         Thread high = new Thread(new High());
         high.setPriority(PRIO_HIGH);
         high.start();
+
+        // Setup is over; from here main is only a spectator, and it must stop outranking the roles it is
+        // waiting for. Thread.join() is a yield-POLL -- the joining task stays RUNNABLE and simply offers the
+        // cpu -- so under strict priority a joiner above a joinee starves it forever. The boot flow's task
+        // sits at the scheduler's PRIO_NORM, which is ABOVE Java priority 5, so joining the MED threads at
+        // the default hangs on a single core: main yields, main is still the most urgent runnable task, main
+        // gets the cpu straight back. Dropping to the floor is the fix, and it costs nothing -- main has
+        // nothing left to do until every role has finished.
+        Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
 
         high.join();
         i = 0;
@@ -126,7 +155,22 @@ public class PipDemo
         {
             synchronized (lock)
             {
-                lowHasLock = true;
+                synchronized (gate)
+                {
+                    lowHasLock = true;
+                    gate.notifyAll();              // main may proceed to set up the contenders
+                    try
+                    {
+                        while (!go)
+                        {
+                            gate.wait();           // hold the lock, burn nothing, until HIGH is at the door
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        return;
+                    }
+                }
                 burn(LOW_HOLD_MS);                 // the critical section HIGH is stuck behind
             }
             burn(20);                              // ordinary work afterwards, back at LOW priority: the
@@ -147,9 +191,14 @@ public class PipDemo
     {
         public void run()
         {
+            synchronized (gate)
+            {
+                go = true;                         // LOW's section starts HERE, and cannot start earlier:
+                gate.notifyAll();                  //   we outrank LOW, so nothing runs between this and the
+            }                                      //   blocking acquire below
             long t0 = System.nanoTime();
-            synchronized (lock)                    // blocks: this is where inheritance fires, lending
-            {                                      //   HIGH's priority to whoever holds the monitor
+            synchronized (lock)                    // blocks: inheritance fires here, lending HIGH's
+            {                                      //   priority to whoever holds the monitor
                 highBlockedMs = (System.nanoTime() - t0) / 1000000L;
             }
             record('H');
