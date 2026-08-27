@@ -72,12 +72,30 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27).** The last scheduler set piece with
-  no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`, `VMScheduler.pipSpin`/
-  `pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads on purpose:**
-  inversion needs contention for a cpu, and the VM version was single-core only because it ran before the
-  secondaries joined the run queue — a launched program must out-number the cores instead. QEMU with the
-  negative control: `HML` / 55 ms with inheritance, `MHL` / 203 ms without.
+- **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
+  set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
+  `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
+  on purpose:** inversion needs contention for a cpu, and the VM version was single-core only because it ran
+  before the secondaries joined the run queue — a launched program must out-number the cores instead. Pi
+  (`core 166MHz`, full suite): `finish HML ... HIGH blocked 61ms`; QEMU 63 ms, and the negative control with
+  the one `inherit()` in `monEnter` commented out gives `MHL` / 270 ms.
+  - **Three bugs, all of them only visible where the SUITE runs it** — single core, timer stopped by
+    `prioDemo`, purely cooperative scheduling. Two of them produced a healthy-LOOKING `LHM / 0ms`, the third
+    hung outright, and standalone (`main=demo/PipDemo`, four cores, timer live) printed a clean `HML` through
+    all three. **A launched demo is not validated until it has run inside the suite.**
+  - **A wall-clock critical section starting at acquisition has already expired** by the time the other five
+    threads are created (>60 ms on an emulator), so HIGH found the lock free. LOW now takes the lock and
+    BLOCKS on a `gate` monitor, burning nothing, until everyone is in position.
+  - **The go signal comes from HIGH**, immediately before it blocks on the lock. HIGH outranks LOW, so nothing
+    runs between the two: the section provably starts with HIGH already contending. Every handshake is a real
+    `Object.wait` and not a yield loop, because a spin at one priority level locks the other levels out when
+    there is no timer.
+  - **`Thread.join()` is a yield-POLL — the joiner stays RUNNABLE and merely offers the cpu.** The boot
+    flow's task sits at the scheduler's `PRIO_NORM` (512), which is ABOVE Java priority 5 (455), so main
+    joining the MED threads at its default priority starved them forever: yield, still the most urgent
+    runnable task, cpu straight back. The MEDs never entered `run()`. main drops to `MIN_PRIORITY` once setup
+    is done. **A coordinator must not outrank the threads it waits for** — and the Java 1..10 scale does not
+    reach `PRIO_NORM`, so "the default" is not neutral.
 - **The demo suite runs demos as PROGRAMS (2026-08-27, PI-VALIDATED).** Every boot-suite demo is started by
   `Loader.launch(name, args)` — pulled from the classDir by name, `main(String[])`, argv, seeded
   `System.out/err/in`, run trampoline, `[main returned normally]` — instead of one of 24 bespoke
