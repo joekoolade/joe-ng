@@ -93,9 +93,22 @@ defines the minimum the assembler must encode.
     `demo/RtaUnseen`; then `linkresolve demo/RtaUnseen.tag` + `phaseA: 1 cells ... for demo/RtaUnseen` mid-run
     and `reflective = unseen`. Negative control (link-stub path disabled): the direct arm still passes and the
     reflective arm ends in a DENYLIST TRAP at `ReflectRtaDemo.viaReflectionOnly` naming `RtaUnseen.tag`.
-  - Retires `ZipJUnitAll.seedFactoryClosure`, the harness-level workaround for exactly this (calling
-    `Stream.of`/`Arguments.of` from reachable code so RTA pulled what the reflectively-reached `@MethodSource`
-    factories needed) — fragile because seeding had to match the DESCRIPTOR, not the name.
+  - **Static methods on interfaces needed a fourth tier, and the zip harness found it.** `bufBySigU`'s three
+    tiers all answer through a DISPATCH table (registered buffer, static cell, vtable slot), and
+    `registerInterface` walks only `isVirtual` methods to hand out itable indices — so a STATIC interface
+    method is registered nowhere at all. JUnit's `Arguments.of` is exactly that, and it is what a
+    reflectively-reached `@MethodSource` factory calls: the stub fired and had nothing to resolve to.
+    `compileSigOnDemand` compiles that one method from the class's own blob, matching name AND DESCRIPTOR
+    (`of(T)` vs varargs `of(T...)`), and patches only its own reloc range so its callees can take stubs too.
+    This is the interface half of `compileMethodOnDemand`'s recorded limitation (it refuses interfaces on the
+    grounds it has no TIB to reuse — but `compileReuseTib` means it never touches one).
+  - **STILL OPEN — late resolution does not cover `new`.** On hardware the chain walks three levels
+    (`Arguments.of` → `Stream.of` → `Spliterators.spliterator`) and then hits
+    `UNRESOLVED NEW: java/util/Spliterators$ArraySpliterator`. A `new` resolves at COMPILE time through
+    `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call
+    site, and `loadClassIncremental` deliberately pulls a class WITHOUT its dependencies (the "eager seeding
+    blew the closure" lesson), so an on-demand compile can instantiate a class nothing pulled. Until that is
+    covered, `ZipJUnitAll.seedFactoryClosure` stays, with a comment saying exactly why.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
