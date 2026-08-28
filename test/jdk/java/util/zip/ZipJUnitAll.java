@@ -65,9 +65,16 @@ public class ZipJUnitAll
      * {@code new} is resolved at COMPILE time (it needs the instance size and TIB while emitting), not by
      * patching a call site, and an on-demand compile can therefore instantiate a class nothing pulled.
      *
-     * <p>So the seed stays until late resolution covers {@code new} as well. Seeding has to match the exact
-     * DESCRIPTOR, not just the name -- {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are
-     * different call sites, and seeding the wrong one leaves the trap in place.
+     * <p>Late resolution NOW covers {@code new} too, and on hardware the whole chain resolves --
+     * {@code Arguments.of} -> {@code Stream.of} -> {@code Spliterators.spliterator} ->
+     * {@code new Spliterators$ArraySpliterator}. The seed still stays, for a different reason: COST. Each
+     * demand-load runs a full structure pass plus a patchRelocs over every reloc so far, and load time is
+     * super-linear (302 classes in 35 s, +70 in the next 115 s). Pulling the ~90-class stream closure one
+     * class at a time, on top of 377 already loaded, does not finish in reasonable time. The seed's real
+     * value is that it pulls that closure in ONE batch.
+     *
+     * <p>Seeding has to match the exact DESCRIPTOR, not just the name -- {@code Stream.of(T)} and the varargs
+     * {@code Stream.of(T...)} are different call sites, and seeding the wrong one leaves the trap in place.
      */
     static void seedFactoryClosure()
     {

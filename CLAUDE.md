@@ -102,7 +102,25 @@ defines the minimum the assembler must encode.
     (`of(T)` vs varargs `of(T...)`), and patches only its own reloc range so its callees can take stubs too.
     This is the interface half of `compileMethodOnDemand`'s recorded limitation (it refuses interfaces on the
     grounds it has no TIB to reuse — but `compileReuseTib` means it never touches one).
-  - **STILL OPEN — late resolution does not cover `new`.** On hardware the chain walks three levels
+  - **`new` is covered now (`newresolve`), but the seed stays for COST.** A `new` site defers instead of
+    halting: reached, it demand-loads the class and allocates at the right size with the class's own TIB
+    (`VM.newUnresolved` returns the reference the emit already pushed). Pi: the whole chain resolves —
+    `Arguments.of` → `Stream.of` → `Spliterators.spliterator` → `newresolve
+    java/util/Spliterators$ArraySpliterator`. **It then runs too slowly to finish.** Each demand-load is a
+    full structure pass plus a `patchRelocs` over every reloc so far, and load time is super-linear (302
+    classes in 35 s, +70 in the next 115 s); pulling the ~90-class stream closure ONE CLASS AT A TIME on top
+    of 377 already loaded does not converge. **The seed's real value was never only RTA reachability — it
+    pulls that closure in ONE batch.** So `seedFactoryClosure` stays, and the next lever is the super-linear
+    incremental-load cost, not resolution.
+  - **The denylist guard on the `new` path is load-bearing:** the call path is guarded at patch time, but a
+    `new` site is recorded during the compile and `pullClass(byte[])` goes straight to the classDir without
+    consulting the denylist. Without an explicit check, resolution would pull a denylisted class and turn
+    `demo/UnresolvedNewDemo` — whose whole point is that this halts — into a silent pass.
+  - **Found, NOT fixed: `invokevirtual` on a class unregistered at compile time is a silent wrong answer.**
+    `globalVtableSlot` returns 0 when it finds no match, so the call dispatches through vtable slot 0 of
+    whatever the receiver is. Writing the demo arm as `new RtaMade().tag()` returned null through exactly
+    that path; the arm returns the object instead, and the caller checks `getClass().getName()`.
+  - **Superseded — the note that late resolution does not cover `new`.** On hardware the chain walks three levels
     (`Arguments.of` → `Stream.of` → `Spliterators.spliterator`) and then hits
     `UNRESOLVED NEW: java/util/Spliterators$ArraySpliterator`. A `new` resolves at COMPILE time through
     `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call
