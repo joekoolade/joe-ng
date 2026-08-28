@@ -120,7 +120,26 @@ defines the minimum the assembler must encode.
     `new` site is recorded during the compile and `pullClass(byte[])` goes straight to the classDir without
     consulting the denylist. Without an explicit check, resolution would pull a denylisted class and turn
     `demo/UnresolvedNewDemo` — whose whole point is that this halts — into a silent pass.
-  - **Found, NOT fixed: `invokevirtual` on a class unregistered at compile time is a silent wrong answer.**
+  - **An itable entry left empty by RTA pruning — FIXED.** `buildItableFor` fills each interface-method entry
+    with `slotBuf(vs)`, which is 0 when the impl has a Code attribute but was never pulled into the batch
+    (nothing statically reachable called it) and so never got a deferral stub. An interface call reaching it
+    later hits `dispatchTargetGuard` as a **bare AIOOBE** — which is precisely what
+    `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(...)` inside `EnumMap.getKeyUniverse` does once
+    its caller arrives through demand-loaded code, and what stopped the seedless zip run.
+    `mintPrunedStub` mints the deferral stub there (it cannot reuse `emitDeferredStub`, which works off the
+    per-method compile arrays that exist only for batched methods; everything needed is in the vtable entry,
+    with `maxLocals`/`codeLen` read back from the Code attribute's header fields).
+    - **Read the two guards to tell the cases apart:** the itable directory-miss sentinel throws **NPE**;
+      `dispatchTargetGuard` (implausible target word) throws **AIOOBE**. AIOOBE therefore means the interface
+      WAS found on the receiver and the slot's entry was empty — not a missing interface.
+    - **Scope is deliberate and measured.** Minting for every vtable slot costs **3-4x the code arena per
+      batch** (8.1K→30.9K, 20.3K→65.9K, 22.9K→91.2K) and buys nothing for plain virtual dispatch: RTA marks
+      all virtuals of an INSTANTIATED class, and a class never instantiated can never be a receiver. Confining
+      it to itable entries costs **~1.4x** (8.1K→11.6K, 20.3K→27.2K, 22.9K→33.1K).
+    - `demo/ReflectRtaDemo`'s `ifaceprune` arm reproduces the whole thing in ten lines instead of 400 classes;
+      `ifacecall` is its control (same interface, statically reachable, entry filled). `demo/EnumMapDemo`
+      pins that EnumMap itself is fine in a small closure — the bug was never EnumMap, it was the context.
+  - **Found, NOT fixed — a DIFFERENT dispatch gap: `invokevirtual` on a class unregistered at compile time.**
     `globalVtableSlot` returns 0 when it finds no match, so the call dispatches through vtable slot 0 of
     whatever the receiver is. Writing the demo arm as `new RtaMade().tag()` returned null through exactly
     that path; the arm returns the object instead, and the caller checks `getClass().getName()`.

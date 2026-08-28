@@ -6375,6 +6375,22 @@ public final class Loader
             if (vs >= 0)
             {
                 buf = slotBuf(vs);
+                if (buf == 0L)
+                {
+                    // The impl has a Code attribute but no buffer: RTA PRUNED it -- nothing statically
+                    // reachable called it, so it was never pulled into the batch and never given a deferral
+                    // stub, and this itable entry would stay 0. An interface call reaching it later then hits
+                    // dispatchTargetGuard as a bare AIOOBE with no hint of what was missing -- which is
+                    // exactly what `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(...)` inside
+                    // EnumMap does once its caller arrives through demand-loaded code.
+                    //
+                    // Minting here rather than in slotBuf is deliberate. Doing it for every vtable slot costs
+                    // 3-4x the code arena per batch (measured: 8K->31K, 20K->64K, 23K->89K), and buys nothing
+                    // for plain virtual dispatch: RTA marks all virtuals of an INSTANTIATED class, and a class
+                    // that is never instantiated can never be a receiver. Interface entries are the case that
+                    // actually goes empty, and they are a small fraction of the methods.
+                    buf = mintPrunedStub(vs);
+                }
             }
             else
             {
@@ -8685,6 +8701,58 @@ public final class Loader
             return nativeBufAt(gbase, gThisNameOff, gvTab[s].base, gvTab[s].name);
         }
         return bufOf(gvTab[s].implCode);                     // this class's own method
+    }
+
+    /**
+     * A deferral stub for a vtable slot whose method RTA pruned. {@link #emitDeferredStub} cannot serve here:
+     * it works off the per-method compile arrays ({@code mCode}/{@code mLen}/...), which only exist for
+     * methods that were pulled into the batch. Everything needed is in the vtable entry instead — the Code
+     * attribute address, and {@code maxLocals}/{@code codeLen} read back from the two header fields that
+     * precede the bytecode ({@code {u2 maxStack}{u2 maxLocals}{u4 codeLen}}). Non-static by construction: a
+     * vtable slot only ever holds an instance method. 0 if the lazy table is full, leaving the old behaviour.
+     */
+    private static long mintPrunedStub(int s)
+    {
+        lazyEnsureTables();
+        if (lzN >= MAXLAZY)
+        {
+            return 0L;
+        }
+        if (lazyTrampAddr == 0L)
+        {
+            buildLazyTramp();
+        }
+        long code = gvTab[s].implCode;
+        int idx = lzN;
+        int pd = findPdByName(gbase, gThisNameOff);
+        if (pd < 0)
+        {
+            return 0L;
+        }
+        lzTab[idx] = new LazyMethod();
+        lzTab[idx].blob = gbase;
+        lzTab[idx].len = pdLen[pd];
+        lzTab[idx].reg = classRegByName(gThisNameOff);
+        lzTab[idx].nameOff = 0;
+        lzTab[idx].descOff = gvTab[s].desc;
+        lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
+        lzTab[idx].code = code;
+        lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
+        lzTab[idx].isStatic = 0;
+        lzTab[idx].maxLocals = u2(code - 6L);
+        lzTab[idx].cache = 0L;
+        lzN += 1;
+        long buf = Heap.allocCode(32);
+        noteStub(buf, idx);
+        Heap.pinCodeAt(buf);
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
+        return buf;
     }
 
     /**

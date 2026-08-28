@@ -45,6 +45,13 @@ public class ReflectRtaDemo
         // the bug this replaced handed back an object carrying an unrelated class's TIB, which would answer
         // with the wrong name here rather than failing.
         System.out.println("newarm     = " + (made == null ? "NULL" : made.getClass().getName()));
+
+        RtaSpeak sp = new RtaSpeaker();
+        System.out.println("ifacecall  = " + sp.reached());     // statically reachable: itable entry filled
+
+        Method p = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceCall");
+        p.setAccessible(true);
+        System.out.println("ifaceprune = " + p.invoke(null));
     }
 
     /** Statically reachable from main: RTA walks this and pulls {@code RtaSeen}. */
@@ -84,6 +91,19 @@ public class ReflectRtaDemo
     static Object viaReflectionNew()
     {
         return new RtaMade();
+    }
+
+    /**
+     * An INTERFACE call to a method nothing statically reachable names. This is the shape the zip run died on:
+     * {@code EnumMap.getKeyUniverse}'s one {@code invokeinterface} threw a bare AIOOBE, which is
+     * {@code dispatchTargetGuard} — the itable for the interface WAS found and the slot's entry was empty. If
+     * the entry is empty because RTA pruned the impl, this arm reproduces it in ten lines instead of 400
+     * classes.
+     */
+    static String viaReflectionIfaceCall()
+    {
+        RtaSpeak s = new RtaSpeaker();
+        return s.pruned();
     }
 
     /**
