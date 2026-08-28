@@ -4284,7 +4284,7 @@ because that invariant is checked every boot rather than assumed.
 ### Demand-load speed — the mark was 99% of it, and most of that was work being discarded (PI-VALIDATED 2026-08-28)
 
 Late resolution made the reflective closure LOAD; it did not make it fast. The zip suite spent **28.5 minutes
-of its boot inside `loadAll`**. Four increments took that to **11.75 seconds — 146x** — with `ALL PASSED`
+of its boot inside `loadAll`**. Six increments took that to **6.14 seconds — 279x** — with `ALL PASSED`
 and the same `linkresolve`/`newresolve` chain.
 
 **Measure first, because the obvious instrument lies.** The `load <cls> NNus` lines time only `addBlob` --
@@ -4304,7 +4304,7 @@ Pi, `main=ZipJUnitAll`, per batch:
 | pd=456 (+4) | 219,265 ms | 23.9 ms | |
 | pd=461 (+13, EnumMap) | 234,707 ms | 93.0 ms | |
 | pd=462 (+1) | 235,344 ms | 59.8 ms | |
-| **total `loadAll`** | **1,711,850 ms** | **11,752 ms** | **146x** |
+| **total `loadAll`** | **1,711,850 ms** | **6,136 ms** | **279x** |
 
 The baseline's shape is the whole diagnosis: `mark` is **flat**. Adding ONE class cost the same 219 s as
 adding thirteen, because `markReachable` re-derived the entire closure from scratch every time.
@@ -4341,9 +4341,54 @@ Pi's remaining 12,364ms mark was `pull` 6,664ms + `virt` 3,471ms -- 82%. Both sc
 `parseConstPool` plus a linear `findPdByName` per level, and `parseForMethods` re-parses a whole constant pool
 per level -- ~300 instantiated classes x chain depth x 33 rounds.
 
-**The next lever is bigger than any of these: the ROUND COUNT.** All 33 rounds redo every pass. A
-worklist-driven mark -- process only newly-reached methods instead of re-scanning everything to a fixpoint --
-would divide the whole thing again. Not built.
+**The ROUND COUNT increment (PI-VALIDATED, 1.18x -- less than hoped, and the shape says why).** All 33 rounds
+redid every pass. Each pass now carries a per-blob / per-class WATERMARK into the pend list, so a round costs
+only what is new; pends accumulate and `collectBlob` collects each method's refs once. `loadAll` 11,752 ->
+10,091 ms; `rounds=33 reach=3092 pend=24826` identical, which is the invariant that says the marked set did
+not move.
+
+The gain split exactly along one line: the passes with NO epoch collapsed (`seed` 281 -> 13.5 ms,
+`collect` 713 -> 140 ms), and the three throttled by one barely moved (`virt` 2,946 -> 2,511, `pull`
+1,539 -> 1,309, `static` 520 -> 448).
+
+**A per-pend watermark is UNSOUND for a pass that walks the SUPERCLASS CHAIN**, because the chain grows as
+ancestors are pulled: a pend already considered for class C can later resolve to an inherited method that was
+not visible the first time. `resolveVirtuals` and `resolveBlob` therefore carry an EPOCH (the blob count) as
+well -- blob set changed, reconsider every pend. Classes keep being pulled through most of the 33 rounds, so
+the epoch invalidates nearly every round and the incremental path only engages in the tail. That is the whole
+of the disappointing 1.18x.
+
+Getting this wrong cost half the closure (`reach` 1040 -> 449 on a 196-class demo) and killed
+`demo/StrOpsDemo` with a bare AIOOBE inside `String.split`. **Only the demo SUITE caught it** -- QEMU's
+ReflectRtaDemo showed `reach`/`pend` unchanged and the same demo STANDALONE built the correct closure even
+with the bug.
+
+**Two levers left, and the second is not what anyone would guess.**
+- A precise invalidation (only when one of C's own ANCESTORS is newly loaded) instead of the conservative
+  blob-count epoch. That is what would unlock `virt`, the largest remaining item at 2.5 s.
+- **The per-class boot lines were SECONDS of every boot -- FIXED, and it is the best line-per-line change of
+  the arc.** `load <cls> NNus` and `phaseA: N cells ... for <cls>` print once per class; a 448-class closure
+  emits ~850 of them at 115200 baud. The suspicion came from the profile (`pull` was 1,309 ms while the `NNus`
+  values inside its own lines summed to ~20 ms and `nameRegistered` had become an O(1) hash), and gating them
+  behind `LOAD_TRACE` confirmed it on hardware:
+
+  | | before | after |
+  |---|---|---|
+  | `pull` | 1,309 ms | **40.4 ms** |
+  | `A` (phase A) | 2,597 ms | **301 ms** |
+  | `struct` | 345 ms | **54.2 ms** |
+  | `virt`/`static`/`collect`/`B` | | unchanged |
+  | first batch total | 9,084 ms | **5,226 ms** |
+
+  Exactly the passes that print moved and no others -- ~3.5 s of the boot was serial traffic. **`A` had been
+  flat at ~2.6 s through every other increment because it was almost entirely printing, not work.**
+  `LOAD_TRACE` is independent of `LOAD_PROFILE` on purpose: a profiling boot needs the timings WITHOUT the
+  serial traffic those lines add to the very phases being timed. A flag, not a deletion -- the `load` list is
+  a real diagnostic that has identified several bugs here.
+
+**What is left: `virt` is now 2,510 ms, 73% of the mark and 48% of the entire first batch.** It is the only
+large computational item remaining, and unlocking it means precise ancestor-invalidation in place of the
+conservative blob-count epoch.
 
 **Four predictions, all too optimistic.** Before that boot I predicted `pull` under 500ms (actual 1,539),
 `virt` a few hundred (2,946), first-batch mark 2-3s (6.6), total 7-8s (11.75). Direction right every time,
