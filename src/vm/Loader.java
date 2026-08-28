@@ -7106,7 +7106,32 @@ public final class Loader
         {
             return false;
         }
-        return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx))
+        {
+            return true;
+        }
+        // Not registered YET, but demand-loadable: emit a REAL call and let patchRelocs give it a link stub,
+        // which resolves when the site is reached. Skipping it is what a deferred `new` cannot survive --
+        // resolveUnresolvedNew allocates the object with the right TIB, and then the constructor beside it was
+        // compiled away as if it were Object.<init>, so every field stayed 0. That is exactly how
+        // `new ReferencePipeline$Head(...)` produced an object whose sourceStage was null, and
+        // AbstractPipeline.isParallel then NPE'd on `sourceStage.parallel`.
+        //
+        // Still skipped: a DENYLISTED or genuinely absent superclass. Those are the "unloaded root" the
+        // skip exists for -- a class extending something the metal environment does not have -- and turning
+        // their super() into a call that traps would break boots that are correct today.
+        return classLoadable(gbase, refClassNameOff(idx));
+    }
+
+    /** True if the class named at {@code (base, off)} could be demand-loaded: not denylisted, and present in
+     *  the embedded classDir. Deliberately narrower than "not registered": see {@link #isRealSpecial}. */
+    private static boolean classLoadable(long base, int off)
+    {
+        if (isDenylisted(base, off))
+        {
+            return false;
+        }
+        return VM.dirBytes(base + off + 2, u2(base + off)) != 0L;
     }
 
     /**
