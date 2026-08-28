@@ -1334,6 +1334,10 @@ public final class Loader
         {                                                  //   makes lazyCompile reachable so the writer
             long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
         }
+        if (VM.resolveLinkStubAddr == 0L)                   // same trick for the link-stub trampoline's target
+        {
+            long u = resolveLinkStub(-1);
+        }
         resetLoader();
         addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
         addBlob(VM.stringBytes, (int) VM.stringLen);        // String + System.out streams
@@ -2127,6 +2131,8 @@ public final class Loader
         sgTab = new RVMField[MAXREG];
         sgCount = 0;
         relocRecording = 0;
+        lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
+        linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
         rcAddr = new long[MAXRELOC];
         rcBase = new long[MAXRELOC];
         rcTail = new int[MAXRELOC];
@@ -3270,11 +3276,53 @@ public final class Loader
         {
             return 0L;                                 // unembedded root (Object/Magic), or already pulled this pass
         }
+        long t0 = Magic.readCNTPCT_EL0();
         addBlob(bytes, (int) VM.dirLen(namePtr, len));
+        long us = elapsedUs(t0);
         Uart.write(Magic.bytes("  load "));
         writeName(namePtr, len);
+        Uart.putc(0x20);
+        printDur(us);
         Uart.putc(0x0A);
         return bytes;
+    }
+
+    /**
+     * Microseconds since the {@code CNTPCT_EL0} reading {@code t0}. The counter is free-running and
+     * independent of the timer tick, so this reads correctly whether or not preemption is armed.
+     */
+    static long elapsedUs(long t0)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return (Magic.readCNTPCT_EL0() - t0) * 1000000L / f;
+    }
+
+    /** A duration in microseconds, as {@code NNNus} under a millisecond and {@code N.NNNms} above it. */
+    static void printDur(long us)
+    {
+        if (us < 1000L)
+        {
+            VM.printDec((int) us);
+            Uart.write(Magic.bytes("us"));
+            return;
+        }
+        VM.printDec((int) (us / 1000L));
+        Uart.putc(0x2E);                                // '.', then the microsecond remainder, zero-padded
+        long r = us % 1000L;
+        if (r < 100L)
+        {
+            Uart.putc(0x30);
+        }
+        if (r < 10L)
+        {
+            Uart.putc(0x30);
+        }
+        VM.printDec((int) r);
+        Uart.write(Magic.bytes("ms"));
     }
 
     /** True if a blob at address {@code bytes} is already pending/loaded. */
@@ -5727,8 +5775,15 @@ public final class Loader
             long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
             if (target == 0L)
             {
-                target = VM.denylistTrapAddr;                  // unresolved: the callee's class was pruned (#43
-                if (trapWireCount < MAXTRAPWIRE)               // denylist) or never compiled -> trap, not a bl 0 wild branch
+                // Unresolved. Two very different causes, and they want opposite treatment:
+                //   - the callee's class is DENYLISTED (a metal-absent subtree on a cold branch) -> trap, as
+                //     before; resolving it would demand-load exactly what the denylist exists to keep out.
+                //   - the class is merely ABSENT from a closure that was computed without ever reading this
+                //     body -- the RTA-through-reflection gap -> a link stub, which resolves on first call.
+                // The trapwire site is recorded either way, so a link stub that fails to resolve still lands
+                // in denylistTrap with its index intact.
+                target = VM.denylistTrapAddr;
+                if (trapWireCount < MAXTRAPWIRE)
                 {
                     if (logTrapWire != 0)                      // verbose per-call dump (index -> callee); off by default
                     {
@@ -5743,7 +5798,15 @@ public final class Loader
                     trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
                     trapWireCount += 1;                        // site by x30, so the table must exist even when quiet
                 }
-            }                                                  // denylist) or never compiled -> trap, not a bl 0 wild branch
+                if (!isDenylisted(rcBase[i], rcClass[i]))
+                {
+                    long stub = linkStubFor(rcBase[i] + rcClass[i], rcBase[i] + rcName[i], rcBase[i] + rcDesc[i]);
+                    if (stub != 0L)
+                    {
+                        target = stub;
+                    }
+                }
+            }
             if (target != 0L)
             {
                 if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
@@ -7381,6 +7444,264 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the fresh method
         Heap.publishCode(buf, buf + w * 4L);
         lazyTrampAddr = buf;
+    }
+
+    // ---- late link resolution: the call sites RTA cannot see -------------------------------------------
+    // RTA marks a method reachable, then walks its body to mark what IT calls. A method reached ONLY through
+    // Method.invoke breaks that chain: it compiles on demand (the method registry has it), but nothing
+    // statically reachable names it, so its OWN callees are never marked and their classes are never pulled.
+    // patchRelocs then finds no target for each of its call sites. Those sites used to go straight to
+    // denylistTrap -- correct for a genuinely pruned class, wrong for a class that is merely absent from a
+    // closure computed without ever reading this body. So an unresolved site whose callee is NOT denylisted
+    // gets a link stub instead: on the FIRST call (i.e. only if the site is actually reached) it demand-loads
+    // the class and resolves the method, exactly as resolveBakeStub does for the baked world, and memoizes.
+    // A cold site costs one 32-byte stub and never runs; a genuinely unresolvable one still lands in
+    // denylistTrap, with the trapwire index intact because the trampoline restores LR before tail-branching.
+
+    private static final int MAXLINKSTUB = 256;
+    private static long[] lkClsU  = new long[MAXLINKSTUB];   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
+    private static long[] lkNameU = new long[MAXLINKSTUB];
+    private static long[] lkDescU = new long[MAXLINKSTUB];
+    private static long[] lkMemo  = new long[MAXLINKSTUB];   // resolved target, filled on first call
+    private static long[] lkStub  = new long[MAXLINKSTUB];
+    private static int    lkCount;
+    private static long   linkTrampAddr;
+
+    /**
+     * The stub every unresolved-but-not-denylisted call site is patched to, deduped by callee identity so N
+     * sites calling the same method share one. Returns 0 if the table is full, and the caller falls back to
+     * the trap.
+     */
+    private static long linkStubFor(long clsU, long nameU, long descU)
+    {
+        int k = 0;
+        while (k < lkCount)
+        {
+            if (utf8EqAt(lkClsU[k], 0, clsU, 0)
+                    && utf8EqAt(lkNameU[k], 0, nameU, 0)
+                    && utf8EqAt(lkDescU[k], 0, descU, 0))
+            {
+                return lkStub[k];
+            }
+            k += 1;
+        }
+        if (lkCount >= MAXLINKSTUB)
+        {
+            return 0L;
+        }
+        if (linkTrampAddr == 0L)
+        {
+            buildLinkTramp();
+        }
+        lkClsU[lkCount] = clsU;
+        lkNameU[lkCount] = nameU;
+        lkDescU[lkCount] = descU;
+        lkMemo[lkCount] = 0L;
+        lkStub[lkCount] = buildLinkStub(lkCount);
+        lkCount += 1;
+        return lkStub[lkCount - 1];
+    }
+
+    /** x17 = stub index, then jump to the shared link trampoline. Same shape as the lazy deferral stub, and
+     *  x16/x17 for the same reason: x0.. are the call's arguments and must survive untouched. */
+    private static long buildLinkStub(int idx)
+    {
+        long buf = Heap.allocCode(32);
+        Heap.pinCodeAt(buf);                                 // only a patched `bl` displacement names it
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (linkTrampAddr & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((linkTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((linkTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
+        return buf;
+    }
+
+    /**
+     * The shared arg-preserving trampoline for link stubs — the twin of {@link #buildLazyTramp}, resolving
+     * through {@code resolveLinkStub} instead of compiling. Preserving x0..x15 matters for the same reason it
+     * does there: a whole demand-load runs between entry and the tail-branch, so every argument register the
+     * callee will read must survive it. Restoring LR before the branch is what keeps the callee's return —
+     * and, when resolution fails and the target is denylistTrap, what keeps that trap's x30-keyed trapwire
+     * lookup and stack walk reading exactly as they do for a direct call.
+     */
+    private static void buildLinkTramp()
+    {
+        long buf = Heap.allocCode(256);
+        long ra = VM.resolveLinkStubAddr;
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 144)); w += 1;   // sub sp,sp,#144
+        int r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.movReg(0, 17));       w += 1;   // x0 = idx (the stub put it in x17)
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = resolved target
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;   // restore LR
+        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;   // add sp,sp,#144
+        Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the resolved method
+        Heap.publishCode(buf, buf + w * 4L);
+        linkTrampAddr = buf;
+    }
+
+    /**
+     * A link stub fired: the site really is reached, so resolve it now. Memoized, so the demand-load happens
+     * once however many times the site is called. Returns {@code VM.denylistTrapAddr} when the callee cannot
+     * be resolved after all — the site then behaves exactly as it did before this path existed, trap message
+     * and backtrace included. Called only from the trampoline (via the stashed address).
+     */
+    static long resolveLinkStub(int idx)
+    {
+        if (idx < 0 || idx >= lkCount)
+        {
+            return VM.denylistTrapAddr;                 // dead force-reference (writer) / bad index
+        }
+        if (lkMemo[idx] != 0L)
+        {
+            return lkMemo[idx];
+        }
+        VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        long buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+        if (buf == 0L)
+        {
+            buf = VM.denylistTrapAddr;
+        }
+        lkMemo[idx] = buf;
+        VM.loaderUnlock();
+        return buf;
+    }
+
+    /**
+     * Demand-load the callee's class and find its callable buffer — the same three-tier lookup
+     * {@link #resolveBakeStub} uses (registered body, celled static, TIB slot), plus the provided-native
+     * fallback. Returns 0 rather than halting: an unresolvable callee here is a legitimate outcome (the class
+     * is genuinely absent), and the caller turns it back into the denylist trap.
+     */
+    private static long resolveLinkTarget(long clsU, long nameU, long descU)
+    {
+        if (clTab == null)
+        {
+            return 0L;
+        }
+        Uart.write(Magic.bytes("  linkresolve "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        Uart.putc(0x0A);
+        int len = u2(clsU);
+        byte[] slash = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            slash[i] = (byte) u1(clsU + 2 + i);
+            i += 1;
+        }
+        if (classIndexByName(slash) < 0 && loadClassIncremental(slash) == 0L)
+        {
+            return 0L;                                  // not in the classDir after all
+        }
+        int reg = classIndexByName(slash);
+        if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
+        {
+            return 0L;                                  // half-lifecycle: do not branch into it
+        }
+        long buf = bufBySigU(clsU, nameU, descU);
+        if (buf == 0L)
+        {
+            buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find
+        }
+        if (buf == 0L)
+        {
+            buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
+        }
+        return buf;
+    }
+
+    /**
+     * Compile one method of an already structure-loaded class, chosen by name AND descriptor, and return its
+     * buffer. The last resort for a link stub: {@link #bufBySigU}'s three tiers all answer through a DISPATCH
+     * table (a registered buffer, a static cell, a vtable slot), and a method can be perfectly callable while
+     * appearing in none of them.
+     *
+     * <p>The case that forced this is a <b>static method on an interface</b>. {@code registerInterface} walks
+     * only {@code isVirtual} methods, to give them itable indices; a static one gets no itable index, no
+     * vtable slot and no static cell, so it is registered nowhere at all. {@code Arguments.of} in the JUnit
+     * shim is exactly that, and it is what a reflectively-reached {@code @MethodSource} factory calls. The
+     * older reflective path ({@link #compileMethodOnDemand}) refuses interfaces outright for the same reason
+     * it has no TIB to reuse — but {@code compileReuseTib} already means we never touch one.
+     *
+     * <p>Matching on the DESCRIPTOR as well as the name is not optional here: {@code of(T)} and the varargs
+     * {@code of(T...)} are different methods at the same name, and compiling the wrong one links the call
+     * site to a body with the wrong signature. Returns 0 if there is no such method or it has no Code.
+     */
+    private static long compileSigOnDemand(long clsU, long nameU, long descU)
+    {
+        int reg = regBySigU(clsU);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long blob = clTab[reg].base;
+        int len = blobLenOf(blob);
+        parseConstPool(blob, len);                      // rebuild this class's compile state (as loadBodies
+        parseFields();                                  //   does, minus the TIB fill)
+        gStatics = clTab[reg].statics;                  // reuse the phase-A statics block
+        findBootstrapMethods();
+        parseVtable(blob);
+        gType = clTab[reg].type;
+        gTib = clTab[reg].tib;                          // 0 for an interface; compileReuseTib means unused
+        parseForMethods(blob, len);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        long code = 0L;
+        int descOff = 0;
+        int isStatic = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(blob, gcp[u2(p + 2)], nameU, 0)
+                    && utf8EqAt(blob, gcp[u2(p + 4)], descU, 0))
+            {
+                long c = findCode(blob, p + 8, attrs);  // sets gcodeLen + gMaxLocals
+                if (c != 0L)
+                {
+                    code = c;
+                    descOff = gcp[u2(p + 4)];
+                    isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    break;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        if (code == 0L)
+        {
+            return 0L;                                  // no such signature, or abstract/native (no Code)
+        }
+        int rcMark = rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
+        int rsMark = rsCount;
+        compileReuseTib = true;
+        compile(code, gcodeLen, descOff, isStatic);
+        compileReuseTib = false;
+        registerAll();
+        patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
+        return bufBySigU(clsU, nameU, descU);
     }
 
     /**

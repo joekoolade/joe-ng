@@ -72,6 +72,46 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Late link resolution — the call sites RTA cannot see (2026-08-27, PI-VALIDATED).** RTA marks a method
+  reachable then walks its body to mark what IT calls; reflection breaks that chain. A method reached only
+  through `Method.invoke` compiles on demand, but nothing statically reachable names it, so its OWN callees
+  are never marked and their classes never pulled — and `patchRelocs` pointed every one of its call sites at
+  `VM.denylistTrap`. Right for a genuinely pruned class, wrong for one merely absent from a closure computed
+  without ever reading this body. An unresolved site whose callee is NOT denylisted now gets a **link stub**:
+  on FIRST call (so only if the site is actually reached) it demand-loads the class and resolves through the
+  same three-tier lookup `resolveBakeStub` uses for the baked world, memoized. A cold site costs one 32-byte
+  stub and never runs.
+  - The trampoline is the twin of the lazy-compile one and preserves x0..x15 for the same reason (a whole
+    demand-load runs between entry and the tail-branch). **Restoring LR before branching is what keeps the
+    fallback honest:** an unresolvable callee still lands in `denylistTrap` with its x30-keyed trapwire index
+    and stack walk reading exactly as they do for a direct call.
+  - **The gap is an unpulled CLASS, not an unmarked method.** `demo/ReflectRtaDemo`'s third arm is the
+    control: also reflective, but calling a class the direct arm pulled — it resolves at patch time with no
+    late link at all, because a registered class already stubs every one of its methods. That corrected a
+    wrong assumption mid-implementation.
+  - **Pi (`core 166MHz`, full suite):** the batch's `load` list contains `demo/RtaSeen` and never mentions
+    `demo/RtaUnseen`; then `linkresolve demo/RtaUnseen.tag` + `phaseA: 1 cells ... for demo/RtaUnseen` mid-run
+    and `reflective = unseen`. Negative control (link-stub path disabled): the direct arm still passes and the
+    reflective arm ends in a DENYLIST TRAP at `ReflectRtaDemo.viaReflectionOnly` naming `RtaUnseen.tag`.
+  - **Static methods on interfaces needed a fourth tier, and the zip harness found it.** `bufBySigU`'s three
+    tiers all answer through a DISPATCH table (registered buffer, static cell, vtable slot), and
+    `registerInterface` walks only `isVirtual` methods to hand out itable indices — so a STATIC interface
+    method is registered nowhere at all. JUnit's `Arguments.of` is exactly that, and it is what a
+    reflectively-reached `@MethodSource` factory calls: the stub fired and had nothing to resolve to.
+    `compileSigOnDemand` compiles that one method from the class's own blob, matching name AND DESCRIPTOR
+    (`of(T)` vs varargs `of(T...)`), and patches only its own reloc range so its callees can take stubs too.
+    This is the interface half of `compileMethodOnDemand`'s recorded limitation (it refuses interfaces on the
+    grounds it has no TIB to reuse — but `compileReuseTib` means it never touches one).
+  - **STILL OPEN — late resolution does not cover `new`.** On hardware the chain walks three levels
+    (`Arguments.of` → `Stream.of` → `Spliterators.spliterator`) and then hits
+    `UNRESOLVED NEW: java/util/Spliterators$ArraySpliterator`. A `new` resolves at COMPILE time through
+    `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call
+    site, and `loadClassIncremental` deliberately pulls a class WITHOUT its dependencies (the "eager seeding
+    blew the closure" lesson), so an on-demand compile can instantiate a class nothing pulled. Until that is
+    covered, `ZipJUnitAll.seedFactoryClosure` stays, with a comment saying exactly why. Pi with the seed back:
+    `zip junit: ran 29, failures 0` and **not one `linkresolve` line** — the stub is a fallback that costs
+    nothing when nothing needs it. The seed's price is visible too: the closure is **446 classes with it and
+    354 without**, i.e. 92 pulled eagerly that late resolution would pull only if reached.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads

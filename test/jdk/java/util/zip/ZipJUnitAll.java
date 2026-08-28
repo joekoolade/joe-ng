@@ -56,13 +56,18 @@ public class ZipJUnitAll
     }
 
     /**
-     * Calls, from STATICALLY REACHABLE code, everything the reflectively-reached {@code @MethodSource}
-     * factories call. RTA cannot see through reflection: those factories are invoked only via
-     * {@code Method.invoke}, so nothing reachable from main mentions the {@code Stream.of} /
-     * {@code Arguments.of} they use, those bodies are never pulled, and each of their call sites becomes a
-     * DENYLIST TRAP naming the callee. Seeding has to match the exact DESCRIPTOR, not just the name --
-     * {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are different call sites, and seeding
-     * the wrong one leaves the trap in place.
+     * Pre-pulls the closure the reflectively-reached {@code @MethodSource} factories need.
+     *
+     * <p>This is a WORKAROUND and should be read as one. Late link resolution (see {@code Loader}'s link
+     * stubs) closes the call-site half of the RTA-through-reflection gap, and on hardware it correctly walks
+     * {@code Arguments.of} -> {@code Stream.of} -> {@code Spliterators.spliterator}. It then stops at a
+     * mechanism it does not cover: {@code new Spliterators$ArraySpliterator} inside that last body. A
+     * {@code new} is resolved at COMPILE time (it needs the instance size and TIB while emitting), not by
+     * patching a call site, and an on-demand compile can therefore instantiate a class nothing pulled.
+     *
+     * <p>So the seed stays until late resolution covers {@code new} as well. Seeding has to match the exact
+     * DESCRIPTOR, not just the name -- {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are
+     * different call sites, and seeding the wrong one leaves the trap in place.
      */
     static void seedFactoryClosure()
     {
