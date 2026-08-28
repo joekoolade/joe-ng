@@ -4284,7 +4284,7 @@ because that invariant is checked every boot rather than assumed.
 ### Demand-load speed — the mark was 99% of it, and most of that was work being discarded (PI-VALIDATED 2026-08-28)
 
 Late resolution made the reflective closure LOAD; it did not make it fast. The zip suite spent **28.5 minutes
-of its boot inside `loadAll`**. Six increments took that to **6.14 seconds — 279x** — with `ALL PASSED`
+of its boot inside `loadAll`**. Seven increments took that to **5.33 seconds — 321x** — with `ALL PASSED`
 and the same `linkresolve`/`newresolve` chain.
 
 **Measure first, because the obvious instrument lies.** The `load <cls> NNus` lines time only `addBlob` --
@@ -4304,7 +4304,7 @@ Pi, `main=ZipJUnitAll`, per batch:
 | pd=456 (+4) | 219,265 ms | 23.9 ms | |
 | pd=461 (+13, EnumMap) | 234,707 ms | 93.0 ms | |
 | pd=462 (+1) | 235,344 ms | 59.8 ms | |
-| **total `loadAll`** | **1,711,850 ms** | **6,136 ms** | **279x** |
+| **total `loadAll`** | **1,711,850 ms** | **5,334 ms** | **321x** |
 
 The baseline's shape is the whole diagnosis: `mark` is **flat**. Adding ONE class cost the same 219 s as
 adding thirteen, because `markReachable` re-derived the entire closure from scratch every time.
@@ -4386,9 +4386,39 @@ with the bug.
   serial traffic those lines add to the very phases being timed. A flag, not a deletion -- the `load` list is
   a real diagnostic that has identified several bugs here.
 
-**What is left: `virt` is now 2,510 ms, 73% of the mark and 48% of the entire first batch.** It is the only
-large computational item remaining, and unlocking it means precise ancestor-invalidation in place of the
-conservative blob-count epoch.
+### `virt`: one failed attempt, one that worked, and the difference between them (PI-VALIDATED)
+
+`virt` was 2,510 ms -- 73% of the mark. It is now **1,766 ms**, via two caches. What makes this section worth
+reading is the FIRST attempt, which was reverted.
+
+**Attempt 1, REVERTED -- a claim about when work can be SKIPPED.** `resolveVirtuals` needs an invalidation
+rule because it walks the superclass chain, and the shipped rule (any new blob invalidates) is conservative.
+The replacement claimed "a chain whose every level is loaded can never grow, so that class can go
+incremental". Measured 2.76x. It is UNSOUND: the suite under-marked by half (`pd` 196 -> 103, `reach`
+1040 -> 449) and `demo/StrOpsDemo` died with a bare AIOOBE inside `String.split`. **Every step of the argument
+still reads as true and the actual cause was never found** -- do not re-attempt from the same reasoning.
+A bisect (keep one half, restore the epoch) settled it in one suite run, after two rounds of reading settled
+nothing.
+
+**Attempt 2, SHIPPED -- caches of facts immutable by construction, no skipping claim at all.**
+- `ensureMethodTable`: a blob's method table is fixed by its classfile, but `matchLevel` re-derived it on every
+  visit -- a full `parseConstPool`, a walk of the table, and an FNV hash over each method's name AND
+  descriptor, once per level per instantiated class per round.
+- `cachedSuperOf`: a resolved superclass link and "declares no superclass" are permanent; only
+  "named but not loaded yet" is retried.
+
+  | | main | +method table | +super memo |
+  |---|---|---|---|
+  | `virt`, QEMU 196-class closure | 451.1 ms | 293.5 ms | 267.8 ms |
+  | `virt`, Pi 448-class closure | 2,510 ms | | **1,766 ms** |
+
+**`cachedSuperOf` measured ZERO on its own and 9% after the method table landed** -- same code, same closure.
+It only pays once the bigger parse stopped hiding it. "This optimization is worthless" was a statement about
+context, not about code.
+
+**Still the largest item: `virt` at 1,766 ms, 65% of the mark and 40% of the first batch.** What remains in it
+is the walk itself -- `instantiated classes x chain depth x rounds` bucket probes -- and cutting that needs a
+sound invalidation rule, which is exactly what attempt 1 failed to find.
 
 **Four predictions, all too optimistic.** Before that boot I predicted `pull` under 500ms (actual 1,539),
 `virt` a few hundred (2,946), first-batch mark 2-3s (6.6), total 7-8s (11.75). Direction right every time,

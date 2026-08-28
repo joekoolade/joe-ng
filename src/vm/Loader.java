@@ -2549,8 +2549,26 @@ public final class Loader
         return pdDoneB[b] != 0;
     }
 
+    /** Discard the method-table cache: blob addresses and indices are per batch, so the offsets go stale. */
+    private static void resetMethodTables()
+    {
+        if (mtName == null)                              // the flat arrays are scratch -- allocate once, reuse
+        {
+            mtName = new int[MAXMETH];
+            mtDesc = new int[MAXMETH];
+            mtHash = new int[MAXMETH];
+            mtCode = new long[MAXMETH];
+            mtStart = new int[MAXBLOB];
+            mtLen = new int[MAXBLOB];
+        }
+        mtBuilt = new int[MAXBLOB];                      // only the per-blob flags need clearing (1024 ints)
+        pdSuperCache = new int[MAXBLOB];
+        mtN = 0;
+    }
+
     private static void markReachable()
     {
+        resetMethodTables();
         reachN = 0;
         reachTab = new long[REACHTAB];                   // the set is rebuilt from the entry each batch
         collectedTab = new long[REACHTAB];               // ... and so is "whose refs are already pended"
@@ -3011,9 +3029,36 @@ public final class Loader
         int superIdx = u2(gp + 4);                       // gp -> access_flags; this(+2), super(+4)
         if (superIdx == 0)
         {
-            return -1;                                   // java/lang/Object
+            return SUPER_NONE;                           // java/lang/Object
         }
         return findPdByName(gbase, gcp[u2(gbase + gcp[superIdx])]);
+    }
+
+    private static final int SUPER_NONE = -2;            // declares no superclass; permanent
+    private static final int SUPER_UNLOADED = -1;        // names one, but that blob is not loaded YET
+    private static int[] pdSuperCache;                   // superPdOf memo, +3 biased so 0 means "not resolved"
+
+    /**
+     * {@link #superPdOf} memoized. Two of its three answers are PERMANENT: a class's superclass NAME is fixed
+     * by its classfile, so once that blob is loaded the link never changes, and "declares no superclass" never
+     * changes. Only {@link #SUPER_UNLOADED} is retried.
+     *
+     * <p>Measured at ZERO on its own -- the chain walk's cost was `parseForMethods`, not this. It pays only
+     * now that {@link #ensureMethodTable} has removed the bigger parse and left this one exposed.
+     */
+    private static int cachedSuperOf(int pd)
+    {
+        int v = pdSuperCache[pd];
+        if (v != 0)
+        {
+            return v - 3;
+        }
+        int r = superPdOf(pd);
+        if (r != SUPER_UNLOADED)
+        {
+            pdSuperCache[pd] = r + 3;
+        }
+        return r;
     }
 
     private static int[] virtResolved;                   // per-pend: STAMP of the class that last dispatched it
@@ -3054,9 +3099,16 @@ public final class Loader
                 int guard = 0;
                 while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
                 {
-                    parseForMethods(pdBase[cur], pdLen[cur]);
-                    grew = matchLevel() || grew;
-                    cur = superPdOf(cur);
+                    if (ensureMethodTable(cur))
+                    {
+                        grew = matchLevelCached(cur) || grew;
+                    }
+                    else
+                    {
+                        parseForMethods(pdBase[cur], pdLen[cur]);
+                        grew = matchLevel() || grew;
+                    }
+                    cur = cachedSuperOf(cur);
                     guard += 1;
                 }
             }
@@ -3079,6 +3131,94 @@ public final class Loader
      * first match, so a pend still binds to the first definition carrying Code, and the chain walk still stops
      * at the nearest one rather than also marking an override-shadowed super definition.
      */
+    // ---- per-blob method-table cache ---------------------------------------------------------------------
+    // matchLevel is called once per superclass level per instantiated class per round, and every call
+    // re-derived the same immutable facts: a full parseConstPool, a walk of the method table, and an FNV hash
+    // over each method's name AND descriptor. A blob's method table never changes, so build it once.
+    private static final int MAXMETH = 65536;
+    private static int[] mtName, mtDesc, mtHash;         // per method: Utf8 offsets (blob-relative) + sig hash
+    private static long[] mtCode;                        // ... and its Code address, 0 for abstract/native
+    private static int[] mtStart, mtBuilt;               // per blob: slice start, and 0=no 1=yes 2=did not fit
+    private static int[] mtLen;                          // per blob: method count
+    private static int mtN;                              // flat-array high-water
+
+    /**
+     * Build blob {@code b}'s method-table slice if absent. False if the flat arrays are full, in which case the
+     * caller must fall back to parsing -- a cap that degrades to today's behaviour rather than failing.
+     */
+    private static boolean ensureMethodTable(int b)
+    {
+        if (mtBuilt[b] == 1)
+        {
+            return true;
+        }
+        if (mtBuilt[b] == 2)
+        {
+            return false;
+        }
+        parseForMethods(pdBase[b], pdLen[b]);
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        if (mtN + mcount > MAXMETH)
+        {
+            mtBuilt[b] = 2;
+            return false;
+        }
+        mtStart[b] = mtN;
+        mtLen[b] = mcount;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            int descOff = gcp[u2(p + 4)];
+            mtName[mtN] = nameOff;
+            mtDesc[mtN] = descOff;
+            mtHash[mtN] = sigHash(gbase, nameOff, descOff);
+            mtCode[mtN] = findCode(gbase, p + 8, attrs);
+            mtN += 1;
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        mtBuilt[b] = 1;
+        return true;
+    }
+
+    /**
+     * {@link #matchLevel} over the cached table. Methods with no Code are skipped outright, which is exactly
+     * what the parsing form does: it probes the bucket but only consumes the pend ({@code virtResolved}) when
+     * {@code findCode} answers non-zero, so an abstract declaration never shadows a superclass's real body.
+     */
+    private static boolean matchLevelCached(int b)
+    {
+        boolean grew = false;
+        long base = pdBase[b];
+        int i = mtStart[b];
+        int end = i + mtLen[b];
+        while (i < end)
+        {
+            long code = mtCode[i];
+            if (code != 0L)
+            {
+                int q = pvBucket[mtHash[i] & (PVTAB - 1)];
+                while (q >= 0)
+                {
+                    if (q >= virtFrom && virtResolved[q] != virtStamp
+                            && utf8EqAt(pendBase[q], pendName[q], base, mtName[i])
+                            && utf8EqAt(pendBase[q], pendDesc[q], base, mtDesc[i]))
+                    {
+                        virtResolved[q] = virtStamp;     // nearest def; don't also mark a super's shadowed one
+                        grew = addReach(code) || grew;
+                    }
+                    q = pvNext[q];
+                }
+            }
+            i += 1;
+        }
+        return grew;
+    }
+
     private static boolean matchLevel()
     {
         boolean grew = false;
