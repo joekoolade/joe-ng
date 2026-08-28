@@ -8746,45 +8746,21 @@ public final class Loader
     private static long mintPrunedStub(int s)
     {
         long code = gvTab[s].implCode;
-        // INSTRUMENTATION (this boot only): name every mint, so the last line before a fault identifies the
-        // class and method whose vtable entry broke an assumption. The Pi NPEs in Loader.u1 during the batch
-        // structure phase with this path enabled, and QEMU cannot reach that phase for this closure at all --
-        // two runs, 7.5 and 33 minutes, both stop dead at the same `load java/util/Enumeration`, with the mint
-        // call disabled as well as enabled. So the only instrument available is the log.
-        Uart.write(Magic.bytes("  mintstub "));
-        if (gbase != 0L && gThisNameOff != 0)
-        {
-            printNameAt(gbase, gThisNameOff);
-        }
-        Uart.putc(0x2E);
-        if (gvTab[s].base != 0L)
-        {
-            printNameAt(gvTab[s].base, gvTab[s].name);
-        }
-        Uart.write(Magic.bytes(" code="));
-        VM.printHex(code);
-        Uart.putc(0x0A);
         if (code == 0L)
         {
-            // slotBuf answers 0 from TWO paths, and only one of them is a pruned method. The other is a
-            // NATIVE instance method whose VM helper is missing (nativeBufAt found nothing) -- and a native
-            // has no bytecode to defer to. Without this guard the Code-attribute header reads below happen at
-            // addresses -4 and -6, which is a NullPointerException inside Loader.u1 during itable building.
-            // (slotBuf's own comment flags the native case; it applies here too.)
+            // slotBuf answers 0 from two paths, and neither has bytecode to defer to. The common one is an
+            // ABSTRACT method the class declares itself -- `AbstractCollection.iterator`, `AbstractMap
+            // .entrySet`, `AbstractList.size` all reach here on a real boot. The other is a NATIVE instance
+            // method whose VM helper is missing (nativeBufAt found nothing). Without the guard the two Code
+            // header reads below happen at addresses -4 and -6.
             return 0L;
         }
-        // The Code attribute's header must lie INSIDE this class's blob, or the two reads below walk off it.
-        // findCode returns the bytecode start, so maxLocals sits at code-6 and codeLen at code-4; both must be
-        // within [blob, blob+len). Checking rather than trusting, because something on hardware evidently
-        // reaches here with a `code` that does not satisfy it -- and an unchecked read is the NPE.
-        int vpd = findPdByName(gbase, gThisNameOff);
-        if (vpd < 0 || code - 6L < gbase || code >= gbase + pdLen[vpd])
+        // The Code attribute's header must lie INSIDE this class's blob, or those reads walk off it. findCode
+        // returns the bytecode start, so maxLocals sits at code-6 and codeLen at code-4; both must be within
+        // [blob, blob+len). The read is raw -- there is no bounds check under it -- so it is checked here.
+        int pd = findPdByName(gbase, gThisNameOff);
+        if (pd < 0 || code - 6L < gbase || code >= gbase + pdLen[pd])
         {
-            Uart.write(Magic.bytes("  mintstub SKIP: code outside blob ["));
-            VM.printHex(gbase);
-            Uart.putc(0x2C);
-            VM.printHex(vpd < 0 ? 0L : gbase + pdLen[vpd]);
-            Uart.write(Magic.bytes(")\n"));
             return 0L;
         }
         lazyEnsureTables();
@@ -8797,7 +8773,6 @@ public final class Loader
             buildLazyTramp();
         }
         int idx = lzN;
-        int pd = vpd;
         lzTab[idx] = new LazyMethod();
         lzTab[idx].blob = gbase;
         lzTab[idx].len = pdLen[pd];
