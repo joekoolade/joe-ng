@@ -164,9 +164,9 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
-- **Demand-load speed — `loadAll` 1712s -> 6.14s on the zip suite, 279x (2026-08-28, PI-VALIDATED).**
+- **Demand-load speed — `loadAll` 1712s -> 5.33s on the zip suite, 321x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
-  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 3.4s;
+  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 2.7s;
   each incremental 219s -> 8-93ms. `ALL PASSED` and the same linkresolve/newresolve chain throughout.
   - **The `load <cls> NNus` line is a DECOY** — it times only `addBlob` (putting a blob on the pending list),
     so it reads 5-180us while its batch takes minutes. `LOAD_PROFILE` in `vm/Loader` (off by default, like
@@ -204,9 +204,18 @@ defines the minimum the assembler must encode.
     **`pull` 1,309 → 40.4ms, `A` 2,597 → 301ms, `struct` 345 → 54ms**, everything else unchanged — ~3.5s of
     the boot was serial traffic. **`A` had been flat at ~2.6s through every other increment because it was
     almost entirely printing.** A flag, not a deletion: the `load` list has identified several bugs here.
-  - **What is left: `virt` at 2,510ms — 73% of the mark, 48% of the whole first batch.** The only large
-    computational item remaining; unlocking it needs precise ancestor-invalidation instead of the
-    conservative blob-count epoch.
+  - **`virt` 2,510 → 1,766ms: one FAILED attempt and one that worked, and the difference matters.** The
+    failed one claimed "a chain whose every level is loaded can never grow, so that class can go incremental"
+    — a claim about when work can be SKIPPED. Measured 2.76x, under-marked HALF the closure (`reach`
+    1040 → 449), killed `demo/StrOpsDemo` with a bare AIOOBE in `String.split`; **cause never identified**,
+    reverted. The one that worked caches facts immutable by construction and makes no skipping claim:
+    `ensureMethodTable` (a blob's method table is fixed by its classfile, yet `matchLevel` re-derived it —
+    parse, walk, and an FNV hash per method — on every level visit) and `cachedSuperOf`.
+    **A bisect settled in one run what two rounds of reading could not.**
+  - **`cachedSuperOf` measured ZERO alone and 9% after the method table landed** — same code, same closure.
+    "This optimization is worthless" is a statement about context, not about code.
+  - **Still the largest item: `virt` at 1,766ms — 65% of the mark, 40% of the first batch.** What is left is
+    the walk itself; cutting it needs the sound invalidation rule attempt 1 failed to find.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
