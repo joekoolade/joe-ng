@@ -164,6 +164,27 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **Demand-load speed — `loadAll` 1712s -> 17.5s on the zip suite, 98x (2026-08-28, PI-VALIDATED).**
+  `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
+  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 12.4s;
+  each incremental 219s -> 8-93ms. `ALL PASSED` and the same linkresolve/newresolve chain throughout.
+  - **The `load <cls> NNus` line is a DECOY** — it times only `addBlob` (putting a blob on the pending list),
+    so it reads 5-180us while its batch takes minutes. `LOAD_PROFILE` in `vm/Loader` (off by default, like
+    `LAZY_TRACE`) times each phase. **It killed two confident guesses:** `patchRelocs`'s linear registry scan
+    (92 ms, not the problem) and my estimate that loop inversion would buy ~3x on a first batch (28.9x).
+  - **Most of the work was being DISCARDED.** Phase B is guarded by `pdDoneB[i] == 0`, so a blob compiled by
+    an earlier batch is never recompiled and its TIB never rebuilt — marking its methods cannot compile
+    anything. ~97% of every pass on an incremental load. `markSettled` skips them everywhere except
+    `probeAll`, which fills the `pdNameOff` that `findPdByName` needs. **Safe only because late resolution
+    exists** — an unmarked method in a settled class now costs a deferral/link stub, not a trap-wired site.
+  - **Several inner loops ran the wrong way.** "For each pend, does this class define it?" is
+    `pends x methods` compares per level; "for each method, is it pended?" is one hash probe per method
+    (`resolveVirtuals`/`markDefaults`/`resolveBlob`). The check that the marked set did not change is
+    `reach=233 pend=699` identical before and after every step.
+  - **QEMU structurally cannot see the last two** — they scale with `pendN`, **699 in the QEMU closure and
+    24,826 on hardware**. `pull` (a `nameRegistered` linear scan per pend) was 6,664 ms of the remaining
+    12,364 ms; `virt`'s residue was the per-class `virtResolved` RESET, not matching. A hardware profile is
+    not a nicety here — it is the only place these appear.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
