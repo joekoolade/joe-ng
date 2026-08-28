@@ -2608,6 +2608,7 @@ public final class Loader
             mrInst += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
             b = 0;
+            buildStaticPendIndex();
             while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
                 if (!markSettled(b))
@@ -2818,13 +2819,15 @@ public final class Loader
     {
         parseForMethods(base, len);
         boolean grew = false;
-        int r = 0;
-        while (r < pendN)
+        // Only static/special calls (kind 0) resolve here: they name a concrete class, so mark that method iff
+        // this blob IS that class. PEND_PULL pulls a class only; virtual/interface (kind 1) go through
+        // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
+        // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
+        // a string compare per (blob, pend), which is pdCount x pendN of them per round.
+        int r = psBucket[utf8Hash(gbase, gThisNameOff) & (PVTAB - 1)];
+        while (r >= 0)
         {
-            // Only static/special calls (kind 0) resolve here: they name a concrete class, so mark that method
-            // iff this blob IS that class. PEND_PULL pulls a class only; virtual/interface (kind 1) go through
-            // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
-            if (pendKind[r] == 0 && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
+            if (utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
                 long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -2838,7 +2841,7 @@ public final class Loader
                     grew = markInheritedStatic(pendBase[r], pendName[r], pendDesc[r], base, len) || grew;
                 }
             }
-            r += 1;
+            r = psNext[r];
         }
         return grew;
     }
@@ -3105,6 +3108,42 @@ public final class Loader
     private static final int PVTAB = 2048;               // power of two; chained, so a full table only lengthens chains
     private static int[] pvBucket;                       // bucket head -> pend index, -1 empty
     private static int[] pvNext;                         // chain link, per pend
+    private static int[] psBucket;                       // ... and the same for STATIC/special pends, keyed on the
+    private static int[] psNext;                         //   callee CLASS name, for resolveBlob
+
+    /** Index this round's STATIC/special pends (kind 0) by callee class name, for {@link #resolveBlob}. */
+    private static void buildStaticPendIndex()
+    {
+        if (psBucket == null)
+        {
+            psBucket = new int[PVTAB];
+        }
+        if (psNext == null || psNext.length < pendN)
+        {
+            psNext = new int[pendN + 64];
+        }
+        int i = 0;
+        while (i < PVTAB)
+        {
+            psBucket[i] = -1;
+            i += 1;
+        }
+        int p = 0;
+        while (p < pendN)
+        {
+            if (pendKind[p] == 0)
+            {
+                int h = utf8Hash(pendBase[p], pendClass[p]) & (PVTAB - 1);
+                psNext[p] = psBucket[h];
+                psBucket[h] = p;
+            }
+            else
+            {
+                psNext[p] = -1;
+            }
+            p += 1;
+        }
+    }
 
     /** Index this round's VIRTUAL pends (kind 1) by their name+descriptor hash, for {@link #matchLevel}. */
     private static void buildPendIndex()
@@ -3278,13 +3317,19 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            parseForMethods(pdBase[b], pdLen[b]);
-            if (!clinitBlocked())
+            // Settled blobs skipped for the same reason as everywhere else: their initializer was marked and
+            // compiled by their own batch, and phase B will not compile it again. Re-marking it here only
+            // re-parsed the constant pool -- and reported `grew`, buying an extra round for nothing.
+            if (!markSettled(b))
             {
-                long code = findMethodByBytes(gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
-                if (code != 0L && clinitCompilable(code, gcodeLen))
+                parseForMethods(pdBase[b], pdLen[b]);
+                if (!clinitBlocked())
                 {
-                    grew = addReach(code) || grew;
+                    long code = findMethodByBytes(gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
+                    if (code != 0L && clinitCompilable(code, gcodeLen))
+                    {
+                        grew = addReach(code) || grew;
+                    }
                 }
             }
             b += 1;
