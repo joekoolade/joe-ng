@@ -3697,6 +3697,11 @@ public final class Loader
         {
             return 0L;                                 // unembedded root (Object/Magic), or already pulled this pass
         }
+        if (!LOAD_TRACE)
+        {
+            addBlob(bytes, (int) VM.dirLen(namePtr, len));
+            return bytes;
+        }
         long t0 = Magic.readCNTPCT_EL0();
         addBlob(bytes, (int) VM.dirLen(namePtr, len));
         long us = elapsedUs(t0);
@@ -7780,6 +7785,18 @@ public final class Loader
      */
     private static final boolean LOAD_PROFILE = false;
 
+    /**
+     * The two PER-CLASS boot lines -- {@code load <cls> NNus} and {@code phaseA: N cells ... for <cls>} --
+     * over the UART (debug). Off by default because they are not free: a 448-class closure prints ~850 of
+     * them, and at 115200 baud that is SECONDS of every boot. The `load` list is a genuinely useful
+     * diagnostic (which classes a closure pulled, and in what order, has diagnosed several bugs in this
+     * project), so this is a flag rather than a deletion -- one character to get them back.
+     *
+     * <p>Kept INDEPENDENT of {@link #LOAD_PROFILE} on purpose: a profiling boot wants the phase timings
+     * WITHOUT the serial traffic those lines add to the very phases being timed.
+     */
+    private static final boolean LOAD_TRACE = false;
+
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
     private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
     {
@@ -8926,11 +8943,14 @@ public final class Loader
             m += 1;
         }
         verifyDlTab();                                      // ... and check none went zero since insertion
-        Uart.write(Magic.bytes("  phaseA: "));
-        VM.printDec(armed);
-        Uart.write(Magic.bytes(" cells at structure time for "));
-        printNameAt(gbase, gThisNameOff);
-        Uart.putc(0x0A);
+        if (LOAD_TRACE)
+        {
+            Uart.write(Magic.bytes("  phaseA: "));
+            VM.printDec(armed);
+            Uart.write(Magic.bytes(" cells at structure time for "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.putc(0x0A);
+        }
     }
 
     /**
