@@ -164,9 +164,9 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
-- **Demand-load speed — `loadAll` 1712s -> 10.09s on the zip suite, 170x (2026-08-28, PI-VALIDATED).**
+- **Demand-load speed — `loadAll` 1712s -> 6.14s on the zip suite, 279x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
-  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 5.0s;
+  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 3.4s;
   each incremental 219s -> 8-93ms. `ALL PASSED` and the same linkresolve/newresolve chain throughout.
   - **The `load <cls> NNus` line is a DECOY** — it times only `addBlob` (putting a blob on the pending list),
     so it reads 5-180us while its batch takes minutes. `LOAD_PROFILE` in `vm/Loader` (off by default, like
@@ -198,9 +198,15 @@ defines the minimum the assembler must encode.
     not visible then. `resolveVirtuals`/`resolveBlob` carry a blob-count EPOCH as well. Getting it wrong cost
     HALF the closure (reach 1040 -> 449) and killed `demo/StrOpsDemo` with a bare AIOOBE in `String.split` —
     **and only the demo SUITE caught it**: standalone built the correct closure even with the bug.
-  - **Two levers left.** Precise ancestor-invalidation instead of the conservative epoch (that is what unlocks
-    `virt`, still 2.5s); and **`pull`'s 1.3s is mostly UART** — 448 `load` lines at 115200, printed
-    unconditionally, against ~20ms of actual `addBlob` time.
+  - **The per-class boot lines were SECONDS of every boot — best line-per-line fix of the arc.** `load` and
+    `phaseA` print once per class (~850 lines for a 448-class closure at 115200 baud). Gated behind
+    `LOAD_TRACE` (independent of `LOAD_PROFILE`, so a profiling boot is not measuring its own printing):
+    **`pull` 1,309 → 40.4ms, `A` 2,597 → 301ms, `struct` 345 → 54ms**, everything else unchanged — ~3.5s of
+    the boot was serial traffic. **`A` had been flat at ~2.6s through every other increment because it was
+    almost entirely printing.** A flag, not a deletion: the `load` list has identified several bugs here.
+  - **What is left: `virt` at 2,510ms — 73% of the mark, 48% of the whole first batch.** The only large
+    computational item remaining; unlocking it needs precise ancestor-invalidation instead of the
+    conservative blob-count epoch.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
