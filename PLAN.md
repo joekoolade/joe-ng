@@ -4280,6 +4280,80 @@ from 12 slots to 14 — and the boot asserts `vtparity java/lang/Throwable OK 14
 loader-built worlds both derive from the same overlay. Adding a method to a baked class is safe precisely
 because that invariant is checked every boot rather than assumed.
 
+
+### Demand-load speed — the mark was 99% of it, and most of that was work being discarded (PI-VALIDATED 2026-08-28)
+
+Late resolution made the reflective closure LOAD; it did not make it fast. The zip suite spent **28.5 minutes
+of its boot inside `loadAll`**. Four increments took that to **11.75 seconds — 146x** — with `ALL PASSED`
+and the same `linkresolve`/`newresolve` chain.
+
+**Measure first, because the obvious instrument lies.** The `load <cls> NNus` lines time only `addBlob` --
+putting a blob on the pending list. They are 5-180us and say nothing: all the real work happens afterwards,
+once, in `loadAll`. A `LOAD_PROFILE` flag (off by default, like `LAZY_TRACE`) times each phase, and the
+standing suspicion -- `patchRelocs` re-resolving every reloc through a linear registry scan -- was wrong.
+`patch` is 92ms. `mark` was 357,124ms.
+
+Pi, `main=ZipJUnitAll`, per batch:
+
+| batch | baseline `mark` | after | |
+|---|---|---|---|
+| first, pd=448 | 357,124 ms | 12,364 ms | 28.9x |
+| pd=449 (+1 class) | 218,784 ms | 8.1 ms | |
+| pd=451 | 219,000 ms | 10.6 ms | |
+| pd=452 | 219,041 ms | 8.1 ms | |
+| pd=456 (+4) | 219,265 ms | 23.9 ms | |
+| pd=461 (+13, EnumMap) | 234,707 ms | 93.0 ms | |
+| pd=462 (+1) | 235,344 ms | 59.8 ms | |
+| **total `loadAll`** | **1,711,850 ms** | **11,752 ms** | **146x** |
+
+The baseline's shape is the whole diagnosis: `mark` is **flat**. Adding ONE class cost the same 219 s as
+adding thirteen, because `markReachable` re-derived the entire closure from scratch every time.
+
+**1. Most of the work was being discarded.** Phase B is guarded by `pdDoneB[i] == 0`, so a blob compiled by
+an earlier batch is never recompiled and its TIB never rebuilt -- marking one of its methods cannot compile
+anything. On an incremental load that is ~97% of every pass, repeated once per round. `markSettled` skips
+them in collect / pullStructural / resolveBlob / resolveVirtuals / markDefaults / seedAllNamed / seedClinits.
+`probeAll` is NOT skipped: it fills `pdNameOff`, which `findPdByName` needs for every blob.
+- What a settled blob's unmarked method costs instead is one late resolution at whatever site reaches it.
+  **This is safe only because the late-resolution arc above exists** -- before it, an unmarked method meant a
+  trap-wired call site.
+- `runClinits` is unaffected: it runs off its own `clinitN`/`clinitRunFrom` watermark, not the reach set.
+
+**2. Several inner loops ran in the wrong direction.** `resolveVirtuals` asked, per instantiated class per
+superclass level, "does this level define this pend?" -- once per pend, i.e. `pends x methods` string
+compares per level. Asked the other way, "is this method pended?", it is one hash probe per method.
+`markDefaults` and `resolveBlob` had the identical shape. Semantics are unchanged and the check that says so
+is `reach=233 pend=699` before and after every step: the marked set is identical, only the cost of computing
+it moved.
+
+**3. Repeated parsing.** The five natively-reached seed signatures were five `seedAllNamed` passes, each
+re-parsing every blob's whole constant pool; `seedNativelyReached` does one parse and five scans.
+
+**A hardware profile finds what QEMU structurally cannot, and it also corrected me.** After those three, the
+Pi's remaining 12,364ms mark was `pull` 6,664ms + `virt` 3,471ms -- 82%. Both scale with `pendN`, which is
+**699 in the QEMU closure and 24,826 on hardware**, so neither was visible locally at any magnification.
+`pull` asked `nameRegistered` once per pend and that was a linear scan over every blob
+(24,826 x 448 x 33 rounds); a name hash index took it to **1,539ms**.
+
+**The `virt` half was a WRONG DIAGNOSIS, and the boot said so.** I attributed its residue to the per-class
+`virtResolved` RESET (`pendN` writes per instantiated class) and replaced it with a stamp. That bought 15%
+(3,471 -> 2,946 ms), so the reset was not the bulk. What remains is the chain walk itself: `superPdOf` does a
+`parseConstPool` plus a linear `findPdByName` per level, and `parseForMethods` re-parses a whole constant pool
+per level -- ~300 instantiated classes x chain depth x 33 rounds.
+
+**The next lever is bigger than any of these: the ROUND COUNT.** All 33 rounds redo every pass. A
+worklist-driven mark -- process only newly-reached methods instead of re-scanning everything to a fixpoint --
+would divide the whole thing again. Not built.
+
+**Four predictions, all too optimistic.** Before that boot I predicted `pull` under 500ms (actual 1,539),
+`virt` a few hundred (2,946), first-batch mark 2-3s (6.6), total 7-8s (11.75). Direction right every time,
+magnitude wrong every time -- worth remembering before quoting an estimate for the round-count work.
+
+**Cost of the instrument, and why it stays.** The timers read `CNTPCT_EL0` unconditionally (a handful of
+sysreg reads per round); only the printing is behind `LOAD_PROFILE`. That is deliberate -- the profile is the
+only thing that has correctly identified a bottleneck in this subsystem, twice, against two confident wrong
+guesses.
+
 ## Stock OpenJDK jar/zip tests on metal (2026-08-25)
 
 Running the unmodified jtreg tests from `test/jdk/java/util/{jar,zip}` as joe-ng guest programs — the

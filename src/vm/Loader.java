@@ -2224,6 +2224,8 @@ public final class Loader
         pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
         pdIfN = new int[MAXBLOB];
         pdCount = 0;
+        pnIndexed = 0;
+        pnBucket = null;                                 // rebuilt by the next probeAll; blobs are all new
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
         pdLen = new int[MAXBLOB];
@@ -2232,6 +2234,7 @@ public final class Loader
         gStubBlob = 0L;
         markActive = 0;
         reachCode = new long[MAXREACH];
+        reachTab = new long[REACHTAB];
         reachN = 0;
         VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
         VM.jitLocalCount = 0L;                           // reset the local table IN LOCKSTEP with the frame table (parallel
@@ -2365,6 +2368,11 @@ public final class Loader
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
     private static long[] reachCode;                     // bytecode addresses of the reachable methods
+    private static final int REACHTAB = 16384;           // power of two > 2*MAXREACH: the set never fills
+    private static long[] reachTab;                      // ... and the same addresses as an open-addressed set,
+                                                         //   because collectBlob asks isReach once per method of
+                                                         //   every blob, every round -- a linear scan makes that
+                                                         //   blobs x methods x reachN
     private static int reachN;
 
     /** Declare the method loadAll should treat as the reachability root (call before addBlob/loadAll). */
@@ -2434,28 +2442,41 @@ public final class Loader
         gp = p;
     }
 
+    /**
+     * Slot for {@code code} in {@link #reachTab}: its index if present, else the first free slot. Open
+     * addressing with linear probing over a power-of-two table twice {@code MAXREACH}, so it can never fill
+     * and the probe always terminates. Addresses are 8-aligned, so the low three bits carry nothing --
+     * multiply before masking or every key lands in one eighth of the table.
+     */
+    private static int reachSlot(long code)
+    {
+        int i = (int) ((code >> 3) * 0x9E3779B1L) & (REACHTAB - 1);
+        while (reachTab[i] != 0L && reachTab[i] != code)
+        {
+            i = (i + 1) & (REACHTAB - 1);
+        }
+        return i;
+    }
+
     /** True if {@code code} (a method's bytecode address) was marked reachable. */
     private static boolean isReach(long code)
     {
-        int i = 0;
-        while (i < reachN)
-        {
-            if (reachCode[i] == code)
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
+        return reachTab[reachSlot(code)] == code;
     }
 
     /** Add {@code code} to the reachable set if new; returns true if it was newly added. */
     private static boolean addReach(long code)
     {
-        if (code == 0L || isReach(code) || reachN >= MAXREACH)
+        if (code == 0L || reachN >= MAXREACH)
         {
             return false;
         }
+        int i = reachSlot(code);
+        if (reachTab[i] == code)
+        {
+            return false;
+        }
+        reachTab[i] = code;
         reachCode[reachN] = code;
         reachN += 1;
         return true;
@@ -2483,9 +2504,31 @@ public final class Loader
     private static int[] instOff;
     private static int instN;
 
+    // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
+    static int mrRounds;
+    static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
+
+    /**
+     * True if blob {@code b} was compiled by an EARLIER batch, so the mark can skip it. Phase B is guarded by
+     * the same flag ({@code pdDoneB[i] == 0}), which is the whole argument: a settled blob is never recompiled
+     * and its TIB never rebuilt, so marking one of its methods now cannot compile anything. All the mark can
+     * still do for it is re-derive references its own batch already followed. On an incremental load that is
+     * ~97% of every pass (75 settled blobs to pull one new class), and it is repeated once per round.
+     *
+     * <p>What a settled blob's UNMARKED method costs instead is one late resolution at the site that reaches
+     * it -- a deferral stub in the vtable, or a link stub at the call -- which is the machinery the reflection
+     * arc built and validated. Within the first batch nothing is settled, so nothing here changes.
+     */
+    private static boolean markSettled(int b)
+    {
+        return pdDoneB[b] != 0;
+    }
+
     private static void markReachable()
     {
         reachN = 0;
+        reachTab = new long[REACHTAB];                   // the set is rebuilt from the entry each batch
+
         pendBase = new long[MAXPEND];
         pendClass = new int[MAXPEND];
         pendName = new int[MAXPEND];
@@ -2506,34 +2549,41 @@ public final class Loader
         // (c) marks the invoke targets now resolvable. So a program pulls only its reachable closure -- the
         // basis for embedding all of java.base without dragging every class's full constant-pool closure in.
         boolean grew = true;
+        mrRounds = 0;
+        mrProbe = 0L;
+        mrSeed = 0L;
+        mrCollect = 0L;
+        mrPull = 0L;
+        mrStruct = 0L;
+        mrInst = 0L;
+        mrStatic = 0L;
+        mrVirt = 0L;
+        mrDflt = 0L;
         while (grew)
         {
             grew = false;
+            mrRounds += 1;
+            long tp = Magic.readCNTPCT_EL0();
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
-            grew = seedAllNamed(Magic.bytes("run"), Magic.bytes("()V")) || grew;   // Runnable trampoline entries
-            // VarHandle overlay ops: their signature-polymorphic call sites (getAndBitwiseOr:(Lsome;I)I) don't
-            // match the overlay descriptor, so the normal invoke-target marking misses them and they'd compile
-            // to a 0 vtable slot. Seed them by the overlay's own descriptor so they're compiled + filled in.
-            grew = seedAllNamed(Magic.bytes("getAndBitwiseOr"), Magic.bytes("(Ljava/lang/Object;I)I")) || grew;
-            grew = seedAllNamed(Magic.bytes("compareAndSet"), Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z")) || grew;
-            // StackTraceElement is instantiated NATIVELY (Loader.frameToElement), which RTA can't see, so its
-            // getters would compile to 0 vtable slots. Seed them by name+descriptor (no-op if STE isn't loaded).
-            grew = seedAllNamed(Magic.bytes("getMethodName"), Magic.bytes("()Ljava/lang/String;")) || grew;
-            // Class mirrors are instantiated NATIVELY too (Loader.classMirror), the same blind spot as
-            // StackTraceElement above. getEnumConstants is the one virtual on Class that stock code reaches
-            // through a mirror it did not create: EnumMap.getKeyUniverse ->
-            // SharedSecrets.getJavaLangAccess().getEnumConstantsShared(klass) -> klass.getEnumConstants().
-            // In a closure whose own code never calls it, RTA prunes it, the vtable slot stays 0, and the call
-            // lands in dispatchTargetGuard as a bare AIOOBE -- which is where StreamOpFlag.<clinit> died.
-            grew = seedAllNamed(Magic.bytes("getEnumConstants"), Magic.bytes("()[Ljava/lang/Object;")) || grew;
+            buildNameIndex();                           // ... which is what makes the names hashable
+            mrProbe += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
+            grew = seedNativelyReached() || grew;       // the five signatures RTA cannot infer (see the method)
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
+            mrSeed += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             pendN = 0;
             int b = 0;
             while (b < pdCount)                         // collect refs of reachable methods
             {
-                collectBlob(pdBase[b], pdLen[b]);
+                if (!markSettled(b))
+                {
+                    collectBlob(pdBase[b], pdLen[b]);
+                }
                 b += 1;
             }
+            mrCollect += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             int r = 0;
             while (r < pendN)                           // pull referenced classes not yet loaded
             {
@@ -2544,21 +2594,39 @@ public final class Loader
                 }
                 r += 1;
             }
+            mrPull += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             b = 0;
             while (b < pdCount)                         // pull each loaded class's super + interfaces
             {
-                grew = pullStructural(pdBase[b], pdLen[b]) || grew;
+                if (!markSettled(b))
+                {
+                    grew = pullStructural(pdBase[b], pdLen[b]) || grew;
+                }
                 b += 1;
             }
+            mrStruct += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = computeInstantiated() || grew;       // RTA: flag the pd blobs `new`'d by a reached method
+            mrInst += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             b = 0;
+            buildStaticPendIndex();
             while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
-                grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                if (!markSettled(b))
+                {
+                    grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                }
                 b += 1;
             }
+            mrStatic += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = resolveVirtuals() || grew;           // RTA: virtual/interface targets, in instantiated types only
+            mrVirt += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = markDefaults() || grew;              // RTA: interface DEFAULT methods (resolveVirtuals only walks
+            mrDflt += Magic.readCNTPCT_EL0() - tp;
         }                                               //   class hierarchies, so an unoverridden default is missed)
         markActive = 1;
     }
@@ -2576,27 +2644,21 @@ public final class Loader
     private static boolean markDefaults()
     {
         boolean grew = false;
+        buildPendIndex();
         int b = 0;
         while (b < pdCount)
         {
+            if (markSettled(b))
+            {
+                b += 1;
+                continue;
+            }
             parseConstPool(pdBase[b], pdLen[b]);
             boolean iface = (u2(gp) & 0x0200) != 0;      // ACC_INTERFACE (access_flags right after the constant pool)
             if (iface)
             {
-                parseForMethods(pdBase[b], pdLen[b]);    // sets gMethodsStart/gp for findMethodByRef
-                int p = 0;
-                while (p < pendN)
-                {
-                    if (pendKind[p] == 1)
-                    {
-                        long code = findMethodByRef(pendBase[p], pendName[p], pendDesc[p]);
-                        if (code != 0L)
-                        {
-                            grew = addReach(code) || grew;
-                        }
-                    }
-                    p += 1;
-                }
+                parseForMethods(pdBase[b], pdLen[b]);
+                grew = matchDefaults() || grew;          // same inversion as resolveVirtuals: per method, not per pend
             }
             b += 1;
         }
@@ -2760,13 +2822,15 @@ public final class Loader
     {
         parseForMethods(base, len);
         boolean grew = false;
-        int r = 0;
-        while (r < pendN)
+        // Only static/special calls (kind 0) resolve here: they name a concrete class, so mark that method iff
+        // this blob IS that class. PEND_PULL pulls a class only; virtual/interface (kind 1) go through
+        // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
+        // Reached through the class-name index rather than by scanning every pend per blob -- that guard was
+        // a string compare per (blob, pend), which is pdCount x pendN of them per round.
+        int r = psBucket[utf8Hash(gbase, gThisNameOff) & (PVTAB - 1)];
+        while (r >= 0)
         {
-            // Only static/special calls (kind 0) resolve here: they name a concrete class, so mark that method
-            // iff this blob IS that class. PEND_PULL pulls a class only; virtual/interface (kind 1) go through
-            // resolveVirtuals (RTA over instantiated types), NOT "mark in every class carrying the name+desc".
-            if (pendKind[r] == 0 && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
+            if (utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
                 long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -2780,7 +2844,7 @@ public final class Loader
                     grew = markInheritedStatic(pendBase[r], pendName[r], pendDesc[r], base, len) || grew;
                 }
             }
-            r += 1;
+            r = psNext[r];
         }
         return grew;
     }
@@ -2914,7 +2978,8 @@ public final class Loader
         return findPdByName(gbase, gcp[u2(gbase + gcp[superIdx])]);
     }
 
-    private static boolean[] virtResolved;               // per-pend: already dispatched for the current class
+    private static int[] virtResolved;                   // per-pend: STAMP of the class that last dispatched it
+    private static int virtStamp;                        // current class's stamp (index+1, so 0 means "never")
 
     /**
      * RTA: mark each virtual/interface call's real targets — for every instantiated receiver type, the method
@@ -2929,43 +2994,254 @@ public final class Loader
         boolean grew = false;
         if (virtResolved == null || virtResolved.length < pendN)
         {
-            virtResolved = new boolean[pendN + 64];
+            virtResolved = new int[pendN + 64];
         }
+        buildPendIndex();
         int c = 0;
         while (c < pdCount)
         {
-            if (pdInstantiated[c])
+            if (pdInstantiated[c] && !markSettled(c))     // a settled receiver's vtable is built and frozen
             {
-                int p = 0;
-                while (p < pendN)                        // reset: no pend dispatched yet for this class
-                {
-                    virtResolved[p] = false;
-                    p += 1;
-                }
+                // "No pend dispatched yet for this class" by STAMP rather than by clearing the array: the
+                // clear was pendN writes per instantiated class, and pendN reaches 24,826 here.
+                virtStamp = c + 1;                       // +1: the array starts at 0, and 0 is a valid class index
                 int cur = c;
                 int guard = 0;
                 while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
                 {
                     parseForMethods(pdBase[cur], pdLen[cur]);
-                    p = 0;
-                    while (p < pendN)
-                    {
-                        if (pendKind[p] == 1 && !virtResolved[p])
-                        {
-                            long code = findMethodByRef(pendBase[p], pendName[p], pendDesc[p]);
-                            if (code != 0L)
-                            {
-                                virtResolved[p] = true;  // nearest def; don't also mark a super's override-shadowed one
-                                grew = addReach(code) || grew;
-                            }
-                        }
-                        p += 1;
-                    }
+                    grew = matchLevel() || grew;
                     cur = superPdOf(cur);
                     guard += 1;
                 }
             }
             c += 1;
+        }
+        return grew;
+    }
+
+    /**
+     * Match the current class level (as left by {@link #parseForMethods}) against the virtual pends, by walking
+     * the level's OWN methods and looking each up in {@link #buildPendIndex}'s table.
+     *
+     * <p>The direction is the point. Asking "for each pend, does this class define it?" is
+     * {@code pends x methods} string compares per level, and the level count is
+     * {@code instantiated classes x chain depth} -- with 699 pends over 75 classes that pass alone was 57% of
+     * a batch's whole reachability mark. Asking "for each method, is it pended?" is one hash probe per method:
+     * {@code methods} instead of {@code pends x methods}.
+     *
+     * <p>Semantics are unchanged. Methods are visited in declaration order and {@code virtResolved} is set on
+     * first match, so a pend still binds to the first definition carrying Code, and the chain walk still stops
+     * at the nearest one rather than also marking an override-shadowed super definition.
+     */
+    private static boolean matchLevel()
+    {
+        boolean grew = false;
+        long p = gp;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            int descOff = gcp[u2(p + 4)];
+            int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
+            while (q >= 0)
+            {
+                if (virtResolved[q] != virtStamp
+                        && utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
+                        && utf8EqAt(pendBase[q], pendDesc[q], gbase, descOff))
+                {
+                    long code = findCode(gbase, p + 8, attrs);
+                    if (code != 0L)
+                    {
+                        virtResolved[q] = virtStamp;     // nearest def; don't also mark a super's shadowed one
+                        grew = addReach(code) || grew;
+                    }
+                }
+                q = pvNext[q];
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return grew;
+    }
+
+    /**
+     * The {@link #matchLevel} inversion for {@link #markDefaults}: mark every concrete method of the current
+     * interface whose name+descriptor is pended. No nearest-definition rule here -- a default is marked
+     * wherever it is found, and {@link #addReach} dedupes -- so there is no {@code virtResolved} to consult.
+     */
+    private static boolean matchDefaults()
+    {
+        boolean grew = false;
+        long p = gp;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            int descOff = gcp[u2(p + 4)];
+            int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
+            while (q >= 0)
+            {
+                if (utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
+                        && utf8EqAt(pendBase[q], pendDesc[q], gbase, descOff))
+                {
+                    long code = findCode(gbase, p + 8, attrs);
+                    if (code != 0L)
+                    {
+                        grew = addReach(code) || grew;
+                        break;                           // marked; other pends on the same method add nothing
+                    }
+                }
+                q = pvNext[q];
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return grew;
+    }
+
+    private static final int PVTAB = 2048;               // power of two; chained, so a full table only lengthens chains
+    private static int[] pvBucket;                       // bucket head -> pend index, -1 empty
+    private static int[] pvNext;                         // chain link, per pend
+    private static int[] psBucket;                       // ... and the same for STATIC/special pends, keyed on the
+    private static int[] psNext;                         //   callee CLASS name, for resolveBlob
+
+    /** Index this round's STATIC/special pends (kind 0) by callee class name, for {@link #resolveBlob}. */
+    private static void buildStaticPendIndex()
+    {
+        if (psBucket == null)
+        {
+            psBucket = new int[PVTAB];
+        }
+        if (psNext == null || psNext.length < pendN)
+        {
+            psNext = new int[pendN + 64];
+        }
+        int i = 0;
+        while (i < PVTAB)
+        {
+            psBucket[i] = -1;
+            i += 1;
+        }
+        int p = 0;
+        while (p < pendN)
+        {
+            if (pendKind[p] == 0)
+            {
+                int h = utf8Hash(pendBase[p], pendClass[p]) & (PVTAB - 1);
+                psNext[p] = psBucket[h];
+                psBucket[h] = p;
+            }
+            else
+            {
+                psNext[p] = -1;
+            }
+            p += 1;
+        }
+    }
+
+    /** Index this round's VIRTUAL pends (kind 1) by their name+descriptor hash, for {@link #matchLevel}. */
+    private static void buildPendIndex()
+    {
+        if (pvBucket == null)
+        {
+            pvBucket = new int[PVTAB];
+        }
+        if (pvNext == null || pvNext.length < pendN)
+        {
+            pvNext = new int[pendN + 64];
+        }
+        int i = 0;
+        while (i < PVTAB)
+        {
+            pvBucket[i] = -1;
+            i += 1;
+        }
+        int p = 0;
+        while (p < pendN)
+        {
+            if (pendKind[p] == 1)
+            {
+                int h = sigHash(pendBase[p], pendName[p], pendDesc[p]) & (PVTAB - 1);
+                pvNext[p] = pvBucket[h];
+                pvBucket[h] = p;
+            }
+            else
+            {
+                pvNext[p] = -1;
+            }
+            p += 1;
+        }
+    }
+
+    /** FNV-1a over a name Utf8 and a descriptor Utf8 -- the key {@link #matchLevel} probes on. */
+    private static int sigHash(long base, int nameOff, int descOff)
+    {
+        return utf8Hash(base, nameOff) * 31 + utf8Hash(base, descOff);
+    }
+
+    /** FNV-1a over the bytes of the length-prefixed Utf8 at {@code base + off}. */
+    private static int utf8Hash(long base, int off)
+    {
+        int len = u2(base + off);
+        long q = base + off + 2L;
+        int h = 0x811C9DC5;
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        return h;
+    }
+
+    /**
+     * Seed the signatures no call site names, in ONE pass over the blobs. Each is a method some NATIVE or
+     * out-of-graph path enters, so RTA prunes it and its vtable slot stays 0:
+     * <ul>
+     *   <li>{@code run()V} -- the thread trampoline enters a Runnable outside the call graph.</li>
+     *   <li>{@code getAndBitwiseOr}/{@code compareAndSet} -- the VarHandle overlay's ops. Their call sites are
+     *       signature-polymorphic ({@code getAndBitwiseOr:(LSocket;I)I}), so they never match the overlay's
+     *       own descriptor and normal invoke-target marking misses them.</li>
+     *   <li>{@code getMethodName} -- StackTraceElement is instantiated natively by {@code frameToElement}.</li>
+     *   <li>{@code getEnumConstants} -- Class mirrors are instantiated natively by {@code classMirror}, the
+     *       same blind spot. Stock code reaches this one through a mirror it did not create:
+     *       {@code EnumMap.getKeyUniverse -> getJavaLangAccess().getEnumConstantsShared(k) ->
+     *       k.getEnumConstants()}. Pruned, the call lands in dispatchTargetGuard as a bare AIOOBE -- which is
+     *       where StreamOpFlag's initializer died.</li>
+     * </ul>
+     *
+     * <p>One pass, not five: {@link #parseForMethods} re-parses the whole constant pool, and doing that five
+     * times per blob per round made these seeds a tenth of the entire mark.
+     */
+    private static boolean seedNativelyReached()
+    {
+        boolean grew = false;
+        int b = 0;
+        while (b < pdCount)
+        {
+            if (!markSettled(b))
+            {
+                // ONE parse, five scans: findMethodByBytes reads gp/gcp and never advances them, so the
+                // constant pool this sets up is good for all five lookups.
+                parseForMethods(pdBase[b], pdLen[b]);
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("run"), Magic.bytes("()V"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("getAndBitwiseOr"),
+                        Magic.bytes("(Ljava/lang/Object;I)I"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("compareAndSet"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("getMethodName"),
+                        Magic.bytes("()Ljava/lang/String;"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("getEnumConstants"),
+                        Magic.bytes("()[Ljava/lang/Object;"))) || grew;
+            }
+            b += 1;
         }
         return grew;
     }
@@ -2977,8 +3253,11 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            parseForMethods(pdBase[b], pdLen[b]);
-            grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
+            if (!markSettled(b))
+            {
+                parseForMethods(pdBase[b], pdLen[b]);
+                grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
+            }
             b += 1;
         }
         return grew;
@@ -3039,13 +3318,19 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            parseForMethods(pdBase[b], pdLen[b]);
-            if (!clinitBlocked())
+            // Settled blobs skipped for the same reason as everywhere else: their initializer was marked and
+            // compiled by their own batch, and phase B will not compile it again. Re-marking it here only
+            // re-parsed the constant pool -- and reported `grew`, buying an extra round for nothing.
+            if (!markSettled(b))
             {
-                long code = findMethodByBytes(gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
-                if (code != 0L && clinitCompilable(code, gcodeLen))
+                parseForMethods(pdBase[b], pdLen[b]);
+                if (!clinitBlocked())
                 {
-                    grew = addReach(code) || grew;
+                    long code = findMethodByBytes(gbase, Magic.bytes("<clinit>"), Magic.bytes("()V"));
+                    if (code != 0L && clinitCompilable(code, gcodeLen))
+                    {
+                        grew = addReach(code) || grew;
+                    }
                 }
             }
             b += 1;
@@ -3250,16 +3535,69 @@ public final class Loader
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
     private static boolean nameRegistered(long base, int off)
     {
-        int j = 0;
-        while (j < pdCount)
+        if (pnBucket != null)
         {
-            if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+            int j = pnBucket[utf8Hash(base, off) & (PVTAB - 1)];
+            while (j >= 0)
+            {
+                if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+                {
+                    return true;
+                }
+                j = pnNext[j];
+            }
+        }
+        // Blobs added since the index was built -- this round's own pulls. Their pdNameOff is not set until
+        // the next probeAll, so they cannot be hashed; scan them. That is exactly what the whole loop used to
+        // do for them, and it stays correct for the same reason: registerNameFromDir dedupes by ADDRESS
+        // (alreadyBlob), so an unreliable answer here costs a re-check, never a duplicate blob.
+        int k = pnIndexed;
+        while (k < pdCount)
+        {
+            if (utf8EqAt(base, off, pdBase[k], pdNameOff[k]))
             {
                 return true;
             }
-            j += 1;
+            k += 1;
         }
         return false;
+    }
+
+    private static int[] pnBucket;                       // registered class names, by hash -> pd index
+    private static int[] pnNext;                         // chain link, per blob
+    private static int pnIndexed;                        // blobs [0,pnIndexed) are indexed with a valid pdNameOff
+
+    /**
+     * Index the registered class names, for {@link #nameRegistered}. Built right after {@link #probeAll}, which
+     * is what fills {@code pdNameOff} -- before that a blob has no name to hash.
+     *
+     * <p>The pull loop asks {@code nameRegistered} once per pend, and a linear scan made that
+     * {@code pends x blobs} string compares per round. With 24,826 pends over 448 blobs it was 11M per round,
+     * 33 rounds -- 54% of the entire mark on hardware, and the largest single item left after the first two
+     * rounds of this work.
+     */
+    private static void buildNameIndex()
+    {
+        if (pnBucket == null)
+        {
+            pnBucket = new int[PVTAB];
+            pnNext = new int[MAXBLOB];
+        }
+        int i = 0;
+        while (i < PVTAB)
+        {
+            pnBucket[i] = -1;
+            i += 1;
+        }
+        i = 0;
+        while (i < pdCount)
+        {
+            int h = utf8Hash(pdBase[i], pdNameOff[i]) & (PVTAB - 1);
+            pnNext[i] = pnBucket[h];
+            pnBucket[h] = i;
+            i += 1;
+        }
+        pnIndexed = pdCount;
     }
 
     /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
@@ -4497,6 +4835,8 @@ public final class Loader
      */
     private static void loadAll()
     {
+        long tAll = Magic.readCNTPCT_EL0();
+        long tMark = tAll;
         ensureObjectBlob();                              // every vtable starts with Object's 9 slots
         if (gEntryBlob != 0L)                            // reachability requested: mark + PULL the reachable
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
@@ -4505,7 +4845,9 @@ public final class Loader
         ensureImplicitExcBlobs();                        // AFTER the closure is pulled -- the gate asks whether
                                                          //   this batch has Throwable, which markReachable is what
                                                          //   brings in; before it, the answer is always no
+        long tProbe = Magic.readCNTPCT_EL0();
         probeAll();                                      // this_class + super + interfaces + dep list over the final set
+        long tA = Magic.readCNTPCT_EL0();
 
         // PHASE A: register every class's STRUCTURE, super/interface-first. That graph is acyclic, so linkReady
         // always finds a ready blob -- no force-load, no arbitrary order. (The fallback guards a malformed set.)
@@ -4545,6 +4887,7 @@ public final class Loader
             }
         }
 
+        long tB = Magic.readCNTPCT_EL0();
         // PHASE B: compile every class's method bodies + fill its TIB, superclass-first (so inherited vtable
         // buffers are already filled). All new/field/vtable/itable/cast targets are structure-registered now, so
         // order is irrelevant except for the super-before-subclass buffer inheritance; method CALLs are patched.
@@ -4584,8 +4927,10 @@ public final class Loader
             }
         }
 
+        long tPatch = Magic.readCNTPCT_EL0();
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
+        long tRest = Magic.readCNTPCT_EL0();
         refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
@@ -4598,6 +4943,10 @@ public final class Loader
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
+        if (LOAD_PROFILE)
+        {
+            profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+        }
         // 4-phase lifecycle: batch initialization just completed -- every INSTANTIATED class's queued
         // <clinit> has run (or was deliberately skipped with seeded statics), so the whole batch
         // reaches INITIALIZED. The boot invariant flags any class stuck short of phase B (a hole in
@@ -7347,6 +7696,86 @@ public final class Loader
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
 
     private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
+
+    /**
+     * Per-batch phase timing for {@link #loadAll} over the UART (debug). A demand-load's cost is invisible in
+     * the {@code load} lines -- those time only {@link #addBlob}, i.e. putting the blob on the pending list.
+     * All the real work happens afterwards in one batch, so this is what says WHERE it goes.
+     */
+    private static final boolean LOAD_PROFILE = false;
+
+    /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
+    private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
+    {
+        Uart.write(Magic.bytes("  loadall pd="));
+        VM.printDec(pdCount);
+        Uart.write(Magic.bytes(" rc="));
+        VM.printDec(rcCount);
+        Uart.write(Magic.bytes(" rg="));
+        VM.printDec(rgCount);
+        Uart.write(Magic.bytes(" mark="));
+        printDur(spanUs(tMark, tProbe));
+        Uart.write(Magic.bytes(" probe="));
+        printDur(spanUs(tProbe, tA));
+        Uart.write(Magic.bytes(" A="));
+        printDur(spanUs(tA, tB));
+        Uart.write(Magic.bytes(" B="));
+        printDur(spanUs(tB, tPatch));
+        Uart.write(Magic.bytes(" patch="));
+        printDur(spanUs(tPatch, tRest));
+        Uart.write(Magic.bytes(" clinit="));
+        printDur(elapsedUs(tRest));
+        Uart.write(Magic.bytes(" total="));
+        printDur(elapsedUs(tAll));
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("    mark rounds="));
+        VM.printDec(mrRounds);
+        Uart.write(Magic.bytes(" reach="));
+        VM.printDec(reachN);
+        Uart.write(Magic.bytes(" pend="));
+        VM.printDec(pendN);
+        Uart.write(Magic.bytes(" probe="));
+        printDur(ticksUs(mrProbe));
+        Uart.write(Magic.bytes(" seed="));
+        printDur(ticksUs(mrSeed));
+        Uart.write(Magic.bytes(" collect="));
+        printDur(ticksUs(mrCollect));
+        Uart.write(Magic.bytes(" pull="));
+        printDur(ticksUs(mrPull));
+        Uart.write(Magic.bytes(" struct="));
+        printDur(ticksUs(mrStruct));
+        Uart.write(Magic.bytes(" inst="));
+        printDur(ticksUs(mrInst));
+        Uart.write(Magic.bytes(" static="));
+        printDur(ticksUs(mrStatic));
+        Uart.write(Magic.bytes(" virt="));
+        printDur(ticksUs(mrVirt));
+        Uart.write(Magic.bytes(" dflt="));
+        printDur(ticksUs(mrDflt));
+        Uart.putc(0x0A);
+    }
+
+    /** A raw CNTPCT tick count as microseconds. */
+    private static long ticksUs(long ticks)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return ticks * 1000000L / f;
+    }
+
+    /** Microseconds between two {@code CNTPCT_EL0} readings. */
+    private static long spanUs(long t0, long t1)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return (t1 - t0) * 1000000L / f;
+    }
     private static DynLink[] dlTab;    // phase-A dynamic-linking table (reified: one DynLink per method cell)
     private static int    dlN;
 
