@@ -10039,9 +10039,77 @@ public final class Loader
     }
 
     /**
-     * The {@code NEW_UNRESOLVED} trap fired: a `new` whose class the loader could not resolve was actually
-     * EXECUTED. Name the class and the calling method, then halt -- there is no correct object to return, and
-     * the old behaviour (an instance carrying an unrelated class's TIB) corrupts silently instead.
+     * A deferred `new` was REACHED: resolve it now. The compile-time failure means only that the class was not
+     * registered when the body was emitted, which is the `new` half of the RTA-through-reflection gap — a body
+     * compiled on demand can instantiate a class nothing pulled, because {@code loadClassIncremental} loads a
+     * class WITHOUT its dependencies on purpose. Demand-load it, then allocate exactly as
+     * {@code Baseline.lowerNew}'s resolved path does: size from the field count, the class's own TIB in the
+     * header. Returns the reference.
+     *
+     * <p>Unlike a call site there is no stub to memoize into — a `new` is a fixed instruction sequence, not a
+     * patchable branch target — so this runs per execution. That is the right trade anyway: the sites that
+     * reach here are cold by construction, and the second execution finds the class already registered, so all
+     * that repeats is a registry lookup.
+     *
+     * <p>If the class still cannot be resolved (a genuinely denylisted subtree) this falls through to
+     * {@link #reportUnresolvedNew}, so that diagnostic — and the guarantee that a wrong-typed object is never
+     * returned — is exactly as it was.
+     */
+    static long resolveUnresolvedNew(long site, long pc)
+    {
+        int i = (int) site;
+        if (unresBase == null || i < 0 || i >= unresN || clTab == null)
+        {
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        if (isDenylisted(unresBase[i], unresOff[i]))
+        {
+            // A metal-absent subtree. The call path gets this guard at patch time (patchRelocsFrom never
+            // stubs a denylisted callee); a `new` site is recorded during the compile, with no such check,
+            // so it has to happen here. Without it loadClassIncremental would cheerfully pull the class --
+            // pullClass(byte[]) goes straight to the classDir -- which both defeats the denylist and turns
+            // demo/UnresolvedNewDemo, whose whole point is that this halts, into a silent pass.
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        long clsU = unresBase[i] + unresOff[i];
+        int len = u2(clsU);
+        byte[] slash = new byte[len];
+        int k = 0;
+        while (k < len)
+        {
+            slash[k] = (byte) u1(clsU + 2 + k);
+            k += 1;
+        }
+        VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        if (classIndexByName(slash) < 0)
+        {
+            Uart.write(Magic.bytes("  newresolve "));
+            printNameAt(clsU, 0);
+            Uart.putc(0x0A);
+            long pulled = loadClassIncremental(slash);
+        }
+        int reg = classIndexByName(slash);
+        long tib = 0L;
+        int fields = 0;
+        if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)
+        {
+            tib = clTab[reg].tib;                       // a half-lifecycle class has no filled TIB: do not use it
+            fields = clTab[reg].fieldCount;
+        }
+        VM.loaderUnlock();
+        if (tib == 0L)
+        {
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        long obj = Heap.alloc(16 + fields * 8);
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
+        return obj;
+    }
+
+    /**
+     * A deferred `new` was reached and could NOT be resolved. Name the class and the calling method, then halt
+     * -- there is no correct object to return, and the old behaviour (an instance carrying an unrelated
+     * class's TIB) corrupts silently instead.
      */
     static void reportUnresolvedNew(long site, long pc)
     {

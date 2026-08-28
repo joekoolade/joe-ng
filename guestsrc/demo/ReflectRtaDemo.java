@@ -37,6 +37,14 @@ public class ReflectRtaDemo
         Method i = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceStatic");
         i.setAccessible(true);
         System.out.println("ifacestat  = " + i.invoke(null));
+
+        Method n = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionNew");
+        n.setAccessible(true);
+        Object made = n.invoke(null);
+        // getClass() is an Object slot, so it resolves normally; the NAME it reports is the real check --
+        // the bug this replaced handed back an object carrying an unrelated class's TIB, which would answer
+        // with the wrong name here rather than failing.
+        System.out.println("newarm     = " + (made == null ? "NULL" : made.getClass().getName()));
     }
 
     /** Statically reachable from main: RTA walks this and pulls {@code RtaSeen}. */
@@ -59,6 +67,23 @@ public class ReflectRtaDemo
     static String viaReflectionIfaceStatic()
     {
         return RtaIface.tag();
+    }
+
+    /**
+     * A {@code new} of a class nothing pulled — the other half of the gap. A {@code new} is resolved at
+     * COMPILE time (it needs the instance size and TIB while emitting), so it cannot take a link stub the way
+     * a call does; the site defers instead, and resolves when it is actually reached.
+     *
+     * <p>It returns the object rather than calling a method on it, and that restraint is deliberate: an
+     * {@code invokevirtual} on a class that is unregistered AT COMPILE TIME is a SEPARATE and still-open bug —
+     * {@code Loader.globalVtableSlot} answers 0 when it finds no match, so the call dispatches through vtable
+     * slot 0 of whatever the receiver turns out to be. Mixing that in would make this arm test two things and
+     * pin neither. The caller checks the object's class name instead, which is precisely what the old
+     * wrong-TIB behaviour would get wrong.
+     */
+    static Object viaReflectionNew()
+    {
+        return new RtaMade();
     }
 
     /**

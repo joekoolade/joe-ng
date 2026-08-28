@@ -1337,15 +1337,19 @@ public final class Baseline
         int size = symbols.objectSize(classIndex);
         if (size < 0)
         {
-            // The class cannot be resolved. Allocating anyway is what the loader used to do -- it fell back to
-            // the CURRENT class's TIB, so `new Missing()` returned an object of an unrelated type that passed
-            // the wrong instanceof checks and dispatched into the wrong vtable, with nothing said. Every such
-            // site in practice is a `new` of a DENYLISTED class on a branch that is never taken (a charset
-            // coder exception, an AssertionError, a jar verifier), so failing here at COMPILE time would kill
-            // boots that are correct; this traps only if the site is actually reached, and names the class.
+            // The class is not resolvable AT COMPILE TIME. Allocating with the current class's TIB is what the
+            // loader used to do -- `new Missing()` returned an object of an unrelated type that passed the
+            // wrong instanceof checks and dispatched into the wrong vtable, silently. Instead the site defers:
+            // the helper runs only if the site is actually REACHED, and then either demand-loads the class and
+            // allocates a correctly-typed object (a `new` the RTA closure could not see, e.g. inside a body
+            // compiled on demand) or halts naming the class (a genuinely denylisted one on a cold branch --
+            // a charset coder exception, an AssertionError, a jar verifier). Deferring rather than failing at
+            // compile time is what keeps correct boots alive: most such sites are never taken.
+            spillLive(cb);                                           // it demand-loads and allocates: clobbers x9..
             cb.emitAll(A64Enc.loadImm64(0, -size - 1));              // x0 = the site the loader recorded
-            symbols.callHelper(cb, Symbols.NEW_UNRESOLVED);          // does not return
-            cb.emit(A64Enc.movReg(pushReg(), 0));                    // unreachable; keeps the operand stack shape
+            symbols.callHelper(cb, Symbols.NEW_UNRESOLVED);          // x0 = the object, or halts
+            reloadLive(cb);
+            cb.emit(A64Enc.movReg(pushReg(), 0));                    // push the reference
             return;
         }
         cb.emitAll(A64Enc.loadImm64(0, size));                       // x0 = size (Heap.alloc arg)
