@@ -2224,6 +2224,15 @@ public final class Loader
         pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
         pdIfN = new int[MAXBLOB];
         pdCount = 0;
+        collectedTab = new long[REACHTAB];
+        pdPendTo = new int[MAXBLOB];
+        pdVirtTo = new int[MAXBLOB];
+        pdPendEpoch = new int[MAXBLOB];
+        pdVirtEpoch = new int[MAXBLOB];
+        pdDfltTo = new int[MAXBLOB];
+        pdSeeded = new int[MAXBLOB];
+        pdSeedC = new int[MAXBLOB];
+        pendPullTo = 0;
         pnIndexed = 0;
         pnBucket = null;                                 // rebuilt by the next probeAll; blobs are all new
         dpOwner = new int[MAXDEP];
@@ -2442,6 +2451,22 @@ public final class Loader
         gp = p;
     }
 
+    /** Record that {@code code}'s refs have been pended; false if they already were. */
+    private static boolean addCollected(long code)
+    {
+        int i = (int) ((code >> 3) * 0x9E3779B1L) & (REACHTAB - 1);
+        while (collectedTab[i] != 0L && collectedTab[i] != code)
+        {
+            i = (i + 1) & (REACHTAB - 1);
+        }
+        if (collectedTab[i] == code)
+        {
+            return false;
+        }
+        collectedTab[i] = code;
+        return true;
+    }
+
     /**
      * Slot for {@code code} in {@link #reachTab}: its index if present, else the first free slot. Open
      * addressing with linear probing over a power-of-two table twice {@code MAXREACH}, so it can never fill
@@ -2528,6 +2553,14 @@ public final class Loader
     {
         reachN = 0;
         reachTab = new long[REACHTAB];                   // the set is rebuilt from the entry each batch
+        collectedTab = new long[REACHTAB];               // ... and so is "whose refs are already pended"
+        pdPendTo = new int[MAXBLOB];                     // Heap.alloc zeroes its payload, so every watermark
+        pdVirtTo = new int[MAXBLOB];                     //   starts at 0 and a blob added later starts there
+        pdDfltTo = new int[MAXBLOB];                     //   too -- it must consider every pend once
+        pdSeeded = new int[MAXBLOB];
+        pdSeedC = new int[MAXBLOB];
+        pendPullTo = 0;
+        pendN = 0;
 
         pendBase = new long[MAXPEND];
         pendClass = new int[MAXPEND];
@@ -2572,9 +2605,8 @@ public final class Loader
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             mrSeed += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
-            pendN = 0;
             int b = 0;
-            while (b < pdCount)                         // collect refs of reachable methods
+            while (b < pdCount)                         // collect refs of NEWLY reachable methods
             {
                 if (!markSettled(b))
                 {
@@ -2584,16 +2616,17 @@ public final class Loader
             }
             mrCollect += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
-            int r = 0;
-            while (r < pendN)                           // pull referenced classes not yet loaded
-            {
-                if (!nameRegistered(pendBase[r], pendClass[r])
+            int r = pendPullTo;                         // pull referenced classes not yet loaded. Only the new
+            while (r < pendN)                           //   pends: an older one either pulled its class already
+            {                                           //   or named one the dir does not have, and neither
+                if (!nameRegistered(pendBase[r], pendClass[r])   // answer changes by being asked again.
                         && registerNameFromDir(pendBase[r], pendClass[r]) != 0L)
                 {
                     grew = true;
                 }
                 r += 1;
             }
+            pendPullTo = pendN;
             mrPull += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
             b = 0;
@@ -2614,9 +2647,12 @@ public final class Loader
             buildStaticPendIndex();
             while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
-                if (!markSettled(b))
+                if (!markSettled(b) && (pdPendTo[b] < pendN || pdPendEpoch[b] != pdCount))
                 {
+                    virtFrom = pdPendEpoch[b] == pdCount ? pdPendTo[b] : 0;   // chain may have grown -> redo all
                     grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                    pdPendTo[b] = pendN;
+                    pdPendEpoch[b] = pdCount;
                 }
                 b += 1;
             }
@@ -2648,7 +2684,7 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            if (markSettled(b))
+            if (markSettled(b) || pdDfltTo[b] >= pendN)
             {
                 b += 1;
                 continue;
@@ -2657,9 +2693,11 @@ public final class Loader
             boolean iface = (u2(gp) & 0x0200) != 0;      // ACC_INTERFACE (access_flags right after the constant pool)
             if (iface)
             {
+                virtFrom = pdDfltTo[b];
                 parseForMethods(pdBase[b], pdLen[b]);
                 grew = matchDefaults() || grew;          // same inversion as resolveVirtuals: per method, not per pend
             }
+            pdDfltTo[b] = pendN;
             b += 1;
         }
         return grew;
@@ -2707,10 +2745,10 @@ public final class Loader
         {
             int attrs = u2(p + 6);
             long code = findCode(base, p + 8, attrs);
-            if (code != 0L && isReach(code))
+            if (code != 0L && isReach(code) && addCollected(code))
             {
-                collectRefs(base, code, gcodeLen);
-            }
+                collectRefs(base, code, gcodeLen);      // ONCE: a method's refs never change, and the pend
+            }                                           //   list now accumulates instead of being rebuilt
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
@@ -2830,7 +2868,7 @@ public final class Loader
         int r = psBucket[utf8Hash(gbase, gThisNameOff) & (PVTAB - 1)];
         while (r >= 0)
         {
-            if (utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
+            if (r >= virtFrom && utf8EqAt(pendBase[r], pendClass[r], gbase, gThisNameOff))
             {
                 long code = findMethodByRef(pendBase[r], pendName[r], pendDesc[r]);
                 if (code != 0L)
@@ -3000,11 +3038,18 @@ public final class Loader
         int c = 0;
         while (c < pdCount)
         {
-            if (pdInstantiated[c] && !markSettled(c))     // a settled receiver's vtable is built and frozen
-            {
+            if (pdInstantiated[c] && !markSettled(c)
+                    && (pdVirtTo[c] < pendN || pdVirtEpoch[c] != pdCount))
+            {                                            // a settled receiver's vtable is built and frozen, and
+                                                         // a class with no NEW pends has nothing to dispatch --
+                                                         // skipping it skips the whole superclass chain walk,
+                                                         // which is what this pass actually spends its time on.
                 // "No pend dispatched yet for this class" by STAMP rather than by clearing the array: the
                 // clear was pendN writes per instantiated class, and pendN reaches 24,826 here.
                 virtStamp = c + 1;                       // +1: the array starts at 0, and 0 is a valid class index
+                virtFrom = pdVirtEpoch[c] == pdCount ? pdVirtTo[c] : 0;   // chain may have grown -> redo all
+                pdVirtTo[c] = pendN;
+                pdVirtEpoch[c] = pdCount;
                 int cur = c;
                 int guard = 0;
                 while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
@@ -3049,7 +3094,7 @@ public final class Loader
             int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
             while (q >= 0)
             {
-                if (virtResolved[q] != virtStamp
+                if (q >= virtFrom && virtResolved[q] != virtStamp
                         && utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
                         && utf8EqAt(pendBase[q], pendDesc[q], gbase, descOff))
                 {
@@ -3088,7 +3133,8 @@ public final class Loader
             int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
             while (q >= 0)
             {
-                if (utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
+                if (q >= virtFrom
+                        && utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
                         && utf8EqAt(pendBase[q], pendDesc[q], gbase, descOff))
                 {
                     long code = findCode(gbase, p + 8, attrs);
@@ -3226,8 +3272,9 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            if (!markSettled(b))
+            if (!markSettled(b) && pdSeeded[b] == 0)
             {
+                pdSeeded[b] = 1;                         // these five signatures do not change; one look each
                 // ONE parse, five scans: findMethodByBytes reads gp/gcp and never advances them, so the
                 // constant pool this sets up is good for all five lookups.
                 parseForMethods(pdBase[b], pdLen[b]);
@@ -3320,9 +3367,11 @@ public final class Loader
         {
             // Settled blobs skipped for the same reason as everywhere else: their initializer was marked and
             // compiled by their own batch, and phase B will not compile it again. Re-marking it here only
-            // re-parsed the constant pool -- and reported `grew`, buying an extra round for nothing.
-            if (!markSettled(b))
+            // re-parsed the constant pool -- and reported `grew`, buying an extra round for nothing. Once per
+            // blob for the same reason: a class's initializer, and whether it is blocked, do not change.
+            if (!markSettled(b) && pdSeedC[b] == 0)
             {
+                pdSeedC[b] = 1;
                 parseForMethods(pdBase[b], pdLen[b]);
                 if (!clinitBlocked())
                 {
@@ -3562,6 +3611,33 @@ public final class Loader
         }
         return false;
     }
+
+    // ---- incremental-mark watermarks -------------------------------------------------------------------
+    // The round loop stays (it is what drives the fixpoint), but every pass now records how far through the
+    // pend list it has already got, per blob / per class. A round then costs only the work that is NEW since
+    // the last one, so each (blob, pend) and (class, pend) pair is processed exactly ONCE across the whole
+    // mark instead of once per round. With 33 rounds over 24,826 pends that is the difference between
+    // O(rounds x pends x blobs) and O(pends x blobs).
+    //
+    // Pends ACCUMULATE for this to work (the list used to be rebuilt from scratch each round). The total is
+    // unchanged -- the old last round already collected every reachable method's refs -- because collectBlob
+    // now collects each method once, tracked in collectedTab.
+    private static long[] collectedTab;                  // method code addresses whose refs are already pended
+    private static int[] pdPendTo;                       // per blob: pends resolved by resolveBlob
+    private static int[] pdVirtTo;                       // per class: pends dispatched by resolveVirtuals
+    // ... and the blob count when that happened. A pend watermark alone is UNSOUND for these two passes,
+    // because both walk the class's SUPERCLASS CHAIN and that chain GROWS as ancestors are pulled in later
+    // rounds: a pend already considered for C can resolve to an inherited method that was not visible the
+    // first time. Whenever the blob set has changed, the class reconsiders every pend. (Conservative -- any
+    // new blob might be an ancestor -- but the rounds after class-pulling stops are the incremental ones,
+    // and they are the majority.) markDefaults needs no epoch: an interface matches against its OWN methods.
+    private static int[] pdPendEpoch;
+    private static int[] pdVirtEpoch;
+    private static int[] pdDfltTo;                       // per blob: pends matched by markDefaults
+    private static int[] pdSeeded;                       // per blob: seedNativelyReached done
+    private static int[] pdSeedC;                        // per blob: seedClinits done
+    private static int pendPullTo;                       // pends already looked up in the class dir
+    private static int virtFrom;                         // matchLevel/matchDefaults: ignore pends below this
 
     private static int[] pnBucket;                       // registered class names, by hash -> pd index
     private static int[] pnNext;                         // chain link, per blob
