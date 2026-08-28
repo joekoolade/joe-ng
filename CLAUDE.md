@@ -109,13 +109,13 @@ defines the minimum the assembler must encode.
     Spliterators$ArraySpliterator` → `StreamSupport.stream` → `newresolve ReferencePipeline$Head` →
     `StreamOpFlag.fromCharacteristics` — demand-loading ~20 classes (`ReferencePipeline`, `AbstractPipeline`,
     `PipelineHelper`, `EnumMap` + 9 nested) as it goes. Resolution is not the blocker any more.
-  - **The seed stays for a DIFFERENT reason, and one earlier reading of this was wrong.** A first Pi run was
+  - **What the seedless run died of next, and one earlier reading that was wrong.** A first Pi run was
     cut short and read as "too slow to finish"; it is slow (each demand-load is a full structure pass plus a
-    `patchRelocs` over every reloc so far, and load time is super-linear) but it DOES complete, and then dies:
+    `patchRelocs` over every reloc so far, and load time is super-linear) but it DOES complete, and then died:
     `ArrayIndexOutOfBoundsException at java/util/EnumMap.getKeyUniverse(EnumMap.java:751)`, whose whole body is
     `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(keyType)` — one `invokeinterface`. A bare AIOOBE
-    at a dispatch is this VM's null-vtable/itable guard, i.e. almost certainly the slot-0 gap below, reached
-    for real rather than only in a demo.
+    at a dispatch is this VM's null-vtable/itable guard: the RTA-pruned itable entry below, reached for real
+    rather than only in a demo. Fixed by `mintPrunedStub`.
   - **The denylist guard on the `new` path is load-bearing:** the call path is guarded at patch time, but a
     `new` site is recorded during the compile and `pullClass(byte[])` goes straight to the classDir without
     consulting the denylist. Without an explicit check, resolution would pull a denylisted class and turn
@@ -143,16 +143,27 @@ defines the minimum the assembler must encode.
     `globalVtableSlot` returns 0 when it finds no match, so the call dispatches through vtable slot 0 of
     whatever the receiver is. Writing the demo arm as `new RtaMade().tag()` returned null through exactly
     that path; the arm returns the object instead, and the caller checks `getClass().getName()`.
-  - **Superseded — the note that late resolution does not cover `new`.** On hardware the chain walks three levels
-    (`Arguments.of` → `Stream.of` → `Spliterators.spliterator`) and then hits
-    `UNRESOLVED NEW: java/util/Spliterators$ArraySpliterator`. A `new` resolves at COMPILE time through
-    `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call
-    site, and `loadClassIncremental` deliberately pulls a class WITHOUT its dependencies (the "eager seeding
-    blew the closure" lesson), so an on-demand compile can instantiate a class nothing pulled. Until that is
-    covered, `ZipJUnitAll.seedFactoryClosure` stays, with a comment saying exactly why. Pi with the seed back:
-    `zip junit: ran 29, failures 0` and **not one `linkresolve` line** — the stub is a fallback that costs
-    nothing when nothing needs it. The seed's price is visible too: the closure is **446 classes with it and
-    354 without**, i.e. 92 pulled eagerly that late resolution would pull only if reached.
+  - **A deferred `new` SKIPPED its constructor — the last gap.** `isRealSpecial` treated an `invokespecial`
+    as a real call only if the target class was already registered; a class that had just been resolved late
+    is not, so `<init>` was lowered as a pop and the object came back raw. That is what NPE'd in
+    `AbstractPipeline.isParallel` — `ReferencePipeline$Head`'s three-deep constructor chain never ran, so
+    `sourceStage` was null. `classLoadable` widens the test to "in the classDir and not denied".
+  - **DONE, PI-VALIDATED 2026-08-28 (PR #192): `zip junit: ran 29, failures 0` / `ALL PASSED` with
+    `seedFactoryClosure` DELETED.** The log walks the whole reflective closure — `Arguments.of` →
+    `Stream.of` → `Spliterators.spliterator` → `newresolve ArraySpliterator` → its `<init>` →
+    `StreamSupport.stream` → `newresolve ReferencePipeline$Head` → `<init>` → `ReferencePipeline.<init>` →
+    `AbstractPipeline.<init>` → `StreamOpFlag.fromCharacteristics` (pulling EnumMap + 10 nested) →
+    `newresolve Spliterators$1Adapter` → `lambda$of$0`. **Each of the five gaps was invisible until the one
+    before it was fixed** — one Pi boot per layer — so a fix that "exposes the next layer" is progress here.
+    Seeding's price, now unpaid: the closure was **446 classes with the seed and 354 without**.
+    - **Cost of minting: ~700 stubs over that 354-class closure**, nearly all `MetalJavaLangAccess`'s ~100
+      interface methods and the java.time/collections families' unused overrides — arena pressure at load
+      time for methods that never run. Lever if it matters: mint on first dispatch, not at itable-build time.
+    - **Two slots legitimately have no bytecode and must stay 0**, and only the instrumented boot could say
+      which: an ABSTRACT method the class declares itself (`AbstractCollection.iterator`,
+      `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
+      shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
+      **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
@@ -377,10 +388,11 @@ defines the minimum the assembler must encode.
   i.e. EVERY varargs call taking a lambda. One line (`superType = objectTypeAddr()`). **(2) RTA cannot see
   through reflection:** a method reached only via `Method.invoke` compiles, but nothing statically reachable
   mentions ITS callees, so they are never pulled and its call sites trap (`logTrapWire = 1` names them).
-  Worked around at the HARNESS level (`seedFactoryClosure` calls the same methods from reachable code);
-  seeding must match the DESCRIPTOR, not the name — `Stream.of(T)` does not satisfy a `Stream.of(T...)` site.
+  Worked around at the time at the HARNESS level (`seedFactoryClosure` called the same methods from reachable
+  code); seeding had to match the DESCRIPTOR, not the name — `Stream.of(T)` does not satisfy a `Stream.of(T...)` site.
   The principled fix — late resolution at the trap site, reusing `resolveBakeStub`'s demand-load+memoize — is
-  NOT built. The first boot of the 22-case suite was 15/22: DeflaterClose 3/3, InflaterClose 3/3,
+  BUILT and Pi-validated now (PR #192, 2026-08-28), and the seed is deleted; see the late-resolution bullets
+  above. The first boot of the 22-case suite was 15/22: DeflaterClose 3/3, InflaterClose 3/3,
   GZIPInputStreamAvailable, both DataDescriptor tests, CloseWrappedStream 6/6 (its log shows
   `baked java/lang/Throwable.addSuppressed`/`getSuppressed` — the tests that need suppressed exceptions are
   the ones exercising the new support). The 7 `Zip64DataDescriptor` failures were ONE bug:
