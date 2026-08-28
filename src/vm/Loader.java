@@ -2483,6 +2483,26 @@ public final class Loader
     private static int[] instOff;
     private static int instN;
 
+    // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
+    static int mrRounds;
+    static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
+
+    /**
+     * True if blob {@code b} was compiled by an EARLIER batch, so the mark can skip it. Phase B is guarded by
+     * the same flag ({@code pdDoneB[i] == 0}), which is the whole argument: a settled blob is never recompiled
+     * and its TIB never rebuilt, so marking one of its methods now cannot compile anything. All the mark can
+     * still do for it is re-derive references its own batch already followed. On an incremental load that is
+     * ~97% of every pass (75 settled blobs to pull one new class), and it is repeated once per round.
+     *
+     * <p>What a settled blob's UNMARKED method costs instead is one late resolution at the site that reaches
+     * it -- a deferral stub in the vtable, or a link stub at the call -- which is the machinery the reflection
+     * arc built and validated. Within the first batch nothing is settled, so nothing here changes.
+     */
+    private static boolean markSettled(int b)
+    {
+        return pdDoneB[b] != 0;
+    }
+
     private static void markReachable()
     {
         reachN = 0;
@@ -2506,10 +2526,24 @@ public final class Loader
         // (c) marks the invoke targets now resolvable. So a program pulls only its reachable closure -- the
         // basis for embedding all of java.base without dragging every class's full constant-pool closure in.
         boolean grew = true;
+        mrRounds = 0;
+        mrProbe = 0L;
+        mrSeed = 0L;
+        mrCollect = 0L;
+        mrPull = 0L;
+        mrStruct = 0L;
+        mrInst = 0L;
+        mrStatic = 0L;
+        mrVirt = 0L;
+        mrDflt = 0L;
         while (grew)
         {
             grew = false;
+            mrRounds += 1;
+            long tp = Magic.readCNTPCT_EL0();
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
+            mrProbe += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = seedAllNamed(Magic.bytes("run"), Magic.bytes("()V")) || grew;   // Runnable trampoline entries
             // VarHandle overlay ops: their signature-polymorphic call sites (getAndBitwiseOr:(Lsome;I)I) don't
             // match the overlay descriptor, so the normal invoke-target marking misses them and they'd compile
@@ -2527,13 +2561,20 @@ public final class Loader
             // lands in dispatchTargetGuard as a bare AIOOBE -- which is where StreamOpFlag.<clinit> died.
             grew = seedAllNamed(Magic.bytes("getEnumConstants"), Magic.bytes("()[Ljava/lang/Object;")) || grew;
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
+            mrSeed += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             pendN = 0;
             int b = 0;
             while (b < pdCount)                         // collect refs of reachable methods
             {
-                collectBlob(pdBase[b], pdLen[b]);
+                if (!markSettled(b))
+                {
+                    collectBlob(pdBase[b], pdLen[b]);
+                }
                 b += 1;
             }
+            mrCollect += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             int r = 0;
             while (r < pendN)                           // pull referenced classes not yet loaded
             {
@@ -2544,21 +2585,38 @@ public final class Loader
                 }
                 r += 1;
             }
+            mrPull += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             b = 0;
             while (b < pdCount)                         // pull each loaded class's super + interfaces
             {
-                grew = pullStructural(pdBase[b], pdLen[b]) || grew;
+                if (!markSettled(b))
+                {
+                    grew = pullStructural(pdBase[b], pdLen[b]) || grew;
+                }
                 b += 1;
             }
+            mrStruct += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = computeInstantiated() || grew;       // RTA: flag the pd blobs `new`'d by a reached method
+            mrInst += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             b = 0;
             while (b < pdCount)                         // resolve static/special targets (class-qualified, precise)
             {
-                grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                if (!markSettled(b))
+                {
+                    grew = resolveBlob(pdBase[b], pdLen[b]) || grew;
+                }
                 b += 1;
             }
+            mrStatic += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = resolveVirtuals() || grew;           // RTA: virtual/interface targets, in instantiated types only
+            mrVirt += Magic.readCNTPCT_EL0() - tp;
+            tp = Magic.readCNTPCT_EL0();
             grew = markDefaults() || grew;              // RTA: interface DEFAULT methods (resolveVirtuals only walks
+            mrDflt += Magic.readCNTPCT_EL0() - tp;
         }                                               //   class hierarchies, so an unoverridden default is missed)
         markActive = 1;
     }
@@ -2579,6 +2637,11 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
+            if (markSettled(b))
+            {
+                b += 1;
+                continue;
+            }
             parseConstPool(pdBase[b], pdLen[b]);
             boolean iface = (u2(gp) & 0x0200) != 0;      // ACC_INTERFACE (access_flags right after the constant pool)
             if (iface)
@@ -2934,7 +2997,7 @@ public final class Loader
         int c = 0;
         while (c < pdCount)
         {
-            if (pdInstantiated[c])
+            if (pdInstantiated[c] && !markSettled(c))     // a settled receiver's vtable is built and frozen
             {
                 int p = 0;
                 while (p < pendN)                        // reset: no pend dispatched yet for this class
@@ -2977,8 +3040,11 @@ public final class Loader
         int b = 0;
         while (b < pdCount)
         {
-            parseForMethods(pdBase[b], pdLen[b]);
-            grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
+            if (!markSettled(b))
+            {
+                parseForMethods(pdBase[b], pdLen[b]);
+                grew = addReach(findMethodByBytes(gbase, name, desc)) || grew;
+            }
             b += 1;
         }
         return grew;
@@ -4497,6 +4563,8 @@ public final class Loader
      */
     private static void loadAll()
     {
+        long tAll = Magic.readCNTPCT_EL0();
+        long tMark = tAll;
         ensureObjectBlob();                              // every vtable starts with Object's 9 slots
         if (gEntryBlob != 0L)                            // reachability requested: mark + PULL the reachable
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
@@ -4505,7 +4573,9 @@ public final class Loader
         ensureImplicitExcBlobs();                        // AFTER the closure is pulled -- the gate asks whether
                                                          //   this batch has Throwable, which markReachable is what
                                                          //   brings in; before it, the answer is always no
+        long tProbe = Magic.readCNTPCT_EL0();
         probeAll();                                      // this_class + super + interfaces + dep list over the final set
+        long tA = Magic.readCNTPCT_EL0();
 
         // PHASE A: register every class's STRUCTURE, super/interface-first. That graph is acyclic, so linkReady
         // always finds a ready blob -- no force-load, no arbitrary order. (The fallback guards a malformed set.)
@@ -4545,6 +4615,7 @@ public final class Loader
             }
         }
 
+        long tB = Magic.readCNTPCT_EL0();
         // PHASE B: compile every class's method bodies + fill its TIB, superclass-first (so inherited vtable
         // buffers are already filled). All new/field/vtable/itable/cast targets are structure-registered now, so
         // order is irrelevant except for the super-before-subclass buffer inheritance; method CALLs are patched.
@@ -4584,8 +4655,10 @@ public final class Loader
             }
         }
 
+        long tPatch = Magic.readCNTPCT_EL0();
         patchRelocs();                                  // every body is compiled now: fix up the cross-class method
                                                         // CALLs left unresolved while their target compiled later
+        long tRest = Magic.readCNTPCT_EL0();
         refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
@@ -4598,6 +4671,10 @@ public final class Loader
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
+        if (LOAD_PROFILE)
+        {
+            profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+        }
         // 4-phase lifecycle: batch initialization just completed -- every INSTANTIATED class's queued
         // <clinit> has run (or was deliberately skipped with seeded statics), so the whole batch
         // reaches INITIALIZED. The boot invariant flags any class stuck short of phase B (a hole in
@@ -7347,6 +7424,86 @@ public final class Loader
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
 
     private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
+
+    /**
+     * Per-batch phase timing for {@link #loadAll} over the UART (debug). A demand-load's cost is invisible in
+     * the {@code load} lines -- those time only {@link #addBlob}, i.e. putting the blob on the pending list.
+     * All the real work happens afterwards in one batch, so this is what says WHERE it goes.
+     */
+    private static final boolean LOAD_PROFILE = true;
+
+    /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
+    private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
+    {
+        Uart.write(Magic.bytes("  loadall pd="));
+        VM.printDec(pdCount);
+        Uart.write(Magic.bytes(" rc="));
+        VM.printDec(rcCount);
+        Uart.write(Magic.bytes(" rg="));
+        VM.printDec(rgCount);
+        Uart.write(Magic.bytes(" mark="));
+        printDur(spanUs(tMark, tProbe));
+        Uart.write(Magic.bytes(" probe="));
+        printDur(spanUs(tProbe, tA));
+        Uart.write(Magic.bytes(" A="));
+        printDur(spanUs(tA, tB));
+        Uart.write(Magic.bytes(" B="));
+        printDur(spanUs(tB, tPatch));
+        Uart.write(Magic.bytes(" patch="));
+        printDur(spanUs(tPatch, tRest));
+        Uart.write(Magic.bytes(" clinit="));
+        printDur(elapsedUs(tRest));
+        Uart.write(Magic.bytes(" total="));
+        printDur(elapsedUs(tAll));
+        Uart.putc(0x0A);
+        Uart.write(Magic.bytes("    mark rounds="));
+        VM.printDec(mrRounds);
+        Uart.write(Magic.bytes(" reach="));
+        VM.printDec(reachN);
+        Uart.write(Magic.bytes(" pend="));
+        VM.printDec(pendN);
+        Uart.write(Magic.bytes(" probe="));
+        printDur(ticksUs(mrProbe));
+        Uart.write(Magic.bytes(" seed="));
+        printDur(ticksUs(mrSeed));
+        Uart.write(Magic.bytes(" collect="));
+        printDur(ticksUs(mrCollect));
+        Uart.write(Magic.bytes(" pull="));
+        printDur(ticksUs(mrPull));
+        Uart.write(Magic.bytes(" struct="));
+        printDur(ticksUs(mrStruct));
+        Uart.write(Magic.bytes(" inst="));
+        printDur(ticksUs(mrInst));
+        Uart.write(Magic.bytes(" static="));
+        printDur(ticksUs(mrStatic));
+        Uart.write(Magic.bytes(" virt="));
+        printDur(ticksUs(mrVirt));
+        Uart.write(Magic.bytes(" dflt="));
+        printDur(ticksUs(mrDflt));
+        Uart.putc(0x0A);
+    }
+
+    /** A raw CNTPCT tick count as microseconds. */
+    private static long ticksUs(long ticks)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return ticks * 1000000L / f;
+    }
+
+    /** Microseconds between two {@code CNTPCT_EL0} readings. */
+    private static long spanUs(long t0, long t1)
+    {
+        long f = Magic.readCNTFRQ_EL0();
+        if (f == 0L)
+        {
+            return 0L;
+        }
+        return (t1 - t0) * 1000000L / f;
+    }
     private static DynLink[] dlTab;    // phase-A dynamic-linking table (reified: one DynLink per method cell)
     private static int    dlN;
 
