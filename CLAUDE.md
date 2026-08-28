@@ -164,9 +164,9 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
-- **Demand-load speed — `loadAll` 1712s -> 11.75s on the zip suite, 146x (2026-08-28, PI-VALIDATED).**
+- **Demand-load speed — `loadAll` 1712s -> 10.09s on the zip suite, 170x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
-  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 12.4s;
+  thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 5.0s;
   each incremental 219s -> 8-93ms. `ALL PASSED` and the same linkresolve/newresolve chain throughout.
   - **The `load <cls> NNus` line is a DECOY** — it times only `addBlob` (putting a blob on the pending list),
     so it reads 5-180us while its batch takes minutes. `LOAD_PROFILE` in `vm/Loader` (off by default, like
@@ -188,8 +188,19 @@ defines the minimum the assembler must encode.
   - **A wrong diagnosis the boot caught:** I said `virt`'s residue was the per-class `virtResolved` RESET.
     Replacing it with a stamp bought 15% (3,471 → 2,946 ms), so it was not the bulk. What remains is the
     chain walk — `superPdOf` does a `parseConstPool` + linear `findPdByName` per level and `parseForMethods`
-    re-parses a constant pool per level. **The biggest remaining lever is the ROUND COUNT: all 33 rounds redo
-    every pass, and a worklist-driven mark would divide the whole thing again. Not built.**
+    re-parses a constant pool per level. **The ROUND COUNT increment is built and PI-VALIDATED, but only 1.18x
+    (11.75s -> 10.09s).** Each pass carries a per-blob/per-class WATERMARK into the pend list, so a round
+    costs only what is new. `rounds=33 reach=3092 pend=24826` identical. The gain split on one line: passes
+    with no epoch collapsed (`seed` 281 -> 13.5ms, `collect` 713 -> 140ms); the three throttled by one barely
+    moved (`virt` 2946 -> 2511, `pull` 1539 -> 1309, `static` 520 -> 448).
+  - **A per-pend watermark is UNSOUND for a pass that walks the SUPERCLASS CHAIN** — the chain grows as
+    ancestors are pulled, so a pend already considered for C can later resolve to an inherited method that was
+    not visible then. `resolveVirtuals`/`resolveBlob` carry a blob-count EPOCH as well. Getting it wrong cost
+    HALF the closure (reach 1040 -> 449) and killed `demo/StrOpsDemo` with a bare AIOOBE in `String.split` —
+    **and only the demo SUITE caught it**: standalone built the correct closure even with the bug.
+  - **Two levers left.** Precise ancestor-invalidation instead of the conservative epoch (that is what unlocks
+    `virt`, still 2.5s); and **`pull`'s 1.3s is mostly UART** — 448 `load` lines at 115200, printed
+    unconditionally, against ~20ms of actual `addBlob` time.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
