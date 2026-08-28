@@ -7702,7 +7702,7 @@ public final class Loader
      * the {@code load} lines -- those time only {@link #addBlob}, i.e. putting the blob on the pending list.
      * All the real work happens afterwards in one batch, so this is what says WHERE it goes.
      */
-    private static final boolean LOAD_PROFILE = true;
+    private static final boolean LOAD_PROFILE = false;
 
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
     private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)

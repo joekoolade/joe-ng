@@ -164,7 +164,7 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
-- **Demand-load speed — `loadAll` 1712s -> 17.5s on the zip suite, 98x (2026-08-28, PI-VALIDATED).**
+- **Demand-load speed — `loadAll` 1712s -> 11.75s on the zip suite, 146x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
   thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 12.4s;
   each incremental 219s -> 8-93ms. `ALL PASSED` and the same linkresolve/newresolve chain throughout.
@@ -183,8 +183,13 @@ defines the minimum the assembler must encode.
     `reach=233 pend=699` identical before and after every step.
   - **QEMU structurally cannot see the last two** — they scale with `pendN`, **699 in the QEMU closure and
     24,826 on hardware**. `pull` (a `nameRegistered` linear scan per pend) was 6,664 ms of the remaining
-    12,364 ms; `virt`'s residue was the per-class `virtResolved` RESET, not matching. A hardware profile is
-    not a nicety here — it is the only place these appear.
+    12,364 ms; a name hash index took it to 1,539 ms. A hardware profile is not a nicety here — it is the only
+    place these appear.
+  - **A wrong diagnosis the boot caught:** I said `virt`'s residue was the per-class `virtResolved` RESET.
+    Replacing it with a stamp bought 15% (3,471 → 2,946 ms), so it was not the bulk. What remains is the
+    chain walk — `superPdOf` does a `parseConstPool` + linear `findPdByName` per level and `parseForMethods`
+    re-parses a constant pool per level. **The biggest remaining lever is the ROUND COUNT: all 33 rounds redo
+    every pass, and a worklist-driven mark would divide the whole thing again. Not built.**
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads

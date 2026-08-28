@@ -4284,7 +4284,7 @@ because that invariant is checked every boot rather than assumed.
 ### Demand-load speed — the mark was 99% of it, and most of that was work being discarded (PI-VALIDATED 2026-08-28)
 
 Late resolution made the reflective closure LOAD; it did not make it fast. The zip suite spent **28.5 minutes
-of its boot inside `loadAll`**. Three increments took that to **17.5 seconds — 98x** — with `ALL PASSED`
+of its boot inside `loadAll`**. Four increments took that to **11.75 seconds — 146x** — with `ALL PASSED`
 and the same `linkresolve`/`newresolve` chain.
 
 **Measure first, because the obvious instrument lies.** The `load <cls> NNus` lines time only `addBlob` --
@@ -4304,7 +4304,7 @@ Pi, `main=ZipJUnitAll`, per batch:
 | pd=456 (+4) | 219,265 ms | 23.9 ms | |
 | pd=461 (+13, EnumMap) | 234,707 ms | 93.0 ms | |
 | pd=462 (+1) | 235,344 ms | 59.8 ms | |
-| **total `loadAll`** | **1,711,850 ms** | **17,528 ms** | **98x** |
+| **total `loadAll`** | **1,711,850 ms** | **11,752 ms** | **146x** |
 
 The baseline's shape is the whole diagnosis: `mark` is **flat**. Adding ONE class cost the same 219 s as
 adding thirteen, because `markReachable` re-derived the entire closure from scratch every time.
@@ -4329,12 +4329,25 @@ it moved.
 **3. Repeated parsing.** The five natively-reached seed signatures were five `seedAllNamed` passes, each
 re-parsing every blob's whole constant pool; `seedNativelyReached` does one parse and five scans.
 
-**A hardware profile finds what QEMU structurally cannot.** After those three, the Pi's remaining 12,364ms
-mark was `pull` 6,664ms + `virt` 3,471ms -- 82%. Both scale with `pendN`, which is **699 in the QEMU closure
-and 24,826 on hardware**, so neither was visible locally at any magnification. `pull` asked `nameRegistered`
-once per pend and that was a linear scan over every blob (24,826 x 448 x 33 rounds); `virt`'s remaining cost
-was not matching but the per-class `virtResolved` RESET, `pendN` writes per instantiated class. A name hash
-index and a stamp, respectively.
+**A hardware profile finds what QEMU structurally cannot, and it also corrected me.** After those three, the
+Pi's remaining 12,364ms mark was `pull` 6,664ms + `virt` 3,471ms -- 82%. Both scale with `pendN`, which is
+**699 in the QEMU closure and 24,826 on hardware**, so neither was visible locally at any magnification.
+`pull` asked `nameRegistered` once per pend and that was a linear scan over every blob
+(24,826 x 448 x 33 rounds); a name hash index took it to **1,539ms**.
+
+**The `virt` half was a WRONG DIAGNOSIS, and the boot said so.** I attributed its residue to the per-class
+`virtResolved` RESET (`pendN` writes per instantiated class) and replaced it with a stamp. That bought 15%
+(3,471 -> 2,946 ms), so the reset was not the bulk. What remains is the chain walk itself: `superPdOf` does a
+`parseConstPool` plus a linear `findPdByName` per level, and `parseForMethods` re-parses a whole constant pool
+per level -- ~300 instantiated classes x chain depth x 33 rounds.
+
+**The next lever is bigger than any of these: the ROUND COUNT.** All 33 rounds redo every pass. A
+worklist-driven mark -- process only newly-reached methods instead of re-scanning everything to a fixpoint --
+would divide the whole thing again. Not built.
+
+**Four predictions, all too optimistic.** Before that boot I predicted `pull` under 500ms (actual 1,539),
+`virt` a few hundred (2,946), first-batch mark 2-3s (6.6), total 7-8s (11.75). Direction right every time,
+magnitude wrong every time -- worth remembering before quoting an estimate for the round-count work.
 
 **Cost of the instrument, and why it stays.** The timers read `CNTPCT_EL0` unconditionally (a handful of
 sysreg reads per round); only the printing is behind `LOAD_PROFILE`. That is deliberate -- the profile is the
