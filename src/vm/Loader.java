@@ -2519,6 +2519,13 @@ public final class Loader
             // StackTraceElement is instantiated NATIVELY (Loader.frameToElement), which RTA can't see, so its
             // getters would compile to 0 vtable slots. Seed them by name+descriptor (no-op if STE isn't loaded).
             grew = seedAllNamed(Magic.bytes("getMethodName"), Magic.bytes("()Ljava/lang/String;")) || grew;
+            // Class mirrors are instantiated NATIVELY too (Loader.classMirror), the same blind spot as
+            // StackTraceElement above. getEnumConstants is the one virtual on Class that stock code reaches
+            // through a mirror it did not create: EnumMap.getKeyUniverse ->
+            // SharedSecrets.getJavaLangAccess().getEnumConstantsShared(klass) -> klass.getEnumConstants().
+            // In a closure whose own code never calls it, RTA prunes it, the vtable slot stays 0, and the call
+            // lands in dispatchTargetGuard as a bare AIOOBE -- which is where StreamOpFlag.<clinit> died.
+            grew = seedAllNamed(Magic.bytes("getEnumConstants"), Magic.bytes("()[Ljava/lang/Object;")) || grew;
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             pendN = 0;
             int b = 0;
