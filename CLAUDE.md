@@ -102,16 +102,20 @@ defines the minimum the assembler must encode.
     (`of(T)` vs varargs `of(T...)`), and patches only its own reloc range so its callees can take stubs too.
     This is the interface half of `compileMethodOnDemand`'s recorded limitation (it refuses interfaces on the
     grounds it has no TIB to reuse — but `compileReuseTib` means it never touches one).
-  - **`new` is covered now (`newresolve`), but the seed stays for COST.** A `new` site defers instead of
+  - **`new` is covered now (`newresolve`) — PI-VALIDATED SIX LEVELS DEEP.** A `new` site defers instead of
     halting: reached, it demand-loads the class and allocates at the right size with the class's own TIB
-    (`VM.newUnresolved` returns the reference the emit already pushed). Pi: the whole chain resolves —
-    `Arguments.of` → `Stream.of` → `Spliterators.spliterator` → `newresolve
-    java/util/Spliterators$ArraySpliterator`. **It then runs too slowly to finish.** Each demand-load is a
-    full structure pass plus a `patchRelocs` over every reloc so far, and load time is super-linear (302
-    classes in 35 s, +70 in the next 115 s); pulling the ~90-class stream closure ONE CLASS AT A TIME on top
-    of 377 already loaded does not converge. **The seed's real value was never only RTA reachability — it
-    pulls that closure in ONE batch.** So `seedFactoryClosure` stays, and the next lever is the super-linear
-    incremental-load cost, not resolution.
+    (`VM.newUnresolved` returns the reference the emit already pushed). With the harness seed removed, the Pi
+    walks the whole chain — `Arguments.of` → `Stream.of` → `Spliterators.spliterator` → `newresolve
+    Spliterators$ArraySpliterator` → `StreamSupport.stream` → `newresolve ReferencePipeline$Head` →
+    `StreamOpFlag.fromCharacteristics` — demand-loading ~20 classes (`ReferencePipeline`, `AbstractPipeline`,
+    `PipelineHelper`, `EnumMap` + 9 nested) as it goes. Resolution is not the blocker any more.
+  - **The seed stays for a DIFFERENT reason, and one earlier reading of this was wrong.** A first Pi run was
+    cut short and read as "too slow to finish"; it is slow (each demand-load is a full structure pass plus a
+    `patchRelocs` over every reloc so far, and load time is super-linear) but it DOES complete, and then dies:
+    `ArrayIndexOutOfBoundsException at java/util/EnumMap.getKeyUniverse(EnumMap.java:751)`, whose whole body is
+    `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(keyType)` — one `invokeinterface`. A bare AIOOBE
+    at a dispatch is this VM's null-vtable/itable guard, i.e. almost certainly the slot-0 gap below, reached
+    for real rather than only in a demo.
   - **The denylist guard on the `new` path is load-bearing:** the call path is guarded at patch time, but a
     `new` site is recorded during the compile and `pullClass(byte[])` goes straight to the classDir without
     consulting the denylist. Without an explicit check, resolution would pull a denylisted class and turn
