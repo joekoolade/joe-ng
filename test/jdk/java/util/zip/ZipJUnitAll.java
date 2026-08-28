@@ -56,29 +56,6 @@ public class ZipJUnitAll
     }
 
     /**
-     * Pre-pulls the closure the reflectively-reached {@code @MethodSource} factories need.
-     *
-     * <p>This is a WORKAROUND and should be read as one. Late link resolution (see {@code Loader}'s link
-     * stubs) closes the call-site half of the RTA-through-reflection gap, and on hardware it correctly walks
-     * {@code Arguments.of} -> {@code Stream.of} -> {@code Spliterators.spliterator}. It then stops at a
-     * mechanism it does not cover: {@code new Spliterators$ArraySpliterator} inside that last body. A
-     * {@code new} is resolved at COMPILE time (it needs the instance size and TIB while emitting), not by
-     * patching a call site, and an on-demand compile can therefore instantiate a class nothing pulled.
-     *
-     * <p>So the seed stays until late resolution covers {@code new} as well. Seeding has to match the exact
-     * DESCRIPTOR, not just the name -- {@code Stream.of(T)} and the varargs {@code Stream.of(T...)} are
-     * different call sites, and seeding the wrong one leaves the trap in place.
-     */
-    static void seedFactoryClosure()
-    {
-        Iterator<Arguments> it = Stream.of(Arguments.of("seed"), Arguments.of("seed")).iterator();
-        while (it.hasNext())
-        {
-            it.next();
-        }
-    }
-
-    /**
      * Runs a {@code @ParameterizedTest} whose arguments come from a {@code @MethodSource} factory. The
      * factory is PRIVATE and static, exactly as the JUnit engine expects to find it, so it is reached the
      * same way the engine reaches it: reflectively, with setAccessible.
@@ -146,7 +123,6 @@ public class ZipJUnitAll
         run("shouldIgnoreTrucatedZip64Extra", () -> { Zip64DataDescriptor t = new Zip64DataDescriptor(); t.setup(); t.shouldIgnoreTrucatedZip64Extra(); });
 
         group("BasicGZIPInputStreamTest");
-        seedFactoryClosure();
         runParameterized("testNPEFromConstructors", "npeFromConstructors",
                          (t, e) -> t.testNPEFromConstructors(e));
         runParameterized("testIAEFromConstructors", "iaeFromConstructors",

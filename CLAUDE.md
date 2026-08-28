@@ -102,7 +102,48 @@ defines the minimum the assembler must encode.
     (`of(T)` vs varargs `of(T...)`), and patches only its own reloc range so its callees can take stubs too.
     This is the interface half of `compileMethodOnDemand`'s recorded limitation (it refuses interfaces on the
     grounds it has no TIB to reuse — but `compileReuseTib` means it never touches one).
-  - **STILL OPEN — late resolution does not cover `new`.** On hardware the chain walks three levels
+  - **`new` is covered now (`newresolve`) — PI-VALIDATED SIX LEVELS DEEP.** A `new` site defers instead of
+    halting: reached, it demand-loads the class and allocates at the right size with the class's own TIB
+    (`VM.newUnresolved` returns the reference the emit already pushed). With the harness seed removed, the Pi
+    walks the whole chain — `Arguments.of` → `Stream.of` → `Spliterators.spliterator` → `newresolve
+    Spliterators$ArraySpliterator` → `StreamSupport.stream` → `newresolve ReferencePipeline$Head` →
+    `StreamOpFlag.fromCharacteristics` — demand-loading ~20 classes (`ReferencePipeline`, `AbstractPipeline`,
+    `PipelineHelper`, `EnumMap` + 9 nested) as it goes. Resolution is not the blocker any more.
+  - **The seed stays for a DIFFERENT reason, and one earlier reading of this was wrong.** A first Pi run was
+    cut short and read as "too slow to finish"; it is slow (each demand-load is a full structure pass plus a
+    `patchRelocs` over every reloc so far, and load time is super-linear) but it DOES complete, and then dies:
+    `ArrayIndexOutOfBoundsException at java/util/EnumMap.getKeyUniverse(EnumMap.java:751)`, whose whole body is
+    `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(keyType)` — one `invokeinterface`. A bare AIOOBE
+    at a dispatch is this VM's null-vtable/itable guard, i.e. almost certainly the slot-0 gap below, reached
+    for real rather than only in a demo.
+  - **The denylist guard on the `new` path is load-bearing:** the call path is guarded at patch time, but a
+    `new` site is recorded during the compile and `pullClass(byte[])` goes straight to the classDir without
+    consulting the denylist. Without an explicit check, resolution would pull a denylisted class and turn
+    `demo/UnresolvedNewDemo` — whose whole point is that this halts — into a silent pass.
+  - **An itable entry left empty by RTA pruning — FIXED.** `buildItableFor` fills each interface-method entry
+    with `slotBuf(vs)`, which is 0 when the impl has a Code attribute but was never pulled into the batch
+    (nothing statically reachable called it) and so never got a deferral stub. An interface call reaching it
+    later hits `dispatchTargetGuard` as a **bare AIOOBE** — which is precisely what
+    `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(...)` inside `EnumMap.getKeyUniverse` does once
+    its caller arrives through demand-loaded code, and what stopped the seedless zip run.
+    `mintPrunedStub` mints the deferral stub there (it cannot reuse `emitDeferredStub`, which works off the
+    per-method compile arrays that exist only for batched methods; everything needed is in the vtable entry,
+    with `maxLocals`/`codeLen` read back from the Code attribute's header fields).
+    - **Read the two guards to tell the cases apart:** the itable directory-miss sentinel throws **NPE**;
+      `dispatchTargetGuard` (implausible target word) throws **AIOOBE**. AIOOBE therefore means the interface
+      WAS found on the receiver and the slot's entry was empty — not a missing interface.
+    - **Scope is deliberate and measured.** Minting for every vtable slot costs **3-4x the code arena per
+      batch** (8.1K→30.9K, 20.3K→65.9K, 22.9K→91.2K) and buys nothing for plain virtual dispatch: RTA marks
+      all virtuals of an INSTANTIATED class, and a class never instantiated can never be a receiver. Confining
+      it to itable entries costs **~1.4x** (8.1K→11.6K, 20.3K→27.2K, 22.9K→33.1K).
+    - `demo/ReflectRtaDemo`'s `ifaceprune` arm reproduces the whole thing in ten lines instead of 400 classes;
+      `ifacecall` is its control (same interface, statically reachable, entry filled). `demo/EnumMapDemo`
+      pins that EnumMap itself is fine in a small closure — the bug was never EnumMap, it was the context.
+  - **Found, NOT fixed — a DIFFERENT dispatch gap: `invokevirtual` on a class unregistered at compile time.**
+    `globalVtableSlot` returns 0 when it finds no match, so the call dispatches through vtable slot 0 of
+    whatever the receiver is. Writing the demo arm as `new RtaMade().tag()` returned null through exactly
+    that path; the arm returns the object instead, and the caller checks `getClass().getName()`.
+  - **Superseded — the note that late resolution does not cover `new`.** On hardware the chain walks three levels
     (`Arguments.of` → `Stream.of` → `Spliterators.spliterator`) and then hits
     `UNRESOLVED NEW: java/util/Spliterators$ArraySpliterator`. A `new` resolves at COMPILE time through
     `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call

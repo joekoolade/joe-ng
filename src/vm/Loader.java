@@ -2519,6 +2519,13 @@ public final class Loader
             // StackTraceElement is instantiated NATIVELY (Loader.frameToElement), which RTA can't see, so its
             // getters would compile to 0 vtable slots. Seed them by name+descriptor (no-op if STE isn't loaded).
             grew = seedAllNamed(Magic.bytes("getMethodName"), Magic.bytes("()Ljava/lang/String;")) || grew;
+            // Class mirrors are instantiated NATIVELY too (Loader.classMirror), the same blind spot as
+            // StackTraceElement above. getEnumConstants is the one virtual on Class that stock code reaches
+            // through a mirror it did not create: EnumMap.getKeyUniverse ->
+            // SharedSecrets.getJavaLangAccess().getEnumConstantsShared(klass) -> klass.getEnumConstants().
+            // In a closure whose own code never calls it, RTA prunes it, the vtable slot stays 0, and the call
+            // lands in dispatchTargetGuard as a bare AIOOBE -- which is where StreamOpFlag.<clinit> died.
+            grew = seedAllNamed(Magic.bytes("getEnumConstants"), Magic.bytes("()[Ljava/lang/Object;")) || grew;
             grew = seedClinits() || grew;               // runnable <clinit>s: pull the classes an initializer calls
             pendN = 0;
             int b = 0;
@@ -6375,6 +6382,22 @@ public final class Loader
             if (vs >= 0)
             {
                 buf = slotBuf(vs);
+                if (buf == 0L)
+                {
+                    // The impl has a Code attribute but no buffer: RTA PRUNED it -- nothing statically
+                    // reachable called it, so it was never pulled into the batch and never given a deferral
+                    // stub, and this itable entry would stay 0. An interface call reaching it later then hits
+                    // dispatchTargetGuard as a bare AIOOBE with no hint of what was missing -- which is
+                    // exactly what `SharedSecrets.getJavaLangAccess().getEnumConstantsShared(...)` inside
+                    // EnumMap does once its caller arrives through demand-loaded code.
+                    //
+                    // Minting here rather than in slotBuf is deliberate. Doing it for every vtable slot costs
+                    // 3-4x the code arena per batch (measured: 8K->31K, 20K->64K, 23K->89K), and buys nothing
+                    // for plain virtual dispatch: RTA marks all virtuals of an INSTANTIATED class, and a class
+                    // that is never instantiated can never be a receiver. Interface entries are the case that
+                    // actually goes empty, and they are a small fraction of the methods.
+                    buf = mintPrunedStub(vs);
+                }
             }
             else
             {
@@ -7083,7 +7106,32 @@ public final class Loader
         {
             return false;
         }
-        return utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx);
+        if (utf8Eq(refClassNameOff(idx), gThisNameOff) || refClassRegistered(idx))
+        {
+            return true;
+        }
+        // Not registered YET, but demand-loadable: emit a REAL call and let patchRelocs give it a link stub,
+        // which resolves when the site is reached. Skipping it is what a deferred `new` cannot survive --
+        // resolveUnresolvedNew allocates the object with the right TIB, and then the constructor beside it was
+        // compiled away as if it were Object.<init>, so every field stayed 0. That is exactly how
+        // `new ReferencePipeline$Head(...)` produced an object whose sourceStage was null, and
+        // AbstractPipeline.isParallel then NPE'd on `sourceStage.parallel`.
+        //
+        // Still skipped: a DENYLISTED or genuinely absent superclass. Those are the "unloaded root" the
+        // skip exists for -- a class extending something the metal environment does not have -- and turning
+        // their super() into a call that traps would break boots that are correct today.
+        return classLoadable(gbase, refClassNameOff(idx));
+    }
+
+    /** True if the class named at {@code (base, off)} could be demand-loaded: not denylisted, and present in
+     *  the embedded classDir. Deliberately narrower than "not registered": see {@link #isRealSpecial}. */
+    private static boolean classLoadable(long base, int off)
+    {
+        if (isDenylisted(base, off))
+        {
+            return false;
+        }
+        return VM.dirBytes(base + off + 2, u2(base + off)) != 0L;
     }
 
     /**
@@ -8688,6 +8736,71 @@ public final class Loader
     }
 
     /**
+     * A deferral stub for a vtable slot whose method RTA pruned. {@link #emitDeferredStub} cannot serve here:
+     * it works off the per-method compile arrays ({@code mCode}/{@code mLen}/...), which only exist for
+     * methods that were pulled into the batch. Everything needed is in the vtable entry instead — the Code
+     * attribute address, and {@code maxLocals}/{@code codeLen} read back from the two header fields that
+     * precede the bytecode ({@code {u2 maxStack}{u2 maxLocals}{u4 codeLen}}). Non-static by construction: a
+     * vtable slot only ever holds an instance method. 0 if the lazy table is full, leaving the old behaviour.
+     */
+    private static long mintPrunedStub(int s)
+    {
+        long code = gvTab[s].implCode;
+        if (code == 0L)
+        {
+            // slotBuf answers 0 from two paths, and neither has bytecode to defer to. The common one is an
+            // ABSTRACT method the class declares itself -- `AbstractCollection.iterator`, `AbstractMap
+            // .entrySet`, `AbstractList.size` all reach here on a real boot. The other is a NATIVE instance
+            // method whose VM helper is missing (nativeBufAt found nothing). Without the guard the two Code
+            // header reads below happen at addresses -4 and -6.
+            return 0L;
+        }
+        // The Code attribute's header must lie INSIDE this class's blob, or those reads walk off it. findCode
+        // returns the bytecode start, so maxLocals sits at code-6 and codeLen at code-4; both must be within
+        // [blob, blob+len). The read is raw -- there is no bounds check under it -- so it is checked here.
+        int pd = findPdByName(gbase, gThisNameOff);
+        if (pd < 0 || code - 6L < gbase || code >= gbase + pdLen[pd])
+        {
+            return 0L;
+        }
+        lazyEnsureTables();
+        if (lzN >= MAXLAZY)
+        {
+            return 0L;
+        }
+        if (lazyTrampAddr == 0L)
+        {
+            buildLazyTramp();
+        }
+        int idx = lzN;
+        lzTab[idx] = new LazyMethod();
+        lzTab[idx].blob = gbase;
+        lzTab[idx].len = pdLen[pd];
+        lzTab[idx].reg = classRegByName(gThisNameOff);
+        lzTab[idx].nameOff = 0;
+        lzTab[idx].descOff = gvTab[s].desc;
+        lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
+        lzTab[idx].code = code;
+        lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
+        lzTab[idx].isStatic = 0;
+        lzTab[idx].maxLocals = u2(code - 6L);
+        lzTab[idx].cache = 0L;
+        lzN += 1;
+        long buf = Heap.allocCode(32);
+        noteStub(buf, idx);
+        Heap.pinCodeAt(buf);
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));                                              w += 1;
+        Heap.publishCode(buf, buf + w * 4L);
+        gvTab[s].implBuf = buf;                         // a class implementing N interfaces that each declare
+        return buf;                                     //   this method would otherwise mint N identical stubs
+    }
+
+    /**
      * Vtable slot of the virtual method named by Methodref {@code idx}. Same-class
      * calls use this class's own vtable; a call whose ref names another class (a
      * cross-class {@code invokevirtual}) or an interface resolves via the global
@@ -10039,9 +10152,77 @@ public final class Loader
     }
 
     /**
-     * The {@code NEW_UNRESOLVED} trap fired: a `new` whose class the loader could not resolve was actually
-     * EXECUTED. Name the class and the calling method, then halt -- there is no correct object to return, and
-     * the old behaviour (an instance carrying an unrelated class's TIB) corrupts silently instead.
+     * A deferred `new` was REACHED: resolve it now. The compile-time failure means only that the class was not
+     * registered when the body was emitted, which is the `new` half of the RTA-through-reflection gap — a body
+     * compiled on demand can instantiate a class nothing pulled, because {@code loadClassIncremental} loads a
+     * class WITHOUT its dependencies on purpose. Demand-load it, then allocate exactly as
+     * {@code Baseline.lowerNew}'s resolved path does: size from the field count, the class's own TIB in the
+     * header. Returns the reference.
+     *
+     * <p>Unlike a call site there is no stub to memoize into — a `new` is a fixed instruction sequence, not a
+     * patchable branch target — so this runs per execution. That is the right trade anyway: the sites that
+     * reach here are cold by construction, and the second execution finds the class already registered, so all
+     * that repeats is a registry lookup.
+     *
+     * <p>If the class still cannot be resolved (a genuinely denylisted subtree) this falls through to
+     * {@link #reportUnresolvedNew}, so that diagnostic — and the guarantee that a wrong-typed object is never
+     * returned — is exactly as it was.
+     */
+    static long resolveUnresolvedNew(long site, long pc)
+    {
+        int i = (int) site;
+        if (unresBase == null || i < 0 || i >= unresN || clTab == null)
+        {
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        if (isDenylisted(unresBase[i], unresOff[i]))
+        {
+            // A metal-absent subtree. The call path gets this guard at patch time (patchRelocsFrom never
+            // stubs a denylisted callee); a `new` site is recorded during the compile, with no such check,
+            // so it has to happen here. Without it loadClassIncremental would cheerfully pull the class --
+            // pullClass(byte[]) goes straight to the classDir -- which both defeats the denylist and turns
+            // demo/UnresolvedNewDemo, whose whole point is that this halts, into a silent pass.
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        long clsU = unresBase[i] + unresOff[i];
+        int len = u2(clsU);
+        byte[] slash = new byte[len];
+        int k = 0;
+        while (k < len)
+        {
+            slash[k] = (byte) u1(clsU + 2 + k);
+            k += 1;
+        }
+        VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        if (classIndexByName(slash) < 0)
+        {
+            Uart.write(Magic.bytes("  newresolve "));
+            printNameAt(clsU, 0);
+            Uart.putc(0x0A);
+            long pulled = loadClassIncremental(slash);
+        }
+        int reg = classIndexByName(slash);
+        long tib = 0L;
+        int fields = 0;
+        if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)
+        {
+            tib = clTab[reg].tib;                       // a half-lifecycle class has no filled TIB: do not use it
+            fields = clTab[reg].fieldCount;
+        }
+        VM.loaderUnlock();
+        if (tib == 0L)
+        {
+            reportUnresolvedNew(site, pc);              // does not return
+        }
+        long obj = Heap.alloc(16 + fields * 8);
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
+        return obj;
+    }
+
+    /**
+     * A deferred `new` was reached and could NOT be resolved. Name the class and the calling method, then halt
+     * -- there is no correct object to return, and the old behaviour (an instance carrying an unrelated
+     * class's TIB) corrupts silently instead.
      */
     static void reportUnresolvedNew(long site, long pc)
     {

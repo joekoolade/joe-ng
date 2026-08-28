@@ -4181,13 +4181,64 @@ ONLY via `Method.invoke` is compiled on demand, but nothing statically reachable
 those bodies are never pulled and each of its static call sites is trap-wired. The probe demonstrates it in
 one file: identical code, direct call passes, reflective call traps.
 
-The workaround here is at the HARNESS level and should be recognised as one: `seedFactoryClosure()` calls the
-same methods from statically reachable code so RTA pulls them. It is fragile in a way worth knowing --
+The workaround at the time was at the HARNESS level and was recognised as one: `seedFactoryClosure()` called
+the same methods from statically reachable code so RTA pulled them. It was fragile in a way worth knowing --
 seeding `Stream.of(T)` does NOT satisfy a `Stream.of(T...)` call site, because resolution is per descriptor,
-not per name; that cost a probe cycle. **The principled fix is late resolution at the trap site**, and the
-machinery already exists for baked methods (`resolveBakeStub` demand-loads the class and memoizes). Pointing
-an unresolved loader call site at the same path would close the whole class of problem instead of one test.
-Not built.
+not per name; that cost a probe cycle. **The principled fix is late resolution at the trap site.** It is now
+BUILT and Pi-validated, and `seedFactoryClosure` is deleted -- see "Late resolution" below.
+
+### Late resolution — RTA's blind spots close at the site, not in the harness (PI-VALIDATED 2026-08-28)
+
+`zip junit: ran 29, failures 0` / `ALL PASSED` on hardware **with no seeding of any kind**. The reflective
+`@MethodSource` closure -- ~10 classes and 3 constructors that nothing statically reachable names -- is
+discovered entirely at runtime, in one chain the boot log spells out end to end:
+
+```
+linkresolve Arguments.of -> Stream.of -> Spliterators.spliterator
+newresolve  Spliterators$ArraySpliterator  -> linkresolve its <init>
+linkresolve StreamSupport.stream
+newresolve  ReferencePipeline$Head -> <init> -> ReferencePipeline.<init> -> AbstractPipeline.<init>
+linkresolve StreamOpFlag.fromCharacteristics  (pulls EnumMap + 10 nested classes)
+newresolve  Spliterators$1Adapter -> <init>
+linkresolve Arguments.lambda$of$0
+```
+
+RTA is unchanged. What changed is that every place the compiler previously had to give up now emits a
+resolving stub instead of a trap, and the stub demand-loads on first execution. **Five gaps, each found only
+because the previous fix exposed it** -- the order is the finding:
+
+1. **An unresolvable CALL site** (`patchRelocsFrom`) now points at a *link stub* (`linkStubFor` ->
+   `buildLinkStub`) rather than the denylist trap. On first call `resolveLinkStub` demand-loads the class and
+   resolves the target, memoized by (class, name, descriptor). `buildLinkTramp` is the twin of the lazy
+   trampoline and saves x0..x15 + LR -- and restores LR *before* the tail branch, so a genuinely denylisted
+   target still reports through `denylistTrap`'s x30-keyed trapwire lookup.
+2. **A static method on an interface** has no vtable slot to defer through, so a 4th resolution tier was
+   needed: `compileSigOnDemand` compiles one method out of its own class's blob, matched on name AND
+   descriptor (name alone picks the wrong overload -- the same per-descriptor lesson as the seeding above).
+3. **An unresolvable `new`** (`NEW_UNRESOLVED`, built earlier as a halt) becomes `VM.newUnresolved(J)J` ->
+   `resolveUnresolvedNew`, which demand-loads the class and allocates. The denylist guard in it is
+   load-bearing: `pullClass(byte[])` goes straight to the classDir and would happily load a denied class.
+4. **An RTA-pruned itable entry** was a literal 0 in the table, which dispatch reported as a bare AIOOBE.
+   `buildItableFor` now mints a deferral stub for it (`mintPrunedStub`), reading `maxLocals`/`codeLen` back
+   out of the Code attribute header. Two slots legitimately have no bytecode and must stay 0 -- an ABSTRACT
+   method the class declares itself (`AbstractCollection.iterator`, `AbstractMap.entrySet` and
+   `AbstractList.size` all reach it on a real boot) and a native with no VM helper.
+5. **A deferred `new` skipped its constructor.** `isRealSpecial` only treated a call real if the class was
+   already registered; a class that had just been resolved late was not, so `<init>` was lowered as a pop
+   and the object came back raw. Widened with `classLoadable` -- present in the classDir and not denied.
+
+Plus one blind spot that is not a call site at all: **`Class.getEnumConstants` is instantiated NATIVELY**
+(via `Loader.classMirror`, the same precedent as `StackTraceElement`), so the RTA rule "a class never
+instantiated can never be a receiver" is false for it. `seedAllNamed` seeds the method by name+descriptor.
+
+**Cost, measured on the validated boot:** ~700 stubs minted across a 354-class closure, nearly all of them
+`MetalJavaLangAccess`'s ~100 interface methods and the `java.time`/collections families' unused overrides.
+That is arena pressure paid at load time for methods that will never run; if it ever matters, the lever is
+minting on first dispatch rather than at itable-build time.
+
+**Still open, deliberately:** `globalVtableSlot` answers 0 on no match, so an `invokevirtual` on a class not
+registered at compile time silently dispatches to slot 0 rather than resolving late. Same shape as the gaps
+above, no test currently reaches it.
 
 **First Pi run of the 22-case suite: 15 of 22, and the 7 failures were one bug.** The confirming boot shows `clinit-lazy java/util/HexFormat` at the head of the
 `Zip64DataDescriptor` group and all seven of its methods green, with the other six classes byte-identical to

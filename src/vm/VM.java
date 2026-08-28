@@ -835,17 +835,18 @@ public final class VM
      * type), 0 = no (the JIT then throws {@link #newAse}). Mirrors the JVM's covariant array-store check.
      */
     /**
-     * {@code NEW_UNRESOLVED}: a `new` of a class the loader could not resolve was executed. Delegates to the
-     * loader, which holds the site table and can name the class; it does not return.
+     * {@code NEW_UNRESOLVED}: a `new` whose class the loader could not resolve AT COMPILE TIME was executed.
+     * Delegates to the loader, which holds the site table: it demand-loads the class and returns a correctly
+     * typed object, or names the class and halts. Returns the new reference in x0, which the JIT pushes.
      */
-    static void newUnresolved(long site)
+    static long newUnresolved(long site)
     {
         long lr = Magic.readLR();                      // FIRST op: x30 = the `new` site + 4 (denylistTrap's idiom)
         if (site < 0L)
         {
-            return;                                    // boot force-compile probe: make the helper reachable only
+            return 0L;                                 // boot force-compile probe: make the helper reachable only
         }
-        Loader.reportUnresolvedNew(site, lr - 4L);
+        return Loader.resolveUnresolvedNew(site, lr - 4L);
     }
 
     static int arrayStoreOk(long array, long value)
@@ -1031,7 +1032,7 @@ public final class VM
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
         if (newCceAddr == 0L) { long u = newCce(); }                  // ClassCastException (failed checkcast)
         if (castOkAddr == 0L) { int u = castOk(0L, 0L); }             // checkcast predicate
-        if (newUnresolvedAddr == 0L) { newUnresolved(-1L); }          // `new` of an unresolvable class (halts)
+        if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
@@ -2149,7 +2150,7 @@ public final class VM
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
-    static long newUnresolvedAddr;     // VM.newUnresolved(J)V — an executed `new` of an unresolvable class
+    static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
