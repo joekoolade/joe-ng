@@ -8713,6 +8713,16 @@ public final class Loader
      */
     private static long mintPrunedStub(int s)
     {
+        long code = gvTab[s].implCode;
+        if (code == 0L)
+        {
+            // slotBuf answers 0 from TWO paths, and only one of them is a pruned method. The other is a
+            // NATIVE instance method whose VM helper is missing (nativeBufAt found nothing) -- and a native
+            // has no bytecode to defer to. Without this guard the Code-attribute header reads below happen at
+            // addresses -4 and -6, which is a NullPointerException inside Loader.u1 during itable building.
+            // (slotBuf's own comment flags the native case; it applies here too.)
+            return 0L;
+        }
         lazyEnsureTables();
         if (lzN >= MAXLAZY)
         {
@@ -8722,7 +8732,6 @@ public final class Loader
         {
             buildLazyTramp();
         }
-        long code = gvTab[s].implCode;
         int idx = lzN;
         int pd = findPdByName(gbase, gThisNameOff);
         if (pd < 0)
