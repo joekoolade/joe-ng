@@ -108,7 +108,10 @@ defines the minimum the assembler must encode.
     `objectSize`/`classRegOf` — it needs the instance size and TIB while emitting — not by patching a call
     site, and `loadClassIncremental` deliberately pulls a class WITHOUT its dependencies (the "eager seeding
     blew the closure" lesson), so an on-demand compile can instantiate a class nothing pulled. Until that is
-    covered, `ZipJUnitAll.seedFactoryClosure` stays, with a comment saying exactly why.
+    covered, `ZipJUnitAll.seedFactoryClosure` stays, with a comment saying exactly why. Pi with the seed back:
+    `zip junit: ran 29, failures 0` and **not one `linkresolve` line** — the stub is a fallback that costs
+    nothing when nothing needs it. The seed's price is visible too: the closure is **446 classes with it and
+    354 without**, i.e. 92 pulled eagerly that late resolution would pull only if reached.
 - **`demo/PipDemo` — priority inversion as a GUEST program (2026-08-27, PI-VALIDATED).** The last scheduler
   set piece with no guest equivalent; stock `Thread`/`setPriority`/`synchronized` only. `VM.pipDemo`,
   `VMScheduler.pipSpin`/`pipTask`, the `pip*` statics and the writer stash are removed. **MED is four threads
