@@ -2224,6 +2224,8 @@ public final class Loader
         pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
         pdIfN = new int[MAXBLOB];
         pdCount = 0;
+        pnIndexed = 0;
+        pnBucket = null;                                 // rebuilt by the next probeAll; blobs are all new
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
         pdLen = new int[MAXBLOB];
@@ -2563,6 +2565,7 @@ public final class Loader
             mrRounds += 1;
             long tp = Magic.readCNTPCT_EL0();
             probeAll();                                 // set pdNameOff for all (incl. just-pulled) + dep list
+            buildNameIndex();                           // ... which is what makes the names hashable
             mrProbe += Magic.readCNTPCT_EL0() - tp;
             tp = Magic.readCNTPCT_EL0();
             grew = seedNativelyReached() || grew;       // the five signatures RTA cannot infer (see the method)
@@ -2975,7 +2978,8 @@ public final class Loader
         return findPdByName(gbase, gcp[u2(gbase + gcp[superIdx])]);
     }
 
-    private static boolean[] virtResolved;               // per-pend: already dispatched for the current class
+    private static int[] virtResolved;                   // per-pend: STAMP of the class that last dispatched it
+    private static int virtStamp;                        // current class's stamp (index+1, so 0 means "never")
 
     /**
      * RTA: mark each virtual/interface call's real targets — for every instantiated receiver type, the method
@@ -2990,7 +2994,7 @@ public final class Loader
         boolean grew = false;
         if (virtResolved == null || virtResolved.length < pendN)
         {
-            virtResolved = new boolean[pendN + 64];
+            virtResolved = new int[pendN + 64];
         }
         buildPendIndex();
         int c = 0;
@@ -2998,12 +3002,9 @@ public final class Loader
         {
             if (pdInstantiated[c] && !markSettled(c))     // a settled receiver's vtable is built and frozen
             {
-                int p = 0;
-                while (p < pendN)                        // reset: no pend dispatched yet for this class
-                {
-                    virtResolved[p] = false;
-                    p += 1;
-                }
+                // "No pend dispatched yet for this class" by STAMP rather than by clearing the array: the
+                // clear was pendN writes per instantiated class, and pendN reaches 24,826 here.
+                virtStamp = c + 1;                       // +1: the array starts at 0, and 0 is a valid class index
                 int cur = c;
                 int guard = 0;
                 while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
@@ -3048,14 +3049,14 @@ public final class Loader
             int q = pvBucket[sigHash(gbase, nameOff, descOff) & (PVTAB - 1)];
             while (q >= 0)
             {
-                if (!virtResolved[q]
+                if (virtResolved[q] != virtStamp
                         && utf8EqAt(pendBase[q], pendName[q], gbase, nameOff)
                         && utf8EqAt(pendBase[q], pendDesc[q], gbase, descOff))
                 {
                     long code = findCode(gbase, p + 8, attrs);
                     if (code != 0L)
                     {
-                        virtResolved[q] = true;          // nearest def; don't also mark a super's shadowed one
+                        virtResolved[q] = virtStamp;     // nearest def; don't also mark a super's shadowed one
                         grew = addReach(code) || grew;
                     }
                 }
@@ -3534,16 +3535,69 @@ public final class Loader
     /** True if some registered blob's own name equals the class name at {@code off} in {@code base}. */
     private static boolean nameRegistered(long base, int off)
     {
-        int j = 0;
-        while (j < pdCount)
+        if (pnBucket != null)
         {
-            if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+            int j = pnBucket[utf8Hash(base, off) & (PVTAB - 1)];
+            while (j >= 0)
+            {
+                if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+                {
+                    return true;
+                }
+                j = pnNext[j];
+            }
+        }
+        // Blobs added since the index was built -- this round's own pulls. Their pdNameOff is not set until
+        // the next probeAll, so they cannot be hashed; scan them. That is exactly what the whole loop used to
+        // do for them, and it stays correct for the same reason: registerNameFromDir dedupes by ADDRESS
+        // (alreadyBlob), so an unreliable answer here costs a re-check, never a duplicate blob.
+        int k = pnIndexed;
+        while (k < pdCount)
+        {
+            if (utf8EqAt(base, off, pdBase[k], pdNameOff[k]))
             {
                 return true;
             }
-            j += 1;
+            k += 1;
         }
         return false;
+    }
+
+    private static int[] pnBucket;                       // registered class names, by hash -> pd index
+    private static int[] pnNext;                         // chain link, per blob
+    private static int pnIndexed;                        // blobs [0,pnIndexed) are indexed with a valid pdNameOff
+
+    /**
+     * Index the registered class names, for {@link #nameRegistered}. Built right after {@link #probeAll}, which
+     * is what fills {@code pdNameOff} -- before that a blob has no name to hash.
+     *
+     * <p>The pull loop asks {@code nameRegistered} once per pend, and a linear scan made that
+     * {@code pends x blobs} string compares per round. With 24,826 pends over 448 blobs it was 11M per round,
+     * 33 rounds -- 54% of the entire mark on hardware, and the largest single item left after the first two
+     * rounds of this work.
+     */
+    private static void buildNameIndex()
+    {
+        if (pnBucket == null)
+        {
+            pnBucket = new int[PVTAB];
+            pnNext = new int[MAXBLOB];
+        }
+        int i = 0;
+        while (i < PVTAB)
+        {
+            pnBucket[i] = -1;
+            i += 1;
+        }
+        i = 0;
+        while (i < pdCount)
+        {
+            int h = utf8Hash(pdBase[i], pdNameOff[i]) & (PVTAB - 1);
+            pnNext[i] = pnBucket[h];
+            pnBucket[h] = i;
+            i += 1;
+        }
+        pnIndexed = pdCount;
     }
 
     /** Register the class named at Utf8 offset {@code off} in {@code base} if it's embedded; returns its base or 0. */
