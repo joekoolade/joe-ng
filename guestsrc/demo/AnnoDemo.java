@@ -47,6 +47,20 @@ public class AnnoDemo
     public static void main(String[] args)
     {
         System.out.println("runtime annotations:");
+        System.out.println("  discovery (getDeclaredMethods + @Test):");
+        java.lang.reflect.Method[] all = AnnoDemo.class.getDeclaredMethods();
+        int tests = 0;
+        int i = 0;
+        while (i < all.length)
+        {
+            if (all[i].isAnnotationPresent(Test.class))
+            {
+                System.out.println("    found @Test: " + all[i].getName());
+                tests += 1;
+            }
+            i += 1;
+        }
+        System.out.println("    declared=" + all.length + " tests=" + tests);
         show("aTest");
         show("anotherTest");
         show("setup");

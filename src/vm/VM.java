@@ -1042,6 +1042,8 @@ public final class VM
         if (isPrimClassAddr == 0L) { long u = VMNatives.isPrimClass(0L); }            // Class.isPrimitive0
         if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
         if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Method.annoPresent0
+        if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
+        if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = VMNatives.fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -2190,6 +2192,8 @@ public final class VM
     static long isPrimClassAddr;       // VM.isPrimClass(J)J — Class.isPrimitive0 (primitive Type tag test)
     static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
     static long annoPresentAddr;       // VM.annoPresent(JJ)J — Method.annoPresent0 (RuntimeVisibleAnnotations)
+    static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
+    static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

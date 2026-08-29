@@ -89,6 +89,55 @@ public final class Class<T>
         return (classModifiers0(this) & 0x0200) != 0;
     }
 
+    /**
+     * Every method this class declares, in VM registry order. Enumerated from the method registry (which is
+     * exactly what the VM knows about -- each method of a registered class is there, compiled or as a deferral
+     * stub) rather than from the classfile.
+     *
+     * <p>With {@code Method.isAnnotationPresent} this is what makes annotation-driven discovery possible: find
+     * the methods carrying {@code @Test} instead of hand-listing their names.
+     */
+    public java.lang.reflect.Method[] getDeclaredMethods()
+    {
+        int n = (int) declaredMethodCount0(this);
+        java.lang.reflect.Method[] out = new java.lang.reflect.Method[n];
+        int i = 0;
+        int k = 0;
+        while (i < n)
+        {
+            String nm = declaredMethodAt0(this, i);
+            try
+            {
+                out[k] = java.lang.reflect.Method.resolve(this, nm);   // resolves + compiles on demand
+                k += 1;
+            }
+            catch (NoSuchMethodException e)
+            {
+                // a declared method the VM cannot resolve (native without a helper) -- skip it
+            }
+            i += 1;
+        }
+        if (k == n)
+        {
+            return out;
+        }
+        java.lang.reflect.Method[] trimmed = new java.lang.reflect.Method[k];
+        int j = 0;
+        while (j < k)
+        {
+            trimmed[j] = out[j];
+            j += 1;
+        }
+        return trimmed;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodAt}): the n-th declared method's NAME. */
+    private static native String declaredMethodAt0(Class<?> c, int want);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodCount}): how many methods it declares.
+     *  {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long declaredMethodCount0(Class<?> c);
+
     /** True if this Class is an array type — the VM tags array Types, so this is a tag test on the mirror. */
     public boolean isArray()
     {

@@ -186,6 +186,21 @@ final class VMNatives
     }
 
     /**
+     * {@code Class.declaredMethodAt0(Class, int)} native: the NAME of the n-th method the class declares, as a
+     * guest String. A negative {@code want} returns the COUNT instead, so one native serves both.
+     */
+    static long declaredMethodAt(long mirror, long want)
+    {
+        return Loader.declaredMethodName(mirror, (int) want);
+    }
+
+    /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
+    static long declaredMethodCount(long mirror)
+    {
+        return Loader.declaredMethodName(mirror, -1);
+    }
+
+    /**
      * {@code Method.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
      * the annotation whose descriptor the byte[] holds. Marker level -- presence only, no element values.
      */

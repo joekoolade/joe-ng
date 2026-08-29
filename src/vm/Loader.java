@@ -6933,6 +6933,8 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
@@ -9629,6 +9631,77 @@ public final class Loader
             n += 1;
         }
         return n;
+    }
+
+    // ----- reflective method enumeration ----------------------------------------------------------------
+    // getDeclaredMethods over the METHOD REGISTRY rather than the classfile: the registry is exactly the set
+    // the VM knows about (every method of a registered class is there, compiled or as a deferral stub), and it
+    // is already keyed by class+name+descriptor. Reflection is not a hot path, so a linear scan is fine.
+
+    /**
+     * The {@code want}-th method DECLARED by the class mirrored by {@code mirror} -- or, for {@code want < 0},
+     * how many there are. Walks the CLASSFILE method table, not the method registry.
+     *
+     * <p>The registry was the obvious source and is the wrong one: it holds only what RTA marked reachable,
+     * and a test method is called by nobody, so every {@code @Test} is pruned from it. Enumerating the
+     * classfile sees what the class actually declares; the caller then resolves each by name through the
+     * ordinary reflection path, which compiles it on demand.
+     *
+     * <p>{@code <init>}/{@code <clinit>} are excluded, as {@code getDeclaredMethods} specifies.
+     */
+    static long declaredMethodName(long mirror, int want)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(mirror + 16L);
+        int ci = classRegByType(type);
+        if (ci < 0)
+        {
+            return want < 0 ? 0L : 0L;
+        }
+        long base = clTab[ci].base;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int seen = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            if (!utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
+                    && !utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
+            {
+                if (want >= 0 && seen == want)
+                {
+                    return utf8ToString(base, nameOff);
+                }
+                seen += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return want < 0 ? (long) seen : 0L;
+    }
+
+    /** The Utf8 at {@code base+off} as a fresh guest String (no '/'->'.' rewrite; this is a plain name). */
+    private static long utf8ToString(long base, int off)
+    {
+        int len = u2(base + off);
+        long arr = Heap.allocArray(len, 1);
+        int k = 0;
+        while (k < len)
+        {
+            Magic.store8(arr + 24L + k, (byte) u1(base + off + 2 + k));
+            k += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);
+        return obj;
     }
 
     // ----- runtime annotations ------------------------------------------------------------------------

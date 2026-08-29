@@ -1340,6 +1340,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isPrimClass(J)J", "vm/VM.isPrimClassAddr");          // Class.isPrimitive0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.primClassOf(J)J", "vm/VM.primClassAddr");            // Class.primitiveClass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoPresent(JJ)J", "vm/VM.annoPresentAddr");         // Method.annoPresent0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(JJ)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(J)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {
