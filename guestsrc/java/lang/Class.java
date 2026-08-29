@@ -89,11 +89,15 @@ public final class Class<T>
         return (classModifiers0(this) & 0x0200) != 0;
     }
 
-    /** True if this Class is an array type. (Loaded array classes are not yet modelled on metal — see arc M1.) */
+    /** True if this Class is an array type — the VM tags array Types, so this is a tag test on the mirror. */
     public boolean isArray()
     {
-        return false;
+        return isArray0(this) != 0L;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.isArrayClass}): mirror -> 1 if its Type is an array
+     *  Type. {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long isArray0(Class c);
 
     /** The element type of an array class (from the array Type's element slot), else null. Feeds
      *  {@code Array.newInstance(a.getClass().getComponentType(), n)} (TimSort/Arrays.copyOf/toArray) the right

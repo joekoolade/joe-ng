@@ -172,6 +172,20 @@ final class VMNatives
     }
 
     /**
+     * {@code Class.isArray0(Class)} native: 1 if the mirror's Type is an array Type, else 0. Returns
+     * {@code long} rather than {@code int} for the same reason {@code classModifiers0} does -- a 1-arg
+     * int-returning native mis-compiles in the JIT, and {@code (J)J} is the shape known to work.
+     */
+    static long isArrayClass(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        return Loader.isArrayType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+    }
+
+    /**
      * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
      * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
      */

@@ -1336,6 +1336,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arrayClone(J)J",    "vm/VM.arrayCloneAddr");  // [T.clone() intrinsic
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.newReflectArray(JJ)J", "vm/VM.newReflectArrayAddr"); // reflect/Array.newInstance0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.componentTypeOf(J)J", "vm/VM.componentTypeAddr");   // Class.getComponentType0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.isArrayClass(J)J", "vm/VM.isArrayClassAddr");        // Class.isArray0
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {

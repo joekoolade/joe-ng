@@ -3958,6 +3958,111 @@ public final class Loader
      *  name bytes, '/'->'.'), or 0 if the Type isn't in the loaded registry. */
     static long classNameString(long type)
     {
+        int len = classNameLen(type);
+        if (len <= 0)
+        {
+            return 0L;
+        }
+        long arr = Heap.allocArray(len, 1);
+        writeClassName(type, arr + 24L, 0);
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);                  // value byte[]; coder@24 stays 0 = LATIN1
+        return obj;
+    }
+
+    /** True if {@code type} is an array Type (its instanceSize slot carries {@link ObjectModel#ARRAY_TYPE_TAG}). */
+    static boolean isArrayType(long type)
+    {
+        if (type == 0L)
+        {
+            return false;
+        }
+        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+    }
+
+    /**
+     * The JVMS descriptor char of a PRIMITIVE array Type's element ('I' for {@code int[]}), or 0.
+     *
+     * <p>Recovered by identity against the per-atype cache rather than from the Type itself, because the
+     * element size cannot tell {@code byte[]} from {@code boolean[]} (both 1) or {@code int[]} from
+     * {@code float[]} (both 4) -- and because that works for a writer-BAKED array Type the loader merely
+     * adopted, which no metal-side field would have been filled in for.
+     */
+    private static int primElemCharOf(long type)
+    {
+        int atype = 4;
+        while (atype < 12)
+        {
+            long tib = primArrTib[atype];
+            if (tib != 0L && Magic.load64(tib) == type)
+            {
+                return primDescChar(atype);
+            }
+            atype += 1;
+        }
+        return 0;
+    }
+
+    /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
+    private static int classNameLen(long type)
+    {
+        if (isArrayType(type))
+        {
+            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (el == 0L)
+            {
+                return primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
+            }
+            int n = elemDescLen(el);
+            return n == 0 ? 0 : 1 + n;
+        }
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clTab[i].type == type)
+            {
+                return u2(clTab[i].base + clTab[i].nameOff);
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /** Length of an array element's DESCRIPTOR form: "[I" for a nested array, "Ljava.lang.String;" otherwise. */
+    private static int elemDescLen(long el)
+    {
+        if (isArrayType(el))
+        {
+            return classNameLen(el);
+        }
+        int n = classNameLen(el);
+        return n == 0 ? 0 : n + 2;                               // 'L' + name + ';'
+    }
+
+    /** Write {@code type}'s name at {@code dst+pos} (dots for '/'); returns the position after it. */
+    private static int writeClassName(long type, long dst, int pos)
+    {
+        if (isArrayType(type))
+        {
+            Magic.store8(dst + pos, (byte) 0x5B);                // '['
+            pos += 1;
+            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (el == 0L)
+            {
+                Magic.store8(dst + pos, (byte) primElemCharOf(type));
+                return pos + 1;
+            }
+            if (isArrayType(el))
+            {
+                return writeClassName(el, dst, pos);             // nested: "[[I"
+            }
+            Magic.store8(dst + pos, (byte) 0x4C);                // 'L'
+            pos = writeClassName(el, dst, pos + 1);
+            Magic.store8(dst + pos, (byte) 0x3B);                // ';'
+            return pos + 1;
+        }
         int i = 0;
         while (i < clCount)
         {
@@ -3965,22 +4070,18 @@ public final class Loader
             {
                 int len = u2(clTab[i].base + clTab[i].nameOff);
                 long src = clTab[i].base + clTab[i].nameOff + 2;
-                long arr = Heap.allocArray(len, 1);
                 int k = 0;
                 while (k < len)
                 {
                     int c = u1(src + k);
-                    Magic.store8(arr + 24L + k, c == 0x2F ? 0x2E : c);   // '/' -> '.'
+                    Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
                     k += 1;
                 }
-                long obj = Heap.alloc(stringSize());
-                Magic.store64(obj + 0L, stringTib());
-                Magic.store64(obj + 16L, arr);          // value byte[]; coder@24 stays 0 = LATIN1
-                return obj;
+                return pos + len;
             }
             i += 1;
         }
-        return 0L;
+        return pos;
     }
 
     /**
@@ -6688,6 +6789,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {

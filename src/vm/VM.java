@@ -1038,6 +1038,7 @@ public final class VM
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
         if (componentTypeAddr == 0L) { long u = VMNatives.componentTypeOf(0L); }       // Class.getComponentType0
+        if (isArrayClassAddr == 0L) { long u = VMNatives.isArrayClass(0L); }          // Class.isArray0
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = VMNatives.fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -2182,6 +2183,7 @@ public final class VM
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)
     static long componentTypeAddr;     // VM.componentTypeOf(J)J — Class.getComponentType0 (array element mirror)
+    static long isArrayClassAddr;      // VM.isArrayClass(J)J — Class.isArray0 (array Type tag test)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
