@@ -14,6 +14,17 @@ package java.lang;
  */
 public final class Character implements Comparable<Character>
 {
+
+    /**
+     * {@code char.class}. javac compiles a primitive class literal to {@code getstatic Character.TYPE}, so this field
+     * is what makes it work -- and a name-winning overlay silently drops it unless it is declared here.
+     *
+     * <p>Deliberately NOT {@code final} and deliberately UNINITIALIZED: the VM fills it in
+     * ({@code Loader.seedPrimitiveTypes}) because the writer cannot bake it -- the seed JVM's value is a host
+     * {@code java.lang.Class} with no image representation. An initializer would also run in {@code <clinit>}
+     * AFTER the seeding and null it back out.
+     */
+    public static Class<Character> TYPE;
     public static final char MIN_VALUE = (char) 0x0000;
     public static final char MAX_VALUE = (char) 0xFFFF;
 

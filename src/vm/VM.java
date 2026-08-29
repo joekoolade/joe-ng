@@ -1039,6 +1039,8 @@ public final class VM
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
         if (componentTypeAddr == 0L) { long u = VMNatives.componentTypeOf(0L); }       // Class.getComponentType0
         if (isArrayClassAddr == 0L) { long u = VMNatives.isArrayClass(0L); }          // Class.isArray0
+        if (isPrimClassAddr == 0L) { long u = VMNatives.isPrimClass(0L); }            // Class.isPrimitive0
+        if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
         if (fileOpenAddr == 0L) { long u = VMNatives.fileOpen(0L); }            // FileInputStream.open0() native (M3 RAMFS)
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
@@ -2184,6 +2186,8 @@ public final class VM
     static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)
     static long componentTypeAddr;     // VM.componentTypeOf(J)J — Class.getComponentType0 (array element mirror)
     static long isArrayClassAddr;      // VM.isArrayClass(J)J — Class.isArray0 (array Type tag test)
+    static long isPrimClassAddr;       // VM.isPrimClass(J)J — Class.isPrimitive0 (primitive Type tag test)
+    static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)

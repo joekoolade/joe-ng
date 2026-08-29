@@ -110,11 +110,42 @@ public final class Class<T>
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.componentTypeOf}): array Class -> element-type mirror. */
     private static native Class<?> getComponentType0(Class c);
 
-    /** True if this Class is a primitive type. (Primitive mirrors are not yet modelled on metal — see arc M1.) */
+    /**
+     * Stock java.base calls this from the wrapper classes' initializers -- {@code Integer.TYPE =
+     * getPrimitiveClass("int")}, and likewise {@code Void} -- so a name-winning {@code Class} overlay that
+     * omits it makes every one of those {@code <clinit>}s trap. That is exactly what happened: the first run
+     * died in {@code java/lang/Void.<clinit>}.
+     *
+     * <p>Stock declares it {@code native}; here the name→descriptor mapping is ordinary Java and only the
+     * mirror lookup is a native, which keeps the native's signature a plain {@code (J)J}.
+     */
+    static Class<?> getPrimitiveClass(String name)
+    {
+        int c = 0;
+        if (name.equals("int"))          { c = 0x49; }
+        else if (name.equals("long"))    { c = 0x4A; }
+        else if (name.equals("double"))  { c = 0x44; }
+        else if (name.equals("float"))   { c = 0x46; }
+        else if (name.equals("short"))   { c = 0x53; }
+        else if (name.equals("byte"))    { c = 0x42; }
+        else if (name.equals("char"))    { c = 0x43; }
+        else if (name.equals("boolean")) { c = 0x5A; }
+        else if (name.equals("void"))    { c = 0x56; }
+        return primitiveClass0(c);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.primClassOf}): descriptor char -> primitive mirror. */
+    private static native Class<?> primitiveClass0(long descChar);
+
+    /** True if this Class is a primitive type ({@code int.class}), i.e. its Type carries the primitive tag. */
     public boolean isPrimitive()
     {
-        return false;
+        return isPrimitive0(this) != 0L;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.isPrimClass}): mirror -> 1 if its Type is a primitive
+     *  Type. {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long isPrimitive0(Class c);
 
     /** True if this class was synthesised by the compiler ({@code ACC_SYNTHETIC}). */
     public boolean isSynthetic()

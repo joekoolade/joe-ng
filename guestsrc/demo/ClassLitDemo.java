@@ -41,5 +41,32 @@ public class ClassLitDemo
         show("new String[2] ", a.getClass());
         System.out.println("  literal == getClass(): " + (String[].class == a.getClass()));
         System.out.println("  componentType of String[]: " + String[].class.getComponentType().getName());
+
+        // Primitive literals. `int.class` is NOT an ldc -- javac compiles it to `getstatic Integer.TYPE`,
+        // and the writer cannot bake that field because the seed JVM's value is a HOST java.lang.Class.
+        System.out.println("primitive literals:");
+        showPrim("int    ", int.class);
+        showPrim("boolean", boolean.class);
+        showPrim("byte   ", byte.class);
+        showPrim("char   ", char.class);
+        showPrim("short  ", short.class);
+        showPrim("long   ", long.class);
+        showPrim("float  ", float.class);
+        showPrim("double ", double.class);
+        showPrim("void   ", void.class);
+        System.out.println("  int.class == Integer.TYPE: " + (int.class == Integer.TYPE));
+        System.out.println("  int.class != long.class:   " + ((Object) int.class != (Object) long.class));
+        System.out.println("  int.class isArray:         " + int.class.isArray());
+        System.out.println("  String.class isPrimitive:  " + String.class.isPrimitive());
+    }
+
+    private static void showPrim(String what, Class<?> c)
+    {
+        if (c == null)
+        {
+            System.out.println("  " + what + " = NULL");
+            return;
+        }
+        System.out.println("  " + what + " isPrimitive=" + c.isPrimitive() + " name=" + c.getName());
     }
 }

@@ -8,6 +8,17 @@ package java.lang;
  */
 public final class Short extends Number implements Comparable<Short>
 {
+
+    /**
+     * {@code short.class}. javac compiles a primitive class literal to {@code getstatic Short.TYPE}, so this field
+     * is what makes it work -- and a name-winning overlay silently drops it unless it is declared here.
+     *
+     * <p>Deliberately NOT {@code final} and deliberately UNINITIALIZED: the VM fills it in
+     * ({@code Loader.seedPrimitiveTypes}) because the writer cannot bake it -- the seed JVM's value is a host
+     * {@code java.lang.Class} with no image representation. An initializer would also run in {@code <clinit>}
+     * AFTER the seeding and null it back out.
+     */
+    public static Class<Short> TYPE;
     public static final short MIN_VALUE = -32768;
     public static final short MAX_VALUE = 32767;
     public static final int SIZE = 16;

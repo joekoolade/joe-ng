@@ -186,6 +186,28 @@ final class VMNatives
     }
 
     /**
+     * {@code Class.primitiveClass0(long)} native: JVMS descriptor char -> the primitive {@code Class} mirror.
+     * Backs {@code Class.getPrimitiveClass}, which stock wrapper initializers call for {@code Integer.TYPE}.
+     */
+    static long primClassOf(long descChar)
+    {
+        return Loader.primitiveMirror((int) descChar);
+    }
+
+    /**
+     * {@code Class.isPrimitive0(Class)} native: 1 if the mirror's Type is a primitive Type, else 0. Same
+     * {@code (J)J} shape as {@link #isArrayClass} and for the same JIT reason.
+     */
+    static long isPrimClass(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        return Loader.isPrimitiveType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+    }
+
+    /**
      * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
      * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
      */

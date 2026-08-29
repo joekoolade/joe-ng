@@ -3971,6 +3971,107 @@ public final class Loader
         return obj;
     }
 
+    private static long[] primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
+
+    /** Index 0..8 for a JVMS primitive descriptor char (Z C F D B S I J V), or -1. */
+    private static int primTypeIdx(int c)
+    {
+        if (c == 0x5A) { return 0; }                    // 'Z' boolean
+        if (c == 0x43) { return 1; }                    // 'C' char
+        if (c == 0x46) { return 2; }                    // 'F' float
+        if (c == 0x44) { return 3; }                    // 'D' double
+        if (c == 0x42) { return 4; }                    // 'B' byte
+        if (c == 0x53) { return 5; }                    // 'S' short
+        if (c == 0x49) { return 6; }                    // 'I' int
+        if (c == 0x4A) { return 7; }                    // 'J' long
+        if (c == 0x56) { return 8; }                    // 'V' void
+        return -1;
+    }
+
+    /**
+     * The Type node backing {@code int.class} and friends, created on demand and cached. It is a real heap
+     * node rather than a small sentinel in the mirror deliberately: every {@code Class} native dereferences
+     * the mirror's Type word, so a tiny value there would have to be guarded at each of them.
+     */
+    static long primitiveType(int descChar)
+    {
+        int idx = primTypeIdx(descChar);
+        if (idx < 0)
+        {
+            return 0L;
+        }
+        if (primTypeCache == null)
+        {
+            primTypeCache = new long[9];
+        }
+        if (primTypeCache[idx] == 0L)
+        {
+            long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+            Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
+                    ObjectModel.PRIM_TYPE_TAG | (long) descChar);
+            Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);         // no super: instanceof stops here
+            Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);
+            primTypeCache[idx] = type;
+        }
+        return primTypeCache[idx];
+    }
+
+    /** The {@code Class} mirror for a primitive, e.g. {@code int.class}. Identity-stable via the mirror cache. */
+    static long primitiveMirror(int descChar)
+    {
+        long t = primitiveType(descChar);
+        return t == 0L ? 0L : classMirror(t);
+    }
+
+    /** True if {@code type} is a primitive Type ({@link ObjectModel#PRIM_TYPE_TAG}). */
+    static boolean isPrimitiveType(long type)
+    {
+        if (type == 0L)
+        {
+            return false;
+        }
+        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.PRIM_TYPE_TAG;
+    }
+
+    /** The descriptor char of a primitive Type ('I'), or 0. */
+    private static int primTypeChar(long type)
+    {
+        if (!isPrimitiveType(type))
+        {
+            return 0;
+        }
+        return (int) (Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET) & 0xFFL);
+    }
+
+    /**
+     * Install {@code Integer.TYPE} and friends. The writer cannot bake these: the seed JVM's value is a HOST
+     * {@code java.lang.Class}, which has no image representation, so the snapshot stores 0 and {@code int.class}
+     * -- which javac compiles to {@code getstatic Integer.TYPE}, not to an {@code ldc} -- reads null. Seeded
+     * here for the same reason {@code System.out} and the Integer cache are. No-op for classes not in the batch.
+     */
+    static void seedPrimitiveTypes()
+    {
+        seedPrimType(Magic.bytes("java/lang/Integer"), 0x49);      // 'I'
+        seedPrimType(Magic.bytes("java/lang/Long"), 0x4A);         // 'J'
+        seedPrimType(Magic.bytes("java/lang/Double"), 0x44);       // 'D'
+        seedPrimType(Magic.bytes("java/lang/Float"), 0x46);        // 'F'
+        seedPrimType(Magic.bytes("java/lang/Short"), 0x53);        // 'S'
+        seedPrimType(Magic.bytes("java/lang/Byte"), 0x42);         // 'B'
+        seedPrimType(Magic.bytes("java/lang/Character"), 0x43);    // 'C'
+        seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A);      // 'Z'
+        seedPrimType(Magic.bytes("java/lang/Void"), 0x56);         // 'V'
+    }
+
+    private static void seedPrimType(byte[] cls, int descChar)
+    {
+        long slot = staticSlotOf(cls, Magic.bytes("TYPE"));
+        if (slot != 0L)
+        {
+            Magic.store64(slot, primitiveMirror(descChar));
+        }
+    }
+
     /** True if {@code type} is an array Type (its instanceSize slot carries {@link ObjectModel#ARRAY_TYPE_TAG}). */
     static boolean isArrayType(long type)
     {
@@ -4008,6 +4109,10 @@ public final class Loader
     /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
     private static int classNameLen(long type)
     {
+        if (isPrimitiveType(type))
+        {
+            return primNameLen(primTypeChar(type));
+        }
         if (isArrayType(type))
         {
             long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
@@ -4030,6 +4135,37 @@ public final class Loader
         return 0;
     }
 
+    /** The Java source name of a primitive descriptor char ("int"), as bytes. */
+    private static byte[] primNameBytes(int c)
+    {
+        if (c == 0x5A) { return Magic.bytes("boolean"); }
+        if (c == 0x43) { return Magic.bytes("char"); }
+        if (c == 0x46) { return Magic.bytes("float"); }
+        if (c == 0x44) { return Magic.bytes("double"); }
+        if (c == 0x42) { return Magic.bytes("byte"); }
+        if (c == 0x53) { return Magic.bytes("short"); }
+        if (c == 0x49) { return Magic.bytes("int"); }
+        if (c == 0x4A) { return Magic.bytes("long"); }
+        return Magic.bytes("void");
+    }
+
+    private static int primNameLen(int c)
+    {
+        return c == 0 ? 0 : primNameBytes(c).length;
+    }
+
+    private static int writePrimName(int c, long dst, int pos)
+    {
+        byte[] nm = primNameBytes(c);
+        int k = 0;
+        while (k < nm.length)
+        {
+            Magic.store8(dst + pos + k, nm[k]);
+            k += 1;
+        }
+        return pos + nm.length;
+    }
+
     /** Length of an array element's DESCRIPTOR form: "[I" for a nested array, "Ljava.lang.String;" otherwise. */
     private static int elemDescLen(long el)
     {
@@ -4044,6 +4180,10 @@ public final class Loader
     /** Write {@code type}'s name at {@code dst+pos} (dots for '/'); returns the position after it. */
     private static int writeClassName(long type, long dst, int pos)
     {
+        if (isPrimitiveType(type))
+        {
+            return writePrimName(primTypeChar(type), dst, pos);
+        }
         if (isArrayType(type))
         {
             Magic.store8(dst + pos, (byte) 0x5B);                // '['
@@ -5264,6 +5404,7 @@ public final class Loader
                                                         //   low=high=0 would index the NULL cache -> NPE); no-op if
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
+        seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         if (LOAD_PROFILE)
         {
@@ -6790,6 +6931,8 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
