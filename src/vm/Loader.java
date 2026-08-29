@@ -6934,6 +6934,10 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
@@ -9625,6 +9629,145 @@ public final class Loader
             n += 1;
         }
         return n;
+    }
+
+    // ----- runtime annotations ------------------------------------------------------------------------
+    // Marker-level: "does this method carry @Foo". Enough for discovery (@Test/@BeforeEach/@Disabled); element
+    // VALUES need annotation instances, which need Proxy or synthesized classes, and are a separate piece.
+    //
+    // Only RuntimeVISIBLEAnnotations count. javac emits RuntimeINVISIBLEAnnotations unless the annotation type
+    // itself is declared @Retention(RUNTIME) -- so an annotation without that is not merely unreadable here, it
+    // is absent from the classfile entirely.
+
+    /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
+     *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
+    static boolean methodAnnoPresent(int rgIndex, long descArr, int descLen)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return false;
+        }
+        long base = rgTab[rgIndex].base;
+        int nameOff = rgTab[rgIndex].nameOff;
+        int descOff = rgTab[rgIndex].descOff;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(base, gcp[u2(p + 2)], base, nameOff)
+                    && utf8EqAt(base, gcp[u2(p + 4)], base, descOff))
+            {
+                return annoInAttrs(base, p + 8, attrs, descArr, descLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return false;
+    }
+
+    /** Scan an attribute list for RuntimeVisibleAnnotations and look for the wanted descriptor in it. */
+    private static boolean annoInAttrs(long base, long p, int attrs, long descArr, int descLen)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            {
+                return annoListHas(base, p, descArr, descLen);
+            }
+            p += alen;
+            a += 1;
+        }
+        return false;
+    }
+
+    /** {@code { u2 num_annotations; annotation[] }} -- true if any annotation's type descriptor matches. */
+    private static boolean annoListHas(long base, long p, long descArr, int descLen)
+    {
+        int n = u2(p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            int typeIdx = u2(p);
+            p += 2;
+            if (utf8EqArr(base, gcp[typeIdx], descArr, descLen))
+            {
+                return true;
+            }
+            p = skipElementPairs(p);                     // must skip precisely: a later annotation may be the one
+            i += 1;
+        }
+        return false;
+    }
+
+    /** {@code { u2 num_pairs; { u2 name_index; element_value }[] }} -> the position after it. */
+    private static long skipElementPairs(long p)
+    {
+        int n = u2(p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            p = skipElementValue(p + 2);                 // past element_name_index
+            i += 1;
+        }
+        return p;
+    }
+
+    /** One {@code element_value} (JVMS 4.7.16.1) -> the position after it. Recursive for '@' and '['. */
+    private static long skipElementValue(long p)
+    {
+        int tag = u1(p);
+        p += 1;
+        if (tag == 0x65)                                 // 'e' enum: type_name_index + const_name_index
+        {
+            return p + 4;
+        }
+        if (tag == 0x40)                                 // '@' nested annotation: type_index, then its pairs
+        {
+            return skipElementPairs(p + 2);
+        }
+        if (tag == 0x5B)                                 // '[' array of element_value
+        {
+            int n = u2(p);
+            p += 2;
+            int i = 0;
+            while (i < n)
+            {
+                p = skipElementValue(p);
+                i += 1;
+            }
+            return p;
+        }
+        return p + 2;                                    // B C D F I J S Z s c: one u2 constant-pool index
+    }
+
+    /** True if the Utf8 at {@code base+off} equals the {@code n} bytes of the byte[] payload at {@code arr}. */
+    private static boolean utf8EqArr(long base, int off, long arr, int n)
+    {
+        if (u2(base + off) != n)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < n)
+        {
+            if (u1(base + off + 2 + k) != (Magic.load8(arr + 24L + k) & 0xFF))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */

@@ -186,6 +186,20 @@ final class VMNatives
     }
 
     /**
+     * {@code Method.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
+     * the annotation whose descriptor the byte[] holds. Marker level -- presence only, no element values.
+     */
+    static long annoPresent(long rgIndex, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+        return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
+    }
+
+    /**
      * {@code Class.primitiveClass0(long)} native: JVMS descriptor char -> the primitive {@code Class} mirror.
      * Backs {@code Class.getPrimitiveClass}, which stock wrapper initializers call for {@code Integer.TYPE}.
      */

@@ -21,9 +21,12 @@ public final class Method extends AccessibleObject
     private final int paramCount;
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
     private final int returnChar;
+    private final int rgIndex;         // this method's slot in the VM's method registry (annotation lookup key)
 
-    private Method(Class<?> clazz, String name, int access, long buf, int paramCount, byte[] paramChars, int returnChar)
+    private Method(Class<?> clazz, String name, int access, long buf, int paramCount, byte[] paramChars, int returnChar,
+            int rgIndex)
     {
+        this.rgIndex = rgIndex;
         this.clazz = clazz;
         this.name = name;
         this.access = access;
@@ -46,8 +49,44 @@ public final class Method extends AccessibleObject
         byte[] pchars = new byte[8];
         long[] out = new long[3];                          // {buffer, access, returnChar}
         int n = methodInfo0(idx, pchars, out);
-        return new Method(c, name, (int) out[1], out[0], n, pchars, (int) out[2]);
+        return new Method(c, name, (int) out[1], out[0], n, pchars, (int) out[2], idx);
     }
+
+    /**
+     * True if this method carries the given annotation. Marker level: presence only, no element values.
+     *
+     * <p>Only annotations declared {@code @Retention(RUNTIME)} are visible -- javac writes anything else into
+     * RuntimeINVISIBLEAnnotations, i.e. an annotation without RUNTIME retention is not merely unreadable here,
+     * it is absent from the classfile.
+     */
+    public boolean isAnnotationPresent(Class<?> anno)
+    {
+        if (anno == null)
+        {
+            return false;
+        }
+        return annoPresent0(rgIndex, descriptorOf(anno)) != 0;
+    }
+
+    /** "org.junit.jupiter.api.Test" -> the field descriptor "Lorg/junit/jupiter/api/Test;" the classfile holds. */
+    private static byte[] descriptorOf(Class<?> anno)
+    {
+        String n = anno.getName();
+        byte[] out = new byte[n.length() + 2];
+        out[0] = (byte) 'L';
+        int i = 0;
+        while (i < n.length())
+        {
+            char c = n.charAt(i);
+            out[i + 1] = (byte) (c == '.' ? '/' : c);
+            i += 1;
+        }
+        out[n.length() + 1] = (byte) ';';
+        return out;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoPresent}): registry index + descriptor -> 0/1. */
+    private static native int annoPresent0(int rgIndex, byte[] descriptor);
 
     private static native int methodResolve0(Class c, byte[] name);
     private static native int methodInfo0(int rgIndex, byte[] paramChars, long[] out);
