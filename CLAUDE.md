@@ -168,6 +168,28 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **Array + primitive class literals — FIXED (2026-08-28, PI-VALIDATED on the full suite).**
+  `String[].class` gave a mirror with `isArray()` hardcoded false and an empty name; `int.class` was NULL.
+  Now `[Ljava.lang.String;` / `[I` / `[[I`, all nine primitives named, `int.class == Integer.TYPE`, and
+  `literal == getClass()`.
+  - **Two unrelated mechanisms behind one symptom.** Arrays: every piece already existed (`typeOfClass`
+    resolves a `[`-literal to a real array Type) and nothing was wired to them — `isArray()` was a literal
+    `return false` and `classNameString` searched only the CLASS registry, which array Types are not in.
+    Primitives: **`int.class` is not an `ldc` at all** — javac emits `getstatic Integer.TYPE`, and the writer
+    cannot bake that field because the seed JVM's value is a HOST `java.lang.Class`, so the snapshot stores 0.
+  - **The primitive element char is recovered by IDENTITY against the per-atype TIB cache**, not from the
+    Type: element size cannot separate `byte[]`/`boolean[]` or `int[]`/`float[]`, and identity also works for
+    a writer-BAKED array Type the loader merely adopted, which no metal-side field would have been set on.
+  - **A primitive Type is a real tagged heap node, not a small sentinel** in the mirror's Type word: every
+    `Class` native dereferences that word, so a tiny value would need guarding at each one.
+  - **The overlay trap again, exactly as StringBuilder/Appendable:** the first run died in
+    `java/lang/Void.<clinit>` because the `Class` overlay had dropped `getPrimitiveClass`, and four overlaid
+    wrappers (Short/Byte/Character/Boolean) had dropped `TYPE`. Implementing `getPrimitiveClass` beats seeding
+    — the stock wrappers then initialise themselves. `TYPE` must be non-final and UNINITIALIZED, or its own
+    `<clinit>` nulls it back out after the VM fills it in.
+  - **Unblocks** `getDeclaredMethod(name, parameterTypes)` overload selection, which was built and reverted as
+    useless because "every distinguishing parameter type is an array or a primitive and a caller cannot
+    express one". A caller can express both now.
 - **Demand-load speed — `loadAll` 1712s -> 5.33s on the zip suite, 321x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
   thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 2.7s;
