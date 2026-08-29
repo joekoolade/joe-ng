@@ -3011,6 +3011,10 @@ public final class VM
         Uart.write(Magic.bytes("reflective call into an unpulled class (late link resolution):\n"));
         Loader.launch(Magic.bytes("demo/ReflectRtaDemo"), Magic.bytes(""));
 
+        // Class literals for arrays and primitives: `String[].class` and `int.class` produce real mirrors.
+        Uart.write(Magic.bytes("array + primitive class literals:\n"));
+        Loader.launch(Magic.bytes("demo/ClassLitDemo"), Magic.bytes(""));
+
         // The real-program milestone: ordinary stock-Java WordCount from main(String[]) -- must match
         // the host JDK's output byte-for-byte on the same input file.
         Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
