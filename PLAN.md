@@ -155,13 +155,18 @@ it can handle.
 - **Done when:** joe-ng takes Java classes it has never seen and runs them, on the
   metal, with no OS.
 
-### M5 — Self-hosting closure (drop the seed JVM) (compiler closure done; writer-on-metal remaining)
-- Run the boot-image writer *inside* joe-ng, so joe-ng builds its own next image.
+### M5 — Self-hosting closure (compiler closure DONE; writer-on-metal DROPPED 2026-08-28)
 - **Compiler closure ✅:** one `compiler/Baseline` compiles in both worlds — the
   writer and the on-metal JIT — verified on QEMU. The metacircular *compiler* loop
   is closed (M5.4); see progress below.
-- **Done when:** the seed JVM is no longer needed to produce an image — i.e. the
-  boot-image *writer* also runs on metal. Fully metacircular, fully self-contained.
+- **DECIDED 2026-08-28: running the boot-image writer on metal is NO LONGER A
+  MILESTONE.** M5.5 below is retained as a record of the analysis, not as work to do.
+- **Consequence, stated plainly:** the seed JVM is now PERMANENT. It is a build-time
+  tool, like javac. "Metacircular" in joe-ng means the classfile parser, the baseline
+  compiler and the runtime are ordinary Java classes that run in both worlds — the
+  image *build* is not part of that loop and is not intended to be.
+- **What M5 means now:** the shared JDK-free pipeline (`ClassReader` / `A64Enc` /
+  `Baseline`), which is done. There is no remaining "drop the seed JVM" goal.
 
 #### M5 progress
 **The compiler closure is done (M5.4 ✅): one baseline compiler now serves both
@@ -610,7 +615,15 @@ self-hosting. ✅ Reached — the metal JIT runs `Baseline`; `Guest`/`Math` comp
 on metal across `new`, virtual/interface/static dispatch, class+interface
 `instanceof`, string literals, magic intrinsics, and `throw`/`catch`.
 
-### M5.5 — the boot-image writer on metal (scoped, not started)
+### M5.5 — the boot-image writer on metal (SCOPED, NEVER STARTED, DROPPED 2026-08-28)
+
+> **This section is history, not a plan.** Running the writer on metal was dropped as a
+> milestone on 2026-08-28. The measurement below (6 of 39 methods compile) and the
+> sub-problem breakdown are kept because they are the record of *why* it is expensive —
+> the writer is JDK-heavy by nature, since its whole job is name→address bookkeeping.
+> The `util` containers and the JDK-free `compiler/*` that came out of M5.5a are real and
+> shipped; they stand on their own merits.
+
 
 The compiler and classfile parser now run on metal; what's left for full M5 is the
 **boot-image writer** — `writer/ImageBuilder` (575 lines): object/TIB/itable/string

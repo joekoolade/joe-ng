@@ -36,9 +36,13 @@ the standing rules and current state so we don't re-litigate them each session.
 - **Compile-only, no interpreter.** With no OS beneath, the first code on metal
   must already be machine code. One baseline compiler serves both the writer and
   the runtime JIT.
-- **The only external seeds** (not things we build): a stock JVM to run the
-  writer initially (gone after self-hosting, M5), and the Pi's GPU firmware that
-  loads `kernel8.img`. Nothing else touches joe-ng.
+- **The only external seeds** (not things we build): a stock JVM to run the writer,
+  and the Pi's GPU firmware that loads `kernel8.img`. Nothing else touches joe-ng.
+  **The seed JVM is PERMANENT (decided 2026-08-28)** — running the boot-image writer
+  on metal was dropped as a milestone, so the writer stays a build-time tool like
+  javac. Metacircular here means the classfile parser, the baseline compiler and the
+  runtime are ordinary Java classes running in BOTH worlds; the image *build* is not
+  part of that loop and is not intended to be.
 - **First-principles / learning project:** reference the ARM ARM, BCM2711 docs,
   and Jikes RVM / JOE *concepts* — write every line ourselves. Log sources in
   `SOURCES.md`.
