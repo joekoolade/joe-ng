@@ -263,6 +263,16 @@ public interface Symbols
      */
     void virtualSite(CodeBuffer cb, int methodCp);
 
+    /**
+     * Load helper {@code helper}'s entry address into {@code reg}. Unlike {@link #callHelper} this does not
+     * branch: the dispatch guard uses it to SUBSTITUTE a resolve trampoline for a null slot, so the call
+     * site's own {@code blr} does the calling.
+     */
+    default void helperInto(CodeBuffer cb, int reg, int helper)
+    {
+        fail(FAIL_ARG_COUNT, helper, reg);              // only the metal JIT resolves dispatch late
+    }
+
     /** Itable slot of the interface method at InterfaceMethodref index {@code ifaceMethodCp}. */
     int interfaceSlot(int ifaceMethodCp);
 

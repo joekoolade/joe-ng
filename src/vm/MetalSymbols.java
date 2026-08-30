@@ -171,6 +171,11 @@ final class MetalSymbols implements Symbols
     {
         return Loader.objectSizeOf(classCp);
     }
+    public void helperInto(CodeBuffer cb, int reg, int helper)
+    {
+        emitAddr(cb, reg, helperAddr(helper));
+    }
+
     public void virtualSite(CodeBuffer cb, int methodCp)
     {
         int idx = Loader.virtualSiteIndex(methodCp);

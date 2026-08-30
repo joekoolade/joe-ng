@@ -4401,6 +4401,39 @@ public final class Loader
         return end == 0L || pc < end;
     }
 
+    /**
+     * Name the nearest registered body BELOW {@code addr}, ignoring the code-block bound. A frame that no
+     * table claims is either compiled by a path that never registers it, or registered but rejected because
+     * the pc ran past its block end -- and only the distance to the nearest entry tells those apart.
+     */
+    private static void printNearestBelow(long addr)
+    {
+        long best = 0L;
+        int bestReg = -1;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > best)
+            {
+                best = rgTab[i].buf;
+                bestReg = i;
+            }
+            i += 1;
+        }
+        if (bestReg < 0)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes(" after "));
+        writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
+        Uart.putc(0x2E);
+        writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+        Uart.write(Magic.bytes(" +"));
+        VM.printHex(addr - best);
+        Uart.write(Magic.bytes(" end="));
+        VM.printHex(Heap.codeBlockEndAt(best));
+    }
+
     static void printFrameAt(long addr)
     {
         long bestBuf = 0L;
@@ -4424,7 +4457,11 @@ public final class Loader
         {
             if (!printImageFrameAt(addr))                            // writer-compiled VM/driver code: image symbol table
             {
-                Uart.write(Magic.bytes("<image/native>"));
+                Uart.write(Magic.bytes("<unclaimed pc="));
+                VM.printHex(addr);
+                printNearestBelow(addr);                        // the only handle on a frame no table claims
+                Uart.putc(0x3E);
+
             }
             return;
         }
@@ -7450,9 +7487,11 @@ public final class Loader
     // Static call sites solved this with link stubs (PR #192); a virtual site cannot, because the target
     // depends on the RECEIVER. So the site records its (class,name,desc) here, emits the index in x17, and
     // calls a trampoline that resolves against the receiver's actual type at first execution.
-    private static final int MAXVSITE = 4096;
+    private static final int MAXVSITE = 16384;
+    private static final int VSHASH = 32768;             // power of two, > 2x MAXVSITE (open addressing)
     private static long[] vsName, vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
     private static int vsCount;
+    private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     private static long virtualTrampAddr;
     private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
     private static int vsMemoIdx = -1;
@@ -7464,14 +7503,37 @@ public final class Loader
         {
             vsName = new long[MAXVSITE];
             vsDesc = new long[MAXVSITE];
+            vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
+            int z = 0;
+            while (z < VSHASH)
+            {
+                vsBucket[z] = 0;
+                z += 1;
+            }
+        }
+        long nameAddr = gbase + mrefNameOff(methodCp);
+        long descAddr = gbase + mrefDescOff(methodCp);
+        // Dedup, because a site is now allocated for EVERY dispatch guard, and the compiler visits each site
+        // more than once (size pass then emit pass). Without this the table would fill with duplicates and
+        // the two passes would bake different indices for the same call.
+        int h = (int) ((nameAddr * 31L + descAddr) >> 3) & (VSHASH - 1);
+        while (vsBucket[h] != 0)
+        {
+            int cand = vsBucket[h] - 1;
+            if (vsName[cand] == nameAddr && vsDesc[cand] == descAddr)
+            {
+                return cand;
+            }
+            h = (h + 1) & (VSHASH - 1);
         }
         if (vsCount >= MAXVSITE)
         {
-            return 0;
+            capHalt(Magic.bytes("MAXVSITE"), vsCount);   // returning a stale index would MIS-RESOLVE silently
         }
         int idx = vsCount;
-        vsName[idx] = gbase + mrefNameOff(methodCp);
-        vsDesc[idx] = gbase + mrefDescOff(methodCp);
+        vsName[idx] = nameAddr;
+        vsDesc[idx] = descAddr;
+        vsBucket[h] = idx + 1;
         vsCount += 1;
         return idx;
     }

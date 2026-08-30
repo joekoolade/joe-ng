@@ -1497,7 +1497,24 @@ public final class Baseline
      * <p>Metal JIT only: trusted image code ({@code implicitChecks() == false}) stays check-free, like
      * {@code nullCheck}.
      */
-    private void dispatchTargetGuard(CodeBuffer cb, int pos)
+    /**
+     * Sanity-check the dispatch target in x16 before the {@code blr}. Two outcomes, because the two failures
+     * mean different things:
+     *
+     * <p>A MISALIGNED or out-of-range word is not code at all -- a corrupt TIB, a stale slot -- and there is
+     * nothing to do but throw.
+     *
+     * <p>A NULL slot means the target was simply never compiled, which is a resolvable state, not an error.
+     * RTA runs at batch time, so a class instantiated only from a LAZILY compiled body was never seen to be
+     * instantiated and its virtuals were never marked -- leaving vtable holes that only surface when someone
+     * dispatches through one. (`java/util/regex/Pattern` reached exactly that way: `Pattern.compile` compiles
+     * on demand, and the `new Pattern` inside it is invisible to the batch's reachability pass.) Rather than
+     * mint stubs for every slot up front -- measured at 3-4x the code arena, nearly all of it never called --
+     * the null slot is REPLACED with the resolve trampoline and the site's own {@code blr} calls that: the
+     * trampoline preserves x0..x15, resolves against the RECEIVER's class, and tail-branches to the body.
+     * A slot that is never dispatched through costs nothing.
+     */
+    private void dispatchTargetGuard(CodeBuffer cb, int pos, int methodCp)
     {
         if (!symbols.implicitChecks())
         {
@@ -1508,15 +1525,20 @@ public final class Baseline
         cb.emit(A64Enc.lsrImm(17, 16, 24));             // x17 = the target's top byte
         cb.emit(A64Enc.cmpImm(17, Symbols.CODE_TOP_BYTE_MAX + 1));
         int b2 = cb.emit(A64Enc.bcond(A64Enc.HS, 0));   // at or above the code ceiling -> heap/large/unmapped
-        int b3 = cb.emit(A64Enc.cbz(16, 0));            // null slot (unresolved / uncompiled)
+        int b3 = cb.emit(A64Enc.cbz(16, 0));            // null slot -> resolve it below, do not throw
         int ok = cb.emit(A64Enc.b(0));
-        int throwAt = cb.wordCount();
+        int nullAt = cb.wordCount();                    // the resolvable case: substitute the trampoline
+        cb.set(b3, A64Enc.cbz(16, nullAt - b3));
+        symbols.virtualSite(cb, methodCp);              // x17 = site index (name+descriptor of this call)
+        symbols.helperInto(cb, 16, Symbols.VIRTUAL_RESOLVE);
+        int back = cb.emit(A64Enc.b(0));
+        int throwAt = cb.wordCount();                   // the unresolvable case: the word is not code
         cb.set(b0, A64Enc.tbnz(16, 0, throwAt - b0));
         cb.set(b1, A64Enc.tbnz(16, 1, throwAt - b1));
         cb.set(b2, A64Enc.bcond(A64Enc.HS, throwAt - b2));
-        cb.set(b3, A64Enc.cbz(16, throwAt - b3));
-        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);     // a bad slot -> AIOOBE (distinct from a null-receiver NPE)
+        throwImplicit(cb, pos, Symbols.NEW_AIOOBE);
         cb.set(ok, A64Enc.b(cb.wordCount() - ok));
+        cb.set(back, A64Enc.b(cb.wordCount() - back));
     }
 
     /** Virtual dispatch through the receiver's TIB vtable. Uses x16 (scratch) for the target. */
@@ -1612,7 +1634,7 @@ public final class Baseline
         // globalVtableSlot's name+desc fallback matched an unrelated class's slot (see Loader ~1864). Left as a
         // bare `blr 0` it wild-branches to 0x0 -> the boot trampoline -> a SILENT REBOOT that looks like a reset.
         // Trap it as an NPE at this PC (same shape as the itable-scan sentinel) so it's reported, not a reboot.
-        dispatchTargetGuard(cb, pos);
+        dispatchTargetGuard(cb, pos, cpIndex);
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))
@@ -1698,7 +1720,7 @@ public final class Baseline
         // compiled, or a slot past a short imap -- otherwise `blr`s into arbitrary memory (a silent-reboot wild
         // branch). x17 is free here (the itable was already dereferenced into x16). Throw AIOOBE at this PC so it
         // is reported with the call's source line, not a reboot. Metal JIT only (trusted image code is check-free).
-        dispatchTargetGuard(cb, pos);
+        dispatchTargetGuard(cb, pos, cpIndex);
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))

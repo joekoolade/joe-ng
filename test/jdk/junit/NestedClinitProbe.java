@@ -31,9 +31,6 @@ public class NestedClinitProbe {
 
     public static void main(String[] args) {
         System.out.println("nested clinit probe:");
-        // Warm Pattern at TOP LEVEL first: if the nested cases then pass, the bug is about INITIALIZING
-        // Pattern from a nested clinit, not about calling it there.
-        System.out.println("  warm  = " + (Pattern.compile("z") == null ? 0 : 1));
         run("viaTrivial");
         run("viaAlloc");
         run("viaStr");
