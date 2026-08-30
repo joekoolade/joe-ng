@@ -9,6 +9,27 @@ public class AssertMsgProbe
         System.out.println("assert message probe:");
         one("assertEquals(2,3) direct");
         reflective("assertEquals(2,3) via Method.invoke");
+        // The BOOT RE-ENTERED repro: getStackTrace() from guest code (printStackTrace works; this path did not).
+        System.out.println("stackTrace probe:");
+        try
+        {
+            throw new IllegalStateException("boom");
+        }
+        catch (Throwable t)
+        {
+            StackTraceElement[] tr = t.getStackTrace();
+            System.out.println("  getStackTrace null? " + (tr == null));
+            if (tr != null)
+            {
+                System.out.println("  frames = " + tr.length);
+                int i = 0;
+                while (i < tr.length && i < 4)
+                {
+                    System.out.println("    at " + tr[i]);
+                    i += 1;
+                }
+            }
+        }
         System.out.println("survived");
     }
 
