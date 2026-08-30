@@ -2288,6 +2288,7 @@ public final class Loader
                                                          // jitFrameCount, so a stale jitLocalCount would keep growing past
                                                          // JIT_FRAME_MAX and overrun jitLocalTable into adjacent heap.
         VM.jitHandlerCount = 0L;                         // resetting per batch stops them accumulating past the caps
+        registerTrampFrames();                           // ... but the trampolines outlive the table (see there)
         if (RECLAIM_BY_GC != false && reclaimArmed != 0)
         {
             // Every registry above has just been replaced, so the previous batch's classes, TIBs, Types,
@@ -7493,6 +7494,7 @@ public final class Loader
     private static int vsCount;
     private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     private static long virtualTrampAddr;
+    private static long virtualTrampLo, virtualTrampHi;   // the range over which its 144-byte frame is live
     private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
     private static int vsMemoIdx = -1;
 
@@ -7597,10 +7599,10 @@ public final class Loader
         int r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 0));   w += 1;   // LR at [sp+0]: what VM.unwind reads to pop this frame
         Magic.store32(buf + w * 4L, A64Enc.movReg(1, 17));       w += 1;   // x1 = site idx (x0 IS the receiver)
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
@@ -7610,14 +7612,17 @@ public final class Loader
         r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 0));   w += 1;
+        virtualTrampHi = buf + w * 4L;                  // the `add sp` below tears the frame down
         Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call: returns to the call site
         Heap.publishCode(buf, buf + w * 4L);
         virtualTrampAddr = buf;
+        virtualTrampLo = buf + 4L;                      // the `sub sp` above establishes it
+        registerTrampFrames();
         return buf;
     }
 
@@ -8401,6 +8406,7 @@ public final class Loader
     private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
+    private static long   lazyTrampLo, lazyTrampHi;    // the range over which its 144-byte frame is live
 
     private static final boolean LAZY_TRACE  = false;   // per-method "jitc" compile trace over the UART (debug)
 
@@ -8623,10 +8629,10 @@ public final class Loader
         int r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 0));   w += 1;   // LR at [sp+0]: what VM.unwind reads to pop this frame
         Magic.store32(buf + w * 4L, A64Enc.movReg(0, 17));       w += 1;   // x0 = idx (the stub put it in x17)
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ca & 0xFFFF), 0));         w += 1;  // x16 = lazyCompile
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 16) & 0xFFFF), 1)); w += 1;
@@ -8636,14 +8642,17 @@ public final class Loader
         r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;   // restore LR
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 0));   w += 1;   // (see registerTrampFrames)
+        lazyTrampHi = buf + w * 4L;
         Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;   // add sp,sp,#144
         Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the fresh method
         Heap.publishCode(buf, buf + w * 4L);
         lazyTrampAddr = buf;
+        lazyTrampLo = buf + 4L;
+        registerTrampFrames();
     }
 
     // ---- late link resolution: the call sites RTA cannot see -------------------------------------------
@@ -8735,10 +8744,10 @@ public final class Loader
         int r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 0));   w += 1;   // LR at [sp+0]: what VM.unwind reads to pop this frame
         Magic.store32(buf + w * 4L, A64Enc.movReg(0, 17));       w += 1;   // x0 = idx (the stub put it in x17)
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
@@ -8748,14 +8757,19 @@ public final class Loader
         r = 0;
         while (r <= 15)
         {
-            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, 8 + r * 8)); w += 1;
             r += 1;
         }
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;   // restore LR
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 0));   w += 1;   // (see registerTrampFrames)
+        long lo = buf + 4L;
+        long hi = buf + w * 4L;
         Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;   // add sp,sp,#144
         Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call the resolved method
         Heap.publishCode(buf, buf + w * 4L);
         linkTrampAddr = buf;
+        // Registered here only: linkTrampAddr is cleared by resetLoader, so this runs again every batch --
+        // unlike the lazy/virtual trampolines, which outlive the table and are re-registered by resetLoader.
+        VM.addJitFrame(lo, hi, 144L, 0L);
     }
 
     /**
@@ -8923,6 +8937,32 @@ public final class Loader
         long done = lazyCompileLocked(idx);
         VM.loaderUnlock();
         return done;
+    }
+
+    /**
+     * Re-publish the persistent trampolines' frames into the JIT unwind table.
+     *
+     * <p>These trampolines establish a real 144-byte frame and then CALL — {@code lazyCompile} runs the whole
+     * compiler, {@code virtualResolve} demand-loads classes and can run a {@code <clinit>} — so an exception
+     * thrown underneath one has to unwind THROUGH it. Without an entry the walk cannot size the frame: it
+     * stops there, and the frames it prints below are stale stack words rather than callers. That is what made
+     * a MetalJUnit failure report a NullPointerException at a bare {@code Magic.load64} in check-free image
+     * code, which cannot throw one.
+     *
+     * <p>Called after every {@link #resetLoader} as well as at build time, because the trampolines are built
+     * ONCE and cached for the life of the VM while {@code jitFrameCount} is zeroed per batch — registering
+     * only at build time would leave every batch after the first unwalkable again.
+     */
+    private static void registerTrampFrames()
+    {
+        if (lazyTrampAddr != 0L)
+        {
+            VM.addJitFrame(lazyTrampLo, lazyTrampHi, 144L, 0L);
+        }
+        if (virtualTrampAddr != 0L)
+        {
+            VM.addJitFrame(virtualTrampLo, virtualTrampHi, 144L, 0L);
+        }
     }
 
     /** {@link #lazyCompile}'s body, run under the loader lock. */
@@ -10665,9 +10705,12 @@ public final class Loader
             w += 1;
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 31, 8));                        w += 1;  // x0 = obj (return)
             Magic.store32(thunk + w * 4L, A64Enc.ldrx(30, 31, 0));                       w += 1;  // restore LR
+            long tlo = thunk + 4L;                                                               // after `sub sp`
+            long thi = thunk + w * 4L;                                                           // at `add sp`
             Magic.store32(thunk + w * 4L, A64Enc.addImm(31, 31, frame));                 w += 1;  // add sp, #frame
             Magic.store32(thunk + w * 4L, A64Enc.ret());                                 w += 1;
             Heap.publishCode(thunk, thunk + w * 4L);
+            VM.addJitFrame(tlo, thi, frame, 0L);        // it calls <init>; an exception from there unwinds through here
             return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
         long implBuf = lambdaImplBuf(idx);
