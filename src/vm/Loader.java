@@ -6768,6 +6768,18 @@ public final class Loader
         // Class-qualified miss: an INHERITED static/special method (invokestatic/invokespecial to a method the ref
         // names via a subclass but that is declared in a SUPERclass, e.g. `ArrayList.subListRangeCheck` really
         // AbstractList.subListRangeCheck). Walk the ref class's super chain and match each ancestor's registration.
+        //
+        // A CONSTRUCTOR is never inherited, so it must not walk: `<init>()V` on an unregistered class would
+        // match `java/lang/Object.<init>()V` -- always registered, since Object is the one eagerly compiled
+        // class -- and Object's <init> is a NO-OP. The call then resolves silently to it and the real
+        // constructor never runs, leaving every field 0. That is how `new Formatter()` in a lazily compiled
+        // `String.formatted` produced a Formatter whose buffer was null, and the NPE surfaced far away, deep
+        // inside JUnit's message formatting. Falling through to the stub tier instead gives it a link stub,
+        // which resolves the actual constructor on first call.
+        if (utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
+        {
+            return dlStubByRef(refBase, classOff, nameOff, descOff);
+        }
         int pd = findPdByName(refBase, classOff);
         while (pd >= 0 && pdSuperOff[pd] != 0)
         {
