@@ -1665,6 +1665,43 @@ public final class Loader
         return n;
     }
 
+    /**
+     * Materialise a {@code StackTraceElement[]} from a Throwable's INLINE backtrace ({@code bt0..bt7} at
+     * {@code obj+16..+72}, 0-terminated), which {@link VM#unwind} fills at THROW time.
+     *
+     * <p>An exception that has been constructed but not yet thrown therefore yields an EMPTY array, which is
+     * correct rather than merely convenient: stock semantics would capture at construction, and joe-ng
+     * deliberately captures at throw so that propagation allocates nothing. Callers that walk the result are
+     * fine with empty -- JUnit's {@code maybeTrimStackTrace}, the reason this exists, loops over the array and
+     * returns early when it finds no match.
+     */
+    static long traceFromThrowable(long exc)
+    {
+        if (exc == 0L)
+        {
+            return 0L;
+        }
+        long tib = steTib();
+        int n = 0;
+        while (n < 8 && Magic.load64(exc + 16L + (long) n * 8L) != 0L)
+        {
+            n += 1;
+        }
+        long arr = Heap.allocArray(n, 8);
+        if (tib != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(Magic.load64(tib)));
+        }
+        int i = 0;
+        while (i < n)
+        {
+            Magic.store64(arr + 24L + (long) i * 8L,
+                    frameToElement(Magic.load64(exc + 16L + (long) i * 8L), tib));
+            i += 1;
+        }
+        return arr;
+    }
+
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
     static long buildTrace(long pc, long sp, long savedX30)
     {
@@ -6840,6 +6877,10 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
@@ -6935,6 +6976,10 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {

@@ -185,6 +185,12 @@ final class VMNatives
         return Loader.isArrayType(Magic.load64(mirror + 16L)) ? 1L : 0L;
     }
 
+    /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
+    static long throwableTrace(long exc)
+    {
+        return Loader.traceFromThrowable(exc);
+    }
+
     /**
      * {@code Class.declaredMethodAt0(Class, int)} native: the NAME of the n-th method the class declares, as a
      * guest String. A negative {@code want} returns the COUNT instead, so one native serves both.
