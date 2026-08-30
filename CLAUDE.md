@@ -168,6 +168,30 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **BOOT RE-ENTERED: a natively instantiated class needs a hole-free vtable (2026-08-30, PI-VALIDATED).**
+  Printing a `StackTraceElement` from guest code wild-branched to the image entry — no exception, no name.
+  - **Narrowed, then named.** `getStackTrace()` itself works (the probe prints `frames = 5` first), so the
+    crash is `"at " + element`. The report's `x30=0xBA8E0` is an image address the frame printer cannot name;
+    `JOENG_SYMMAP=1` places it inside `java/lang/String.valueOf(Ljava/lang/Object;)` at +0x38 — its
+    `obj.toString()` dispatch. **That symmap lookup is the technique for any unnameable image PC.**
+  - **BAKED code carries no `dispatchTargetGuard`** (`implicitChecks()` is false for the writer, by design)
+    yet baked `String.valueOf(Object)` dispatches on whatever guest object it is handed. `StackTraceElement`
+    is instantiated NATIVELY by `frameToElement`, so RTA pruned its `toString` and the slot stayed 0. `blr 0`
+    is a branch to address 0, which the firmware's low-memory shim turns into image re-entry.
+  - **Fix reuses `stubOnly`** — give a blob's virtuals deferral stubs so its vtable has no holes WITHOUT
+    marking them reachable (pulls nothing). It was gated on one blob (`Class.forName`'s incremental path) and
+    now also covers `nativelyInstantiated` classes. `seedNativelyReached` already marked ONE method
+    (`getMethodName`) for this reason; marking one method of a class the VM hands out whole is arbitrary.
+  - **`java/lang/Class` is deliberately NOT listed** (the other native instantiation): its mirrors work
+    today, and widening without a failing case would be a change with no evidence. That is the list to add to.
+  - **NOT fixed, and stated:** baked java.base dispatching unguarded on guest objects is the general hazard.
+    Any other pruned `toString` reachable from baked code reproduces this. Closing it means guarding the bake
+    domain (perturbs the self-hosting fixpoint) or minting far more widely (3-4x the code arena).
+  - **Pi (`core 166MHz`, full suite):** all parity OK, ExcDemo's seven-frame trace, `linkresolve
+    demo/RtaMade.<init>`, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    WPA2 -> HTTP 200 OK. The suite does not print a StackTraceElement through `String.valueOf`, so this
+    confirms NO REGRESSION; the fix itself is QEMU-proven by `AssertMsgProbe`.
+
 - **A deferred `new` SKIPPED its constructor — ROOT-CAUSED AND FIXED (2026-08-30, PI-VALIDATED).** `MetalJUnit`
   reported `NullPointerException` for a test whose assertion is correct in a probe, including reflectively.
   The NPE was in `java/util/Formatter.format` on its own `out` field, under `String.formatted`, under
