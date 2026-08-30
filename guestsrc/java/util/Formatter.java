@@ -20,10 +20,34 @@ package java.util;
  */
 public final class Formatter
 {
-    private final StringBuilder out = new StringBuilder();
+    private StringBuilder out;
 
     public Formatter()
     {
+        out = new StringBuilder();
+    }
+
+    /**
+     * The buffer, created on demand.
+     *
+     * <p>NOT a style choice, and not redundant with the constructor: on metal this object can arrive with its
+     * constructor NEVER HAVING RUN. When `String.formatted` is compiled before `java/util/Formatter` is
+     * registered, its `new Formatter()` defers (a `newresolve` line in the boot log) and the
+     * `invokespecial <init>` beside it does not execute -- proven by instrumenting a `ctorRan` flag, which
+     * read 0 while `isRealSpecial` never reported skipping the call. Every field is then 0, and the first
+     * `out.append` NPEs deep inside JUnit's message formatting.
+     *
+     * <p>That is a VM bug and this is a guard, not its fix. It is here because a formatter that NPEs when it
+     * is constructed the wrong way turns a readable assertion failure into an unrelated NullPointerException,
+     * which is how this cost a full debugging arc.
+     */
+    private StringBuilder buf()
+    {
+        if (out == null)
+        {
+            out = new StringBuilder();
+        }
+        return out;
     }
 
     public Formatter format(String fmt, Object... args)
@@ -40,7 +64,7 @@ public final class Formatter
             char ch = fmt.charAt(i);
             if (ch != '%')
             {
-                out.append(ch);
+                buf().append(ch);
                 i += 1;
                 continue;
             }
@@ -51,17 +75,17 @@ public final class Formatter
             }
             if (j >= n)
             {
-                out.append(ch);                     // a trailing '%': emit it rather than dropping it
+                buf().append(ch);                     // a trailing '%': emit it rather than dropping it
                 break;
             }
             char conv = fmt.charAt(j);
             if (conv == '%')
             {
-                out.append('%');
+                buf().append('%');
             }
             else if (conv == 'n')
             {
-                out.append('\n');
+                buf().append('\n');
             }
             else
             {
@@ -73,11 +97,11 @@ public final class Formatter
                 String s = convert(conv, a);
                 if (s == null)
                 {
-                    out.append(fmt, i, j + 1);      // unknown conversion: verbatim, and it took no argument
+                    buf().append(fmt, i, j + 1);      // unknown conversion: verbatim, and it took no argument
                 }
                 else
                 {
-                    out.append(s);
+                    buf().append(s);
                     argi += 1;
                 }
             }
@@ -195,6 +219,6 @@ public final class Formatter
 
     public String toString()
     {
-        return out.toString();
+        return buf().toString();
     }
 }

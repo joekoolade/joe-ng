@@ -120,5 +120,11 @@ public class MetalJUnit {
         }
         System.out.println("  " + what + " " + test.getName() + " -> " + cause.getClass().getName()
                 + (cause.getMessage() == null ? "" : ": " + cause.getMessage()));
+        // An assertion failure is the test's own verdict and its message says everything. Anything else is a
+        // fault in the harness or the VM, so show where it came from. printStackTrace(), not getStackTrace():
+        // the array-materialising path wild-branched from here once, while this one is what ExcDemo uses.
+        if (!cause.getClass().getName().startsWith("org.opentest4j.")) {
+            cause.printStackTrace();
+        }
     }
 }
