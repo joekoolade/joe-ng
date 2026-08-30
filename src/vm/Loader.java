@@ -9177,41 +9177,17 @@ public final class Loader
         {
             q += 1;
         }
-        byte[] slash = lambdaIfaceName(p + 1, (int) (q - p - 1));
-        if (classIndexByName(slash) < 0 && !nameAlreadyPending(slash))
+        int off = internIndyNameAt(p + 1, (int) (q - p - 1));
+        if (regBySigU(indyNameBuf + off) >= 0)
         {
-            long pulled = pullClass(slash);
-        }
+            return;                                     // already a REGISTERED class -- re-adding its blob
+        }                                               //   re-registers it (lifecycle DIFF, then a wild branch)
+        // registerNameFromDir, not pullClass: it dedupes by blob ADDRESS (addBlob does), skips
+        // java/lang/Object, and -- the part that matters -- honours the DENYLIST. pullClass(byte[]) goes
+        // straight to the classDir, which is how the deferred-`new` path once pulled a denylisted class.
+        long pulled = registerNameFromDir(indyNameBuf, off);
     }
 
-    /** True if a blob for {@code slash} is already on the pending list (pullClass dedupes by ADDRESS, which
-     *  does not help before the blob is looked up). */
-    private static boolean nameAlreadyPending(byte[] slash)
-    {
-        int i = 0;
-        while (i < pdCount)
-        {
-            if (pdNameOff[i] != 0 && utf8IsAtBase(pdBase[i], pdNameOff[i], slash))
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
-
-    /** Copy the {@code len} interface-name bytes at {@code raw} into a byte[] the class lookups take. */
-    private static byte[] lambdaIfaceName(long raw, int len)
-    {
-        byte[] slash = new byte[len];
-        int k = 0;
-        while (k < len)
-        {
-            slash[k] = (byte) u1(raw + k);
-            k += 1;
-        }
-        return slash;
-    }
 
     /**
      * Compile deferred method {@code idx} at call time: restore its class's compile context, re-find the
@@ -9365,6 +9341,19 @@ public final class Loader
         patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)
         {
+            // An index alone is unchaseable -- it is a slot number in a table rebuilt every batch. Name the
+            // method the same way LAZY_TRACE does; the context is restored, so gbase/gThisNameOff are valid.
+            Uart.write(Magic.bytes("  compile returned null for "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.putc(0x2E);
+            int nullName = lzTab[idx].nameOff;
+            if (nullName == 0)
+            {
+                nullName = findNameByCode(lzTab[idx].code);
+            }
+            printNameAt(lzTab[idx].blob, nullName);
+            printNameAt(lzTab[idx].blob, lzTab[idx].descOff);
+            Uart.putc(0x0A);
             capHalt(Magic.bytes("lazy-compile-null"), idx);   // the trampoline would `br 0` -- halt with a name instead
         }
         rememberLazyBody(idx, buf);
@@ -11103,6 +11092,11 @@ public final class Loader
                 // compiled (a `newresolve`d class, say). Indexing on -1 would load TIB[0], the Type pointer,
                 // and branch into the heap. Resolve against the RECEIVER at first call instead, through the
                 // same late-dispatch trampoline a guarded call site uses: x0 is already the receiver here.
+                Uart.write(Magic.bytes("  lambdaslot late "));
+                printNameAt(gbase, refClassNameOff(lambdaImplMref(idx)));
+                Uart.putc(0x2E);
+                printNameAt(gbase, mrefNameOff(lambdaImplMref(idx)));
+                Uart.putc(0x0A);
                 w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
                 w = emitTrampAddr(thunk, w, virtualTramp());
             }
