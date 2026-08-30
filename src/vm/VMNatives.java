@@ -185,6 +185,15 @@ final class VMNatives
         return Loader.isArrayType(Magic.load64(mirror + 16L)) ? 1L : 0L;
     }
 
+    /**
+     * Late virtual dispatch: resolve call site {@code idx} against the receiver's dynamic type. Called only
+     * from {@code Loader.virtualTramp}, which has already saved the argument registers.
+     */
+    static long virtualResolve(long recv, long idx)
+    {
+        return Loader.virtualResolve(recv, (int) idx);
+    }
+
     /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
     static long throwableTrace(long exc)
     {

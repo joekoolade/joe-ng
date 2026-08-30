@@ -1576,6 +1576,15 @@ public final class Baseline
             return;
         }
         int slot = symbols.vtableSlot(cpIndex);
+        if (slot < 0)
+        {
+            // The referenced class is not registered, so there is no slot to bake into the instruction. Put
+            // the site index in x17 BEFORE emitCall -- arg marshalling writes x0..x15 and leaves x17 alone --
+            // and let the trampoline resolve against the receiver it finds in x0 and tail-branch.
+            symbols.virtualSite(cb, cpIndex);
+            emitCall(cb, paramCount(cpIndex), returnsValue(cpIndex), true, SYM_HELPER, Symbols.VIRTUAL_RESOLVE);
+            return;
+        }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
         if (deepStack)
         {

@@ -211,6 +211,12 @@ final class MetalWriterSymbols implements Symbols
         byte[] cls = utf8Copy(ClassReader.classNameOff(classBytes, cpOff, classCp));
         return ObjectModel.scalarSize(MetalClassModel.instanceFieldCount(cls));
     }
+    /** Never reached: the writer compiles a closed world, so every vtable slot resolves. */
+    public void virtualSite(CodeBuffer cb, int methodCp)
+    {
+        fail(Symbols.FAIL_ARG_COUNT, methodCp, 0);
+    }
+
     public int vtableSlot(int methodCp)
     {
         byte[] recv = utf8Copy(ClassReader.refClassNameOff(classBytes, cpOff, methodCp));

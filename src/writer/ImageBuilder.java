@@ -1343,6 +1343,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(JJ)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(J)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.throwableTrace(J)J", "vm/VM.stackTraceAddr");        // Throwable.stackTrace0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.virtualResolve(JJ)J", "vm/VM.virtualResolveAddr"); // late virtual dispatch
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {

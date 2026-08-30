@@ -171,6 +171,13 @@ final class MetalSymbols implements Symbols
     {
         return Loader.objectSizeOf(classCp);
     }
+    public void virtualSite(CodeBuffer cb, int methodCp)
+    {
+        int idx = Loader.virtualSiteIndex(methodCp);
+        cb.emit(A64Enc.movz(17, idx & 0xFFFF, 0));               // x17 = site index; the trampoline reads it
+        cb.emit(A64Enc.movk(17, (idx >> 16) & 0xFFFF, 1));       // fixed width: sizing must not depend on idx
+    }
+
     public int vtableSlot(int methodCp)
     {
         return Loader.vtableSlotOf(methodCp);
@@ -292,6 +299,10 @@ final class MetalSymbols implements Symbols
     /** Writer-stashed address of the runtime helper with the given {@link Symbols} id. */
     private static long helperAddr(int helper)
     {
+        if (helper == Symbols.VIRTUAL_RESOLVE)
+        {
+            return Loader.virtualTramp();               // built on first use, like the link trampoline
+        }
         if (helper == Symbols.HEAP_ALLOC)
         {
             return VM.heapAlloc;

@@ -7442,7 +7442,118 @@ public final class Loader
             writeName(gbase + nameOff + 2, u2(gbase + nameOff));
             Uart.putc(0x0A);
         }
-        return 0;
+        return -1;                                      // unresolved -> the caller lowers a late-dispatch site
+    }
+
+    // ----- late virtual dispatch ------------------------------------------------------------------------
+    // A virtual call whose class is not registered at compile time has no slot to bake into the instruction.
+    // Static call sites solved this with link stubs (PR #192); a virtual site cannot, because the target
+    // depends on the RECEIVER. So the site records its (class,name,desc) here, emits the index in x17, and
+    // calls a trampoline that resolves against the receiver's actual type at first execution.
+    private static final int MAXVSITE = 4096;
+    private static long[] vsName, vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
+    private static int vsCount;
+    private static long virtualTrampAddr;
+    private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
+    private static int vsMemoIdx = -1;
+
+    /** Record an unresolved virtual site; returns its index (what the emitted code puts in x17). */
+    static int virtualSiteIndex(int methodCp)
+    {
+        if (vsName == null)
+        {
+            vsName = new long[MAXVSITE];
+            vsDesc = new long[MAXVSITE];
+        }
+        if (vsCount >= MAXVSITE)
+        {
+            return 0;
+        }
+        int idx = vsCount;
+        vsName[idx] = gbase + mrefNameOff(methodCp);
+        vsDesc[idx] = gbase + mrefDescOff(methodCp);
+        vsCount += 1;
+        return idx;
+    }
+
+    /**
+     * Resolve an unresolved virtual site against the RECEIVER's dynamic type. Reuses
+     * {@link #resolveLinkTarget}, which demand-loads the class and walks the same tiers a link stub does --
+     * the only difference is that the class name comes from the receiver rather than from the call site,
+     * which is what makes it virtual dispatch.
+     */
+    static long virtualResolve(long recv, int idx)
+    {
+        if (recv == 0L || idx < 0 || idx >= vsCount || clTab == null)
+        {
+            return VM.denylistTrapAddr;
+        }
+        long tib = Magic.load64(recv + ObjectModel.TIB_OFFSET);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
+        }
+        long type = Magic.load64(tib);
+        if (idx == vsMemoIdx && type == vsMemoType && vsMemoBuf != 0L)
+        {
+            return vsMemoBuf;                           // monomorphic site: skip the whole lookup
+        }
+        int ci = classRegByType(type);
+        if (ci < 0)
+        {
+            return VM.denylistTrapAddr;
+        }
+        long buf = resolveLinkTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx]);
+        if (buf == 0L)
+        {
+            return VM.denylistTrapAddr;
+        }
+        vsMemoIdx = idx;
+        vsMemoType = type;
+        vsMemoBuf = buf;
+        return buf;
+    }
+
+    /**
+     * The late-dispatch trampoline: the twin of {@link #buildLinkTramp}, but the receiver is already in x0 and
+     * the site index arrives in x17. Saves x0..x15 + LR so the resolve cannot disturb the arguments, then
+     * tail-branches to the target -- so the callee returns straight to the original call site.
+     */
+    static long virtualTramp()
+    {
+        if (virtualTrampAddr != 0L)
+        {
+            return virtualTrampAddr;
+        }
+        long buf = Heap.allocCode(256);
+        long ra = VM.virtualResolveAddr;
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 144)); w += 1;
+        int r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.movReg(1, 17));       w += 1;   // x1 = site idx (x0 IS the receiver)
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = resolved target
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call: returns to the call site
+        Heap.publishCode(buf, buf + w * 4L);
+        virtualTrampAddr = buf;
+        return buf;
     }
 
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
