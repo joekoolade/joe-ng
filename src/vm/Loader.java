@@ -3426,6 +3426,32 @@ public final class Loader
     }
 
     /**
+     * Classes the VM instantiates ITSELF, outside the call graph, and then hands to arbitrary code. Their
+     * vtables must have no holes, so their virtuals get deferral stubs even where RTA prunes them.
+     *
+     * <p>The failure a hole causes here is the worst kind. BAKED code carries no {@code dispatchTargetGuard}
+     * -- {@code implicitChecks()} is false for the writer, deliberately -- and baked
+     * {@code String.valueOf(Object)} does {@code obj.toString()} on whatever it is given. A pruned
+     * {@code toString} slot therefore becomes {@code blr 0}, which the firmware's low-memory shim turns into a
+     * re-entry of the image entry: "BOOT RE-ENTERED", no exception, no name, nothing to chase. That is what
+     * printing a {@code StackTraceElement} from guest code did -- {@code getStackTrace()} itself worked and
+     * returned five frames; the crash was `"at " + element`.
+     *
+     * <p>{@code seedNativelyReached} already marks ONE method here ({@code getMethodName}) for exactly this
+     * reason. Marking one method of a class the VM hands out whole is arbitrary -- any of its methods can be
+     * the one called -- so stub them all. Stubs pull nothing: a few instructions routing the first call into
+     * lazyCompile.
+     *
+     * <p>{@code java/lang/Class} is the other native instantiation ({@code classMirror}) and is NOT listed:
+     * its mirrors work today and widening this without a failing case to check against would be a change with
+     * no evidence behind it. If a mirror ever wild-branches the same way, this is the list to add it to.
+     */
+    private static boolean nativelyInstantiated(long base, int nameOff)
+    {
+        return utf8IsAtBase(base, nameOff, Magic.bytes("java/lang/StackTraceElement"));
+    }
+
+    /**
      * Seed the signatures no call site names, in ONE pass over the blobs. Each is a method some NATIVE or
      * out-of-graph path enters, so RTA prunes it and its vtable slot stays 0:
      * <ul>
@@ -5201,8 +5227,11 @@ public final class Loader
             int attrs = u2(p + 6);
             long code = findCode(bytes, p + 8, attrs);
             // A stub-blob's own virtual methods are kept even when RTA prunes them, so the class's vtable has
-            // no holes -- but STUB ONLY, so nothing of theirs is pulled into this batch (see stubBlob).
-            boolean stubOnly = gbase == gStubBlob && gStubBlob != 0L && code != 0L
+            // no holes -- but STUB ONLY, so nothing of theirs is pulled into this batch (see stubBlob). A
+            // NATIVELY INSTANTIATED class needs the same treatment for a different reason (see there).
+            boolean holeFree = (gbase == gStubBlob && gStubBlob != 0L)
+                    || nativelyInstantiated(gbase, gThisNameOff);
+            boolean stubOnly = holeFree && code != 0L
                     && !isReach(code) && isVirtual(u2(p), gcp[u2(p + 2)]);
             if (code != 0L && (markActive == 0 || isReach(code) || stubOnly))
             {
