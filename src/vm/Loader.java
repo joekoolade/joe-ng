@@ -7428,6 +7428,20 @@ public final class Loader
             }
             i += 1;
         }
+        // A MISS IS ALWAYS A BUG: returning 0 dispatches through vtable slot 0 of whatever the receiver
+        // happens to be -- one of java/lang/Object's nine virtuals -- so the call silently returns the wrong
+        // thing instead of failing. It happens when the referenced class is not registered at COMPILE time,
+        // which is routine for a method reached only reflectively: it is compiled on demand, and its callees'
+        // classes were never pulled. Static call sites got late resolution (link stubs) in PR #192; virtual
+        // ones still need it. VT_TRACE names the sites meanwhile.
+        if (VT_TRACE)
+        {
+            Uart.write(Magic.bytes("  VTMISS "));
+            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            Uart.putc(0x2E);
+            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            Uart.putc(0x0A);
+        }
         return 0;
     }
 
@@ -8232,6 +8246,10 @@ public final class Loader
      * WITHOUT the serial traffic those lines add to the very phases being timed.
      */
     private static final boolean LOAD_TRACE = false;
+
+    /** Name every {@code invokevirtual} whose vtable slot could not be resolved at compile time (debug). Each
+     *  one is a silent wrong dispatch through slot 0 -- see {@link #globalVtableSlot}. */
+    private static final boolean VT_TRACE = false;
 
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
     private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
