@@ -270,6 +270,7 @@ public final class BuildRuntimeImage
         Path out = Path.of("kernel8.img");
         String mainClass = null;             // --main <class>: the program the image runs from main(String[])
         String mainArgs = "";                // --args "<...>": its command-line args (space-separated)
+        String classpath = null;             // --classpath <path>: a RAMFS archive the guest loads classes from
         int pos = 0;
         int i = 0;
         while (i < args.length)
@@ -283,6 +284,11 @@ public final class BuildRuntimeImage
             else if (a.equals("--args") && i + 1 < args.length)
             {
                 mainArgs = args[i + 1];
+                i += 2;
+            }
+            else if (a.equals("--classpath") && i + 1 < args.length)
+            {
+                classpath = args[i + 1];
                 i += 2;
             }
             else
@@ -307,9 +313,11 @@ public final class BuildRuntimeImage
             Path init = Path.of("ramfs/etc/init");
             Files.createDirectories(init.getParent());
             Files.writeString(init, "main=" + mainClass + "\n"
-                    + (mainArgs.isEmpty() ? "" : "args=" + mainArgs + "\n"));
+                    + (mainArgs.isEmpty() ? "" : "args=" + mainArgs + "\n")
+                    + (classpath == null ? "" : "classpath=" + classpath + "\n"));
             System.out.println("wrote " + init + " (main=" + mainClass
-                    + (mainArgs.isEmpty() ? "" : " args=" + mainArgs) + ")");
+                    + (mainArgs.isEmpty() ? "" : " args=" + mainArgs)
+                    + (classpath == null ? "" : " classpath=" + classpath) + ")");
         }
 
         CodeBuffer code = build(classesDir);

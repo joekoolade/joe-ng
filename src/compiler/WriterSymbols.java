@@ -221,6 +221,12 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         }
         return ClassFile.chainFieldBase(cls, this);
     }
+    /** Never reached: the writer compiles a closed world, so every vtable slot resolves. */
+    public void virtualSite(CodeBuffer cb, int methodCp)
+    {
+        fail(Symbols.FAIL_ARG_COUNT, methodCp, 0);
+    }
+
     public int vtableSlot(int methodCp)
     {
         ClassFile.MemberRef ref = cf.memberRef(methodCp);

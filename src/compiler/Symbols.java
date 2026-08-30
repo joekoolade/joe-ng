@@ -59,6 +59,8 @@ public interface Symbols
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
+    int VIRTUAL_RESOLVE = 48;   // the late virtual-dispatch trampoline: resolve x17's site against x0's
+                                //   receiver, restore the args, and tail-branch to the real method
     int MON_NOTIFY = 26;        // vm/VM.objNotify(J)V     — wake one waiter on an object
     int MON_NOTALL = 27;        // vm/VM.objNotifyAll(J)V  — wake every waiter on an object
     int THREAD_JOIN = 28;       // vm/VM.threadJoin(J)V    — block until a Thread's task has exited
@@ -243,8 +245,33 @@ public interface Symbols
 
     int objectSize(int classCp);
 
-    /** Vtable slot of the virtual method at Methodref index {@code methodCp}. */
+    /**
+     * Vtable slot of the virtual method at Methodref index {@code methodCp}, or {@code -1} when it cannot be
+     * resolved at compile time -- the referenced class is not registered, which happens whenever a method is
+     * compiled on demand after RTA has stopped looking (anything reached only reflectively).
+     *
+     * <p>{@code -1} rather than 0 because 0 IS a valid slot: it used to be returned for a miss, and the call
+     * then dispatched through java/lang/Object's first virtual and silently returned the wrong thing. The
+     * caller lowers a {@code -1} through {@link #virtualSite} + {@link #VIRTUAL_RESOLVE} instead.
+     */
     int vtableSlot(int methodCp);
+
+    /**
+     * Record the unresolved virtual call site at {@code methodCp} and emit its index into the scratch register
+     * the {@link #VIRTUAL_RESOLVE} trampoline reads (x17 -- outside the 16 argument registers, and already the
+     * convention deferral stubs use). Only ever called when {@link #vtableSlot} answered -1.
+     */
+    void virtualSite(CodeBuffer cb, int methodCp);
+
+    /**
+     * Load helper {@code helper}'s entry address into {@code reg}. Unlike {@link #callHelper} this does not
+     * branch: the dispatch guard uses it to SUBSTITUTE a resolve trampoline for a null slot, so the call
+     * site's own {@code blr} does the calling.
+     */
+    default void helperInto(CodeBuffer cb, int reg, int helper)
+    {
+        fail(FAIL_ARG_COUNT, helper, reg);              // only the metal JIT resolves dispatch late
+    }
 
     /** Itable slot of the interface method at InterfaceMethodref index {@code ifaceMethodCp}. */
     int interfaceSlot(int ifaceMethodCp);

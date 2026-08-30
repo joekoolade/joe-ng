@@ -107,8 +107,13 @@ public final class ObjectModel
     // an element-Type field; its instanceSize slot carries a tag (so it is recognisable) with the element size.
     /** Tag in an array Type's instanceSize slot (high bits); the low 16 bits hold the element size. */
     public static final long ARRAY_TYPE_TAG = 0xA55A0000L;
-    /** Mask to read the tag (identify an array Type). */
+    /** Mask to read the tag (identify an array or primitive Type). */
     public static final long ARRAY_TYPE_TAG_MASK = 0xFFFF0000L;
+    /** Tag in a PRIMITIVE Type's instanceSize slot; the low bits hold the JVMS descriptor char ('I', 'Z', ...).
+     *  A primitive Type exists only to back {@code int.class} and friends: nothing is ever allocated from it,
+     *  its super is 0 (so an instanceof walk terminates at once) and it has no itable. Distinct tag from
+     *  {@link #ARRAY_TYPE_TAG} so the array test stays exact. */
+    public static final long PRIM_TYPE_TAG = 0xA55B0000L;
     /** Array Type field: the element's Type (0 for a primitive element); used for reference-array covariance. */
     public static final int ARRAY_TYPE_ELEMENT_OFFSET = 3 * WORD;   // 24
     /** Total array Type size (= TYPE_SIZE: one uniform record, arrays fill the element word). */

@@ -89,11 +89,64 @@ public final class Class<T>
         return (classModifiers0(this) & 0x0200) != 0;
     }
 
-    /** True if this Class is an array type. (Loaded array classes are not yet modelled on metal — see arc M1.) */
+    /**
+     * Every method this class declares, in VM registry order. Enumerated from the method registry (which is
+     * exactly what the VM knows about -- each method of a registered class is there, compiled or as a deferral
+     * stub) rather than from the classfile.
+     *
+     * <p>With {@code Method.isAnnotationPresent} this is what makes annotation-driven discovery possible: find
+     * the methods carrying {@code @Test} instead of hand-listing their names.
+     */
+    public java.lang.reflect.Method[] getDeclaredMethods()
+    {
+        int n = (int) declaredMethodCount0(this);
+        java.lang.reflect.Method[] out = new java.lang.reflect.Method[n];
+        int i = 0;
+        int k = 0;
+        while (i < n)
+        {
+            String nm = declaredMethodAt0(this, i);
+            try
+            {
+                out[k] = java.lang.reflect.Method.resolve(this, nm);   // resolves + compiles on demand
+                k += 1;
+            }
+            catch (NoSuchMethodException e)
+            {
+                // a declared method the VM cannot resolve (native without a helper) -- skip it
+            }
+            i += 1;
+        }
+        if (k == n)
+        {
+            return out;
+        }
+        java.lang.reflect.Method[] trimmed = new java.lang.reflect.Method[k];
+        int j = 0;
+        while (j < k)
+        {
+            trimmed[j] = out[j];
+            j += 1;
+        }
+        return trimmed;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodAt}): the n-th declared method's NAME. */
+    private static native String declaredMethodAt0(Class<?> c, int want);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodCount}): how many methods it declares.
+     *  {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long declaredMethodCount0(Class<?> c);
+
+    /** True if this Class is an array type — the VM tags array Types, so this is a tag test on the mirror. */
     public boolean isArray()
     {
-        return false;
+        return isArray0(this) != 0L;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.isArrayClass}): mirror -> 1 if its Type is an array
+     *  Type. {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long isArray0(Class c);
 
     /** The element type of an array class (from the array Type's element slot), else null. Feeds
      *  {@code Array.newInstance(a.getClass().getComponentType(), n)} (TimSort/Arrays.copyOf/toArray) the right
@@ -106,11 +159,42 @@ public final class Class<T>
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.componentTypeOf}): array Class -> element-type mirror. */
     private static native Class<?> getComponentType0(Class c);
 
-    /** True if this Class is a primitive type. (Primitive mirrors are not yet modelled on metal — see arc M1.) */
+    /**
+     * Stock java.base calls this from the wrapper classes' initializers -- {@code Integer.TYPE =
+     * getPrimitiveClass("int")}, and likewise {@code Void} -- so a name-winning {@code Class} overlay that
+     * omits it makes every one of those {@code <clinit>}s trap. That is exactly what happened: the first run
+     * died in {@code java/lang/Void.<clinit>}.
+     *
+     * <p>Stock declares it {@code native}; here the name→descriptor mapping is ordinary Java and only the
+     * mirror lookup is a native, which keeps the native's signature a plain {@code (J)J}.
+     */
+    static Class<?> getPrimitiveClass(String name)
+    {
+        int c = 0;
+        if (name.equals("int"))          { c = 0x49; }
+        else if (name.equals("long"))    { c = 0x4A; }
+        else if (name.equals("double"))  { c = 0x44; }
+        else if (name.equals("float"))   { c = 0x46; }
+        else if (name.equals("short"))   { c = 0x53; }
+        else if (name.equals("byte"))    { c = 0x42; }
+        else if (name.equals("char"))    { c = 0x43; }
+        else if (name.equals("boolean")) { c = 0x5A; }
+        else if (name.equals("void"))    { c = 0x56; }
+        return primitiveClass0(c);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.primClassOf}): descriptor char -> primitive mirror. */
+    private static native Class<?> primitiveClass0(long descChar);
+
+    /** True if this Class is a primitive type ({@code int.class}), i.e. its Type carries the primitive tag. */
     public boolean isPrimitive()
     {
-        return false;
+        return isPrimitive0(this) != 0L;
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.isPrimClass}): mirror -> 1 if its Type is a primitive
+     *  Type. {@code long}-returning for the same reason as {@code classModifiers0}. */
+    private static native long isPrimitive0(Class c);
 
     /** True if this class was synthesised by the compiler ({@code ACC_SYNTHETIC}). */
     public boolean isSynthetic()

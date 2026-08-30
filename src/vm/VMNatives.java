@@ -172,6 +172,86 @@ final class VMNatives
     }
 
     /**
+     * {@code Class.isArray0(Class)} native: 1 if the mirror's Type is an array Type, else 0. Returns
+     * {@code long} rather than {@code int} for the same reason {@code classModifiers0} does -- a 1-arg
+     * int-returning native mis-compiles in the JIT, and {@code (J)J} is the shape known to work.
+     */
+    static long isArrayClass(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        return Loader.isArrayType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+    }
+
+    /**
+     * Late virtual dispatch: resolve call site {@code idx} against the receiver's dynamic type. Called only
+     * from {@code Loader.virtualTramp}, which has already saved the argument registers.
+     */
+    static long virtualResolve(long recv, long idx)
+    {
+        return Loader.virtualResolve(recv, (int) idx);
+    }
+
+    /** {@code Throwable.stackTrace0(Throwable)} native: its inline backtrace as a StackTraceElement[]. */
+    static long throwableTrace(long exc)
+    {
+        return Loader.traceFromThrowable(exc);
+    }
+
+    /**
+     * {@code Class.declaredMethodAt0(Class, int)} native: the NAME of the n-th method the class declares, as a
+     * guest String. A negative {@code want} returns the COUNT instead, so one native serves both.
+     */
+    static long declaredMethodAt(long mirror, long want)
+    {
+        return Loader.declaredMethodName(mirror, (int) want);
+    }
+
+    /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
+    static long declaredMethodCount(long mirror)
+    {
+        return Loader.declaredMethodName(mirror, -1);
+    }
+
+    /**
+     * {@code Method.annoPresent0(int, byte[])} native: 1 if the method registered at {@code rgIndex} carries
+     * the annotation whose descriptor the byte[] holds. Marker level -- presence only, no element values.
+     */
+    static long annoPresent(long rgIndex, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+        return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
+    }
+
+    /**
+     * {@code Class.primitiveClass0(long)} native: JVMS descriptor char -> the primitive {@code Class} mirror.
+     * Backs {@code Class.getPrimitiveClass}, which stock wrapper initializers call for {@code Integer.TYPE}.
+     */
+    static long primClassOf(long descChar)
+    {
+        return Loader.primitiveMirror((int) descChar);
+    }
+
+    /**
+     * {@code Class.isPrimitive0(Class)} native: 1 if the mirror's Type is a primitive Type, else 0. Same
+     * {@code (J)J} shape as {@link #isArrayClass} and for the same JIT reason.
+     */
+    static long isPrimClass(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        return Loader.isPrimitiveType(Magic.load64(mirror + 16L)) ? 1L : 0L;
+    }
+
+    /**
      * M4: {@code Class.getName0(Class)} native — the mirror's Type ({@code @16}) -> a fresh guest String of
      * the class's dotted binary name (built by {@code Loader.classNameString} from the registry name bytes).
      */

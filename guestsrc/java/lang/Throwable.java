@@ -50,6 +50,33 @@ public class Throwable
     {
     }
 
+    /**
+     * The stack trace, materialised from the inline backtrace {@link #printStackTrace} already uses.
+     *
+     * <p>joe-ng captures the backtrace at THROW time rather than at construction (so propagation allocates
+     * nothing), which means an exception built but not yet thrown reports an EMPTY trace. That is what stock
+     * code that walks the array wants -- it loops and finds nothing -- rather than a null, which is what the
+     * absence of this method used to produce: the call landed on an empty vtable slot and surfaced as a bare
+     * ArrayIndexOutOfBoundsException from the dispatch guard, three frames from anything relevant.
+     */
+    public StackTraceElement[] getStackTrace()
+    {
+        if (stackTrace != null)
+        {
+            return stackTrace;
+        }
+        return stackTrace0(this);
+    }
+
+    /** Replace the trace. Stock library code does this to trim frames (JUnit's assertion builder, for one). */
+    public void setStackTrace(StackTraceElement[] trace)
+    {
+        stackTrace = trace;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.throwableTrace}): inline backtrace -> StackTraceElement[]. */
+    private static native StackTraceElement[] stackTrace0(Throwable t);
+
     /** The detail message string, or {@code null}. */
     /**
      * Suppressed exceptions. javac lowers every try-with-resources into a call to {@code addSuppressed},
@@ -58,6 +85,10 @@ public class Throwable
      */
     private Throwable[] suppressed;
     private int suppressedCount;
+
+    // Declared LAST on purpose: VM.unwind / VM.printStackTrace hardcode bt0..bt7 at obj+16..+72 and
+    // detailMessage at +80, so any new field must land after those.
+    private StackTraceElement[] stackTrace;   // non-null only once setStackTrace has overridden the inline one
 
     public final void addSuppressed(Throwable exception)
     {

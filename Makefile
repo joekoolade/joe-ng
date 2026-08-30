@@ -39,14 +39,17 @@ $(OUT)/.stamp: $(SOURCES)
 	@touch $@
 
 # Compile the guest tree into out/ after the main set (it references magic.Magic there).
-# ALWAYS purge the guest output packages (java/ jdk/ demo/ come only from guestsrc) before recompiling: an
+# ALWAYS purge the guest output packages (java/ jdk/ demo/ org/ come only from guestsrc) before recompiling: an
 # incremental javac never deletes the .class of a REMOVED source, so a retired guest class (e.g. a mini
 # java/lang/String swapped for stock) would leave a stale .class that registerTree keeps embedding — the build
-# would silently keep running the old class. The guest tree is small; a clean recompile each build is cheap and
+# would silently keep running the old class. org/ was MISSING from this list and cost exactly that: after the
+# hand-written org/junit/jupiter stubs were deleted, their stale .class files stayed in out/, were baked into
+# the image, and shadowed the real JUnit in the runtime jar -- a probe "proving" the real API worked on metal
+# was in fact still running the stubs. The guest tree is small; a clean recompile each build is cheap and
 # keeps "delete the source" honest.
 .PHONY: guest
 guest: $(OUT)/.stamp
-	rm -rf $(OUT)/java $(OUT)/jdk $(OUT)/demo
+	rm -rf $(OUT)/java $(OUT)/jdk $(OUT)/demo $(OUT)/org
 	$(JAVAC) --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(GUESTSRC)
 
 test: build
@@ -61,11 +64,11 @@ test: build
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
-JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java test/jdk/java/lang/Thread/ITLConstructor.java test/jdk/java/lang/Thread/JoinWithDuration.java test/jdk/java/lang/Thread/JoinWithDurationRun.java test/jdk/java/lang/Thread/MainThreadTest.java test/jdk/java/lang/Thread/NullStackTrace.java test/jdk/java/lang/Thread/SleepSanity.java test/jdk/java/lang/Thread/SleepSanityRun.java test/jdk/java/lang/Thread/SleepWithDuration.java test/jdk/java/lang/Thread/SleepWithDurationRun.java test/jdk/java/lang/Compare.java test/jdk/testlib/RandomFactory.java test/jdk/java/lang/Long/BitTwiddle.java test/jdk/java/util/concurrent/atomic/Lazy.java test/jdk/java/util/concurrent/atomic/AtomicUpdaters.java test/jdk/java/util/concurrent/ConcurrentMap/ConcurrentModification.java test/jdk/java/util/zip/DeflaterClose.java test/jdk/java/util/zip/InflaterClose.java test/jdk/java/util/zip/DataDescriptorIgnoreCrcAndSizeFields.java test/jdk/java/util/zip/DataDescriptorSignatureMissing.java test/jdk/java/util/zip/GZIP/GZIPInputStreamAvailable.java test/jdk/java/util/zip/GZIP/BasicGZIPInputStreamTest.java test/jdk/java/util/zip/ZipOutputStream/CloseWrappedStream.java test/jdk/java/util/zip/ZipInputStream/Zip64DataDescriptor.java test/jdk/java/util/zip/ZipJUnitAll.java
+JDKTESTS ?= test/jdk/java/lang/Thread/GenerifyStackTraces.java test/jdk/java/lang/Thread/HoldsLock.java test/jdk/java/lang/Thread/IsAlive.java test/jdk/java/lang/Thread/ITLConstructor.java test/jdk/java/lang/Thread/JoinWithDuration.java test/jdk/java/lang/Thread/JoinWithDurationRun.java test/jdk/java/lang/Thread/MainThreadTest.java test/jdk/java/lang/Thread/NullStackTrace.java test/jdk/java/lang/Thread/SleepSanity.java test/jdk/java/lang/Thread/SleepSanityRun.java test/jdk/java/lang/Thread/SleepWithDuration.java test/jdk/java/lang/Thread/SleepWithDurationRun.java test/jdk/java/lang/Compare.java test/jdk/testlib/RandomFactory.java test/jdk/java/lang/Long/BitTwiddle.java test/jdk/java/util/concurrent/atomic/Lazy.java test/jdk/java/util/concurrent/atomic/AtomicUpdaters.java test/jdk/java/util/concurrent/ConcurrentMap/ConcurrentModification.java test/jdk/java/util/zip/DeflaterClose.java test/jdk/java/util/zip/InflaterClose.java test/jdk/java/util/zip/DataDescriptorIgnoreCrcAndSizeFields.java test/jdk/java/util/zip/DataDescriptorSignatureMissing.java test/jdk/java/util/zip/GZIP/GZIPInputStreamAvailable.java test/jdk/java/util/zip/GZIP/BasicGZIPInputStreamTest.java test/jdk/java/util/zip/ZipOutputStream/CloseWrappedStream.java test/jdk/java/util/zip/ZipInputStream/Zip64DataDescriptor.java test/jdk/java/util/zip/ZipJUnitAll.java test/jdk/junit/JUnitApiProbe.java test/jdk/junit/MetalJUnit.java test/jdk/junit/PatternProbe.java test/jdk/junit/NestedClinitProbe.java test/jdk/junit/SampleTest.java
 
 .PHONY: jdktests
-jdktests: guest
-	$(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT) -d $(OUT) $(JDKTESTS)
+jdktests: guest $(JUNIT_JAR)
+	$(JAVAC) -implicit:none -sourcepath '' --patch-module java.base=guestsrc --add-reads java.base=ALL-UNNAMED -cp $(OUT):$(JUNIT_JAR) -d $(OUT) $(JDKTESTS)
 
 # M4: external "plugin" classes compiled into ramfs/plugins/ (a generated, gitignored subtree) -- NOT into the
 # classDir (out/). On the metal they exist ONLY as files the guest reads + defineClass'es at runtime, never
@@ -88,7 +91,14 @@ appjar: guest
 	  jar --create --file ramfs/lib/app.jar --main-class app.Main -C $(JARCLASSES) . && \
 	  ls -l ramfs/lib/app.jar; fi
 
-image: build jdktests plugins appjar
+# The JUnit API + engine, staged into the RAMFS so the guest can load it at RUNTIME. Deliberately a COPY of
+# the host jar rather than anything compiled into the image: on the metal these classes exist only inside the
+# archive, exactly like app.jar, and /etc/init's `classpath=` is what makes them loadable.
+.PHONY: junitjar
+junitjar: $(JUNIT_JAR)
+	@mkdir -p ramfs/lib && cp $(JUNIT_JAR) ramfs/lib/junit.jar && ls -l ramfs/lib/junit.jar
+
+image: build jdktests plugins appjar junitjar
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 
@@ -100,10 +110,13 @@ qemu: image
 # need no build tool. Downloaded on demand into jars/ (gitignored) rather than vendored: it is a 3 MB
 # binary and this repo deliberately carries no third-party jars.
 #
-# It is HOST-ONLY, and must never reach the guest classpath: guestsrc/org/junit/jupiter/* are our own
-# stubs under the SAME fully-qualified names (a duplicate org.junit.jupiter.api.Test would shadow
-# whichever came first), and the real Jupiter engine drives discovery through java.lang.invoke, which
-# Loader denies (CLAUDE.md: the `java/lang/invoke/` deny list). Guest-side JUnit stays the stubs.
+# It is now BOTH the host test tool and the guest's JUnit API: the hand-written guestsrc/org/junit/jupiter/*
+# stubs are gone, so tests compile against the real annotations and Assertions and the classes are loaded at
+# RUNTIME out of a RAMFS copy of this jar (vm/JarFs via /etc/init's `classpath=`), never baked into the image.
+# The stubs had to go precisely because they carried the same fully-qualified names and would shadow the real
+# ones. (What the engine itself needs beyond this -- annotation element values, ServiceLoader, java.nio.file --
+# is still open; `java.lang.invoke` turned out NOT to be a blocker: every invoke reference in the jar is an
+# ordinary lambda/string-concat bootstrap, which joe-ng's JIT compiles itself.)
 #
 # Overriding JUNIT_VERSION requires overriding JUNIT_SHA256 to match -- the pin is per-version. Set
 # JUNIT_SHA256= (empty) to skip verification entirely.

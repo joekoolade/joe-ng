@@ -36,9 +36,13 @@ the standing rules and current state so we don't re-litigate them each session.
 - **Compile-only, no interpreter.** With no OS beneath, the first code on metal
   must already be machine code. One baseline compiler serves both the writer and
   the runtime JIT.
-- **The only external seeds** (not things we build): a stock JVM to run the
-  writer initially (gone after self-hosting, M5), and the Pi's GPU firmware that
-  loads `kernel8.img`. Nothing else touches joe-ng.
+- **The only external seeds** (not things we build): a stock JVM to run the writer,
+  and the Pi's GPU firmware that loads `kernel8.img`. Nothing else touches joe-ng.
+  **The seed JVM is PERMANENT (decided 2026-08-28)** — running the boot-image writer
+  on metal was dropped as a milestone, so the writer stays a build-time tool like
+  javac. Metacircular here means the classfile parser, the baseline compiler and the
+  runtime are ordinary Java classes running in BOTH worlds; the image *build* is not
+  part of that loop and is not intended to be.
 - **First-principles / learning project:** reference the ARM ARM, BCM2711 docs,
   and Jikes RVM / JOE *concepts* — write every line ourselves. Log sources in
   `SOURCES.md`.
@@ -164,6 +168,63 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **A null dispatch slot RESOLVES now instead of throwing (2026-08-29, PI-VALIDATED on the full suite).**
+  `Pattern.compile("abc")` from any `<clinit>` reached reflectively died with a bare AIOOBE, while the same
+  call at top level worked. **RTA runs at batch time, so a class instantiated only from a LAZILY compiled body
+  is never seen to be instantiated** — its virtuals are never marked and its vtable keeps holes. `Pattern` is
+  exactly that: `Pattern.compile` itself compiles on demand, so the `new Pattern` inside it is invisible to the
+  batch's reachability pass, and `Pattern.<init>` then dispatches through the hole.
+  - **The vtable twin of the itable gap `mintPrunedStub` closed**, fixed with the lever recorded there
+    ("mint on first dispatch, not at itable-build time"). `dispatchTargetGuard` now has TWO outcomes: a
+    misaligned/out-of-range target is not code at all and still throws AIOOBE; a NULL slot means only "never
+    compiled", so the slot is REPLACED with the resolve trampoline and the site's own `blr` calls it — which
+    preserves x0..x15, resolves against the RECEIVER's class, and tail-branches. A slot never dispatched
+    through costs nothing; minting every slot up front measured 3-4x the code arena. This also closes the old
+    "`globalVtableSlot` answers 0 on no match" gap — it answers -1 now.
+  - **A site table shared by every dispatch guard MUST dedup, and not for size reasons:** the compiler visits
+    each site twice (size pass, emit pass), so without dedup the two passes baked DIFFERENT indices for the
+    same call. The old overflow behaviour (return index 0) silently mis-resolved to whatever site 0 was;
+    `capHalt` instead. `MAXVSITE` 4096 -> 16384.
+  - **Naming a frame no table claims is what cracked it.** An unclaimed frame printed a bare `<image/native>`
+    with nothing to chase; it now prints its pc plus the nearest registered body below it and that body's
+    block end, which separates "nothing claims this" from "claimed but the pc ran past the recorded end".
+    That put the fault 0xAA8 past the last registered buffer. Two one-boot experiments finished it: flip the
+    guard's exception class to see whether the guard was involved at all, then split its four branches across
+    two throw sites to see WHICH fired.
+  - **The cheapest discriminator was a warm-up line.** Calling `Pattern.compile` once at top level first made
+    every nested case pass — one boot turned "Pattern is broken" into "FIRST-TIME initialization in this
+    context is broken" and pointed at the vtable. `test/jdk/junit/NestedClinitProbe` pins the boundary
+    (Trivial/Alloc/StringBuilder nest fine; Pattern did not).
+  - **Pi (`core 166MHz`, full suite):** 26 batches, every `vtparity`/`itparity` OK, no exception/trap/fault and
+    no `unclaimed pc=`/`MAXVSITE`, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    WPA2 -> DHCP -> DNS -> TCP -> HTTP 200 OK (828 bytes).
+  - **A WiFi failure on the FIRST of those two boots was NOT a regression** — `no mac` (the `cur_etheraddr`
+    ioctl response lost among post-JOIN event frames) zeroed the MAC, so every MIC was wrong and the AP
+    dropped all six msg2 attempts. An unchanged re-boot of the SAME card reached HTTP 200 OK. That path is
+    intermittent; re-boot before building a control image.
+
+- **Array + primitive class literals — FIXED (2026-08-28, PI-VALIDATED on the full suite).**
+  `String[].class` gave a mirror with `isArray()` hardcoded false and an empty name; `int.class` was NULL.
+  Now `[Ljava.lang.String;` / `[I` / `[[I`, all nine primitives named, `int.class == Integer.TYPE`, and
+  `literal == getClass()`.
+  - **Two unrelated mechanisms behind one symptom.** Arrays: every piece already existed (`typeOfClass`
+    resolves a `[`-literal to a real array Type) and nothing was wired to them — `isArray()` was a literal
+    `return false` and `classNameString` searched only the CLASS registry, which array Types are not in.
+    Primitives: **`int.class` is not an `ldc` at all** — javac emits `getstatic Integer.TYPE`, and the writer
+    cannot bake that field because the seed JVM's value is a HOST `java.lang.Class`, so the snapshot stores 0.
+  - **The primitive element char is recovered by IDENTITY against the per-atype TIB cache**, not from the
+    Type: element size cannot separate `byte[]`/`boolean[]` or `int[]`/`float[]`, and identity also works for
+    a writer-BAKED array Type the loader merely adopted, which no metal-side field would have been set on.
+  - **A primitive Type is a real tagged heap node, not a small sentinel** in the mirror's Type word: every
+    `Class` native dereferences that word, so a tiny value would need guarding at each one.
+  - **The overlay trap again, exactly as StringBuilder/Appendable:** the first run died in
+    `java/lang/Void.<clinit>` because the `Class` overlay had dropped `getPrimitiveClass`, and four overlaid
+    wrappers (Short/Byte/Character/Boolean) had dropped `TYPE`. Implementing `getPrimitiveClass` beats seeding
+    — the stock wrappers then initialise themselves. `TYPE` must be non-final and UNINITIALIZED, or its own
+    `<clinit>` nulls it back out after the VM fills it in.
+  - **Unblocks** `getDeclaredMethod(name, parameterTypes)` overload selection, which was built and reverted as
+    useless because "every distinguishing parameter type is an array or a primitive and a caller cannot
+    express one". A caller can express both now.
 - **Demand-load speed — `loadAll` 1712s -> 5.33s on the zip suite, 321x (2026-08-28, PI-VALIDATED).**
   `markReachable` was ~99% of every demand-load and **flat**: adding ONE class cost the same 219 s as adding
   thirteen, because the whole closure was re-derived from scratch each batch. First batch 357s -> 2.7s;

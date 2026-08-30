@@ -1665,6 +1665,43 @@ public final class Loader
         return n;
     }
 
+    /**
+     * Materialise a {@code StackTraceElement[]} from a Throwable's INLINE backtrace ({@code bt0..bt7} at
+     * {@code obj+16..+72}, 0-terminated), which {@link VM#unwind} fills at THROW time.
+     *
+     * <p>An exception that has been constructed but not yet thrown therefore yields an EMPTY array, which is
+     * correct rather than merely convenient: stock semantics would capture at construction, and joe-ng
+     * deliberately captures at throw so that propagation allocates nothing. Callers that walk the result are
+     * fine with empty -- JUnit's {@code maybeTrimStackTrace}, the reason this exists, loops over the array and
+     * returns early when it finds no match.
+     */
+    static long traceFromThrowable(long exc)
+    {
+        if (exc == 0L)
+        {
+            return 0L;
+        }
+        long tib = steTib();
+        int n = 0;
+        while (n < 8 && Magic.load64(exc + 16L + (long) n * 8L) != 0L)
+        {
+            n += 1;
+        }
+        long arr = Heap.allocArray(n, 8);
+        if (tib != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(Magic.load64(tib)));
+        }
+        int i = 0;
+        while (i < n)
+        {
+            Magic.store64(arr + 24L + (long) i * 8L,
+                    frameToElement(Magic.load64(exc + 16L + (long) i * 8L), tib));
+            i += 1;
+        }
+        return arr;
+    }
+
     /** Materialise a {@code StackTraceElement[]} for the frame chain at ({@code pc},{@code sp}). */
     static long buildTrace(long pc, long sp, long savedX30)
     {
@@ -3958,6 +3995,251 @@ public final class Loader
      *  name bytes, '/'->'.'), or 0 if the Type isn't in the loaded registry. */
     static long classNameString(long type)
     {
+        int len = classNameLen(type);
+        if (len <= 0)
+        {
+            return 0L;
+        }
+        long arr = Heap.allocArray(len, 1);
+        writeClassName(type, arr + 24L, 0);
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);                  // value byte[]; coder@24 stays 0 = LATIN1
+        return obj;
+    }
+
+    private static long[] primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
+
+    /** Index 0..8 for a JVMS primitive descriptor char (Z C F D B S I J V), or -1. */
+    private static int primTypeIdx(int c)
+    {
+        if (c == 0x5A) { return 0; }                    // 'Z' boolean
+        if (c == 0x43) { return 1; }                    // 'C' char
+        if (c == 0x46) { return 2; }                    // 'F' float
+        if (c == 0x44) { return 3; }                    // 'D' double
+        if (c == 0x42) { return 4; }                    // 'B' byte
+        if (c == 0x53) { return 5; }                    // 'S' short
+        if (c == 0x49) { return 6; }                    // 'I' int
+        if (c == 0x4A) { return 7; }                    // 'J' long
+        if (c == 0x56) { return 8; }                    // 'V' void
+        return -1;
+    }
+
+    /**
+     * The Type node backing {@code int.class} and friends, created on demand and cached. It is a real heap
+     * node rather than a small sentinel in the mirror deliberately: every {@code Class} native dereferences
+     * the mirror's Type word, so a tiny value there would have to be guarded at each of them.
+     */
+    static long primitiveType(int descChar)
+    {
+        int idx = primTypeIdx(descChar);
+        if (idx < 0)
+        {
+            return 0L;
+        }
+        if (primTypeCache == null)
+        {
+            primTypeCache = new long[9];
+        }
+        if (primTypeCache[idx] == 0L)
+        {
+            long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+            Magic.store64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET,
+                    ObjectModel.PRIM_TYPE_TAG | (long) descChar);
+            Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, 0L);         // no super: instanceof stops here
+            Magic.store64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET, 0L);
+            primTypeCache[idx] = type;
+        }
+        return primTypeCache[idx];
+    }
+
+    /** The {@code Class} mirror for a primitive, e.g. {@code int.class}. Identity-stable via the mirror cache. */
+    static long primitiveMirror(int descChar)
+    {
+        long t = primitiveType(descChar);
+        return t == 0L ? 0L : classMirror(t);
+    }
+
+    /** True if {@code type} is a primitive Type ({@link ObjectModel#PRIM_TYPE_TAG}). */
+    static boolean isPrimitiveType(long type)
+    {
+        if (type == 0L)
+        {
+            return false;
+        }
+        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.PRIM_TYPE_TAG;
+    }
+
+    /** The descriptor char of a primitive Type ('I'), or 0. */
+    private static int primTypeChar(long type)
+    {
+        if (!isPrimitiveType(type))
+        {
+            return 0;
+        }
+        return (int) (Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET) & 0xFFL);
+    }
+
+    /**
+     * Install {@code Integer.TYPE} and friends. The writer cannot bake these: the seed JVM's value is a HOST
+     * {@code java.lang.Class}, which has no image representation, so the snapshot stores 0 and {@code int.class}
+     * -- which javac compiles to {@code getstatic Integer.TYPE}, not to an {@code ldc} -- reads null. Seeded
+     * here for the same reason {@code System.out} and the Integer cache are. No-op for classes not in the batch.
+     */
+    static void seedPrimitiveTypes()
+    {
+        seedPrimType(Magic.bytes("java/lang/Integer"), 0x49);      // 'I'
+        seedPrimType(Magic.bytes("java/lang/Long"), 0x4A);         // 'J'
+        seedPrimType(Magic.bytes("java/lang/Double"), 0x44);       // 'D'
+        seedPrimType(Magic.bytes("java/lang/Float"), 0x46);        // 'F'
+        seedPrimType(Magic.bytes("java/lang/Short"), 0x53);        // 'S'
+        seedPrimType(Magic.bytes("java/lang/Byte"), 0x42);         // 'B'
+        seedPrimType(Magic.bytes("java/lang/Character"), 0x43);    // 'C'
+        seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A);      // 'Z'
+        seedPrimType(Magic.bytes("java/lang/Void"), 0x56);         // 'V'
+    }
+
+    private static void seedPrimType(byte[] cls, int descChar)
+    {
+        long slot = staticSlotOf(cls, Magic.bytes("TYPE"));
+        if (slot != 0L)
+        {
+            Magic.store64(slot, primitiveMirror(descChar));
+        }
+    }
+
+    /** True if {@code type} is an array Type (its instanceSize slot carries {@link ObjectModel#ARRAY_TYPE_TAG}). */
+    static boolean isArrayType(long type)
+    {
+        if (type == 0L)
+        {
+            return false;
+        }
+        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
+        return (instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG;
+    }
+
+    /**
+     * The JVMS descriptor char of a PRIMITIVE array Type's element ('I' for {@code int[]}), or 0.
+     *
+     * <p>Recovered by identity against the per-atype cache rather than from the Type itself, because the
+     * element size cannot tell {@code byte[]} from {@code boolean[]} (both 1) or {@code int[]} from
+     * {@code float[]} (both 4) -- and because that works for a writer-BAKED array Type the loader merely
+     * adopted, which no metal-side field would have been filled in for.
+     */
+    private static int primElemCharOf(long type)
+    {
+        int atype = 4;
+        while (atype < 12)
+        {
+            long tib = primArrTib[atype];
+            if (tib != 0L && Magic.load64(tib) == type)
+            {
+                return primDescChar(atype);
+            }
+            atype += 1;
+        }
+        return 0;
+    }
+
+    /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
+    private static int classNameLen(long type)
+    {
+        if (isPrimitiveType(type))
+        {
+            return primNameLen(primTypeChar(type));
+        }
+        if (isArrayType(type))
+        {
+            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (el == 0L)
+            {
+                return primElemCharOf(type) == 0 ? 0 : 2;        // "[I"; 0 = a ref array whose element is unresolved
+            }
+            int n = elemDescLen(el);
+            return n == 0 ? 0 : 1 + n;
+        }
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clTab[i].type == type)
+            {
+                return u2(clTab[i].base + clTab[i].nameOff);
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /** The Java source name of a primitive descriptor char ("int"), as bytes. */
+    private static byte[] primNameBytes(int c)
+    {
+        if (c == 0x5A) { return Magic.bytes("boolean"); }
+        if (c == 0x43) { return Magic.bytes("char"); }
+        if (c == 0x46) { return Magic.bytes("float"); }
+        if (c == 0x44) { return Magic.bytes("double"); }
+        if (c == 0x42) { return Magic.bytes("byte"); }
+        if (c == 0x53) { return Magic.bytes("short"); }
+        if (c == 0x49) { return Magic.bytes("int"); }
+        if (c == 0x4A) { return Magic.bytes("long"); }
+        return Magic.bytes("void");
+    }
+
+    private static int primNameLen(int c)
+    {
+        return c == 0 ? 0 : primNameBytes(c).length;
+    }
+
+    private static int writePrimName(int c, long dst, int pos)
+    {
+        byte[] nm = primNameBytes(c);
+        int k = 0;
+        while (k < nm.length)
+        {
+            Magic.store8(dst + pos + k, nm[k]);
+            k += 1;
+        }
+        return pos + nm.length;
+    }
+
+    /** Length of an array element's DESCRIPTOR form: "[I" for a nested array, "Ljava.lang.String;" otherwise. */
+    private static int elemDescLen(long el)
+    {
+        if (isArrayType(el))
+        {
+            return classNameLen(el);
+        }
+        int n = classNameLen(el);
+        return n == 0 ? 0 : n + 2;                               // 'L' + name + ';'
+    }
+
+    /** Write {@code type}'s name at {@code dst+pos} (dots for '/'); returns the position after it. */
+    private static int writeClassName(long type, long dst, int pos)
+    {
+        if (isPrimitiveType(type))
+        {
+            return writePrimName(primTypeChar(type), dst, pos);
+        }
+        if (isArrayType(type))
+        {
+            Magic.store8(dst + pos, (byte) 0x5B);                // '['
+            pos += 1;
+            long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+            if (el == 0L)
+            {
+                Magic.store8(dst + pos, (byte) primElemCharOf(type));
+                return pos + 1;
+            }
+            if (isArrayType(el))
+            {
+                return writeClassName(el, dst, pos);             // nested: "[[I"
+            }
+            Magic.store8(dst + pos, (byte) 0x4C);                // 'L'
+            pos = writeClassName(el, dst, pos + 1);
+            Magic.store8(dst + pos, (byte) 0x3B);                // ';'
+            return pos + 1;
+        }
         int i = 0;
         while (i < clCount)
         {
@@ -3965,22 +4247,18 @@ public final class Loader
             {
                 int len = u2(clTab[i].base + clTab[i].nameOff);
                 long src = clTab[i].base + clTab[i].nameOff + 2;
-                long arr = Heap.allocArray(len, 1);
                 int k = 0;
                 while (k < len)
                 {
                     int c = u1(src + k);
-                    Magic.store8(arr + 24L + k, c == 0x2F ? 0x2E : c);   // '/' -> '.'
+                    Magic.store8(dst + pos + k, (byte) (c == 0x2F ? 0x2E : c));   // '/' -> '.'
                     k += 1;
                 }
-                long obj = Heap.alloc(stringSize());
-                Magic.store64(obj + 0L, stringTib());
-                Magic.store64(obj + 16L, arr);          // value byte[]; coder@24 stays 0 = LATIN1
-                return obj;
+                return pos + len;
             }
             i += 1;
         }
-        return 0L;
+        return pos;
     }
 
     /**
@@ -4123,6 +4401,39 @@ public final class Loader
         return end == 0L || pc < end;
     }
 
+    /**
+     * Name the nearest registered body BELOW {@code addr}, ignoring the code-block bound. A frame that no
+     * table claims is either compiled by a path that never registers it, or registered but rejected because
+     * the pc ran past its block end -- and only the distance to the nearest entry tells those apart.
+     */
+    private static void printNearestBelow(long addr)
+    {
+        long best = 0L;
+        int bestReg = -1;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > best)
+            {
+                best = rgTab[i].buf;
+                bestReg = i;
+            }
+            i += 1;
+        }
+        if (bestReg < 0)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes(" after "));
+        writeName(rgTab[bestReg].base + rgTab[bestReg].classOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].classOff));
+        Uart.putc(0x2E);
+        writeName(rgTab[bestReg].base + rgTab[bestReg].nameOff + 2, u2(rgTab[bestReg].base + rgTab[bestReg].nameOff));
+        Uart.write(Magic.bytes(" +"));
+        VM.printHex(addr - best);
+        Uart.write(Magic.bytes(" end="));
+        VM.printHex(Heap.codeBlockEndAt(best));
+    }
+
     static void printFrameAt(long addr)
     {
         long bestBuf = 0L;
@@ -4146,7 +4457,11 @@ public final class Loader
         {
             if (!printImageFrameAt(addr))                            // writer-compiled VM/driver code: image symbol table
             {
-                Uart.write(Magic.bytes("<image/native>"));
+                Uart.write(Magic.bytes("<unclaimed pc="));
+                VM.printHex(addr);
+                printNearestBelow(addr);                        // the only handle on a frame no table claims
+                Uart.putc(0x3E);
+
             }
             return;
         }
@@ -5163,6 +5478,7 @@ public final class Loader
                                                         //   low=high=0 would index the NULL cache -> NPE); no-op if
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
+        seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
         if (LOAD_PROFILE)
         {
@@ -6598,6 +6914,10 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
@@ -6688,6 +7008,19 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getComponentType0")))  { return VM.componentTypeAddr; } // (Class)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isArray0")))          { return VM.isArrayClassAddr; }  // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
@@ -7132,7 +7465,160 @@ public final class Loader
             }
             i += 1;
         }
-        return 0;
+        // A MISS IS ALWAYS A BUG: returning 0 dispatches through vtable slot 0 of whatever the receiver
+        // happens to be -- one of java/lang/Object's nine virtuals -- so the call silently returns the wrong
+        // thing instead of failing. It happens when the referenced class is not registered at COMPILE time,
+        // which is routine for a method reached only reflectively: it is compiled on demand, and its callees'
+        // classes were never pulled. Static call sites got late resolution (link stubs) in PR #192; virtual
+        // ones still need it. VT_TRACE names the sites meanwhile.
+        if (VT_TRACE)
+        {
+            Uart.write(Magic.bytes("  VTMISS "));
+            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            Uart.putc(0x2E);
+            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            Uart.putc(0x0A);
+        }
+        return -1;                                      // unresolved -> the caller lowers a late-dispatch site
+    }
+
+    // ----- late virtual dispatch ------------------------------------------------------------------------
+    // A virtual call whose class is not registered at compile time has no slot to bake into the instruction.
+    // Static call sites solved this with link stubs (PR #192); a virtual site cannot, because the target
+    // depends on the RECEIVER. So the site records its (class,name,desc) here, emits the index in x17, and
+    // calls a trampoline that resolves against the receiver's actual type at first execution.
+    private static final int MAXVSITE = 16384;
+    private static final int VSHASH = 32768;             // power of two, > 2x MAXVSITE (open addressing)
+    private static long[] vsName, vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
+    private static int vsCount;
+    private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
+    private static long virtualTrampAddr;
+    private static long vsMemoType, vsMemoBuf;           // one-entry memo: the same site is usually monomorphic
+    private static int vsMemoIdx = -1;
+
+    /** Record an unresolved virtual site; returns its index (what the emitted code puts in x17). */
+    static int virtualSiteIndex(int methodCp)
+    {
+        if (vsName == null)
+        {
+            vsName = new long[MAXVSITE];
+            vsDesc = new long[MAXVSITE];
+            vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
+            int z = 0;
+            while (z < VSHASH)
+            {
+                vsBucket[z] = 0;
+                z += 1;
+            }
+        }
+        long nameAddr = gbase + mrefNameOff(methodCp);
+        long descAddr = gbase + mrefDescOff(methodCp);
+        // Dedup, because a site is now allocated for EVERY dispatch guard, and the compiler visits each site
+        // more than once (size pass then emit pass). Without this the table would fill with duplicates and
+        // the two passes would bake different indices for the same call.
+        int h = (int) ((nameAddr * 31L + descAddr) >> 3) & (VSHASH - 1);
+        while (vsBucket[h] != 0)
+        {
+            int cand = vsBucket[h] - 1;
+            if (vsName[cand] == nameAddr && vsDesc[cand] == descAddr)
+            {
+                return cand;
+            }
+            h = (h + 1) & (VSHASH - 1);
+        }
+        if (vsCount >= MAXVSITE)
+        {
+            capHalt(Magic.bytes("MAXVSITE"), vsCount);   // returning a stale index would MIS-RESOLVE silently
+        }
+        int idx = vsCount;
+        vsName[idx] = nameAddr;
+        vsDesc[idx] = descAddr;
+        vsBucket[h] = idx + 1;
+        vsCount += 1;
+        return idx;
+    }
+
+    /**
+     * Resolve an unresolved virtual site against the RECEIVER's dynamic type. Reuses
+     * {@link #resolveLinkTarget}, which demand-loads the class and walks the same tiers a link stub does --
+     * the only difference is that the class name comes from the receiver rather than from the call site,
+     * which is what makes it virtual dispatch.
+     */
+    static long virtualResolve(long recv, int idx)
+    {
+        if (recv == 0L || idx < 0 || idx >= vsCount || clTab == null)
+        {
+            return VM.denylistTrapAddr;
+        }
+        long tib = Magic.load64(recv + ObjectModel.TIB_OFFSET);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return VM.denylistTrapAddr;                 // a raw array has no Type to dispatch through
+        }
+        long type = Magic.load64(tib);
+        if (idx == vsMemoIdx && type == vsMemoType && vsMemoBuf != 0L)
+        {
+            return vsMemoBuf;                           // monomorphic site: skip the whole lookup
+        }
+        int ci = classRegByType(type);
+        if (ci < 0 || ci >= clCount || clTab[ci] == null || vsName == null)
+        {
+            // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
+            // adopted, say -- has no blob to resolve against. Image code carries no implicit null check, so
+            // the missing entry has to be tested here or the dereference reads from a wild address.
+            return VM.denylistTrapAddr;
+        }
+        long buf = resolveLinkTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx]);
+        if (buf == 0L)
+        {
+            return VM.denylistTrapAddr;
+        }
+        vsMemoIdx = idx;
+        vsMemoType = type;
+        vsMemoBuf = buf;
+        return buf;
+    }
+
+    /**
+     * The late-dispatch trampoline: the twin of {@link #buildLinkTramp}, but the receiver is already in x0 and
+     * the site index arrives in x17. Saves x0..x15 + LR so the resolve cannot disturb the arguments, then
+     * tail-branches to the target -- so the callee returns straight to the original call site.
+     */
+    static long virtualTramp()
+    {
+        if (virtualTrampAddr != 0L)
+        {
+            return virtualTrampAddr;
+        }
+        long buf = Heap.allocCode(256);
+        long ra = VM.virtualResolveAddr;
+        int w = 0;
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 144)); w += 1;
+        int r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.strx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.strx(30, 31, 128));   w += 1;   // save LR
+        Magic.store32(buf + w * 4L, A64Enc.movReg(1, 17));       w += 1;   // x1 = site idx (x0 IS the receiver)
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ra & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = resolved target
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        r = 0;
+        while (r <= 15)
+        {
+            Magic.store32(buf + w * 4L, A64Enc.ldrx(r, 31, r * 8)); w += 1;
+            r += 1;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(30, 31, 128));   w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.addImm(31, 31, 144)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.br(16));              w += 1;   // tail-call: returns to the call site
+        Heap.publishCode(buf, buf + w * 4L);
+        virtualTrampAddr = buf;
+        return buf;
     }
 
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
@@ -7936,6 +8422,10 @@ public final class Loader
      * WITHOUT the serial traffic those lines add to the very phases being timed.
      */
     private static final boolean LOAD_TRACE = false;
+
+    /** Name every {@code invokevirtual} whose vtable slot could not be resolved at compile time (debug). Each
+     *  one is a silent wrong dispatch through slot 0 -- see {@link #globalVtableSlot}. */
+    private static final boolean VT_TRACE = false;
 
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
     private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
@@ -9380,6 +9870,216 @@ public final class Loader
             n += 1;
         }
         return n;
+    }
+
+    // ----- reflective method enumeration ----------------------------------------------------------------
+    // getDeclaredMethods over the METHOD REGISTRY rather than the classfile: the registry is exactly the set
+    // the VM knows about (every method of a registered class is there, compiled or as a deferral stub), and it
+    // is already keyed by class+name+descriptor. Reflection is not a hot path, so a linear scan is fine.
+
+    /**
+     * The {@code want}-th method DECLARED by the class mirrored by {@code mirror} -- or, for {@code want < 0},
+     * how many there are. Walks the CLASSFILE method table, not the method registry.
+     *
+     * <p>The registry was the obvious source and is the wrong one: it holds only what RTA marked reachable,
+     * and a test method is called by nobody, so every {@code @Test} is pruned from it. Enumerating the
+     * classfile sees what the class actually declares; the caller then resolves each by name through the
+     * ordinary reflection path, which compiles it on demand.
+     *
+     * <p>{@code <init>}/{@code <clinit>} are excluded, as {@code getDeclaredMethods} specifies.
+     */
+    static long declaredMethodName(long mirror, int want)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(mirror + 16L);
+        int ci = classRegByType(type);
+        if (ci < 0)
+        {
+            return want < 0 ? 0L : 0L;
+        }
+        long base = clTab[ci].base;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int seen = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            if (!utf8IsAtBase(base, nameOff, Magic.bytes("<init>"))
+                    && !utf8IsAtBase(base, nameOff, Magic.bytes("<clinit>")))
+            {
+                if (want >= 0 && seen == want)
+                {
+                    return utf8ToString(base, nameOff);
+                }
+                seen += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return want < 0 ? (long) seen : 0L;
+    }
+
+    /** The Utf8 at {@code base+off} as a fresh guest String (no '/'->'.' rewrite; this is a plain name). */
+    private static long utf8ToString(long base, int off)
+    {
+        int len = u2(base + off);
+        long arr = Heap.allocArray(len, 1);
+        int k = 0;
+        while (k < len)
+        {
+            Magic.store8(arr + 24L + k, (byte) u1(base + off + 2 + k));
+            k += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);
+        return obj;
+    }
+
+    // ----- runtime annotations ------------------------------------------------------------------------
+    // Marker-level: "does this method carry @Foo". Enough for discovery (@Test/@BeforeEach/@Disabled); element
+    // VALUES need annotation instances, which need Proxy or synthesized classes, and are a separate piece.
+    //
+    // Only RuntimeVISIBLEAnnotations count. javac emits RuntimeINVISIBLEAnnotations unless the annotation type
+    // itself is declared @Retention(RUNTIME) -- so an annotation without that is not merely unreadable here, it
+    // is absent from the classfile entirely.
+
+    /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
+     *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
+    static boolean methodAnnoPresent(int rgIndex, long descArr, int descLen)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return false;
+        }
+        long base = rgTab[rgIndex].base;
+        int nameOff = rgTab[rgIndex].nameOff;
+        int descOff = rgTab[rgIndex].descOff;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(base, gcp[u2(p + 2)], base, nameOff)
+                    && utf8EqAt(base, gcp[u2(p + 4)], base, descOff))
+            {
+                return annoInAttrs(base, p + 8, attrs, descArr, descLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return false;
+    }
+
+    /** Scan an attribute list for RuntimeVisibleAnnotations and look for the wanted descriptor in it. */
+    private static boolean annoInAttrs(long base, long p, int attrs, long descArr, int descLen)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            {
+                return annoListHas(base, p, descArr, descLen);
+            }
+            p += alen;
+            a += 1;
+        }
+        return false;
+    }
+
+    /** {@code { u2 num_annotations; annotation[] }} -- true if any annotation's type descriptor matches. */
+    private static boolean annoListHas(long base, long p, long descArr, int descLen)
+    {
+        int n = u2(p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            int typeIdx = u2(p);
+            p += 2;
+            if (utf8EqArr(base, gcp[typeIdx], descArr, descLen))
+            {
+                return true;
+            }
+            p = skipElementPairs(p);                     // must skip precisely: a later annotation may be the one
+            i += 1;
+        }
+        return false;
+    }
+
+    /** {@code { u2 num_pairs; { u2 name_index; element_value }[] }} -> the position after it. */
+    private static long skipElementPairs(long p)
+    {
+        int n = u2(p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            p = skipElementValue(p + 2);                 // past element_name_index
+            i += 1;
+        }
+        return p;
+    }
+
+    /** One {@code element_value} (JVMS 4.7.16.1) -> the position after it. Recursive for '@' and '['. */
+    private static long skipElementValue(long p)
+    {
+        int tag = u1(p);
+        p += 1;
+        if (tag == 0x65)                                 // 'e' enum: type_name_index + const_name_index
+        {
+            return p + 4;
+        }
+        if (tag == 0x40)                                 // '@' nested annotation: type_index, then its pairs
+        {
+            return skipElementPairs(p + 2);
+        }
+        if (tag == 0x5B)                                 // '[' array of element_value
+        {
+            int n = u2(p);
+            p += 2;
+            int i = 0;
+            while (i < n)
+            {
+                p = skipElementValue(p);
+                i += 1;
+            }
+            return p;
+        }
+        return p + 2;                                    // B C D F I J S Z s c: one u2 constant-pool index
+    }
+
+    /** True if the Utf8 at {@code base+off} equals the {@code n} bytes of the byte[] payload at {@code arr}. */
+    private static boolean utf8EqArr(long base, int off, long arr, int n)
+    {
+        if (u2(base + off) != n)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < n)
+        {
+            if (u1(base + off + 2 + k) != (Magic.load8(arr + 24L + k) & 0xFF))
+            {
+                return false;
+            }
+            k += 1;
+        }
+        return true;
     }
 
     /** Compiled buffer for flattened slot {@code s}: inherited (pre-resolved) or this class's own. */
