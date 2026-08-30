@@ -168,6 +168,32 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **A backtrace crossing a resolve trampoline is trustworthy now (2026-08-30, PI-VALIDATED).** A MetalJUnit
+  failure reported NPE at `Loader.virtualResolve`'s bare `Magic.load64` — in check-free image code, which
+  cannot throw one. The whole trace was an artifact. The three trampolines (lazy-compile, link-resolve,
+  late-virtual) establish a real 144-byte frame and then CALL — `lazyCompile` runs the whole compiler,
+  `virtualResolve` demand-loads and can run a `<clinit>` — so an exception underneath one unwinds THROUGH it,
+  but none had a frame-table entry. The walk could not size the frame, stopped, and printed stale stack words
+  as callers.
+  - **Two things were wrong and either alone kept it broken.** (1) `VM.unwind` reads the saved LR at `[sp+0]`
+    (a handler's callee-saved locals from `[sp+8]`), but the trampolines put x0..x15 at `[sp+0..120]` and LR
+    at `[sp+128]` — registering as-is would have made a saved x16 the return address. Store order is
+    irrelevant, so it was a pure offset change. (2) `resetLoader` zeroes `jitFrameCount` per batch while the
+    lazy/virtual trampolines are built ONCE and cached for the life of the VM, so build-time registration
+    alone would have fixed batch 1 and left every later batch broken — the harder half to notice.
+    `registerTrampFrames()` re-publishes after every reset; `linkTramp` is the odd one out, cleared by
+    `resetLoader` and so re-registered when rebuilt.
+  - Each entry covers only where the frame is LIVE (after `sub sp`, up to `add sp`), so the tail-branch —
+    which tears the frame down before `br` — is correctly excluded. The lambda thunk gets one too.
+  - **Result: 3 frames + an unclaimed one became 12 named frames**, and the real failure was something else
+    entirely — a DENYLIST TRAP in `AssertionFailureBuilder.maybeTrimStackTrace`, with three tests passing and
+    the fourth reaching the assertion machinery as intended.
+  - **The lesson: an IMPOSSIBLE trace — an implicit exception reported in check-free image code — means the
+    WALK is broken, not the frame it names.** Chasing the named frame first cost a round trip.
+  - **Pi (`core 166MHz`, full suite):** `demo/ExcDemo`'s `printStackTrace` walks `level3 -> level2 -> level1
+    -> main -> Loader.launch -> VM.run -> VM.boot` with no `<unclaimed pc=`; 26 batches, all parity OK,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK (828 bytes).
+
 - **A null dispatch slot RESOLVES now instead of throwing (2026-08-29, PI-VALIDATED on the full suite).**
   `Pattern.compile("abc")` from any `<clinit>` reached reflectively died with a bare AIOOBE, while the same
   call at top level worked. **RTA runs at batch time, so a class instantiated only from a LAZILY compiled body
