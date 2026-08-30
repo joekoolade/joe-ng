@@ -1,8 +1,8 @@
 package demo;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.reflect.Method;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.BeforeEach;
 
 /**
  * Runtime annotations, marker level. Before this, joe-ng read no annotations at all: a JUnit-style runner had
@@ -15,6 +15,14 @@ import org.junit.jupiter.api.BeforeEach;
  */
 public class AnnoDemo
 {
+    /** Demo-local markers, so this VM-level demo needs no JUnit on the classpath. RUNTIME retention is the
+     *  whole point: without it javac writes RuntimeINVISIBLEAnnotations and the VM sees nothing. */
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Test { }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface BeforeEach { }
+
     @Test
     public void aTest() { }
 

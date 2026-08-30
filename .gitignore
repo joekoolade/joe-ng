@@ -20,3 +20,6 @@ ramfs/lib/app.jar
 
 # JUnit console-standalone jar (downloaded by `make junit`; host-side test tooling, not vendored).
 jars/
+
+# Staged by `make junitjar` from jars/ (itself gitignored) -- a 3 MB third-party binary, never vendored.
+ramfs/lib/junit.jar
