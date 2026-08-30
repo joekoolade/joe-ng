@@ -7,8 +7,41 @@ public class AssertMsgProbe
     public static void main(String[] args) throws Exception
     {
         System.out.println("assert message probe:");
-        one("assertEquals(2,3)");
+        one("assertEquals(2,3) direct");
+        reflective("assertEquals(2,3) via Method.invoke");
         System.out.println("survived");
+    }
+
+    /** The MetalJUnit path: same assertion, reached through reflection. */
+    private static void reflective(String what)
+    {
+        try
+        {
+            java.lang.reflect.Method m = AssertMsgProbe.class.getDeclaredMethod("boom");
+            m.setAccessible(true);
+            m.invoke(new AssertMsgProbe());
+            System.out.println("  " + what + " -> DID NOT THROW");
+        }
+        catch (Throwable t)
+        {
+            Throwable c = t;
+            if (t instanceof java.lang.reflect.InvocationTargetException)
+            {
+                Throwable inner = ((java.lang.reflect.InvocationTargetException) t).getCause();
+                System.out.println("  ITE.getCause() null? " + (inner == null));
+                if (inner != null)
+                {
+                    c = inner;
+                }
+            }
+            System.out.println("  " + what + " -> " + c.getClass().getName());
+            System.out.println("  message = [" + c.getMessage() + "]");
+        }
+    }
+
+    public void boom()
+    {
+        org.junit.jupiter.api.Assertions.assertEquals(2, 3);
     }
 
     private static void one(String what)
