@@ -168,6 +168,30 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **A deferred `new` can SKIP its constructor — OPEN, reproduced not fixed (2026-08-30).** `MetalJUnit`
+  reported `NullPointerException` for a test whose assertion is correct in a probe, including reflectively.
+  The NPE was in `java/util/Formatter.format` on its own `out` field, under `String.formatted`, under
+  `AssertionFailureBuilder.formatValues`.
+  - **A `ctorRan` flag set in the constructor read 0.** The object arrives with its constructor never having
+    run, so every field is 0. The condition is in the log: `String.formatted` is compiled BEFORE
+    `java/util/Formatter` is registered, so its `new Formatter()` defers (`newresolve java/util/Formatter`)
+    and the `invokespecial <init>` beside it never executes. An image where Formatter is in the batch has no
+    `newresolve` line and constructs normally — that difference is the whole reproduction.
+  - **NOT the documented cause.** `isRealSpecial` skipping an `<init>` for an unregistered class was fixed by
+    `classLoadable`; instrumenting it to print EVERY skip showed it firing only for an unrelated
+    `java/nio/charset/UnmappableCharacterException`, never for `Formatter.<init>`. The link-stub path is out
+    too: `linkresolve java/util/Formatter.format` appears while `.<init>` never does. So the call was emitted
+    and still did not run.
+  - **Worked around:** `guestsrc/java/util/Formatter` creates its buffer lazily, with the reason at the
+    declaration. The runner now reports `FAIL deliberateFailure -> org.opentest4j.AssertionFailedError:
+    expected: <1> but was: <2>` and `metal junit: ran 4, failures 1`.
+  - **Method notes.** `printStackTrace()` works from guest code where `getStackTrace()` wild-branched
+    (`BOOT RE-ENTERED` after `bakeresolve java/lang/Throwable.stackTrace0` — also still open). And a null
+    guard that PRINTS what it found answers "did the constructor run" and unblocks the run in one boot.
+  - **Pi (`core 166MHz`, full suite):** all parity OK incl. `java/lang/Throwable OK 18`, ExcDemo's
+    seven-frame trace intact, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    WPA2 -> HTTP 200 OK.
+
 - **A JUnit assertion failure carries its message now (2026-08-30, PI-VALIDATED).** Three bugs between the
   runner and a readable failure, found one behind the other.
   - **Late virtual dispatch did not walk the SUPERCLASS CHAIN.** `resolveLinkTarget` answers only for the
