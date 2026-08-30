@@ -168,7 +168,7 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
-- **A deferred `new` can SKIP its constructor — OPEN, reproduced not fixed (2026-08-30).** `MetalJUnit`
+- **A deferred `new` SKIPPED its constructor — ROOT-CAUSED AND FIXED (2026-08-30, PI-VALIDATED).** `MetalJUnit`
   reported `NullPointerException` for a test whose assertion is correct in a probe, including reflectively.
   The NPE was in `java/util/Formatter.format` on its own `out` field, under `String.formatted`, under
   `AssertionFailureBuilder.formatValues`.
@@ -182,9 +182,20 @@ defines the minimum the assembler must encode.
     `java/nio/charset/UnmappableCharacterException`, never for `Formatter.<init>`. The link-stub path is out
     too: `linkresolve java/util/Formatter.format` appears while `.<init>` never does. So the call was emitted
     and still did not run.
-  - **Worked around:** `guestsrc/java/util/Formatter` creates its buffer lazily, with the reason at the
-    declaration. The runner now reports `FAIL deliberateFailure -> org.opentest4j.AssertionFailedError:
-    expected: <1> but was: <2>` and `metal junit: ran 4, failures 1`.
+  - **ROOT CAUSE: `globalBufByRef`'s superclass-chain tier applied to `<init>`.** Tier 1 (class+name+desc)
+    misses for an unregistered class; tier 2 then walks the ref class's SUPER CHAIN for the same
+    name+descriptor — right for an inherited static/special (`ArrayList.subListRangeCheck` really on
+    AbstractList), WRONG for a constructor, because constructors are never inherited. `Formatter.<init>()V`
+    matched `java/lang/Object.<init>()V` — always registered, Object being the one eagerly compiled class —
+    whose body is a NO-OP. The call resolved silently to it. `<init>` now skips the walk and falls through to
+    the stub tier. **The missing log line was the evidence all along:** `linkresolve …format` appeared while
+    `.<init>` never did.
+  - **The workaround was REMOVED** — `Formatter` is a plain final field again and still reports
+    `FAIL deliberateFailure -> org.opentest4j.AssertionFailedError: expected: <1> but was: <2>` /
+    `metal junit: ran 4, failures 1`. That is what proves the VM fix rather than the guard.
+  - **Pi evidence is direct, in the suite:** `demo/RtaMade` is a real deferred `new`, and the boot now prints
+    `newresolve demo/RtaMade` / `linkresolve demo/RtaMade.<init>` — a line absent from every earlier boot.
+    That demo had been constructing a half-built object all along.
   - **Method notes.** `printStackTrace()` works from guest code where `getStackTrace()` wild-branched
     (`BOOT RE-ENTERED` after `bakeresolve java/lang/Throwable.stackTrace0` — also still open). And a null
     guard that PRINTS what it found answers "did the constructor run" and unblocks the run in one boot.
