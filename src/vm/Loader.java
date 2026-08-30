@@ -7561,8 +7561,11 @@ public final class Loader
             return vsMemoBuf;                           // monomorphic site: skip the whole lookup
         }
         int ci = classRegByType(type);
-        if (ci < 0)
+        if (ci < 0 || ci >= clCount || clTab[ci] == null || vsName == null)
         {
+            // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
+            // adopted, say -- has no blob to resolve against. Image code carries no implicit null check, so
+            // the missing entry has to be tested here or the dereference reads from a wild address.
             return VM.denylistTrapAddr;
         }
         long buf = resolveLinkTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx]);
