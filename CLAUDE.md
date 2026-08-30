@@ -76,6 +76,82 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Three lambda-adaptation faults, found by a stock `@run junit` test — PI-VALIDATED 2026-08-30 (SMP off).**
+  Running the unmodified jtreg `java/util/StringTokenizer/NextTokenWithNullDelimTest` through `MetalJUnit`
+  failed with NPE, while every hand-written replay of its exact call sequence PASSED — including reflectively.
+  Three separate bugs were stacked behind that one symptom.
+  - **(1) A method REFERENCE returning a primitive into a generic SAM was not boxed.** javac adapts a lambda
+    BODY itself (the synthetic method carries the instantiated signature), so only a method reference reaches
+    `LambdaMetafactory` unadapted — and joe-ng synthesises the lambda class, so the conversion must be emitted
+    into the thunk. `assertDoesNotThrow(st::hasMoreTokens)` handed the boolean 1 back **as an address**. New
+    `vm/VMBox.box(JI)J` calls the wrappers' own `valueOf`, so a boxed value from a method reference is the same
+    object (cache and all) as an ordinary autobox. **Float/double are excluded on purpose** — the result
+    arrives in d0, not x0 — and such a reference is REPORTED by name rather than mis-adapted.
+  - **(2) A lambda's functional interface was pulled by NOTHING.** It is named only as the return type inside
+    the indy's own descriptor, never as a `CONSTANT_Class`. It normally arrives with the lambda's CONSUMER
+    (which names it in an `invokeinterface`) — which is why lambdas work at all. A lambda whose consumer is
+    not in the batch resolved to Type 0, **which is also the itable directory's END SENTINEL**, so the lambda
+    satisfied no interface and every dispatch on it threw NPE from the directory miss, inside whatever library
+    received it. Pulled now in three places: with the class (`pullIndyIfaces`), with RTA's ref collection
+    (`collectBlob`), and as an ordinary dependency (`probeAll` — whose dep list needed an explicit BASE, since
+    the name lives mid-descriptor with no Utf8 length prefix of its own).
+  - **(3) A bound method reference on a LATE-pulled class branched into the heap.** `globalVtableSlot` answers
+    -1 when the class has no vtable numbering yet, and `8 + -1*8` is 0 — TIB[0], the Type pointer. Such a thunk
+    now goes through the late-dispatch trampoline, resolving against the receiver at first call.
+  - **A demand-load INSIDE `buildLambdaTib` was built and reverted.** A load parses every blob and can collect,
+    and the in-progress code buffer is not reachable yet — it was swept, and the method ran off a zeroed buffer
+    (`ec=0` at offset +0). Pulling with the CLASS avoids the question entirely.
+  - **A guard I added was a WILD READ, and only hardware showed it.** `nameAlreadyPending` scanned `pdNameOff[]`
+    for blobs added since the last `probeAll` — and `probeAll` is what fills that array, so a just-pulled blob's
+    entry is whatever the previous batch left there. Harmless against QEMU's zeroed DRAM; on a Pi it read
+    arbitrary memory and produced a DIFFERENT failure on each of two boots. It was also unnecessary (`addBlob`
+    already dedupes by ADDRESS). The pull goes through `registerNameFromDir` now, which dedupes that way and
+    **honours the DENYLIST** — `pullClass(byte[])` goes straight to the classDir, the same bypass recorded for
+    the deferred-`new` path.
+  - **Both halves of the old guard were load-bearing.** Removing it outright re-added an already-registered
+    class's blob, re-registered the class, and printed `lifecycle DIFF java/lang/String state=2` then a wild
+    branch. The surviving check asks the CLASS REGISTRY (`regBySigU`), which is valid state at that moment.
+  - **Instruments, because an index is not a name:** a null lazy compile now prints the class, method and
+    descriptor it failed on (`CAP EXCEEDED ... count=834` was a slot in a table rebuilt every batch), an
+    unresolved lambda interface prints its NAME (it was a silent 0), a lambda thunk taking the late-slot path
+    says so, and `MetalJUnit` prints the CAUSE of an assertion that WRAPS a throwable.
+  - **Pi (`core 166MHz`, full suite, SMP off):** every batch clean, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `linkresolve demo/RtaUnseen.tag` / `newresolve demo/RtaMade` /
+    `linkresolve demo/RtaMade.<init>` all intact, class literals correct, WPA2 -> HTTP 200 OK (828 bytes).
+    **SMP off is not a property of this change** — the suite fails with SMP on for a reason that reproduces on
+    main; see the entry below.
+  - **QEMU:** `metal junit: ran 3, failures 0` for `RegionMatches` + `NextTokenWithNullDelimTest`, the first
+    stock `@run junit` tests to run on the metal. `test/jdk/junit/LambdaAdaptProbe` pins all three faults over
+    six primitive kinds, run directly AND through `Method.invoke` — **only the reflective arm reproduces (2)
+    and (3)**, because a reflectively reached method compiles after the batch that would have pulled what it
+    needs. `scripts/run-junit.sh` drives `MetalJUnit` on QEMU.
+  - **Of 273 stock `@run junit` tests in `java/lang` + `java/util`, 65 compile against the guest overlay**;
+    most of the rest need tz/locale data, `@ParameterizedTest`, or the module machinery.
+
+- **THE DEMO SUITE IS BROKEN ON HARDWARE WITH SMP ON — PRE-EXISTING, ON MAIN (2026-08-30).** The suite dies
+  mid-run with `GC: STW TIMEOUT (a core never parked)`, a console interleaved byte-by-byte by two cores, and
+  `InternalError at <unclaimed pc=... after java/lang/Thread.start>`. **Reproduced on `main` (b2fa751) with
+  the class directory unchanged**, so it is nothing to do with the lambda-adaptation branch:
+  | boot | VM | classDir | wild pc |
+  | --- | --- | --- | --- |
+  | branch | lambda-adaptation | +3 tests | `0x03740080` |
+  | control | **main** | +3 tests | `0x0C01FE50` |
+  | pure main | **main** | **main** | `0x0C01FE50` |
+  - **The same pc in both control boots, across two differently-sized images, means a DETERMINISTIC value —
+    not stack garbage.** That is the lead: name it with `JOENG_SYMMAP=1`.
+  - **`VM.SMP_ENABLED = false` makes the whole suite pass** (batches 17-26 all clean, `churnMB=625 live=32
+    intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK). So the fault is in the SMP
+    scheduler, not in any demo.
+  - **`smp=0` in `/etc/init` does NOT disable it** — `launchSmp()` returns false when there is no manifest
+    ("the demo suite runs its own SMP phases"), and the suite runs precisely by having no `main=`. The master
+    switch is `VM.SMP_ENABLED`; the manifest line governs only a LAUNCHED program.
+  - Also seen once, and probably the same fault: `priority ... finish LMH (want HML)` — priority ordering not
+    happening at all, immediately before an STW TIMEOUT. A core that never parks would explain the timeout,
+    the interleaving and the wild pc together.
+  - **Method note that cost four boots: BUILD THE CONTROL FIRST.** Three Pi boots were spent chasing this as a
+    regression of the branch under test. One control boot settled it. When a hardware failure appears
+    alongside a change, the baseline is the cheapest question to ask, not the last one.
+
 - **Late link resolution — the call sites RTA cannot see (2026-08-27, PI-VALIDATED).** RTA marks a method
   reachable then walks its body to mark what IT calls; reflection breaks that chain. A method reached only
   through `Method.invoke` compiles on demand, but nothing statically reachable names it, so its OWN callees
