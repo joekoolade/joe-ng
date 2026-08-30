@@ -168,6 +168,41 @@ defines the minimum the assembler must encode.
       `AbstractMap.entrySet`, `AbstractList.size` all reach it) and a native with no VM helper. The guard had
       shipped with "native" as its stated cause on a reading-only diagnosis, and that was never confirmed —
       **when the Pi is the only harness that reaches a failure, spend the boot on an instrument, not a guess.**
+- **A JUnit assertion failure carries its message now (2026-08-30, PI-VALIDATED).** Three bugs between the
+  runner and a readable failure, found one behind the other.
+  - **Late virtual dispatch did not walk the SUPERCLASS CHAIN.** `resolveLinkTarget` answers only for the
+    class it is handed (`bufBySigU`, `nativeBufAt` and `compileSigOnDemand` all work off that class's own
+    blob), so an INHERITED method resolved nowhere. `AssertionFailedError` inherits `initCause`/
+    `getStackTrace` from `Throwable`: the guard fired on the pruned slot, the resolve looked only at
+    `AssertionFailedError`, and the call landed in `denylistTrap`. Walking most-derived-first IS virtual
+    dispatch. **`TRAPWIRE index=-1` was the tell** — no patch-time site is recorded for a late-resolved call,
+    so a denylist trap with no index is NOT a denylisted class. A failed resolve now names the class and
+    signature it could not find.
+  - **`java/util/Formatter` was a STUB returning `""`,** and its own comment stated the premise: "because the
+    format path is compiled but never executed on metal, the trivial bodies are never actually run". False —
+    JUnit's `formatValues` builds the whole message through `String.formatted`. Now a real minimal printf
+    (`%s %S %d %x %X %o %c %b %B %% %n`); flags/width/precision are parsed and DROPPED rather than
+    mis-applied, and an unknown conversion is emitted verbatim rather than vanishing.
+  - **`java/lang/Throwable` took a `cause` in two constructors and DISCARDED it,** with neither `initCause`
+    nor `getCause` declared — so `initCause` was not in the vtable at all. The overlay-drops-stock-members
+    trap for the FOURTH time (after StringBuilder/Appendable, Class/getPrimitiveClass, the wrappers' TYPE).
+    vtparity 16 -> 18 across every exception class. The `cause` field goes after `detailMessage`: bt0..bt7
+    (obj+16..+72) and the message (obj+80) are hardcoded in the VM.
+  - **javac had been reporting the third one every build** — `no virtual method
+    initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable; in java/lang/AssertionError` — in a `bake-stub`
+    line that was being filtered out as noise. **Read the bake-stub lines.**
+  - **Both message fixes were proven directly, not inferred:** `FormatProbe` (every conversion, `%%`, null
+    args, unknown conversions) and `AssertMsgProbe` (`Assertions.assertEquals(2,3)` direct AND through
+    `Method.invoke`, both `message = [expected: <2> but was: <3>]`).
+  - **Pi (`core 166MHz`, full suite):** `vtparity java/lang/Throwable OK 18` and every exception class at 18
+    in all 26 batches, ExcDemo's seven-frame trace intact, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK (828 bytes).
+  - **STILL OPEN:** `SampleTest.deliberateFailure` reports NPE through the MetalJUnit runner while the
+    identical assertion is correct in the probe, including reflectively — a closure/pruning difference in
+    that image, not the message path. And a `BOOT RE-ENTERED` wild branch after
+    `bakeresolve java/lang/Throwable.stackTrace0`, hit while printing traces from the runner; the print was
+    backed out rather than chased.
+
 - **A backtrace crossing a resolve trampoline is trustworthy now (2026-08-30, PI-VALIDATED).** A MetalJUnit
   failure reported NPE at `Loader.virtualResolve`'s bare `Magic.load64` — in check-free image code, which
   cannot throw one. The whole trace was an artifact. The three trampolines (lazy-compile, link-resolve,

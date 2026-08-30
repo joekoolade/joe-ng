@@ -44,10 +44,37 @@ public class Throwable
     public Throwable(String message, Throwable cause)
     {
         detailMessage = message;
+        this.cause = cause;
     }
 
     public Throwable(Throwable cause)
     {
+        detailMessage = cause == null ? null : cause.toString();
+        this.cause = cause;
+    }
+
+    /**
+     * The cause, and the two methods that reach it.
+     *
+     * <p>The constructors above USED to take a cause and silently drop it, with neither accessor declared --
+     * so `initCause` was not in the vtable at all. Stock code that chains exceptions then dispatched through
+     * an empty slot: `org.opentest4j.AssertionFailedError.<init>` calls `initCause`, which is why every JUnit
+     * assertion failure died before its message could be read. javac reports this at build time
+     * ("no virtual method initCause... in java/lang/AssertionError") and it had been scrolling past in the
+     * bake-stub lines for some time.
+     *
+     * <p>`cause == this` is stock's "not yet initialised" sentinel, kept so getCause() answers null for an
+     * exception that never had one.
+     */
+    public Throwable initCause(Throwable cause)
+    {
+        this.cause = cause;
+        return this;
+    }
+
+    public Throwable getCause()
+    {
+        return cause == this ? null : cause;
     }
 
     /**
@@ -83,6 +110,10 @@ public class Throwable
      * so without these a guest t-w-r whose body AND close() both throw has no method to resolve — this is
      * part of the language, not just of the Throwable API.
      */
+    // Declared here, i.e. after detailMessage: VM.unwind / VM.printStackTrace hardcode the backtrace at
+    // obj+16..+72 and the message at obj+80, so nothing may be inserted ahead of them.
+    private Throwable cause = this;                  // stock's "not yet initialised" sentinel
+
     private Throwable[] suppressed;
     private int suppressedCount;
 

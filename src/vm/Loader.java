@@ -7570,9 +7570,34 @@ public final class Loader
             // the missing entry has to be tested here or the dereference reads from a wild address.
             return VM.denylistTrapAddr;
         }
-        long buf = resolveLinkTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx]);
+        // Walk the receiver's superclass chain, most-derived first -- which IS virtual dispatch: the
+        // implementation is whichever class nearest the receiver declares it. resolveLinkTarget answers only
+        // for the class it is handed (bufBySigU, nativeBufAt and compileSigOnDemand all work off that class's
+        // own blob), so an INHERITED method resolves nowhere without this. `AssertionFailedError` inheriting
+        // `getStackTrace` from `Throwable` is the case that found it: the dispatch guard fired on the pruned
+        // slot, the resolve looked only at AssertionFailedError, and the call landed in denylistTrap.
+        long buf = 0L;
+        int c = ci;
+        int hops = 0;
+        while (c >= 0 && buf == 0L && hops < MAXCHAIN)
+        {
+            if (clTab[c] != null)
+            {
+                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, vsName[idx], vsDesc[idx]);
+            }
+            c = clTab[c] == null ? -1 : clTab[c].superReg;
+            hops += 1;
+        }
         if (buf == 0L)
         {
+            // Name it. A bare denylistTrap from here reports TRAPWIRE index=-1 (no patch-time site was
+            // recorded for a late-resolved call), which says nothing at all about what failed.
+            Uart.write(Magic.bytes("  VIRTUALRESOLVE FAILED "));
+            printNameAt(clTab[ci].base, clTab[ci].nameOff);
+            Uart.putc(0x2E);
+            printNameAt(vsName[idx], 0);
+            printNameAt(vsDesc[idx], 0);
+            Uart.putc(0x0A);
             return VM.denylistTrapAddr;
         }
         vsMemoIdx = idx;
@@ -8938,6 +8963,10 @@ public final class Loader
         VM.loaderUnlock();
         return done;
     }
+
+    // Superclass-chain hop cap for the late virtual resolve. A registry chain is acyclic by construction,
+    // so this only bounds the damage if one ever is not -- a spin here would hang mid-dispatch.
+    private static final int MAXCHAIN = 64;
 
     // ---- unwindable stub frame layout ------------------------------------------------------------------
     // Shared by the three resolve trampolines (lazy-compile, link-resolve, late-virtual) and the lambda
