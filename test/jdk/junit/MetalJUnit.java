@@ -125,6 +125,11 @@ public class MetalJUnit {
         // the array-materialising path wild-branched from here once, while this one is what ExcDemo uses.
         if (!cause.getClass().getName().startsWith("org.opentest4j.")) {
             cause.printStackTrace();
+        } else if (cause.getCause() != null) {
+            // ... except when the verdict WRAPS a throwable: assertDoesNotThrow and assertThrows both report
+            // "unexpected exception" by name only, and the name alone has never been enough to place one.
+            System.out.println("  caused by:");
+            cause.getCause().printStackTrace();
         }
     }
 }

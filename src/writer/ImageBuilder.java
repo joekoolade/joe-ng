@@ -1286,6 +1286,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.newSem(I)I",        "vm/VM.newSemAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.philReport(II)V",   "vm/VM.philReportAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMScheduler.taskExit()V",       "vm/VM.taskExitAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMBox.box(JI)J",            "vm/VM.boxPrimAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scStart()J",        "vm/VM.scStartAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scChar(JI)V",       "vm/VM.scCharAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMConcat.scInt(JI)V",        "vm/VM.scIntAddr");

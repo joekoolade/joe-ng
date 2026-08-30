@@ -207,7 +207,13 @@ public final class Loader
     private static int pdCount;
     private static final int MAXDEP = 49152;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
-    private static int[] dpOff;          // dependency's name Utf8 offset (in pdBase[dpOwner])
+    private static int[] dpOff;          // dependency's name Utf8 offset (in dpBase[d])
+    private static final int MAXINDYNAME = 16384;  // scratch bytes for interned invokedynamic interface names
+    private static long indyNameBuf;     // [u2 len][name] runs; a Loader static, so the statics scan roots it
+    private static int indyNameUsed;
+    private static long[] dpBase;        // blob the name lives in: usually pdBase[dpOwner], but an
+                                         //   invokedynamic's functional interface is named only inside a
+                                         //   DESCRIPTOR, so its name is copied into indyNameBuf instead
     private static int dpCount;
 
     private static int u1(long p)
@@ -2274,6 +2280,9 @@ public final class Loader
         pnBucket = null;                                 // rebuilt by the next probeAll; blobs are all new
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
+        dpBase = new long[MAXDEP];
+        indyNameUsed = 0;                                // interned names live for the whole batch:
+                                                 //   a pend outlives the probeAll that made it
         pdLen = new int[MAXBLOB];
         gEntryBlob = 0L;                                 // no reachability mark unless a caller sets an entry
         gRootBlob = 0L;
@@ -2881,6 +2890,7 @@ public final class Loader
                 int mk = lambdaImplKind(idx);
                 addPend(base, refClassNameOff(mref), mrefNameOff(mref), mrefDescOff(mref),
                         (mk == 5 || mk == 9) ? 1 : 0);   // invokeVirtual/Interface -> name+desc; else class-qualified
+                pendIndyIface(idx);                      // ... and the FUNCTIONAL INTERFACE, which nothing else names
                 if (mk == 8)                             // constructor ref (X::new) instantiates X, like `new X`:
                 {                                        // mark it a receiver type so RTA pulls its overridden
                     addInst(base, refClassNameOff(mref));//   virtual methods (hashCode/equals/...) and fills its vtable
@@ -2888,6 +2898,38 @@ public final class Loader
             }
             pc += insnLen(code, pc);
         }
+    }
+
+    /**
+     * Pull the functional interface of the {@code invokedynamic} at {@code idx}.
+     *
+     * <p>It is named ONLY as the return type inside the indy's own descriptor -- never as a
+     * {@code CONSTANT_Class} -- so neither the tag-7 scan nor the ref collection above sees it, and RTA
+     * happily builds a closure with the lambda's impl but not its interface. {@code buildLambdaTib} then
+     * resolves it to Type 0, which is also the itable directory's END SENTINEL: the lambda satisfies no
+     * interface at all and every dispatch on it throws NPE from the directory miss, inside whatever library
+     * received it. That is what made the stock NextTokenWithNullDelimTest fail while a hand-written replay of
+     * the identical calls passed -- the replay's batch happened to contain the interface already.
+     */
+    private static void pendIndyIface(int idx)
+    {
+        long p = gbase + mrefDescOff(idx) + 2;
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;
+        if (u1(p) != 'L')
+        {
+            return;                                      // a primitive return names no class
+        }
+        long start = p + 1;
+        long q = start;
+        while (u1(q) != ';')
+        {
+            q += 1;
+        }
+        addPend(indyNameBuf, internIndyNameAt(start, (int) (q - start)), 0, 0, PEND_PULL);
     }
 
     /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gcp}/{@code gbase}). */
@@ -3649,9 +3691,9 @@ public final class Loader
             int d = 0;
             while (d < dpCount)
             {
-                int owner = dpOwner[d];
-                int off = dpOff[d];                    // referenced class name (Utf8 in pdBase[owner])
-                if (!nameRegistered(pdBase[owner], off) && registerNameFromDir(pdBase[owner], off) != 0L)
+                long base = dpBase[d];                 // referenced class name (Utf8 in this blob)
+                int off = dpOff[d];
+                if (!nameRegistered(base, off) && registerNameFromDir(base, off) != 0L)
                 {
                     grew = true;
                 }
@@ -4338,6 +4380,7 @@ public final class Loader
         {
             return 0L;                                  // not embedded in the classDir
         }
+        pullIndyIfaces(blob);                           // its lambdas' interfaces: named in no CONSTANT_Class
         // Seed the class's <clinit> as the reachability root: it (and everything it transitively calls) gets
         // compiled + run, and the class's structure/Type/mirror is registered by loadStructure regardless. The
         // class's OTHER methods are compiled LAZILY when reflectively invoked (M2) — eagerly seeding them all
@@ -4376,6 +4419,8 @@ public final class Loader
             i += 1;
         }
         addBlob(blob, len);
+        pullIndyIfaces(blob);                           // as loadClassIncremental: a lambda's interface is named
+                                                        //   in no CONSTANT_Class, so nothing else pulls it
         rootBlob(blob);                                 // EVERY method is a root: nothing loaded calls into a
                                                         //   class the program just handed us (see rootBlob)
         entryPoint(blob, Magic.bytes("<clinit>"), Magic.bytes("()V"));   // enables the mark; <clinit> may be absent
@@ -5594,6 +5639,10 @@ public final class Loader
                 else if (gcpTag[c] == 8 || gcpTag[c] == 18)   // CONSTANT_String / CONSTANT_InvokeDynamic:
                 {
                     pdNeedsString[i] = true;            // materializes a String via newStringFromBytes (baked TIB)
+                    if (gcpTag[c] == 18)
+                    {
+                        addIndyIfaceDep(i, c);          // ... and names its functional interface in a descriptor
+                    }
                 }
                 c += 1;
             }
@@ -5640,14 +5689,14 @@ public final class Loader
      */
     private static boolean linkReady(int i)
     {
-        if (pdSuperOff[i] != 0 && blocked(i, pdSuperOff[i]))
+        if (pdSuperOff[i] != 0 && blocked(i, pdBase[i], pdSuperOff[i]))
         {
             return false;
         }
         int k = 0;
         while (k < pdIfN[i])
         {
-            if (blocked(i, pdIfOff[i * MAX_DIRECT_IF + k]))
+            if (blocked(i, pdBase[i], pdIfOff[i * MAX_DIRECT_IF + k]))
             {
                 return false;
             }
@@ -5683,10 +5732,103 @@ public final class Loader
         return false;
     }
 
+    /**
+     * Record the functional interface an {@code invokedynamic} names as a dependency of its owner.
+     *
+     * <p>It is a dependency NOTHING else records: a lambda's interface appears only as the RETURN TYPE inside
+     * the indy's own descriptor, never as a {@code CONSTANT_Class}, so the tag-7 scan above cannot see it.
+     * The cost of missing it is silent and severe: {@code buildLambdaTib} resolves the interface to a Type at
+     * COMPILE time, and an unregistered one resolves to 0 -- which is also the itable directory's END
+     * SENTINEL, so the lambda ends up satisfying no interface at all and every dispatch on it throws NPE from
+     * the directory miss. That is what made the stock NextTokenWithNullDelimTest fail while every hand-written
+     * replay of the same calls passed: the replay's batch happened to contain {@code ThrowingSupplier}
+     * already, and the test's did not.
+     *
+     * <p>A non-lambda indy (string concat, a record's {@code ObjectMethods} bootstrap) is not special-cased:
+     * its descriptor's return type is a genuine dependency of the class too, and a primitive return simply
+     * has no name to add.
+     */
+    private static void addIndyIfaceDep(int owner, int c)
+    {
+        int nt = u2(gbase + gcp[c] + 2);                // InvokeDynamic { u2 bsmAttrIdx, u2 nameAndTypeIdx }
+        int descOff = gcp[u2(gbase + gcp[nt] + 2)];     // NameAndType { u2 nameIdx, u2 descIdx } -> Utf8 offset
+        int end = descOff + 2 + u2(gbase + descOff);
+        int p = descOff + 2;
+        while (p < end && u1(gbase + p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;                                         // past ')'
+        if (p >= end || u1(gbase + p) != 'L')
+        {
+            return;                                     // primitive return: no class named
+        }
+        int start = p + 1;
+        int q = start;
+        while (q < end && u1(gbase + q) != ';')
+        {
+            q += 1;
+        }
+        addDepAt(owner, indyNameBuf, internIndyName(start, q - start));
+    }
+
+    /**
+     * Copy the class name at {@code [start, start+len)} of the current blob into {@code indyNameBuf} as a
+     * {@code [u2 len][bytes]} run and return its offset, reusing an identical earlier entry.
+     *
+     * <p>The copy is needed because a dependency is addressed as a Utf8 (length prefix and all) and this name
+     * is embedded MID-descriptor, with no prefix of its own. The buffer is a Loader static, so the statics
+     * root scan keeps it alive for as long as the dependency list points into it.
+     */
+    private static int internIndyName(int start, int len)
+    {
+        return internIndyNameAt(gbase + start, len);
+    }
+
+    /** As {@link #internIndyName}, from an absolute address. */
+    private static int internIndyNameAt(long raw, int len)
+    {
+        if (indyNameBuf == 0L)
+        {
+            indyNameBuf = Heap.allocData(MAXINDYNAME);
+        }
+        int e = 0;
+        while (e < indyNameUsed)
+        {
+            if (rawNameEq(indyNameBuf, e, raw, len))
+            {
+                return e;                               // one interface, many lambdas: intern rather than repeat
+            }
+            e += 2 + u2(indyNameBuf + e);
+        }
+        if (indyNameUsed + 2 + len > MAXINDYNAME)
+        {
+            capHalt(Magic.bytes("MAXINDYNAME"), indyNameUsed);
+        }
+        int off = indyNameUsed;
+        Magic.store8(indyNameBuf + off, (byte) (len >> 8));
+        Magic.store8(indyNameBuf + off + 1, (byte) len);
+        int k = 0;
+        while (k < len)
+        {
+            Magic.store8(indyNameBuf + off + 2 + k, (byte) u1(raw + k));
+            k += 1;
+        }
+        indyNameUsed = off + 2 + len;
+        return off;
+    }
+
     private static void addDep(int owner, int nameOff)
+    {
+        addDepAt(owner, pdBase[owner], nameOff);
+    }
+
+    /** As {@link #addDep}, but for a name that does not live in the owner's own blob. */
+    private static void addDepAt(int owner, long base, int nameOff)
     {
         if (dpCount >= MAXDEP) { capHalt(Magic.bytes("MAXDEP"), dpCount); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
         dpOwner[dpCount] = owner;
+        dpBase[dpCount] = base;
         dpOff[dpCount] = nameOff;
         dpCount += 1;
     }
@@ -5704,7 +5846,7 @@ public final class Loader
         int d = 0;
         while (d < dpCount)
         {
-            if (dpOwner[d] == i && blocked(i, dpOff[d]))
+            if (dpOwner[d] == i && blocked(i, dpBase[d], dpOff[d]))
             {
                 return false;
             }
@@ -5713,14 +5855,14 @@ public final class Loader
         return true;
     }
 
-    /** True if some other still-unloaded blob declares the class named at {@code off}. */
-    private static boolean blocked(int i, int off)
+    /** True if some other still-unloaded blob declares the class named at {@code off} in {@code base}. */
+    private static boolean blocked(int i, long base, int off)
     {
         int j = 0;
         while (j < pdCount)
         {
             if (j != i && pdDone[j] == 0
-                    && utf8EqAt(pdBase[i], off, pdBase[j], pdNameOff[j]))
+                    && utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
             {
                 return true;
             }
@@ -8985,6 +9127,93 @@ public final class Loader
     }
 
     /**
+     * Pull the functional interface of every {@code invokedynamic} in a just-pulled blob.
+     *
+     * <p>A lambda's interface is named ONLY as the return type inside the indy's own descriptor -- never as a
+     * {@code CONSTANT_Class} -- so no dependency scan sees it. Normally it arrives with the lambda's CONSUMER,
+     * which does name it (an {@code invokeinterface} on the SAM), and that is why lambdas work at all. A class
+     * pulled INCREMENTALLY has no such guarantee: a test method reached through {@code Method.invoke} compiles
+     * on demand and its {@code Assertions} call is resolved later still through a link stub, so when the
+     * lambda class is built neither the consumer nor the interface exists.
+     *
+     * <p>{@code buildLambdaTib} then resolves the interface to Type 0 -- which is also the itable directory's
+     * END SENTINEL, so the lambda satisfies NO interface and every dispatch on it throws NPE from the
+     * directory miss, inside whatever library received it.
+     *
+     * <p>Here rather than at the lambda's compile: a demand-load parses every blob and can collect, and the
+     * in-progress code buffer is not reachable yet -- doing this mid-compile swept it, and the method ran off
+     * a zeroed buffer ({@code ec=0} at offset +0).
+     */
+    private static void pullIndyIfaces(long blob)
+    {
+        parseConstPool(blob, blobLenOf(blob));
+        int c = 1;
+        while (c < gcpCount)
+        {
+            if (gcpTag[c] == 18)
+            {
+                pullIndyIface(c);
+            }
+            c += 1;
+        }
+    }
+
+    /** Pull the class named by the return type of the indy descriptor at cp index {@code c}, if any. */
+    private static void pullIndyIface(int c)
+    {
+        int nt = u2(gbase + gcp[c] + 2);                // InvokeDynamic { u2 bsmAttrIdx, u2 nameAndTypeIdx }
+        long p = gbase + gcp[u2(gbase + gcp[nt] + 2)] + 2;   // NameAndType -> descriptor Utf8 body
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;
+        if (u1(p) != 'L')
+        {
+            return;                                     // a primitive return names no class
+        }
+        long q = p + 1;
+        while (u1(q) != ';')
+        {
+            q += 1;
+        }
+        byte[] slash = lambdaIfaceName(p + 1, (int) (q - p - 1));
+        if (classIndexByName(slash) < 0 && !nameAlreadyPending(slash))
+        {
+            long pulled = pullClass(slash);
+        }
+    }
+
+    /** True if a blob for {@code slash} is already on the pending list (pullClass dedupes by ADDRESS, which
+     *  does not help before the blob is looked up). */
+    private static boolean nameAlreadyPending(byte[] slash)
+    {
+        int i = 0;
+        while (i < pdCount)
+        {
+            if (pdNameOff[i] != 0 && utf8IsAtBase(pdBase[i], pdNameOff[i], slash))
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /** Copy the {@code len} interface-name bytes at {@code raw} into a byte[] the class lookups take. */
+    private static byte[] lambdaIfaceName(long raw, int len)
+    {
+        byte[] slash = new byte[len];
+        int k = 0;
+        while (k < len)
+        {
+            slash[k] = (byte) u1(raw + k);
+            k += 1;
+        }
+        return slash;
+    }
+
+    /**
      * Compile deferred method {@code idx} at call time: restore its class's compile context, re-find the
      * method, compile just it, install the fresh buffer into the TIB slot, and return it. Called only from
      * the trampoline (via the stashed address). Guarded so the writer's dead force-reference is a no-op.
@@ -10645,6 +10874,28 @@ public final class Loader
         return u1(gbase + gcp[mhIdx]);                  // MethodHandle.reference_kind
     }
 
+    /** Print the functional interface named by the indy descriptor at {@code idx}. */
+    private static void printLambdaIfaceName(int idx)
+    {
+        long p = gbase + mrefDescOff(idx) + 2;
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;
+        if (u1(p) != 'L')
+        {
+            Uart.write(Magic.bytes("<non-reference return>"));
+            return;
+        }
+        p += 1;
+        while (u1(p) != ';')
+        {
+            Uart.putc(u1(p));
+            p += 1;
+        }
+    }
+
     /** Type of the functional interface = the indy descriptor's return class, or 0 if not loaded. */
     private static long lambdaIfaceType(int idx)
     {
@@ -10701,15 +10952,128 @@ public final class Loader
         return 16 + ClassReader.descParamCount(gbytes, mrefDescOff(idx)) * 8;
     }
 
+    /** Frame a boxing thunk establishes so it can CALL the referent and then the boxer: LR only, but SP must
+     *  stay 16-byte aligned. LR sits at STUB_LR_OFF, where {@code VM.unwind} looks for it. */
+    private static final int BOX_FRAME = 16;
+
+    /**
+     * Primitive kinds a thunk can box. Float and double are absent on purpose: their result arrives in d0,
+     * not x0, so there is nothing for an integer-register thunk to hand the boxer. Such a reference is
+     * REPORTED rather than mis-adapted -- see {@link #reportUnboxableRef}.
+     */
+    private static boolean boxableKind(int k)
+    {
+        return k == 'Z' || k == 'B' || k == 'C' || k == 'S' || k == 'I' || k == 'J';
+    }
+
+    /** True if the erased SAM at {@code idx} returns a reference while its referent returns a primitive, so
+     *  the thunk must box. A constructor reference is excluded by its {@code V} return. */
+    private static boolean lambdaNeedsBoxing(int idx)
+    {
+        char samRet = ClassReader.descReturnKind(gbytes, lambdaSamDescOff(idx));
+        if (samRet != 'L' && samRet != '[')
+        {
+            return false;
+        }
+        char implRet = ClassReader.descReturnKind(gbytes, mrefDescOff(lambdaImplMref(idx)));
+        return implRet != 'V' && implRet != 'L' && implRet != '[';
+    }
+
+    /** Descriptor kind char of the referent's return type. */
+    private static int lambdaImplRetKind(int idx)
+    {
+        return ClassReader.descReturnKind(gbytes, mrefDescOff(lambdaImplMref(idx)));
+    }
+
+    /** Say which method reference needs an adaptation we do not emit, instead of silently emitting a thunk
+     *  that reads the wrong register. Named, because the symptom is otherwise a wild value in x0. */
+    private static void reportUnboxableRef(int idx, int retKind)
+    {
+        int mref = lambdaImplMref(idx);
+        Uart.write(Magic.bytes("  UNBOXABLE METHOD REF "));
+        printNameAt(gbase, refClassNameOff(mref));
+        Uart.putc(0x2E);
+        printNameAt(gbase, mrefNameOff(mref));
+        Uart.write(Magic.bytes(" returns "));
+        Uart.putc(retKind);
+        Uart.write(Magic.bytes(" into a generic SAM (float/double not adapted)\n"));
+    }
+
+    /** Emit one instruction word at word index {@code w}; returns the next index. */
+    private static int emitAt(long thunk, int w, int word)
+    {
+        Magic.store32(thunk + w * 4L, word);
+        return w + 1;
+    }
+
+    /** Load an absolute trampoline address into x16, the register both thunk tails branch through. */
+    private static int emitTrampAddr(long thunk, int w, long addr)
+    {
+        w = emitAt(thunk, w, A64Enc.movz(16, (int) (addr & 0xFFFF), 0));
+        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr >> 16) & 0xFFFF), 1));
+        w = emitAt(thunk, w, A64Enc.movk(16, (int) ((addr >> 32) & 0xFFFF), 2));
+        return w;
+    }
+
+    /** Frame prologue for a thunk that must CALL rather than tail-branch. */
+    private static int emitBoxPrologue(long thunk, int w)
+    {
+        w = emitAt(thunk, w, A64Enc.subImm(STUB_SP, STUB_SP, BOX_FRAME));
+        w = emitAt(thunk, w, A64Enc.strx(STUB_LR, STUB_SP, STUB_LR_OFF));
+        return w;
+    }
+
+    /**
+     * Epilogue of a boxing thunk: the referent has just been CALLED, so x0 holds its raw primitive. Hand it
+     * to {@code VMBox.box} with its descriptor kind and return the reference the SAM's caller expects.
+     *
+     * <p>It also registers the frame. The thunk now calls twice and the boxer allocates, so an exception (or
+     * a GC stack walk) can pass through here; a frame the walker cannot size is what turns a real fault into
+     * an unreadable trace.
+     */
+    private static int emitBoxReturn(long thunk, int w, int retKind)
+    {
+        w = emitAt(thunk, w, A64Enc.movz(1, retKind, 0));               // x1 = the descriptor kind char
+        long at = thunk + w * 4L;
+        Magic.store32(at, A64Enc.bl((int) ((VM.boxPrimAddr - at) / 4L)));
+        w += 1;
+        w = emitAt(thunk, w, A64Enc.ldrx(STUB_LR, STUB_SP, STUB_LR_OFF));
+        long thi = thunk + w * 4L;                                      // at the `add sp`: the frame dies here
+        w = emitAt(thunk, w, A64Enc.addImm(STUB_SP, STUB_SP, BOX_FRAME));
+        w = emitAt(thunk, w, A64Enc.ret());
+        VM.addJitFrame(thunk + 4L, thi, BOX_FRAME, 0L);                 // live from just after the `sub sp`
+        return w;
+    }
+
     /** Build the synthetic lambda class (thunk + imap + itable dir + Type + TIB); returns the TIB address. */
     static long buildLambdaTib(int idx)
     {
         long ifaceType = lambdaIfaceType(idx);
+        if (ifaceType == 0L)
+        {
+            // 0 is also the itable directory's END SENTINEL, so a lambda built with it satisfies NO interface
+            // and every dispatch on it throws NPE from the directory miss, far from the indy that caused it.
+            // Name it rather than let that happen quietly.
+            Uart.write(Magic.bytes("  LAMBDA IFACE UNRESOLVED "));
+            printLambdaIfaceName(idx);
+            Uart.putc(0x0A);
+        }
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
         int ia = lambdaSamArgc(idx);                                    // SAM (interface method) args
         int kind = lambdaImplKind(idx);
-        long thunk = Heap.allocCode(128);
+        boolean boxRet = lambdaNeedsBoxing(idx);
+        int retKind = boxRet ? lambdaImplRetKind(idx) : 0;
+        if (boxRet && (!boxableKind(retKind) || VM.boxPrimAddr == 0L))
+        {
+            reportUnboxableRef(idx, retKind);
+            boxRet = false;                 // an un-adapted result is wrong, but a `bl 0` re-enters the image
+        }
+        long thunk = Heap.allocCode(160);   // 128 + the boxing epilogue's 7 words
         int w = 0;
+        if (boxRet)
+        {
+            w = emitBoxPrologue(thunk, w);
+        }
         if (kind == 5 || kind == 9)
         {
             // Instance method ref -> vtable-dispatch the referent on its receiver (so overrides resolve).
@@ -10733,9 +11097,29 @@ public final class Loader
                 w += 1;
             }
             int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 0, 0));                        w += 1;  // x16 = recv.tib (TIB@0)
-            Magic.store32(thunk + w * 4L, A64Enc.ldrx(16, 16, 8 + slot * 8));            w += 1;  // x16 = vtable[slot]
-            Magic.store32(thunk + w * 4L, A64Enc.br(16));                                w += 1;  // tail-call
+            if (slot < 0)
+            {
+                // The referent's class has no vtable numbering yet -- it was pulled AFTER this method was
+                // compiled (a `newresolve`d class, say). Indexing on -1 would load TIB[0], the Type pointer,
+                // and branch into the heap. Resolve against the RECEIVER at first call instead, through the
+                // same late-dispatch trampoline a guarded call site uses: x0 is already the receiver here.
+                w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
+                w = emitTrampAddr(thunk, w, virtualTramp());
+            }
+            else
+            {
+                w = emitAt(thunk, w, A64Enc.ldrx(16, 0, 0));                 // x16 = recv.tib (TIB@0)
+                w = emitAt(thunk, w, A64Enc.ldrx(16, 16, 8 + slot * 8));     // x16 = vtable[slot]
+            }
+            if (boxRet)
+            {
+                w = emitAt(thunk, w, A64Enc.blr(16));                        // CALL: the result must be boxed
+                w = emitBoxReturn(thunk, w, retKind);
+            }
+            else
+            {
+                w = emitAt(thunk, w, A64Enc.br(16));                         // tail-call
+            }
             Heap.publishCode(thunk, thunk + w * 4L);
             return finishLambdaClass(thunk, ifaceType, idx, nc);
         }
@@ -10836,7 +11220,17 @@ public final class Loader
         {
             Heap.pinCodeAt(implBuf);
             CodeEdges.note(bAt, implBuf);                                        // as above: a tail branch is
-            Magic.store32(bAt, A64Enc.b((int) ((implBuf - bAt) / 4L)));     //   still a code->code edge
+            // Boxing makes this a CALL, not a tail branch: the boxer runs after the referent returns.
+            Magic.store32(bAt, boxRet
+                    ? A64Enc.bl((int) ((implBuf - bAt) / 4L))
+                    : A64Enc.b((int) ((implBuf - bAt) / 4L)));              //   still a code->code edge
+        }
+        else if (boxRet)
+        {
+            // As below, but the site is a call, so it takes the CALL reloc: patchRelocs must leave the
+            // boxing epilogue after it reachable rather than turning the site into a tail branch.
+            Magic.store32(bAt, A64Enc.bl(0));
+            recordCallReloc(bAt, lambdaImplMref(idx));
         }
         else
         {
@@ -10846,6 +11240,10 @@ public final class Loader
             recordTailReloc(bAt, lambdaImplMref(idx));
         }
         w += 1;
+        if (boxRet)
+        {
+            w = emitBoxReturn(thunk, w, retKind);
+        }
         Heap.publishCode(thunk, thunk + w * 4L);
         return finishLambdaClass(thunk, ifaceType, idx, nc);
     }
