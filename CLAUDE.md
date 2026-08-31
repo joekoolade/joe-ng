@@ -76,6 +76,48 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`invokeinterface` RESOLVES LATE — the last RTA blind spot at the site is closed. PI-VALIDATED 2026-08-31,
+  SMP ON.** RTA runs at batch time, so an interface named only by a body compiled LAZILY -- after its batch --
+  is never pulled. The call site then holds a target interface Type of 0 AND the receiver's itable DIRECTORY
+  has no entry for it, so the scan fell off the 0-terminator as a bare NPE. `newresolve`/`linkresolve` already
+  covered a deferred `new` and a deferred call; this is the interface counterpart.
+  - **`java/lang/String.split` is the case in hand:** it compiles on demand and does
+    `list.subList(0,n).toArray(result)`, an `invokeinterface` on `java/util/List`, which appears NOWHERE in
+    that image. **The tell was an ABSENCE, not an error** -- and the suite's own ArrayList demo prints
+    `subList(1,3).size=2 sub[0]=q sub[1]=r` perfectly, which is what isolated the fault to the LAZY-COMPILE
+    CONTEXT rather than to `subList`.
+  - **The miss path needed NO new machinery.** An interface call's target is whichever class NEAREST THE
+    RECEIVER declares that name+descriptor -- exactly what the existing `VIRTUAL_RESOLVE` trampoline answers
+    (the one the null-vtable-slot guard already substitutes). At the 0-terminator the compiler puts the site
+    index in x17 and the trampoline in x16 and jumps to the dispatch's own `blr`: x17 held the directory
+    cursor and x16 the interface Type, both dead there, and x0 (the receiver) is untouched by the search. The
+    itable load and its guard are skipped -- x16 is already a call target. Three instructions, no new state.
+  - **Interface DEFAULTS needed one more tier.** No class declares a default, so the receiver's chain cannot
+    find one -- and a class-typed receiver reaches a default THROUGH THE ITABLE precisely because it has no
+    vtable slot for it, so a missed directory strands exactly the case the chain walk cannot answer.
+    `virtualResolve` falls back to the interfaces of the receiver's chain, two levels deep (a class's own,
+    then each of those interfaces' own), covering `ArrayList -> List -> Collection` without recursion.
+  - **The interface name ADDRESSES are collected BEFORE any resolving.** `resolveLinkTarget` parses whatever
+    class it is handed and clobbers `gcp`/`gbase`, so an offset read afterwards would be against the WRONG
+    BLOB. Absolute addresses survive that; offsets do not.
+  - **New `ifaceresolve` line, unconditional like `linkresolve`/`newresolve`.** The absence of any line at all
+    is what hid this whole class of bug.
+  - **`demo/RtaLate` + `demo/RtaLater` are a TRUE reproduction, not a demo that would pass anyway:** the boot
+    log prints `newresolve demo/RtaLater` and NEVER mentions `demo/RtaLate`, so the interface really is absent
+    and the directory really is missed. This is NOT what the existing `ifaceprune` arm pins -- there the
+    interface IS present and only the slot's ENTRY was empty, and the two guards throw different exceptions
+    (directory miss = NPE, implausible slot = AIOOBE).
+  - **Pi (`core 166MHz`, full suite, SMP on):** `ifacelate = late-iface`, then
+    `linkresolve demo/RtaLater.viaDefault` / `linkresolve java/lang/Object.viaDefault` (the chain runs to the
+    root and fails) / `linkresolve demo/RtaLate.viaDefault` / `ifaceresolve demo/RtaLater.viaDefault` /
+    `ifacedflt = late-default` -- the whole walk, visible. Plus `SMP: 4 of 4`, `jobs/core 6/6/6/6`,
+    `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`, `steps/core 60/61/60/59`, `finish HML`,
+    `priority inversion ... HIGH blocked 62ms`, ExcDemo's seven-frame trace, 28 batches all parity OK,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+  - **QEMU:** `SplitWithDelimitersTest` 15/22 -> `metal junit: ran 22, failures 0` / `ALL PASSED`, with
+    `java/util/List` STILL never loaded -- it resolves without pulling the interface.
+  - **Known limit:** a default inherited three interfaces deep still fails, and says so by name.
+
 - **`@ParameterizedTest` on the metal, and the TWO VM BUGS it found — PI-VALIDATED 2026-08-31, SMP ON.**
   Wiring more stock jtreg `@run junit` tests through `MetalJUnit` needed `@ParameterizedTest`/`@MethodSource`,
   and building it uncovered two defects with nothing to do with JUnit.
