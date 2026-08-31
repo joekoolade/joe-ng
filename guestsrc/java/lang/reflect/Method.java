@@ -53,6 +53,28 @@ public final class Method extends AccessibleObject
     }
 
     /**
+     * Resolve the method with this name AND descriptor. A class may declare two methods of the same name, and
+     * then the name alone identifies neither: {@link #resolve(Class,String)} answers with whichever the registry
+     * scan reaches first, for both. Callers that HAVE the descriptor (enumeration via
+     * {@code Class.getDeclaredMethods}) must use this, or every overload in the array is the same Method.
+     */
+    public static Method resolve(Class<?> c, String name, String desc) throws NoSuchMethodException
+    {
+        int idx = methodResolveDesc0(c, name.getBytes(), desc == null ? null : desc.getBytes());
+        if (idx < 0)
+        {
+            throw new NoSuchMethodException(name);
+        }
+        byte[] pchars = new byte[8];
+        long[] out = new long[3];                          // {buffer, access, returnChar}
+        int n = methodInfo0(idx, pchars, out);
+        return new Method(c, name, (int) out[1], out[0], n, pchars, (int) out[2], idx);
+    }
+
+    /** VM native: registry index of the method with this name AND descriptor, or -1. */
+    private static native int methodResolveDesc0(Class c, byte[] name, byte[] desc);
+
+    /**
      * True if this method carries the given annotation. Marker level: presence only, no element values.
      *
      * <p>Only annotations declared {@code @Retention(RUNTIME)} are visible -- javac writes anything else into

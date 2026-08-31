@@ -1075,6 +1075,7 @@ public final class VM
         if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
         if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Method.annoPresent0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
+        if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
@@ -1100,6 +1101,7 @@ public final class VM
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
         if (methodResolveAddr == 0L) { int u = VMNatives.methodResolve(0L, 0L); } // Method.methodResolve0 native (reflection M2)
+        if (methodResolveDescAddr == 0L) { int u = VMNatives.methodResolveDesc(0L, 0L, 0L); } // Method.methodResolveDesc0
         if (methodInfoAddr == 0L) { int u = VMNatives.methodInfo(0L, 0L, 0L); }   // Method.methodInfo0 native (reflection M2)
         if (constructorResolveAddr == 0L) { int u = VMNatives.constructorResolve(0L, 0L); } // Constructor.ctorResolve0 (M2)
         if (allocInstanceAddr == 0L) { long u = VMNatives.allocInstance(0L); }    // Constructor.allocInstance0 native (M2)
@@ -2225,6 +2227,7 @@ public final class VM
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)
     static long methodResolveAddr;     // VM.methodResolve(JJ)I — Method.methodResolve0 (reflection M2)
+    static long methodResolveDescAddr; // VM.methodResolveDesc(JJJ)I — Method.methodResolveDesc0 (overload-exact)
     static long methodInfoAddr;        // VM.methodInfo(JJJ)I — Method.methodInfo0 (reflection M2)
     static long constructorResolveAddr;// VM.constructorResolve(JJ)I — Constructor.ctorResolve0 (reflection M2)
     static long allocInstanceAddr;     // VM.allocInstance(J)J — Constructor.allocInstance0 (reflection M2)
@@ -2239,6 +2242,7 @@ public final class VM
     static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
     static long annoPresentAddr;       // VM.annoPresent(JJ)J — Method.annoPresent0 (RuntimeVisibleAnnotations)
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
+    static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
@@ -3064,6 +3068,10 @@ public final class VM
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
         Loader.launch(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
+
+        // Overloads under getDeclaredMethods: same name, different descriptors -- name alone identifies neither.
+        Uart.write(Magic.bytes("overloaded methods under getDeclaredMethods:\n"));
+        Loader.launch(Magic.bytes("demo/OverloadReflectDemo"), Magic.bytes(""));
 
         // Late link resolution: a method reached only through Method.invoke calls a class RTA never pulled.
         Uart.write(Magic.bytes("reflective call into an unpulled class (late link resolution):\n"));

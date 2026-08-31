@@ -106,9 +106,14 @@ public final class Class<T>
         while (i < n)
         {
             String nm = declaredMethodAt0(this, i);
+            String ds = declaredMethodDescAt0(this, i);
             try
             {
-                out[k] = java.lang.reflect.Method.resolve(this, nm);   // resolves + compiles on demand
+                // BY NAME AND DESCRIPTOR: a class may declare two methods of the same name, and resolving by name
+                // alone hands back the same one for both -- so an overloaded class enumerated to duplicates and
+                // the other overload was unreachable. (A stock @ParameterizedTest is exactly that shape: the test
+                // and its same-named @MethodSource factory.)
+                out[k] = java.lang.reflect.Method.resolve(this, nm, ds);   // resolves + compiles on demand
                 k += 1;
             }
             catch (NoSuchMethodException e)
@@ -133,6 +138,9 @@ public final class Class<T>
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodAt}): the n-th declared method's NAME. */
     private static native String declaredMethodAt0(Class<?> c, int want);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodDescAt}): the n-th method's DESCRIPTOR. */
+    private static native String declaredMethodDescAt0(Class<?> c, int want);
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodCount}): how many methods it declares.
      *  {@code long}-returning for the same reason as {@code classModifiers0}. */

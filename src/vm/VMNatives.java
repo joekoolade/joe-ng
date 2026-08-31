@@ -209,6 +209,12 @@ final class VMNatives
         return Loader.declaredMethodName(mirror, (int) want);
     }
 
+    /** {@code Class.declaredMethodDescAt0(Class,int)} native: the n-th declared method's DESCRIPTOR. */
+    static long declaredMethodDescAt(long mirror, long want)
+    {
+        return Loader.declaredMethodDesc(mirror, (int) want);
+    }
+
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
     static long declaredMethodCount(long mirror)
     {
@@ -308,6 +314,17 @@ final class VMNatives
             return -1;                                     // boot force-compile passes 0
         }
         return Loader.methodResolve(Magic.load64(mirrorRef + 16L), nameArrRef);
+    }
+
+    /** Reflection: {@code Method.methodResolveDesc0(Class,byte[],byte[])} -> registry index of the method with
+     *  that name AND descriptor -- the only key that tells two overloads apart. -1 if there is none. */
+    static int methodResolveDesc(long mirrorRef, long nameArrRef, long descArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        {
+            return -1;                                     // boot force-compile passes 0
+        }
+        return Loader.methodResolveDesc(Magic.load64(mirrorRef + 16L), nameArrRef, descArrRef);
     }
 
     /** Reflection: {@code Method.methodInfo0(int,byte[],long[])} -> fills param chars + {buf,access,retChar}; count. */
