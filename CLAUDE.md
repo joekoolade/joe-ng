@@ -161,7 +161,16 @@ defines the minimum the assembler must encode.
   - **QEMU cannot gate SMP work:** merged main itself flakes at the scheduler set-piece about one boot in
     three (measured 2 of 3 passes on main). Measure the baseline before reading any SMP result as a regression.
 
-- **THE SMP SUITE FAILURE IS FIXED — PI-VALIDATED 2026-08-31, FULL SUITE, SMP ON.** `priority ... finish HML
+- **THE SMP SUITE FAILURE IS FIXED, WITH FULL CORE COVERAGE — PI-VALIDATED 2026-08-31, SMP ON.**
+  `SMP: 4 of 4 cores up`, `smp jobs 321010` / `jobs/core: c0=6 c1=6 c2=6 c3=6` (was all core 0),
+  **`ticks/core: c1=50 c2=50 c3=50`** -- the secondaries' own preemptive timers, the one line QEMU
+  structurally cannot show -- `sched: 89 preemptions`, `smp sched: 4 of 4`,
+  `steps/core: c0=61 c1=60 c2=59 c3=60`, `finish HML (want HML) steps 20/20/20`, `priority inversion ...
+  finish HML ... HIGH blocked 62ms`, 26 batches all parity OK, `churnMB=625 live=32 intact=32`,
+  `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK. No STW TIMEOUT, watchdog, BOOT RE-ENTERED,
+  `unclaimed pc` or `JIT unsupported`. The console is legible again too: the byte-by-byte interleaving was
+  cores racing through the set pieces, not a UART problem.
+ `priority ... finish HML
   (want HML) steps L/M/H = 20/20/20`, `priority inversion (guest Thread): finish HML ... HIGH blocked 62ms`
   (PipDemo, the demo that hung), all 26 batches with every parity OK, `churnMB=625 live=32 intact=32`,
   `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK. No STW TIMEOUT, no watchdog, no BOOT RE-ENTERED,
