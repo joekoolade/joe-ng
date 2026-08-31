@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **More arguments than argument registers — FIXED, PI-VALIDATED 2026-08-31.** x0..x15 carry arguments, so a
+  17-parameter method had nowhere to put the 17th and the JIT refused to compile it: `JIT unsupported:
+  reason=11` (`FAIL_ARG_COUNT`), from BOTH halves of the same limit. That is what stopped one SMP suite boot.
+  - **Past `MAX_ARG_REGS` the LAST register changes meaning:** x0..x14 carry arguments 0..14 and **x15 carries
+    a POINTER** to the rest, which the caller stages in its own frame.
+  - **Deliberately NOT the AAPCS scheme of pushing overflow arguments below SP.** `VM.unwind` reads a frame's
+    saved LR at `[sp+0]` and pops by the recorded `frameSize`, so a caller that moved SP across a call would
+    leave the walker off by the overflow whenever an exception unwound through it -- silently, and far from
+    the cause. `ExcDemo`'s seven-frame trace on the validating boot is what says the walker and the compiler
+    still agree, now that `frameSize` includes the new area.
+  - **The area sits at the END of the frame**, after the operand spill, so every other offset is unchanged and
+    a method making no such call compiles BYTE-FOR-BYTE as before -- which keeps the self-hosting fixpoint,
+    and is what `compiler: 37 checks` passing asserts.
+  - **Only the deep-operand path needed changing:** pushing more than `MAX_ARG_REGS` arguments takes the
+    operand stack past `OP_MAX`, which is exactly what sets `deepStack`. The register path keeps the guard
+    rather than assuming that -- it has no memory to put an overflow argument in and would pass garbage.
+  - **`demo/ManyArgsDemo` (in the suite)** pins four shapes: a 20-argument static call; an INSTANCE call,
+    where the receiver takes x0 so the boundary falls one argument earlier than the parameter count suggests;
+    a weighting BY POSITION, so a permuted or duplicated argument changes the answer rather than passing by
+    luck; and a bare `long` past the boundary -- one argument register but TWO local slots, the stepping this
+    VM has got wrong before.
+  - **Pi (`core 166MHz`, full suite, SMP on):** `sum20 = 210`, `weighted20 = 2870`, `tally17 = 1153`,
+    `wide = 7000000155`, with `SMP: 4 of 4`, `jobs/core c0=6 c1=6 c2=6 c3=6`, `ticks/core c1=50 c2=50 c3=50`,
+    `steps/core 60/60/60/60`, `finish HML`, `priority inversion ... HML ... 62ms`, 27 batches all parity OK,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+  - **The demo's first run printed `wide = 7000000155 (want 7000000138)` and the VM was RIGHT** -- 1..15 sums
+    to 120, not 103. Check the expected constant before believing a one-arm failure.
+
 - **Three lambda-adaptation faults, found by a stock `@run junit` test — PI-VALIDATED 2026-08-30 (SMP off).**
   Running the unmodified jtreg `java/util/StringTokenizer/NextTokenWithNullDelimTest` through `MetalJUnit`
   failed with NPE, while every hand-written replay of its exact call sequence PASSED — including reflectively.
