@@ -703,12 +703,12 @@ public final class VMScheduler
     private static long gcPark(int core, long curSp)
     {
         taskSp[coreTask[core]] = curSp;
-        gcParked[core] = 1;
-        Magic.dsb();
-        while (gcStop != 0)
+        Magic.dsb();                                       // we got here by observing gcStop; order the gcGen
+        gcParked[core] = gcGen;                            //   read after it, then publish the generation we
+        Magic.dsb();                                       //   parked for -- never cleared, so the NEXT
+        while (gcStop != 0)                                //   collection cannot mistake it for parked
         {
         }
-        gcParked[core] = 0;
         Magic.dsb();
         return curSp;                                      // the world restarts exactly where it stopped
     }

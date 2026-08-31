@@ -364,7 +364,12 @@ public final class VM
     // place every core passes through, on its own timer tick or its idle yield) with its context already
     // saved to its task's stack, so the collector can trace it. gcParked[c] = 1 while core c is parked.
     static int    gcStop;                   // 1 = every core but the collector must park in pickNext
-    static int[]  gcParked;                 // index = core: 1 while that core is parked for the collection
+    // A GENERATION, not a flag. A parked core clears a flag only AFTER it leaves the park, so between two
+    // collections the flags still read 1 -- and a stop-the-world that believed them would mark and sweep with
+    // three cores still mutating. A core publishes the generation it parked FOR; nothing needs clearing,
+    // because a value from an earlier collection simply is not this one.
+    static long   gcGen;                    // bumped by stopTheWorld BEFORE it raises gcStop (ordered by dsb)
+    static long[] gcParked;                 // index = core: the generation that core last parked for
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
@@ -471,7 +476,7 @@ public final class VM
         coreTask = new int[4];
         coreIdle = new int[4];
         coreSched = new int[4];
-        gcParked = new int[4];
+        gcParked = new long[4];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
         // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
@@ -490,7 +495,7 @@ public final class VM
             coreIdle[c] = -1;                               // no idle task until a core joins the run queue
             coreTask[c] = 0;
             coreSched[c] = 0;
-            gcParked[c] = 0;
+            gcParked[c] = 0L;
             c += 1;
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock

@@ -35,7 +35,19 @@ final class VMGc
         lastScanFrom = scanFrom;
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
-        stopTheWorld();                               // ... and no MUTATION on another core, for the same reason
+        if (!stopTheWorld())                          // ... and no MUTATION on another core, for the same reason
+        {
+            // The world would not stop, so SKIP the collection. Marking against a running mutator sweeps
+            // objects that core still holds, and the dangling reference surfaces arbitrarily far away -- on a
+            // Pi it was a dispatch branching to a HEAP address (`unclaimed pc=0x0C01FE50`). The allocator
+            // retries once and then halts with a loud "heap OOM", which is a strictly better failure than a
+            // corrupted heap. This is what the comment above stopTheWorld always claimed happened.
+            if ((daif & 0x80L) == 0L)
+            {
+                Magic.enableIrq();
+            }
+            return;
+        }
         probes = 0L;                                  // precision metrics for this collection (gcLog)
         nomap = 0L;
         markSp = MARK_STACK;                          // the trace worklist starts empty
@@ -230,25 +242,81 @@ final class VMGc
      * mutator we give up after ~1 s, count it in {@code stwTimeouts} and say so, because a silent
      * corruption here surfaces arbitrarily far away.
      */
-    private static void stopTheWorld()
+    private static boolean stopTheWorld()
     {
-        if (smpSched == 0)
+        if (coreSched == null || gcParked == null || scheduling() == 0)
         {
-            return;                                   // single core in the table: the world is already stopped
+            return true;                              // no other core is scheduling: the world is already stopped
         }
-        gcStop = 1;
+        // Deliberately NOT `smpSched == 0`: stopSmpScheduling clears that flag after waiting only ~1 s for the
+        // secondaries to drain, so a straggler still inside smpSchedulerMain leaves it 0 while still mutating.
+        // coreSched[] is per-core and says what is actually true.
+        gcGen = gcGen + 1L;                           // this collection's generation ...
+        Magic.dsb();                                  // ... PUBLISHED BEFORE gcStop: a core that saw the stop
+        gcStop = 1;                                   //     but the old generation would park uncounted
         Magic.dsb();
         long deadline = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0();
-        int parked = 0;
-        while (parked < 3 && Magic.readCNTPCT_EL0() < deadline)
+        // Wait for the cores that are actually SCHEDULING, not a hardcoded three. A core that has left the
+        // run queue (smpStop drained it, or it never joined -- "smp sched: 3 of 4") has no timer and no yield
+        // point, so it can never park: waiting for it times out EVERY collection, for ever.
+        while (Magic.readCNTPCT_EL0() < deadline && unparked() != 0)
         {
-            parked = gcParked[1] + gcParked[2] + gcParked[3];
         }
-        if (parked < 3)
+        if (unparked() != 0)
         {
             stwTimeouts = stwTimeouts + 1L;
-            Uart.write(Magic.bytes("\nGC: STW TIMEOUT (a core never parked)\n"));
+            Uart.write(Magic.bytes("\nGC: STW TIMEOUT -- unparked core"));
+            int c = 1;
+            while (c < 4)
+            {
+                if (coreSched[c] != 0 && gcParked[c] != gcGen)
+                {
+                    Uart.putc(0x20);
+                    printDec(c);
+                }
+                c += 1;
+            }
+            Uart.write(Magic.bytes(" (collection SKIPPED)\n"));
+            gcStop = 0;                               // release whoever DID park: we are not collecting
+            Magic.dsb();
+            Magic.sev();
+            return false;
         }
+        return true;
+    }
+
+    /** Cores scheduling from the shared run queue that have not parked for THIS collection -- compared
+     *  against the generation, so a core parked for an earlier one does not count. */
+    private static int unparked()
+    {
+        int n = 0;
+        int c = 1;
+        while (c < 4)
+        {
+            if (coreSched[c] != 0 && gcParked[c] != gcGen)
+            {
+                n += 1;
+            }
+            c += 1;
+        }
+        return n;
+    }
+
+
+    /** Secondaries currently scheduling from the shared run queue. */
+    private static int scheduling()
+    {
+        int n = 0;
+        int c = 1;
+        while (c < 4)
+        {
+            if (coreSched[c] != 0)
+            {
+                n += 1;
+            }
+            c += 1;
+        }
+        return n;
     }
 
     /** Release the parked cores: the heap is consistent again. */
