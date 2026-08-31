@@ -4683,23 +4683,22 @@ public final class Loader
      */
     static void buildRunTramp()
     {
-        long rt = runnableTypeAddr();
-        int slot = runnableRunSlot();
+        // The itable scan this used to emit BY HAND was, in its own words, "unguarded past the sentinel", and
+        // it also baked Runnable's Type in as an immediate -- built once, cached for the life of the VM. Both
+        // are the hazards this VM has been closing everywhere else, and here they land on a FRESHLY SPAWNED
+        // task: nothing is on the stack, so a wild branch out of the scan names no caller and reports nothing.
+        // The lookup is Java now (resolveRun), which can bounds-check, fall back, and say what it could not
+        // find; the stub is just a frame, a call, and the dispatch.
         long buf = Heap.allocCode(96);
         int w = 0;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 0, 0));         w += 1;  // x17 = receiver.tib
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 0));        w += 1;  // x17 = Type
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(17, 17, 16));       w += 1;  // x17 = itable dir
-        Magic.store32(buf + w * 4L, A64Enc.movz(15, (int) (rt & 0xFFFFL), 0));          w += 1;  // x15 = Runnable Type
-        Magic.store32(buf + w * 4L, A64Enc.movk(15, (int) ((rt >> 16) & 0xFFFFL), 1));  w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.movk(15, (int) ((rt >> 32) & 0xFFFFL), 2));  w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 0));        w += 1;  // loop: x16 = entry.interfaceType
-        Magic.store32(buf + w * 4L, A64Enc.cmpReg(16, 15));         w += 1;
-        Magic.store32(buf + w * 4L, A64Enc.bcond(0, 3));            w += 1;  // b.eq found
-        Magic.store32(buf + w * 4L, A64Enc.addImm(17, 17, 16));     w += 1;  // next entry
-        Magic.store32(buf + w * 4L, A64Enc.b(-4));                  w += 1;  // back to loop
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 17, 8));        w += 1;  // found: x16 = Runnable's itable
-        Magic.store32(buf + w * 4L, A64Enc.ldrx(16, 16, slot * 8)); w += 1;  // x16 = run() buffer
+        Magic.store32(buf + w * 4L, A64Enc.subImm(31, 31, 16));     w += 1;  // frame: the receiver must survive
+        Magic.store32(buf + w * 4L, A64Enc.strx(0, 31, 0));         w += 1;  //   the resolve call
+        long rr = VM.runResolveAddr;
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) rr, 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) (rr >> 16), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // resolveRun(recv) -> run() buffer
+        Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));          w += 1;  // x16 = the resolved buffer
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(0, 31, 0));         w += 1;  // x0 = the receiver again
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // run() with x0 = receiver
         long te = VM.taskExitAddr;
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) te, 0));         w += 1;
@@ -4707,6 +4706,91 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.blr(16));                w += 1;  // taskExit() — never returns
         Heap.publishCode(buf, buf + w * 4L);
         VM.runTrampAddr = buf;
+    }
+
+    /**
+     * The run-trampoline's dispatch, in Java: find {@code run()V} for the Runnable a spawned task was handed.
+     * Returns a callable buffer, or {@code denylistTrap} after naming what failed -- never a garbage word.
+     *
+     * <p>Every intermediate is checked, and the directory scan STOPS at its 0 terminator rather than walking
+     * past it: on a fresh task stack a bad word here becomes a branch that no report can attribute, because
+     * there is no caller on the stack to name.
+     */
+    static long resolveRun(long recv)
+    {
+        if (recv == 0L)
+        {
+            return 0L;                                  // boot force-compile probe: make the helper reachable
+        }
+        if (recv < Heap.BASE || recv >= Heap.LARGE_LIMIT || (recv & 7L) != 0L)
+        {
+            Uart.write(Magic.bytes("\n  RUNTRAMP: receiver is not an object: "));
+            VM.printHex(recv);
+            Uart.putc(0x0A);
+            return VM.denylistTrapAddr;
+        }
+        long buf = runFromItable(recv);
+        if (buf == 0L || !plausibleCode(buf))
+        {
+            Uart.write(Magic.bytes("\n  RUNTRAMP: no run()V for "));
+            long tib = Magic.load64(recv);
+            if (tib > 0x1000L)
+            {
+                reportClassOfType(Magic.load64(tib));
+            }
+            Uart.write(Magic.bytes(" (buf="));
+            VM.printHex(buf);
+            Uart.write(Magic.bytes(")\n"));
+            return VM.denylistTrapAddr;
+        }
+        return buf;
+    }
+
+    /** {@code run()V} via the receiver's itable entry for java/lang/Runnable, or 0. Bounded, unlike the
+     *  hand-emitted scan it replaces: it stops at the 0 terminator instead of walking past it. */
+    private static long runFromItable(long recv)
+    {
+        long want = runnableTypeAddr();                 // looked up FRESH: not an immediate baked in once
+        if (want == 0L)
+        {
+            return 0L;
+        }
+        long tib = Magic.load64(recv);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(tib);
+        if (type <= 0x1000L)
+        {
+            return 0L;
+        }
+        long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        if (dir <= 0x1000L)
+        {
+            return 0L;
+        }
+        int n = 0;
+        while (n < MAXIFACEFALLBACK)
+        {
+            long ent = Magic.load64(dir + n * (long) ObjectModel.ITABLE_ENTRY_SIZE);
+            if (ent == 0L)
+            {
+                return 0L;                              // the sentinel: STOP (the old scan ran past it)
+            }
+            if (ent == want)
+            {
+                long it = Magic.load64(dir + n * (long) ObjectModel.ITABLE_ENTRY_SIZE
+                        + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET);
+                if (it <= 0x1000L)
+                {
+                    return 0L;
+                }
+                return Magic.load64(it + runnableRunSlot() * 8L);
+            }
+            n += 1;
+        }
+        return 0L;
     }
 
     /** java/lang/Runnable's ONE Type (0 if not loaded: no Runnables can exist yet). */

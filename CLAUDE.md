@@ -76,6 +76,37 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`SleepSanity` PASSES — the run-trampoline's blind itable scan was the wild branch. PI-VALIDATED
+  2026-08-31, SMP ON.** `metal junit: ran 2, failures 0` / `ALL PASSED` on QEMU, and every threaded demo in
+  the suite green on hardware.
+  - **The bug was in `buildRunTramp`, and its own comment stated the false premise:** *"Unguarded past the
+    sentinel: the tramp is only ever entered with real Runnables, whose dir always carries the entry."* For
+    `SleepSanity`'s watcher thread it did not, so the hand-emitted scan **ran PAST the 0 terminator** into
+    adjacent memory and branched to whatever it read there.
+  - **That explains every observation the earlier probes could not.** The constant was identical across
+    different images because the scan walked past the directory into the same fixed region every time; the
+    conservative stack scan found no callers because the fault is inside the trampoline on a FRESH task,
+    before anything is pushed; and `demo/LambdaThreadDemo` passed because those receivers' directories DO
+    carry the Runnable entry, so the scan never reaches the sentinel -- **the demo tested the shape but not
+    the condition.**
+  - **The old stub also baked Runnable's Type in as a `movz`/`movk` IMMEDIATE**, built once and cached for
+    the life of the VM. Looked up fresh now.
+  - **The stub is a frame, a call and the dispatch; the lookup is Java** (`Loader.resolveRun`), which
+    bounds-checks every intermediate, STOPS at the sentinel, and on failure names the receiver's class and
+    returns `denylistTrap` instead of a garbage word. The helper address is writer-stashed like `taskExit`.
+  - **A class-chain fallback was written and REMOVED before shipping:** it passed
+    `Magic.addrOf(Magic.bytes("run"))` where `resolveLinkTarget` wants a Utf8-shaped pointer (u2 length then
+    bytes), so it would have read garbage. The corrected itable path alone is what passes.
+  - **Pi (`core 166MHz`, full suite, SMP on):** EVERY thread path exercises the new lookup and all are green
+    -- philosophers, `finish HML`, `priority inversion ... 62ms`, `smp threads steps/core 60/60/60/60`,
+    `spawned currentThread==self 1 getName=worker-1`, and `lambda thread ran = 42` / `capturing lambda ran =
+    105` / `reflective lambda thread = 7`. 29 batches all parity OK, no `RUNTRAMP:` lines, no faults,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+  - **Method: the isolated demo that PASSES is not a control unless it reproduces the CONDITION.**
+    `LambdaThreadDemo` was built to test `new Thread(lambda)` and did -- but the fault needed a receiver whose
+    directory lacks the entry, which it never had. Four hypotheses died to instruments before this one; what
+    finally worked was making the suspect code SELF-CHECKING rather than guessing what it did.
+
 - **A late compile PULLS the classes its statics name, and recompiles once — the closure gap CLOSED.
   PI-VALIDATED 2026-08-31, SMP ON.** The gap behind the previous entry's zero cell: RTA computes its closure
   at batch time, so a static read by a body compiled LATER names a class nothing ever pulls.
