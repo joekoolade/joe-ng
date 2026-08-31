@@ -656,6 +656,16 @@ public final class VM
      */
     static void resetTaskTable()
     {
+        // The secondaries must LEAVE the shared queue first. This points EVERY core's coreTask at task 0 and
+        // drops taskCount to 1, so doing it while cores 1-3 are scheduling puts four cores on the boot flow's
+        // single stack -- the "one task, two cores" hazard `claimable` exists to prevent, reintroduced
+        // wholesale, plus their idle tasks vanish from under them.
+        //
+        // smpThreadsDemo always drained first; prioDemo did not, and it is called immediately before
+        // demo/PipDemo in the suite -- which then hung for ever on a gate monitor nobody was left to notify.
+        // Draining HERE makes every caller safe instead of relying on each to remember (two of them did not).
+        // A no-op when smpSched is already 0, so the single-core path pays nothing.
+        VMScheduler.stopSmpScheduling();
         taskCount = 1;
         taskState[0] = TASK_READY;
         int c = 0;
