@@ -1046,6 +1046,7 @@ public final class VM
         if (newSemAddr == 0L) { int u = VMScheduler.newSem(0); }
         if (philReportAddr == 0L) { VMScheduler.philReport(0, 0); }
         if (taskExitAddr == 0L) { VMScheduler.taskExit(); }
+        if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
         if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
@@ -2219,6 +2220,7 @@ public final class VM
     static long newSemAddr;            // VM.newSem(I)I
     static long philReportAddr;        // VM.philReport(II)V
     static long taskExitAddr;          // VM.taskExit()V — the run-trampoline's tail (loader-emitted BL)
+    static long runResolveAddr;        // Loader.resolveRun(J)J — the run-trampoline's Runnable.run() lookup
     // invokedynamic string-concat helpers (JIT'd concat lowering BLs these).
     static long scStartAddr;           // VM.scStart()J
     static long boxPrimAddr;           // VMBox.box(JI)J — a method ref's primitive result, boxed for a generic SAM
