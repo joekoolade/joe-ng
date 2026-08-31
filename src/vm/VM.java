@@ -364,7 +364,12 @@ public final class VM
     // place every core passes through, on its own timer tick or its idle yield) with its context already
     // saved to its task's stack, so the collector can trace it. gcParked[c] = 1 while core c is parked.
     static int    gcStop;                   // 1 = every core but the collector must park in pickNext
-    static int[]  gcParked;                 // index = core: 1 while that core is parked for the collection
+    // A GENERATION, not a flag. A parked core clears a flag only AFTER it leaves the park, so between two
+    // collections the flags still read 1 -- and a stop-the-world that believed them would mark and sweep with
+    // three cores still mutating. A core publishes the generation it parked FOR; nothing needs clearing,
+    // because a value from an earlier collection simply is not this one.
+    static long   gcGen;                    // bumped by stopTheWorld BEFORE it raises gcStop (ordered by dsb)
+    static long[] gcParked;                 // index = core: the generation that core last parked for
     static long   stwTimeouts;              // collections that started with a core still unparked (a bug signal)
     /** The scheduler's cross-core lock (a {@link Magic#spinLock} word). Held only with IRQs masked, and only
      *  across task-table updates -- never across a UART write or an allocation. A different cache line from
@@ -393,6 +398,8 @@ public final class VM
             loaderDepth = loaderDepth + 1;              // re-entry: a <clinit> compiling inside a compile
             return;
         }
+        long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
+        int said = 0;
         while (true)
         {
             long daif = VMScheduler.schedLock();
@@ -404,6 +411,20 @@ public final class VM
                 return;
             }
             VMScheduler.schedUnlock(daif);
+            // A holder that can never run again -- parked for a collection that never ends, or a task the
+            // collector reaped while it still owned this lock -- turns every later demand-load into a silent
+            // hang. Name the owner rather than spin mutely for ever.
+            if (said == 0 && Magic.readCNTPCT_EL0() > stuck)
+            {
+                said = 1;
+                Uart.write(Magic.bytes("\nLOADER LOCK stuck >10s: owner task "));
+                printDec(loaderOwner);
+                Uart.write(Magic.bytes(" state "));
+                printDec(loaderOwner >= 0 && taskState != null ? taskState[loaderOwner] : -1);
+                Uart.write(Magic.bytes(" waiter "));
+                printDec(me);
+                Uart.putc(0x0A);
+            }
             VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
         }
     }
@@ -471,7 +492,7 @@ public final class VM
         coreTask = new int[4];
         coreIdle = new int[4];
         coreSched = new int[4];
-        gcParked = new int[4];
+        gcParked = new long[4];
         // Initialise every element explicitly. Heap.allocArray does NOT zero its elements (a block off the
         // free list carries whatever the dead object left), and on real hardware DRAM starts full of
         // firmware leftovers -- so "a fresh int[] reads as zeroes" is a QEMU accident, not a guarantee.
@@ -490,7 +511,7 @@ public final class VM
             coreIdle[c] = -1;                               // no idle task until a core joins the run queue
             coreTask[c] = 0;
             coreSched[c] = 0;
-            gcParked[c] = 0;
+            gcParked[c] = 0L;
             c += 1;
         }
         // The scheduler's lock word is raw scratch RAM, not a Java field: nothing zeroed it, and spinLock
@@ -635,6 +656,16 @@ public final class VM
      */
     static void resetTaskTable()
     {
+        // The secondaries must LEAVE the shared queue first. This points EVERY core's coreTask at task 0 and
+        // drops taskCount to 1, so doing it while cores 1-3 are scheduling puts four cores on the boot flow's
+        // single stack -- the "one task, two cores" hazard `claimable` exists to prevent, reintroduced
+        // wholesale, plus their idle tasks vanish from under them.
+        //
+        // smpThreadsDemo always drained first; prioDemo did not, and it is called immediately before
+        // demo/PipDemo in the suite -- which then hung for ever on a gate monitor nobody was left to notify.
+        // Draining HERE makes every caller safe instead of relying on each to remember (two of them did not).
+        // A no-op when smpSched is already 0, so the single-core path pays nothing.
+        VMScheduler.stopSmpScheduling();
         taskCount = 1;
         taskState[0] = TASK_READY;
         int c = 0;
@@ -1310,7 +1341,16 @@ public final class VM
         }
         long conf = Magic.load64(e + 16L);
         int flen = (int) Magic.load64(e + 24L);
-        long v = Heap.allocData(16);
+        long v = Heap.allocData(256);
+        // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
+        // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
+        // the LAUNCH path before `smpDemo` was set, so they skipped smpWork/pcCoreMain entirely (jobs/core
+        // c1-c3 = 0, ticks/core = 0) and the suite's own bringUpSecondaries then found only core 0. This
+        // block exists for a launched PROGRAM; with no main= there is no program to give the cores to.
+        if (manifestValue(conf, flen, Magic.bytes("main"), v, 250) == 0)
+        {
+            return false;
+        }
         int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
         return n < 1 || (Magic.load8(v) & 0xFF) != 0x30;    // absent = on; "0" = off
     }
@@ -1654,6 +1694,8 @@ public final class VM
         printHex(a & 0xFFFFFFFFL);
         Uart.write(Magic.bytes(" b="));
         printDec(b);
+        Uart.write(Magic.bytes(" in "));
+        Loader.printCompiling();
         Uart.putc(0x0A);
     }
 

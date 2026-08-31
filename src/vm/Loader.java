@@ -8593,6 +8593,18 @@ public final class Loader
     }
 
     /** Print the Utf8 class name at (base, off) over the UART. */
+    /** Name the class the metal JIT is compiling right now. Called from {@link VM#jitFail}: a bare reason
+     *  code says WHAT the compiler cannot do but never WHERE, and the where is the whole lead. */
+    static void printCompiling()
+    {
+        if (gbase == 0L)
+        {
+            Uart.write(Magic.bytes("<no compile context>"));
+            return;
+        }
+        printNameAt(gbase, gThisNameOff);
+    }
+
     private static void printNameAt(long base, int off)
     {
         int len = u2(base + off);
