@@ -161,30 +161,43 @@ defines the minimum the assembler must encode.
   - **QEMU cannot gate SMP work:** merged main itself flakes at the scheduler set-piece about one boot in
     three (measured 2 of 3 passes on main). Measure the baseline before reading any SMP result as a regression.
 
-- **THE DEMO SUITE IS BROKEN ON HARDWARE WITH SMP ON — PRE-EXISTING, ON MAIN (2026-08-30).** The suite dies
-  mid-run with `GC: STW TIMEOUT (a core never parked)`, a console interleaved byte-by-byte by two cores, and
-  `InternalError at <unclaimed pc=... after java/lang/Thread.start>`. **Reproduced on `main` (b2fa751) with
-  the class directory unchanged**, so it is nothing to do with the lambda-adaptation branch:
-  | boot | VM | classDir | wild pc |
-  | --- | --- | --- | --- |
-  | branch | lambda-adaptation | +3 tests | `0x03740080` |
-  | control | **main** | +3 tests | `0x0C01FE50` |
-  | pure main | **main** | **main** | `0x0C01FE50` |
-  - **The same pc in both control boots, across two differently-sized images, means a DETERMINISTIC value —
-    not stack garbage.** That is the lead: name it with `JOENG_SYMMAP=1`.
-  - **`VM.SMP_ENABLED = false` makes the whole suite pass** (batches 17-26 all clean, `churnMB=625 live=32
-    intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK). So the fault is in the SMP
-    scheduler, not in any demo.
-  - **`smp=0` in `/etc/init` does NOT disable it** — `launchSmp()` returns false when there is no manifest
-    ("the demo suite runs its own SMP phases"), and the suite runs precisely by having no `main=`. The master
-    switch is `VM.SMP_ENABLED`; the manifest line governs only a LAUNCHED program.
-  - Also seen once, and probably the same fault: `priority ... finish LMH (want HML)` — priority ordering not
-    happening at all, immediately before an STW TIMEOUT. A core that never parks would explain the timeout,
-    the interleaving and the wild pc together.
-  - **Method note that cost four boots: BUILD THE CONTROL FIRST.** Three Pi boots were spent chasing this as a
-    regression of the branch under test. One control boot settled it. When a hardware failure appears
-    alongside a change, the baseline is the cheapest question to ask, not the last one.
-
+- **THE SMP SUITE FAILURE IS FIXED — PI-VALIDATED 2026-08-31, FULL SUITE, SMP ON.** `priority ... finish HML
+  (want HML) steps L/M/H = 20/20/20`, `priority inversion (guest Thread): finish HML ... HIGH blocked 62ms`
+  (PipDemo, the demo that hung), all 26 batches with every parity OK, `churnMB=625 live=32 intact=32`,
+  `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK. No STW TIMEOUT, no watchdog, no BOOT RE-ENTERED,
+  no `unclaimed pc`. Four defects, in two groups:
+  - **Stop-the-world let the collector run against a mutator, three ways.** (1) On timeout it **collected
+    anyway** -- the doc comment said it gave up, the code counted, printed and marched on; that is the
+    corruption mechanism, and it SKIPS now (the allocator retries once then halts with a loud `heap OOM`).
+    (2) It waited for a **hardcoded three** cores; a core that left the run queue has no timer and no yield
+    point, so waiting for it times out EVERY collection for ever -- it waits for the cores actually
+    scheduling, and the entry check asks `coreSched[]`, not `smpSched` (which `stopSmpScheduling` clears
+    after only ~1 s of draining, leaving a straggler mutating). (3) **`gcParked[]` was a FLAG, and flags go
+    stale** -- a core clears its own only AFTER leaving the park, so a second collection reads leftover 1s and
+    concludes the world is stopped. It is a GENERATION now, published BEFORE `gcStop` with a `dsb` between;
+    without that ordering a core can see the stop but the old generation and park uncounted.
+  - **`resetTaskTable` wiped the table under the secondaries.** It points EVERY core's `coreTask` at task 0
+    and drops `taskCount` to 1, so doing it while cores 1-3 schedule puts four cores on the boot flow's single
+    stack -- the "one task, two cores" hazard `claimable` exists to prevent. `prioDemo` did exactly that
+    IMMEDIATELY BEFORE launching PipDemo, whose first act is a `gate` handshake: main then waited on a monitor
+    nobody was left to notify. `stopSmpScheduling`'s own doc says draining is what makes the reset safe, and
+    `smpThreadsDemo` brackets itself correctly; **the drain lives inside `resetTaskTable` now**, because two
+    callers did not remember. It also explains the `finish LMH` seen earlier: the wipe destroyed priority
+    ordering too.
+  - **Why the suite had secondaries at all:** `launchSmp()` only looks for an `smp=` line, so an EMPTY BUT
+    PRESENT `/etc/init` -- exactly how the no-manifest suite image is built -- reads as "SMP on". That is also
+    why `smp=0` never gated the suite and `VM.SMP_ENABLED=false` did.
+  - **REGRESSION INTRODUCED, NOT YET FIXED: the suite no longer demonstrates SMP.** `smp threads` now prints
+    `smp sched: 1 of 4` / `steps/core: c0=240 c1=0 c2=0 c3=0`, where CLAUDE.md's validated result was `4 of 4`
+    / `c0=61 c1=60 c2=60 c3=59`. The boot-time reset drains, and the secondaries do not rejoin when
+    `smpThreadsDemo` calls `startSmpScheduling()`. The suite is GREEN but its cross-core coverage is gone.
+  - **NOT REPRODUCED, NOT FIXED:** the previous boot died with `JIT unsupported: reason=11 a=0x11 b=1` --
+    `FAIL_ARG_COUNT`, callee half, a method with 17 parameters against `MAX_ARG_REGS = 16`. It did not recur
+    on the passing boot with no relevant change between them, so it is intermittent and still open. `jitFail`
+    names the class now.
+  - **Method, at a cost of four wasted boots: BUILD THE CONTROL FIRST.** Three Pi boots were spent chasing
+    this as a regression of the branch under test; one control boot on `main` settled it. And QEMU cannot gate
+    SMP work -- merged main flakes at the scheduler set-piece about one boot in three (measured).
 - **Late link resolution — the call sites RTA cannot see (2026-08-27, PI-VALIDATED).** RTA marks a method
   reachable then walks its body to mark what IT calls; reflection breaks that chain. A method reached only
   through `Method.invoke` compiles on demand, but nothing statically reachable names it, so its OWN callees
