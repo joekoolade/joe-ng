@@ -3107,6 +3107,11 @@ public final class VM
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
         Loader.launch(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
 
+        // Thread whose Runnable is a LAMBDA (plain, capturing, and created in a reflectively-reached body) --
+        // every other thread demo passes a named class, so the synthesised-itable shape was never exercised.
+        Uart.write(Magic.bytes("Thread on a lambda Runnable:\n"));
+        Loader.launch(Magic.bytes("demo/LambdaThreadDemo"), Magic.bytes(""));
+
         // Overloads under getDeclaredMethods: same name, different descriptors -- name alone identifies neither.
         Uart.write(Magic.bytes("overloaded methods under getDeclaredMethods:\n"));
         Loader.launch(Magic.bytes("demo/OverloadReflectDemo"), Magic.bytes(""));

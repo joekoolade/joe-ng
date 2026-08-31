@@ -5083,6 +5083,15 @@ public final class Loader
             }
             i += 1;
         }
+        if (lzCompiling && !lzRetried && notePullNeeded(gbase + refClassNameOff(idx)))
+        {
+            // A LATE compile named a static of a class RTA never pulled. Do NOT load it here: a load parses
+            // every blob and can collect, and the code buffer being compiled is not reachable yet -- it would
+            // be swept out from under us (the hazard recorded for buildLambdaTib). Note it instead; the
+            // caller pulls it once the compile is over and compiles this body AGAIN, with the class present.
+            // The doomed first body reads the zero cell, and is discarded before anything can call it.
+            return unresolvedStaticCell();
+        }
         if (compileReuseTib)
         {
             // A LATE compile (lazy body, on-demand method, deferred <clinit>) -- there is no later batch
@@ -5097,6 +5106,75 @@ public final class Loader
             return unresolvedStaticCell();
         }
         return 0L;                                      // batch compile: the reloc pass patches it later
+    }
+
+    // ---- deferred class pulls: collect during a lazy compile, load AFTER it, recompile once -------------
+    // The twin of lzInitReg/drainPendingInit above, for the class a getstatic NAMES rather than the class it
+    // must initialize. Same reason for deferring: loading mid-compile can collect the in-progress buffer.
+    private static final int MAXPENDPULL = 32;
+    private static long[] lzPullU;
+    private static int lzPullN;
+    private static boolean lzRetried;
+
+    /** Note that the body being compiled reads a static of the (unloaded) class named at {@code clsU}.
+     *  False if it is not worth retrying for -- absent from the classDir, denylisted, or the list is full. */
+    private static boolean notePullNeeded(long clsU)
+    {
+        if (lzPullN >= MAXPENDPULL || isDenylisted(clsU, 0))
+        {
+            return false;                               // a denylisted class must stay absent: reading null
+        }                                               //   is the intended outcome, not a closure to widen
+        int i = 0;
+        while (i < lzPullN)
+        {
+            if (lzPullU[i] == clsU)
+            {
+                return true;                            // already noted (the same site is visited twice)
+            }
+            i += 1;
+        }
+        if (lzPullU == null)
+        {
+            lzPullU = new long[MAXPENDPULL];
+        }
+        lzPullU[lzPullN] = clsU;
+        lzPullN += 1;
+        return true;
+    }
+
+    /** Demand-load every class noted during the compile that just finished. Snapshots and CLEARS the list
+     *  first: a pull runs initializers, which can re-enter the compiler and note pulls of their own. */
+    private static void drainPendingPulls()
+    {
+        long[] want = new long[lzPullN];
+        int n = lzPullN;
+        int i = 0;
+        while (i < n)
+        {
+            want[i] = lzPullU[i];
+            i += 1;
+        }
+        lzPullN = 0;
+        i = 0;
+        while (i < n)
+        {
+            int len = u2(want[i]);
+            byte[] slash = new byte[len];
+            int k = 0;
+            while (k < len)
+            {
+                slash[k] = (byte) u1(want[i] + 2 + k);
+                k += 1;
+            }
+            if (classIndexByName(slash) < 0)
+            {
+                Uart.write(Magic.bytes("  staticresolve "));
+                printNameAt(want[i], 0);
+                Uart.putc(0x0A);
+                long pulled = loadClassIncremental(slash);
+            }
+            i += 1;
+        }
     }
 
     /** One permanently-zero word, shared by every static a late compile could not resolve. */
@@ -6977,11 +7055,19 @@ public final class Loader
         while (j < rsCount)
         {
             long addr = globalStaticByRef(rsBase[j], rsClass[j], rsName[j]);
-            if (addr != 0L)
+            if (addr == 0L)
             {
-                Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
-                Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
+                // Unresolved: the class is not loaded YET. Point it at the permanently-zero cell rather than
+                // leaving the emitted `movz 0` in place -- otherwise the access reads ADDRESS 0, the firmware's
+                // low-memory shim, and hands instruction words back as if they were the field's value.
+                //
+                // Not a final verdict and deliberately silent: patchRelocs() revisits every site from 0 at each
+                // batch end, so a class loaded LATER still patches this site properly. The cell only decides
+                // what happens if it never is -- a null read and an ordinary NPE, instead of a wild branch.
+                addr = unresolvedStaticCell();
             }
+            Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
+            Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
             j += 1;
         }
         Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the patched code
@@ -9650,8 +9736,39 @@ public final class Loader
         int rcMark = rcCount;                           // this compile's own reloc sites start here
         int rsMark = rsCount;
         lzCompiling = true;                             // collect the classes this body actively uses
+        lzPullN = 0;
+        lzRetried = false;
         long buf = compile(code, len, descOff, isStatic);
         lzCompiling = false;
+        if (lzPullN > 0)
+        {
+            // This body reads a static of a class nothing pulled. The compile is OVER, so loading is safe now
+            // (mid-compile it would collect the in-progress buffer). Load, then compile the SAME body again
+            // with the class present, so its getstatic resolves to the real cell instead of the zero one.
+            //
+            // The first buffer is simply abandoned -- unreachable, so the next sweep takes it. That is the
+            // whole reason to retry HERE rather than one level up: nothing has registered it, cached it, or
+            // stored it into a TIB slot yet, so no caller can ever have run the doomed code.
+            drainPendingPulls();
+            rcCount = rcMark;                           // and drop its reloc sites: patching them later would
+            rsCount = rsMark;                           //   write into a buffer the sweep may already have reused
+            lzRetried = true;                           // once only -- a class that is still missing reads null
+            restoreCtxForCompile(lzTab[idx].blob, lzTab[idx].len, lzTab[idx].reg);   // the pull clobbered g*
+            if (lzTab[idx].code != 0L)
+            {
+                gMaxLocals = lzTab[idx].maxLocals;      // AFTER the restore: parseFields/parseVtable clobber it
+            }
+            else
+            {
+                code = findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
+                len = gcodeLen;
+                descOff = gFoundDescOff;
+                isStatic = gFoundStatic;
+            }
+            lzCompiling = true;
+            buf = compile(code, len, descOff, isStatic);
+            lzCompiling = false;
+        }
         compileReuseTib = false;
         patchRelocsFrom(rcMark, rsMark);                // batch-end patchRelocs is long past: resolve OUR sites now,
         if (buf == 0L)                                  // or a `bl 0` wild-branches to address 0 (see patchRelocsFrom)

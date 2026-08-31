@@ -76,6 +76,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A late compile PULLS the classes its statics name, and recompiles once — the closure gap CLOSED.
+  PI-VALIDATED 2026-08-31, SMP ON.** The gap behind the previous entry's zero cell: RTA computes its closure
+  at batch time, so a static read by a body compiled LATER names a class nothing ever pulls.
+  - **PULL AFTER THE COMPILE, NOT DURING IT.** A load parses every blob and can collect, and the buffer being
+    compiled is not reachable yet -- it would be swept out from under us (the hazard recorded for
+    `buildLambdaTib`). `globalStaticAddr` NOTES the class instead, exactly as `noteInitNeeded`/
+    `drainPendingInit` already do for the class a getstatic must INITIALIZE; `lazyCompileLocked` drains the
+    list once the compile is over and compiles the same body AGAIN with the class present.
+  - **Retrying INSIDE `lazyCompileLocked` is what makes discarding the first body safe:** nothing has
+    registered it, cached it, or stored it into a TIB slot yet, so no caller can ever have run it. Its reloc
+    sites are dropped with it (`rcCount`/`rsCount` rewind) -- patching them afterwards would write into a
+    buffer the sweep may already have reused. Once only.
+  - **THE BATCH PATH HAD THE SAME HOLE, SILENTLY.** `patchRelocsFrom` patched a static site only
+    `if (addr != 0)`, leaving the emitted `movz 0` otherwise -- so a batch-compiled body whose class never
+    arrived read ADDRESS 0 too. It points at the zero cell now: deliberately silent and not a verdict, since
+    `patchRelocs()` revisits every site from 0 at each batch end and a class loaded later still patches it.
+  - **`demo/LambdaThreadDemo` covers three thread shapes nothing else did.** Every other thread demo
+    (SmpDemo, PrioDemo, PipDemo) passes a NAMED class, so a Runnable that is a LAMBDA -- whose itable is
+    synthesised by `buildLambdaTib` rather than built from a classfile -- had never been exercised at all.
+    Plain, capturing, and created inside a reflectively-reached body.
+  - **Pi (`core 166MHz`, full suite, SMP on):** `lambda thread ran = 42`, `capturing lambda ran = 105`,
+    `reflective lambda thread = 7`, all exact; 29 batches all parity OK, `SMP: 4 of 4`,
+    `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`, `steps/core 61/60/59/60`, `finish HML`,
+    `priority inversion ... 62ms`, ExcDemo's seven-frame trace, ManyArgs, the overload and interface demos,
+    class literals, WordCount, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    WPA2 -> HTTP 200 OK. Three deduped `UNRESOLVED STATIC` lines, no faults.
+  - **QEMU:** `SleepSanity` prints `staticresolve java/util/concurrent/TimeUnit` and `staticresolve
+    java/lang/CharacterDataLatin1` and runs on past `Pattern.compile` into the JUnit assertion machinery,
+    where it used to die.
+  - **STILL OPEN: `SleepSanity` does not PASS.** What remains is a SEPARATE wild branch at `new Thread(...)`
+    inside its `testTimeout`, on a freshly spawned task (the stack scan finds no callers). **Ruled out with
+    evidence, not argument** -- the closure gap (fixed; the `staticresolve` lines prove it); an unresolved
+    static on either the late or the batch path (both read the zero cell); a lambda Runnable, a capturing
+    one, and one created in a reflectively-reached body (all three PASS in the new demo, on hardware); the
+    run-trampoline chain (every link printed valid -- `dir[0]` matched, itable, slot 0, entry real code); a
+    stale itable slot; a literal pool (`emitAddr` is movz/movk, there is none). **Four of those were my own
+    confident hypotheses, and each died to an instrument rather than to reasoning.**
+
 - **An unresolved static in a LATE compile read FIRMWARE MEMORY, not null — the SleepSanity wild branch,
   ROOT-CAUSED AND FIXED. PI-VALIDATED 2026-08-31, SMP ON.** The symptom was an instruction abort at
   `0xAA1F03E1580000C0` -- not an address, **two A64 instruction words** -- at a pc no table claims, with an
