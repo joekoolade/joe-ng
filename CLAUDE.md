@@ -128,6 +128,39 @@ defines the minimum the assembler must encode.
   - **Of 273 stock `@run junit` tests in `java/lang` + `java/util`, 65 compile against the guest overlay**;
     most of the rest need tz/locale data, `@ParameterizedTest`, or the module machinery.
 
+- **Stop-the-world: three defects fixed; the remaining SMP hang is now ISOLATED to PipDemo-in-the-suite
+  (2026-08-30, branch `smp-stop-the-world`, NOT merged).** Reading `stopTheWorld` found three independent ways
+  the world can fail to stop, each letting mark-and-sweep run against a live mutator:
+  - **(1) On timeout it collected ANYWAY.** The doc comment said "rather than mark against a running mutator
+    we give up after ~1 s"; the code counted, printed and returned, and `gcCollect` marched on. That is the
+    corruption mechanism. It SKIPS the collection now -- the allocator retries once then halts with a loud
+    `heap OOM`, a strictly better failure than a corrupted heap.
+  - **(2) It waited for a HARDCODED THREE cores.** A core that left the run queue (drained by `smpStop`, or
+    one that never joined -- `smp sched: 3 of 4`) has no timer and no yield point, so it can never park:
+    waiting for it times out EVERY collection, for ever. Now it waits for the cores actually scheduling, and
+    the entry check asks `coreSched[]` rather than `smpSched` -- `stopSmpScheduling` clears that flag after
+    waiting only ~1 s for the secondaries to drain, so a straggler left it 0 while still mutating.
+  - **(3) `gcParked[]` was a FLAG, and flags go stale.** A core clears its flag only AFTER leaving the park,
+    so between two collections the flags still read 1 and a stop-the-world that believed them would collect
+    with three cores running. It is a GENERATION now, published BEFORE `gcStop` with a `dsb` between -- without
+    that ordering a core can observe the stop but the old generation and park uncounted.
+  - **Pi result: `GC: STW TIMEOUT` is GONE** (it preceded every previous SMP-on failure), and so are
+    `BOOT RE-ENTERED` / `unclaimed pc` / `heap OOM`. The suite now HANGS SILENTLY instead, at
+    `clinit-lazy demo/PipDemo` -- reproduced on QEMU, so the Pi is no longer needed to chase it.
+  - **What the hang is NOT:** watchdogs added to `gcPark` (>10 s parked) and `VM.loaderLock` (>10 s waiting,
+    naming the owner and its state) did not fire in a 300 s run. And **PipDemo STANDALONE with SMP on passes**
+    -- `finish HML`, `HIGH blocked 65ms`, twice, in 2 s. So it is the SUITE CONTEXT, exactly as this demo's
+    own entry warns: its failures have only ever been visible there.
+  - **Not a regression of the fix.** Pre-fix, the same boot FAULTED at PipDemo; the control on main died at
+    `Thread.start`. Preventing the corruption unmasked a hang that was already there.
+  - **A console-lock attempt was built and REVERTED.** Ordinary `Uart.write` is unlocked, so every SMP log
+    interleaves byte-by-byte and the evidence is destroyed in exactly the boots that need reading. Locking it
+    naively deadlocks (a core parked mid-message never releases), so the attempt masked IRQs for the message
+    -- which is MILLISECONDS with interrupts off per line at 115200 baud, and wrecked the scheduler demos. The
+    idea is right; it needs a per-core buffer flushed under a short lock, not a lock held across the UART.
+  - **QEMU cannot gate SMP work:** merged main itself flakes at the scheduler set-piece about one boot in
+    three (measured 2 of 3 passes on main). Measure the baseline before reading any SMP result as a regression.
+
 - **THE DEMO SUITE IS BROKEN ON HARDWARE WITH SMP ON — PRE-EXISTING, ON MAIN (2026-08-30).** The suite dies
   mid-run with `GC: STW TIMEOUT (a core never parked)`, a console interleaved byte-by-byte by two cores, and
   `InternalError at <unclaimed pc=... after java/lang/Thread.start>`. **Reproduced on `main` (b2fa751) with

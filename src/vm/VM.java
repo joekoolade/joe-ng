@@ -398,6 +398,8 @@ public final class VM
             loaderDepth = loaderDepth + 1;              // re-entry: a <clinit> compiling inside a compile
             return;
         }
+        long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
+        int said = 0;
         while (true)
         {
             long daif = VMScheduler.schedLock();
@@ -409,6 +411,20 @@ public final class VM
                 return;
             }
             VMScheduler.schedUnlock(daif);
+            // A holder that can never run again -- parked for a collection that never ends, or a task the
+            // collector reaped while it still owned this lock -- turns every later demand-load into a silent
+            // hang. Name the owner rather than spin mutely for ever.
+            if (said == 0 && Magic.readCNTPCT_EL0() > stuck)
+            {
+                said = 1;
+                Uart.write(Magic.bytes("\nLOADER LOCK stuck >10s: owner task "));
+                printDec(loaderOwner);
+                Uart.write(Magic.bytes(" state "));
+                printDec(loaderOwner >= 0 && taskState != null ? taskState[loaderOwner] : -1);
+                Uart.write(Magic.bytes(" waiter "));
+                printDec(me);
+                Uart.putc(0x0A);
+            }
             VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
         }
     }

@@ -706,8 +706,22 @@ public final class VMScheduler
         Magic.dsb();                                       // we got here by observing gcStop; order the gcGen
         gcParked[core] = gcGen;                            //   read after it, then publish the generation we
         Magic.dsb();                                       //   parked for -- never cleared, so the NEXT
+        long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
+        int said = 0;
         while (gcStop != 0)                                //   collection cannot mistake it for parked
         {
+            // A park is meant to last a collection. If gcStop is never cleared this spins for ever and the
+            // whole boot goes silent -- which is exactly what a stop-the-world bug looks like from outside.
+            // Say so once, then keep spinning: leaving the park would let this core mutate a half-swept heap.
+            if (said == 0 && Magic.readCNTPCT_EL0() > stuck)
+            {
+                said = 1;
+                Uart.write(Magic.bytes("\nGC: core stuck parked >10s, core "));
+                printDec(core);
+                Uart.write(Magic.bytes(" gen "));
+                printDec((int) gcGen);
+                Uart.putc(0x0A);
+            }
         }
         Magic.dsb();
         return curSp;                                      // the world restarts exactly where it stopped
