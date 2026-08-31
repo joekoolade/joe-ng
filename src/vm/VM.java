@@ -1341,7 +1341,16 @@ public final class VM
         }
         long conf = Magic.load64(e + 16L);
         int flen = (int) Magic.load64(e + 24L);
-        long v = Heap.allocData(16);
+        long v = Heap.allocData(256);
+        // ... and neither does an EMPTY manifest, which is exactly how the no-manifest suite image is built:
+        // the file exists, so fileFind succeeds, and only `smp=` was ever consulted. That handed cores 1-3 to
+        // the LAUNCH path before `smpDemo` was set, so they skipped smpWork/pcCoreMain entirely (jobs/core
+        // c1-c3 = 0, ticks/core = 0) and the suite's own bringUpSecondaries then found only core 0. This
+        // block exists for a launched PROGRAM; with no main= there is no program to give the cores to.
+        if (manifestValue(conf, flen, Magic.bytes("main"), v, 250) == 0)
+        {
+            return false;
+        }
         int n = manifestValue(conf, flen, Magic.bytes("smp"), v, 8);
         return n < 1 || (Magic.load8(v) & 0xFF) != 0x30;    // absent = on; "0" = off
     }

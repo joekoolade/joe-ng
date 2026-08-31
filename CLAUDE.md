@@ -187,10 +187,18 @@ defines the minimum the assembler must encode.
   - **Why the suite had secondaries at all:** `launchSmp()` only looks for an `smp=` line, so an EMPTY BUT
     PRESENT `/etc/init` -- exactly how the no-manifest suite image is built -- reads as "SMP on". That is also
     why `smp=0` never gated the suite and `VM.SMP_ENABLED=false` did.
-  - **REGRESSION INTRODUCED, NOT YET FIXED: the suite no longer demonstrates SMP.** `smp threads` now prints
-    `smp sched: 1 of 4` / `steps/core: c0=240 c1=0 c2=0 c3=0`, where CLAUDE.md's validated result was `4 of 4`
-    / `c0=61 c1=60 c2=60 c3=59`. The boot-time reset drains, and the secondaries do not rejoin when
-    `smpThreadsDemo` calls `startSmpScheduling()`. The suite is GREEN but its cross-core coverage is gone.
+  - **The suite's SMP set pieces were DEAD, and that was pre-existing, not this change.** `smp jobs` ran
+    entirely on core 0 (`jobs/core: c0=24 c1=0 c2=0 c3=0`), `ticks/core` was all zeros and `smp threads` said
+    `1 of 4` -- and merged main gives the same on QEMU, so it long predates this work. Cause: `launchSmp()`
+    consulted only `smp=`, so the EMPTY manifest handed cores 1-3 to the LAUNCH path at boot, BEFORE
+    `smpDemo = 1` was set. The secondaries went straight to the scheduler loop, skipped `smpWork`/
+    `pcCoreMain` entirely, and the suite's own `bringUpSecondaries` then found only core 0 (`SMP: 1 of 4
+    cores up`). That block exists for a launched PROGRAM: with no `main=` there is no program to give the
+    cores to, so `launchSmp()` requires one now. Restored: `jobs/core: c0=4 c1=6 c2=9 c3=5`,
+    `smp sched: 4 of 4`, `steps/core: c0=59 c1=60 c2=61 c3=60`. (`ticks/core` stays 0 on QEMU -- no timer PPI
+    reaches a secondary there.)
+  - **I called this a regression of my own change and it was not.** The evidence that settled it was one
+    grep of an existing control log, not a new boot: main gives `1 of 4` too.
   - **NOT REPRODUCED, NOT FIXED:** the previous boot died with `JIT unsupported: reason=11 a=0x11 b=1` --
     `FAIL_ARG_COUNT`, callee half, a method with 17 parameters against `MAX_ARG_REGS = 16`. It did not recur
     on the passing boot with no relevant change between them, so it is intermittent and still open. `jitFail`
