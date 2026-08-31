@@ -5083,7 +5083,72 @@ public final class Loader
             }
             i += 1;
         }
-        return 0L;                                      // unresolved (class not loaded yet) -> reloc will patch it
+        if (compileReuseTib)
+        {
+            // A LATE compile (lazy body, on-demand method, deferred <clinit>) -- there is no later batch
+            // patchRelocs to fill this in, so 0 is not "patch me", it is the final answer. Emitted as-is the
+            // access reads ADDRESS 0: the firmware's low-memory shim, whose instructions come back as a
+            // plausible-looking 64-bit value. Handed to a dispatch that is exactly a wild branch to a pc no
+            // table claims, on whatever stack happens to be running -- which is how `CharacterDataLatin1
+            // .instance` (never pulled, because StringLatin1.toUpperCase compiled after its batch) crashed
+            // String.toUpperCase. Point it at a permanently-zero cell instead: the field reads NULL and the
+            // use throws an ordinary NPE with a real stack, at the site that actually needs the class.
+            reportUnresolvedStatic(idx);
+            return unresolvedStaticCell();
+        }
+        return 0L;                                      // batch compile: the reloc pass patches it later
+    }
+
+    /** One permanently-zero word, shared by every static a late compile could not resolve. */
+    private static long unresolvedStaticCell()
+    {
+        if (unresStaticCell == 0L)
+        {
+            unresStaticCell = Heap.allocData(8);
+            Magic.store64(unresStaticCell, 0L);         // allocData does NOT zero
+        }
+        return unresStaticCell;
+    }
+
+    private static long unresStaticCell;
+
+    private static long[] unresStaticSeen;
+    private static int unresStaticSeenN;
+
+    /**
+     * Name the class+field a late compile could not resolve -- silence here is what made this unfindable.
+     * ONCE per field: the same unresolved static is re-reported on every method that reads it (88 lines for
+     * two fields on one boot), and a log nobody reads is the state this bug lived in.
+     */
+    private static void reportUnresolvedStatic(int idx)
+    {
+        long key = gbase + refClassNameOff(idx) + (long) mrefNameOff(idx);
+        if (unresStaticSeen == null)
+        {
+            unresStaticSeen = new long[64];
+            unresStaticSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresStaticSeenN)
+        {
+            if (unresStaticSeen[k] == key)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (unresStaticSeenN < 64)
+        {
+            unresStaticSeen[unresStaticSeenN] = key;
+            unresStaticSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  UNRESOLVED STATIC (reads null): "));
+        printNameAt(gbase + refClassNameOff(idx), 0);
+        Uart.putc(0x2E);
+        printNameAt(gbase + mrefNameOff(idx), 0);
+        Uart.write(Magic.bytes(" -- class never pulled; needed by "));
+        printCompiling();
+        Uart.putc(0x0A);
     }
 
     /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
@@ -7737,6 +7802,23 @@ public final class Loader
         {
             return VM.denylistTrapAddr;
         }
+        if (recv < Heap.BASE || recv >= Heap.LARGE_LIMIT || (recv & 7L) != 0L)
+        {
+            // NOT AN OBJECT AT ALL. Image code carries no implicit checks, so dereferencing this would data-
+            // abort INSIDE the fault handler's own unwind -- a NESTED FAULT report naming only this method,
+            // with the caller nowhere in it. The site's name+descriptor is right here, so say which dispatch
+            // was handed the garbage; that is the one fact the fault report cannot recover.
+            Uart.write(Magic.bytes("\n  BAD RECEIVER at dispatch: recv="));
+            VM.printHex(recv);
+            if (vsName != null && idx >= 0 && idx < vsCount)
+            {
+                Uart.write(Magic.bytes(" site="));
+                printNameAt(vsName[idx], 0);
+                printNameAt(vsDesc[idx], 0);
+            }
+            Uart.putc(0x0A);
+            return VM.denylistTrapAddr;
+        }
         long tib = Magic.load64(recv + ObjectModel.TIB_OFFSET);
         if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
         {
@@ -7802,6 +7884,11 @@ public final class Loader
             printNameAt(vsDesc[idx], 0);
             Uart.putc(0x0A);
             return VM.denylistTrapAddr;
+        }
+        if (!plausibleCode(buf))
+        {
+            reportBadTarget(clTab[ci].base + clTab[ci].nameOff, vsName[idx], vsDesc[idx], buf, 0);
+            return VM.denylistTrapAddr;                 // and do NOT memoize it
         }
         vsMemoIdx = idx;
         vsMemoType = type;
@@ -9211,15 +9298,59 @@ public final class Loader
             return 0L;                                  // half-lifecycle: do not branch into it
         }
         long buf = bufBySigU(clsU, nameU, descU);
+        int tier = 1;
         if (buf == 0L)
         {
             buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find
+            tier = 2;
         }
         if (buf == 0L)
         {
             buf = compileSigOnDemand(clsU, nameU, descU);   // never compiled AND not dispatchable: JIT it now
+            tier = 3;
+        }
+        if (buf != 0L && !plausibleCode(buf))
+        {
+            // THE LATE PATHS WERE THE ONE UNGUARDED DISPATCH. Every inline call site gets
+            // Baseline.dispatchTargetGuard, but a late-resolved target is TAIL-BRANCHED to by the trampoline
+            // with nothing checking it -- so a tier that answers with a non-code word (tier 1 reads a static
+            // cell's CONTENTS and a TIB slot; either can hold a stale or out-of-range value) branches straight
+            // into whatever that word is. Read as an address, two adjacent instruction words look exactly like
+            // one: that is how this surfaced, as a bare instruction abort at a pc no table claims, with the
+            // caller nowhere in the report. Trap it by name instead.
+            reportBadTarget(clsU, nameU, descU, buf, tier);
+            return 0L;                                  // -> the caller substitutes denylistTrap
         }
         return buf;
+    }
+
+    /**
+     * A callable target must be 4-aligned and below the code ceiling -- exactly the test the JIT's inline
+     * {@link compiler.Baseline#dispatchTargetGuard} applies, which the late-resolution paths never had.
+     *
+     * <p>The range is IMAGE **and** code arena, not the arena alone: a lazily compiled body routinely links to
+     * a BAKED java.base body, which lives in the image below {@code Heap.CODE_BASE}. Testing for the arena
+     * only rejected `java/lang/String.getBytes` on its first real use -- an instrument that broke the boot it
+     * was added to diagnose.
+     */
+    static boolean plausibleCode(long buf)
+    {
+        return buf > 0x1000L && (buf >> 24) <= (long) Symbols.CODE_TOP_BYTE_MAX && (buf & 3L) == 0L;
+    }
+
+    /** Name a late-resolved target that is not code, and which of the tiers produced it. */
+    private static void reportBadTarget(long clsU, long nameU, long descU, long buf, int tier)
+    {
+        Uart.write(Magic.bytes("\n  BAD LINK TARGET tier="));
+        VM.printDec(tier);
+        Uart.write(Magic.bytes(" buf="));
+        VM.printHex(buf);
+        Uart.write(Magic.bytes(" for "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        printNameAt(descU, 0);
+        Uart.putc(0x0A);
     }
 
     /**
@@ -9376,6 +9507,19 @@ public final class Loader
         VM.loaderLock();                                // SMP: the compile context is static -- one compiler at a time
         long done = lazyCompileLocked(idx);
         VM.loaderUnlock();
+        if (done != 0L && !plausibleCode(done))
+        {
+            // The third and last tail-branching path (with the link stub and the late-virtual resolve). Its
+            // trampoline branches to whatever comes back with nothing checking it, so a bogus buffer here is a
+            // wild branch at a pc no table claims -- and if it happens on a freshly spawned task there is not
+            // even a caller on the stack to name. Say what was being compiled instead.
+            Uart.write(Magic.bytes("\n  BAD LAZY TARGET buf="));
+            VM.printHex(done);
+            Uart.write(Magic.bytes(" for "));
+            printCompiling();
+            Uart.putc(0x0A);
+            return 0L;
+        }
         return done;
     }
 

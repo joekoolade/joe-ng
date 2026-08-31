@@ -1460,6 +1460,10 @@ public final class VM
         long exc = 0L;
         if (ec == 0x24L || ec == 0x25L || ec == 0x20L || ec == 0x21L)   // data / instruction abort = address trap
         {
+            if ((ec == 0x20L || ec == 0x21L) && !Loader.plausibleCode(elr))
+            {
+                reportWildBranch(sp);        // executing at a non-code address: say who branched there
+            }
             exc = newNpe();
         }
         else                                                           // any other unexpected trap (alignment,
@@ -1641,6 +1645,40 @@ public final class VM
      * nothing to throw -- would otherwise report only the leaf method and a raw address, which is how a wild
      * pointer inside a two-line helper like {@code Loader.u1} stays unexplained.
      */
+    /**
+     * An INSTRUCTION abort at an address that is not code: we branched somewhere impossible, and the ordinary
+     * report can name nothing -- the pc belongs to no method, so the frame walk cannot even start and the
+     * backtrace comes out empty. The caller is still on the stack though, so scan it conservatively (the same
+     * premise the collector's root scan already runs on) and name every word that lands inside a registered
+     * body. The `blr` that did this is one of them, and its method is the place to look.
+     */
+    static void reportWildBranch(long sp)
+    {
+        Uart.write(Magic.bytes("\nWILD BRANCH: pc is not code. Conservative scan of the faulting stack:\n"));
+        long p = sp;
+        int shown = 0;
+        int i = 0;
+        while (i < 128 && shown < 12)
+        {
+            long w = Magic.load64(p);
+            if (Loader.plausibleCode(w) || (w >= 0x80000L && w < Heap.CODE_BASE))
+            {
+                Uart.write(Magic.bytes("  [sp+"));
+                printDec(i * 8);
+                Uart.write(Magic.bytes("] "));
+                Loader.printFrameAt(w - 4L);        // a saved LR points PAST the call: name the call site
+                Uart.putc(0x0A);
+                shown += 1;
+            }
+            p += 8L;
+            i += 1;
+        }
+        if (shown == 0)
+        {
+            Uart.write(Magic.bytes("  (no code-looking words on the stack)\n"));
+        }
+    }
+
     static void reportFaultStack(long pc, long sp)
     {
         if (pc >= Heap.CODE_BASE && pc < Heap.CODE_LIMIT)

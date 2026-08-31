@@ -76,6 +76,51 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **An unresolved static in a LATE compile read FIRMWARE MEMORY, not null — the SleepSanity wild branch,
+  ROOT-CAUSED AND FIXED. PI-VALIDATED 2026-08-31, SMP ON.** The symptom was an instruction abort at
+  `0xAA1F03E1580000C0` -- not an address, **two A64 instruction words** -- at a pc no table claims, with an
+  empty backtrace and no caller anywhere in the report.
+  - **`globalStaticAddr` returns 0 for a static whose class is not loaded**, on the documented premise that
+    "the reloc will patch it". That holds for a BATCH compile and is FALSE for a LATE one (lazy body,
+    on-demand method, deferred `<clinit>`): batch `patchRelocs` is long past, so 0 is not "patch me later",
+    it is the final answer. Emitted as-is the `getstatic` reads **ADDRESS 0** -- the firmware's low-memory
+    shim -- whose instructions come back as a plausible-looking 64-bit value. Handed to a dispatch, that is a
+    wild branch.
+  - **`java/lang/CharacterDataLatin1.instance` is the case:** nothing statically reachable calls
+    `StringLatin1.toUpperCase`, so it compiles after its batch and the class is never pulled. **The suite's own
+    demos call `toUpperCase` and PASS** (`clinit-lazy java/lang/CharacterDataLatin1` + `HeLLo -> HELLO` in
+    StrOpsDemo/WordCount), because there it IS in the batch -- the same "works in one closure, broken in
+    another" signature as every other member of this family.
+  - **An unresolved late static now points at a permanently-zero cell:** the field reads NULL and the use
+    throws an ordinary NPE with a real stack, at the site that actually needs the class. Reported ONCE per
+    field (88 lines for two fields on the first boot).
+  - **THE LATE PATHS WERE THE UNGUARDED DISPATCHES.** Every inline call site gets `dispatchTargetGuard`; the
+    three trampolines that TAIL-BRANCH to a resolved target had nothing. All three are guarded now (link stub,
+    late-virtual, lazy compile) plus `virtualResolve`'s RECEIVER, and each names what failed.
+  - **THE GUARD BROKE THE BOOT IT WAS ADDED TO DIAGNOSE.** `plausibleCode` first tested for the code arena
+    alone, which rejects a **BAKED java.base body** -- those live in the IMAGE, below `Heap.CODE_BASE`. It
+    killed `String.getBytes` on first use. The predicate now matches `dispatchTargetGuard` exactly: 4-aligned
+    and below the code ceiling. **Every instrument lies at least once; check it against a passing boot.**
+  - **The scan that cracked it: "no code-looking words on the stack".** A wild branch at a non-code pc now
+    scans the faulting stack conservatively for callers. Getting NOTHING back is what proved the fault was on
+    a **freshly spawned task**, which redirected the whole investigation -- three earlier hypotheses (a stale
+    baked Runnable Type in the run-tramp, a bad itable slot, a literal-pool miss) each died to an instrument,
+    not to argument. The run-tramp chain printed VALID at every link: `dir[0]` matched, `itable=0x0422B5C0`,
+    `slot=0`, `entry=0x02043148` real code.
+  - **Two more silent instances surfaced the moment the report existed:**
+    `java/nio/charset/CodingErrorAction.REPLACE` (needed by String) and `java/text/Normalizer$Form.NFD`/`NFC`
+    (needed by Pattern). All three have been reading firmware memory on EVERY boot.
+  - **Pi (`core 166MHz`, full suite, SMP on):** exactly three `UNRESOLVED STATIC` lines and nothing else new;
+    `SMP: 4 of 4`, `jobs/core 6/6/6/6`, `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`,
+    `steps/core 61/59/60/60`, `finish HML`, `priority inversion ... 62ms`, ExcDemo's seven-frame trace,
+    `sum20/weighted20/tally17/wide` all exact, overload demo exact, `ifacelate`/`ifacedflt`, class literals,
+    WordCount, 28 batches all parity OK, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610
+    stable=1`, WPA2 -> HTTP 200 OK. No FAULT/TRAP/WILD BRANCH/BOOT RE-ENTERED/unclaimed pc.
+  - **STILL OPEN, and stated: `SleepSanity` does not PASS.** The class is still never pulled; the wild branch
+    is gone and the failure is now a named trap with a nine-frame stack. Closing the closure gap means pulling
+    the class **BEFORE** a late compile, never DURING one -- a load parses every blob and can collect, and the
+    in-progress code buffer is not reachable yet (the hazard already recorded for `buildLambdaTib`).
+
 - **`invokeinterface` RESOLVES LATE — the last RTA blind spot at the site is closed. PI-VALIDATED 2026-08-31,
   SMP ON.** RTA runs at batch time, so an interface named only by a body compiled LAZILY -- after its batch --
   is never pulled. The call site then holds a target interface Type of 0 AND the receiver's itable DIRECTORY
