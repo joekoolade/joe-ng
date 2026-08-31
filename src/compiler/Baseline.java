@@ -1715,18 +1715,34 @@ public final class Baseline
         cb.emit(A64Enc.ldrx(9, 17, ObjectModel.ITABLE_ENTRY_IFACE_OFFSET));            // x9 = entry.interfaceType
         // Directory-sentinel guard (metal JIT only; the image writer's trusted code is check-free like nullCheck):
         // if the scan reaches the 0-terminator without a match, the receiver's itable dir lacks the target
-        // interface -- bail with an NPE at this PC rather than dereferencing the sentinel's itable (blr 0) or
-        // walking PAST it into arbitrary heap and blr'ing a layout-dependent garbage word (the wild branch that
-        // reset/hung nondeterministically). A well-formed program never hits it.
+        // interface. It must not dereference the sentinel's itable (blr 0) or walk PAST it into arbitrary heap
+        // and blr a layout-dependent garbage word (the wild branch that reset/hung nondeterministically); it
+        // takes the late-resolve path below instead, which is what makes an interface call work in a body
+        // compiled after its batch.
         int miss = symbols.implicitChecks() ? cb.emit(A64Enc.cbz(9, 0)) : -1;
         cb.emit(A64Enc.cmpReg(9, 16));
         int beq = cb.emit(A64Enc.bcond(A64Enc.EQ, 0));                                    // found?
         cb.emit(A64Enc.addImm(17, 17, ObjectModel.ITABLE_ENTRY_SIZE));                 // next entry
         cb.emit(A64Enc.b(search - cb.wordCount()));                                    // loop
+        int back = -1;
         if (miss >= 0)
         {
+            // RESOLVE LATE rather than throw. Reaching the 0-terminator means the receiver's directory has no
+            // entry for this interface, and the ordinary reason is not a malformed program: RTA runs at batch
+            // time, so an interface named only by a body compiled LAZILY (after its batch) is never pulled,
+            // and the target interface Type baked into x16 is then 0 as well. `java/lang/String.split` is the
+            // case in hand -- it compiles on demand and does `list.subList(0,n).toArray(result)`, an
+            // invokeinterface on java/util/List, which appears nowhere in that image.
+            //
+            // This is the invokeinterface twin of the `newresolve`/`linkresolve` paths, and it needs no new
+            // machinery: an interface call's target is whichever class NEAREST THE RECEIVER declares that
+            // name+descriptor, which is precisely what VIRTUAL_RESOLVE answers. x17 held the directory cursor
+            // and x16 the interface Type; both are dead here, so they can carry the site index and the
+            // trampoline address into the shared `blr` below. x0 (the receiver) is untouched by the search.
             cb.set(miss, A64Enc.cbz(9, cb.wordCount() - miss));
-            throwImplicit(cb, pos, Symbols.NEW_NPE);
+            symbols.virtualSite(cb, cpIndex);                                          // x17 = site index
+            symbols.helperInto(cb, 16, Symbols.VIRTUAL_RESOLVE);                       // x16 = the trampoline
+            back = cb.emit(A64Enc.b(0));           // skip the itable load AND its guard: x16 is already a call
         }
         int found = cb.wordCount();
         cb.set(beq, A64Enc.bcond(A64Enc.EQ, found - beq));
@@ -1738,6 +1754,10 @@ public final class Baseline
         // branch). x17 is free here (the itable was already dereferenced into x16). Throw AIOOBE at this PC so it
         // is reported with the call's source line, not a reboot. Metal JIT only (trusted image code is check-free).
         dispatchTargetGuard(cb, pos, cpIndex);
+        if (back >= 0)
+        {
+            cb.set(back, A64Enc.b(cb.wordCount() - back));   // the late-resolve path rejoins here
+        }
         cb.emit(A64Enc.blr(16));
         reloadLive(cb);
         if (returnsValue(cpIndex))

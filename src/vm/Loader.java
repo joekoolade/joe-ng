@@ -7775,6 +7775,24 @@ public final class Loader
         }
         if (buf == 0L)
         {
+            // Nothing in the receiver's CLASS chain declares it, which for an interface call is the DEFAULT
+            // METHOD case: the body lives on an interface, and a class gets one without declaring anything.
+            // (Reached both from an itable directory miss and from a null vtable slot -- neither can see a
+            // default, which is exactly why defaultDispatch routes such a call through the itable at all.)
+            buf = resolveViaInterfaces(ci, vsName[idx], vsDesc[idx]);
+            if (buf != 0L)
+            {
+                // The line whose ABSENCE hid this whole class of bug: an interface reached only from a body
+                // compiled after its batch is never pulled, and every trace of the call vanished with it.
+                Uart.write(Magic.bytes("  ifaceresolve "));
+                printNameAt(clTab[ci].base, clTab[ci].nameOff);
+                Uart.putc(0x2E);
+                printNameAt(vsName[idx], 0);
+                Uart.putc(0x0A);
+            }
+        }
+        if (buf == 0L)
+        {
             // Name it. A bare denylistTrap from here reports TRAPWIRE index=-1 (no patch-time site was
             // recorded for a late-resolved call), which says nothing at all about what failed.
             Uart.write(Magic.bytes("  VIRTUALRESOLVE FAILED "));
@@ -7789,6 +7807,70 @@ public final class Loader
         vsMemoType = type;
         vsMemoBuf = buf;
         return buf;
+    }
+
+    /**
+     * Last tier of {@link #virtualResolve}: look for {@code nameU}/{@code descU} on the INTERFACES of the
+     * receiver's class chain -- an interface default, which no class declares and so no chain walk can find.
+     *
+     * <p>Two levels (a class's own interfaces, then each of those interfaces' own), which covers the shapes
+     * that occur in practice ({@code ArrayList -> List -> Collection}, {@code LinkedHashMap -> Map}) without
+     * recursion or a worklist. A default inherited three interfaces deep still fails, and says so by name.
+     *
+     * <p>The interface NAME ADDRESSES are collected BEFORE any resolving: {@link #resolveLinkTarget} parses
+     * whatever class it is handed, which clobbers {@code gcp}/{@code gbase}, so an offset read afterwards
+     * would be against the wrong blob. Absolute addresses survive that; offsets do not.
+     */
+    private static long resolveViaInterfaces(int ci, long nameU, long descU)
+    {
+        long[] names = new long[MAXIFACEFALLBACK];
+        int n = collectIfaceNames(ci, names, 0);
+        int direct = n;
+        int i = 0;
+        while (i < direct)                              // level 2: each interface's own super-interfaces
+        {
+            int r = regBySigU(names[i]);
+            if (r >= 0)
+            {
+                n = collectIfaceNames(r, names, n);
+            }
+            i += 1;
+        }
+        int k = 0;
+        while (k < n)
+        {
+            long buf = resolveLinkTarget(names[k], nameU, descU);
+            if (buf != 0L)
+            {
+                return buf;
+            }
+            k += 1;
+        }
+        return 0L;
+    }
+
+    /** Append class {@code ci}'s directly-declared interface name Utf8 ADDRESSES to {@code out}; new length. */
+    private static int collectIfaceNames(int ci, long[] out, int n)
+    {
+        if (clTab == null || ci < 0 || ci >= clCount || clTab[ci] == null)
+        {
+            return n;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        int count = u2(base + gAfterCp + 6);            // interfaces_count (ClassReader.afterInterfaces layout)
+        int k = 0;
+        while (k < count && n < MAXIFACEFALLBACK)
+        {
+            int cpi = u2(base + gAfterCp + 8 + k * 2);
+            if (cpi > 0)
+            {
+                out[n] = base + gcp[u2(base + gcp[cpi])];   // CONSTANT_Class -> name_index -> Utf8 offset
+                n += 1;
+            }
+            k += 1;
+        }
+        return n;
     }
 
     /**
@@ -9300,6 +9382,8 @@ public final class Loader
     // Superclass-chain hop cap for the late virtual resolve. A registry chain is acyclic by construction,
     // so this only bounds the damage if one ever is not -- a spin here would hang mid-dispatch.
     private static final int MAXCHAIN = 64;
+    /** Cap on the interface names virtualResolve's default-method tier will consider for one receiver. */
+    private static final int MAXIFACEFALLBACK = 64;
 
     // ---- unwindable stub frame layout ------------------------------------------------------------------
     // Shared by the three resolve trampolines (lazy-compile, link-resolve, late-virtual) and the lambda

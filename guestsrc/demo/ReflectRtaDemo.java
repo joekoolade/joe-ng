@@ -52,6 +52,43 @@ public class ReflectRtaDemo
         Method p = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceCall");
         p.setAccessible(true);
         System.out.println("ifaceprune = " + p.invoke(null));
+
+        Method q = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceLate");
+        q.setAccessible(true);
+        System.out.println("ifacelate  = " + q.invoke(null));
+
+        Method r = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceDefault");
+        r.setAccessible(true);
+        System.out.println("ifacedflt  = " + r.invoke(null));
+    }
+
+    /**
+     * An {@code invokeinterface} whose INTERFACE is absent from the batch entirely — the twin of the
+     * {@code newresolve}/{@code linkresolve} gaps. RTA runs at batch time and never walks this body, so
+     * neither {@link RtaLate} nor {@link RtaLater} is pulled; the {@code new} defers (that half already
+     * worked), and the call then scans an itable directory with no entry for the interface, against a
+     * call-site interface Type of 0. Before the late path it fell off the 0-terminator as a bare NPE.
+     *
+     * <p>This is NOT what {@code ifaceprune} pins: there the interface IS present and only the slot's entry
+     * was empty. The two guards even throw different exceptions — a directory miss is NPE, an implausible
+     * slot is AIOOBE.
+     */
+    static String viaReflectionIfaceLate()
+    {
+        RtaLate x = new RtaLater();
+        return x.late();
+    }
+
+    /**
+     * The same miss, but for an interface DEFAULT — no class in the receiver's chain declares it, so only the
+     * interface tier of the resolve can answer. A class-typed receiver reaches a default through the itable
+     * (a class has no vtable slot for one), so this misses the directory exactly as the arm above does and
+     * then needs the extra tier the arm above does not.
+     */
+    static String viaReflectionIfaceDefault()
+    {
+        RtaLater x = new RtaLater();
+        return x.viaDefault();
     }
 
     /** Statically reachable from main: RTA walks this and pulls {@code RtaSeen}. */
