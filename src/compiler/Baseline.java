@@ -74,6 +74,23 @@ public final class Baseline
     private int[] regHolds = new int[OP_MAX];
     private int[] savedHolds = new int[OP_MAX];   // regHolds snapshot around an off-path (skipped) throw block
     private int opStackBase;
+
+    // ----- outgoing arguments beyond the argument registers -----------------------------------------
+    // x0..x15 carry arguments, so a 17-parameter method had nowhere to put the 17th and the JIT simply
+    // refused it (FAIL_ARG_COUNT). Beyond MAX_ARG_REGS the LAST register changes meaning: x0..x14 carry
+    // arguments 0..14 and x15 carries a POINTER to the rest, which the caller has written into its own
+    // frame. Deliberately not the AAPCS scheme of pushing them below SP: VM.unwind reads a frame's saved
+    // LR at [sp+0] and pops by the recorded frameSize, so a caller that moved SP across the call would
+    // leave the walker off by the overflow whenever an exception unwound through it.
+    //
+    // The area sits at the END of the frame, after the operand spill, so every other offset is unchanged
+    // and a method that makes no such call compiles byte-for-byte as before -- which is what keeps the
+    // self-hosting fixpoint intact.
+    private static final int ARG_REGS_WITH_PTR = MAX_ARG_REGS - 1;   // x0..x14 by value, x15 = the pointer
+    private static final int ARG_PTR_REG = MAX_ARG_REGS - 1;         // x15
+    private static final int ARG_TMP_REG = 16;                       // x16: scratch, free before/after a call
+    private int outArgsBase;      // frame offset of outgoing argument ARG_REGS_WITH_PTR
+    private int outArgsSlots;     // how many outgoing arguments the deepest call site passes in memory
     private CodeBuffer curCb;     // the body's CodeBuffer, so push/pop can emit spill/reload
     private boolean saveLR;
     private boolean nonLeaf;
@@ -2131,9 +2148,12 @@ public final class Baseline
     private void emitCall(CodeBuffer cb, int paramCount, boolean returnsValue, boolean hasReceiver, int symKind, int symArg)
     {
         int nargs = paramCount + (hasReceiver ? 1 : 0);
-        if (nargs > MAX_ARG_REGS)
+        if (nargs > MAX_ARG_REGS && !deepStack)
         {
-            symbols.fail(Symbols.FAIL_ARG_COUNT, nargs, 0);      // no register to pass it in -- do not guess
+            // Unreachable in valid bytecode: pushing more than MAX_ARG_REGS arguments takes the operand stack
+            // past OP_MAX, which is exactly what sets deepStack. Guarded rather than assumed, because the
+            // register path has no memory to put an overflow argument in and would silently pass garbage.
+            symbols.fail(Symbols.FAIL_ARG_COUNT, nargs, 0);
         }
         if (deepStack)
         {
@@ -2176,10 +2196,26 @@ public final class Baseline
     private void marshalArgsFromMemory(CodeBuffer cb, int nargs)
     {
         syncOut(cb);                                            // every live slot now in opStackBase memory
+        int regArgs = nargs > MAX_ARG_REGS ? ARG_REGS_WITH_PTR : nargs;
         for (int k = 0; k < nargs; k++)
         {
             int slot = sp - 1 - k;                              // src[0] = top of stack -> highest arg reg
-            cb.emit(A64Enc.ldrx(nargs - 1 - k, 31, opStackBase + slot * 8));
+            int arg = nargs - 1 - k;
+            if (arg < regArgs)
+            {
+                cb.emit(A64Enc.ldrx(arg, 31, opStackBase + slot * 8));
+            }
+            else
+            {
+                // Past the registers: stage it in this frame's outgoing-argument area. x16 is scratch here --
+                // the dispatch sequences that use it run after every argument is in place.
+                cb.emit(A64Enc.ldrx(ARG_TMP_REG, 31, opStackBase + slot * 8));
+                cb.emit(A64Enc.strx(ARG_TMP_REG, 31, outArgsBase + (arg - regArgs) * 8));
+            }
+        }
+        if (nargs > MAX_ARG_REGS)
+        {
+            cb.emit(A64Enc.addImm(ARG_PTR_REG, 31, outArgsBase));   // x15 = &args[ARG_REGS_WITH_PTR], last
         }
         sp -= nargs;                                            // args consumed
     }
@@ -2846,6 +2882,34 @@ public final class Baseline
     }
 
     /**
+     * Pre-pass: how many outgoing arguments the deepest call site in {@code code} has to pass in MEMORY.
+     * Zero for almost every method, and zero means the frame layout below is unchanged.
+     *
+     * <p>Only real invokes are counted. A helper call ({@code Heap.alloc}, the dispatch trampolines) takes a
+     * handful of arguments by construction, and the entry method makes none of its own.
+     */
+    private int maxOutgoingOverflow(byte[] code)
+    {
+        int worst = 0;
+        int pos = 0;
+        while (pos < code.length)
+        {
+            int op = code[pos] & 0xFF;
+            if (op == 0xB6 || op == 0xB7 || op == 0xB8 || op == 0xB9)
+            {
+                int cp = ((code[pos + 1] & 0xFF) << 8) | (code[pos + 2] & 0xFF);
+                int nargs = paramCount(cp) + (op == 0xB8 ? 0 : 1);   // invokestatic has no receiver
+                if (nargs > MAX_ARG_REGS && nargs - ARG_REGS_WITH_PTR > worst)
+                {
+                    worst = nargs - ARG_REGS_WITH_PTR;
+                }
+            }
+            pos += opLen(op, code, pos);
+        }
+        return worst;
+    }
+
+    /**
      * Pre-pass: the actual operand-stack depth entering each bytecode, by forward data-flow (valid bytecode has
      * one depth per pc; the JVM verifier guarantees it). Sets {@link #deepStack}/frame sizing from the real
      * peak depth -- so a method whose DECLARED max_stack exceeds the register budget but never actually goes
@@ -3261,11 +3325,13 @@ public final class Baseline
             symbols.fail(Symbols.FAIL_STACK_OVERFLOW, maxActualDepth, 0);   // frameless entry can't spill; unexpected
         }
         this.opStackBase = spillBase;
+        this.outArgsSlots = maxOutgoingOverflow(code);
         // +OPSTACK_MARGIN: the exception-search path (throwStored) pushes a few synthetic temporaries (exc/pc/sp,
         // or obj/catchType) ABOVE the current depth, beyond what computeDepths (which sees only normal flow) counts.
         this.opStackSlots = deepStack ? maxActualDepth + OPSTACK_MARGIN : 0;
         int spillWords = deepStack ? opStackSlots : ((!isEntry && nonLeaf) ? OP_MAX : 0);
-        int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords;
+        this.outArgsBase = opStackBase + spillWords * 8;
+        int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords + outArgsSlots;
         this.frameSize = isEntry ? 0 : A64Enc.align16(savedWords * 8);
         sp = 0;
         for (int r = 0; r < OP_MAX; r++)
@@ -3370,6 +3436,11 @@ public final class Baseline
         }
         // instance methods receive `this` as x0 -> slot 0; each parameter is one
         // argument register (long/double included), stepping its local slots wide.
+        // Beyond MAX_ARG_REGS the caller passes x0..x14 by value and x15 as a pointer to the rest (see
+        // marshalArgsFromMemory). Read them here, in the prologue, before anything can touch x15 -- the moves
+        // below target x19.. (register locals) or the frame, so it survives the whole loop.
+        int total = ClassReader.descParamCount(classBytes, descOff) + (isStatic ? 0 : 1);
+        int regArgs = total > MAX_ARG_REGS ? ARG_REGS_WITH_PTR : MAX_ARG_REGS;
         int arg = 0;
         int slot = 0;
         if (!isStatic)
@@ -3381,12 +3452,14 @@ public final class Baseline
         int p = descOff + 2 + 1;                         // past u2 length and '('
         while (ClassReader.u1(classBytes, p) != ')')
         {
-            if (arg >= MAX_ARG_REGS)
+            int from = arg;
+            if (arg >= regArgs)
             {
-                symbols.fail(Symbols.FAIL_ARG_COUNT, arg + 1, 1);  // the callee half of the same limit
+                from = ARG_TMP_REG;                      // x16 = the incoming argument, loaded via x15
+                cb.emit(A64Enc.ldrx(ARG_TMP_REG, ARG_PTR_REG, (arg - regArgs) * 8));
             }
-            cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), arg)
-                                : A64Enc.strx(arg, 31, localMem(slot)));
+            cb.emit(inReg(slot) ? A64Enc.movReg(localReg(slot), from)
+                                : A64Enc.strx(from, 31, localMem(slot)));
             arg++;
             int q = p;
             while (ClassReader.u1(classBytes, q) == '[')  // array prefixes fold into the element

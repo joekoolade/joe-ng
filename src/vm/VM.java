@@ -3037,6 +3037,10 @@ public final class VM
         Uart.write(Magic.bytes("real Math floorDiv/floorMod/addExact (unmodified JDK):\n"));
         Loader.launch(Magic.bytes("demo/MathIntDemo"), Magic.bytes(""));
 
+        // More arguments than there are argument registers: x0..x14 by value, x15 a pointer to the rest.
+        Uart.write(Magic.bytes("more args than argument registers (static, instance, and a wide one):\n"));
+        Loader.launch(Magic.bytes("demo/ManyArgsDemo"), Magic.bytes(""));
+
         // Real java.util.Objects: equals/hashCode via the Object root's vtable, requireNonNull's NPE.
         Uart.write(Magic.bytes("real java.util.Objects (unmodified JDK):\n"));
         Loader.launch(Magic.bytes("demo/ObjectsDemo"), Magic.bytes(""));
