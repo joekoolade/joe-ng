@@ -1685,6 +1685,8 @@ public final class VM
         printHex(a & 0xFFFFFFFFL);
         Uart.write(Magic.bytes(" b="));
         printDec(b);
+        Uart.write(Magic.bytes(" in "));
+        Loader.printCompiling();
         Uart.putc(0x0A);
     }
 
