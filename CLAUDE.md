@@ -76,6 +76,24 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Character.toString` — FIXED, PI-VALIDATED 2026-08-31.** The overlay never declared it, so it inherited
+  `Object`'s and printed `java.lang.Character@71`. A missing overlay member does NOT trap -- it silently
+  inherits, and here the right answer was in the output all along: `0x71` is `hashCode()`, which for
+  `Character` is the char itself. Boolean/Byte/Short all carry theirs. **The overlay-drops-stock-members trap
+  for the FIFTH time** (StringBuilder/Appendable, Class.getPrimitiveClass, the wrappers' TYPE,
+  Throwable.initCause), and the class comment now says so.
+  - **`vtparity java/lang/Character` stays at 12** -- `toString` is one of Object's nine virtuals, so an
+    override FILLS an existing slot instead of widening. Contrast `Throwable.initCause`, which took parity
+    16 -> 18 because those were genuinely new methods. Unchanged parity here is correct, not a null result.
+  - QEMU: `LambdaAdaptProbe` reports `char -> q`, direct and through `Method.invoke`. Pi: full suite clean,
+    27 batches all parity OK, `Character OK 12` throughout -- the suite prints no Character, so the boot
+    confirms NO REGRESSION and the probe is what proves the fix.
+- **FOUR consecutive clean full-suite Pi boots with SMP ON** (stop-the-world fixes, coverage restore,
+  argument overflow, this): `SMP: 4 of 4`, `jobs/core 6/6/6/6`, `ticks/core c1=50 c2=50 c3=50`,
+  `sched: 89 preemptions`, `steps/core ~60` each, `finish HML`, `priority inversion HML 62ms`, ExcDemo's
+  seven-frame trace, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP
+  200 OK. That retires the "one clean boot" caveat on the SMP arc.
+
 - **More arguments than argument registers — FIXED, PI-VALIDATED 2026-08-31.** x0..x15 carry arguments, so a
   17-parameter method had nowhere to put the 17th and the JIT refused to compile it: `JIT unsupported:
   reason=11` (`FAIL_ARG_COUNT`), from BOTH halves of the same limit. That is what stopped one SMP suite boot.

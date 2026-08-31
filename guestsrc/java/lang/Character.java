@@ -66,6 +66,24 @@ public final class Character implements Comparable<Character>
         return value;
     }
 
+    /**
+     * The overlay wins by name, so a member it does not declare is simply GONE -- and a missing {@code
+     * toString} does not trap, it silently inherits {@code Object}'s and prints {@code java.lang.Character@71}
+     * where the character should be (0x71 being {@code hashCode()}, i.e. the char itself). Boolean, Byte and
+     * Short all carry theirs; this one was the omission. Same trap as StringBuilder/Appendable, Class
+     * .getPrimitiveClass, the wrappers' TYPE, and Throwable.initCause before it.
+     */
+    public String toString()
+    {
+        return String.valueOf(value);
+    }
+
+    /** Static form, for {@code Character.toString(c)} and the {@code String.valueOf} path that mirrors it. */
+    public static String toString(char c)
+    {
+        return String.valueOf(c);
+    }
+
     public static int digit(char ch, int radix)
     {
         int d = -1;
