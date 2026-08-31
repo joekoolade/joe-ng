@@ -76,6 +76,57 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`@ParameterizedTest` on the metal, and the TWO VM BUGS it found — PI-VALIDATED 2026-08-31, SMP ON.**
+  Wiring more stock jtreg `@run junit` tests through `MetalJUnit` needed `@ParameterizedTest`/`@MethodSource`,
+  and building it uncovered two defects with nothing to do with JUnit.
+  - **`@MethodSource` is supported in its DEFAULT-NAME form ONLY** — the factory is the static method with the
+    test's name. Not a shortcut: reading `@MethodSource("name")`'s element VALUE needs a live annotation
+    instance (a Proxy), which this VM has no runtime for, while `isAnnotationPresent` is answered from the
+    classfile. Stream, Iterable AND plain-array factories all work (a stock factory returns `Arguments[]` as
+    readily as `Stream<Arguments>`; the array is indexed directly, costing no stream closure).
+  - **OVERLOADS COLLAPSED UNDER `getDeclaredMethods()`.** It walked the classfile by NAME and resolved each
+    entry by NAME, so a class with two same-named methods handed back the SAME `Method` twice and the other
+    overload was unreachable — parameter count, annotations and body alike. A `@ParameterizedTest` is exactly
+    that shape (test + same-named factory): it reported the TEST's annotation for both while the factory could
+    not be found at all. Fixed end to end — `Class.declaredMethodDescAt0` gives the n-th method's DESCRIPTOR
+    beside its name, `Method.resolve(Class,String,String)` resolves on both, and **`compileMethodOnDemand`
+    takes a descriptor filter**. That last piece is not optional: without it the registry lookup was exact but
+    the on-demand compile behind it was still a coin toss between two bodies, and the symptom did not move.
+  - **A DEFERRED `new` DID NOT INITIALIZE ITS CLASS.** JVMS 5.5 makes instance creation an active use, so
+    `<clinit>` must run before the object exists and certainly before the `<init>` the JIT calls next.
+    `resolveUnresolvedNew` never called `ensureClinit`, so the initializer ran only when some LATER path forced
+    it (a link-resolved call into the same class) — by which time `<init>` had read its statics as 0.
+    `java/util/ArrayList.<init>` reads `DEFAULTCAPACITY_EMPTY_ELEMENTDATA`, so a deferred `new ArrayList<>()`
+    produced a list with a null `elementData` whose first `add()` threw NPE. **The boot log had been saying it
+    outright** — `newresolve` and `<init>` ahead of `clinit-lazy` for one class; it now reads
+    `newresolve -> clinit-lazy -> <init>`.
+  - **An uncaught exception with an EMPTY backtrace now names the fault that made it.** `captureTrace` cannot
+    walk from a pc it was never given, which in practice means a wild branch (`blr 0` aborts, `throwFromFault`
+    turns the address trap into an NPE, and `unwind` is handed ELR = 0). Reported bare that is an exception
+    name with NO location — the least diagnosable thing this VM can print — so `fault0Esr/Elr/Far` is printed.
+  - **Pi (`core 166MHz`, full suite, SMP on):** `demo/OverloadReflectDemo` prints `overloads named pick = 3`,
+    `by parameter count 0/1/2 = 1/1/1`, `invoked = none int:7 two:42`, all exact; `SMP: 4 of 4`,
+    `jobs/core 6/6/6/6`, `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `steps/core 61/59/60/60`, `finish HML`, `priority inversion HML 62ms`, 28 batches all parity OK, ExcDemo's
+    seven-frame trace, `newresolve demo/RtaMade` + `linkresolve demo/RtaMade.<init>`, every class literal
+    correct, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+  - **QEMU:** `SplitWithDelimitersTest` runs all 22 argument sets (was 2 x `NO FACTORY`), 15 pass;
+    `RegionMatches` 2/2 and `NextTokenWithNullDelimTest` 1/1 pass through `MetalJUnit`.
+  - **STILL OPEN — the `invokeinterface` twin of late resolution.** The 7 remaining `SplitWithDelimitersTest`
+    failures are a bare NPE from the **itable directory-miss sentinel** inside
+    `String.split`'s `list.subList(0,n).toArray(result)`. `java/util/List` appears NOWHERE in that boot log:
+    `String.split` is compiled LAZILY, after its batch, so nothing pulled the interface it dispatches on.
+    `newresolve`/`linkresolve` have no interface counterpart. **The suite's own ArrayList demo prints
+    `subList(1,3).size=2 sub[0]=q sub[1]=r`** — so `subList` is fine and the fault is purely the lazy-compile
+    CONTEXT. Also still open: `SleepSanity` wild-branches to `0xAA1F03E1580000C0` after
+    `linkresolve java/util/Locale.getLanguage` (so the three `Thread` `*Run` companions cannot be retired yet),
+    and `AccessFlagNullCheckTest` compiles but DENYLIST TRAPs on `AccessFlag.valueOf`.
+  - **Of 273 stock `@run junit` tests in `java/lang` + `java/util`, 61 compile against the guest overlay**
+    (excluding any needing `@library`/`@modules`/`jdk.test.lib`); most of the rest need tz/locale data or the
+    module machinery.
+  - **Method note: `grep` treats a UART log as BINARY** (stray control bytes) and silently prints nothing.
+    Several greps "proved" the demo never ran while its output was there all along — use `grep -a`.
+
 - **`Character.toString` — FIXED, PI-VALIDATED 2026-08-31.** The overlay never declared it, so it inherited
   `Object`'s and printed `java.lang.Character@71`. A missing overlay member does NOT trap -- it silently
   inherits, and here the right answer was in the output all along: `0x71` is `hashCode()`, which for

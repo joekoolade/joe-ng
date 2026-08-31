@@ -7105,6 +7105,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolveDesc0"))) { return VM.methodResolveDescAddr; } // (Class,byte[],byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodInfo0")))      { return VM.methodInfoAddr; }       // (I,byte[],long[])I
         }
         // Reflective Constructor.newInstance: resolve <init> by arity, read its descriptor (shared methodInfo0),
@@ -7196,6 +7197,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isPrimitive0")))      { return VM.isPrimClassAddr; }   // (Class)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("primitiveClass0")))   { return VM.primClassAddr; }     // (J)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodDescAt0"))) { return VM.declMethodDescAddr; } // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
@@ -7951,6 +7953,65 @@ public final class Loader
         return compileMethodOnDemand(type, nameArr);       // reflectively-only method: JIT it now, then resolve
     }
 
+    /**
+     * Resolve a method by name AND DESCRIPTOR -- the only key that identifies one when a class overloads. Falls
+     * back to the name-only answer when the descriptor matches nothing, so a caller that has no descriptor (or
+     * one this VM spells differently) is never made worse off than {@link #methodResolve}.
+     */
+    static int methodResolveDesc(long type, long nameArr, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return methodResolve(type, nameArr);
+        }
+        if (type == 0L || nameArr <= 0x1000L)
+        {
+            return -1;
+        }
+        ensureClinit(classRegByType(type));             // reflective invoke is an active use (JVMS 5.5)
+        int idx = methodResolveRegistryDesc(type, nameArr, descArr);
+        if (idx >= 0)
+        {
+            return idx;
+        }
+        idx = compileMethodOnDemand(type, nameArr, descArr);   // reflectively-only method: JIT exactly THIS one
+        if (idx >= 0)
+        {
+            return idx;
+        }
+        return methodResolve(type, nameArr);            // descriptor matched nothing: no worse than name-only
+    }
+
+    /** {@link #methodResolveRegistry} with the descriptor compared too. */
+    private static int methodResolveRegistryDesc(long type, long nameArr, long descArr)
+    {
+        int ci = 0;
+        while (ci < clCount && clTab[ci].type != type)
+        {
+            ci += 1;
+        }
+        if (ci >= clCount)
+        {
+            return -1;
+        }
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        int dlen = (int) Magic.load64(descArr + 16L);
+        long dbase = descArr + 24L;
+        int i = 0;
+        while (i < rgCount)
+        {
+            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[i].base, rgTab[i].classOff)
+                    && rawEqUtf8(nbase, nlen, rgTab[i].base, rgTab[i].nameOff)
+                    && rawEqUtf8(dbase, dlen, rgTab[i].base, rgTab[i].descOff))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
     /** Method-registry index of the method named {@code nameArr} declared by the class whose Type is {@code type}
      *  (class name + method name match), or -1 if it is not currently compiled/registered. */
     private static int methodResolveRegistry(long type, long nameArr)
@@ -7989,6 +8050,13 @@ public final class Loader
      */
     private static int compileMethodOnDemand(long type, long nameArr)
     {
+        return compileMethodOnDemand(type, nameArr, 0L);
+    }
+
+    /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
+     *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
+    private static int compileMethodOnDemand(long type, long nameArr, long descArr)
+    {
         int ci = 0;
         while (ci < clCount && clTab[ci].type != type)
         {
@@ -8018,6 +8086,8 @@ public final class Loader
         p += 2;
         int nlen = (int) Magic.load64(nameArr + 16L);
         long nbase = nameArr + 24L;
+        int dlen = descArr <= 0x1000L ? 0 : (int) Magic.load64(descArr + 16L);
+        long dbase = descArr + 24L;
         long code = 0L;
         int descOff = 0;
         int isStatic = 0;
@@ -8025,7 +8095,8 @@ public final class Loader
         while (m < mcount)
         {
             int attrs = u2(p + 6);
-            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p + 2)]))
+            if (rawEqUtf8(nbase, nlen, blob, gcp[u2(p + 2)])
+                    && (dlen == 0 || rawEqUtf8(dbase, dlen, blob, gcp[u2(p + 4)])))
             {
                 long c = findCode(blob, p + 8, attrs);     // sets gcodeLen + gMaxLocals for this method
                 if (c != 0L)
@@ -8048,6 +8119,10 @@ public final class Loader
         compileReuseTib = false;
         registerAll();                                     // register the just-compiled method(s) -> globalBuf
         patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
+        if (dlen != 0)
+        {
+            return methodResolveRegistryDesc(type, nameArr, descArr);
+        }
         return methodResolveRegistry(type, nameArr);
     }
 
@@ -10246,6 +10321,25 @@ public final class Loader
      */
     static long declaredMethodName(long mirror, int want)
     {
+        return declaredMethodPart(mirror, want, 0);
+    }
+
+    /**
+     * The {@code want}-th declared method's DESCRIPTOR, the companion of {@link #declaredMethodName}. Two methods
+     * of a class can share a name, so the name ALONE does not identify one: enumerating by name and resolving by
+     * name gives the same overload twice and never the other. (That is exactly what a stock {@code
+     * @ParameterizedTest} looks like -- the test and its same-named {@code @MethodSource} factory -- and it
+     * reported the test's own annotation for both while the factory was unreachable.) The caller pairs this with
+     * the name and resolves through {@link #methodResolveDesc}.
+     */
+    static long declaredMethodDesc(long mirror, int want)
+    {
+        return declaredMethodPart(mirror, want, 1);
+    }
+
+    /** Shared classfile walk: {@code part} 0 = the method's name Utf8, 1 = its descriptor Utf8. */
+    private static long declaredMethodPart(long mirror, int want, int part)
+    {
         if (mirror <= 0x1000L)
         {
             return 0L;
@@ -10272,7 +10366,7 @@ public final class Loader
             {
                 if (want >= 0 && seen == want)
                 {
-                    return utf8ToString(base, nameOff);
+                    return utf8ToString(base, part == 0 ? nameOff : gcp[u2(p + 4)]);
                 }
                 seen += 1;
             }
@@ -12112,6 +12206,14 @@ public final class Loader
         {
             reportUnresolvedNew(site, pc);              // does not return
         }
+        // JVMS 5.5: CREATING AN INSTANCE IS AN ACTIVE USE, so the class initializes BEFORE the object exists --
+        // and in particular before the <init> the JIT calls next. Without this the initializer runs only when
+        // some LATER path happens to force it (a link-resolved call into the class), by which time <init> has
+        // already read its statics as 0. That is not an abstract ordering point: java/util/ArrayList's <init>
+        // reads DEFAULTCAPACITY_EMPTY_ELEMENTDATA, so a deferred `new ArrayList<>()` produced a list whose
+        // elementData was null and whose first add() threw NPE -- with the boot log showing `newresolve` and
+        // `<init>` ahead of `clinit-lazy` for the same class.
+        ensureClinit(reg);
         long obj = Heap.alloc(16 + fields * 8);
         Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
         return obj;

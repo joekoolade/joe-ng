@@ -182,6 +182,28 @@ final class VMUnwind
                     Uart.putc(0x0A);
                     fi += 1;
                 }
+                if (fi == 0)
+                {
+                    // An EMPTY backtrace means captureTrace was handed a pc it could not walk from -- in practice a
+                    // wild branch (a null/garbage dispatch slot: `blr 0` aborts, throwFromFault turns an address trap
+                    // into an NPE, and unwind is then called with ELR = 0). Reported bare, that is a bare exception
+                    // name with NO location at all, which is the least diagnosable thing this VM can print. The
+                    // syndrome of the fault that made it is still in fault0*, so say it.
+                    Uart.write(Magic.bytes("  <no backtrace -- raised at a pc with no frame entry>\n"));
+                    if (fault0Elr != 0L || fault0Esr != 0L)
+                    {
+                        Uart.write(Magic.bytes("  last fault esr="));
+                        printHex(fault0Esr);
+                        Uart.write(Magic.bytes(" elr="));
+                        printHex(fault0Elr);
+                        Uart.write(Magic.bytes(" far="));
+                        printHex(fault0Far);
+                        Uart.putc(0x0A);
+                        Uart.write(Magic.bytes("  at "));
+                        Loader.printFrameAt(fault0Elr);
+                        Uart.putc(0x0A);
+                    }
+                }
                 while (true)
                 {
                     Magic.wfe();    // uncaught at the top
