@@ -4722,7 +4722,7 @@ public final class Loader
         {
             return 0L;                                  // boot force-compile probe: make the helper reachable
         }
-        if (recv < Heap.BASE || recv >= Heap.LARGE_LIMIT || (recv & 7L) != 0L)
+        if (recv < Heap.BASE || recv >= Heap.managedTop() || (recv & 7L) != 0L)
         {
             Uart.write(Magic.bytes("\n  RUNTRAMP: receiver is not an object: "));
             VM.printHex(recv);
@@ -7972,9 +7972,11 @@ public final class Loader
         {
             return VM.denylistTrapAddr;
         }
-        if (recv < Heap.BASE || recv >= Heap.LARGE_LIMIT || (recv & 7L) != 0L)
+        if (recv < Heap.BASE || recv >= Heap.managedTop() || (recv & 7L) != 0L)
         {
-            // NOT AN OBJECT AT ALL. Image code carries no implicit checks, so dereferencing this would data-
+            // NOT AN OBJECT AT ALL. The bound is managedTop(), NOT LARGE_LIMIT: that is only where the
+            // SECONDARIES' arenas begin, so LARGE_LIMIT rejects every object cores 1-3 allocate -- which is
+            // most of what a spawned thread touches, and it turned a WORKING call into a denylist trap. Image code carries no implicit checks, so dereferencing this would data-
             // abort INSIDE the fault handler's own unwind -- a NESTED FAULT report naming only this method,
             // with the caller nowhere in it. The site's name+descriptor is right here, so say which dispatch
             // was handed the garbage; that is the one fact the fault report cannot recover.
@@ -12414,7 +12416,54 @@ public final class Loader
     /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
     static long classLiteral(int classCp)
     {
-        return classMirror(typeOfClass(classCp));
+        long type = typeOfClass(classCp);
+        if (type == 0L)
+        {
+            // A CLASS LITERAL FOR A CLASS NOTHING PULLED. `emitAddr` bakes the mirror as an IMMEDIATE, so
+            // unlike a call there is no reloc for a later batch to patch -- 0 here means the literal is null
+            // for ever, and the first use is an NPE somewhere else entirely. `Foo.class` compiled before Foo
+            // is loaded is the ordinary way to get here: `assertThrows(IllegalThreadStateException.class, ...)`
+            // in a lazily compiled test body, where the class is not pulled until something THROWS one --
+            // long after the literal was baked. Note it and let lazyCompileLocked pull and recompile, the
+            // same route a static of an unpulled class takes.
+            int nameOff = gcp[u2(gbase + gcp[classCp])];
+            if (u1(gbase + nameOff + 2) != 0x5B                     // an array literal builds its own Type
+                    && lzCompiling && !lzRetried && notePullNeeded(gbase + nameOff))
+            {
+                return 0L;                                          // discarded compile: retried with it loaded
+            }
+            reportNullClassLiteral(gbase + nameOff);
+        }
+        return classMirror(type);
+    }
+
+    /** Name a class literal that stayed null -- silence here surfaces as an NPE in unrelated code. */
+    private static void reportNullClassLiteral(long clsU)
+    {
+        if (unresStaticSeen == null)
+        {
+            unresStaticSeen = new long[64];
+            unresStaticSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresStaticSeenN)
+        {
+            if (unresStaticSeen[k] == clsU)
+            {
+                return;                                             // once per class, as for a static
+            }
+            k += 1;
+        }
+        if (unresStaticSeenN < 64)
+        {
+            unresStaticSeen[unresStaticSeenN] = clsU;
+            unresStaticSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  NULL CLASS LITERAL: "));
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(".class -- class never pulled; needed by "));
+        printCompiling();
+        Uart.putc(0x0A);
     }
 
     /** The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0. */

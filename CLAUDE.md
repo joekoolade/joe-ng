@@ -76,6 +76,37 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **38 STOCK OpenJDK jtreg `@run junit` TESTS RUN ON THE PI: `ran 38, failures 0` / `ALL PASSED`
+  (2026-08-31).** Six unmodified test classes -- `SleepSanity`, `SleepWithDuration`, `JoinWithDuration`,
+  `RegionMatches`, `NextTokenWithNullDelimTest`, `SplitWithDelimitersTest` -- with the JUnit API and engine
+  classes demand-loaded at runtime out of a RAMFS copy of the real console-standalone jar (`classpath
+  /lib/junit.jar entries=2135`), none of it baked into the image. `SplitWithDelimitersTest` contributes all
+  22 `@ParameterizedTest` argument sets. **The timing tests are real:** `testSleep`, `testInterruptSleep`,
+  `testJoinOnTerminatingThread`, `testInterruptJoin` assert wall-clock behaviour against a 166 MHz core.
+  - **A CLASS LITERAL FOR AN UNPULLED CLASS BAKED NULL.** `typeOfClass` ends
+    `return r >= 0 ? clTab[r].type : 0L`, and `emitAddr` bakes the mirror as an IMMEDIATE -- so unlike a call
+    there is no reloc for a later batch to patch: 0 means the literal is null FOR EVER, and the first use is
+    an NPE somewhere else entirely. `assertThrows(IllegalThreadStateException.class, ...)` is the shape: the
+    class is not pulled until something THROWS one, long after the test body compiled. Fixed with the same
+    note-pull-recompile route a static of an unpulled class takes; `staticresolve
+    java/lang/IllegalThreadStateException` now precedes the test and it passes.
+  - **Diagnosed WITHOUT a boot, by finding the discriminator.** `javap -c -l` put `AssertThrows.java:57` at
+    bytecode 10 = `expectedType.isInstance(actualException)` -- an invokevirtual on the literal. The PASSING
+    `assertThrows` in `SleepWithDuration` expects `NullPointerException.class`, which IS in the boot closure.
+    Same code path, different closure: that settled it before spending a cycle.
+  - **MY OWN GUARD REJECTED VALID OBJECTS -- the second too-tight bound this session.**
+    `virtualResolve`'s receiver check used `Heap.BASE .. Heap.LARGE_LIMIT`, but `LARGE_LIMIT` is only where
+    the SECONDARIES' arenas BEGIN (`Heap.arenaBase`: core N >= 1 lives at `0x1000_0000 + (N-1)*0x0400_0000`).
+    It therefore rejected every object cores 1-3 allocate -- most of what a spawned thread touches -- and
+    turned a WORKING call into a denylist trap (`BAD RECEIVER recv=0x180072B0`, core 3's arena). New
+    `Heap.managedTop()` is the correct bound and says so, because `LARGE_LIMIT` is the obvious wrong reach.
+  - **Twice in one session a guard I added was too strict** (this, and `plausibleCode` rejecting BAKED image
+    bodies and killing `String.getBytes`). Both were caught only because the instrument broke something that
+    had been working. **Check a new guard against a PASSING run, not only against the failure it targets.**
+  - **Pi: `metal junit: ran 38, failures 0` / `ALL PASSED`**, with `SMP: 4 of 4`, `smp sched: 4 of 4`, three
+    deduped `UNRESOLVED STATIC` lines and nothing else new. QEMU: the three thread classes `ran 13, failures
+    0`. Host tests unchanged.
+
 - **`SleepSanity` PASSES — the run-trampoline's blind itable scan was the wild branch. PI-VALIDATED
   2026-08-31, SMP ON.** `metal junit: ran 2, failures 0` / `ALL PASSED` on QEMU, and every threaded demo in
   the suite green on hardware.

@@ -189,6 +189,17 @@ public final class Heap
         return core == 0 ? LARGE_BASE : arenaBase(core) + 0x0400_0000L;   // core 0's tail is the large region
     }
 
+    /**
+     * Above every managed arena. NOT {@link #LARGE_LIMIT}: that is only where the SECONDARIES' slots begin
+     * (see {@link #arenaBase}), so a bound of LARGE_LIMIT excludes every object cores 1-3 ever allocate --
+     * which is most objects touched by a spawned thread. Any check of the form "is this a heap reference"
+     * must use this.
+     */
+    public static long managedTop()
+    {
+        return arenaLimit(3);
+    }
+
     /** Seed every core's bump pointer + free list. Call once, early in boot, before any {@code new}. */
     public static void init()
     {
