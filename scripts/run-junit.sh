@@ -29,8 +29,14 @@ echo "== build image: $CLASSES =="
 java --add-opens java.base/java.lang=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/junit.img >/dev/null
 ls -l /tmp/junit.img
 
-echo "== boot QEMU (${SECS}s) =="
-OUT="$(mktemp)"
+# The serial log goes straight to /tmp/junit.log rather than to a mktemp file copied at the end, so it is
+# READABLE WHILE THE RUN IS STILL GOING -- a boot takes minutes, and the interesting line is often printed long
+# before the run ends. Announced before the boot for the same reason: told only at the end, the path is no use
+# while you are waiting. Truncated up front so a stale log from a previous run can never be mistaken for this
+# one (that cost real confusion: the old copy-at-the-end left the PREVIOUS run's output in place throughout).
+OUT=/tmp/junit.log
+: > "$OUT"
+echo "== boot QEMU (${SECS}s) -- live log: $OUT =="
 qemu-system-aarch64 -M raspi4b -kernel /tmp/junit.img -serial null -serial stdio -display none -no-reboot \
     >"$OUT" 2>&1 &
 PID=$!
@@ -45,6 +51,4 @@ wait "$PID" 2>/dev/null || true
 
 echo "== output (launch..end), waited ${i}s =="
 sed -n '/^launch /,$p' "$OUT" | grep -vE "^  load |^load |terminating on signal"
-cp "$OUT" /tmp/junit.log
-rm -f "$OUT"
-echo "== full log: /tmp/junit.log =="
+echo "== full log: $OUT =="
