@@ -107,7 +107,13 @@ defines the minimum the assembler must encode.
     stream, since closing the UART would silence the console for the rest of the boot.
   - **Remaining 78 is mostly out of reach by design:** 19 need annotation instances (Proxy) or generic
     signatures, and most of `Class`'s 21 need reflection arrays, resource enumeration or `java/security`.
-  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, host tests unchanged, `overlay-check: 78 known gap(s), 0 new`.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, no new `LINK FAILED`. **The console output IS the evidence for
+    the PrintStream field**: every line after the banner goes through `System.out`, a PrintStream allocated
+    with NO constructor run, so a boot that prints at all is a boot where that field read null and routed to
+    the UART. QEMU hands out zeroed DRAM and a Pi at cold power-on does not -- the zeroing here comes from
+    `Heap.alloc`, not from luck, and hardware is what settles that. QEMU also green; host tests unchanged;
+    `overlay-check: 78 known gap(s), 0 new`.
 
 - **Overlay backlog worked down 166 -> 97 (42%) -- 69 dropped-but-referenced members restored (2026-09-01).**
   Every one was a member `make overlaycheck` listed as REFERENCED by something we ship yet silently absent from
