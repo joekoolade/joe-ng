@@ -122,6 +122,20 @@ public class InetAddress
      * is null -- which happens on metal because {@code Net.localInetAddress} is stubbed to null, so
      * {@code Net.localAddress(fd)} (queried after connect) builds the local endpoint from the wildcard.
      */
+    /** 127.0.0.1. Constructed directly rather than resolved: there is no resolver entry for it, and a
+     *  loopback lookup that went to DNS would be both wrong and slow. */
+    public static InetAddress getLoopbackAddress()
+    {
+        try
+        {
+            return getByAddress(new byte[] { (byte) 127, 0, 0, 1 });
+        }
+        catch (UnknownHostException e)
+        {
+            return null;                                // getByAddress only rejects a bad LENGTH; 4 is fine
+        }
+    }
+
     static InetAddress anyLocalAddress()
     {
         Inet4Address a = new Inet4Address();

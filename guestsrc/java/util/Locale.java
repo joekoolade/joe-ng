@@ -41,6 +41,28 @@ public final class Locale
         this.language = language;
     }
 
+    /**
+     * {@code setDefault} is accepted and IGNORED, and {@code forLanguageTag} parses only the language subtag.
+     * joe-ng carries no locale data at all -- there is nothing for a different default to select, and the one
+     * place a Locale is actually read ({@code Pattern}'s CASE_INSENSITIVE folding) wants ENGLISH, which is
+     * already the default. Accepting the call is what matters: a name-winning overlay that omits it drops the
+     * member, and the call traps instead of being harmlessly inert.
+     */
+    public static void setDefault(Locale l)
+    {
+    }
+
+    /** BCP-47 tag -> Locale, language subtag only (everything before the first '-'). */
+    public static Locale forLanguageTag(String tag)
+    {
+        if (tag == null || tag.isEmpty())
+        {
+            return ROOT;
+        }
+        int dash = tag.indexOf('-');
+        return new Locale(dash < 0 ? tag : tag.substring(0, dash));
+    }
+
     public static Locale getDefault()
     {
         return DEFAULT;

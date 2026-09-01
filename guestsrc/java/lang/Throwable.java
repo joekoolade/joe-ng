@@ -168,6 +168,31 @@ public class Throwable
     }
 
     /** Print this throwable's class and captured stack frames to the UART (metal-friendly printStackTrace). */
+    /**
+     * {@code getLocalizedMessage} is {@code getMessage} -- stock's own default, and joe-ng has no locale data
+     * to do anything else with. Declared because a name-winning overlay silently drops what it does not
+     * declare: without it the call resolves NOWHERE and traps, even though the answer is trivial.
+     */
+    public String getLocalizedMessage()
+    {
+        return getMessage();
+    }
+
+    /**
+     * A no-op that returns {@code this}, as the stock signature requires.
+     *
+     * <p>joe-ng captures the backtrace at CONSTRUCTION (the {@code bt0..bt7} slots the VM fills), so there is
+     * no separate fill step to perform and re-capturing here would REPLACE a trace taken at the throw site
+     * with one taken wherever this happens to be called -- strictly worse information. Stock code overrides
+     * this to make an exception cheap by skipping the capture; subclasses that do so (
+     * {@code IllegalAccessException}, {@code InvocationTargetException}) were the ones the overlay check
+     * flagged, because their calls to {@code super.fillInStackTrace()} resolved nowhere.
+     */
+    public synchronized Throwable fillInStackTrace()
+    {
+        return this;
+    }
+
     public void printStackTrace()
     {
         printStackTrace0(this);

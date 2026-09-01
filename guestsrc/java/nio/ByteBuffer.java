@@ -54,6 +54,16 @@ public class ByteBuffer implements DirectBuffer
         return b;
     }
 
+    /**
+     * Identical to {@link #allocate}: joe-ng has no off-heap region, and a "direct" buffer's only guarantee a
+     * caller can observe here is that it works. {@code isDirect()} answers false accordingly rather than
+     * claiming otherwise -- a caller that branches on it gets the truth.
+     */
+    public static ByteBuffer allocateDirect(int capacity)
+    {
+        return allocate(capacity);
+    }
+
     public static ByteBuffer allocate(int capacity)
     {
         return new ByteBuffer(capacity);

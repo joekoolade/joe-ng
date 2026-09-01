@@ -31,17 +31,11 @@ java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;
 java/lang/ClassLoader#getResource(Ljava/lang/String;)Ljava/net/URL;
 java/lang/ClassLoader#getResources(Ljava/lang/String;)Ljava/util/Enumeration;
-java/lang/Exception#getLocalizedMessage()Ljava/lang/String;
 java/lang/Exception#printStackTrace(Ljava/io/PrintWriter;)V
-java/lang/IllegalAccessException#fillInStackTrace()Ljava/lang/Throwable;
 java/lang/IllegalArgumentException#<init>(Ljava/lang/String;Ljava/lang/Throwable;)V
 java/lang/RuntimeException#<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V
 java/lang/StringBuilder#append(D)Ljava/lang/StringBuilder;
 java/lang/Thread#getState()Ljava/lang/Thread$State;
-java/lang/ThreadGroup#<init>(Ljava/lang/String;)V
-java/lang/ThreadGroup#isDaemon()Z
-java/lang/ThreadGroup#setDaemon(Z)V
-java/lang/ThreadLocal#withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;
 java/lang/Throwable#printStackTrace(Ljava/io/PrintWriter;)V
 java/lang/reflect/AccessibleObject#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Constructor#getParameterAnnotations()[[Ljava/lang/annotation/Annotation;
@@ -54,7 +48,6 @@ java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
 java/lang/reflect/Field#getGenericType()Ljava/lang/reflect/Type;
 java/lang/reflect/Field#getType()Ljava/lang/Class;
 java/lang/reflect/Field#toGenericString()Ljava/lang/String;
-java/lang/reflect/InvocationTargetException#fillInStackTrace()Ljava/lang/Throwable;
 java/lang/reflect/Method#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;
@@ -65,8 +58,6 @@ java/lang/reflect/Method#getParameterTypes()[Ljava/lang/Class;
 java/lang/reflect/Method#getParameters()[Ljava/lang/reflect/Parameter;
 java/lang/reflect/Method#getReturnType()Ljava/lang/Class;
 java/lang/reflect/Method#toGenericString()Ljava/lang/String;
-java/net/InetAddress#getLoopbackAddress()Ljava/net/InetAddress;
-java/nio/ByteBuffer#allocateDirect(I)Ljava/nio/ByteBuffer;
 java/time/Duration#between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;
 java/time/Duration#of(JLjava/time/temporal/TemporalUnit;)Ljava/time/Duration;
 java/time/Duration#parse(Ljava/lang/CharSequence;)Ljava/time/Duration;
@@ -75,11 +66,7 @@ java/util/Collections#emptyNavigableSet()Ljava/util/NavigableSet;
 java/util/Collections#emptySortedMap()Ljava/util/SortedMap;
 java/util/Collections#emptySortedSet()Ljava/util/SortedSet;
 java/util/Collections#unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;
-java/util/Locale#forLanguageTag(Ljava/lang/String;)Ljava/util/Locale;
-java/util/Locale#setDefault(Ljava/util/Locale;)V
 java/util/concurrent/ConcurrentHashMap#newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;
 java/util/concurrent/Semaphore#availablePermits()I
 java/util/concurrent/Semaphore#tryAcquire()Z
-java/util/concurrent/atomic/AtomicBoolean#getPlain()Z
-java/util/concurrent/atomic/AtomicBoolean#setPlain(Z)V
 java/util/jar/JarFile#<init>(Ljava/io/File;)V

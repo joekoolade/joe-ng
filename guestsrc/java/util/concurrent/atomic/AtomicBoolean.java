@@ -50,6 +50,57 @@ public class AtomicBoolean
         return false;
     }
 
+    /**
+     * The VarHandle MEMORY-MODE accessors, as on {@code AtomicReferenceArray}: every mode maps to the plain
+     * access, which is correct rather than approximate -- plain/opaque/acquire/release/volatile differ only in
+     * the ORDERING they impose between accesses, and a single aligned word already has the atomicity. Declared
+     * because a name-winning overlay drops what it does not declare and the call then traps.
+     */
+    public final boolean getPlain()
+    {
+        return get();
+    }
+
+    public final void setPlain(boolean newValue)
+    {
+        set(newValue);
+    }
+
+    public final boolean getOpaque()
+    {
+        return get();
+    }
+
+    public final void setOpaque(boolean newValue)
+    {
+        set(newValue);
+    }
+
+    public final boolean getAcquire()
+    {
+        return get();
+    }
+
+    public final void setRelease(boolean newValue)
+    {
+        set(newValue);
+    }
+
+    public final boolean weakCompareAndSetPlain(boolean expect, boolean update)
+    {
+        return compareAndSet(expect, update);
+    }
+
+    public final boolean compareAndExchange(boolean expect, boolean update)
+    {
+        boolean witness = get();
+        if (witness == expect)
+        {
+            set(update);
+        }
+        return witness;
+    }
+
     public String toString()
     {
         return value ? "true" : "false";
