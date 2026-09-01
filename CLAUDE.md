@@ -97,8 +97,10 @@ defines the minimum the assembler must encode.
     and showed `close`/`finish` resolving NOWHERE before the throw -- an ABSENCE again -- which moved the
     suspicion off the link stubs and onto slot selection. The `logVtableSlot` tier markers ('Q' qualified,
     'F' fallback, now 'H' chain) then named the tier in one boot.
-  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED` -- no regression from removing a dispatch
-    fallback. Host tests unchanged (A64 94, compiler 37, zip 91 -- 0 failures).
+  - **Pi (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `classpath /lib/junit.jar entries=2135`, `gc: collections=7`, the three denylisted
+    `UNRESOLVED STATIC` lines and nothing else -- **no regression from removing a dispatch path used across
+    the whole VM.** QEMU the same. Host tests unchanged (A64 94, compiler 37, zip 91 -- 0 failures).
     `DataDescriptorIgnoreCrcAndSizeFields` now runs from line 55 to line 65 -- through the whole zip build and
     byte-patching -- and stops at the SEPARATE `ZipInputStream.readAllBytes` denylist trap.
 
