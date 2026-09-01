@@ -76,6 +76,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **The load-time chatter is OFF by default (2026-08-31).** A boot that resolves normally now says nothing
+  about it: the demo suite went 2400 -> 1116 lines, and a `MetalJUnit` run 3000+ -> 90. What is left on the
+  wire is the program's own output and anything that actually went wrong.
+  - **`Loader.LOAD_LOG` (default false)** gates `linkresolve`/`newresolve`/`staticresolve`/`ifaceresolve`/
+    `lambdaslot late`/`baked`/`bakeresolve`/`clinit-lazy`/`typeadopt`/`arrayadopt`/`staticadopt`/
+    `lifecycle OK`/`batch N:` and the `vtparity`/`itparity` **OK** lines. **`LIFETIME_TRACE` is false now**
+    too -- ~20 lines of allocator histograms PER BATCH.
+  - **FAILURES ARE NOT GATED, deliberately.** A parity DIFF still prints, and prints its own header (that is
+    what `vtParityHeader`/`ifParityHeader` are for -- the header used to be unconditional and the OK/DIFF
+    text merely followed it). Every trap, `UNRESOLVED STATIC`, `NULL CLASS LITERAL` and fault is unchanged.
+    The flag suppresses the "went fine" half only: these lines are what made several bugs findable, and a
+    log nobody can read is the state those bugs lived in.
+  - **Two new guards for silent-corruption paths**, both of the shape this VM keeps getting wrong (answer 0
+    and carry on): `UNREGISTERED SUPER (fields alias)` when a class DECLARING fields extends an unregistered
+    super -- own fields would be laid at slot 0, on top of the inherited ones -- and `UNRESOLVED FIELD
+    (aliases slot 0)` when `globalFieldOffset` matches nothing and returns 16.
+  - **The super guard immediately reported `vm/MyExc extends java/lang/RuntimeException`, and that one is
+    FINE** -- MyExc declares no fields, and its class comment records that the writer roots `java/*` supers
+    on purpose. The report is now conditional on the subclass declaring fields, which is what makes the
+    words "fields alias" true. **A new warning's first job is to be checked against a passing boot.**
+  - **Suite unchanged otherwise:** `finish HML`, priority inversion, `steps/core 60/59/59/62`, `sum20=210`,
+    lambda-thread 42, overload demo exact, `ifacelate`/`ifacedflt`, class literals, WordCount,
+    `churnMB=625 live=32 intact=32`, and only the three known `UNRESOLVED STATIC` lines. Host tests
+    unchanged.
+  - **MORE JUNIT TESTS: ATTEMPTED, NONE ADDED -- the 38 already wired are still the set.** Nine more classes
+    were tried and none can join yet:
+    - **The eight `java/util/zip` classes fail through `MetalJUnit` while PASSING through the hand-written
+      `ZipJUnitAll` in the same image.** Their counters read back HEAP ADDRESSES (`expected: <3> but was:
+      <67885768>` = 0x040BE0C8). Two hypotheses were tested and BOTH REFUTED by instruments rather than
+      argument: an unregistered superclass mis-laying the fields (the new guard did not fire) and
+      `globalFieldOffset` falling through to slot 0 (the new guard did not fire either). So the offset
+      resolves correctly and the VALUE is wrong -- the field holds a reference. The runner is the only
+      difference: `MetalJUnit` reaches the body through `Method.invoke`, so it compiles ON DEMAND, while
+      `ZipJUnitAll` calls it directly from a batch. That is the shape of every bug in the late-resolution
+      family, but it is NOT YET PINNED.
+    - **`IntegralPowTest` cannot load at all** (`CANNOT LOAD: NullPointerException`): its `<clinit>` needs
+      `java.math.BigInteger`.
+
 - **38 STOCK OpenJDK jtreg `@run junit` TESTS RUN ON THE PI: `ran 38, failures 0` / `ALL PASSED`
   (2026-08-31).** Six unmodified test classes -- `SleepSanity`, `SleepWithDuration`, `JoinWithDuration`,
   `RegionMatches`, `NextTokenWithNullDelimTest`, `SplitWithDelimitersTest` -- with the JUnit API and engine
