@@ -105,8 +105,13 @@ defines the minimum the assembler must encode.
   - **`Random.nextInt(int)` keeps the stock REJECTION LOOP**, which is not an optimisation: `next(31) % bound`
     is biased whenever bound does not divide 2^31, and this class's own comment promises a bit-for-bit JDK
     sequence.
-  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`, `overlay-check: 97 known gap(s), 0 new -- OK`,
-    host tests unchanged.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, no new `LINK FAILED`. **The timing tests are the ones that
+    matter for this change** -- `testSleep`, `testInterruptSleep`, `testJoinOnTerminatingThread`,
+    `testInterruptJoin` assert wall-clock behaviour with the REORDERED `TimeUnit` constants and the extended
+    `Thread` underneath them, and QEMU (100x slower, counter near real time) is exactly where such a test can
+    pass for the wrong reason. QEMU also green; `overlay-check: 97 known gap(s), 0 new -- OK`; host tests
+    unchanged.
 
 - **`make overlaycheck` -- the overlay-drops-stock-members trap is caught at BUILD TIME now (2026-09-01).**
   A `guestsrc/` overlay WINS the name, so every stock member it does not declare CEASES TO EXIST, with no build
