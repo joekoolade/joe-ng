@@ -76,7 +76,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **The load-time chatter is OFF by default (2026-08-31).** A boot that resolves normally now says nothing
+- **The load-time chatter is OFF by default, and 44 STOCK jtreg TESTS PASS ON THE PI (2026-08-31).**
+  `metal junit: ran 44, failures 0` / `ALL PASSED` on hardware (was 38) in a **~100-line boot log**. A boot that resolves normally now says nothing
   about it: the demo suite went 2400 -> 1116 lines, and a `MetalJUnit` run 3000+ -> 90. What is left on the
   wire is the program's own output and anything that actually went wrong.
   - **`Loader.LOAD_LOG` (default false)** gates `linkresolve`/`newresolve`/`staticresolve`/`ifaceresolve`/
@@ -100,19 +101,28 @@ defines the minimum the assembler must encode.
     lambda-thread 42, overload demo exact, `ifacelate`/`ifacedflt`, class literals, WordCount,
     `churnMB=625 live=32 intact=32`, and only the three known `UNRESOLVED STATIC` lines. Host tests
     unchanged.
-  - **MORE JUNIT TESTS: ATTEMPTED, NONE ADDED -- the 38 already wired are still the set.** Nine more classes
-    were tried and none can join yet:
-    - **The eight `java/util/zip` classes fail through `MetalJUnit` while PASSING through the hand-written
-      `ZipJUnitAll` in the same image.** Their counters read back HEAP ADDRESSES (`expected: <3> but was:
-      <67885768>` = 0x040BE0C8). Two hypotheses were tested and BOTH REFUTED by instruments rather than
-      argument: an unregistered superclass mis-laying the fields (the new guard did not fire) and
-      `globalFieldOffset` falling through to slot 0 (the new guard did not fire either). So the offset
-      resolves correctly and the VALUE is wrong -- the field holds a reference. The runner is the only
-      difference: `MetalJUnit` reaches the body through `Method.invoke`, so it compiles ON DEMAND, while
-      `ZipJUnitAll` calls it directly from a batch. That is the shape of every bug in the late-resolution
-      family, but it is NOT YET PINNED.
-    - **`IntegralPowTest` cannot load at all** (`CANNOT LOAD: NullPointerException`): its `<clinit>` needs
-      `java.math.BigInteger`.
+  - **A GATING LEAK I INTRODUCED, found by READING the quiet log.** The `itparity` OK print was inside
+    `if (LOAD_LOG)` and the `vtparity` one was not, so a quiet boot emitted a column of bare ` OK 9` lines
+    whose `vtparity <class>` header had been suppressed -- **worse than either state**, since the number
+    named nothing. Only visible once the surrounding noise was gone.
+  - **+6 TESTS: `DeflaterClose` and `InflaterClose` PASS (3+3) and are wired in.** They had been failing
+    through `MetalJUnit` with counters reading back HEAP ADDRESSES (`expected: <3> but was: <67885768>` =
+    0x040BE0C8) while passing through the hand-written `ZipJUnitAll`; that symptom is GONE. **The route to
+    them was the new field guard firing on something else** -- `Pattern$TreeInfo.minLength` (a nested class's
+    field resolving to slot 0) is the same shape as an int counter reading a reference, which sent me back to
+    a family I had parked after two refuted hypotheses.
+  - **The other six zip classes stay out, with NAMED causes instead of a mystery:**
+    `java/nio/ByteOrder.LITTLE_ENDIAN` reads null, so the ByteBuffer stays BIG-endian and the zip header
+    comes out byte-swapped (`IllegalArgumentException: invalid compression method` -- the instrument names
+    the cause on the line above the failure); and a `DENYLIST TRAP` at `ZipInputStream.readAllBytes`.
+    **`java/nio/ByteOrder` IS in `guestsrc`**, so the late-pull path simply did not fire at that site -- that
+    is the next thing to chase, not a missing class. **`IntegralPowTest` cannot load at all**
+    (`CANNOT LOAD: NullPointerException`): its `<clinit>` needs `java.math.BigInteger`.
+  - **QEMU could not finish eight zip classes in 900 s**, so the Pi is the only harness that can judge that
+    set -- one more reason not to wire them in before the two causes are fixed.
+  - **Pi:** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`, `smp sched: 4 of 4`,
+    `classpath /lib/junit.jar entries=2135`, the four known `UNRESOLVED STATIC` lines, the two new
+    `UNRESOLVED FIELD` lines, `gc: collections=7`, and nothing else.
 
 - **38 STOCK OpenJDK jtreg `@run junit` TESTS RUN ON THE PI: `ran 38, failures 0` / `ALL PASSED`
   (2026-08-31).** Six unmodified test classes -- `SleepSanity`, `SleepWithDuration`, `JoinWithDuration`,
