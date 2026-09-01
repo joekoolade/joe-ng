@@ -10348,9 +10348,12 @@ public final class Loader
             }
             s += 1;
         }
-        Uart.write(Magic.bytes(" OK "));
-        VM.printDec(count);
-        Uart.putc(0x0A);
+        if (LOAD_LOG)
+        {
+            Uart.write(Magic.bytes(" OK "));
+            VM.printDec(count);
+            Uart.putc(0x0A);
+        }
     }
 
     /** Print the vtparity header a DIFF needs when {@link #LOAD_LOG} left it out. */
