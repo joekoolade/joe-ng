@@ -41,6 +41,22 @@ final class VMNatives
      * {@code Float.intBitsToFloat}, {@code Double.doubleToRawLongBits}, {@code Double.longBitsToDouble}):
      * joe-ng already holds floats/doubles as raw bits in GP registers, so these are pass-throughs.
      */
+    /**
+     * {@code jdk.internal.misc.Unsafe.storeFence/loadFence/fullFence} — all three map to one full data
+     * barrier here. Splitting them into the weaker one-way barriers would be an optimisation, and joe-ng has
+     * no reason to want it: these appear on cold paths (a Hashtable publish, a lazy holder) where a `dsb`
+     * costs nothing measurable, and getting a one-way barrier wrong is invisible until an SMP boot corrupts
+     * something far away. Stronger than required is always correct.
+     *
+     * <p>Takes the receiver because Unsafe's fences are INSTANCE methods -- the provided-native convention
+     * passes it in x0, exactly as {@link #identity} receives its argument -- and ignores it: a fence has no
+     * state.
+     */
+    static void unsafeFence(long ignoredReceiver)
+    {
+        Magic.dsb();
+    }
+
     static long identity(long x)
     {
         return x;

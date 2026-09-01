@@ -44,10 +44,56 @@ public final class Collections
         return s;
     }
 
+    /**
+     * The {@code List}/{@code Collection}/{@code Map} siblings of {@link #unmodifiableSet}, with the same
+     * caveat and the same reason for existing: a name-winning overlay silently drops whatever it does not
+     * declare, so an undeclared one resolves nowhere and ends in a denylist trap rather than a missing-method
+     * error. JUnit's picocli builds its default colour scheme out of {@code unmodifiableList}, and the
+     * trap-wire dump showed {@code unmodifiableCollection} queued behind it.
+     *
+     * <p>Returning the backing collection is behaviourally exact wherever the result is only READ, which is
+     * every path joe-ng runs; immutability is simply not enforced yet. A caller that mutates the result would
+     * silently succeed instead of throwing UnsupportedOperationException -- the one way this differs from
+     * stock, and the reason these are documented rather than quietly aliased.
+     */
+    public static <T> List<T> unmodifiableList(List<T> l)
+    {
+        return l;
+    }
+
+    public static <T> Collection<T> unmodifiableCollection(Collection<T> c)
+    {
+        return c;
+    }
+
+    public static <K, V> Map<K, V> unmodifiableMap(Map<K, V> m)
+    {
+        return m;
+    }
+
     /** An empty set ({@code Collections.emptySet()}) — mutable, but used read-only in the paths we run. */
     public static Set emptySet()
     {
         return new HashSet();
+    }
+
+    /** Empty {@code List}/{@code Map}, the siblings of {@link #emptySet()} and equally read-only in practice. */
+    public static <T> List<T> emptyList()
+    {
+        return new ArrayList<T>();
+    }
+
+    public static <K, V> Map<K, V> emptyMap()
+    {
+        return new HashMap<K, V>();
+    }
+
+    /** A single-element immutable-by-convention list, as {@code Collections.singletonList}. */
+    public static <T> List<T> singletonList(T o)
+    {
+        ArrayList<T> l = new ArrayList<T>();
+        l.add(o);
+        return l;
     }
 
     /** As {@link #sort(List)}, but ordered by a caller-supplied {@link Comparator} (typically a lambda). */

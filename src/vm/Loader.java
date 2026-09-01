@@ -91,7 +91,7 @@ public final class Loader
     // Global method registry across all loaded classes, so a call in one class can
     // link to a method compiled in another. Each entry captures where its class /
     // name / descriptor Utf8 bytes live (all in that class's blob) plus its buffer.
-    private static final int MAXREG = 6144;
+    private static final int MAXREG = 24576;
     private static RVMMethod[] rgTab;   // global method registry (reified: one RVMMethod per compiled method)
     private static int rgCount;
 
@@ -102,7 +102,7 @@ public final class Loader
 
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
-    private static final int MAXCLASS = 1024;
+    private static final int MAXCLASS = 4096;
     // The class registry, reified: one RVMClass per loaded class (base/nameOff/tib/type/statics/fieldCount/
     // vtCount/vtStart/superReg/modifiers/isIface). The direct-interface list (clIfaceReg/clIfaceRegN) and the
     // <clinit> dependency arrays (clDep*) stay separate.
@@ -162,7 +162,7 @@ public final class Loader
     // Vtable-slot registry: per virtual method of each class, its class/name/desc
     // (base+offset) and vtable slot, so a cross-class invokevirtual can find the
     // slot in the receiver class's vtable (dispatch itself uses the object's TIB).
-    private static final int MAXVT = 16384;
+    private static final int MAXVT = 65536;
     private static long[] vtClassBase;   // class the vtable belongs to (base + off)
     private static int[] vtClassOff;
     private static long[] vtNameBase;    // method signature blob (may be a superclass's)
@@ -190,7 +190,7 @@ public final class Loader
     // class it names — its superclass and interfaces (needed for field layout,
     // vtable flattening and itable indices) but also anything it instantiates,
     // calls or type-tests (needed by the class/method/field registries).
-    private static final int MAXBLOB = 1024;
+    private static final int MAXBLOB = 4096;
     private static long[] pdBase;        // blob address
     private static int[] pdLen;          // blob length
     private static int[] pdNameOff;      // its own this_class name Utf8 offset
@@ -1387,6 +1387,7 @@ public final class Loader
         pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
+        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
@@ -1952,7 +1953,7 @@ public final class Loader
     private static final long CODE_ZERO_SPAN = 0x0080_0000L;   // pre-zero 8 MiB above the code mark (cold DRAM)
     /** Span pre-zeroed above the mark so cold-boot DRAM garbage can't wild-branch a tall batch (see resetLoader).
      *  Comfortably exceeds the ~18 MiB per-batch bl-range budget; clamped below core 1's arena (0x1000_0000). */
-    private static final long DEMAND_ZERO_SPAN = 0x0180_0000L;   // 24 MiB
+    private static final long DEMAND_ZERO_SPAN = 0x0600_0000L;   // 96 MiB (scaled with MAXBLOB 1024 -> 4096)
 
     /**
      * Start reclaiming the demand-load heap between batches. Called once, AFTER the philosophers demo — whose
@@ -6462,6 +6463,46 @@ public final class Loader
         Magic.store64(cacheSlot, arr);
     }
 
+
+    /**
+     * Install a real {@code java.util.Properties} in {@code System.props}, the same way
+     * {@link #seedSystemStreams()} installs the streams: stock {@code System.initPhase1} is native-heavy and
+     * never runs on metal, so the field stays null and the FIRST {@code System.setProperty} NPEs inside
+     * java.base -- which is where JUnit's {@code ConsoleLauncher} dies before printing anything.
+     *
+     * <p>Unlike the PrintStream overlay this one CANNOT be a bare allocation: {@code Properties} extends
+     * {@code Hashtable}, whose table array is built by its constructor, so an object with only a TIB would NPE
+     * on the first {@code put} instead. The {@code <init>} is resolved and run on the fresh instance.
+     *
+     * <p>No-op if the class is absent or the slot is already filled -- a boot whose closure lacks Properties
+     * has no {@code setProperty} caller either.
+     */
+    static void seedSystemProps()
+    {
+        long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props"));
+        if (slot == 0L || Magic.load64(slot) != 0L)
+        {
+            return;
+        }
+        int pi = classIndexByName(Magic.bytes("java/util/Properties"));
+        if (pi < 0)
+        {
+            return;
+        }
+        long obj = allocInstance(clTab[pi].type);
+        if (obj == 0L)
+        {
+            return;
+        }
+        int ctor = constructorResolve(clTab[pi].type, 0);
+        if (ctor < 0 || rgTab[ctor].buf == 0L)
+        {
+            return;                                     // no runnable <init>: leaving props null is honest
+        }
+        Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
+        Magic.store64(slot, obj);
+    }
+
     /**
      * Install {@code System.out} / {@code System.err} with a metal {@link java.io.PrintStream} overlay (call
      * after {@code loadAll} for a batch whose closure includes {@code java/lang/System} + {@code java/io/PrintStream}).
@@ -7078,6 +7119,12 @@ public final class Loader
     // (the return address) and report WHICH pruned callee actually fired at runtime (vs the dead-branch refs).
     private static final int MAXTRAPWIRE = 512;
     private static long[] trapWireSite = new long[MAXTRAPWIRE];   // the bl call-site address
+    // The callee's class+name Utf8 ADDRESSES (blob base + offset), so a fired trap can NAME what it denied.
+    // Storing only the site meant the report said `index=126` and nothing else -- a number that identifies the
+    // callee only if you happen to have the verbose patch-time dump from the SAME boot, which costs seconds of
+    // UART and in practice starves the run it was meant to diagnose. The name is two words per site.
+    private static long[] trapWireCls = new long[MAXTRAPWIRE];
+    private static long[] trapWireMth = new long[MAXTRAPWIRE];
     private static int trapWireCount;
 
     /** Record an unresolved cross-class call at {@code blAddr} (the ref names class/name/desc in the current cp). */
@@ -7130,6 +7177,19 @@ public final class Loader
 
     /** #43 diagnostic: which trap-wired call site (by index, as printed at patch time) does return address {@code lr}
      *  belong to? Returns the TRAPWIRE index, or -1. The bl site is {@code lr - 4}. */
+    /** Print the callee a fired trap denied, as {@code class.method}. No-op for an unknown index. */
+    static void printTrapCallee(int k)
+    {
+        if (k < 0 || k >= trapWireCount || trapWireCls[k] == 0L)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes(" "));
+        printNameAt(trapWireCls[k], 0);
+        Uart.putc(0x2E);
+        printNameAt(trapWireMth[k], 0);
+    }
+
     static int trapIndexFor(long lr)
     {
         long site = lr - 4L;
@@ -7188,7 +7248,9 @@ public final class Loader
                         Uart.putc(0x0A);
                     }
                     trapWireSite[trapWireCount] = rcAddr[i];   // ALWAYS recorded: denylistTrap looks up the fired
-                    trapWireCount += 1;                        // site by x30, so the table must exist even when quiet
+                    trapWireCls[trapWireCount] = rcBase[i] + rcClass[i];   // site by x30, so the table must exist
+                    trapWireMth[trapWireCount] = rcBase[i] + rcName[i];    //   even when quiet -- and now it
+                    trapWireCount += 1;                                    //   carries the NAME as well
                 }
                 if (!isDenylisted(rcBase[i], rcClass[i]))
                 {
@@ -7392,6 +7454,14 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/Unsafe")))
+        {
+            // One full barrier for all three: see VMNatives.unsafeFence. Reached from Hashtable/Properties
+            // and the JUnit launcher's lazy holders.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
@@ -9219,7 +9289,7 @@ public final class Loader
     // any non-static) gets a deferral stub as both its registered buffer and its TIB slot (emitDeferredStub).
     // Either way the first call routes through the shared trampoline into lazyCompile, which compiles the one
     // method and data-patches the cell/slot, so later calls dispatch straight to the body.
-    private static final int MAXLAZY = 8192;
+    private static final int MAXLAZY = 32768;
     private static LazyMethod[] lzTab;     // deferred/lazy methods (reified: one LazyMethod per entry)
     private static int    lzN;
     private static long   lazyTrampAddr;   // the shared arg-preserving trampoline
