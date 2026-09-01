@@ -102,7 +102,15 @@ defines the minimum the assembler must encode.
   - **Remaining 65 is the VM-feature tail**: annotation instances (Proxy), generic signatures, reflection
     arrays, resource enumeration, `java/security`, TreeMap/TreeSet. The mechanical phase of this backlog is
     over.
-  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, host tests unchanged, `overlay-check: 65 known gap(s), 0 new`.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, no new `LINK FAILED`, and **no `vtparity DIFF`** -- the last is
+    the meaningful absence, since adding `fillInStackTrace` WIDENS `java/lang/Throwable`'s vtable (the same
+    shape that took parity 16 -> 18 when `initCause`/`getCause` arrived) and a mismatch prints UNGATED. Every
+    one of the 44 tests runs through the exception machinery, so this is a real check rather than a quiet path.
+    QEMU also green; host tests unchanged; `overlay-check: 65 known gap(s), 0 new`.
+  - **Scope, stated:** the suite never constructs a named `ThreadGroup`, calls `Locale.setDefault` or asks for a
+    loopback address -- those belong to the console-launcher path and were seen on QEMU. The Pi run confirms NO
+    REGRESSION from widening Throwable, which is a different claim.
 
 - **Overlay backlog 166 -> 78 (53%) -- second pass adds the reflection predicates, `Array` and `PrintStream`
   (2026-09-01).** 19 more members restored on top of the 69 below.
