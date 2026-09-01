@@ -103,8 +103,13 @@ defines the minimum the assembler must encode.
   - **NEXT WALL IS A REAL FEATURE, not an overlay gap:** `Class.getAnnotation(Class)` must return an annotation
     INSTANCE, which needs a Proxy runtime joe-ng does not have -- the same reason `@MethodSource("name")`'s
     element value is unreadable. `ServiceLoader` discovery is still behind that.
-  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`, 84 lines, zero `LINK FAILED`. Host tests
-    unchanged.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, and **zero `LINK FAILED`** -- the check that matters for the
+    corrected report, since MORE classes reach the late-virtual chain walk on hardware than on QEMU, so a
+    still-too-eager report would show here first. QEMU the same, 84 lines. Host tests unchanged.
+  - **The CHM fix itself is NOT exercised by that boot** -- the suite never constructs
+    `ConcurrentHashMap(int,float,int)`; that path is the console launcher's and was proven on QEMU. The Pi run
+    confirms NO REGRESSION, which is a different claim and worth keeping straight.
 
 - **TOWARD THE REAL JUnit `ConsoleLauncher` ON METAL: ten blockers cleared, NOT YET RUNNING (2026-09-01).**
   Goal: replace the hand-written `MetalJUnit` with stock `org.junit.platform.console.ConsoleLauncher`,
