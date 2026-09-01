@@ -104,7 +104,13 @@ defines the minimum the assembler must encode.
   - **`test/jdk/junit/AnnoProxyProbe` asserts VALUES, not non-nullness.** A proxy returning the wrong slot
     would still be non-null, which is exactly what a broken slot-index==value-index identity would produce.
     QEMU: `value = hello`, `count = 7`, `names.length = 3`, `names = abc`, `absent = 1` -- all exact, first run.
-  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`, host tests unchanged, backlog 65 -> 64.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, no `ANNOTATION IFACE NOT LOADED`, no new `LINK FAILED`. **The GC-root sharing is what
+    that boot actually tests**: annotation TIBs live in `lambdaTibRoots`, and getting that wrong sweeps a TIB
+    under memory pressure and wild-branches rather than failing an assertion -- so 8 collections with lambdas
+    in use throughout is the evidence. **The annotation runtime itself is NOT exercised by the suite** (
+    `MetalJUnit` uses the presence-only `isAnnotationPresent`); `AnnoProxyProbe` on QEMU is what proves the
+    feature. QEMU also green; host tests unchanged; backlog 65 -> 64.
 
 - **Overlay backlog 166 -> 65 (61%) -- third pass: Throwable, ThreadGroup, AtomicBoolean, ThreadLocal, Locale,
   ByteBuffer, InetAddress (2026-09-01).** 13 more restored.
