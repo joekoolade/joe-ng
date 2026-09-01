@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **The late pull works on the ON-DEMAND compile paths too -- PI-VALIDATED 2026-09-01, SMP ON.**
+  `java/nio/ByteOrder.LITTLE_ENDIAN` read null even though the class is in the image, so the `ByteBuffer`
+  stayed BIG-endian and the zip header came out byte-swapped.
+  - **ROOT CAUSE: `lzCompiling` is set only around `lazyCompileLocked`'s `compile()`.** The other late paths
+    -- **`compileMethodOnDemand` (what `Method.invoke` uses)** and `compileSigOnDemand` -- set
+    `compileReuseTib` but not `lzCompiling`, so a `getstatic` there noted nothing, never pulled, and fell
+    straight to the zero cell. **Every reflectively reached body was affected**; the zip tests are only where
+    it showed.
+  - **The retry needs no new machinery:** everything each method uses is re-derived from its own arguments,
+    so the retry is that method called again with the class present. `compileMethodOnDemand` also had **no
+    `rcMark`/`rsMark` rewind at all**, so the abandoned body's reloc sites would have been patched into memory
+    the sweep may already have reused. `odRetried` bounds it to one attempt.
+  - **THE REPORT WAS ASSERTING A CAUSE IT NEVER CHECKED.** The line ended `"class never pulled"`
+    unconditionally. It now states what it observes -- **denylisted / absent from the classDir / registered
+    but no static cell / in the classDir but resolved outside the retry window** -- and the last arm named
+    this bug in ONE boot after two rounds of reading had not.
+  - **That reclassified the three long-standing `UNRESOLVED STATIC` lines**
+    (`CodingErrorAction.REPLACE`, `Normalizer$Form.NFD`/`NFC`): all three say **DENYLISTED (reading null is
+    intended)**. They were never defects, and had been read as such for weeks.
+  - **MY FIRST CUT OF THE INSTRUMENT LIED.** It asked `classIndexByName`, which searches the LOADED registry
+    (`clTab`), not the image directory, and so reported "absent from the classDir" for a class the image
+    plainly carries. It asks `VM.dirBytes` now. **An instrument that conflates two tables is worse than none:
+    it fabricates a cause.** I also mis-read a `grep` of `kernel8.img` as proof the class was in the
+    directory -- it was counting CONSTANT-POOL REFERENCES. Third time this month a new instrument was wrong.
+  - **The `UNRESOLVED FIELD (aliases slot 0)` lines for `Pattern$TreeInfo.minLength` are GONE too, and I had
+    predicted they would remain.** Same root cause: with the on-demand pull working, `Pattern$TreeInfo` is
+    pulled and the field resolves instead of aliasing slot 0. A silent-corruption path closed as a side
+    effect of the static fix -- the guard added one commit earlier is what made it visible enough to notice.
+  - **Pi (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `classpath /lib/junit.jar entries=2135`, `gc: collections=7`; the
+    `TimeUnit.NANOSECONDS` and `StandardCharsets.UTF_8` lines GONE, the three denylisted ones correctly
+    labelled, and nothing else on the wire. Host tests unchanged.
+  - **STILL FAILING, and separately:** `DataDescriptorIgnoreCrcAndSizeFields` now gets PAST the byte order
+    and dies in `ZipOutputStream.setMethod` with `invalid compression method` -- a different defect the
+    unresolved static had been masking.
+
 - **The load-time chatter is OFF by default, and 44 STOCK jtreg TESTS PASS ON THE PI (2026-08-31).**
   `metal junit: ran 44, failures 0` / `ALL PASSED` on hardware (was 38) in a **~100-line boot log**. A boot that resolves normally now says nothing
   about it: the demo suite went 2400 -> 1116 lines, and a `MetalJUnit` run 3000+ -> 90. What is left on the
