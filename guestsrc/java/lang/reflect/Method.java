@@ -128,6 +128,40 @@ public final class Method extends AccessibleObject
         return clazz;
     }
 
+    /**
+     * The access-flag predicates. Each is one bit of the method's own {@code access_flags}, which this Method
+     * already carries, so leaving them undeclared bought nothing and cost a DENYLIST TRAP on the day one was
+     * reached -- JUnit filters candidate test methods with exactly these ({@code isSynthetic} and
+     * {@code isBridge} exclude the compiler-generated ones).
+     *
+     * <p>ACC_BRIDGE and ACC_VARARGS share their bit values with ACC_VOLATILE/ACC_TRANSIENT, which is why they
+     * are only meaningful on a METHOD -- reading them off a field would be nonsense.
+     */
+    public boolean isBridge()
+    {
+        return (access & 0x0040) != 0;                  // ACC_BRIDGE
+    }
+
+    public boolean isVarArgs()
+    {
+        return (access & 0x0080) != 0;                  // ACC_VARARGS
+    }
+
+    public boolean isSynthetic()
+    {
+        return (access & 0x1000) != 0;                  // ACC_SYNTHETIC
+    }
+
+    /**
+     * A DEFAULT method: declared in an interface, neither abstract nor static. The interface test comes from
+     * the declaring class, since the flag itself is an absence rather than a bit.
+     */
+    public boolean isDefault()
+    {
+        return clazz != null && clazz.isInterface()
+                && (access & 0x0408) == 0;              // not ACC_ABSTRACT (0x0400), not ACC_STATIC (0x0008)
+    }
+
     public int getParameterCount()
     {
         return paramCount;

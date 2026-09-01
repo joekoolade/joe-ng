@@ -76,6 +76,39 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Overlay backlog 166 -> 78 (53%) -- second pass adds the reflection predicates, `Array` and `PrintStream`
+  (2026-09-01).** 19 more members restored on top of the 69 below.
+  - **Access-flag predicates, which the member's own flags already answer:** `Method.isBridge`/`isVarArgs`/
+    `isSynthetic`/`isDefault`, `Field.isSynthetic`/`isEnumConstant`, `Constructor.isSynthetic`/`isVarArgs`.
+    **`isDefault` is not a bit** -- it is "declared in an interface, neither abstract nor static" -- and
+    ACC_BRIDGE/ACC_VARARGS share bit values with ACC_VOLATILE/ACC_TRANSIENT, so they are only meaningful on a
+    method.
+  - **`Field` narrow primitives** (`getByte`/`setByte`/`getShort`/`setShort`/`getChar`/`setChar`): a
+    byte/short/char occupies a full 8-byte slot, so the value is read as a word and the CAST applies the sign
+    extension for byte/short and the zero extension for char -- the stock contract. **`getFloat`/`getDouble`
+    stay out on purpose:** those arrive in FP registers that joe-ng's reflective marshalling does not carry, so
+    a plausible-looking accessor would return a WRONG NUMBER rather than fail.
+  - **`Array.getLength`/`get`/`set`/`getLong`/`getInt` + the varargs `newInstance`,** read straight out of the
+    object layout (length at +16, elements at +24) -- the same layout `arraylength`/`aaload` are lowered
+    against, so they agree with ordinary bytecode by construction. **Bounds are checked here**: a reflective
+    accessor that trusted its index would read or WRITE outside the object, which is the failure mode this VM
+    is least able to diagnose. A multi-dimensional request is REFUSED rather than quietly given one dimension.
+  - **`AccessibleObject.isAnnotationPresent`** -- false on the base, OVERRIDDEN by `Method`. Needed because a
+    call through an `AccessibleObject`-typed reference resolves against the BASE, so the overlay dropping it
+    dropped the member even though `Method` implements it. **`getAnnotation` deliberately NOT added beside it:**
+    it must return a live annotation instance (a Proxy runtime joe-ng lacks), and returning null would claim
+    "no such annotation" while `isAnnotationPresent` answers true -- a self-contradiction is worse than a gap.
+  - **`PrintStream` can WRAP a stream now** (`(OutputStream)`, `(OutputStream,boolean)`, `append`, `close`,
+    `write([BII)`). JUnit's `StreamInterceptor` and picocli both do `new PrintStream(someStream)` to CAPTURE
+    output; ignoring the argument would leave the capture silently empty, which reads as a mysteriously failing
+    assertion rather than a missing feature. **The field is safe on the SEEDED `System.out`** -- which is
+    allocated with no constructor run -- because `Heap.alloc` zeroes an allocation's payload. **Checked, not
+    assumed:** a garbage value there would have been handed to a virtual call. `close()` only closes a WRAPPED
+    stream, since closing the UART would silence the console for the rest of the boot.
+  - **Remaining 78 is mostly out of reach by design:** 19 need annotation instances (Proxy) or generic
+    signatures, and most of `Class`'s 21 need reflection arrays, resource enumeration or `java/security`.
+  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, host tests unchanged, `overlay-check: 78 known gap(s), 0 new`.
+
 - **Overlay backlog worked down 166 -> 97 (42%) -- 69 dropped-but-referenced members restored (2026-09-01).**
   Every one was a member `make overlaycheck` listed as REFERENCED by something we ship yet silently absent from
   a name-winning overlay: each would have surfaced on metal as a `DENYLIST TRAP` on the day it was reached.

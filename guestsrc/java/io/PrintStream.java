@@ -23,14 +23,56 @@ import magic.Magic;
  */
 public class PrintStream
 {
+    /**
+     * The stream this PrintStream wraps, or NULL for the UART.
+     *
+     * <p>Null is the normal case and must stay correct: {@code Loader.seedSystemStreams()} allocates
+     * {@code System.out}/{@code err} WITHOUT running a constructor, so this field is never assigned for them.
+     * It reads null rather than garbage because {@code Heap.alloc} zeroes an allocation's payload -- checked,
+     * not assumed, since a garbage value here would be handed to a virtual call.
+     */
+    private OutputStream out;
+
     public PrintStream()
     {
     }
 
-    /** The one sink: stock UTF-8 encode, then raw bytes to the UART ({@code putc} translates {@code \n}). */
-    private static void emit(String s)
+    /**
+     * Wrap another stream, as stock. Added because JUnit's {@code StreamInterceptor} and picocli both do
+     * {@code new PrintStream(someStream)} to CAPTURE output: ignoring the argument and writing to the UART
+     * anyway would leave the capture silently empty, which reads as a mysteriously failing assertion rather
+     * than as a missing feature.
+     *
+     * <p>{@code autoFlush} is accepted and ignored: every write here goes straight to the sink, so the stream
+     * is never in a buffered state for a flush to resolve.
+     */
+    public PrintStream(OutputStream out)
     {
-        Magic.printStr(s.getBytes());
+        this.out = out;
+    }
+
+    public PrintStream(OutputStream out, boolean autoFlush)
+    {
+        this.out = out;
+    }
+
+    /** The sink: the wrapped stream if there is one, else stock UTF-8 encode + raw bytes to the UART. */
+    private void emit(String s)
+    {
+        byte[] b = s.getBytes();
+        if (out == null)
+        {
+            Magic.printStr(b);
+            return;
+        }
+        try
+        {
+            out.write(b, 0, b.length);
+        }
+        catch (IOException e)
+        {
+            // A PrintStream never propagates an IOException -- stock sets an internal error flag instead.
+        }
     }
 
     public void print(String s)
@@ -328,5 +370,51 @@ public class PrintStream
             i += 1;
         }
         return new String(cs);
+    }
+
+    /** {@code Appendable}-shaped and raw-byte writes, plus {@code close}. */
+    public PrintStream append(char c)
+    {
+        print(c);
+        return this;
+    }
+
+    public PrintStream append(CharSequence cs)
+    {
+        print(cs == null ? "null" : cs.toString());
+        return this;
+    }
+
+    public void write(byte[] buf, int off, int len)
+    {
+        if (out == null)
+        {
+            byte[] slice = new byte[len];
+            System.arraycopy(buf, off, slice, 0, len);
+            Magic.printStr(slice);
+            return;
+        }
+        try
+        {
+            out.write(buf, off, len);
+        }
+        catch (IOException e)
+        {
+        }
+    }
+
+    /** Closing the UART would silence the console for the rest of the boot, so only a WRAPPED stream closes. */
+    public void close()
+    {
+        if (out != null)
+        {
+            try
+            {
+                out.close();
+            }
+            catch (IOException e)
+            {
+            }
+        }
     }
 }

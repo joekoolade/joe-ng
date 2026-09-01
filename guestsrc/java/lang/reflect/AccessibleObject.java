@@ -24,6 +24,22 @@ public class AccessibleObject
         return override;
     }
 
+    /**
+     * False here, OVERRIDDEN by {@link Method} (which answers it from the classfile via the VM). Declared on
+     * the base because a call through an {@code AccessibleObject}-typed reference resolves against THIS class,
+     * and a name-winning overlay that does not declare it drops the member entirely -- the call then resolves
+     * nowhere and traps, even though Method has a perfectly good implementation.
+     *
+     * <p>{@code getAnnotation} is deliberately NOT declared alongside it: it must return a live annotation
+     * INSTANCE, which needs a Proxy runtime joe-ng does not have. Returning null would claim "no such
+     * annotation" and directly contradict an {@code isAnnotationPresent} that answers true -- a wrong answer
+     * where a known gap is better.
+     */
+    public boolean isAnnotationPresent(Class<?> anno)
+    {
+        return false;
+    }
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAtPc}): Class of the method containing frame PC {@code pc}. */
     static native Object callerClass0(long pc);
 
