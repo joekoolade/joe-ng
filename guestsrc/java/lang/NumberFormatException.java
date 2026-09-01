@@ -14,6 +14,17 @@ public class NumberFormatException extends IllegalArgumentException
     {
     }
 
+    /**
+     * The stock {@code (String)} constructor. Its absence was the overlay trap one level down: adding
+     * {@code Byte.parseByte}/{@code Short.parseShort} -- which throw it on an out-of-range value, as stock
+     * does -- failed to COMPILE against this overlay. javac catching it is the lucky case; the same gap
+     * reached from a stock class that already compiles surfaces on metal as a DENYLIST TRAP instead.
+     */
+    public NumberFormatException(String message)
+    {
+        this.message = message;
+    }
+
     static NumberFormatException forInputString(String s, int radix)
     {
         NumberFormatException e = new NumberFormatException();

@@ -152,4 +152,115 @@ public final class Collections
             return it.next();
         }
     }
+
+    /**
+     * The remaining statics {@code make overlaycheck} listed as REFERENCED but dropped. Each traps if reached,
+     * so they are declared rather than left to a boot to discover.
+     *
+     * <p>The {@code synchronized*} wrappers return the backing collection unchanged. That is honest for joe-ng
+     * as it stands -- what stock buys with them is a lock, and every reached caller here uses the result from
+     * one task -- but it is NOT a general substitute: a genuinely shared mutable collection would race. Noted
+     * so the day that matters, this is the line to change.
+     */
+    public static <T> boolean addAll(Collection<? super T> c, T... elements)
+    {
+        boolean changed = false;
+        for (int i = 0; i < elements.length; i++)
+        {
+            if (c.add(elements[i]))
+            {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /** Drain an {@link Enumeration} into a list -- the inverse of the existing {@code enumeration}. */
+    public static <T> ArrayList<T> list(Enumeration<T> e)
+    {
+        ArrayList<T> out = new ArrayList<T>();
+        while (e.hasMoreElements())
+        {
+            out.add(e.nextElement());
+        }
+        return out;
+    }
+
+    public static void reverse(List<?> list)
+    {
+        int lo = 0;
+        int hi = list.size() - 1;
+        while (lo < hi)
+        {
+            swapRaw(list, lo, hi);
+            lo = lo + 1;
+            hi = hi - 1;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void swapRaw(List list, int i, int j)
+    {
+        Object a = list.get(i);
+        list.set(i, list.get(j));
+        list.set(j, a);
+    }
+
+    /** A comparator's reverse; {@code reverseOrder(null)} is natural-order reversed, as stock. */
+    public static <T> Comparator<T> reverseOrder(Comparator<T> cmp)
+    {
+        if (cmp == null)
+        {
+            return (T a, T b) -> ((Comparable<T>) b).compareTo(a);
+        }
+        return (T a, T b) -> cmp.compare(b, a);
+    }
+
+    /** Fisher-Yates, as stock: the ONLY correct shuffle here -- picking random pairs is not uniform. */
+    public static void shuffle(List<?> list, Random rnd)
+    {
+        for (int i = list.size() - 1; i > 0; i--)
+        {
+            swapRaw(list, i, rnd.nextInt(i + 1));
+        }
+    }
+
+    public static void shuffle(List<?> list)
+    {
+        shuffle(list, new Random());
+    }
+
+    public static <T> Set<T> singleton(T o)
+    {
+        HashSet<T> s = new HashSet<T>();
+        s.add(o);
+        return s;
+    }
+
+    public static <K, V> Map<K, V> singletonMap(K key, V value)
+    {
+        HashMap<K, V> m = new HashMap<K, V>();
+        m.put(key, value);
+        return m;
+    }
+
+    public static <T> List<T> synchronizedList(List<T> l)
+    {
+        return l;
+    }
+
+    public static <K, V> Map<K, V> synchronizedMap(Map<K, V> m)
+    {
+        return m;
+    }
+
+    public static <T> Set<T> synchronizedSet(Set<T> s)
+    {
+        return s;
+    }
+
+    public static <T> Collection<T> synchronizedCollection(Collection<T> c)
+    {
+        return c;
+    }
 }

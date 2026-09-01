@@ -69,6 +69,54 @@ public class Thread implements Runnable
         }
     }
 
+    /** The 3-arg stock constructor -- the shape most library code uses; delegates to the full one. */
+    public Thread(ThreadGroup group, Runnable r, String threadName)
+    {
+        this(group, r, threadName, 0L, true);
+    }
+
+    /**
+     * The small accessors {@code make overlaycheck} listed as REFERENCED but dropped. Each is answerable from
+     * state this class already keeps, so leaving them undeclared bought nothing and cost a DENYLIST TRAP on
+     * the day one is reached.
+     *
+     * <p>{@code getId} is the identity hash, which on joe-ng IS the object's address -- so it is stable for
+     * the thread's lifetime and distinct among LIVE threads, the contract stock states. Deliberately not a
+     * counter: this class's fields sit at offsets the VM hardcodes (@16..@56), so adding one would shift the
+     * layout underneath it. It is not unique across a whole boot, since a collected thread's address can be
+     * reused; nothing reached needs that, and the honest answer is cheaper than a wrong one.
+     */
+    public long getId()
+    {
+        return threadId();
+    }
+
+    public long threadId()
+    {
+        return (long) System.identityHashCode(this) & 0xFFFFFFFFL;
+    }
+
+    /**
+     * Always false: joe-ng has no daemon/non-daemon distinction -- the VM exits when the boot flow finishes,
+     * not when the last non-daemon thread does. False is the safe answer, since a caller checking this is
+     * asking "will this keep the VM alive", and here nothing does. (The no-op {@code setDaemon} that pairs
+     * with it already existed.)
+     */
+    public boolean isDaemon()
+    {
+        return false;
+    }
+
+    /** Null: joe-ng loads every class through one VM loader, which is the bootstrap loader's own answer. */
+    public ClassLoader getContextClassLoader()
+    {
+        return null;
+    }
+
+    public void setContextClassLoader(ClassLoader cl)
+    {
+    }
+
     /** Every thread belongs to the one flat group (no hierarchy on joe-ng). */
     public ThreadGroup getThreadGroup()
     {
