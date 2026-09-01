@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A vtable slot from an UNRELATED class -- the `setMethod` failure, ROOT-CAUSED AND FIXED (2026-09-01).**
+  `ZipOutputStream.close()` threw `IllegalArgumentException: invalid compression method`, from
+  `setMethod(I)V`, which nothing in the test calls.
+  - **`globalVtableSlot`'s tier 2 matched a method by NAME+DESCRIPTOR ACROSS ANY CLASS** and returned that
+    class's slot number. **A slot number is an index into ONE class's flattened vtable** and means nothing in
+    another's. The probe caught it on adjacent lines: `ZipInputStream.close()V -> slot 18` and
+    `ZipOutputStream.close()V -> slot 18`. At most one can be right; in `ZipOutputStream` slot 18 is
+    `setMethod(I)V`, so closing the stream called `setMethod` with a header value.
+  - **Tier 2 is now the referenced class's OWN SUPERCLASS CHAIN, most-derived first** -- which is what virtual
+    dispatch means. A miss returns -1 and the caller lowers a **late-dispatch site that resolves against the
+    RECEIVER's class**, which is exactly right for the cases the old fallback was guessing at.
+  - **MY FIRST FIX WAS INCOMPLETE AND THE TEST SAID SO.** I kept the cross-class match for when the ref class
+    is unregistered, reasoning that `invokeinterface` needed it. It did not fix the bug, because
+    `ZipOutputStream` genuinely IS unregistered at compile time (the trace shows `newresolve` -- a deferred
+    `new`), so the guess still fired. **Checking instead of assuming settled it:** `symbols.vtableSlot` is
+    called ONLY from `invokevirtual` (`Baseline:1617`); `invokeinterface` goes through `ifSlotOf`. The
+    cross-class guess served nothing and is deleted.
+  - **`LOAD_LOG` paid for itself on its first real use.** Flipping it on printed the whole resolve sequence
+    and showed `close`/`finish` resolving NOWHERE before the throw -- an ABSENCE again -- which moved the
+    suspicion off the link stubs and onto slot selection. The `logVtableSlot` tier markers ('Q' qualified,
+    'F' fallback, now 'H' chain) then named the tier in one boot.
+  - **Pi (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `classpath /lib/junit.jar entries=2135`, `gc: collections=7`, the three denylisted
+    `UNRESOLVED STATIC` lines and nothing else -- **no regression from removing a dispatch path used across
+    the whole VM.** QEMU the same. Host tests unchanged (A64 94, compiler 37, zip 91 -- 0 failures).
+    `DataDescriptorIgnoreCrcAndSizeFields` now runs from line 55 to line 65 -- through the whole zip build and
+    byte-patching -- and stops at the SEPARATE `ZipInputStream.readAllBytes` denylist trap.
+
 - **The late pull works on the ON-DEMAND compile paths too -- PI-VALIDATED 2026-09-01, SMP ON.**
   `java/nio/ByteOrder.LITTLE_ENDIAN` read null even though the class is in the image, so the `ByteBuffer`
   stayed BIG-endian and the zip header came out byte-swapped.

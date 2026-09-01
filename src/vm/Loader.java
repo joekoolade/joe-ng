@@ -7975,17 +7975,38 @@ public final class Loader
             }
             i += 1;
         }
-        i = 0;
-        while (i < vtCount)                             // name+descriptor (invokeinterface / inherited)
+        // INHERITED: walk the referenced class's OWN SUPERCLASS CHAIN, most-derived first. That is what
+        // virtual dispatch means, and the slot is only meaningful within this chain's flattened numbering.
+        int reg = classRegByName(classOff);
+        int chain = reg;
+        while (chain >= 0)
         {
-            if (utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
-                    && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
+            i = 0;
+            while (i < vtCount)
             {
-                logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x46);   // 'F' name+desc fallback
-                return vtSlot[i];
+                if (utf8EqAt(clTab[chain].base, clTab[chain].nameOff, vtClassBase[i], vtClassOff[i])
+                        && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i])
+                        && utf8EqAt(gbase, descOff, vtNameBase[i], vtDescOff[i]))
+                {
+                    logVtableSlot(classOff, nameOff, descOff, vtSlot[i], 0x48);   // 'H' cHain
+                    return vtSlot[i];
+                }
+                i += 1;
             }
-            i += 1;
+            chain = clTab[chain].superReg;
         }
+        // NO name+descriptor fallback over unrelated classes. A slot number is an index into ONE class's
+        // flattened vtable, so matching some other class's method and returning ITS slot indexes whatever
+        // happens to sit at that position in the receiver. That was a live bug: `ZipInputStream.close()V` and
+        // `ZipOutputStream.close()V` both resolved to slot 18 -- at most one can be right, and in
+        // ZipOutputStream slot 18 is setMethod(I)V, so closing the stream called setMethod with a header
+        // value and threw "invalid compression method".
+        //
+        // This path serves invokevirtual ONLY (Baseline calls symbols.vtableSlot there; invokeinterface goes
+        // through ifSlotOf), so nothing needs the cross-class guess. Falling through to -1 costs nothing: the
+        // caller lowers a late-dispatch site that resolves against the RECEIVER's own class -- which is the
+        // right answer precisely when the referenced class is not registered yet (a deferred `new`, a
+        // reflectively reached body), the case the old fallback was silently guessing at.
         // A MISS IS ALWAYS A BUG: returning 0 dispatches through vtable slot 0 of whatever the receiver
         // happens to be -- one of java/lang/Object's nine virtuals -- so the call silently returns the wrong
         // thing instead of failing. It happens when the referenced class is not registered at COMPILE time,
