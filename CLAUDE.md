@@ -76,6 +76,37 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`make overlaycheck` -- the overlay-drops-stock-members trap is caught at BUILD TIME now (2026-09-01).**
+  A `guestsrc/` overlay WINS the name, so every stock member it does not declare CEASES TO EXIST, with no build
+  error and no `NoSuchMethodError`: the call resolves nowhere and surfaces on metal as
+  `DENYLIST TRAP: call into a pruned (metal-absent) class`, naming a denylist the class is not even on. **That
+  trap has cost NINE separate debugging sessions.**
+  - **It is NOT an overlay-vs-stock diff.** Overlays are deliberately minimal -- dropping most of a stock class
+    is the POINT -- so that diff is thousands of lines of intended absence and would be ignored within a week.
+    It asks the question that can actually trap: **does anything we ship still REFERENCE a member the overlay
+    dropped?** 107 overlays, **166 referenced-but-dropped members**.
+  - **The RAMFS jars are scanned, not just `out/`** -- not optional: `ConcurrentHashMap.<init>(IFI)V` is called
+    from the JUnit jar and from nowhere else in the tree.
+  - **Resolution walks the OVERLAY's own super chain** (an overlay may extend something different from stock),
+    preferring an overlaid ancestor at each step -- what the metal loader does -- plus interfaces for defaults.
+    `<init>` is deliberately NOT inherited, which is the JVMS rule and the exact bug behind the earlier
+    `globalBufByRef` fix.
+  - **VERIFIED THREE WAYS BEFORE THE BASELINE WAS TRUSTED**, because a checker that lies produces a garbage
+    backlog: `Character.isDigit` really is absent (reported); `Boolean.valueOf(String)` really is absent, only
+    `valueOf(boolean)` exists (reported); and **`Boolean.getBoolean`, which was ADDED hours earlier, is
+    correctly NOT reported** -- the passing-run check this session has now earned five times.
+  - **NEGATIVE CONTROL: deleting `Boolean.getBoolean` makes it fail**, naming the member, naming the picocli
+    class that calls it, exit 1. That is the bug that cost a full debug round earlier the same day, caught
+    before any boot.
+  - **`test/overlay/known-gaps.txt` is a BACKLOG, not an approval list** -- and says so in its own header. A
+    line means the gap is known and unfixed, not safe: the two that bit us looked exactly this cold until the
+    day they ran. `make test` fails on anything NEW; `make overlaycheck-update` regenerates.
+  - **Host-side build-time tool only -- NO image change**, so there is nothing for a Pi boot to confirm. Host
+    tests unchanged plus `overlay-check: 166 known gap(s), 0 new -- OK`.
+  - **The backlog is already predictive of the console-launcher arc:** `Character.isDigit`/`isWhitespace`/
+    `isLetterOrDigit`, `Class.cast`/`asSubclass`, 13 `reflect/Method` and 11 `reflect/Field` members are all on
+    the path that arc is walking.
+
 - **The `ConcurrentHashMap` blocker was NOT a denylist -- it was the overlay-drops-stock-members trap, for the
   SEVENTH time (2026-09-01).** `CHM` is **not denylisted at all**; the `DENYLIST TRAP` message ("call into a
   pruned (metal-absent) class") also fires for a **LINK STUB THAT FAILED TO RESOLVE**, and blamed a denylist

@@ -60,6 +60,28 @@ test: build
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
 	$(JAVA) -cp $(OUT) zip.ZipTest
+	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt
+
+# A guestsrc/ overlay WINS the name, so every stock member it does not declare CEASES TO EXIST -- with no
+# build error and no NoSuchMethodError. The call resolves nowhere and surfaces on metal as
+# `DENYLIST TRAP: call into a pruned (metal-absent) class`, naming a denylist the class is not even on. That
+# trap has cost nine separate debugging sessions (StringBuilder/Appendable, Class.getPrimitiveClass, the
+# wrappers' TYPE, Throwable.initCause, Character.toString, Boolean.getBoolean, the Collections unmodifiable*
+# family, ConcurrentHashMap.<init>(IFI)V, AtomicReferenceArray.getOpaque, DecimalDigits.appendPair).
+#
+# The check does NOT diff overlay against stock -- overlays are deliberately minimal, so that is thousands of
+# lines of intended absence. It asks whether anything WE SHIP still REFERENCES a dropped member, which is
+# exactly the set that can trap. `test` runs it against whatever is in ramfs/lib; run this target for the full
+# signal, since ConcurrentHashMap.<init>(IFI)V is called from the JUnit jar and from nowhere else in the tree.
+.PHONY: overlaycheck
+overlaycheck: build junitjar
+	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt
+
+# Regenerate the backlog after deliberately accepting new gaps. Read the diff before committing it: the point
+# of the file is that a NEW line is a decision, not a rubber stamp.
+.PHONY: overlaycheck-update
+overlaycheck-update: build junitjar
+	$(JAVA) -cp $(OUT) overlay.OverlayCheck --write test/overlay/known-gaps.txt
 
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
