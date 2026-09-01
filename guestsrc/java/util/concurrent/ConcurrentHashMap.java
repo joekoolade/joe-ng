@@ -31,6 +31,34 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> implements Concurrent
         super(initialCapacity);
     }
 
+    /**
+     * The remaining stock constructors. A NAME-WINNING OVERLAY SILENTLY DROPS whatever it does not declare, so
+     * an undeclared one resolves nowhere and surfaces as a DENYLIST TRAP that blames a denylist CHM is not even
+     * on. JUnit's console launcher calls {@code <init>(IFI)V}, and the trap said only "call into a pruned
+     * class" until the link-failure report was taught to name the descriptor.
+     *
+     * <p>{@code loadFactor} and {@code concurrencyLevel} are accepted and IGNORED, which is exactly what they
+     * are: sizing hints with no observable effect on the Map contract. The backing {@link HashMap} chooses its
+     * own load factor, and joe-ng's map is not striped, so a concurrency level has nothing to tune. They are
+     * deliberately not passed to {@code super}: the float is never used in arithmetic here, so this adds no
+     * floating-point codegen to a path that had none.
+     */
+    public ConcurrentHashMap(int initialCapacity, float loadFactor)
+    {
+        super(initialCapacity);
+    }
+
+    public ConcurrentHashMap(int initialCapacity, float loadFactor, int concurrencyLevel)
+    {
+        super(initialCapacity);
+    }
+
+    /** Copy constructor, as {@code ConcurrentHashMap(Map)}. */
+    public ConcurrentHashMap(Map<? extends K, ? extends V> m)
+    {
+        putAll(m);
+    }
+
     /** Snapshot the live entries (key+value) as fresh write-through entries -- the basis of every view. */
     private ArrayList<Map.Entry<K, V>> snapshot()
     {
