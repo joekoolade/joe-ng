@@ -898,9 +898,12 @@ public final class Loader
             if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
             {
                 clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
-                Uart.write(Magic.bytes("  clinit-lazy "));
-                printNameAt(clTab[reg].base, clTab[reg].nameOff);
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  clinit-lazy "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.putc(0x0A);
+                }
                 long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
                 if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
                 {                                                //   Name it here, where the class is in hand.
@@ -2006,8 +2009,10 @@ public final class Loader
     static final boolean RECLAIM_CODE_BY_GC = true;
 
     /** Per-batch footprint accounting, printed when {@link #LIFETIME_TRACE} is on: what each batch actually
-     *  costs in data and code is the number this arc has to fit inside the arena without a rewind. */
-    static final boolean LIFETIME_TRACE = true;
+     *  costs in data and code is the number this arc has to fit inside the arena without a rewind. OFF by
+     *  default -- it is ~20 lines PER BATCH of allocator histograms, which buried the program's own output.
+     *  Turn it on for arena/compaction work, where those histograms are the measurement. */
+    static final boolean LIFETIME_TRACE = false;
     private static int  batchN;
     private static long batchDataTotal;
     private static long batchCodeTotal;
@@ -2082,17 +2087,20 @@ public final class Loader
                 if (usedCode > batchCodePeak) { batchCodePeak = usedCode; }
                 if (LIFETIME_TRACE != false)
                 {
-                    Uart.write(Magic.bytes("  batch "));
-                    VM.printDec(batchN);
-                    Uart.write(Magic.bytes(": data="));
-                    VM.printHex(usedData);
-                    Uart.write(Magic.bytes(" code="));
-                    VM.printHex(usedCode);
-                    Uart.write(Magic.bytes(" cumData="));
-                    VM.printHex(batchDataTotal);           // what a no-rewind run would have to hold
-                    Uart.write(Magic.bytes(" cumCode="));
-                    VM.printHex(batchCodeTotal);
-                    Uart.putc(0x0A);
+                    if (LOAD_LOG)
+                    {
+                        Uart.write(Magic.bytes("  batch "));
+                        VM.printDec(batchN);
+                        Uart.write(Magic.bytes(": data="));
+                        VM.printHex(usedData);
+                        Uart.write(Magic.bytes(" code="));
+                        VM.printHex(usedCode);
+                        Uart.write(Magic.bytes(" cumData="));
+                        VM.printHex(batchDataTotal);           // what a no-rewind run would have to hold
+                        Uart.write(Magic.bytes(" cumCode="));
+                        VM.printHex(batchCodeTotal);
+                        Uart.putc(0x0A);
+                    }
                 }
                 long oldPtr = Magic.load64(Heap.PTR_CELL);      // ZERO all heap ever used above the mark, so a reused
                 if (oldPtr > demandHeapHigh)                     // block never carries a PRIOR batch's code bytes: an
@@ -4969,6 +4977,7 @@ public final class Loader
         gIsInterface = (u2(p) & 0x0200) != 0;             // ACC_INTERFACE
         gThisNameOff = gcp[u2(gbase + gcp[u2(p + 2)])];   // this_class -> Class -> name Utf8 offset
         gSuperNameOff = u2(p + 4) == 0 ? 0 : gcp[u2(gbase + gcp[u2(p + 4)])];   // super_class -> name
+        superUnregistered = false;
         int islot = superFieldCount();                  // own instance fields sit after inherited ones
         p += 6;                                         // access_flags, this_class, super_class
         gImplIfCount = u2(p);                           // interfaces this class implements
@@ -4982,6 +4991,18 @@ public final class Loader
         }
         p += 2 + gImplIfCount * 2;                      // interfaces
         int fcount = u2(p);
+        if (superUnregistered && fcount != 0)
+        {
+            // Own fields would be laid at slot 0, on top of the inherited ones. Harmless for a field-free
+            // class (the writer-rooted exceptions), silent whole-object corruption for any other. fcount
+            // counts STATIC fields too, so a statics-only subclass warns spuriously -- erring toward saying
+            // something, since the failure this catches is invisible.
+            Uart.write(Magic.bytes("\n  UNREGISTERED SUPER (fields alias): "));
+            printNameAt(gbase, gThisNameOff);
+            Uart.write(Magic.bytes(" extends "));
+            printNameAt(gbase, gSuperNameOff);
+            Uart.putc(0x0A);
+        }
         p += 2;
         gsfName = new int[fcount + 1];
         gifName = new int[fcount + islot + 1];
@@ -5107,11 +5128,28 @@ public final class Loader
         return -1;
     }
 
-    /** Instance-field count of the superclass (inherited fields), 0 if super is Object/unloaded. */
+    /**
+     * Instance-field count of the superclass -- own fields are laid out after it. 0 when the super is
+     * {@code java/lang/Object} (nothing to inherit).
+     *
+     * <p>A NAMED SUPERCLASS THAT IS NOT REGISTERED WOULD BE A LAYOUT ERROR -- answering 0 puts this class's
+     * own fields ON TOP of the inherited ones, and every field of both then aliases the other. It is only an
+     * error if this class DECLARES a field, though: a field-free subclass of an unlaid-out super is the
+     * normal, deliberate arrangement for the writer-rooted exception classes (see {@code vm/MyExc}), which
+     * is why the report lives at the layout site below and not here.
+     */
+    private static boolean superUnregistered;
+
     private static int superFieldCount()
     {
         int r = classRegByName(gSuperNameOff);
-        return r >= 0 ? clTab[r].fieldCount : 0;
+        if (r >= 0)
+        {
+            return clTab[r].fieldCount;
+        }
+        superUnregistered = gSuperNameOff != 0
+                && !utf8IsAtBase(gbase, gSuperNameOff, Magic.bytes("java/lang/Object"));
+        return 0;
     }
 
     /** A method goes in the vtable if it is instance, non-private, and not a constructor. */
@@ -5252,9 +5290,12 @@ public final class Loader
             }
             if (classIndexByName(slash) < 0)
             {
-                Uart.write(Magic.bytes("  staticresolve "));
-                printNameAt(want[i], 0);
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  staticresolve "));
+                    printNameAt(want[i], 0);
+                    Uart.putc(0x0A);
+                }
                 long pulled = loadClassIncremental(slash);
             }
             i += 1;
@@ -5818,15 +5859,18 @@ public final class Loader
             }
             lc += 1;
         }
-        Uart.write(Magic.bytes("  lifecycle OK "));
-        VM.printDec(lcOk);
-        if (lcPend > 0)                                 // deliberately uninitialized: waiting for first active use
+        if (LOAD_LOG)
         {
-            Uart.write(Magic.bytes(" (+"));
-            VM.printDec(lcPend);
-            Uart.write(Magic.bytes(" lazy-init pending)"));
+            Uart.write(Magic.bytes("  lifecycle OK "));
+            VM.printDec(lcOk);
+            if (lcPend > 0)                                 // deliberately uninitialized: waiting for first active use
+            {
+                Uart.write(Magic.bytes(" (+"));
+                VM.printDec(lcPend);
+                Uart.write(Magic.bytes(" lazy-init pending)"));
+            }
+            Uart.putc(0x0A);
         }
-        Uart.putc(0x0A);
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
         markActive = 0;                                 // don't leak the reachability state past this batch
@@ -6129,9 +6173,12 @@ public final class Loader
             if (gAdoptType != 0L)
             {
                 gType = gAdoptType;
-                Uart.write(Magic.bytes("  typeadopt "));
-                printNameAt(gbase, gThisNameOff);
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  typeadopt "));
+                    printNameAt(gbase, gThisNameOff);
+                    Uart.putc(0x0A);
+                }
             }
             else
             {
@@ -8038,11 +8085,14 @@ public final class Loader
             {
                 // The line whose ABSENCE hid this whole class of bug: an interface reached only from a body
                 // compiled after its batch is never pulled, and every trace of the call vanished with it.
-                Uart.write(Magic.bytes("  ifaceresolve "));
-                printNameAt(clTab[ci].base, clTab[ci].nameOff);
-                Uart.putc(0x2E);
-                printNameAt(vsName[idx], 0);
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  ifaceresolve "));
+                    printNameAt(clTab[ci].base, clTab[ci].nameOff);
+                    Uart.putc(0x2E);
+                    printNameAt(vsName[idx], 0);
+                    Uart.putc(0x0A);
+                }
             }
         }
         if (buf == 0L)
@@ -8863,7 +8913,31 @@ public final class Loader
             }
             pd = findPdByName(pdBase[pd], pdSuperOff[pd]);   // ascend to the superclass
         }
+        // NOTHING MATCHED. `return 16` is slot 0 -- the object's FIRST field -- so an unresolved reference
+        // silently reads and writes a field of some other name and type. On a subclass that is exactly an
+        // inherited REFERENCE, and an int counter then reads back a heap address (DeflaterClose's nested
+        // counters printed 67885768 for an expected 3). The ordinary cause is a class not registered when
+        // the referencing body compiled -- a privately nested class the enclosing method touches, pulled
+        // late by `newresolve` -- so take the same note-pull-recompile route a static and a class literal
+        // take, and name it if it is still missing on the retry.
+        if (lzCompiling && !lzRetried && notePullNeeded(gbase + classOff))
+        {
+            return 16;                                  // this compile is discarded and redone with it loaded
+        }
+        reportUnresolvedField(gbase + classOff, gbase + nameOff);
         return 16;
+    }
+
+    /** Name a field reference that resolved to nothing -- it is about to alias slot 0. */
+    private static void reportUnresolvedField(long clsU, long nameU)
+    {
+        Uart.write(Magic.bytes("\n  UNRESOLVED FIELD (aliases slot 0): "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        Uart.write(Magic.bytes(" -- needed by "));
+        printCompiling();
+        Uart.putc(0x0A);
     }
 
     /**
@@ -8901,9 +8975,12 @@ public final class Loader
         if (gAdoptType != 0L)
         {
             gType = gAdoptType;
-            Uart.write(Magic.bytes("  typeadopt "));
-            printNameAt(gbase, gThisNameOff);
-            Uart.putc(0x0A);
+            if (LOAD_LOG)
+            {
+                Uart.write(Magic.bytes("  typeadopt "));
+                printNameAt(gbase, gThisNameOff);
+                Uart.putc(0x0A);
+            }
         }
         else
         {
@@ -9064,6 +9141,19 @@ public final class Loader
      * WITHOUT the serial traffic those lines add to the very phases being timed.
      */
     private static final boolean LOAD_TRACE = false;
+
+    /**
+     * Per-resolution chatter -- `linkresolve`/`newresolve`/`staticresolve`/`ifaceresolve`/`baked`/
+     * `clinit-lazy`/`typeadopt`/`vtparity OK` and the rest. OFF by default: a boot that resolves normally
+     * says nothing about it, so what remains on the wire is the program's own output and anything that
+     * actually went wrong. Turn it on to watch what a batch pulls and links.
+     *
+     * <p>FAILURES ARE NOT GATED. A parity DIFF, an unresolved static, a null class literal and every trap
+     * still print with this off -- the flag suppresses the "went fine" half only, never a diagnosis. That
+     * distinction is the whole point: these lines were what made several bugs findable, and a log nobody
+     * can read is the state those bugs lived in.
+     */
+    static final boolean LOAD_LOG = false;
 
     /** Name every {@code invokevirtual} whose vtable slot could not be resolved at compile time (debug). Each
      *  one is a silent wrong dispatch through slot 0 -- see {@link #globalVtableSlot}. */
@@ -9447,11 +9537,14 @@ public final class Loader
         {
             return 0L;
         }
-        Uart.write(Magic.bytes("  linkresolve "));
-        printNameAt(clsU, 0);
-        Uart.putc(0x2E);
-        printNameAt(nameU, 0);
-        Uart.putc(0x0A);
+        if (LOAD_LOG)
+        {
+            Uart.write(Magic.bytes("  linkresolve "));
+            printNameAt(clsU, 0);
+            Uart.putc(0x2E);
+            printNameAt(nameU, 0);
+            Uart.putc(0x0A);
+        }
         int len = u2(clsU);
         byte[] slash = new byte[len];
         int i = 0;
@@ -9791,11 +9884,14 @@ public final class Loader
             long baked = bakedBuf(bkName, descOff);
             if (baked != 0L)
             {
-                Uart.write(Magic.bytes("  baked "));
-                printNameAt(gbase, gThisNameOff);
-                Uart.putc(0x2E);
-                printNameAt(gbase, bkName);
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  baked "));
+                    printNameAt(gbase, gThisNameOff);
+                    Uart.putc(0x2E);
+                    printNameAt(gbase, bkName);
+                    Uart.putc(0x0A);
+                }
                 lzTab[idx].cache = baked;
                 if (lzTab[idx].slot != 0L)
                 {
@@ -9953,11 +10049,14 @@ public final class Loader
         {
             capHalt(Magic.bytes("bakeresolve-early"), 0);   // a stub fired before the loader exists
         }
-        Uart.write(Magic.bytes("  bakeresolve "));
-        printNameAt(clsU, 0);
-        Uart.putc(0x2E);
-        printNameAt(nameU, 0);
-        Uart.putc(0x0A);
+        if (LOAD_LOG)
+        {
+            Uart.write(Magic.bytes("  bakeresolve "));
+            printNameAt(clsU, 0);
+            Uart.putc(0x2E);
+            printNameAt(nameU, 0);
+            Uart.putc(0x0A);
+        }
         int len = u2(clsU);
         byte[] slash = new byte[len];
         int i = 0;
@@ -10104,13 +10203,16 @@ public final class Loader
         }
         if (gAdoptStaticCount != gsfCount)
         {
-            Uart.write(Magic.bytes("  staticadopt "));
-            printNameAt(gbase, gThisNameOff);
-            Uart.write(Magic.bytes(" DIFF "));
-            VM.printDec(gAdoptStaticCount);
-            Uart.putc(0x2F);
-            VM.printDec(gsfCount);
-            Uart.putc(0x0A);
+            if (LOAD_LOG)
+            {
+                Uart.write(Magic.bytes("  staticadopt "));
+                printNameAt(gbase, gThisNameOff);
+                Uart.write(Magic.bytes(" DIFF "));
+                VM.printDec(gAdoptStaticCount);
+                Uart.putc(0x2F);
+                VM.printDec(gsfCount);
+                Uart.putc(0x0A);
+            }
             return;
         }
         gStatics = gAdoptStatics;
@@ -10135,10 +10237,14 @@ public final class Loader
         {
             return;                                     // not a baked interface: nothing to compare
         }
-        Uart.write(Magic.bytes("  itparity "));
-        printNameAt(gbase, gThisNameOff);
+        if (LOAD_LOG)                                   // the header; a DIFF prints its own below, so a
+        {                                               //   parity failure is never silenced by the flag
+            Uart.write(Magic.bytes("  itparity "));
+            printNameAt(gbase, gThisNameOff);
+        }
         if (gVtSigCount != clTab[reg].ifmCount)
         {
+            ifParityHeader();
             Uart.write(Magic.bytes(" DIFF count "));
             VM.printDec(gVtSigCount);
             Uart.putc(0x2F);
@@ -10154,6 +10260,7 @@ public final class Loader
             if (!utf8EqAt(ifBase[i], ifNameOff[i], Magic.load64(p), 0)
                     || !utf8EqAt(ifBase[i], ifDescOff[i], Magic.load64(p + 8L), 0))
             {
+                ifParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));
                 VM.printDec(s);
                 Uart.putc(0x0A);
@@ -10161,18 +10268,35 @@ public final class Loader
             }
             s += 1;
         }
-        Uart.write(Magic.bytes(" OK "));
-        VM.printDec(gVtSigCount);
-        Uart.putc(0x0A);
+        if (LOAD_LOG)
+        {
+            Uart.write(Magic.bytes(" OK "));
+            VM.printDec(gVtSigCount);
+            Uart.putc(0x0A);
+        }
+    }
+
+    /** Print the itparity header a DIFF needs when {@link #LOAD_LOG} left it out. */
+    private static void ifParityHeader()
+    {
+        if (!LOAD_LOG)
+        {
+            Uart.write(Magic.bytes("  itparity "));
+            printNameAt(gbase, gThisNameOff);
+        }
     }
 
     /** Compare the current class's gv flattening against writer slot signatures at {@code slots}. */
     private static void vtParityAt(long slots, int count)
     {
-        Uart.write(Magic.bytes("  vtparity "));
-        printNameAt(gbase, gThisNameOff);
+        if (LOAD_LOG)                                   // header only; every DIFF below prints its own
+        {
+            Uart.write(Magic.bytes("  vtparity "));
+            printNameAt(gbase, gThisNameOff);
+        }
         if (count != gvCount)
         {
+            vtParityHeader();
             Uart.write(Magic.bytes(" DIFF count "));
             VM.printDec(count);
             Uart.putc(0x2F);
@@ -10216,6 +10340,7 @@ public final class Loader
             if (!utf8EqAt(gvTab[s].base, gvTab[s].name, Magic.load64(p), 0)
                     || !utf8EqAt(gvTab[s].base, gvTab[s].desc, Magic.load64(p + 8L), 0))
             {
+                vtParityHeader();
                 Uart.write(Magic.bytes(" DIFF slot "));
                 VM.printDec(s);
                 Uart.putc(0x0A);
@@ -10223,9 +10348,22 @@ public final class Loader
             }
             s += 1;
         }
-        Uart.write(Magic.bytes(" OK "));
-        VM.printDec(count);
-        Uart.putc(0x0A);
+        if (LOAD_LOG)
+        {
+            Uart.write(Magic.bytes(" OK "));
+            VM.printDec(count);
+            Uart.putc(0x0A);
+        }
+    }
+
+    /** Print the vtparity header a DIFF needs when {@link #LOAD_LOG} left it out. */
+    private static void vtParityHeader()
+    {
+        if (!LOAD_LOG)
+        {
+            Uart.write(Magic.bytes("  vtparity "));
+            printNameAt(gbase, gThisNameOff);
+        }
     }
 
     /**
@@ -11629,11 +11767,14 @@ public final class Loader
                 // compiled (a `newresolve`d class, say). Indexing on -1 would load TIB[0], the Type pointer,
                 // and branch into the heap. Resolve against the RECEIVER at first call instead, through the
                 // same late-dispatch trampoline a guarded call site uses: x0 is already the receiver here.
-                Uart.write(Magic.bytes("  lambdaslot late "));
-                printNameAt(gbase, refClassNameOff(lambdaImplMref(idx)));
-                Uart.putc(0x2E);
-                printNameAt(gbase, mrefNameOff(lambdaImplMref(idx)));
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  lambdaslot late "));
+                    printNameAt(gbase, refClassNameOff(lambdaImplMref(idx)));
+                    Uart.putc(0x2E);
+                    printNameAt(gbase, mrefNameOff(lambdaImplMref(idx)));
+                    Uart.putc(0x0A);
+                }
                 w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(lambdaImplMref(idx)), 0));
                 w = emitTrampAddr(thunk, w, virtualTramp());
             }
@@ -12104,10 +12245,13 @@ public final class Loader
             {
                 primArrTib[atype] = baked;
                 primArrAdopted[atype] = true;
-                Uart.write(Magic.bytes("  arrayadopt "));
-                Uart.putc(0x5B);                        // '['
-                Uart.putc(primDescChar(atype));
-                Uart.putc(0x0A);
+                if (LOAD_LOG)
+                {
+                    Uart.write(Magic.bytes("  arrayadopt "));
+                    Uart.putc(0x5B);                        // '['
+                    Uart.putc(primDescChar(atype));
+                    Uart.putc(0x0A);
+                }
             }
             else
             {
@@ -12666,9 +12810,12 @@ public final class Loader
         VM.loaderLock();                                // demand-loads a class: one compiler at a time
         if (classIndexByName(slash) < 0)
         {
-            Uart.write(Magic.bytes("  newresolve "));
-            printNameAt(clsU, 0);
-            Uart.putc(0x0A);
+            if (LOAD_LOG)
+            {
+                Uart.write(Magic.bytes("  newresolve "));
+                printNameAt(clsU, 0);
+                Uart.putc(0x0A);
+            }
             long pulled = loadClassIncremental(slash);
         }
         int reg = classIndexByName(slash);
