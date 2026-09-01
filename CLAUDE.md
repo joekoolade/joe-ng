@@ -76,6 +76,41 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **The `ConcurrentHashMap` blocker was NOT a denylist -- it was the overlay-drops-stock-members trap, for the
+  SEVENTH time (2026-09-01).** `CHM` is **not denylisted at all**; the `DENYLIST TRAP` message ("call into a
+  pruned (metal-absent) class") also fires for a **LINK STUB THAT FAILED TO RESOLVE**, and blamed a denylist
+  CHM was never on.
+  - **Found by instrument, in two rounds.** `resolveLinkTarget` had THREE distinct `return 0` paths sharing one
+    silence. Naming them gave `class OK but no body for that name+descriptor` -- narrowed but unactionable,
+    since it did not say WHICH descriptor. Adding the descriptor gave the answer outright:
+    **`ConcurrentHashMap.<init>(IFI)V`**.
+  - **`guestsrc/java/util/concurrent/ConcurrentHashMap` declared only `()` and `(int)`;** stock has five
+    constructors. `(int,float,int)` therefore resolved NOWHERE. Added `(int,float)`, `(int,float,int)` and
+    `(Map)`. `loadFactor`/`concurrencyLevel` are accepted and IGNORED -- which is what they are, sizing hints
+    with no observable effect on the Map contract, and joe-ng's map is not striped. **Deliberately not passed
+    to `super`:** the float is never used in arithmetic, so this adds no floating-point codegen to a path that
+    had none.
+  - **Two more fell straight behind it, identical trap:** `AtomicReferenceArray.getOpaque` (the WHOLE
+    memory-mode family added -- opaque/acquire/release/plain/weak-CAS/compareAndExchange -- rather than one
+    method per boot, since every mode differs from plain only in ORDERING that a single aligned word access
+    already satisfies) and `jdk/internal/util/DecimalDigits.appendPair`. **NINE TIMES** now for this trap.
+  - **MY NEW REPORT CRIED WOLF ON A GREEN RUN -- 26 `LINK FAILED` lines on a boot where all 44 tests PASS.**
+    `resolveLinkTarget` IS CALLED IN A LOOP: the late-virtual path walks the receiver's superclass chain, and a
+    0 at one level is the normal way of saying "not declared here, try the super". The reason is now RECORDED
+    (`lnkFailWhy`) and printed only by `resolveLinkStub`, which has no other tier to try. Silent on a green
+    run again. **Fourth too-eager instrument this session** (after `plausibleCode`, `Heap.LARGE_LIMIT`, and the
+    `UNREGISTERED SUPER` guard): **a report that cries wolf on a passing boot is worse than none.**
+  - **NEXT WALL IS A REAL FEATURE, not an overlay gap:** `Class.getAnnotation(Class)` must return an annotation
+    INSTANCE, which needs a Proxy runtime joe-ng does not have -- the same reason `@MethodSource("name")`'s
+    element value is unreadable. `ServiceLoader` discovery is still behind that.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, and **zero `LINK FAILED`** -- the check that matters for the
+    corrected report, since MORE classes reach the late-virtual chain walk on hardware than on QEMU, so a
+    still-too-eager report would show here first. QEMU the same, 84 lines. Host tests unchanged.
+  - **The CHM fix itself is NOT exercised by that boot** -- the suite never constructs
+    `ConcurrentHashMap(int,float,int)`; that path is the console launcher's and was proven on QEMU. The Pi run
+    confirms NO REGRESSION, which is a different claim and worth keeping straight.
+
 - **TOWARD THE REAL JUnit `ConsoleLauncher` ON METAL: ten blockers cleared, NOT YET RUNNING (2026-09-01).**
   Goal: replace the hand-written `MetalJUnit` with stock `org.junit.platform.console.ConsoleLauncher`,
   demand-loaded from the RAMFS jar. It is FOUND, LAUNCHED, and now executes inside `ConsoleLauncher.main` ->

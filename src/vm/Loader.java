@@ -9689,15 +9689,91 @@ public final class Loader
             return lkMemo[idx];
         }
         VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        lnkFailWhy = 0;
         long buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
         if (buf == 0L)
         {
+            // TERMINAL: this stub has no other tier to try, so the call really is about to trap. (The chain
+            // walkers that also call resolveLinkTarget report through VIRTUALRESOLVE FAILED when THEIR whole
+            // walk is over -- not per level.)
+            if (lnkFailWhy == 1)
+            {
+                reportLinkFail(lkClsU[idx], lkNameU[idx], lkDescU[idx],
+                        Magic.bytes("class not in the classDir (nothing can load it)"));
+            }
+            else if (lnkFailWhy == 2)
+            {
+                reportLinkFail(lkClsU[idx], lkNameU[idx], lkDescU[idx],
+                        Magic.bytes("class loaded but NOT INSTANTIATED (half lifecycle)"));
+            }
+            else
+            {
+                reportLinkFail(lkClsU[idx], lkNameU[idx], lkDescU[idx],
+                        Magic.bytes("class OK but no body for that name+descriptor"));
+            }
             buf = VM.denylistTrapAddr;
         }
         lkMemo[idx] = buf;
         VM.loaderUnlock();
         return buf;
     }
+
+    /**
+     * Say WHY a link stub could not resolve, ONCE per class+method. Three very different failures shared one
+     * silent {@code return 0} -- absent class, half-built class, and "loaded fine but no callable body" -- and
+     * all three surface identically as a DENYLIST TRAP, whose message then blames a denylist that may have
+     * nothing to do with it (ConcurrentHashMap is not denylisted at all). Each arm needs a different fix, so
+     * each says which it is.
+     */
+    /**
+     * The reason the LAST {@link #resolveLinkTarget} answered 0: 1 = class absent from the classDir, 2 = class
+     * loaded but not instantiated, 3 = class fine but no body for that name+descriptor.
+     *
+     * <p>Recorded rather than printed at the point of failure because {@code resolveLinkTarget} IS CALLED IN A
+     * LOOP: the late-virtual path walks the receiver's superclass chain and a 0 at one level is the normal way
+     * of saying "not declared here, try the super". Printing there reported 26 failures on a boot where all 44
+     * tests PASS -- a report that cries wolf on a green run is worse than none. Only the caller knows the walk
+     * is over, so only the caller prints.
+     */
+    private static int lnkFailWhy;
+
+    private static void reportLinkFail(long clsU, long nameU, long descU, byte[] why)
+    {
+        long key = clsU + (long) u2(nameU);
+        if (lnkFailSeen == null)
+        {
+            lnkFailSeen = new long[64];
+            lnkFailSeenN = 0;
+        }
+        int k = 0;
+        while (k < lnkFailSeenN)
+        {
+            if (lnkFailSeen[k] == key)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (lnkFailSeenN < 64)
+        {
+            lnkFailSeen[lnkFailSeenN] = key;
+            lnkFailSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  LINK FAILED: "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        if (descU != 0L)
+        {
+            printNameAt(descU, 0);                      // WHICH overload -- "no body for that descriptor"
+        }                                               //   is unactionable without saying which descriptor
+        Uart.write(Magic.bytes(" -- "));
+        Uart.write(why);
+        Uart.putc(0x0A);
+    }
+
+    private static long[] lnkFailSeen;
+    private static int lnkFailSeenN;
 
     /**
      * Demand-load the callee's class and find its callable buffer — the same three-tier lookup
@@ -9729,12 +9805,16 @@ public final class Loader
         }
         if (classIndexByName(slash) < 0 && loadClassIncremental(slash) == 0L)
         {
-            return 0L;                                  // not in the classDir after all
+            lnkFailWhy = 1;                             // RECORD, do not print: see reportLinkFail
+            return 0L;
         }
         int reg = classIndexByName(slash);
         if (reg >= 0 && clTab[reg].state < RVMClass.ST_INSTANTIATED)
         {
-            return 0L;                                  // half-lifecycle: do not branch into it
+            // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
+            // registered. Branching in would run against half-built statics and a possibly empty vtable.
+            lnkFailWhy = 2;
+            return 0L;
         }
         long buf = bufBySigU(clsU, nameU, descU);
         int tier = 1;
@@ -9759,6 +9839,13 @@ public final class Loader
             // caller nowhere in the report. Trap it by name instead.
             reportBadTarget(clsU, nameU, descU, buf, tier);
             return 0L;                                  // -> the caller substitutes denylistTrap
+        }
+        if (buf == 0L)
+        {
+            // Class is present and fully built, yet no tier produced a body: not registered, not a provided
+            // native, and compileSigOnDemand found no Code for this exact name+descriptor. Usually an
+            // abstract/native method with no VM helper, or a descriptor mismatch.
+            lnkFailWhy = 3;
         }
         return buf;
     }

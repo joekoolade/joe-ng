@@ -77,4 +77,24 @@ public final class DecimalDigits
         }
         return i;
     }
+
+    /**
+     * Append the two decimal digits of {@code i} (zero-padded), as {@code java.time} formatting does for a
+     * minutes/seconds/hours field.
+     *
+     * <p>Stock indexes a packed {@code DIGITS} table with {@code i & 0x7f} and appends the two bytes through
+     * {@code JavaLangAccess}; computing the digits directly is the same result without the table, the
+     * {@code Unsafe} it is built with, or the access shim. The mask is kept so an out-of-range caller behaves
+     * as stock does rather than throwing.
+     *
+     * <p>Declared here because a name-winning overlay silently drops what it does not declare: the call then
+     * resolves nowhere and surfaces as a DENYLIST TRAP naming a denylist this class is not on. That is the
+     * NINTH time this trap has been paid in joe-ng.
+     */
+    public static void appendPair(StringBuilder sb, int i)
+    {
+        int v = i & 0x7f;
+        sb.append((char) ('0' + v / 10));
+        sb.append((char) ('0' + v % 10));
+    }
 }
