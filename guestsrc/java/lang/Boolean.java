@@ -65,6 +65,12 @@ public final class Boolean implements Comparable<Boolean>
     }
 
     /** {@code true} iff {@code s} equals "true" ignoring case; false for null, per the stock contract. */
+    /** {@code Boolean.valueOf(String)} -- the stock string overload beside {@code valueOf(boolean)}. */
+    public static Boolean valueOf(String s)
+    {
+        return parseBoolean(s) ? TRUE : FALSE;
+    }
+
     public static boolean parseBoolean(String s)
     {
         return s != null && s.equalsIgnoreCase("true");

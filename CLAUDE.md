@@ -76,6 +76,43 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Overlay backlog worked down 166 -> 97 (42%) -- 69 dropped-but-referenced members restored (2026-09-01).**
+  Every one was a member `make overlaycheck` listed as REFERENCED by something we ship yet silently absent from
+  a name-winning overlay: each would have surfaced on metal as a `DENYLIST TRAP` on the day it was reached.
+  - **Restored:** `Character` classification predicates (10), `Comparator` combinators + factories (8),
+    `Predicate` combinators (5), `Function.identity`/`andThen`/`compose`, `Boolean.valueOf(String)`,
+    `Byte`/`Short` `parse`/`valueOf`/`decode` (8), `StringBuilder` constructors + `charAt`/`setLength`/
+    `substring`/`insert`/`append(char[])`/`appendCodePoint`/`deleteCharAt` (10), `Collections` statics (10),
+    `Class` casts + nesting predicates + `getTypeName`/`getClassLoader`/`getEnclosingClass` (9), `TimeUnit`
+    MINUTES/HOURS/DAYS + the enum surface + conversions (6), `Thread` 3-arg ctor + `getId`/`isDaemon`/
+    context-classloader (6), `Random.nextInt(int)`/`nextBoolean`, `Module.getLayer`,
+    `NumberFormatException(String)`.
+  - **TWO MORE INSTANCES OF THE SAME TRAP SURFACED WHILE FIXING IT, AND JAVAC CAUGHT BOTH:**
+    `NumberFormatException` had no `(String)` constructor and `Random` no `nextInt(int)`, so adding
+    `Byte.parseByte` and `Collections.shuffle` failed to COMPILE. **javac catching it is the lucky case** --
+    the same gap reached from a stock class that already compiles surfaces as a denylist trap instead.
+  - **WHAT WAS DELIBERATELY *NOT* ANSWERED**, because a wrong answer is worse than a known gap:
+    `StringBuilder.append(double)` (no double-to-string), `Class.getAnnotation*` (needs a Proxy runtime),
+    `getProtectionDomain` (`java/security` is denylisted), `getResource*` (URL + resource enumeration), the
+    generic-signature methods, and the `Collections` sorted/navigable empties (no TreeMap/TreeSet).
+  - **`Thread.getId` is the identity hash, NOT a counter, and the reason is load-bearing:** this class's fields
+    sit at offsets the VM HARDCODES (`@16..@56`), so adding one would shift the layout underneath it. The
+    identity hash IS the address here, so it is stable per thread and distinct among LIVE threads -- the stock
+    contract -- but not unique across a boot, which is stated rather than glossed.
+  - **`Collections.synchronized*` return the backing collection**, which is honest for joe-ng as it stands
+    (every reached caller uses the result from one task) but is NOT a general substitute -- noted in the code
+    as the line to change the day a collection is genuinely shared.
+  - **`Random.nextInt(int)` keeps the stock REJECTION LOOP**, which is not an optimisation: `next(31) % bound`
+    is biased whenever bound does not divide 2^31, and this class's own comment promises a bit-for-bit JDK
+    sequence.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `metal junit: ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, no new `LINK FAILED`. **The timing tests are the ones that
+    matter for this change** -- `testSleep`, `testInterruptSleep`, `testJoinOnTerminatingThread`,
+    `testInterruptJoin` assert wall-clock behaviour with the REORDERED `TimeUnit` constants and the extended
+    `Thread` underneath them, and QEMU (100x slower, counter near real time) is exactly where such a test can
+    pass for the wrong reason. QEMU also green; `overlay-check: 97 known gap(s), 0 new -- OK`; host tests
+    unchanged.
+
 - **`make overlaycheck` -- the overlay-drops-stock-members trap is caught at BUILD TIME now (2026-09-01).**
   A `guestsrc/` overlay WINS the name, so every stock member it does not declare CEASES TO EXIST, with no build
   error and no `NoSuchMethodError`: the call resolves nowhere and surfaces on metal as

@@ -98,4 +98,48 @@ public final class Byte extends Number implements Comparable<Byte>
     {
         return Integer.toString(value);
     }
+
+    /**
+     * The string-parsing statics. {@code decode} accepts the stock prefixes -- {@code 0x}/{@code 0X}/{@code #}
+     * for hex, a leading {@code 0} for octal, otherwise decimal -- with an optional sign, and delegates the
+     * digits to {@link Integer}. Range is checked so an out-of-range value throws rather than wrapping
+     * silently, which is the whole point of the narrow wrappers.
+     *
+     * <p>Declared because a name-winning overlay silently drops what it does not declare; listed by
+     * {@code make overlaycheck} as referenced from JUnit's string-to-number conversion and picocli's converters.
+     */
+    public static byte parseByte(String s)
+    {
+        return parseByte(s, 10);
+    }
+
+    public static byte parseByte(String s, int radix)
+    {
+        int v = Integer.parseInt(s, radix);
+        if (v < MIN_VALUE || v > MAX_VALUE)
+        {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (byte) v;
+    }
+
+    public static Byte valueOf(String s)
+    {
+        return valueOf(parseByte(s, 10));
+    }
+
+    public static Byte valueOf(String s, int radix)
+    {
+        return valueOf(parseByte(s, radix));
+    }
+
+    public static Byte decode(String nm)
+    {
+        int v = Integer.decode(nm).intValue();
+        if (v < MIN_VALUE || v > MAX_VALUE)
+        {
+            throw new NumberFormatException("Value " + v + " out of range from input " + nm);
+        }
+        return valueOf((byte) v);
+    }
 }

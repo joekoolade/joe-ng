@@ -106,6 +106,116 @@ public final class Character implements Comparable<Character>
         return d;
     }
 
+    // ----- classification predicates -----------------------------------------------------------------------
+    // LATIN-1 ONLY, and that is a real limit, stated rather than hidden: the stock answers come from Unicode
+    // character-class tables that joe-ng does not carry, so anything above U+00FF is classified by the ASCII
+    // rules below and will disagree with stock for scripts that need those tables. Every caller reached so far
+    // (picocli's parser, JUnit's identifier and display-name checks, our own tokenizers) is ASCII in practice.
+    //
+    // Declared at all because a name-winning overlay silently drops what it does not declare: the call then
+    // resolves NOWHERE and surfaces as a DENYLIST TRAP. `make overlaycheck` is what listed these.
+    public static boolean isDigit(char ch)
+    {
+        return ch >= '0' && ch <= '9';
+    }
+
+    public static boolean isDigit(int cp)
+    {
+        return cp >= '0' && cp <= '9';
+    }
+
+    public static boolean isLetter(char ch)
+    {
+        return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+    }
+
+    public static boolean isLetter(int cp)
+    {
+        return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
+    }
+
+    public static boolean isLetterOrDigit(char ch)
+    {
+        return isLetter(ch) || isDigit(ch);
+    }
+
+    public static boolean isLetterOrDigit(int cp)
+    {
+        return isLetter(cp) || isDigit(cp);
+    }
+
+    public static boolean isUpperCase(char ch)
+    {
+        return ch >= 'A' && ch <= 'Z';
+    }
+
+    public static boolean isUpperCase(int cp)
+    {
+        return cp >= 'A' && cp <= 'Z';
+    }
+
+    public static boolean isLowerCase(char ch)
+    {
+        return ch >= 'a' && ch <= 'z';
+    }
+
+    public static boolean isLowerCase(int cp)
+    {
+        return cp >= 'a' && cp <= 'z';
+    }
+
+    /** Space, tab, newline, vertical tab, form feed, carriage return, and the file/group/record/unit separators. */
+    public static boolean isWhitespace(char ch)
+    {
+        return isWhitespace((int) ch);
+    }
+
+    public static boolean isWhitespace(int cp)
+    {
+        return cp == ' ' || (cp >= 0x09 && cp <= 0x0D) || (cp >= 0x1C && cp <= 0x1F);
+    }
+
+    /** {@code isSpaceChar} is the SPACE-SEPARATOR test, so a tab is NOT one -- unlike {@link #isWhitespace}. */
+    public static boolean isSpaceChar(char ch)
+    {
+        return ch == ' ' || ch == 0x00A0;                 // SPACE, NO-BREAK SPACE
+    }
+
+    public static boolean isSpaceChar(int cp)
+    {
+        return cp == ' ' || cp == 0x00A0;
+    }
+
+    public static boolean isISOControl(char ch)
+    {
+        return isISOControl((int) ch);
+    }
+
+    public static boolean isISOControl(int cp)
+    {
+        return (cp >= 0x00 && cp <= 0x1F) || (cp >= 0x7F && cp <= 0x9F);
+    }
+
+    public static boolean isJavaIdentifierStart(char ch)
+    {
+        return isLetter(ch) || ch == '$' || ch == '_';
+    }
+
+    public static boolean isJavaIdentifierStart(int cp)
+    {
+        return isLetter(cp) || cp == '$' || cp == '_';
+    }
+
+    public static boolean isJavaIdentifierPart(char ch)
+    {
+        return isJavaIdentifierStart(ch) || isDigit(ch);
+    }
+
+    public static boolean isJavaIdentifierPart(int cp)
+    {
+        return isJavaIdentifierStart(cp) || isDigit(cp);
+    }
+
     // ----- surrogate / BMP predicates (pure bit logic; 0xD800..0xDFFF is the surrogate range) ---------------
     public static boolean isHighSurrogate(char ch)
     {

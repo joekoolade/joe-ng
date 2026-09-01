@@ -39,4 +39,39 @@ public class Random
     {
         return ((long) next(32) << 32) + next(32);
     }
+
+    /**
+     * {@code nextInt(bound)} -- the stock algorithm exactly, including the REJECTION LOOP.
+     *
+     * <p>The loop is not optional and not an optimisation: the obvious {@code next(31) % bound} is BIASED
+     * whenever bound does not divide 2^31, because the low residues get one extra representative each. Stock
+     * rejects the values in that overhang and redraws, which is what makes the distribution uniform and what
+     * makes the sequence bit-for-bit reproducible against the JDK for a given seed -- the property this class's
+     * comment already claims. The power-of-two case is the stock fast path.
+     */
+    public int nextInt(int bound)
+    {
+        if (bound <= 0)
+        {
+            throw new IllegalArgumentException("bound must be positive");
+        }
+        if ((bound & -bound) == bound)
+        {
+            return (int) ((bound * (long) next(31)) >> 31);
+        }
+        int bits;
+        int val;
+        do
+        {
+            bits = next(31);
+            val = bits % bound;
+        }
+        while (bits - val + (bound - 1) < 0);
+        return val;
+    }
+
+    public boolean nextBoolean()
+    {
+        return next(1) != 0;
+    }
 }

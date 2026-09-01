@@ -47,6 +47,12 @@ public final class Module
         return null;
     }
 
+    /** Null: joe-ng has no module GRAPH either, so there is no layer to report. */
+    public ModuleLayer getLayer()
+    {
+        return null;
+    }
+
     @Override
     public String toString()
     {

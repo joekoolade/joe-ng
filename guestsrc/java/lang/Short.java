@@ -85,4 +85,40 @@ public final class Short extends Number implements Comparable<Short>
     {
         return Integer.toString(value);
     }
+
+    /** The string-parsing statics; see {@link Byte#decode} for the accepted {@code decode} prefixes. */
+    public static short parseShort(String s)
+    {
+        return parseShort(s, 10);
+    }
+
+    public static short parseShort(String s, int radix)
+    {
+        int v = Integer.parseInt(s, radix);
+        if (v < MIN_VALUE || v > MAX_VALUE)
+        {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (short) v;
+    }
+
+    public static Short valueOf(String s)
+    {
+        return valueOf(parseShort(s, 10));
+    }
+
+    public static Short valueOf(String s, int radix)
+    {
+        return valueOf(parseShort(s, radix));
+    }
+
+    public static Short decode(String nm)
+    {
+        int v = Integer.decode(nm).intValue();
+        if (v < MIN_VALUE || v > MAX_VALUE)
+        {
+            throw new NumberFormatException("Value " + v + " out of range from input " + nm);
+        }
+        return valueOf((short) v);
+    }
 }

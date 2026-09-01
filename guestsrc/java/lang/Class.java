@@ -317,6 +317,127 @@ public final class Class<T>
         return false;
     }
 
+    /**
+     * The cheap half of the reflection surface {@code make overlaycheck} listed as REFERENCED but dropped.
+     * Each of these is answerable from what the mirror already knows -- the Type chain, the modifiers, and the
+     * name -- so leaving them undeclared bought nothing and cost a DENYLIST TRAP on the day one is reached.
+     *
+     * <p>The half NOT added here is the half that needs machinery joe-ng does not have:
+     * {@code getAnnotation}/{@code getAnnotations} need a live annotation instance (a Proxy runtime),
+     * {@code getProtectionDomain} needs {@code java/security} (denylisted), {@code getResource*} needs URL and
+     * resource enumeration, and the generic-signature methods need a signature parser. Those stay in the
+     * backlog rather than being answered wrongly.
+     */
+    @SuppressWarnings("unchecked")
+    public <U> Class<? extends U> asSubclass(Class<U> clazz)
+    {
+        if (!clazz.isAssignableFrom(this))
+        {
+            throw new ClassCastException(getName() + " is not a subclass of " + clazz.getName());
+        }
+        return (Class<? extends U>) this;
+    }
+
+    /** Stock semantics: null casts cleanly; anything else must be an instance. */
+    @SuppressWarnings("unchecked")
+    public T cast(Object obj)
+    {
+        if (obj != null && !isInstance(obj))
+        {
+            throw new ClassCastException("Cannot cast " + obj.getClass().getName() + " to " + getName());
+        }
+        return (T) obj;
+    }
+
+    /** For a non-array, non-primitive class this is {@link #getName()}; arrays report the source-style form. */
+    public String getTypeName()
+    {
+        if (isArray())
+        {
+            Class<?> c = getComponentType();
+            return c == null ? getName() : c.getTypeName() + "[]";
+        }
+        return getName();
+    }
+
+    /** Null: joe-ng loads every class through one VM loader, which is the bootstrap loader's own answer. */
+    public ClassLoader getClassLoader()
+    {
+        return null;
+    }
+
+    public boolean isAnnotation()
+    {
+        return (getModifiers() & 0x2000) != 0;          // ACC_ANNOTATION
+    }
+
+    /**
+     * NESTING is read from the binary name, which is what the JVM guarantees for a nested class: javac emits
+     * {@code Outer$Inner}, and only a nested class carries a '$'. An anonymous class's simple name is all
+     * digits ({@code Outer$1}); a local class's begins with digits then letters ({@code Outer$1Named}); a
+     * member class's begins with a letter. This is the same rule {@link #getSimpleName} already relies on.
+     */
+    public boolean isMemberClass()
+    {
+        String sn = nestedSimpleName();
+        return sn != null && !sn.isEmpty() && !isDigit(sn.charAt(0));
+    }
+
+    public boolean isAnonymousClass()
+    {
+        String sn = nestedSimpleName();
+        if (sn == null || sn.isEmpty())
+        {
+            return false;
+        }
+        for (int i = 0; i < sn.length(); i++)
+        {
+            if (!isDigit(sn.charAt(i)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean isLocalClass()
+    {
+        String sn = nestedSimpleName();
+        return sn != null && !sn.isEmpty() && isDigit(sn.charAt(0)) && !isAnonymousClass();
+    }
+
+    /** The enclosing class of a nested class, or null. */
+    public Class<?> getEnclosingClass()
+    {
+        String n = getName();
+        int i = n.lastIndexOf('$');
+        if (i < 0)
+        {
+            return null;
+        }
+        try
+        {
+            return Class.forName(n.substring(0, i));
+        }
+        catch (ClassNotFoundException e)
+        {
+            return null;
+        }
+    }
+
+    /** The part after the last '$', or null when this class is not nested. */
+    private String nestedSimpleName()
+    {
+        String n = getName();
+        int i = n.lastIndexOf('$');
+        return i < 0 ? null : n.substring(i + 1);
+    }
+
+    private static boolean isDigit(char c)
+    {
+        return c >= '0' && c <= '9';
+    }
+
     /** The superclass's mirror (cached per Type, so {@code getSuperclass() == Super.class}), or null. */
     public Class getSuperclass()
     {
