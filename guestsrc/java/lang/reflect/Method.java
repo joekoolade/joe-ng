@@ -107,6 +107,29 @@ public final class Method extends AccessibleObject
         return out;
     }
 
+    /**
+     * The annotation INSTANCE, or null when absent. The object the VM returns implements the annotation
+     * interface: its Type carries an itable for that interface whose slots are two-instruction thunks reading
+     * the element values out of the instance (see {@code Loader.annoTibFor}). So {@code getAnnotation(X.class)
+     * .value()} is an ordinary interface dispatch, not a special case.
+     *
+     * <p>Element values that need a class RESOLVED -- a {@code Class} element, an enum constant, a nested
+     * annotation -- read null in this increment, because resolving one mid-walk would re-parse a blob and
+     * clobber the classfile cursor the walk is using.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(rgIndex, descriptorOf(anno));
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoGet}): registry index + descriptor -> instance. */
+    private static native Object annoGet0(int rgIndex, byte[] descriptor);
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoPresent}): registry index + descriptor -> 0/1. */
     private static native int annoPresent0(int rgIndex, byte[] descriptor);
 

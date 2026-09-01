@@ -1076,6 +1076,8 @@ public final class VM
         if (isPrimClassAddr == 0L) { long u = VMNatives.isPrimClass(0L); }            // Class.isPrimitive0
         if (primClassAddr == 0L) { long u = VMNatives.primClassOf(0L); }              // Class.primitiveClass0
         if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Method.annoPresent0
+        if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, 0L); }              // Method.annoGet0
+        if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(0L, 0L); }     // Class.annoGet0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
         if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
@@ -2285,6 +2287,8 @@ public final class VM
     static long isPrimClassAddr;       // VM.isPrimClass(J)J — Class.isPrimitive0 (primitive Type tag test)
     static long primClassAddr;         // VM.primClassOf(J)J — Class.primitiveClass0 (desc char -> mirror)
     static long annoPresentAddr;       // VM.annoPresent(JJ)J — Method.annoPresent0 (RuntimeVisibleAnnotations)
+    static long annoGetAddr;           // VMNatives.annoGet(JJ)J — Method.annoGet0 (annotation INSTANCE)
+    static long classAnnoGetAddr;      // VMNatives.classAnnoGet(JJ)J — Class.annoGet0
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
     static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0

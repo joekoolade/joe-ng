@@ -23,7 +23,6 @@ java/lang/Class#getMethods()[Ljava/lang/reflect/Method;
 java/lang/Class#getProtectionDomain()Ljava/security/ProtectionDomain;
 java/lang/Class#getResource(Ljava/lang/String;)Ljava/net/URL;
 java/lang/Class#getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;
-java/lang/Class#isAnnotationPresent(Ljava/lang/Class;)Z
 java/lang/Class#isRecord()Z
 java/lang/Class#newInstance()Ljava/lang/Object;
 java/lang/Class#toGenericString()Ljava/lang/String;

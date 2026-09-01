@@ -252,6 +252,32 @@ final class VMNatives
     }
 
     /**
+     * {@code Method.annoGet0(int, byte[])} native: the ANNOTATION INSTANCE for that descriptor on the method
+     * registered at {@code rgIndex}, or 0. The instance-level twin of {@link #annoPresent}, which only ever
+     * answered presence.
+     */
+    static long annoGet(long rgIndex, long descArr)
+    {
+        if (descArr <= 0x1000L)
+        {
+            return 0L;                                     // boot-time force-compile passes 0; no-op
+        }
+        int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+        return Loader.methodAnnotation((int) rgIndex, descArr, n);
+    }
+
+    /** {@code Class.annoGet0(Class, byte[])} native: the same, for an annotation on the CLASS itself. */
+    static long classAnnoGet(long mirror, long descArr)
+    {
+        if (descArr <= 0x1000L || mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int n = (int) Magic.load64(descArr + 16L);
+        return Loader.classAnnotation(mirror, descArr, n);
+    }
+
+    /**
      * {@code Class.primitiveClass0(long)} native: JVMS descriptor char -> the primitive {@code Class} mirror.
      * Backs {@code Class.getPrimitiveClass}, which stock wrapper initializers call for {@code Integer.TYPE}.
      */

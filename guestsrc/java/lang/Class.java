@@ -349,6 +349,44 @@ public final class Class<T>
         return (T) obj;
     }
 
+    /**
+     * The annotation INSTANCE carried by this class, or null. Same machinery as {@link
+     * java.lang.reflect.Method#getAnnotation} -- the returned object implements the annotation interface, so
+     * calling an element method on it is an ordinary interface dispatch.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(this, annoDescriptorOf(anno));
+    }
+
+    public boolean isAnnotationPresent(Class<?> anno)
+    {
+        return getAnnotation(anno) != null;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAnnoGet}): mirror + descriptor -> instance. */
+    private static native Object annoGet0(Class c, byte[] descriptor);
+
+    /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;} -- the form the classfile stores. */
+    private static byte[] annoDescriptorOf(Class<?> anno)
+    {
+        String n = anno.getName();
+        byte[] out = new byte[n.length() + 2];
+        out[0] = (byte) 'L';
+        for (int i = 0; i < n.length(); i++)
+        {
+            char c = n.charAt(i);
+            out[i + 1] = (byte) (c == '.' ? '/' : c);
+        }
+        out[out.length - 1] = (byte) ';';
+        return out;
+    }
+
     /** For a non-array, non-primitive class this is {@link #getName()}; arrays report the source-style form. */
     public String getTypeName()
     {
