@@ -5237,6 +5237,9 @@ public final class Loader
     private static long[] lzPullU;
     private static int lzPullN;
     private static boolean lzRetried;
+    /** Bounds the ON-DEMAND compile paths to one pull-and-retry each. Separate from {@link #lzRetried},
+     *  which those paths save and restore around their own attempt so a nested compile is unaffected. */
+    private static boolean odRetried;
 
     /** Note that the body being compiled reads a static of the (unloaded) class named at {@code clsU}.
      *  False if it is not worth retrying for -- absent from the classDir, denylisted, or the list is full. */
@@ -5345,13 +5348,63 @@ public final class Loader
             unresStaticSeen[unresStaticSeenN] = key;
             unresStaticSeenN += 1;
         }
+        long clsU = gbase + refClassNameOff(idx);
         Uart.write(Magic.bytes("\n  UNRESOLVED STATIC (reads null): "));
-        printNameAt(gbase + refClassNameOff(idx), 0);
+        printNameAt(clsU, 0);
         Uart.putc(0x2E);
         printNameAt(gbase + mrefNameOff(idx), 0);
-        Uart.write(Magic.bytes(" -- class never pulled; needed by "));
+        Uart.write(Magic.bytes(" -- "));
+        printWhyUnpulled(clsU);
+        Uart.write(Magic.bytes("; needed by "));
         printCompiling();
         Uart.putc(0x0A);
+    }
+
+    /**
+     * Say WHY the class behind an unresolved static is absent, instead of asserting a cause. This line used
+     * to read "class never pulled" unconditionally -- a message that states a diagnosis it never checked, so
+     * a class that WAS pulled but whose statics never reached {@code sgTab} reported as if the loader had
+     * never heard of it. Each arm below is a different bug with a different fix, and they were indistinguish-
+     * able on the wire.
+     */
+    private static void printWhyUnpulled(long clsU)
+    {
+        if (isDenylisted(clsU, 0))
+        {
+            Uart.write(Magic.bytes("DENYLISTED (reading null is intended)"));
+            return;
+        }
+        boolean registered = regBySigU(clsU) >= 0;
+        // Ask the IMAGE DIRECTORY, not classIndexByName -- that searches the LOADED registry (clTab), so it
+        // answers "not loaded", which is the question we are already asking with regBySigU. The first cut of
+        // this instrument used it and reported "absent from the classDir" for a class the image plainly
+        // carries. An instrument that conflates two tables is worse than none: it fabricates a cause.
+        boolean inDir = VM.dirBytes(clsU + 2L, u2(clsU)) != 0L;
+        if (registered)
+        {
+            // The pull worked and the class is live, so the hole is in static REGISTRATION, not in loading:
+            // adoptStatics/phase A never gave this class an sgTab entry. Nothing here widens the closure.
+            Uart.write(Magic.bytes("class IS REGISTERED but has no static cell (registration gap)"));
+        }
+        else if (!inDir)
+        {
+            Uart.write(Magic.bytes("class absent from the classDir (nothing can pull it)"));
+        }
+        else if (lzRetried)
+        {
+            // The one retry a lazy compile gets was already spent on some OTHER class this same body named.
+            Uart.write(Magic.bytes("in the classDir; the body's single retry was already spent"));
+        }
+        else if (!lzCompiling)
+        {
+            // compileReuseTib says "late compile", but the pull path needs lzCompiling -- so this getstatic
+            // is being resolved outside the compile() the retry brackets (a stub mint, a reloc pass).
+            Uart.write(Magic.bytes("in the classDir, but resolved outside the retry window"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("in the classDir; pull declined (list full?)"));
+        }
     }
 
     /** From {@code gp} (at the methods), return the bytecode address of the sought method. */
@@ -8506,8 +8559,38 @@ public final class Loader
             return -1;                                     // no such method, or abstract/native (no Code)
         }
         compileReuseTib = true;                            // do NOT rebuild/refill the class's TIB
+        int rcMark = rcCount;                              // this compile's own reloc sites start here
+        int rsMark = rsCount;
+        boolean outerCompiling = lzCompiling;              // a drain re-enters the compiler: save the whole note state
+        boolean outerRetried = lzRetried;
+        int outerPullN = lzPullN;
+        lzCompiling = true;                                // collect the classes this body's statics NAME
+        lzPullN = 0;
+        lzRetried = false;
         compile(code, gcodeLen, descOff, isStatic);
+        lzCompiling = outerCompiling;
         compileReuseTib = false;
+        boolean pulled = lzPullN > 0;
+        if (pulled)
+        {
+            drainPendingPulls();
+            rcCount = rcMark;                              // drop the doomed body's reloc sites: patching them later
+            rsCount = rsMark;                              //   would write into a buffer the sweep may have reused
+        }
+        lzRetried = outerRetried;
+        lzPullN = outerPullN;
+        if (pulled && !odRetried)
+        {
+            // Everything above is re-derived from (type, nameArr, descArr), so the retry is just this method
+            // again -- with the pulled classes present, so the getstatic resolves to the real cell. The first
+            // buffer is abandoned: nothing has registered it or stored it in a TIB slot, so no caller can have
+            // run it. `odRetried` bounds it to one attempt, since a class that is still missing after the pull
+            // would otherwise re-note and recurse for ever.
+            odRetried = true;
+            int r = compileMethodOnDemand(type, nameArr, descArr);
+            odRetried = false;
+            return r;
+        }
         registerAll();                                     // register the just-compiled method(s) -> globalBuf
         patchRelocs();                                     // resolve its cross-class calls (idempotent over prior relocs)
         if (dlen != 0)
@@ -9684,8 +9767,31 @@ public final class Loader
         int rcMark = rcCount;                           // patch only THIS compile's relocs (see patchRelocsFrom)
         int rsMark = rsCount;
         compileReuseTib = true;
+        boolean outerCompiling = lzCompiling;
+        boolean outerRetried = lzRetried;
+        int outerPullN = lzPullN;
+        lzCompiling = true;                             // same deferred-pull retry as compileMethodOnDemand
+        lzPullN = 0;
+        lzRetried = false;
         compile(code, gcodeLen, descOff, isStatic);
+        lzCompiling = outerCompiling;
         compileReuseTib = false;
+        boolean pulled = lzPullN > 0;
+        if (pulled)
+        {
+            drainPendingPulls();
+            rcCount = rcMark;
+            rsCount = rsMark;
+        }
+        lzRetried = outerRetried;
+        lzPullN = outerPullN;
+        if (pulled && !odRetried)
+        {
+            odRetried = true;                           // re-derived from (clsU, nameU, descU), like the twin above
+            long r = compileSigOnDemand(clsU, nameU, descU);
+            odRetried = false;
+            return r;
+        }
         registerAll();
         patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
         return bufBySigU(clsU, nameU, descU);
