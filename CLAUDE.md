@@ -122,6 +122,12 @@ defines the minimum the assembler must encode.
     `SerializablePermission extends BasicPermission`).
   - **No regression at any step:** `metal junit: ran 44, failures 0` / `ALL PASSED` and host tests unchanged
     (A64 94, object-model 22, class-reader 171, refmap 13, compiler 37, crypto 17, zip 91 -- 0 failures).
+  - **PI-VALIDATED over TWO cold boots** (`core 166MHz`, SMP on): both `ran 44, failures 0` / `ALL PASSED`,
+    `SMP: 4 of 4`, `smp sched: 4 of 4`, no `BOOT RE-ENTERED`, wild branch or `heap OOM`. **The repetition is
+    the evidence**: the two boots differ underneath (`gc: collections=7` vs `8`, different probe/heap counts),
+    which is exactly the cold-DRAM and timing variation the enlarged `DEMAND_ZERO_SPAN` has to cover, and
+    which QEMU structurally cannot show -- it hands out ZEROED DRAM, so a short span reads clean there and
+    wild-branches differently on each real power-on.
 
 - **A vtable slot from an UNRELATED class -- the `setMethod` failure, ROOT-CAUSED AND FIXED (2026-09-01).**
   `ZipOutputStream.close()` threw `IllegalArgumentException: invalid compression method`, from
