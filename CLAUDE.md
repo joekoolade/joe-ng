@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **ANNOTATION INSTANCES ON THE METAL -- `getAnnotation` returns a real object (2026-09-01).** The wall the
+  console launcher and 19 backlog entries sat behind. `Method.getAnnotation` and `Class.getAnnotation` now
+  return an object that IS the annotation interface, so `getAnnotation(Tag.class).value()` is an **ordinary
+  interface dispatch**, not a special case.
+  - **NO Proxy runtime, and none needed.** An annotation object has the SAME SHAPE as a synthesised lambda
+    (`finishLambdaClass`): an object whose Type carries an itable directory for one interface. A lambda has ONE
+    thunk (its SAM); an annotation has one per ELEMENT -- and each is **two instructions**, because the value
+    lives in the instance:
+    `ldr x0, [x0, #16 + slot*8]` / `ret`.
+  - **What makes it small is an IDENTITY, not a coincidence:** the interface's own itable slot numbering IS the
+    value index, because both sides are `ifmSlotIn`'s numbering for the same interface. Element method at slot
+    s reads value slot s. No name->value map, no boxing, no capture list.
+  - **Type/TIB/itable depend only on the INTERFACE, never the values**, so they are built once per annotation
+    type and shared by every instance (`annoTibFor`, cached, GC-rooted through the same `lambdaTibRoots` array
+    and for the same recorded reason -- nothing scanned would otherwise reference them).
+  - **The value array is TYPED as `Object[]`.** A raw 8-byte-element array is not traced as references, so the
+    Strings a `String[]` element holds would be reachable from nothing the collector follows and swept out from
+    under it.
+  - **Scope, stated: `Class` ('c'), enum ('e') and nested-annotation ('@') elements read NULL and are not
+    faked.** Resolving one demand-loads a class, and a load re-parses a blob and clobbers the `gcp`/`gbase`
+    cursor this walk is standing on -- the hazard already recorded for `buildLambdaTib`. The fix is the
+    note-and-retry route the static and class-literal paths use, and it belongs in its own increment.
+  - **An annotation whose INTERFACE is not loaded says so** (`ANNOTATION IFACE NOT LOADED`): without the
+    interface there is no itable to give the instance, and a silent null there would read as "the annotation is
+    absent" -- a different and wrong statement.
+  - **`test/jdk/junit/AnnoProxyProbe` asserts VALUES, not non-nullness.** A proxy returning the wrong slot
+    would still be non-null, which is exactly what a broken slot-index==value-index identity would produce.
+    QEMU: `value = hello`, `count = 7`, `names.length = 3`, `names = abc`, `absent = 1` -- all exact, first run.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, no `ANNOTATION IFACE NOT LOADED`, no new `LINK FAILED`. **The GC-root sharing is what
+    that boot actually tests**: annotation TIBs live in `lambdaTibRoots`, and getting that wrong sweeps a TIB
+    under memory pressure and wild-branches rather than failing an assertion -- so 8 collections with lambdas
+    in use throughout is the evidence. **The annotation runtime itself is NOT exercised by the suite** (
+    `MetalJUnit` uses the presence-only `isAnnotationPresent`); `AnnoProxyProbe` on QEMU is what proves the
+    feature. QEMU also green; host tests unchanged; backlog 65 -> 64.
+
 - **Overlay backlog 166 -> 65 (61%) -- third pass: Throwable, ThreadGroup, AtomicBoolean, ThreadLocal, Locale,
   ByteBuffer, InetAddress (2026-09-01).** 13 more restored.
   - **`Throwable.fillInStackTrace()` is a NO-OP returning `this`, deliberately.** joe-ng captures the backtrace

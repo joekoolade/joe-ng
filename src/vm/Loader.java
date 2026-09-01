@@ -7591,6 +7591,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Class")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.classAnnoGetAddr; }  // (Class,byte[]) -> instance
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
@@ -7612,6 +7613,7 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
@@ -11284,6 +11286,163 @@ public final class Loader
         return false;
     }
 
+    /**
+     * {@code Method.getAnnotation0}: the annotation instance for descriptor {@code descArr} carried by the
+     * method registered at {@code rgIndex}, or 0 if it is absent (or its interface is not loaded, since
+     * without the interface there is no itable to give the object).
+     */
+    static long methodAnnotation(int rgIndex, long descArr, int descLen)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return 0L;
+        }
+        long base = rgTab[rgIndex].base;
+        int nameOff = rgTab[rgIndex].nameOff;
+        int descOff = rgTab[rgIndex].descOff;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(base, gcp[u2(p + 2)], base, nameOff)
+                    && utf8EqAt(base, gcp[u2(p + 4)], base, descOff))
+            {
+                return annoFromAttrs(base, p + 8, attrs, descArr, descLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0L;
+    }
+
+    /** The class-level {@code attributes_count} position: past every method, which is where they begin. */
+    private static long classAttrsPos(long base)
+    {
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            p = skipAttributes(p + 8, u2(p + 6));
+            m += 1;
+        }
+        return p;
+    }
+
+    /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */
+    static long classAnnotation(long mirror, long descArr, int descLen)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[reg].base;
+        long p = classAttrsPos(base);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        return annoFromAttrs(base, p + 2L, u2(p), descArr, descLen);
+    }
+
+    /** Find RuntimeVisibleAnnotations in an attribute list and build the matching annotation's instance. */
+    private static long annoFromAttrs(long base, long p, int attrs, long descArr, int descLen)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            {
+                long pairs = annoListFind(base, p, descArr, descLen);
+                if (pairs == 0L)
+                {
+                    return 0L;
+                }
+                int ifaceReg = regOfAnnoDesc(descArr, descLen);
+                if (ifaceReg < 0)
+                {
+                    reportAnnoIfaceMissing(descArr, descLen);
+                    return 0L;
+                }
+                return buildAnnoObject(base, pairs, ifaceReg);
+            }
+            p += alen;
+            a += 1;
+        }
+        return 0L;
+    }
+
+    /** {@code "Lcom/x/Foo;"} -> the class-registry index of {@code com/x/Foo}, or -1 if it is not loaded. */
+    private static int regOfAnnoDesc(long descArr, int descLen)
+    {
+        if (descLen < 3)
+        {
+            return -1;
+        }
+        byte[] name = new byte[descLen - 2];            // strip the leading 'L' and the trailing ';'
+        int i = 0;
+        while (i < descLen - 2)
+        {
+            name[i] = (byte) u1(descArr + 24 + 1 + i);  // byte[] elements start at +24
+            i += 1;
+        }
+        return classIndexByName(name);
+    }
+
+    /**
+     * Name an annotation whose INTERFACE is not loaded. Without it there is no itable to give the instance, so
+     * the answer is null -- and a silent null here reads as "the annotation is absent", which is a different
+     * and wrong statement. Reported once per descriptor.
+     */
+    private static void reportAnnoIfaceMissing(long descArr, int descLen)
+    {
+        if (annoMissSeen == null)
+        {
+            annoMissSeen = new long[32];
+            annoMissSeenN = 0;
+        }
+        int k = 0;
+        while (k < annoMissSeenN)
+        {
+            if (annoMissSeen[k] == descArr)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (annoMissSeenN < 32)
+        {
+            annoMissSeen[annoMissSeenN] = descArr;
+            annoMissSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  ANNOTATION IFACE NOT LOADED (reads null): "));
+        int i = 0;
+        while (i < descLen)
+        {
+            Uart.putc((byte) u1(descArr + 24 + i));
+            i += 1;
+        }
+        Uart.putc(0x0A);
+    }
+
+    private static long[] annoMissSeen;
+    private static int annoMissSeenN;
+
     /** Scan an attribute list for RuntimeVisibleAnnotations and look for the wanted descriptor in it. */
     private static boolean annoInAttrs(long base, long p, int attrs, long descArr, int descLen)
     {
@@ -11322,6 +11481,221 @@ public final class Loader
             i += 1;
         }
         return false;
+    }
+
+    // ===== annotation INSTANCES ==========================================================================
+    // An annotation object has the SAME SHAPE as a synthesised lambda (finishLambdaClass): an object whose
+    // Type carries an itable directory for one interface. The difference is that a lambda has ONE thunk (its
+    // SAM) and an annotation has one per ELEMENT -- and each of those is trivial, because the value lives in
+    // the instance:
+    //
+    //     ldr x0, [x0, #16 + slot*8]
+    //     ret
+    //
+    // Two instructions, no boxing and no capture list, because the interface's own itable slot numbering IS
+    // the value index: the element method at slot s reads value slot s. That identity is what makes this
+    // small, and it is not a coincidence -- both sides are `ifmSlotIn`'s numbering for the same interface.
+    //
+    // Type/TIB/itable depend only on the annotation INTERFACE, never on the values, so they are built once per
+    // interface and shared by every instance.
+
+    private static final int MAXANNOTIB = 64;
+    private static long[] annoTibKey;                   // interface Type -> its shared TIB
+    private static long[] annoTibVal;
+    private static int annoTibN;
+
+    /** The shared TIB for annotation interface {@code ifaceReg}, built once and GC-rooted like a lambda's. */
+    private static long annoTibFor(int ifaceReg)
+    {
+        long ifaceType = clTab[ifaceReg].type;
+        if (ifaceType == 0L)
+        {
+            return 0L;
+        }
+        if (annoTibKey == null)
+        {
+            annoTibKey = new long[MAXANNOTIB];
+            annoTibVal = new long[MAXANNOTIB];
+            annoTibN = 0;
+        }
+        int i = 0;
+        while (i < annoTibN)
+        {
+            if (annoTibKey[i] == ifaceType)
+            {
+                return annoTibVal[i];
+            }
+            i += 1;
+        }
+        if (annoTibN >= MAXANNOTIB)
+        {
+            return 0L;
+        }
+        int n = clTab[ifaceReg].ifmCount;
+        long it = Heap.allocData(n > 0 ? n * 8 : 8);
+        int s = 0;
+        while (s < n)
+        {
+            long thunk = Heap.allocCode(8);
+            Heap.pinCodeAt(thunk);                      // only the itable names it; no `bl` displacement does
+            Magic.store32(thunk + 0L, A64Enc.ldrx(0, 0, 16 + s * 8));
+            Magic.store32(thunk + 4L, A64Enc.ret());
+            Heap.publishCode(thunk, thunk + 8L);        // another core may run it: maintenance is BY ADDRESS
+            Magic.store64(it + s * 8L, thunk);
+            s += 1;
+        }
+        long dir = Heap.allocData(2 * 16);
+        Magic.store64(dir + 0L, ifaceType);
+        Magic.store64(dir + 8L, it);
+        Magic.store64(dir + 16L, 0L);                   // sentinel: interfaceType 0 ends the directory
+        Magic.store64(dir + 24L, 0L);
+        long type = Heap.allocData(ObjectModel.TYPE_SIZE);
+        Magic.store64(type + 0L, (long) (16 + n * 8));
+        Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // NOT 0 -- see finishLambdaClass
+        Magic.store64(type + 16L, dir);
+        long tib = Heap.allocData(16);
+        Magic.store64(tib + 0L, type);
+        annoTibKey[annoTibN] = ifaceType;
+        annoTibVal[annoTibN] = tib;
+        annoTibN += 1;
+        if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
+        {
+            lambdaTibRoots[lambdaTibRootN] = tib;       // same GC root as a lambda TIB, for the same reason:
+            lambdaTibRootN += 1;                        //   nothing scanned would otherwise reference it
+        }
+        return tib;
+    }
+
+    /**
+     * Build the annotation object for the annotation whose element_value_pairs start at {@code pairsPos}, as
+     * an instance of interface {@code ifaceReg}.
+     *
+     * <p>ELEMENT TYPES: primitives, {@code String} and arrays of those. {@code Class} ('c'), enum ('e') and
+     * nested annotation ('@') elements are left NULL and reported by name -- deliberately, because resolving
+     * one demand-loads a class, and a load re-parses a blob and clobbers {@code gcp}/{@code gbase} underneath
+     * this walk. That is the same hazard recorded for {@code buildLambdaTib}; the fix is the note-and-retry
+     * route the static/class-literal paths already use, and it belongs in its own increment rather than
+     * bolted into the first one.
+     */
+    private static long buildAnnoObject(long base, long pairsPos, int ifaceReg)
+    {
+        long tib = annoTibFor(ifaceReg);
+        if (tib == 0L)
+        {
+            return 0L;
+        }
+        int n = clTab[ifaceReg].ifmCount;
+        long obj = Heap.alloc(16 + n * 8);
+        Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
+        int start = clTab[ifaceReg].ifmStart;
+        int pairs = u2(pairsPos);
+        int s = 0;
+        while (s < n)
+        {
+            long p = pairsPos + 2L;
+            int k = 0;
+            while (k < pairs)
+            {
+                int nameIdx = u2(p);
+                if (utf8EqAt(base, gcp[nameIdx], ifBase[start + s], ifNameOff[start + s]))
+                {
+                    Magic.store64(obj + 16L + s * 8L, annoElementValue(base, p + 2L));
+                    break;
+                }
+                p = skipElementValue(p + 2L);
+                k += 1;
+            }
+            s += 1;                                     // absent element -> 0/null (the default is not read yet)
+        }
+        return obj;
+    }
+
+    /** Decode one {@code element_value} to the word an element method should return. */
+    private static long annoElementValue(long base, long p)
+    {
+        int tag = u1(p);
+        int idx = u2(p + 1);
+        if (tag == 0x73)                                // 's' -- a String
+        {
+            return internUtf8Obj(base, gcp[idx]);
+        }
+        if (tag == 0x42 || tag == 0x43 || tag == 0x49 || tag == 0x53 || tag == 0x5A)
+        {
+            return (long) u4(base + gcp[idx]);          // B C I S Z -- all CONSTANT_Integer
+        }
+        if (tag == 0x4A)                                // 'J' -- CONSTANT_Long, two u4 halves
+        {
+            return ((long) u4(base + gcp[idx]) << 32) | ((long) u4(base + gcp[idx] + 4) & 0xFFFFFFFFL);
+        }
+        if (tag == 0x5B)                                // '[' -- array of element_values
+        {
+            int count = u2(p + 1);
+            long arr = Heap.allocArray(count, 8);
+            // TYPE it as Object[]: a RAW 8-byte-element array is not traced as references, so the Strings this
+            // array holds would be reachable from nothing the collector follows and swept out from under it.
+            long at = refArrayTib(objectTypeAddr());
+            if (at != 0L)
+            {
+                Magic.store64(arr + ObjectModel.TIB_OFFSET, at);
+            }
+            long q = p + 3L;
+            int i = 0;
+            while (i < count)
+            {
+                Magic.store64(arr + 24L + i * 8L, annoElementValue(base, q));
+                q = skipElementValue(q);
+                i += 1;
+            }
+            return arr;
+        }
+        return 0L;                                      // 'c' / 'e' / '@' -- see buildAnnoObject's note
+    }
+
+    /** A {@code java/lang/String} object for the Utf8 at {@code off} in {@code base} (no cp-index cache). */
+    private static long internUtf8Obj(long base, int off)
+    {
+        int len = u2(base + off);
+        long bytes = Heap.allocArray(len, 1);
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(bytes + ObjectModel.TIB_OFFSET, bt);
+        }
+        int i = 0;
+        while (i < len)
+        {
+            Magic.store8(bytes + 24 + i, u1(base + off + 2 + i));
+            i += 1;
+        }
+        long tib = stringTib();
+        if (tib == 0L)
+        {
+            return bytes;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, tib);
+        Magic.store64(obj + 16L, bytes);
+        return obj;
+    }
+
+    /** The position of the element_value_pairs of the annotation matching {@code descArr}, or 0. */
+    private static long annoListFind(long base, long p, long descArr, int descLen)
+    {
+        int n = u2(p);
+        p += 2;
+        int i = 0;
+        while (i < n)
+        {
+            int typeIdx = u2(p);
+            p += 2;
+            if (utf8EqArr(base, gcp[typeIdx], descArr, descLen))
+            {
+                return p;
+            }
+            p = skipElementPairs(p);
+            i += 1;
+        }
+        return 0L;
     }
 
     /** {@code { u2 num_pairs; { u2 name_index; element_value }[] }} -> the position after it. */
