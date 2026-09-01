@@ -60,6 +60,30 @@ public final class Class<T>
     }
 
     /** The class's binary name with dots (M4), built by the VM from the loader registry's name bytes. */
+    /**
+     * The single unnamed module (joe-ng has no module layer -- see {@link Module}). Stock code calls this on
+     * ordinary paths, e.g. JUnit's {@code ModuleUtils.getModuleVersion}, which then short-circuits on
+     * {@code isNamed()}.
+     */
+    /**
+     * Always null: joe-ng has no {@code Package} objects -- the boot image is a flat class directory with no
+     * package-level metadata (no sealing, no spec/impl title or version, no manifest attributes).
+     *
+     * <p>Null is a SUPPORTED answer, not a fudge. The JDK contract is "null if no Package object was created
+     * by the class loader", and stock callers handle it: JUnit's {@code PackageUtils.getAttribute} wraps this
+     * in {@code Optional.ofNullable(...)} precisely so an absent package yields an empty Optional. Returning
+     * a fabricated Package with blank attributes would be the lie.
+     */
+    public Package getPackage()
+    {
+        return null;
+    }
+
+    public Module getModule()
+    {
+        return Module.UNNAMED;
+    }
+
     public String getName()
     {
         return getName0(this);

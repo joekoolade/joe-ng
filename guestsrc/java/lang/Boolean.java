@@ -43,6 +43,38 @@ public final class Boolean implements Comparable<Boolean>
         return (x == y) ? 0 : (x ? 1 : -1);
     }
 
+    /**
+     * {@code true} iff the system property {@code name} exists and equals "true", ignoring case -- the stock
+     * contract, including returning false (never throwing) for a null, empty or absent name.
+     *
+     * <p>Present because a NAME-WINNING OVERLAY SILENTLY DROPS whatever it does not declare, and the call then
+     * resolves nowhere and ends in a denylist trap. That is how JUnit's picocli died here: its
+     * {@code loadClosureClass} opens with {@code Boolean.getBoolean("...disable.closures")}. Stock library code
+     * reaches these "small" statics on ordinary paths, and the same trap has now been paid for
+     * StringBuilder/Appendable, Class.getPrimitiveClass, the wrappers' TYPE, Throwable.initCause and
+     * Character.toString.
+     */
+    public static boolean getBoolean(String name)
+    {
+        if (name == null || name.isEmpty())
+        {
+            return false;
+        }
+        String v = System.getProperty(name);
+        return parseBoolean(v);
+    }
+
+    /** {@code true} iff {@code s} equals "true" ignoring case; false for null, per the stock contract. */
+    public static boolean parseBoolean(String s)
+    {
+        return s != null && s.equalsIgnoreCase("true");
+    }
+
+    public static String toString(boolean b)
+    {
+        return b ? "true" : "false";
+    }
+
     public int compareTo(Boolean other)
     {
         return compare(this.value, other.value);

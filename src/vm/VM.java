@@ -1058,6 +1058,7 @@ public final class VM
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
+        if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
         if (arraycopyAddr == 0L) { VMNatives.arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
@@ -1608,7 +1609,9 @@ public final class VM
         long mysp = Magic.readSP();                            // denylistTrap's own frame base (SP is stable post-prologue)
         Uart.write(Magic.bytes("\nDENYLIST TRAP: call into a pruned (metal-absent) class -- see Loader.isDenylisted\n"));
         int k = Loader.trapIndexFor(lr);                       // #43: match against the TRAPWIRE table printed at patch time
-        Uart.write(Magic.bytes("  fired TRAPWIRE index="));
+        Uart.write(Magic.bytes("  denied callee:"));
+        Loader.printTrapCallee(k);                             // WHAT was denied, not just which slot said so
+        Uart.write(Magic.bytes("\n  fired TRAPWIRE index="));
         printDec(k);
         Uart.write(Magic.bytes(" (lr="));
         printHex(lr);
@@ -2235,6 +2238,7 @@ public final class VM
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
+    static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
     static long arraycopyAddr;         // VM.arraycopy(JIJII)V — System.arraycopy
     // Implicit-exception constructors the JIT calls on a failed null/bounds check (writer-stashed).
     static long newNpeAddr;            // VM.newNpe()J    — a java/lang/NullPointerException

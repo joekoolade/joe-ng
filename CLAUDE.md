@@ -76,6 +76,53 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **TOWARD THE REAL JUnit `ConsoleLauncher` ON METAL: ten blockers cleared, NOT YET RUNNING (2026-09-01).**
+  Goal: replace the hand-written `MetalJUnit` with stock `org.junit.platform.console.ConsoleLauncher`,
+  demand-loaded from the RAMFS jar. It is FOUND, LAUNCHED, and now executes inside `ConsoleLauncher.main` ->
+  `CommandFacade.run`. **Every failure so far has been a nameable gap, not an architectural wall.**
+  - **Caps (each hit in turn, each raised):** `MAXBLOB` 1024 -> 4096, `MAXCLASS` -> 4096, `MAXVT` 16384 ->
+    65536, `MAXREG` -> 24576, `MAXLAZY` 8192 -> 32768. **`DEMAND_ZERO_SPAN` 24 -> 96 MiB WITH them**, because
+    the code comment ties the two: the pre-zeroed span is sized so no batch can outgrow it, and a bigger
+    MAXBLOB without it reintroduces the cold-DRAM wild branches that span exists to prevent.
+  - **`java/lang/Module` (new overlay) + `Class.getModule()`.** joe-ng has no module layer, so the single
+    UNNAMED module is the TRUE answer, not a stub: `ModuleUtils.getModuleVersion` short-circuits on
+    `isNamed()` and returns `Optional.empty()`. `getDescriptor()` returns null per the JDK's own contract.
+  - **`Class.getPackage()` -> null**, which `PackageUtils.getAttribute` explicitly supports
+    (`Optional.ofNullable`). Fabricating a blank `Package` would have been the lie.
+  - **`seedSystemProps()`** -- stock `System.initPhase1` never runs, so `props` is null and the first
+    `setProperty` NPEs inside java.base. Unlike the `System.out` precedent this CANNOT be a bare allocation:
+    `Properties` extends `Hashtable`, so a TIB-only object just moves the NPE into `put`. The `<init>` is
+    resolved and run.
+  - **`Unsafe.storeFence/loadFence/fullFence`** -> one full `dsb` (`VMNatives.unsafeFence`). Stronger than
+    required is always correct, and these are cold paths where a one-way barrier would buy nothing and could
+    be wrong invisibly.
+  - **THE DENYLIST TRAP NAMES ITS CALLEE NOW (`denied callee: <class>.<method>`)** -- two words per trap-wire
+    site. It used to print `index=126` and nothing else, a number meaningful only with the verbose patch-time
+    dump from the SAME boot; turning that dump on **flooded the UART and starved the run it was meant to
+    diagnose** (the "boot lines cost seconds" lesson, paid again). **This was the highest-leverage change of
+    the arc:** the next two blockers each fell in ONE round after it.
+  - **`Boolean.getBoolean` -- THE OVERLAY-DROPS-STOCK-MEMBERS TRAP FOR THE SIXTH TIME** (after
+    StringBuilder/Appendable, `Class.getPrimitiveClass`, the wrappers' `TYPE`, `Throwable.initCause`,
+    `Character.toString`). Undeclared -> resolves nowhere -> denylist trap, NOT a missing-method error.
+    `parseBoolean`/`toString(boolean)` added beside it.
+  - **`Collections.unmodifiableList`/`unmodifiableCollection`/`unmodifiableMap`/`emptyList`/`emptyMap`/
+    `singletonList`** -- same trap, same class as the earlier `enumeration` gap. Returning the backing
+    collection is exact wherever the result is only READ, which is every path joe-ng runs; a mutating caller
+    would silently succeed instead of throwing, and that is documented rather than quietly aliased.
+  - **A NEW REPORT ARM FIRED ON SOMETHING UNRELATED:** `java/time/Duration.MAX -- class IS REGISTERED but has
+    no static cell (registration gap)`. A distinct defect the old unconditional "class never pulled" wording
+    would have mislabelled.
+  - **STILL BLOCKED, and stated: `java/util/concurrent/ConcurrentHashMap.<init>` is DENYLISTED** -- a bigger
+    piece than the last several (un-denylist and pull a large concurrency closure, or write a synchronized
+    HashMap-backed overlay whose surface is wide enough that a partial one would re-earn the silent-drop
+    trap). **Beyond it sits `ServiceLoader` engine discovery**, which needs `META-INF/services` resource
+    enumeration out of the jar -- the largest remaining piece. Also open in this closure:
+    `LAMBDA IFACE UNRESOLVED org/junit/platform/launcher/LauncherInterceptor$Invocation`, and two
+    `UNREGISTERED SUPER (fields alias)` warnings (`URLClassLoader extends SecureClassLoader`,
+    `SerializablePermission extends BasicPermission`).
+  - **No regression at any step:** `metal junit: ran 44, failures 0` / `ALL PASSED` and host tests unchanged
+    (A64 94, object-model 22, class-reader 171, refmap 13, compiler 37, crypto 17, zip 91 -- 0 failures).
+
 - **A vtable slot from an UNRELATED class -- the `setMethod` failure, ROOT-CAUSED AND FIXED (2026-09-01).**
   `ZipOutputStream.close()` threw `IllegalArgumentException: invalid compression method`, from
   `setMethod(I)V`, which nothing in the test calls.
