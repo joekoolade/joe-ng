@@ -98,4 +98,16 @@ public final class Constructor<T> extends AccessibleObject
         if (tc == 'S') { return ((Short) a).shortValue(); }
         return a == null ? 0L : Magic.addrOf(a);           // 'L' / '[' reference
     }
+
+    /** ACC_SYNTHETIC / ACC_VARARGS -- see {@link Method#isSynthetic()}; both are bits of this member's own
+     *  access_flags, which this Constructor already carries. */
+    public boolean isSynthetic()
+    {
+        return (access & 0x1000) != 0;
+    }
+
+    public boolean isVarArgs()
+    {
+        return (access & 0x0080) != 0;
+    }
 }

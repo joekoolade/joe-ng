@@ -6,11 +6,6 @@
 # bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold
 # until the day they ran. The check exists to stop NEW ones appearing silently.
 java/io/FileInputStream#<init>(Ljava/io/File;)V
-java/io/PrintStream#<init>(Ljava/io/OutputStream;)V
-java/io/PrintStream#<init>(Ljava/io/OutputStream;Z)V
-java/io/PrintStream#append(C)Ljava/io/PrintStream;
-java/io/PrintStream#close()V
-java/io/PrintStream#write([BII)V
 java/lang/Class#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/Class#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/Class#getClasses()[Ljava/lang/Class;
@@ -49,26 +44,15 @@ java/lang/ThreadGroup#setDaemon(Z)V
 java/lang/ThreadLocal#withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;
 java/lang/Throwable#printStackTrace(Ljava/io/PrintWriter;)V
 java/lang/reflect/AccessibleObject#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
-java/lang/reflect/AccessibleObject#isAnnotationPresent(Ljava/lang/Class;)Z
-java/lang/reflect/Array#get(Ljava/lang/Object;I)Ljava/lang/Object;
-java/lang/reflect/Array#getLength(Ljava/lang/Object;)I
-java/lang/reflect/Array#getLong(Ljava/lang/Object;I)J
-java/lang/reflect/Array#newInstance(Ljava/lang/Class;[I)Ljava/lang/Object;
-java/lang/reflect/Array#set(Ljava/lang/Object;ILjava/lang/Object;)V
 java/lang/reflect/Constructor#getParameterAnnotations()[[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Constructor#getParameterTypes()[Ljava/lang/Class;
-java/lang/reflect/Constructor#isSynthetic()Z
 java/lang/reflect/Constructor#toGenericString()Ljava/lang/String;
 java/lang/reflect/Field#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Field#getAnnotations()[Ljava/lang/annotation/Annotation;
-java/lang/reflect/Field#getByte(Ljava/lang/Object;)B
-java/lang/reflect/Field#getChar(Ljava/lang/Object;)C
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
 java/lang/reflect/Field#getGenericType()Ljava/lang/reflect/Type;
-java/lang/reflect/Field#getShort(Ljava/lang/Object;)S
 java/lang/reflect/Field#getType()Ljava/lang/Class;
-java/lang/reflect/Field#isSynthetic()Z
 java/lang/reflect/Field#toGenericString()Ljava/lang/String;
 java/lang/reflect/InvocationTargetException#fillInStackTrace()Ljava/lang/Throwable;
 java/lang/reflect/Method#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
@@ -80,9 +64,6 @@ java/lang/reflect/Method#getParameterAnnotations()[[Ljava/lang/annotation/Annota
 java/lang/reflect/Method#getParameterTypes()[Ljava/lang/Class;
 java/lang/reflect/Method#getParameters()[Ljava/lang/reflect/Parameter;
 java/lang/reflect/Method#getReturnType()Ljava/lang/Class;
-java/lang/reflect/Method#isBridge()Z
-java/lang/reflect/Method#isDefault()Z
-java/lang/reflect/Method#isSynthetic()Z
 java/lang/reflect/Method#toGenericString()Ljava/lang/String;
 java/net/InetAddress#getLoopbackAddress()Ljava/net/InetAddress;
 java/nio/ByteBuffer#allocateDirect(I)Ljava/nio/ByteBuffer;

@@ -110,6 +110,56 @@ public final class Field extends AccessibleObject
         return Magic.load32(addr(obj)) != 0;
     }
 
+    /**
+     * The NARROW primitive reads/writes. A byte/short/char field occupies a full 8-byte slot in joe-ng's
+     * object layout, so the value is read as a word and narrowed by the cast -- the cast is what applies the
+     * sign extension for byte/short and the zero extension for char, which is exactly the stock contract.
+     *
+     * <p>{@code float}/{@code double} are deliberately absent: their values arrive in the FP registers, which
+     * joe-ng's reflective marshalling does not carry, so a plausible-looking {@code getFloat} would return a
+     * wrong number rather than fail. Left in the overlay backlog instead -- see {@code make overlaycheck}.
+     */
+    public byte getByte(Object obj) throws IllegalAccessException
+    {
+        return (byte) Magic.load32(addr(obj));
+    }
+
+    public void setByte(Object obj, byte v) throws IllegalAccessException
+    {
+        Magic.store32(addr(obj), v);
+    }
+
+    public short getShort(Object obj) throws IllegalAccessException
+    {
+        return (short) Magic.load32(addr(obj));
+    }
+
+    public void setShort(Object obj, short v) throws IllegalAccessException
+    {
+        Magic.store32(addr(obj), v);
+    }
+
+    public char getChar(Object obj) throws IllegalAccessException
+    {
+        return (char) Magic.load32(addr(obj));
+    }
+
+    public void setChar(Object obj, char v) throws IllegalAccessException
+    {
+        Magic.store32(addr(obj), v);
+    }
+
+    /** ACC_SYNTHETIC -- a compiler-generated field (an outer-instance {@code this$0}, a switch map). */
+    public boolean isSynthetic()
+    {
+        return (modifiers & 0x1000) != 0;
+    }
+
+    public boolean isEnumConstant()
+    {
+        return (modifiers & 0x4000) != 0;               // ACC_ENUM
+    }
+
     public void setBoolean(Object obj, boolean v) throws IllegalAccessException
     {
         Magic.store32(addr(obj), v ? 1 : 0);

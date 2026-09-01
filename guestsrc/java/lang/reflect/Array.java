@@ -1,5 +1,7 @@
 package java.lang.reflect;
 
+import magic.Magic;
+
 /**
  * A JDK-free, minimal {@code java.lang.reflect.Array} overlay (wins by name). Stock {@code Array.newInstance}
  * is a native over the JVM's typed-array creation. On metal we provide the 1-D {@code newInstance(Class, int)}
@@ -31,4 +33,73 @@ public final class Array
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.newReflectArray}): a raw {@code length}-element,
      *  8-byte-per-element reference array. */
     private static native Object newArray0(Class componentType, int length);
+
+    /**
+     * Length, and reference element get/set, read straight out of the object layout: {@link
+     * objectmodel.ObjectModel} puts an array's length at {@code +16} and its elements at {@code +24}. That is
+     * the same layout {@code arraylength} and {@code aaload} are lowered against, so this agrees with ordinary
+     * bytecode by construction rather than by convention.
+     *
+     * <p>Bounds are checked here. A reflective accessor that trusted its index would read or WRITE outside the
+     * object -- silent heap corruption, which is the failure mode this VM is least able to diagnose.
+     */
+    public static int getLength(Object array)
+    {
+        if (array == null)
+        {
+            throw new NullPointerException();
+        }
+        return (int) Magic.load64(Magic.addrOf(array) + 16L);
+    }
+
+    public static Object get(Object array, int index)
+    {
+        checkIndex(array, index);
+        long e = Magic.load64(Magic.addrOf(array) + 24L + (long) index * 8L);
+        return Magic.fromAddr(e);
+    }
+
+    public static void set(Object array, int index, Object value)
+    {
+        checkIndex(array, index);
+        Magic.store64(Magic.addrOf(array) + 24L + (long) index * 8L,
+                value == null ? 0L : Magic.addrOf(value));
+    }
+
+    public static long getLong(Object array, int index)
+    {
+        checkIndex(array, index);
+        return Magic.load64(Magic.addrOf(array) + 24L + (long) index * 8L);
+    }
+
+    public static int getInt(Object array, int index)
+    {
+        checkIndex(array, index);
+        return Magic.load32(Magic.addrOf(array) + 24L + (long) index * 8L);
+    }
+
+    /** Multi-dimensional {@code newInstance}. Only the 1-D case is real here (see the class note); a deeper
+     *  request is REFUSED rather than quietly given one dimension. */
+    public static Object newInstance(Class<?> componentType, int... dimensions)
+    {
+        if (dimensions == null || dimensions.length == 0)
+        {
+            throw new IllegalArgumentException("dimensions is empty");
+        }
+        if (dimensions.length > 1)
+        {
+            throw new UnsupportedOperationException(
+                    "joe-ng: reflective multi-dimensional arrays are not supported (" + dimensions.length + "D)");
+        }
+        return newInstance(componentType, dimensions[0]);
+    }
+
+    private static void checkIndex(Object array, int index)
+    {
+        int n = getLength(array);
+        if (index < 0 || index >= n)
+        {
+            throw new ArrayIndexOutOfBoundsException(index);
+        }
+    }
 }
