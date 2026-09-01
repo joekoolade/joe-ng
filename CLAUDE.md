@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Overlay backlog 166 -> 65 (61%) -- third pass: Throwable, ThreadGroup, AtomicBoolean, ThreadLocal, Locale,
+  ByteBuffer, InetAddress (2026-09-01).** 13 more restored.
+  - **`Throwable.fillInStackTrace()` is a NO-OP returning `this`, deliberately.** joe-ng captures the backtrace
+    at CONSTRUCTION (the `bt0..bt7` slots the VM fills), so there is nothing to fill -- and re-capturing here
+    would REPLACE a trace taken at the throw site with one taken wherever this is called, which is strictly
+    worse information. Stock subclasses override it to make an exception cheap, and it was exactly those
+    (`IllegalAccessException`, `InvocationTargetException`) the check flagged, because their
+    `super.fillInStackTrace()` resolved nowhere. Plus `getLocalizedMessage` = `getMessage`, stock's own default.
+  - **`ThreadGroup(String)`/`getName`/`isDaemon`/`setDaemon`/`getParent`** -- named groups are accepted and
+    FLATTENED into the one group: the name is remembered so `getName()` is truthful, but grouping has no
+    scheduling effect. Library code constructs a group to LABEL threads (supported); code expecting a group to
+    ISOLATE threads would be disappointed, and there is none on metal.
+  - **`AtomicBoolean` memory modes** and **`ThreadLocal.withInitial`** (an anonymous subclass overriding
+    `initialValue`, exactly as stock's `SuppliedThreadLocal`).
+  - **`Locale.setDefault` accepted and IGNORED, `forLanguageTag` parses the language subtag only.** joe-ng
+    carries no locale data, so there is nothing a different default could select, and the one place a Locale is
+    read (`Pattern`'s CASE_INSENSITIVE folding) wants ENGLISH -- already the default. **Accepting the call is
+    the point**: omitting it drops the member and the call traps instead of being harmlessly inert.
+  - **`ByteBuffer.allocateDirect` = `allocate`** (no off-heap region), with `isDirect()` still answering false
+    rather than claiming otherwise. **`InetAddress.getLoopbackAddress`** builds 127.0.0.1 directly -- a
+    loopback lookup that went to DNS would be both wrong and slow.
+  - **`Semaphore.tryAcquire`/`availablePermits` STAY OUT**: there is no try-acquire or count-peek intrinsic, so
+    they need VM work rather than an overlay method. Stated rather than faked.
+  - **Remaining 65 is the VM-feature tail**: annotation instances (Proxy), generic signatures, reflection
+    arrays, resource enumeration, `java/security`, TreeMap/TreeSet. The mechanical phase of this backlog is
+    over.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `smp sched: 4 of 4`, `gc: collections=8`, no new `LINK FAILED`, and **no `vtparity DIFF`** -- the last is
+    the meaningful absence, since adding `fillInStackTrace` WIDENS `java/lang/Throwable`'s vtable (the same
+    shape that took parity 16 -> 18 when `initCause`/`getCause` arrived) and a mismatch prints UNGATED. Every
+    one of the 44 tests runs through the exception machinery, so this is a real check rather than a quiet path.
+    QEMU also green; host tests unchanged; `overlay-check: 65 known gap(s), 0 new`.
+  - **Scope, stated:** the suite never constructs a named `ThreadGroup`, calls `Locale.setDefault` or asks for a
+    loopback address -- those belong to the console-launcher path and were seen on QEMU. The Pi run confirms NO
+    REGRESSION from widening Throwable, which is a different claim.
+
 - **Overlay backlog 166 -> 78 (53%) -- second pass adds the reflection predicates, `Array` and `PrintStream`
   (2026-09-01).** 19 more members restored on top of the 69 below.
   - **Access-flag predicates, which the member's own flags already answer:** `Method.isBridge`/`isVarArgs`/

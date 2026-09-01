@@ -48,4 +48,20 @@ public class ThreadLocal<T>
     {
         Thread.currentThread().tlRemove(this);
     }
+
+    /**
+     * {@code ThreadLocal.withInitial(supplier)} -- the factory form, implemented as an anonymous subclass
+     * overriding {@code initialValue()}, exactly as stock's {@code SuppliedThreadLocal} does.
+     */
+    public static <S> ThreadLocal<S> withInitial(java.util.function.Supplier<? extends S> supplier)
+    {
+        return new ThreadLocal<S>()
+        {
+            @Override
+            protected S initialValue()
+            {
+                return supplier.get();
+            }
+        };
+    }
 }
