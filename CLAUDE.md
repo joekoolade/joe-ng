@@ -101,8 +101,11 @@ defines the minimum the assembler must encode.
   - **CONSOLE LAUNCHER: two more blockers cleared.** Past `getDeclaredFields`, past the `updateVersion` NPE
     (defaults), now a `ClassCastException` in picocli's `UsageMessageSpec.updateFromCommand` -- consistent with
     a `Class`/enum-valued element still reading null, the gap this increment deliberately left.
-  - **QEMU:** probe exact -- `d.size = 9` (written), `d.name = anon` and `d.tags = 2:xy` (both defaulted);
-    `ran 44, failures 0` / `ALL PASSED`; host tests unchanged.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, no `LINK FAILED`, no fault from the new natives being in the table. **The suite calls
+    neither `getDeclaredFields` nor `getAnnotation`** -- the probe on QEMU is what proves both; this boot
+    confirms NO REGRESSION, which is a different claim. QEMU probe exact: `d.size = 9` (written),
+    `d.name = anon` and `d.tags = 2:xy` (both defaulted). Host tests unchanged.
 
 - **The annotation runtime had TWO bugs a direct probe could not see -- both fixed, backlog 65 -> 60
   (2026-09-01).** `getAnnotation` worked perfectly in `AnnoProxyProbe` and STILL failed for JUnit's launcher.
