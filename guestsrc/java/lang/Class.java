@@ -496,6 +496,117 @@ public final class Class<T>
      * Declared instance/static field named {@code name} (any access), or throws {@code NoSuchFieldException}.
      * Modifiers + type descriptor come from the loader re-walking this class's classfile ({@code fieldMeta0}).
      */
+    /**
+     * Every field this class DECLARES -- public or not, instance or static -- in classfile order.
+     *
+     * <p>Enumerated by index and resolved by NAME, which is sound here in a way the method equivalent is not:
+     * a class cannot declare two fields of the same name, so there is no descriptor ambiguity to guard against
+     * (that guard exists in {@link #getDeclaredMethods} because overloads DO collide, and resolving by name
+     * alone handed back the same overload twice).
+     *
+     * <p>Inherited fields are excluded, as stock requires -- {@link #getFields} is the one that walks up.
+     *
+     * <p><b>STATIC fields are omitted, and this DIVERGES from stock.</b> A {@code Field} here reads through an
+     * INSTANCE offset ({@code Field.addr} is {@code addrOf(obj) + fieldOffset}), and joe-ng's field registry
+     * holds instance fields only -- so a static would have to be handed back as an object whose {@code get()}
+     * computes a meaningless address. Returning nothing is the lesser wrong: a caller iterating fields sees
+     * fewer than it should, which is visible, rather than reading a plausible number from the wrong memory,
+     * which is not. Closing it properly means giving Field a static-cell mode, not widening this walk.
+     */
+    public java.lang.reflect.Field[] getDeclaredFields()
+    {
+        int n = (int) declaredFieldCount0(this);
+        java.lang.reflect.Field[] out = new java.lang.reflect.Field[n];
+        int i = 0;
+        int k = 0;
+        while (i < n)
+        {
+            String nm = declaredFieldAt0(this, i);
+            if (nm != null)
+            {
+                try
+                {
+                    out[k] = getDeclaredField(nm);
+                    k += 1;
+                }
+                catch (NoSuchFieldException e)
+                {
+                    // declared in the classfile but not resolvable through the field registry -- skip it
+                }
+            }
+            i += 1;
+        }
+        if (k == n)
+        {
+            return out;
+        }
+        java.lang.reflect.Field[] trimmed = new java.lang.reflect.Field[k];
+        int j = 0;
+        while (j < k)
+        {
+            trimmed[j] = out[j];
+            j += 1;
+        }
+        return trimmed;
+    }
+
+    /**
+     * The PUBLIC fields of this class and its superclasses, as stock. Walks the chain most-derived first; a
+     * field HIDDEN by a subclass declaration is reported once, by the most-derived declaration, which is what
+     * stock does and what a caller reading values expects.
+     */
+    public java.lang.reflect.Field[] getFields()
+    {
+        java.lang.reflect.Field[] acc = new java.lang.reflect.Field[64];
+        int k = 0;
+        Class<?> c = this;
+        int hops = 0;
+        while (c != null && hops < 24)
+        {
+            java.lang.reflect.Field[] own = c.getDeclaredFields();
+            int i = 0;
+            while (i < own.length && k < acc.length)
+            {
+                if ((own[i].getModifiers() & 0x0001) != 0)      // ACC_PUBLIC
+                {
+                    boolean hidden = false;
+                    int j = 0;
+                    while (j < k)
+                    {
+                        if (acc[j].getName().equals(own[i].getName()))
+                        {
+                            hidden = true;                      // a more-derived declaration already won
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if (!hidden)
+                    {
+                        acc[k] = own[i];
+                        k += 1;
+                    }
+                }
+                i += 1;
+            }
+            c = c.getSuperclass();
+            hops += 1;
+        }
+        java.lang.reflect.Field[] out = new java.lang.reflect.Field[k];
+        int j = 0;
+        while (j < k)
+        {
+            out[j] = acc[j];
+            j += 1;
+        }
+        return out;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredFieldAt}): the n-th declared field's NAME. */
+    private static native String declaredFieldAt0(Class<?> c, int want);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredFieldCount}): how many fields it declares. */
+    private static native long declaredFieldCount0(Class<?> c);
+
     public java.lang.reflect.Field getDeclaredField(String name) throws NoSuchFieldException
     {
         byte[] nb = name.getBytes();

@@ -1349,6 +1349,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodAt(JJ)J", "vm/VM.declMethodAddr");     // Class.declaredMethodAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodDescAt(JJ)J", "vm/VM.declMethodDescAddr"); // Class.declaredMethodDescAt0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredMethodCount(J)J", "vm/VM.declMethodCountAddr"); // Class.declaredMethodCount0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldAt(JJ)J", "vm/VM.declFieldAddr");        // Class.declaredFieldAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldDescAt(JJ)J", "vm/VM.declFieldDescAddr"); // Class.declaredFieldDescAt0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredFieldCount(J)J", "vm/VM.declFieldCountAddr"); // Class.declaredFieldCount0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.throwableTrace(J)J", "vm/VM.stackTraceAddr");        // Throwable.stackTrace0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.virtualResolve(JJ)J", "vm/VM.virtualResolveAddr"); // late virtual dispatch
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
