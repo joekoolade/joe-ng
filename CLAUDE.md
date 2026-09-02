@@ -95,10 +95,16 @@ defines the minimum the assembler must encode.
   - **CAVEAT, stated: the pc attribution is a nearest-body-below GUESS.** `+0x390` is 912 bytes into a method
     whose bytecode is 30 bytes, so the frame naming is unreliable even though the object's identity and the
     bytecode shape are solid. Do not build the fix on that offset.
-  - **Suspicion for the fix, unproven:** `maybeThrow`'s CALLER stores the caught exception in local **12**
-    (`astore 12` / `aload 12`), and joe-ng maps JVM locals to callee-saved x19..x28 -- ten registers, i.e.
-    slots 0..9. A slot past the register window needs a spill path, and that is where a slot-12 read could
-    return slot 0.
+  - **THE HIGH-LOCAL HYPOTHESIS IS REFUTED.** `maybeThrow`'s caller stores the caught exception in a local past
+    the register window (x19..x28 = slots 0..9), so the overflow spill looked like the culprit.
+    **`test/jdk/junit/HighLocalThrowProbe` reproduces that shape and PASSES** -- javac puts its catch variable
+    in slot **24**, and the value survives the spill, the call boundary and the rethrow intact
+    (`result = boom:66`). Kept as a pinned control so the search does not circle back to it.
+  - **Reproducing the SHAPE is not reproducing the CONDITION** -- the lesson this VM has taught before
+    (`LambdaThreadDemo` tested `new Thread(lambda)` but never a receiver whose directory lacked the entry).
+    What the probe does NOT have is picocli's other conditions: an ENORMOUS method with a DEEP operand stack
+    (past `OP_MAX = 7`, into the spill path), compiled LAZILY rather than in a batch. That is where to look
+    next.
   - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, **no `BAD THROW` on a healthy run** (checked -- an
     instrument that fires on a passing boot is worse than none); host tests unchanged; backlog 57.
 
