@@ -93,8 +93,25 @@ defines the minimum the assembler must encode.
     constructors had always ACCEPTED country and variant and thrown them away, so `getCountry()` would have had
     to lie; two references are cheaper than a wrong answer, and Locale carries no VM-fixed field offsets
     (unlike `Thread`).
-  - **CONSOLE LAUNCHER: past `Class.newInstance`, past `Character.getType`**, now at `Locale.getDefault`
-    (added here). It is well beyond picocli now -- into `java/time/format`, JUnit's reporting path.
+  - **FOUR MORE BLOCKERS CLEARED IN THE SAME PASS, using the deep scan to batch instead of one boot each:**
+    the reachable `Character` classification/code-point members and `StringBuilder.delete`/`codePointAt`;
+    **`ProcessEnvironment`** (the environment is EMPTY and that is the TRUTH -- there is no OS beneath the VM;
+    overlaid rather than denylisted precisely because the honest answer exists and a denylisted class would
+    keep trapping); **`MethodHandles.lookup()` returns a SINGLETON** instead of null, with
+    `Lookup.ensureInitialized` -- stock `SharedSecrets` calls it before reading EVERY access shim and catches
+    only `IllegalAccessException`, which a denylist trap is not.
+  - **THE VM HAS SYSTEM PROPERTIES NOW (`seedStandardProps`), and it states WHAT IT IS.** Library code reads
+    these unconditionally: picocli's `Ansi.isWindows()` does
+    `System.getProperty("os.name").toLowerCase()` and NPEs inside the library on a null. `os.name` and
+    `java.vm.name` say **joe-ng** rather than imitating Linux -- code that branches on the platform should not
+    be told something false. `line.separator` is `\n`, because `Uart.putc` is what turns that into CRLF and a
+    `\r\n` here would double the carriage returns.
+  - **CONSOLE LAUNCHER: through picocli's ENTIRE command-spec and subcommand setup now.** It ends in a
+    CORRUPTED state rather than a clean blocker -- a `LOADER LOCK stuck >10s` watchdog and an "exception"
+    whose class is `CommandLine$Interpreter`, which is not a Throwable at all. The
+    `NULL CLASS LITERAL: java/net/NetworkInterface` line above it is the likely cause: that is the family
+    where a literal for an unpulled class bakes null FOR EVER, and the earlier note-pull-recompile fix
+    evidently does not cover this site. **Next thread, and a real one rather than another missing member.**
   - **QEMU:** `ran 44, failures 0` / `ALL PASSED`; host tests unchanged; shallow backlog 57, unchanged.
 
 - **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**

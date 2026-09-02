@@ -304,6 +304,90 @@ public final class Character implements Comparable<Character>
         return OTHER_PUNCTUATION;                       // ! " # % & ' * , . / : ; ? @ \ -- the rest of ASCII
     }
 
+    /**
+     * The remaining classification and code-point helpers stock text code reaches, listed by
+     * {@code make overlaycheck-deep}. ASCII/Latin-1 only, the same stated limit as the predicates above:
+     * everything here answers from the character itself, never from a Unicode table joe-ng does not carry.
+     *
+     * <p>The properties that are MEANINGLESS without those tables -- {@code isMirrored}, {@code isIdeographic},
+     * the emoji family, {@code getName} -- are deliberately NOT declared. Answering "false" for them would be a
+     * confident claim about a character set this VM cannot see; leaving them absent keeps the gap visible in
+     * the deep scan, which is where it belongs.
+     */
+    public static boolean isAlphabetic(int cp)
+    {
+        return isLetter(cp);
+    }
+
+    public static boolean isDefined(int cp)
+    {
+        return cp >= 0 && cp <= 0x7F;                   // only ASCII is modelled -- say so rather than claim more
+    }
+
+    public static boolean isTitleCase(int cp)
+    {
+        return false;                                   // ASCII has no title-case characters; this IS exact
+    }
+
+    public static boolean isIdentifierIgnorable(int cp)
+    {
+        return (cp >= 0x00 && cp <= 0x08) || (cp >= 0x0E && cp <= 0x1B) || cp == 0x7F;
+    }
+
+    public static boolean isUnicodeIdentifierStart(int cp)
+    {
+        return isLetter(cp);
+    }
+
+    public static boolean isUnicodeIdentifierPart(int cp)
+    {
+        return isLetter(cp) || isDigit(cp) || cp == '_' || isIdentifierIgnorable(cp);
+    }
+
+    /** Digit value in {@code radix}, or -1 -- the code-point twin of {@link #digit(char,int)}. */
+    public static int getNumericValue(int cp)
+    {
+        if (cp >= '0' && cp <= '9')
+        {
+            return cp - '0';
+        }
+        if (cp >= 'A' && cp <= 'Z')
+        {
+            return cp - 'A' + 10;
+        }
+        if (cp >= 'a' && cp <= 'z')
+        {
+            return cp - 'a' + 10;
+        }
+        return -1;
+    }
+
+    /** The inverse of {@link #digit}: a digit value to its character, or NUL when out of range (as stock). */
+    public static char forDigit(int digit, int radix)
+    {
+        if (digit < 0 || digit >= radix || radix < 2 || radix > 36)
+        {
+            return '\0';
+        }
+        return (char) (digit < 10 ? '0' + digit : 'a' + digit - 10);
+    }
+
+    public static int codePointAt(char[] a, int index)
+    {
+        return a[index];                                // BMP only: a surrogate pair is not combined here
+    }
+
+    public static int toChars(int codePoint, char[] dst, int dstIndex)
+    {
+        dst[dstIndex] = (char) codePoint;
+        return 1;                                       // BMP only -- a supplementary point would need 2
+    }
+
+    public static char reverseBytes(char ch)
+    {
+        return (char) (((ch & 0xFF00) >> 8) | ((ch & 0x00FF) << 8));
+    }
+
     // ----- surrogate / BMP predicates (pure bit logic; 0xD800..0xDFFF is the surrogate range) ---------------
     public static boolean isHighSurrogate(char ch)
     {

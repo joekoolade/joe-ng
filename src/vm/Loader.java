@@ -6501,7 +6501,56 @@ public final class Loader
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
         Magic.store64(slot, obj);
+        seedStandardProps(obj, pi);
     }
+
+    /**
+     * Fill the standard system properties every JVM defines.
+     *
+     * <p>Not decoration: library code reads these UNCONDITIONALLY and does not expect null. picocli's
+     * {@code Ansi.isWindows()} does {@code System.getProperty("os.name").toLowerCase()} -- with no property it
+     * NPEs inside the library, far from anything the VM did. A property is also the one place joe-ng can state
+     * WHAT IT IS rather than imitate something else, so {@code java.vm.name} says joe-ng and {@code os.name}
+     * says so too: code that branches on the platform should not be told it is running on Linux.
+     *
+     * <p>{@code line.separator} is "\n": {@code Uart.putc} is what turns that into CRLF for the console, so a
+     * "\r\n" here would double the carriage returns.
+     */
+    private static void seedStandardProps(long props, int propsClass)
+    {
+        int m = methodResolveRegistry(clTab[propsClass].type, Magic.addrOf(Magic.bytes("setProperty")));
+        if (m < 0 || rgTab[m] == null || rgTab[m].buf == 0L)
+        {
+            return;                                     // no setProperty: leave the map empty rather than halt
+        }
+        long buf = rgTab[m].buf;
+        putProp(buf, props, Magic.bytes("os.name"), Magic.bytes("joe-ng"));
+        putProp(buf, props, Magic.bytes("os.arch"), Magic.bytes("aarch64"));
+        putProp(buf, props, Magic.bytes("os.version"), Magic.bytes("1.0"));
+        putProp(buf, props, Magic.bytes("java.vm.name"), Magic.bytes("joe-ng"));
+        putProp(buf, props, Magic.bytes("java.vm.vendor"), Magic.bytes("joe-ng"));
+        putProp(buf, props, Magic.bytes("java.version"), Magic.bytes("26"));
+        putProp(buf, props, Magic.bytes("java.specification.version"), Magic.bytes("26"));
+        putProp(buf, props, Magic.bytes("line.separator"), Magic.bytes("\n"));
+        putProp(buf, props, Magic.bytes("file.separator"), Magic.bytes("/"));
+        putProp(buf, props, Magic.bytes("path.separator"), Magic.bytes(":"));
+        putProp(buf, props, Magic.bytes("file.encoding"), Magic.bytes("UTF-8"));
+        putProp(buf, props, Magic.bytes("native.encoding"), Magic.bytes("UTF-8"));
+        putProp(buf, props, Magic.bytes("user.dir"), Magic.bytes("/"));
+        putProp(buf, props, Magic.bytes("user.name"), Magic.bytes("root"));
+        putProp(buf, props, Magic.bytes("java.io.tmpdir"), Magic.bytes("/tmp"));
+    }
+
+    /** One {@code props.setProperty(key, value)} through the ordinary call convention. */
+    private static void putProp(long buf, long props, byte[] key, byte[] value)
+    {
+        long[] args = new long[3];
+        args[0] = props;
+        args[1] = guestString(key);
+        args[2] = guestString(value);
+        Magic.callN(buf, Magic.addrOf(args) + 24L);     // args[] elements start at +24
+    }
+
 
     /**
      * Install {@code System.out} / {@code System.err} with a metal {@link java.io.PrintStream} overlay (call
