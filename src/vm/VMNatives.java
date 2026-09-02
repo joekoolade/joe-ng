@@ -231,6 +231,24 @@ final class VMNatives
         return Loader.declaredMethodDesc(mirror, (int) want);
     }
 
+    /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
+    static long declaredFieldAt(long mirror, long want)
+    {
+        return Loader.declaredFieldName(mirror, (int) want);
+    }
+
+    /** {@code Class.declaredFieldDescAt0(Class,int)} native: the n-th declared field's DESCRIPTOR. */
+    static long declaredFieldDescAt(long mirror, long want)
+    {
+        return Loader.declaredFieldDesc(mirror, (int) want);
+    }
+
+    /** {@code Class.declaredFieldCount0(Class)} native: how many fields the class declares (statics included). */
+    static long declaredFieldCount(long mirror)
+    {
+        return Loader.declaredFieldName(mirror, -1);
+    }
+
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
     static long declaredMethodCount(long mirror)
     {

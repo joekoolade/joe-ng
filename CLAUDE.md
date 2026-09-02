@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`getDeclaredFields` + annotation DEFAULTS -- two more launcher blockers, backlog 60 -> 58 (2026-09-01).**
+  - **`Class.getDeclaredFields`/`getFields`**, enumerated by a classfile walk of the FIELDS section.
+    Deliberately NOT reusing `parseFields()`: that is the LAYOUT pass -- it assigns slots, consults the
+    superclass chain and writes `gsf*`/`superUnregistered` -- so reusing it for a read-only query would re-run
+    layout as a side effect of reflection. This walk touches nothing but the cursor.
+    Resolved by NAME, which is sound here in a way the METHOD equivalent is not: a class cannot declare two
+    fields of the same name, so there is no overload ambiguity to guard against.
+  - **STATIC fields are omitted, and that DIVERGES from stock -- stated, not hidden.** A `Field` reads through
+    an INSTANCE offset (`addrOf(obj) + fieldOffset`) and the field registry holds instance fields only, so a
+    static would be an object whose `get()` computes a meaningless address. **Returning fewer fields is
+    visible; reading a plausible number from the wrong memory is not.** The probe pins `2 (stock 3)` so the
+    divergence cannot drift silently.
+  - **ANNOTATION DEFAULTS (`AnnotationDefault`), and they are not optional:** an annotation use writes only the
+    elements it overrides, so picocli's `@Command(name = "junit")` leaves a dozen defaulted -- which read null
+    and made the library **NPE on its own annotation**. That is exactly how it surfaced.
+  - **Two phases, never interleaved.** Written pairs are decoded against the ANNOTATED class's blob; defaults
+    live in the ANNOTATION TYPE's classfile and reading them re-parses that blob, clobbering the `gcp`/`gbase`
+    cursor phase 1 walks. Element names are snapshotted as ABSOLUTE addresses before the re-parse, because
+    `ifNameOff[]` is an offset into a blob the parse is about to change out from under.
+  - **The probe caught a real bug the moment it was written** -- `declaredFields = 2 (want 3)` -- which is why
+    it counts AND names rather than checking non-emptiness: a walk that mis-steps its cursor still returns
+    plausible objects.
+  - **CONSOLE LAUNCHER: two more blockers cleared.** Past `getDeclaredFields`, past the `updateVersion` NPE
+    (defaults), now a `ClassCastException` in picocli's `UsageMessageSpec.updateFromCommand` -- consistent with
+    a `Class`/enum-valued element still reading null, the gap this increment deliberately left.
+  - **QEMU:** probe exact -- `d.size = 9` (written), `d.name = anon` and `d.tags = 2:xy` (both defaulted);
+    `ran 44, failures 0` / `ALL PASSED`; host tests unchanged.
+
 - **The annotation runtime had TWO bugs a direct probe could not see -- both fixed, backlog 65 -> 60
   (2026-09-01).** `getAnnotation` worked perfectly in `AnnoProxyProbe` and STILL failed for JUnit's launcher.
   - **(1) THE TYPE-VARIABLE BOUND IS THE DESCRIPTOR.** Declared `<T> T getAnnotation(Class<T>)`, the return

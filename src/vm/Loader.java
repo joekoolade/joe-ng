@@ -7605,6 +7605,9 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodDescAt0"))) { return VM.declMethodDescAddr; } // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldAt0")))   { return VM.declFieldAddr; }       // (Class,I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldDescAt0"))) { return VM.declFieldDescAddr; }  // (Class,I)String
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldCount0"))) { return VM.declFieldCountAddr; }  // (Class)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
@@ -11231,6 +11234,59 @@ public final class Loader
         return want < 0 ? (long) seen : 0L;
     }
 
+    /** The {@code want}-th declared FIELD's name, or the count when {@code want < 0}. */
+    static long declaredFieldName(long mirror, int want)
+    {
+        return declaredFieldPart(mirror, want, 0);
+    }
+
+    /** The {@code want}-th declared field's DESCRIPTOR -- the companion of {@link #declaredFieldName}. */
+    static long declaredFieldDesc(long mirror, int want)
+    {
+        return declaredFieldPart(mirror, want, 1);
+    }
+
+    /**
+     * Walk the classfile's FIELDS section: {@code part} 0 = the field's name Utf8, 1 = its descriptor.
+     *
+     * <p>Walked from the constant pool rather than reusing {@code parseFields()}, which is the LAYOUT pass --
+     * it assigns slots, consults the superclass chain and writes {@code gsf*}/{@code superUnregistered}. Reusing
+     * it for a read-only enumeration would re-run layout as a side effect of reflection, which is how a
+     * "harmless" query corrupts state. This walk touches nothing but the cursor.
+     *
+     * <p>STATIC fields are included, as {@code getDeclaredFields} requires: the caller filters by modifier if
+     * it cares, and dropping them here would silently answer a different question.
+     */
+    private static long declaredFieldPart(long mirror, int want, int part)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;                               // past access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int f = 0;
+        while (f < fcount)
+        {
+            if (want >= 0 && f == want)
+            {
+                return utf8ToString(base, gcp[u2(p + (part == 0 ? 2 : 4))]);
+            }
+            p = skipAttributes(p + 8, u2(p + 6));       // access, name, desc, attr_count, then attributes
+            f += 1;
+        }
+        return want < 0 ? (long) fcount : 0L;
+    }
+
     /** The Utf8 at {@code base+off} as a fresh guest String (no '/'->'.' rewrite; this is a plain name). */
     private static long utf8ToString(long base, int off)
     {
@@ -11249,8 +11305,10 @@ public final class Loader
     }
 
     // ----- runtime annotations ------------------------------------------------------------------------
-    // Marker-level: "does this method carry @Foo". Enough for discovery (@Test/@BeforeEach/@Disabled); element
-    // VALUES need annotation instances, which need Proxy or synthesized classes, and are a separate piece.
+    // Two levels. `methodAnnoPresent` is marker-level -- "does this method carry @Foo" -- and is enough for
+    // discovery (@Test/@BeforeEach/@Disabled). `methodAnnotation`/`classAnnotation` build a real INSTANCE whose
+    // element methods return the values; see annoTibFor. No Proxy runtime was needed: an annotation object has
+    // the same shape as a synthesised lambda.
     //
     // Only RuntimeVISIBLEAnnotations count. javac emits RuntimeINVISIBLEAnnotations unless the annotation type
     // itself is declared @Retention(RUNTIME) -- so an annotation without that is not merely unreadable here, it
@@ -11617,6 +11675,8 @@ public final class Loader
         Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
         int start = clTab[ifaceReg].ifmStart;
         int pairs = u2(pairsPos);
+        // PHASE 1 -- every element the annotation USE writes, decoded against the annotated class's blob.
+        boolean[] filled = new boolean[n];
         int s = 0;
         while (s < n)
         {
@@ -11628,14 +11688,88 @@ public final class Loader
                 if (utf8EqAt(base, gcp[nameIdx], ifBase[start + s], ifNameOff[start + s]))
                 {
                     Magic.store64(obj + 16L + s * 8L, annoElementValue(base, p + 2L));
+                    filled[s] = true;
                     break;
                 }
                 p = skipElementValue(p + 2L);
                 k += 1;
             }
-            s += 1;                                     // absent element -> 0/null (the default is not read yet)
+            s += 1;
         }
+        // PHASE 2 -- DEFAULTS, for every element the use omitted. Strictly after phase 1 and never interleaved
+        // with it: the defaults live in the ANNOTATION TYPE's classfile, and reading them re-parses that blob,
+        // which clobbers the gcp/gbase cursor phase 1 is walking. Two passes cost one extra parse and make the
+        // ordering impossible to get wrong.
+        //
+        // Not optional. An annotation use writes only the elements it overrides -- picocli's
+        // `@Command(name = "junit")` leaves a dozen defaulted -- so without this those read null and the
+        // library NPEs on its own annotation. That is exactly how this surfaced.
+        applyAnnoDefaults(obj, ifaceReg, filled, n);
         return obj;
+    }
+
+    /**
+     * Fill the elements a use omitted from the annotation TYPE's {@code AnnotationDefault} attributes.
+     *
+     * <p>An element's default is stored as a single {@code element_value} on the interface's own method, so
+     * this is the same decode as a written pair -- only the blob differs. Elements with neither a written value
+     * nor a default (a mandatory element) keep 0/null, which is what the classfile says.
+     */
+    private static void applyAnnoDefaults(long obj, int ifaceReg, boolean[] filled, int n)
+    {
+        int start = clTab[ifaceReg].ifmStart;
+        long ibase = clTab[ifaceReg].base;
+        // Snapshot the element NAMES as absolute Utf8 addresses BEFORE re-parsing: ifNameOff[] is an offset
+        // into ifBase[], and the parse below is what makes those offsets resolvable against a different blob.
+        long[] want = new long[n];
+        int s = 0;
+        while (s < n)
+        {
+            want[s] = filled[s] ? 0L : ifBase[start + s] + ifNameOff[start + s];
+            s += 1;
+        }
+        parseForMethods(ibase, blobLenOf(ibase));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            int slot = -1;
+            int j = 0;
+            while (j < n)
+            {
+                if (want[j] != 0L && utf8EqAt(ibase, nameOff, want[j], 0))
+                {
+                    slot = j;
+                    break;
+                }
+                j += 1;
+            }
+            if (slot >= 0)
+            {
+                long q = p + 8;
+                int a = 0;
+                while (a < attrs)
+                {
+                    int anIdx = u2(q);
+                    q += 2;
+                    int alen = u4(q);
+                    q += 4;
+                    if (utf8IsAtBase(ibase, gcp[anIdx], Magic.bytes("AnnotationDefault")))
+                    {
+                        Magic.store64(obj + 16L + slot * 8L, annoElementValue(ibase, q));
+                        break;
+                    }
+                    q += alen;
+                    a += 1;
+                }
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
     }
 
     /** Decode one {@code element_value} to the word an element method should return. */

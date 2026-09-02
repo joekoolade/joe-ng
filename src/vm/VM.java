@@ -1081,6 +1081,9 @@ public final class VM
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
         if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
+        if (declFieldAddr == 0L) { long u = VMNatives.declaredFieldAt(0L, -1L); }    // Class.declaredFieldAt0
+        if (declFieldDescAddr == 0L) { long u = VMNatives.declaredFieldDescAt(0L, -1L); }
+        if (declFieldCountAddr == 0L) { long u = VMNatives.declaredFieldCount(0L); }
         if (stackTraceAddr == 0L) { long u = VMNatives.throwableTrace(0L); }          // Throwable.stackTrace0
         if (virtualResolveAddr == 0L) { long u = VMNatives.virtualResolve(0L, 0L); }  // late virtual dispatch
         if (printStackTraceAddr == 0L) { VMNatives.printStackTrace(0L); }       // Throwable.printStackTrace0() native
@@ -2292,6 +2295,9 @@ public final class VM
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
     static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0
+    static long declFieldAddr;         // VMNatives.declaredFieldAt(JJ)J — Class.declaredFieldAt0
+    static long declFieldDescAddr;     // VMNatives.declaredFieldDescAt(JJ)J — Class.declaredFieldDescAt0
+    static long declFieldCountAddr;    // VMNatives.declaredFieldCount(J)J — Class.declaredFieldCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
