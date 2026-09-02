@@ -28,6 +28,22 @@ public class AnnoProxyProbe
     {
     }
 
+    public enum Colour
+    {
+        RED, GREEN, BLUE
+    }
+
+    /** Class- and enum-valued elements, both written and defaulted -- the phase-3 resolution path. */
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Typed
+    {
+        Class<?> type() default String.class;
+
+        Class<?> prim() default int.class;
+
+        Colour colour() default Colour.RED;
+    }
+
     /** Every element DEFAULTED, so a use that writes none must still read the declared defaults. */
     @Retention(RetentionPolicy.RUNTIME)
     public @interface Defaulted
@@ -51,6 +67,12 @@ public class AnnoProxyProbe
     /** Writes ONE element; the other two must come from AnnotationDefault. */
     @Defaulted(size = 9)
     public void partlyDefaulted()
+    {
+    }
+
+    /** `type` and `colour` written, `prim` defaulted -- so phase 3 must run for BOTH sources. */
+    @Typed(type = Integer.class, colour = Colour.BLUE)
+    public void typed()
     {
     }
 
@@ -82,6 +104,13 @@ public class AnnoProxyProbe
             if (n != null && n.length == 3)
             {
                 System.out.println("names = " + n[0] + n[1] + n[2] + " (want abc)");
+            // The array must be a REAL String[], not an Object[] that merely holds Strings: picocli does
+            // `cmd.customSynopsis().clone()` then `checkcast [Ljava/lang/String;`, and an Object[] fails it.
+            // instanceof is the same test the cast makes, without needing to catch.
+            System.out.println("names instanceof String[] = " + (((Object) n) instanceof String[])
+                    + " (want true)");
+            Object cloned = n.clone();
+            System.out.println("clone instanceof String[] = " + (cloned instanceof String[]) + " (want true)");
             }
         }
         Method untagged = AnnoProxyProbe.class.getDeclaredMethod("untagged");
@@ -99,6 +128,23 @@ public class AnnoProxyProbe
             String[] tg = d.tags();
             System.out.println("d.tags = " + (tg == null ? "null" : tg.length + ":" + tg[0] + tg[1])
                     + " (want 2:xy, defaulted)");
+        }
+
+        // CLASS and ENUM elements -- resolved in phase 3, after every classfile walk is finished, because
+        // resolving demand-loads and a load clobbers the cursor a walk stands on. Written AND defaulted are
+        // both checked: they arrive from different blobs.
+        Typed ty = AnnoProxyProbe.class.getDeclaredMethod("typed").getAnnotation(Typed.class);
+        System.out.println("typed = " + (ty != null));
+        if (ty != null)
+        {
+            Class<?> tc = ty.type();
+            Class<?> pr = ty.prim();
+            Colour c = ty.colour();
+            System.out.println("ty.type = " + (tc == null ? "null" : tc.getName()) + " (want java.lang.Integer)");
+            System.out.println("ty.type==Integer.class = " + (tc == Integer.class) + " (want true)");
+            System.out.println("ty.prim = " + (pr == null ? "null" : pr.getName()) + " (want int, defaulted)");
+            System.out.println("ty.colour = " + (c == null ? "null" : c.name()) + " (want BLUE)");
+            System.out.println("ty.colour==BLUE = " + (c == Colour.BLUE) + " (want true)");
         }
 
         // getDeclaredFields: counted AND named, because a walk that mis-steps its cursor still returns
