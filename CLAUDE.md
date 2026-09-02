@@ -76,6 +76,35 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**
+  Backlog 58 -> 57; the console launcher completed picocli's whole `CommandSpec` construction.
+  - **A THIRD PHASE resolves `'c'` and `'e'` elements**, after every classfile walk has finished -- the same
+    reason phases 1 and 2 are separated: resolving demand-loads, a load re-parses a blob, and that clobbers the
+    `gcp`/`gbase` cursor a walk is standing on. Pending entries hold ABSOLUTE Utf8 addresses, which survive a
+    re-parse because blobs do not move; only the parse STATE does.
+  - **Identity holds, which is the real test:** `ty.type == Integer.class` and `ty.colour == Colour.BLUE` are
+    both true -- the mirror and the enum constant are the SAME objects the rest of the VM uses, not copies.
+    Enum constants go through `ensureClinit` first, because the constants ARE statics and only `<clinit>` sets
+    them. Primitive class literals work too (`ty.prim = int`, defaulted).
+  - **MY PREDICTION WAS WRONG AND THE RUN SAID SO.** I expected this to clear the launcher's
+    `ClassCastException`; it did not move at all. The real cause was found by disassembling picocli at the
+    reported line: `customSynopsis().clone()` then `checkcast [Ljava/lang/String;`.
+  - **I HAD TYPED ANNOTATION ARRAYS AS `Object[]` -- traced correctly, WRONG TYPE.** A `String[]` element
+    reached picocli as an Object[], and the cast failed. Arrays are now typed from the ELEMENT METHOD'S OWN
+    DESCRIPTOR, which is the only place the declared type is written down: an `element_value` says what a value
+    IS, never what the declaration expects. Object[] remains the fallback when the element type is
+    unresolvable -- what must never happen is a RAW array, whose elements are not traced as references at all.
+  - **The probe now asserts `instanceof String[]` on the array AND ON ITS CLONE** -- the exact test picocli's
+    checkcast makes. The original probe printed the right strings out of a wrongly-typed array, which is
+    precisely the class of bug an element-value check cannot see.
+  - **`Class.newInstance()`** delegates to `getDeclaredConstructor().newInstance()` and KEEPS the checked
+    exceptions, because picocli catches around it and falls back -- swallowing the failure would turn its
+    fallback into dead code.
+  - **CONSOLE LAUNCHER: past `updateFromCommand` and the whole CommandSpec build**, now at
+    `Class.newInstance` -> added -> next run. Every remaining stop has been an ordinary reflection feature.
+  - **QEMU:** probe exact on all four kinds plus both array-type checks; `ran 44, failures 0` / `ALL PASSED`;
+    host tests unchanged.
+
 - **`getDeclaredFields` + annotation DEFAULTS -- two more launcher blockers, backlog 60 -> 58 (2026-09-01).**
   - **`Class.getDeclaredFields`/`getFields`**, enumerated by a classfile walk of the FIELDS section.
     Deliberately NOT reusing `parseFields()`: that is the LAYOUT pass -- it assigns slots, consults the

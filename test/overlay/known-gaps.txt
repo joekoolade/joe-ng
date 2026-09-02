@@ -13,8 +13,6 @@ java/lang/Class#getConstructors()[Ljava/lang/reflect/Constructor;
 java/lang/Class#getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/Class#getDeclaredClasses()[Ljava/lang/Class;
 java/lang/Class#getDeclaredConstructors()[Ljava/lang/reflect/Constructor;
-java/lang/Class#getDeclaredFields()[Ljava/lang/reflect/Field;
-java/lang/Class#getFields()[Ljava/lang/reflect/Field;
 java/lang/Class#getGenericSuperclass()Ljava/lang/reflect/Type;
 java/lang/Class#getInterfaces()[Ljava/lang/Class;
 java/lang/Class#getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;
@@ -23,7 +21,6 @@ java/lang/Class#getProtectionDomain()Ljava/security/ProtectionDomain;
 java/lang/Class#getResource(Ljava/lang/String;)Ljava/net/URL;
 java/lang/Class#getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;
 java/lang/Class#isRecord()Z
-java/lang/Class#newInstance()Ljava/lang/Object;
 java/lang/Class#toGenericString()Ljava/lang/String;
 java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;

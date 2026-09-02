@@ -394,6 +394,32 @@ public final class Class<T>
         return out;
     }
 
+    /**
+     * {@code newInstance()} -- the no-arg construction stock deprecated in favour of
+     * {@code getDeclaredConstructor().newInstance()}, which is exactly what it delegates to here.
+     *
+     * <p>Stock declares the checked {@code InstantiationException}/{@code IllegalAccessException} and this
+     * keeps them, so a caller's existing catch blocks still compile and still run: picocli's
+     * {@code DefaultFactory.create} catches around it and falls back, and swallowing the failure here would
+     * turn its fallback into dead code.
+     */
+    @SuppressWarnings("unchecked")
+    public T newInstance() throws InstantiationException, IllegalAccessException
+    {
+        try
+        {
+            return (T) getDeclaredConstructor().newInstance();
+        }
+        catch (NoSuchMethodException e)
+        {
+            throw new InstantiationException(getName() + " has no no-arg constructor");
+        }
+        catch (java.lang.reflect.InvocationTargetException e)
+        {
+            throw new InstantiationException(getName() + " constructor threw");
+        }
+    }
+
     /** For a non-array, non-primitive class this is {@link #getName()}; arrays report the source-style form. */
     public String getTypeName()
     {
