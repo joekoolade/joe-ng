@@ -13661,7 +13661,17 @@ public final class Loader
         }
         Uart.write(Magic.bytes("\n  NULL CLASS LITERAL: "));
         printNameAt(clsU, 0);
-        Uart.write(Magic.bytes(".class -- class never pulled; needed by "));
+        Uart.write(Magic.bytes(".class -- "));
+        printWhyUnpulled(clsU);                         // the CHECKED cause, not "class never pulled"
+        if (!lzCompiling)
+        {
+            Uart.write(Magic.bytes(", and OUTSIDE the retry window"));
+        }
+        else if (lzRetried)
+        {
+            Uart.write(Magic.bytes(", and the body's single retry was already spent"));
+        }
+        Uart.write(Magic.bytes("; needed by "));
         printCompiling();
         Uart.putc(0x0A);
     }

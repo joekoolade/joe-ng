@@ -109,9 +109,18 @@ defines the minimum the assembler must encode.
   - **CONSOLE LAUNCHER: through picocli's ENTIRE command-spec and subcommand setup now.** It ends in a
     CORRUPTED state rather than a clean blocker -- a `LOADER LOCK stuck >10s` watchdog and an "exception"
     whose class is `CommandLine$Interpreter`, which is not a Throwable at all. The
-    `NULL CLASS LITERAL: java/net/NetworkInterface` line above it is the likely cause: that is the family
-    where a literal for an unpulled class bakes null FOR EVER, and the earlier note-pull-recompile fix
-    evidently does not cover this site. **Next thread, and a real one rather than another missing member.**
+    `NULL CLASS LITERAL: java/net/NetworkInterface` line above it looked like the cause -- the family where a
+    literal for an unpulled class bakes null for ever.
+  - **THAT HYPOTHESIS WAS WRONG, AND ONE REPORT SETTLED IT.** `NULL CLASS LITERAL` still said
+    "class never pulled", an UNCHECKED assertion -- the identical trap already fixed for `UNRESOLVED STATIC`
+    hours earlier, left in place on the sibling message. Routed through `printWhyUnpulled`, it answers
+    immediately: **`java/net/NetworkInterface` is DENYLISTED**, so that null is INTENDED and was never the bug.
+    A wrong diagnosis ruled out by evidence in one run instead of a chase.
+  - **What remains is a WILD BRANCH, and the pc says so:** `<unclaimed pc=0x060B9DB8>` is above the code
+    ceiling (`CODE_LIMIT` = `0x0300_0000`) -- a HEAP address, not code -- with an absurd frame offset, preceded
+    by `LOADER LOCK stuck >10s`. That is a real VM bug and deserves its own session rather than another
+    overlay member. **Note QEMU runs ~100x slow, so a 10 s wall-clock watchdog can fire on legitimate work
+    there; the wild pc is the part that cannot be explained away.**
   - **QEMU:** `ran 44, failures 0` / `ALL PASSED`; host tests unchanged; shallow backlog 57, unchanged.
 
 - **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**
