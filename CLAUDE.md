@@ -98,10 +98,18 @@ defines the minimum the assembler must encode.
   - **`getGenericParameterTypes` builds a fresh `Type[]` and copies** rather than returning the `Class[]`:
     array covariance would permit it, but that leans on the VM's array-Type assignability for a cast the
     CALLER makes; allocating the right array costs one loop and no assumptions.
-  - **UNVERIFIED, and stated:** picocli warns that `--help`/`--version` are each registered FOUR times. That may
-    be ordinary aggregation across JUnit's four subcommands, or a duplicate-enumeration bug in
-    `getDeclaredFields`. **The probe pins 2 fields with correct names, so enumeration is right in the small;
-    this is not evidence either way at scale.**
+  - **THE DUPLICATE-OPTION WARNING IS REAL AND ITS CAUSE IS STILL UNKNOWN.** picocli warns that
+    `--help`/`--version` are each registered FOUR times. **The HOST JVM running the same jar and the same
+    command prints no such warning**, so it is joe-ng's, not picocli being noisy -- a ten-second control that
+    settled what a boot could not.
+  - **Two hypotheses ruled out by probe, not argument.** A superclass chain that revisits or fails to
+    terminate would make picocli's `cls = cls.getSuperclass()` collection loop: the chain is exactly
+    `Sub -> Fields -> Object`, 3 hops, terminating. And a stateful enumeration that drifts between calls:
+    `getDeclaredFields()` twice on the same class gives `2,2`. **Still open**, with `getDeclaredMethods`
+    (annotated SETTERS) the untested candidate.
+  - **The same host control also settled an earlier question:** `execute --select-class=... --disable-ansi-colors
+    --disable-banner` is a VALID command line, so the "Unknown options" seen before was a genuine VM gap (field
+    annotations) and never bad arguments.
   - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
     checks`; backlog 54 -> 47.
 

@@ -147,6 +147,27 @@ public class AnnoProxyProbe
             System.out.println("ty.colour==BLUE = " + (c == Colour.BLUE) + " (want true)");
         }
 
+        // SUPERCLASS CHAIN: picocli collects annotated members by walking `cls = cls.getSuperclass()` until
+        // null, so a chain that revisits or fails to terminate collects the same fields repeatedly -- which is
+        // what "Multiple options [--help, --help, --help, --help]" would look like. The host JVM prints no
+        // such warning for the same command, so it is joe-ng's.
+        StringBuilder chain = new StringBuilder();
+        Class<?> c = Sub.class;
+        int hops = 0;
+        while (c != null && hops < 8)
+        {
+            chain.append(c.getName()).append(' ');
+            c = c.getSuperclass();
+            hops++;
+        }
+        System.out.println("chain = " + chain.toString().trim());
+        System.out.println("chain hops = " + hops + " (want 3: Sub, Fields, Object)");
+
+        // And the same fields enumerated twice must agree -- a stateful walk would drift.
+        int n1 = Fields.class.getDeclaredFields().length;
+        int n2 = Fields.class.getDeclaredFields().length;
+        System.out.println("repeat = " + n1 + "," + n2 + " (want 2,2)");
+
         // getDeclaredFields: counted AND named, because a walk that mis-steps its cursor still returns
         // plausible objects -- the count alone would not catch a field skipped or double-counted.
         // want 2, NOT the 3 stock would give: joe-ng omits STATIC fields, because a Field here reads through
