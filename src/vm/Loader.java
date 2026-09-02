@@ -13676,6 +13676,19 @@ public final class Loader
         Uart.putc(0x0A);
     }
 
+    /** The Type of {@code java/lang/Throwable}, or 0 if it is not loaded. Cached: this is asked on a fault path. */
+    static long throwableTypeAddr()
+    {
+        if (thrTypeCache == 0L)
+        {
+            int i = classIndexByName(Magic.bytes("java/lang/Throwable"));
+            thrTypeCache = i < 0 ? 0L : clTab[i].type;
+        }
+        return thrTypeCache;
+    }
+
+    private static long thrTypeCache;
+
     /** The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0. */
     static long classMirrorAtPc(long pc)
     {

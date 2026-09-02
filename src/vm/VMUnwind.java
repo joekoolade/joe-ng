@@ -148,6 +148,32 @@ final class VMUnwind
                 // report it like a JVM ("Exception in thread \"main\" <class>: <message>"), not a VM error. Only
                 // an absent/invalid exception object means a real frame-table gap (overflowed/unregistered method).
                 long xt = Magic.load64(exc);
+                // IS IT ACTUALLY A THROWABLE? Everything below reads Throwable's LAYOUT off this object -- the
+                // backtrace at +16..+72 and detailMessage at +80 -- so on any other object those are unrelated
+                // instance fields, and the "stack trace" is FABRICATED from whatever they hold. That is not
+                // hypothetical: a thrown non-Throwable printed a plausible-looking frame at pc 0x060B9DB8,
+                // which was simply a heap reference in one of its fields, and it sent the diagnosis chasing a
+                // wild branch that had never happened. Say what the object IS instead.
+                long thrType = Loader.throwableTypeAddr();
+                boolean isThrowable = xt > 0x1000L
+                        && (thrType == 0L || VM.instanceOf(exc, thrType) != 0);
+                if (xt > 0x1000L && !isThrowable)
+                {
+                    Uart.write(Magic.bytes("\nUNWIND: THROWN OBJECT IS NOT A THROWABLE -- "));
+                    Loader.printClassName(Magic.load64(xt));
+                    Uart.write(Magic.bytes(" at "));
+                    printHex(exc);
+                    Uart.write(Magic.bytes("\n  (no backtrace decoded: this object has no Throwable layout,"));
+                    Uart.write(Magic.bytes(" so its fields are NOT frame pcs)\n"));
+                    Uart.write(Magic.bytes("  last fault esr="));
+                    printHex(fault0Esr);
+                    Uart.write(Magic.bytes(" elr="));
+                    printHex(fault0Elr);
+                    Uart.write(Magic.bytes(" far="));
+                    printHex(fault0Far);
+                    Uart.putc(0x0A);
+                    VM.spin();
+                }
                 if (xt > 0x1000L)
                 {
                     Uart.write(Magic.bytes("\nException in thread \"main\" "));
