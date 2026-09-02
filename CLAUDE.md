@@ -76,6 +76,31 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE CONSOLE LAUNCHER RUNS: it parses, reports and exits (2026-09-02).** With the deep-handler fix in, three
+  more gaps on the OUTPUT path fell and the launcher executed end to end -- `CommandLine.execute` ->
+  `handleParseException` -> `DefaultExceptionHandler` -> `PrintWriter` -> `Runtime.exit`.
+  - **`sun/nio/cs/StreamEncoder` overlaid.** Stock's `forOutputStreamWriter` calls `charset.newEncoder()`, and
+    joe-ng's `Charset`/`UTF_8` overlays are IDENTITY TOKENS with no encoder behind them (the String fast paths
+    only ever compare `charset == UTF_8.INSTANCE`). A real `CharsetEncoder` would mean CharBuffer, ByteBuffer,
+    CoderResult and the whole nio coder protocol -- **and none of it is needed, because `String.getBytes()` IS
+    the stock UTF-8 fast path** and is what `PrintStream` has always used. Routing the Writer the same way
+    means a Writer and a PrintStream produce identical bytes rather than two encoders that might disagree.
+    **Unbuffered on purpose:** nothing to lose when the VM halts mid-run.
+  - **`Throwable.printStackTrace(PrintWriter)`** -- the writer is ignored (one sink, the UART), but declaring it
+    matters because **library code REPORTS FAILURES through it**: picocli hands a caught exception to
+    `throwableToColorString`, so without it the reporting path trapped and hid the original error. **A trace on
+    the console beats a denylist trap that conceals the thing it was trying to tell you.** It is what made the
+    next bug readable.
+  - **`System.lineSeparator` is a STATIC FIELD, not a property lookup -- seeding `props` was not enough.**
+    Stock `initPhase1` copies the property into a private static, and joe-ng never runs initPhase1: the map
+    said `\n` while the accessor still answered NULL. `PrintWriter.newLine()` then wrote a null separator into
+    `Writer.write` and NPE'd inside java.base, with the real cause two frames up. Seeded like `System.out`.
+  - **Progress is now measured in picocli's own phases:** past command-spec construction, past parsing, into
+    **help/usage FORMATTING** -- the next stop is `java/text/BreakIterator.getLineInstance`, which picocli uses
+    for word wrapping.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 57 -> 55.
+
 - **A DEEP-STACK HANDLER READ THE CAUGHT EXCEPTION FROM AN UNWRITTEN SPILL SLOT -- ROOT-CAUSED AND FIXED
   (2026-09-02).** The console launcher's `athrow`-threw-`this`, finally explained, and it was one line.
   - **In `deepStack` mode the operand stack lives in FRAME MEMORY**, and a merge point calls `syncIn`, which

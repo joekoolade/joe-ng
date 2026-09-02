@@ -6502,6 +6502,25 @@ public final class Loader
         Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
         Magic.store64(slot, obj);
         seedStandardProps(obj, pi);
+        seedLineSeparator();
+    }
+
+    /**
+     * Fill {@code System.lineSeparator}, which is a STATIC FIELD and not a property lookup.
+     *
+     * <p>Seeding {@code System.props} is not enough and the distinction is not academic: stock
+     * {@code System.lineSeparator()} returns a private static that {@code initPhase1} copies out of the
+     * properties -- and joe-ng never runs initPhase1. So the map said "\n" while the accessor still answered
+     * NULL, and {@code PrintWriter.newLine()} wrote a null separator straight into {@code Writer.write},
+     * NPE-ing inside java.base with the real cause two frames up. That is how JUnit's console output failed.
+     */
+    private static void seedLineSeparator()
+    {
+        long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("lineSeparator"));
+        if (slot != 0L && Magic.load64(slot) == 0L)
+        {
+            Magic.store64(slot, guestString(Magic.bytes("\n")));   // Uart.putc makes this CRLF for the console
+        }
     }
 
     /**
