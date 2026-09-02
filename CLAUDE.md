@@ -102,8 +102,11 @@ defines the minimum the assembler must encode.
     fallback into dead code.
   - **CONSOLE LAUNCHER: past `updateFromCommand` and the whole CommandSpec build**, now at
     `Class.newInstance` -> added -> next run. Every remaining stop has been an ordinary reflection feature.
-  - **QEMU:** probe exact on all four kinds plus both array-type checks; `ran 44, failures 0` / `ALL PASSED`;
-    host tests unchanged.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, no `LINK FAILED`. The array-TIB change touches `refArrayTib`, which the whole VM's
+    array typing goes through, so the suite's array `instanceof` battery in the bootstrap block is a real
+    check here even though it builds no annotations. QEMU: probe exact on all four element kinds plus both
+    array-type checks. Host tests unchanged.
 
 - **`getDeclaredFields` + annotation DEFAULTS -- two more launcher blockers, backlog 60 -> 58 (2026-09-01).**
   - **`Class.getDeclaredFields`/`getFields`**, enumerated by a classfile walk of the FIELDS section.
