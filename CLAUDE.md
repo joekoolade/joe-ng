@@ -76,6 +76,33 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THERE WAS NO WILD BRANCH. The unwinder was FABRICATING the stack trace (2026-09-02).** The console
+  launcher's ending looked like a wild branch to a heap address; it was nothing of the kind, and the VM's own
+  report is what invented it.
+  - **The uncaught-exception path read Throwable's LAYOUT off whatever object it was handed** -- backtrace at
+    `+16..+72`, `detailMessage` at `+80` -- without checking the object IS a Throwable. Handed a
+    `CommandLine$Interpreter`, it printed that object's INSTANCE FIELDS as frame pcs. The "wild pc"
+    `0x060B9DB8` was `0x060B9D70 + 0x48`: **a heap reference in a field of the thrown object itself.**
+  - **It now verifies Throwable-ness first** (`Loader.throwableTypeAddr` + `VM.instanceOf`) and, when the
+    object is not one, says so and decodes NOTHING -- naming the class and address instead of manufacturing a
+    trace. One run then gave the real picture:
+    `UNWIND: THROWN OBJECT IS NOT A THROWABLE -- CommandLine$Interpreter at 0x060B9D70`, with
+    **`esr=0 elr=0 far=0`**.
+  - **ALL-ZERO fault syndrome is the decisive part: there was NO hardware fault**, so no wild branch and no bad
+    dispatch. `athrow` simply executed with a non-Throwable operand -- an OPERAND-STACK bug, not memory
+    corruption, and a far more tractable one.
+  - **`LOADER LOCK stuck >10s` was ALSO a false alarm:** `state 4` is `TASK_RUNNING`, so task 0 held the lock
+    and was still WORKING, not blocked. QEMU runs ~100x slow and the launcher's closure is enormous, so a 10 s
+    wall-clock threshold is exceeded by legitimate work there.
+  - **I had called this "a real VM bug, a wild branch" in the previous entry. Both halves were wrong**, and
+    both were the VM's own instruments misleading me: one report asserting a layout it had not checked, one
+    watchdog measuring wall clock on an emulator. **Every instrument lies at least once -- including the ones
+    that print a stack trace.**
+  - **NEXT, and now well-scoped:** `athrow` with a non-Throwable in a picocli method. `Interpreter` is very
+    likely `this`, which points at the operand stack being off by some slots -- and picocli's methods are
+    enormous, which is exactly where the `OP_MAX = 7` window and the deep-spill path are stressed.
+  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, no `UNWIND` lines; host tests unchanged; backlog 57.
+
 - **`make overlaycheck-deep` -- the checker had a BLIND SPOT, and it was the biggest caller population
   (2026-09-02).** The launcher trapped on `Character.getType`, a dropped overlay member the check had never
   listed. Reason: it scanned `out/` and the RAMFS jars but **not the stock `java.base` classes**, and
