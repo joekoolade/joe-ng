@@ -204,6 +204,21 @@ public class Throwable
         printStackTrace0(this);
     }
 
+    /**
+     * {@code printStackTrace(PrintWriter)} -- same treatment as the PrintStream form: the trace goes to the
+     * UART and the writer is ignored, because the VM's backtrace lives in the {@code bt0..bt7} slots and is
+     * formatted by a native that writes there.
+     *
+     * <p>Worth declaring even though the writer is dropped: library code REPORTS FAILURES through this. picocli
+     * hands a caught exception to {@code throwableToColorString}, which calls it -- so without it the reporting
+     * path traps and the ORIGINAL error is never printed. A trace on the console beats a denylist trap that
+     * hides the thing it was trying to tell you about.
+     */
+    public void printStackTrace(java.io.PrintWriter w)
+    {
+        printStackTrace0(this);
+    }
+
     /** VM native (wired in {@code Loader.nativeBuf}): formats the captured backtrace of {@code t}. STATIC so the
      *  call is an {@code invokestatic} resolved via nativeBuf -- a private INSTANCE native would be dispatched
      *  through an (empty) vtable slot and trip the metal's null-vtable guard. */
