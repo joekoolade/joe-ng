@@ -76,6 +76,35 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **The annotation runtime had TWO bugs a direct probe could not see -- both fixed, backlog 65 -> 60
+  (2026-09-01).** `getAnnotation` worked perfectly in `AnnoProxyProbe` and STILL failed for JUnit's launcher.
+  - **(1) THE TYPE-VARIABLE BOUND IS THE DESCRIPTOR.** Declared `<T> T getAnnotation(Class<T>)`, the return
+    erases to `Ljava/lang/Object;`. Stock is `<A extends Annotation> A getAnnotation(Class<A>)`, which erases
+    to `Ljava/lang/annotation/Annotation;` -- **a DIFFERENT METHOD**, so every stock caller resolved nowhere
+    and trapped. The probe passed because it called the overlay's own signature directly.
+  - **`make overlaycheck` HAD ALREADY SAID SO AND I DID NOT READ IT.** The backlog moved 65 -> 64 when it
+    should have dropped by several, and `java/lang/Class#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/
+    Annotation;` was still listed in plain sight. **I built the tool for exactly this failure and then ignored
+    its output** -- the count is the signal, not just the pass/fail.
+  - **(2) THE ITABLE DIRECTORY NEEDED THE INTERFACE'S CLOSURE.** Every `@interface Foo` implicitly extends
+    `java/lang/annotation/Annotation`, and a bounded caller emits a **`checkcast Annotation`** on the result --
+    which walks that directory. With only Foo in it the cast threw `ClassCastException`. Same closure treatment
+    `finishLambdaClass` gives a functional interface. The extra entries get correctly sized but ZERO-FILLED
+    itables: a zero slot meets the dispatch guard (a named trap) rather than running off a short table.
+  - **FIX (1) IS WHAT EXPOSED (2).** Without the bound javac emitted no checkcast, so the missing closure was
+    invisible. The probe tests more now than it did when it first passed.
+  - **`AccessibleObject.getAnnotation` could finally be added** -- it was held back only while nothing could
+    build an instance, because a null there would have contradicted an `isAnnotationPresent` answering true.
+    With `Method` overriding both, the pair agrees.
+  - **CONSOLE LAUNCHER: the annotation wall is CLEARED.** It now gets past `getAnnotation` and stops at
+    `Class.getDeclaredFields()` -- a reflection ARRAY, which is the next real feature.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, **no `vtparity DIFF`** (`AccessibleObject` gained a virtual, widening its vtable, and
+    both `Method` and `Field` extend it), no wild branch under collection pressure -- the closure change adds
+    one itable per closure interface to every annotation TIB, all held by `lambdaTibRoots`. **The suite does
+    not call `getAnnotation`**; the probe on QEMU is what proves the feature. QEMU: probe exact
+    (`hello`/`7`/`abc`) now through a real `checkcast`; host tests unchanged; overlay backlog **65 -> 60**.
+
 - **ANNOTATION INSTANCES ON THE METAL -- `getAnnotation` returns a real object (2026-09-01).** The wall the
   console launcher and 19 backlog entries sat behind. `Method.getAnnotation` and `Class.getAnnotation` now
   return an object that IS the annotation interface, so `getAnnotation(Tag.class).value()` is an **ordinary

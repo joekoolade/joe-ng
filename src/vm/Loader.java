@@ -11544,11 +11544,39 @@ public final class Loader
             Magic.store64(it + s * 8L, thunk);
             s += 1;
         }
-        long dir = Heap.allocData(2 * 16);
+        // THE DIRECTORY MUST CARRY THE INTERFACE'S CLOSURE, NOT JUST THE INTERFACE. Every `@interface Foo`
+        // implicitly extends java.lang.annotation.Annotation, and a bounded `<T extends Annotation>` caller
+        // emits a `checkcast Annotation` on the result -- which walks this directory. With only Foo in it the
+        // cast throws ClassCastException, which is exactly how this first failed. Same closure treatment
+        // finishLambdaClass gives a functional interface, and for the same reason.
+        //
+        // The extra entries get CORRECTLY SIZED but ZERO-FILLED itables: nothing here implements
+        // Annotation.annotationType()/equals/hashCode, and a zero slot meets the dispatch guard (a named trap)
+        // rather than branching into whatever a short table would have run off into.
+        int closN = ifaceClosureOf(ifaceReg);
+        long dir = Heap.allocData((closN + 2) * 16);
         Magic.store64(dir + 0L, ifaceType);
         Magic.store64(dir + 8L, it);
-        Magic.store64(dir + 16L, 0L);                   // sentinel: interfaceType 0 ends the directory
-        Magic.store64(dir + 24L, 0L);
+        int e = 1;
+        int ci = 0;
+        while (ci < closN)
+        {
+            int cr = ifClosureBuf[ci];
+            int cn = clTab[cr].ifmCount;
+            long cit = Heap.allocData(cn > 0 ? cn * 8 : 8);
+            int z = 0;
+            while (z < cn)
+            {
+                Magic.store64(cit + z * 8L, 0L);
+                z += 1;
+            }
+            Magic.store64(dir + e * 16L + 0L, clTab[cr].type);
+            Magic.store64(dir + e * 16L + 8L, cit);
+            e += 1;
+            ci += 1;
+        }
+        Magic.store64(dir + e * 16L + 0L, 0L);          // sentinel: interfaceType 0 ends the directory
+        Magic.store64(dir + e * 16L + 8L, 0L);
         long type = Heap.allocData(ObjectModel.TYPE_SIZE);
         Magic.store64(type + 0L, (long) (16 + n * 8));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // NOT 0 -- see finishLambdaClass
