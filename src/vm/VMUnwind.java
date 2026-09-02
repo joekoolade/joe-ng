@@ -52,8 +52,34 @@ final class VMUnwind
         }
     }
 
+    /** One report per boot: the first bad throw is the informative one; the rest are its wreckage. */
+    private static boolean badThrowReported;
+
     static void unwind(long exc, long pc, long sp)
     {
+        // A NON-THROWABLE reaching the unwinder is always a VM bug, so report it AT THE THROW SITE -- the one
+        // place the original pc is still in hand. The uncaught report at the top of the stack cannot supply
+        // this: by then the walk has reached VM.boot and the pc names the boot frame, not the thrower.
+        //
+        // Deliberately NOT folded into `unwindLog`, which caps at the first 24 throws: picocli and JUnit throw
+        // ClassNotFoundException/NoSuchMethodException/NumberFormatException as ordinary CONTROL FLOW, so that
+        // budget is spent long before anything interesting happens. This fires only on the broken case.
+        if (exc > 0x1000L && !badThrowReported)
+        {
+            long t = Magic.load64(exc);
+            long thrType = Loader.throwableTypeAddr();
+            if (t > 0x1000L && thrType != 0L && VM.instanceOf(exc, thrType) == 0)
+            {
+                badThrowReported = true;
+                Uart.write(Magic.bytes("\n  BAD THROW: not a Throwable -- "));
+                Loader.printClassName(Magic.load64(t));
+                Uart.write(Magic.bytes(" at pc="));
+                printHex(pc);
+                Uart.write(Magic.bytes("\n    thrown by "));
+                Loader.printFrameAt(pc);
+                Uart.putc(0x0A);
+            }
+        }
         if (unwindLog != 0 && unwindLogged < 24)            // #43: name the FIRST exceptions thrown (root NPE first)
         {
             unwindLogged += 1;
@@ -165,6 +191,31 @@ final class VMUnwind
                     printHex(exc);
                     Uart.write(Magic.bytes("\n  (no backtrace decoded: this object has no Throwable layout,"));
                     Uart.write(Magic.bytes(" so its fields are NOT frame pcs)\n"));
+                    // WHERE the unwind gave up -- the one fact the class and address do not supply. `pc` is
+                    // the site athrow (or a helper) handed us; naming the method containing it says whether
+                    // the bad operand came from a compiled body or from somewhere with no frame entry at all.
+                    Uart.write(Magic.bytes("  raised at pc="));
+                    printHex(pc);
+                    Uart.write(Magic.bytes(" sp="));
+                    printHex(sp);
+                    Uart.write(Magic.bytes("\n  in "));
+                    Loader.printFrameAt(pc);
+                    // IS IT A MIS-TYPED EXCEPTION RATHER THAN A WRONG OPERAND? joe-ng has produced
+                    // wrong-typed objects before -- a `new` of a class the compile could not resolve once took
+                    // the CURRENT class's TIB. If this object carries a Throwable-shaped payload (a String at
+                    // +80, pcs in the backtrace slots) then it IS an exception wearing the wrong Type, which is
+                    // a completely different bug from athrow being handed the wrong value. Dump the head.
+                    Uart.write(Magic.bytes("\n  words:"));
+                    int wi = 0;
+                    while (wi < 12)
+                    {
+                        Uart.write(Magic.bytes(" +"));
+                        printDec(wi * 8);
+                        Uart.putc(0x3D);
+                        printHex(Magic.load64(exc + wi * 8L));
+                        wi += 1;
+                    }
+                    Uart.putc(0x0A);
                     Uart.write(Magic.bytes("  last fault esr="));
                     printHex(fault0Esr);
                     Uart.write(Magic.bytes(" elr="));

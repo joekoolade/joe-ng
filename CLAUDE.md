@@ -76,6 +76,32 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`athrow` THREW `this` INSTEAD OF THE EXCEPTION PARAMETER -- located exactly (2026-09-02).** The console
+  launcher's failure, chased from "wild branch" through "not a Throwable" to a named bytecode site.
+  - **`BAD THROW` reports a non-Throwable AT THE THROW SITE**, which is the only place the original pc is still
+    in hand: by the time the uncaught report fires, the walk has reached `VM.boot` and the pc names the boot
+    frame, not the thrower. Deliberately NOT folded into `unwindLog`, which caps at the first 24 throws --
+    picocli and JUnit throw `ClassNotFoundException`/`NoSuchMethodException`/`NumberFormatException` as
+    ordinary CONTROL FLOW, so that budget is spent long before anything interesting happens. **23 of the 24
+    logged throws were normal control flow**, which is exactly why the capped instrument could not see this.
+  - **The site:** `CommandLine$Interpreter.maybeThrow`, line 13583 = bytecode offset 27, which is literally
+    `aload_1; athrow`. Local slot 0 is `this` (an Interpreter), slot 1 is the `ex` parameter -- **so the throw
+    took slot 0's value for slot 1.** A LOCAL-SLOT resolution bug, not an operand-stack one, which is a
+    different subsystem from where I had been looking.
+  - **The object confirms it independently:** its status word says **72 bytes = 7 fields**, while joe-ng's
+    `Throwable` needs at least 88 (eight backtrace slots at +16..+72 plus the message at +80). So it is a real
+    `Interpreter`, not an exception wearing a wrong TIB -- which refutes the mis-typed-`new` hypothesis that
+    fitted every other symptom.
+  - **CAVEAT, stated: the pc attribution is a nearest-body-below GUESS.** `+0x390` is 912 bytes into a method
+    whose bytecode is 30 bytes, so the frame naming is unreliable even though the object's identity and the
+    bytecode shape are solid. Do not build the fix on that offset.
+  - **Suspicion for the fix, unproven:** `maybeThrow`'s CALLER stores the caught exception in local **12**
+    (`astore 12` / `aload 12`), and joe-ng maps JVM locals to callee-saved x19..x28 -- ten registers, i.e.
+    slots 0..9. A slot past the register window needs a spill path, and that is where a slot-12 read could
+    return slot 0.
+  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, **no `BAD THROW` on a healthy run** (checked -- an
+    instrument that fires on a passing boot is worse than none); host tests unchanged; backlog 57.
+
 - **THERE WAS NO WILD BRANCH. The unwinder was FABRICATING the stack trace (2026-09-02).** The console
   launcher's ending looked like a wild branch to a heap address; it was nothing of the kind, and the VM's own
   report is what invented it.
