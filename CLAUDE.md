@@ -98,8 +98,12 @@ defines the minimum the assembler must encode.
     With `Method` overriding both, the pair agrees.
   - **CONSOLE LAUNCHER: the annotation wall is CLEARED.** It now gets past `getAnnotation` and stops at
     `Class.getDeclaredFields()` -- a reflection ARRAY, which is the next real feature.
-  - **QEMU:** probe exact (`hello`/`7`/`abc`) now through a real `checkcast`, `ran 44, failures 0` /
-    `ALL PASSED`, host tests unchanged, overlay backlog **65 -> 60**.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, **no `vtparity DIFF`** (`AccessibleObject` gained a virtual, widening its vtable, and
+    both `Method` and `Field` extend it), no wild branch under collection pressure -- the closure change adds
+    one itable per closure interface to every annotation TIB, all held by `lambdaTibRoots`. **The suite does
+    not call `getAnnotation`**; the probe on QEMU is what proves the feature. QEMU: probe exact
+    (`hello`/`7`/`abc`) now through a real `checkcast`; host tests unchanged; overlay backlog **65 -> 60**.
 
 - **ANNOTATION INSTANCES ON THE METAL -- `getAnnotation` returns a real object (2026-09-01).** The wall the
   console launcher and 19 backlog entries sat behind. `Method.getAnnotation` and `Class.getAnnotation` now
