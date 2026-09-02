@@ -121,7 +121,12 @@ defines the minimum the assembler must encode.
     by `LOADER LOCK stuck >10s`. That is a real VM bug and deserves its own session rather than another
     overlay member. **Note QEMU runs ~100x slow, so a 10 s wall-clock watchdog can fire on legitimate work
     there; the wild pc is the part that cannot be explained away.**
-  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`; host tests unchanged; shallow backlog 57, unchanged.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`. **The BOOT PHASE is what this boot tested**: `seedStandardProps` now runs during
+    loader init on EVERY image -- fifteen guest Strings built and pushed through `Properties.setProperty` via
+    `Magic.callN` before `main` -- and `MethodHandles.lookup()` returns a real object where it returned null
+    for the life of the project. Both ran clean, well before `launch MetalJUnit`, which is where a fault in
+    either would have shown. QEMU also green; host tests unchanged; shallow backlog 57.
 
 - **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**
   Backlog 58 -> 57; the console launcher completed picocli's whole `CommandSpec` construction.
