@@ -76,6 +76,33 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A DEEP-STACK HANDLER READ THE CAUGHT EXCEPTION FROM AN UNWRITTEN SPILL SLOT -- ROOT-CAUSED AND FIXED
+  (2026-09-02).** The console launcher's `athrow`-threw-`this`, finally explained, and it was one line.
+  - **In `deepStack` mode the operand stack lives in FRAME MEMORY**, and a merge point calls `syncIn`, which
+    declares every operand register invalid so reads reload from memory. A handler IS a merge point -- but a
+    handler does not receive its exception from memory, it receives it **in a register (x9)**.
+  - **The inline path got away with it and hid the bug for the whole arc.** `emitCatch` (a throw caught in the
+    SAME method) does `emitLoadException` then `syncOut`, which spills slot 0 to memory -- so the handler's
+    reload finds it. An exception thrown by a **CALLEE** arrives through `VM.unwind` -> `Magic.resume`, which
+    only sets the register. **Nothing ever wrote that slot**, so the handler read whatever it last held.
+  - **Three different symptoms, one cause, and the probe produced all three:** a previous exception (the catch
+    returned ANOTHER METHOD'S message -- `deep = D`), `this` (picocli's `parse`, which then handed it to
+    `maybeThrow` and threw a non-Throwable), and garbage (an undefined instruction, `ec=0`).
+  - **The fix is `regHolds[0] = 0` at a handler entry** -- BOTH paths deliver the exception in x9, which IS
+    slot 0's register (`OP_BASE + 0 % OP_MAX`), so recording that residency is all it takes. No store, no new
+    convention, and shallow methods are untouched (`compiler: 37 checks` still passes, so the byte-for-byte
+    self-hosting fixpoint holds).
+  - **THE BISECT IS WHY THIS WAS FOUND AT ALL.** `HighLocalThrowProbe` runs four arms in one 3-minute boot:
+    deep stack alone (A, ok), + throw/catch (B, ok), + a NESTED try/catch (D, ok), + a throw from a CALLEE
+    (C, **fails**). A/B/D all pass because their exceptions are caught in the same method -- the inline path.
+    **The condition is a cross-method unwind into a deep-stack handler**, which no amount of staring at
+    "deep stack" or "high locals" would have isolated.
+  - **Two hypotheses died on the way, both by control rather than argument:** high local slots (a probe with
+    the catch variable in slot **24** passes) and "a call from the catch" (arm B already calls
+    `getMessage()` from its handler and passes).
+  - **QEMU:** probe all four arms exact; `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests
+    unchanged incl. `compiler: 37 checks`; overlay backlog 57.
+
 - **`athrow` THREW `this` INSTEAD OF THE EXCEPTION PARAMETER -- located exactly (2026-09-02).** The console
   launcher's failure, chased from "wild branch" through "not a Throwable" to a named bytecode site.
   - **`BAD THROW` reports a non-Throwable AT THE THROW SITE**, which is the only place the original pc is still

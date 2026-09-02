@@ -897,6 +897,19 @@ public final class Baseline
         }
     }
 
+    /** True if {@code pc} is the entry of some exception handler (control arrives there on an exception edge). */
+    private boolean isHandlerPc(int pc)
+    {
+        for (int k = 0; k < exCount; k++)
+        {
+            if (exHandlerPc[k] == pc)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Invalidate every operand register at a merge point / after a call: reads reload from (canonical) memory. */
     private void syncIn(CodeBuffer cb)
     {
@@ -3406,6 +3419,22 @@ public final class Baseline
                         syncOut(cb);
                     }
                     syncIn(cb);
+                    if (isHandlerPc(pos))
+                    {
+                        // A HANDLER RECEIVES THE EXCEPTION IN A REGISTER, NOT IN MEMORY. syncIn has just
+                        // declared every operand register invalid, so the handler's first read of slot 0 would
+                        // load the frame spill slot -- which NO ONE WROTE on the cross-method path.
+                        //
+                        // The inline path (emitCatch) spills it and got away with this; an exception thrown by
+                        // a CALLEE arrives through VM.unwind -> Magic.resume, which only sets the register. The
+                        // handler then read whatever that slot last held: a previous exception (the probe's
+                        // catch returned another method's message), `this` (picocli's parse, which then passed
+                        // it to maybeThrow and threw a non-Throwable), or garbage (an undefined instruction).
+                        //
+                        // BOTH paths deliver it in x9, which IS slot 0's register (OP_BASE + 0 % OP_MAX), so
+                        // recording that residency is all it takes -- no store, no new convention.
+                        regHolds[0] = 0;
+                    }
                 }
                 sp = bcDepth[pos];    // merge point: adopt the branch-edge depth
             }
