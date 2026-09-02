@@ -76,6 +76,27 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`make overlaycheck-deep` -- the checker had a BLIND SPOT, and it was the biggest caller population
+  (2026-09-02).** The launcher trapped on `Character.getType`, a dropped overlay member the check had never
+  listed. Reason: it scanned `out/` and the RAMFS jars but **not the stock `java.base` classes**, and
+  `getType`'s only caller is stock `java/time/format/DateTimeFormatterBuilder`. Every java.base class is
+  demand-loadable and routinely calls into an overlaid class, so that population matters most.
+  - **The deep scan finds ~1059 further members** -- the TRUE set of "would trap if reached".
+  - **It is OPT-IN, and that is a scope decision rather than a cost one.** Most of java.base is never reached
+    on metal (denylisted subtrees, cold paths), so folding 1059 into the baseline would bury the ~57 gaps in
+    code we actually ship, **and a check nobody reads is exactly how the one that mattered got missed**.
+    `make test` stays shallow; `make overlaycheck-deep` is for when a trap's caller IS stock library code.
+  - **`Character.getType` + the category constants** -- ASCII only, the same stated limit as the other
+    classification predicates; above U+007F it reports `UNASSIGNED` rather than a confidently wrong category.
+  - **`Locale.Category` (nested, a plain class like `TimeUnit` -- no enum machinery) + `getDefault(Category)`,
+    `getCountry`/`getVariant`/`getScript`/`toLanguageTag`/`getDisplayName`/`stripExtensions`/`of`.** The
+    constructors had always ACCEPTED country and variant and thrown them away, so `getCountry()` would have had
+    to lie; two references are cheaper than a wrong answer, and Locale carries no VM-fixed field offsets
+    (unlike `Thread`).
+  - **CONSOLE LAUNCHER: past `Class.newInstance`, past `Character.getType`**, now at `Locale.getDefault`
+    (added here). It is well beyond picocli now -- into `java/time/format`, JUnit's reporting path.
+  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`; host tests unchanged; shallow backlog 57, unchanged.
+
 - **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**
   Backlog 58 -> 57; the console launcher completed picocli's whole `CommandSpec` construction.
   - **A THIRD PHASE resolves `'c'` and `'e'` elements**, after every classfile walk has finished -- the same

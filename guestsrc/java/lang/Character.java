@@ -216,6 +216,94 @@ public final class Character implements Comparable<Character>
         return isJavaIdentifierStart(cp) || isDigit(cp);
     }
 
+    // ----- Unicode general category -------------------------------------------------------------------------
+    // The stock category constants, needed because getType returns one and callers compare against them.
+    public static final byte UNASSIGNED = 0;
+    public static final byte UPPERCASE_LETTER = 1;
+    public static final byte LOWERCASE_LETTER = 2;
+    public static final byte DECIMAL_DIGIT_NUMBER = 9;
+    public static final byte SPACE_SEPARATOR = 12;
+    public static final byte CONTROL = 15;
+    public static final byte DASH_PUNCTUATION = 20;
+    public static final byte START_PUNCTUATION = 21;
+    public static final byte END_PUNCTUATION = 22;
+    public static final byte CONNECTOR_PUNCTUATION = 23;
+    public static final byte OTHER_PUNCTUATION = 24;
+    public static final byte MATH_SYMBOL = 25;
+    public static final byte CURRENCY_SYMBOL = 26;
+    public static final byte MODIFIER_SYMBOL = 27;
+
+    /**
+     * The Unicode general category of {@code ch} -- ASCII only, the same stated limit as the classification
+     * predicates above: the real answer comes from Unicode tables joe-ng does not carry, so anything above
+     * U+007F reports {@link #UNASSIGNED} rather than a confidently wrong category.
+     *
+     * <p>Reached from {@code java.time.format.DateTimeFormatterBuilder}, which classifies the characters of a
+     * format pattern -- all ASCII in practice. Declared because a name-winning overlay silently drops what it
+     * does not declare, and the call then resolves NOWHERE and traps.
+     */
+    public static int getType(char ch)
+    {
+        return getType((int) ch);
+    }
+
+    public static int getType(int cp)
+    {
+        if (cp > 0x7F)
+        {
+            return UNASSIGNED;                          // outside ASCII: see the note above
+        }
+        if (isUpperCase(cp))
+        {
+            return UPPERCASE_LETTER;
+        }
+        if (isLowerCase(cp))
+        {
+            return LOWERCASE_LETTER;
+        }
+        if (isDigit(cp))
+        {
+            return DECIMAL_DIGIT_NUMBER;
+        }
+        if (cp == ' ')
+        {
+            return SPACE_SEPARATOR;
+        }
+        if (cp < 0x20 || cp == 0x7F)
+        {
+            return CONTROL;                             // includes tab/newline, as Unicode does
+        }
+        if (cp == '_')
+        {
+            return CONNECTOR_PUNCTUATION;
+        }
+        if (cp == '-')
+        {
+            return DASH_PUNCTUATION;
+        }
+        if (cp == '(' || cp == '[' || cp == '{')
+        {
+            return START_PUNCTUATION;
+        }
+        if (cp == ')' || cp == ']' || cp == '}')
+        {
+            return END_PUNCTUATION;
+        }
+        if (cp == '$')
+        {
+            return CURRENCY_SYMBOL;
+        }
+        if (cp == '+' || cp == '<' || cp == '=' || cp == '>' || cp == '|' || cp == '~')
+        {
+            return MATH_SYMBOL;
+        }
+        if (cp == '^' || cp == '`')
+        {
+            return MODIFIER_SYMBOL;
+        }
+        return OTHER_PUNCTUATION;                       // ! " # % & ' * , . / : ; ? @ \ -- the rest of ASCII
+    }
+
     // ----- surrogate / BMP predicates (pure bit logic; 0xD800..0xDFFF is the surrogate range) ---------------
     public static boolean isHighSurrogate(char ch)
     {
