@@ -3761,7 +3761,13 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
                 // ExtendedSocketOptions is overlaid to a no-op (Net.<clinit> sets EXTENDED_OPTIONS from it);
                 // the rest of sun/net/ext stays denied.
-                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions")))
+                || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/ExtendedSocketOptions"))
+                // NARROWED OUT of the java/text/ denial: joe-ng OVERLAYS BreakIterator (whitespace line
+                // breaking, no locale tables), so the reason for the broad denial -- stock's factory going
+                // through the java/text/spi/ provider machinery -- does not apply to it. Without this the
+                // call site is trap-wired at PATCH TIME and the overlay is never reached: a denied class is
+                // denied before any link stub gets a chance to resolve it.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/BreakIterator")))
         {
             return false;
         }

@@ -76,6 +76,25 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`java/text/BreakIterator` overlaid, and NARROWED OUT of the `java/text/` denial (2026-09-02).** picocli
+  word-wraps its help and error output with it; without it the launcher trapped in `TextTable.putValue`.
+  - **Whitespace and hyphen boundaries only, stated as a real limit.** Stock line breaking follows the Unicode
+    line-breaking algorithm with locale tailoring; joe-ng carries none of those tables, so text in a script
+    that does not delimit words with spaces will not wrap where a reader expects. For ASCII -- every caller
+    reached -- the two agree. picocli uses exactly four methods: `getLineInstance`, `setText`, `first`, `next`.
+  - **THE OVERLAY ALONE DID NOTHING, and the reason is worth keeping: `java/text/` IS DENYLISTED.** A denied
+    class is trap-wired at PATCH TIME, so no link stub ever runs and the overlay is never consulted -- the
+    call failed with the identical `TRAPWIRE index=71` as before the overlay existed. It needed the narrow
+    allowance the denylist already has for this shape (as `java/lang/reflect/Method` is allowed out of
+    `java/lang/reflect/`). **An overlay cannot rescue a DENIED class; the denial has to be narrowed first.**
+  - **I MISSED THE DENIAL BY SAMPLING.** I dumped the tail of the prefix list, did not see `java/text/`, and
+    concluded it was absent -- it was two lines above the cut. **Third time this session a conclusion came from
+    partial output** (after `grep` on a binary log, and `classIndexByName` answering a different table).
+  - **Launcher: past word wrapping**, now at `java/lang/Class.enumConstantDirectory()` -- another `Class`
+    overlay gap, the ordinary kind.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 55, unchanged.
+
 - **THE CONSOLE LAUNCHER RUNS: it parses, reports and exits (2026-09-02).** With the deep-handler fix in, three
   more gaps on the OUTPUT path fell and the launcher executed end to end -- `CommandLine.execute` ->
   `handleParseException` -> `DefaultExceptionHandler` -> `PrintWriter` -> `Runtime.exit`.
