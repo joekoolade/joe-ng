@@ -76,6 +76,38 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`athrow` THREW `this` INSTEAD OF THE EXCEPTION PARAMETER -- located exactly (2026-09-02).** The console
+  launcher's failure, chased from "wild branch" through "not a Throwable" to a named bytecode site.
+  - **`BAD THROW` reports a non-Throwable AT THE THROW SITE**, which is the only place the original pc is still
+    in hand: by the time the uncaught report fires, the walk has reached `VM.boot` and the pc names the boot
+    frame, not the thrower. Deliberately NOT folded into `unwindLog`, which caps at the first 24 throws --
+    picocli and JUnit throw `ClassNotFoundException`/`NoSuchMethodException`/`NumberFormatException` as
+    ordinary CONTROL FLOW, so that budget is spent long before anything interesting happens. **23 of the 24
+    logged throws were normal control flow**, which is exactly why the capped instrument could not see this.
+  - **The site:** `CommandLine$Interpreter.maybeThrow`, line 13583 = bytecode offset 27, which is literally
+    `aload_1; athrow`. Local slot 0 is `this` (an Interpreter), slot 1 is the `ex` parameter -- **so the throw
+    took slot 0's value for slot 1.** A LOCAL-SLOT resolution bug, not an operand-stack one, which is a
+    different subsystem from where I had been looking.
+  - **The object confirms it independently:** its status word says **72 bytes = 7 fields**, while joe-ng's
+    `Throwable` needs at least 88 (eight backtrace slots at +16..+72 plus the message at +80). So it is a real
+    `Interpreter`, not an exception wearing a wrong TIB -- which refutes the mis-typed-`new` hypothesis that
+    fitted every other symptom.
+  - **CAVEAT, stated: the pc attribution is a nearest-body-below GUESS.** `+0x390` is 912 bytes into a method
+    whose bytecode is 30 bytes, so the frame naming is unreliable even though the object's identity and the
+    bytecode shape are solid. Do not build the fix on that offset.
+  - **THE HIGH-LOCAL HYPOTHESIS IS REFUTED.** `maybeThrow`'s caller stores the caught exception in a local past
+    the register window (x19..x28 = slots 0..9), so the overflow spill looked like the culprit.
+    **`test/jdk/junit/HighLocalThrowProbe` reproduces that shape and PASSES** -- javac puts its catch variable
+    in slot **24**, and the value survives the spill, the call boundary and the rethrow intact
+    (`result = boom:66`). Kept as a pinned control so the search does not circle back to it.
+  - **Reproducing the SHAPE is not reproducing the CONDITION** -- the lesson this VM has taught before
+    (`LambdaThreadDemo` tested `new Thread(lambda)` but never a receiver whose directory lacked the entry).
+    What the probe does NOT have is picocli's other conditions: an ENORMOUS method with a DEEP operand stack
+    (past `OP_MAX = 7`, into the spill path), compiled LAZILY rather than in a batch. That is where to look
+    next.
+  - **QEMU:** `ran 44, failures 0` / `ALL PASSED`, **no `BAD THROW` on a healthy run** (checked -- an
+    instrument that fires on a passing boot is worse than none); host tests unchanged; backlog 57.
+
 - **THERE WAS NO WILD BRANCH. The unwinder was FABRICATING the stack trace (2026-09-02).** The console
   launcher's ending looked like a wild branch to a heap address; it was nothing of the kind, and the VM's own
   report is what invented it.
