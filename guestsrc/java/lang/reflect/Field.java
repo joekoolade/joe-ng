@@ -207,6 +207,58 @@ public final class Field extends AccessibleObject
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.fieldType}): mirror + field name -> Class. */
     private static native Object fieldType0(Class<?> c, byte[] fieldName);
 
+    /**
+     * The declared type, EXACT for a non-generic field and the ERASURE for a generic one.
+     *
+     * <p>Stock returns a {@code ParameterizedType} when the field carries a {@code Signature} attribute, which
+     * needs a generic-signature parser joe-ng does not have. Returning the raw {@link Class} is what stock
+     * itself returns for every NON-generic field, and a caller that inspects the result asks
+     * {@code instanceof ParameterizedType} first -- which is false here, so it takes its raw-type path rather
+     * than misreading a wrong answer. For {@code List<String>} that means the element type is unknown, not
+     * wrong.
+     */
+    public java.lang.reflect.Type getGenericType()
+    {
+        return getType();
+    }
+
+    /**
+     * {@code "public java.lang.String com.x.Foo.bar"} -- modifiers, type, declaring class, name.
+     *
+     * <p>Built directly rather than through {@code Modifier.toString}, to avoid pulling the reflection
+     * modifier machinery for a string. The modifier ORDER is the one the JLS specifies and stock follows, so
+     * the output matches for every field joe-ng can describe; the erasure is used for the type, matching
+     * {@link #getGenericType()}.
+     *
+     * <p>picocli calls it while building an {@code ArgSpec} -- an option's own description -- so a missing
+     * one stops option construction entirely rather than merely degrading a message.
+     */
+    public String toGenericString()
+    {
+        StringBuilder b = new StringBuilder();
+        int m = modifiers;
+        if ((m & 0x0001) != 0) { b.append("public "); }
+        if ((m & 0x0002) != 0) { b.append("private "); }
+        if ((m & 0x0004) != 0) { b.append("protected "); }
+        if ((m & 0x0008) != 0) { b.append("static "); }
+        if ((m & 0x0010) != 0) { b.append("final "); }
+        if ((m & 0x0040) != 0) { b.append("volatile "); }
+        if ((m & 0x0080) != 0) { b.append("transient "); }
+        Class<?> t = getType();
+        b.append(t == null ? "java.lang.Object" : t.getTypeName());
+        b.append(' ');
+        b.append(clazz == null ? "?" : clazz.getName());
+        b.append('.');
+        b.append(name);
+        return b.toString();
+    }
+
+    @Override
+    public String toString()
+    {
+        return toGenericString();
+    }
+
     /** ACC_SYNTHETIC -- a compiler-generated field (an outer-instance {@code this$0}, a switch map). */
     public boolean isSynthetic()
     {

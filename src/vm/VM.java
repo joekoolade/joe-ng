@@ -1080,6 +1080,8 @@ public final class VM
         if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(0L, 0L); }     // Class.annoGet0
         if (fieldAnnoGetAddr == 0L) { long u = VMNatives.fieldAnnoGet(0L, 0L, 0L); } // Field.annoGet0
         if (fieldTypeAddr == 0L) { long u = VMNatives.fieldType(0L, 0L); }          // Field.type0
+        if (paramTypesAddr == 0L) { long u = VMNatives.methodParamTypes(-1L); }     // Method.paramTypes0
+        if (returnTypeAddr == 0L) { long u = VMNatives.methodReturnType(-1L); }     // Method.returnType0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
         if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
@@ -2296,6 +2298,8 @@ public final class VM
     static long classAnnoGetAddr;      // VMNatives.classAnnoGet(JJ)J — Class.annoGet0
     static long fieldAnnoGetAddr;      // VMNatives.fieldAnnoGet(JJJ)J — Field.annoGet0
     static long fieldTypeAddr;         // VMNatives.fieldType(JJ)J — Field.type0
+    static long paramTypesAddr;        // VMNatives.methodParamTypes(J)J — Method.paramTypes0
+    static long returnTypeAddr;        // VMNatives.methodReturnType(J)J — Method.returnType0
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
     static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0

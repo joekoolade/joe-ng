@@ -76,6 +76,35 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LAUNCHER BUILDS ITS COMMAND SPEC: options are registered and parsing succeeds (2026-09-02).** The only
+  output is picocli's own warnings, and the 700 s QEMU timeout then hits with it STILL WORKING -- no trap.
+  Overlay backlog **54 -> 47**.
+  - **`java/lang/reflect/Type` NARROWED OUT of the denial rather than overlaid**, following the standing rule
+    that guestsrc is for classes that need NATIVES: `Type` is an empty marker interface with one default method
+    and no natives, so the STOCK class loads as-is. It was denied only by the broad prefix that keeps out the
+    reflection IMPLEMENTATION machinery, and a marker is not that. `Class` implements it (Class is a legitimate
+    overlay -- it carries natives).
+  - **`Field.getGenericType`/`toGenericString`, `Method.getParameterTypes`/`getReturnType`/
+    `getGenericParameterTypes`/`getGenericReturnType`/`toGenericString`.** The parameter and return types come
+    from the DESCRIPTOR, which the stored `paramChars`/`returnChar` cannot answer -- they keep only the first
+    character, so every reference type looked alike. That is why these were omitted when `getDeclaredFields`
+    landed, and why they are answerable now.
+  - **Generic forms return the ERASURE, and a caller is not misled by it:** stock returns a
+    `ParameterizedType` only when a `Signature` attribute is present, and every caller asks
+    `instanceof ParameterizedType` first -- false here, so it takes its raw-type path. For `List<String>` the
+    element type is UNKNOWN, not wrong.
+  - **An ARRAY parameter resolves to null rather than to `Object.class`:** visibly wrong at the caller, where
+    a plausible answer would be quietly wrong.
+  - **`getGenericParameterTypes` builds a fresh `Type[]` and copies** rather than returning the `Class[]`:
+    array covariance would permit it, but that leans on the VM's array-Type assignability for a cast the
+    CALLER makes; allocating the right array costs one loop and no assumptions.
+  - **UNVERIFIED, and stated:** picocli warns that `--help`/`--version` are each registered FOUR times. That may
+    be ordinary aggregation across JUnit's four subcommands, or a duplicate-enumeration bug in
+    `getDeclaredFields`. **The probe pins 2 fields with correct names, so enumeration is right in the small;
+    this is not evidence either way at scale.**
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; backlog 54 -> 47.
+
 - **THE JUnit CONSOLE LAUNCHER PRINTS ITS OWN OUTPUT ON BARE METAL (2026-09-02)** -- usage text, word-wrapped,
   with ANSI colour escapes:
   `Unknown options: '--select-class=SleepSanity' ...` / `Usage: junit execute` / `Execute tests` /

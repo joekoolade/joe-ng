@@ -12,7 +12,7 @@ import magic.Magic;
  * ({@code getName}/{@code getComponentType}/{@code isInstance}/...) are added on demand as the code that runs
  * on metal reaches them. The VM allocates the object directly (bypassing this ctor).
  */
-public final class Class<T>
+public final class Class<T> implements java.lang.reflect.Type
 {
     private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
 

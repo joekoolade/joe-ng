@@ -3767,7 +3767,15 @@ public final class Loader
                 // through the java/text/spi/ provider machinery -- does not apply to it. Without this the
                 // call site is trap-wired at PATCH TIME and the overlay is never reached: a denied class is
                 // denied before any link stub gets a chance to resolve it.
-                || utf8HasPrefix(base, off, Magic.bytes("java/text/BreakIterator")))
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/BreakIterator"))
+                // NARROWED OUT of the java/lang/reflect/ denial: `Type` is an empty MARKER INTERFACE with one
+                // default method and no natives, so the stock class loads as-is -- no overlay needed, which is
+                // the right shape (guestsrc is for classes that need natives). It is denied only by the broad
+                // prefix that keeps out the reflection IMPLEMENTATION machinery, and a marker is not that.
+                //
+                // Needed because `Field.getGenericType()` and `Class` itself are declared in terms of it: a
+                // return type that cannot load makes the method unresolvable however simple its body.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Type")))
         {
             return false;
         }
@@ -7693,6 +7701,8 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
@@ -11555,6 +11565,150 @@ public final class Loader
             f += 1;
         }
         return descU == 0L ? 0L : annoClassValue(descU);
+    }
+
+    /**
+     * {@code Method.paramTypes0}: a {@code Class[]} of the parameter types of the method registered at
+     * {@code rgIndex}, resolved from its DESCRIPTOR.
+     *
+     * <p>The stored {@code paramChars} cannot answer this -- it keeps only the first descriptor character, so
+     * every reference parameter looks alike. The descriptor has the real names, and the annotation runtime
+     * already turns a descriptor into a mirror.
+     *
+     * <p>An ARRAY parameter resolves to null rather than to something plausible: joe-ng's array Types are
+     * interned per element type and reaching one from a descriptor slice is a separate piece of work. A null
+     * element is visibly wrong at the caller; {@code Object.class} would be quietly wrong.
+     */
+    static long methodParamTypes(int rgIndex)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return 0L;
+        }
+        long base = rgTab[rgIndex].base;
+        int off = rgTab[rgIndex].descOff;
+        int len = u2(base + off);
+        long d = base + off + 2;                        // the descriptor bytes: "(...)ret"
+        int n = countDescParams(d, len);
+        long arr = Heap.allocArray(n, 8);
+        long at = refArrayTib(classMirrorTypeAddr());
+        if (at != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, at);
+        }
+        int i = 1;                                      // past '('
+        int k = 0;
+        while (i < len && u1(d + i) != 0x29)            // ')'
+        {
+            int start = i;
+            while (i < len && u1(d + i) == 0x5B)        // '[' -- array prefixes
+            {
+                i += 1;
+            }
+            long mirror;
+            if (u1(d + i) == 0x4C)                      // 'L' <name> ';'
+            {
+                int nameStart = i + 1;
+                while (i < len && u1(d + i) != 0x3B)
+                {
+                    i += 1;
+                }
+                mirror = start == nameStart - 1 ? mirrorOfInternalName(d + nameStart, i - nameStart) : 0L;
+                i += 1;                                 // past ';'
+            }
+            else
+            {
+                mirror = start == i ? primitiveMirror(u1(d + i)) : 0L;   // a bare primitive, not an array
+                i += 1;
+            }
+            Magic.store64(arr + 24L + k * 8L, mirror);
+            k += 1;
+        }
+        return arr;
+    }
+
+    /** {@code Method.returnType0}: the declared return type's mirror, resolved from the descriptor. */
+    static long methodReturnType(int rgIndex)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return 0L;
+        }
+        long base = rgTab[rgIndex].base;
+        int off = rgTab[rgIndex].descOff;
+        int len = u2(base + off);
+        long d = base + off + 2;
+        int i = 1;
+        while (i < len && u1(d + i) != 0x29)            // skip to just past ')'
+        {
+            i += 1;
+        }
+        i += 1;
+        int start = i;
+        while (i < len && u1(d + i) == 0x5B)            // array prefixes: not modelled, see methodParamTypes
+        {
+            i += 1;
+        }
+        if (u1(d + i) == 0x4C)
+        {
+            int nameStart = i + 1;
+            while (i < len && u1(d + i) != 0x3B)
+            {
+                i += 1;
+            }
+            return start == nameStart - 1 ? mirrorOfInternalName(d + nameStart, i - nameStart) : 0L;
+        }
+        return start == i ? primitiveMirror(u1(d + i)) : 0L;   // includes 'V' for void
+    }
+
+    /** Parameter count of the descriptor bytes at {@code d} (arrays fold into their element). */
+    private static int countDescParams(long d, int len)
+    {
+        int i = 1;
+        int n = 0;
+        while (i < len && u1(d + i) != 0x29)
+        {
+            while (i < len && u1(d + i) == 0x5B)
+            {
+                i += 1;
+            }
+            if (u1(d + i) == 0x4C)
+            {
+                while (i < len && u1(d + i) != 0x3B)
+                {
+                    i += 1;
+                }
+            }
+            i += 1;
+            n += 1;
+        }
+        return n;
+    }
+
+    /** The Class mirror of the internal name of {@code len} bytes at {@code p}, demand-loading it if needed. */
+    private static long mirrorOfInternalName(long p, int len)
+    {
+        byte[] name = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            name[i] = (byte) u1(p + i);
+            i += 1;
+        }
+        int ci = classIndexByName(name);
+        if (ci < 0)
+        {
+            loadClassIncremental(name);
+            ci = classIndexByName(name);
+        }
+        return ci < 0 ? 0L : classMirror(clTab[ci].type);
+    }
+
+    /** The Type of {@code java/lang/Class}, for typing a {@code Class[]}. */
+    private static long classMirrorTypeAddr()
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/Class"));
+        return i < 0 ? objectTypeAddr() : clTab[i].type;
     }
 
     /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */

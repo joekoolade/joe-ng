@@ -295,6 +295,18 @@ final class VMNatives
         return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
     }
 
+    /** {@code Method.paramTypes0(int)} native: a {@code Class[]} of the method's parameter types. */
+    static long methodParamTypes(long rgIndex)
+    {
+        return Loader.methodParamTypes((int) rgIndex);
+    }
+
+    /** {@code Method.returnType0(int)} native: the Class mirror of the method's declared return type. */
+    static long methodReturnType(long rgIndex)
+    {
+        return Loader.methodReturnType((int) rgIndex);
+    }
+
     /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
     static long fieldType(long mirror, long nameArr)
     {
