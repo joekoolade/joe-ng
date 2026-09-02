@@ -76,6 +76,36 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE JUnit CONSOLE LAUNCHER PRINTS ITS OWN OUTPUT ON BARE METAL (2026-09-02)** -- usage text, word-wrapped,
+  with ANSI colour escapes:
+  `Unknown options: '--select-class=SleepSanity' ...` / `Usage: junit execute` / `Execute tests` /
+  `For more information, please refer to the JUnit User Guide at https://docs.junit.org/current/`.
+  - **THE SILENT-OUTPUT BUG WAS AN OVERLAY DROPPING ITS STOCK SUPERCLASS.** joe-ng's `PrintStream` was declared
+    `public class PrintStream` -- extending nothing -- while stock is
+    `PrintStream extends FilterOutputStream extends OutputStream`. So `System.out` was NOT an `OutputStream`,
+    and every library that WRAPS it (`new PrintWriter(System.out)`, `new OutputStreamWriter(...)`) could not
+    bind. **The launcher produced no output at all -- not a crash, silence.** Same trap as StringBuilder
+    dropping `Appendable`, one rung up: **an overlay drops the stock SUPERCLASS as silently as an interface.**
+    Fixed by extending `java.io.OutputStream` directly (not `FilterOutputStream`, whose wrapped-stream field is
+    unused); `write(int)` already existed, so it cost no new code.
+  - **`Field.getAnnotation` + `isAnnotationPresent`** -- field annotations are how libraries declare
+    CONFIGURATION (`@Option`/`@Parameters` live on fields), so without them picocli's command spec had NO
+    OPTIONS: every argument came back "Unknown options" and the usage block listed none. The annotation
+    runtime already existed; this is the field-level entry point into it.
+  - **`Field.getType`**, recoverable now in a way it was not when `getDeclaredFields` landed: the DESCRIPTOR is
+    in the classfile and the annotation runtime already resolves a descriptor to a mirror, primitives included.
+    Only the type CHAR was kept before, which cannot name a reference type -- so it was omitted rather than
+    answering `Object` for everything. The descriptor's ABSOLUTE address is taken before resolving, since a
+    resolve may demand-load and move the cursor.
+  - **`Class.enumConstantDirectory`** for `Enum.valueOf`, built from `getEnumConstants()` so the constants are
+    the SAME objects the VM holds -- `valueOf(E.class,"X") == E.X` by identity. Not cached, unlike stock's
+    volatile field: caching would mean a new field on `Class`, whose mirrors the VM allocates itself.
+  - **NEXT: `Field.getGenericType`**, which returns a `java/lang/reflect/Type` -- and that interface is
+    DENYLISTED, so it needs a denial narrowing AND `Class` implementing the interface. A bigger step than the
+    last few.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 55 -> 54.
+
 - **`java/text/BreakIterator` overlaid, and NARROWED OUT of the `java/text/` denial (2026-09-02).** picocli
   word-wraps its help and error output with it; without it the launcher trapped in `TextTable.putValue`.
   - **Whitespace and hyphen boundaries only, stated as a real limit.** Stock line breaking follows the Unicode

@@ -149,6 +149,64 @@ public final class Field extends AccessibleObject
         Magic.store32(addr(obj), v);
     }
 
+    /**
+     * The annotation INSTANCE on this field, or null.
+     *
+     * <p>Field annotations are how libraries declare CONFIGURATION -- picocli's {@code @Option} and
+     * {@code @Parameters} live on fields -- so without this a command spec has no options at all: JUnit's
+     * launcher printed "Unknown options" for every argument and a usage block listing none.
+     *
+     * <p>The BOUND is load-bearing: {@code <T extends Annotation>} erases the return to
+     * {@code Ljava/lang/annotation/Annotation;}, the descriptor stock callers reference. A plain {@code <T>}
+     * erases to {@code Object} and is a DIFFERENT METHOD that resolves nowhere.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno));
+    }
+
+    @Override
+    public boolean isAnnotationPresent(Class<?> anno)
+    {
+        return anno != null && fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno)) != null;
+    }
+
+    /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;}, the form the classfile stores. */
+    private static byte[] descriptorOf(Class<?> anno)
+    {
+        String n = anno.getName();
+        byte[] out = new byte[n.length() + 2];
+        out[0] = (byte) 'L';
+        for (int i = 0; i < n.length(); i++)
+        {
+            char c = n.charAt(i);
+            out[i + 1] = (byte) (c == '.' ? '/' : c);
+        }
+        out[out.length - 1] = (byte) ';';
+        return out;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.fieldAnnoGet}): mirror + field name + descriptor. */
+    private static native Object fieldAnnoGet0(Class<?> c, byte[] fieldName, byte[] descriptor);
+
+    /**
+     * The field's declared type. Resolved from the classfile DESCRIPTOR rather than from the stored type CHAR,
+     * which cannot name a reference type -- picocli reads it to decide how to convert an option's argument, so
+     * answering {@code Object} for every reference field would be worse than not answering at all.
+     */
+    public Class<?> getType()
+    {
+        return (Class<?>) fieldType0(clazz, nameBytes);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.fieldType}): mirror + field name -> Class. */
+    private static native Object fieldType0(Class<?> c, byte[] fieldName);
+
     /** ACC_SYNTHETIC -- a compiler-generated field (an outer-instance {@code this$0}, a switch map). */
     public boolean isSynthetic()
     {

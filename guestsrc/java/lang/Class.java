@@ -247,6 +247,38 @@ public final class Class<T>
      * same array the language exposes — rather than the stock {@code getEnumConstantsShared} cache. Not cloned
      * (single-threaded, read-only use), so the caller must not mutate the returned array.
      */
+    /**
+     * name -> constant, for {@code Enum.valueOf(Class, String)}.
+     *
+     * <p>Package-private and returning a raw {@code Map}, matching stock, because {@code Enum.valueOf} calls it
+     * directly and both live in {@code java.lang}. Built from {@link #getEnumConstants()}, which reaches the
+     * enum's own {@code values()} -- so the constants here are the SAME objects the rest of the VM holds, and
+     * {@code valueOf(E.class, "X") == E.X} as identity, not merely as equals.
+     *
+     * <p>NOT CACHED, unlike stock's volatile field. Caching would mean a new field on {@code Class}, whose
+     * mirrors the VM allocates itself; rebuilding costs one reflective {@code values()} call on a path
+     * ({@code Enum.valueOf}) that is not hot, and avoids putting VM-allocated objects and guest field layout in
+     * the same argument.
+     */
+    java.util.Map enumConstantDirectory()
+    {
+        java.util.HashMap m = new java.util.HashMap();
+        Object[] constants = getEnumConstants();
+        if (constants == null)
+        {
+            return m;                                   // not an enum, or values() unreachable: empty, not null
+        }
+        for (int i = 0; i < constants.length; i++)
+        {
+            Object c = constants[i];
+            if (c != null)
+            {
+                m.put(((Enum) c).name(), c);
+            }
+        }
+        return m;
+    }
+
     public Object[] getEnumConstants()
     {
         if (!isEnum())

@@ -7575,6 +7575,8 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldType0")))       { return VM.fieldTypeAddr; }        // (Class,byte[])Class
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
@@ -11465,6 +11467,94 @@ public final class Loader
             m += 1;
         }
         return p;
+    }
+
+    /**
+     * {@code Field.annoGet0}: the annotation instance for {@code descArr} on the field named {@code nameArr}
+     * of the class whose mirror is given, or 0.
+     *
+     * <p>Field annotations are how a library declares CONFIGURATION: picocli's `@Option`/`@Parameters` live on
+     * fields, and without this its command spec has no options at all -- the launcher printed
+     * "Unknown options" for every argument and a usage block listing none.
+     */
+    static long fieldAnnotation(long mirror, long nameArr, long descArr, int descLen)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;                               // past access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);   // byte[] length @16
+        long nbase = nameArr + 24L;
+        int f = 0;
+        while (f < fcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p + 2)]))
+            {
+                return annoFromAttrs(base, p + 8, attrs, descArr, descLen);
+            }
+            p = skipAttributes(p + 8, attrs);
+            f += 1;
+        }
+        return 0L;
+    }
+
+    /**
+     * {@code Field.type0}: the {@code Class} mirror of the declared type of field {@code nameArr}, or 0.
+     *
+     * <p>Recoverable now in a way it was not when {@code getDeclaredFields} landed: the field's DESCRIPTOR is
+     * in the classfile, and the annotation runtime already resolves a descriptor to a mirror
+     * ({@code annoClassValue}), primitives included. Previously only the type CHAR was kept, which cannot name
+     * a reference type -- so the method was left out rather than answering {@code Object} for everything.
+     *
+     * <p>The descriptor's ABSOLUTE address is taken before resolving: resolving may demand-load, which
+     * re-parses a blob and moves the {@code gcp}/{@code gbase} cursor. Blobs themselves do not move, so an
+     * absolute Utf8 pointer survives it -- the same property {@code applyAnnoDefaults} relies on.
+     */
+    static long fieldTypeMirror(long mirror, long nameArr)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        long descU = 0L;
+        int f = 0;
+        while (f < fcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p + 2)]))
+            {
+                descU = base + gcp[u2(p + 4)];          // absolute: survives the re-parse a resolve may cause
+                break;
+            }
+            p = skipAttributes(p + 8, attrs);
+            f += 1;
+        }
+        return descU == 0L ? 0L : annoClassValue(descU);
     }
 
     /** {@code Class.getAnnotation0}: the same, for the annotations on a CLASS (its own attribute list). */

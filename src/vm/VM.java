@@ -1078,6 +1078,8 @@ public final class VM
         if (annoPresentAddr == 0L) { long u = VMNatives.annoPresent(0L, 0L); }        // Method.annoPresent0
         if (annoGetAddr == 0L) { long u = VMNatives.annoGet(0L, 0L); }              // Method.annoGet0
         if (classAnnoGetAddr == 0L) { long u = VMNatives.classAnnoGet(0L, 0L); }     // Class.annoGet0
+        if (fieldAnnoGetAddr == 0L) { long u = VMNatives.fieldAnnoGet(0L, 0L, 0L); } // Field.annoGet0
+        if (fieldTypeAddr == 0L) { long u = VMNatives.fieldType(0L, 0L); }          // Field.type0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
         if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
@@ -2292,6 +2294,8 @@ public final class VM
     static long annoPresentAddr;       // VM.annoPresent(JJ)J — Method.annoPresent0 (RuntimeVisibleAnnotations)
     static long annoGetAddr;           // VMNatives.annoGet(JJ)J — Method.annoGet0 (annotation INSTANCE)
     static long classAnnoGetAddr;      // VMNatives.classAnnoGet(JJ)J — Class.annoGet0
+    static long fieldAnnoGetAddr;      // VMNatives.fieldAnnoGet(JJJ)J — Field.annoGet0
+    static long fieldTypeAddr;         // VMNatives.fieldType(JJ)J — Field.type0
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
     static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0
