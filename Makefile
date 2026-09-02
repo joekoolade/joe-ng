@@ -83,6 +83,15 @@ overlaycheck: build junitjar
 overlaycheck-update: build junitjar
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --write test/overlay/known-gaps.txt
 
+# The DEEP scan adds the stock java.base classes as callers -- the true set of "would trap if reached", and
+# about 1059 members wider. Not the default: most of java.base is never reached on metal, so folding it into
+# the baseline would bury the ~57 gaps in code we actually ship, and a check nobody reads is how the one that
+# mattered got missed. Reach for this when a trap's caller IS stock library code: Character.getType was dropped
+# and its only caller is java.time.format.DateTimeFormatterBuilder, invisible to the shallow scan.
+.PHONY: overlaycheck-deep
+overlaycheck-deep: build junitjar
+	$(JAVA) -cp $(OUT) overlay.OverlayCheck --deep --baseline test/overlay/known-gaps.txt || true
+
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)

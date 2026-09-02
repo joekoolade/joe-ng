@@ -73,8 +73,30 @@ public final class OverlayCheck
             }
         }
         OverlayCheck c = new OverlayCheck();
+        for (int i = 0; i < args.length; i++)
+        {
+            if (args[i].equals("--deep"))
+            {
+                c.deep = true;
+            }
+        }
         c.run(outDir, Path.of("ramfs", "lib"), baseline, write);
     }
+
+    /**
+     * Whether to scan the stock {@code java.base} classes as callers as well.
+     *
+     * <p>OFF by default, and the reason is scope rather than cost. Every java.base class is demand-loadable and
+     * can call an overlaid member, so the deep scan is the TRUE set of "would trap if reached" -- about 1059
+     * further members. But most of java.base is never reached on metal (denylisted subtrees, cold paths), so
+     * folding that into the default baseline would bury the ~57 gaps in code we actually ship and the check
+     * would stop being read -- which is how the one that mattered got missed in the first place.
+     *
+     * <p>Use {@code make overlaycheck-deep} when chasing a trap whose caller is stock library code:
+     * {@code Character.getType} was dropped and its only caller is
+     * {@code java.time.format.DateTimeFormatterBuilder}, so the shallow scan could not see it.
+     */
+    private boolean deep;
 
     private void run(Path outDir, Path jarDir, Path baseline, Path write) throws IOException
     {
@@ -84,6 +106,10 @@ public final class OverlayCheck
 
         scanTree(outDir);
         scanJars(jarDir);
+        if (deep)
+        {
+            scanJavaBase();
+        }
 
         if (write != null)
         {
@@ -173,6 +199,41 @@ public final class OverlayCheck
                 {
                     checkRefs(internalName(dir, p), Files.readAllBytes(p));
                 }
+            }
+        }
+    }
+
+    /**
+     * Scan the stock {@code java.base} classes too -- the LARGEST caller population, and the one this check
+     * originally missed. Every class in java.base is demand-loadable on metal and routinely calls into an
+     * overlaid class, so a member an overlay drops traps just as readily from there as from our own code.
+     *
+     * <p>That blind spot was not theoretical: {@code Character.getType} was dropped, and the only caller is
+     * stock {@code java.time.format.DateTimeFormatterBuilder} -- so the gap was INVISIBLE to this check and
+     * surfaced instead as a denylist trap on a boot.
+     *
+     * <p>An overlaid class's OWN stock version is skipped: its bytes are the ones the overlay REPLACES, so its
+     * internal references describe the class we are not running.
+     */
+    private void scanJavaBase() throws IOException
+    {
+        Path base = jrt.getPath("/modules/java.base");
+        try (var paths = Files.walk(base))
+        {
+            for (Path p : (Iterable<Path>) paths::iterator)
+            {
+                String sp = p.toString();
+                if (!sp.endsWith(".class"))
+                {
+                    continue;
+                }
+                String name = base.relativize(p).toString();
+                name = name.substring(0, name.length() - ".class".length());
+                if (name.equals("module-info") || overlays.containsKey(name))
+                {
+                    continue;
+                }
+                checkRefs(name, Files.readAllBytes(p));
             }
         }
     }

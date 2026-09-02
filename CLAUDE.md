@@ -76,6 +76,58 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`make overlaycheck-deep` -- the checker had a BLIND SPOT, and it was the biggest caller population
+  (2026-09-02).** The launcher trapped on `Character.getType`, a dropped overlay member the check had never
+  listed. Reason: it scanned `out/` and the RAMFS jars but **not the stock `java.base` classes**, and
+  `getType`'s only caller is stock `java/time/format/DateTimeFormatterBuilder`. Every java.base class is
+  demand-loadable and routinely calls into an overlaid class, so that population matters most.
+  - **The deep scan finds ~1059 further members** -- the TRUE set of "would trap if reached".
+  - **It is OPT-IN, and that is a scope decision rather than a cost one.** Most of java.base is never reached
+    on metal (denylisted subtrees, cold paths), so folding 1059 into the baseline would bury the ~57 gaps in
+    code we actually ship, **and a check nobody reads is exactly how the one that mattered got missed**.
+    `make test` stays shallow; `make overlaycheck-deep` is for when a trap's caller IS stock library code.
+  - **`Character.getType` + the category constants** -- ASCII only, the same stated limit as the other
+    classification predicates; above U+007F it reports `UNASSIGNED` rather than a confidently wrong category.
+  - **`Locale.Category` (nested, a plain class like `TimeUnit` -- no enum machinery) + `getDefault(Category)`,
+    `getCountry`/`getVariant`/`getScript`/`toLanguageTag`/`getDisplayName`/`stripExtensions`/`of`.** The
+    constructors had always ACCEPTED country and variant and thrown them away, so `getCountry()` would have had
+    to lie; two references are cheaper than a wrong answer, and Locale carries no VM-fixed field offsets
+    (unlike `Thread`).
+  - **FOUR MORE BLOCKERS CLEARED IN THE SAME PASS, using the deep scan to batch instead of one boot each:**
+    the reachable `Character` classification/code-point members and `StringBuilder.delete`/`codePointAt`;
+    **`ProcessEnvironment`** (the environment is EMPTY and that is the TRUTH -- there is no OS beneath the VM;
+    overlaid rather than denylisted precisely because the honest answer exists and a denylisted class would
+    keep trapping); **`MethodHandles.lookup()` returns a SINGLETON** instead of null, with
+    `Lookup.ensureInitialized` -- stock `SharedSecrets` calls it before reading EVERY access shim and catches
+    only `IllegalAccessException`, which a denylist trap is not.
+  - **THE VM HAS SYSTEM PROPERTIES NOW (`seedStandardProps`), and it states WHAT IT IS.** Library code reads
+    these unconditionally: picocli's `Ansi.isWindows()` does
+    `System.getProperty("os.name").toLowerCase()` and NPEs inside the library on a null. `os.name` and
+    `java.vm.name` say **joe-ng** rather than imitating Linux -- code that branches on the platform should not
+    be told something false. `line.separator` is `\n`, because `Uart.putc` is what turns that into CRLF and a
+    `\r\n` here would double the carriage returns.
+  - **CONSOLE LAUNCHER: through picocli's ENTIRE command-spec and subcommand setup now.** It ends in a
+    CORRUPTED state rather than a clean blocker -- a `LOADER LOCK stuck >10s` watchdog and an "exception"
+    whose class is `CommandLine$Interpreter`, which is not a Throwable at all. The
+    `NULL CLASS LITERAL: java/net/NetworkInterface` line above it looked like the cause -- the family where a
+    literal for an unpulled class bakes null for ever.
+  - **THAT HYPOTHESIS WAS WRONG, AND ONE REPORT SETTLED IT.** `NULL CLASS LITERAL` still said
+    "class never pulled", an UNCHECKED assertion -- the identical trap already fixed for `UNRESOLVED STATIC`
+    hours earlier, left in place on the sibling message. Routed through `printWhyUnpulled`, it answers
+    immediately: **`java/net/NetworkInterface` is DENYLISTED**, so that null is INTENDED and was never the bug.
+    A wrong diagnosis ruled out by evidence in one run instead of a chase.
+  - **What remains is a WILD BRANCH, and the pc says so:** `<unclaimed pc=0x060B9DB8>` is above the code
+    ceiling (`CODE_LIMIT` = `0x0300_0000`) -- a HEAP address, not code -- with an absurd frame offset, preceded
+    by `LOADER LOCK stuck >10s`. That is a real VM bug and deserves its own session rather than another
+    overlay member. **Note QEMU runs ~100x slow, so a 10 s wall-clock watchdog can fire on legitimate work
+    there; the wild pc is the part that cannot be explained away.**
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`. **The BOOT PHASE is what this boot tested**: `seedStandardProps` now runs during
+    loader init on EVERY image -- fifteen guest Strings built and pushed through `Properties.setProperty` via
+    `Magic.callN` before `main` -- and `MethodHandles.lookup()` returns a real object where it returned null
+    for the life of the project. Both ran clean, well before `launch MetalJUnit`, which is where a fault in
+    either would have shown. QEMU also green; host tests unchanged; shallow backlog 57.
+
 - **Class- and enum-valued annotation elements, and an ARRAY-TYPING bug I had put there myself (2026-09-01).**
   Backlog 58 -> 57; the console launcher completed picocli's whole `CommandSpec` construction.
   - **A THIRD PHASE resolves `'c'` and `'e'` elements**, after every classfile walk has finished -- the same

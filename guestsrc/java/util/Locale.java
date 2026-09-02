@@ -25,20 +25,27 @@ public final class Locale
     private static final Locale DEFAULT = ENGLISH;
 
     private final String language;
+    // Country and variant are KEPT now rather than discarded. The constructors always accepted them and threw
+    // them away, so getCountry() would have had to lie; storing two references is cheaper than a wrong answer,
+    // and Locale carries no VM-fixed field offsets (unlike Thread), so widening it is safe.
+    private final String country;
+    private final String variant;
 
     public Locale(String language)
     {
-        this.language = language;
+        this(language, "", "");
     }
 
     public Locale(String language, String country)
     {
-        this.language = language;
+        this(language, country, "");
     }
 
     public Locale(String language, String country, String variant)
     {
         this.language = language;
+        this.country = country;
+        this.variant = variant;
     }
 
     /**
@@ -61,6 +68,104 @@ public final class Locale
         }
         int dash = tag.indexOf('-');
         return new Locale(dash < 0 ? tag : tag.substring(0, dash));
+    }
+
+    /**
+     * {@code Locale.Category} -- a plain class, not an enum, for the same reason {@link
+     * java.util.concurrent.TimeUnit} is: joe-ng has no enum machinery here and the stock nested enum's
+     * {@code <clinit>} is unrunnable. Declared INSIDE Locale so it compiles to {@code java/util/Locale$Category},
+     * the name stock callers reference; without it the overlay drops the nested type as well as the method.
+     */
+    public static final class Category
+    {
+        public static final Category DISPLAY = new Category("DISPLAY", 0);
+        public static final Category FORMAT = new Category("FORMAT", 1);
+
+        private final String name;
+        private final int ordinal;
+
+        private Category(String name, int ordinal)
+        {
+            this.name = name;
+            this.ordinal = ordinal;
+        }
+
+        public String name()
+        {
+            return name;
+        }
+
+        public int ordinal()
+        {
+            return ordinal;
+        }
+
+        public String toString()
+        {
+            return name;
+        }
+
+        public static Category[] values()
+        {
+            return new Category[] { DISPLAY, FORMAT };
+        }
+    }
+
+    /**
+     * Per-category default -- the same Locale for both, since joe-ng carries no locale data and therefore has
+     * nothing to distinguish a DISPLAY default from a FORMAT one. Reached from {@code java.time.format}.
+     */
+    public static Locale getDefault(Category category)
+    {
+        return DEFAULT;
+    }
+
+    /** The simple accessors. Country/variant/script are empty because a joe-ng Locale carries only a language;
+     *  {@code toLanguageTag} therefore reports just that, which is a VALID BCP-47 tag rather than a truncation. */
+    public String getCountry()
+    {
+        return country == null ? "" : country;
+    }
+
+    public String getVariant()
+    {
+        return variant == null ? "" : variant;
+    }
+
+    public String getScript()
+    {
+        return "";
+    }
+
+    public String toLanguageTag()
+    {
+        String c = getCountry();
+        return c.isEmpty() ? getLanguage() : getLanguage() + "-" + c;
+    }
+
+    public String getDisplayName()
+    {
+        return toLanguageTag();
+    }
+
+    public Locale stripExtensions()
+    {
+        return this;                                    // no extensions are ever carried
+    }
+
+    public static Locale of(String language)
+    {
+        return new Locale(language);
+    }
+
+    public static Locale of(String language, String country)
+    {
+        return new Locale(language, country);
+    }
+
+    public static Locale of(String language, String country, String variant)
+    {
+        return new Locale(language, country, variant);
     }
 
     public static Locale getDefault()

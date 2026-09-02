@@ -269,6 +269,34 @@ public final class StringBuilder implements Appendable
         return this;
     }
 
+    /** {@code delete(start,end)} -- the range form of {@link #deleteCharAt}. */
+    public StringBuilder delete(int start, int end)
+    {
+        if (start < 0 || start > count || start > end)
+        {
+            throw new StringIndexOutOfBoundsException(start);
+        }
+        int to = end > count ? count : end;
+        int n = to - start;
+        for (int i = start; i < count - n; i++)
+        {
+            value[i] = value[i + n];
+        }
+        count = count - n;
+        return this;
+    }
+
+    /** Latin-1 buffer, so a code point IS the character -- no surrogate pairing to undo. */
+    public int codePointAt(int index)
+    {
+        return charAt(index);
+    }
+
+    public int codePointBefore(int index)
+    {
+        return charAt(index - 1);
+    }
+
     public String toString()
     {
         byte[] t = new byte[count];

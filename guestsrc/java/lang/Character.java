@@ -216,6 +216,178 @@ public final class Character implements Comparable<Character>
         return isJavaIdentifierStart(cp) || isDigit(cp);
     }
 
+    // ----- Unicode general category -------------------------------------------------------------------------
+    // The stock category constants, needed because getType returns one and callers compare against them.
+    public static final byte UNASSIGNED = 0;
+    public static final byte UPPERCASE_LETTER = 1;
+    public static final byte LOWERCASE_LETTER = 2;
+    public static final byte DECIMAL_DIGIT_NUMBER = 9;
+    public static final byte SPACE_SEPARATOR = 12;
+    public static final byte CONTROL = 15;
+    public static final byte DASH_PUNCTUATION = 20;
+    public static final byte START_PUNCTUATION = 21;
+    public static final byte END_PUNCTUATION = 22;
+    public static final byte CONNECTOR_PUNCTUATION = 23;
+    public static final byte OTHER_PUNCTUATION = 24;
+    public static final byte MATH_SYMBOL = 25;
+    public static final byte CURRENCY_SYMBOL = 26;
+    public static final byte MODIFIER_SYMBOL = 27;
+
+    /**
+     * The Unicode general category of {@code ch} -- ASCII only, the same stated limit as the classification
+     * predicates above: the real answer comes from Unicode tables joe-ng does not carry, so anything above
+     * U+007F reports {@link #UNASSIGNED} rather than a confidently wrong category.
+     *
+     * <p>Reached from {@code java.time.format.DateTimeFormatterBuilder}, which classifies the characters of a
+     * format pattern -- all ASCII in practice. Declared because a name-winning overlay silently drops what it
+     * does not declare, and the call then resolves NOWHERE and traps.
+     */
+    public static int getType(char ch)
+    {
+        return getType((int) ch);
+    }
+
+    public static int getType(int cp)
+    {
+        if (cp > 0x7F)
+        {
+            return UNASSIGNED;                          // outside ASCII: see the note above
+        }
+        if (isUpperCase(cp))
+        {
+            return UPPERCASE_LETTER;
+        }
+        if (isLowerCase(cp))
+        {
+            return LOWERCASE_LETTER;
+        }
+        if (isDigit(cp))
+        {
+            return DECIMAL_DIGIT_NUMBER;
+        }
+        if (cp == ' ')
+        {
+            return SPACE_SEPARATOR;
+        }
+        if (cp < 0x20 || cp == 0x7F)
+        {
+            return CONTROL;                             // includes tab/newline, as Unicode does
+        }
+        if (cp == '_')
+        {
+            return CONNECTOR_PUNCTUATION;
+        }
+        if (cp == '-')
+        {
+            return DASH_PUNCTUATION;
+        }
+        if (cp == '(' || cp == '[' || cp == '{')
+        {
+            return START_PUNCTUATION;
+        }
+        if (cp == ')' || cp == ']' || cp == '}')
+        {
+            return END_PUNCTUATION;
+        }
+        if (cp == '$')
+        {
+            return CURRENCY_SYMBOL;
+        }
+        if (cp == '+' || cp == '<' || cp == '=' || cp == '>' || cp == '|' || cp == '~')
+        {
+            return MATH_SYMBOL;
+        }
+        if (cp == '^' || cp == '`')
+        {
+            return MODIFIER_SYMBOL;
+        }
+        return OTHER_PUNCTUATION;                       // ! " # % & ' * , . / : ; ? @ \ -- the rest of ASCII
+    }
+
+    /**
+     * The remaining classification and code-point helpers stock text code reaches, listed by
+     * {@code make overlaycheck-deep}. ASCII/Latin-1 only, the same stated limit as the predicates above:
+     * everything here answers from the character itself, never from a Unicode table joe-ng does not carry.
+     *
+     * <p>The properties that are MEANINGLESS without those tables -- {@code isMirrored}, {@code isIdeographic},
+     * the emoji family, {@code getName} -- are deliberately NOT declared. Answering "false" for them would be a
+     * confident claim about a character set this VM cannot see; leaving them absent keeps the gap visible in
+     * the deep scan, which is where it belongs.
+     */
+    public static boolean isAlphabetic(int cp)
+    {
+        return isLetter(cp);
+    }
+
+    public static boolean isDefined(int cp)
+    {
+        return cp >= 0 && cp <= 0x7F;                   // only ASCII is modelled -- say so rather than claim more
+    }
+
+    public static boolean isTitleCase(int cp)
+    {
+        return false;                                   // ASCII has no title-case characters; this IS exact
+    }
+
+    public static boolean isIdentifierIgnorable(int cp)
+    {
+        return (cp >= 0x00 && cp <= 0x08) || (cp >= 0x0E && cp <= 0x1B) || cp == 0x7F;
+    }
+
+    public static boolean isUnicodeIdentifierStart(int cp)
+    {
+        return isLetter(cp);
+    }
+
+    public static boolean isUnicodeIdentifierPart(int cp)
+    {
+        return isLetter(cp) || isDigit(cp) || cp == '_' || isIdentifierIgnorable(cp);
+    }
+
+    /** Digit value in {@code radix}, or -1 -- the code-point twin of {@link #digit(char,int)}. */
+    public static int getNumericValue(int cp)
+    {
+        if (cp >= '0' && cp <= '9')
+        {
+            return cp - '0';
+        }
+        if (cp >= 'A' && cp <= 'Z')
+        {
+            return cp - 'A' + 10;
+        }
+        if (cp >= 'a' && cp <= 'z')
+        {
+            return cp - 'a' + 10;
+        }
+        return -1;
+    }
+
+    /** The inverse of {@link #digit}: a digit value to its character, or NUL when out of range (as stock). */
+    public static char forDigit(int digit, int radix)
+    {
+        if (digit < 0 || digit >= radix || radix < 2 || radix > 36)
+        {
+            return '\0';
+        }
+        return (char) (digit < 10 ? '0' + digit : 'a' + digit - 10);
+    }
+
+    public static int codePointAt(char[] a, int index)
+    {
+        return a[index];                                // BMP only: a surrogate pair is not combined here
+    }
+
+    public static int toChars(int codePoint, char[] dst, int dstIndex)
+    {
+        dst[dstIndex] = (char) codePoint;
+        return 1;                                       // BMP only -- a supplementary point would need 2
+    }
+
+    public static char reverseBytes(char ch)
+    {
+        return (char) (((ch & 0xFF00) >> 8) | ((ch & 0x00FF) << 8));
+    }
+
     // ----- surrogate / BMP predicates (pure bit logic; 0xD800..0xDFFF is the surrogate range) ---------------
     public static boolean isHighSurrogate(char ch)
     {
