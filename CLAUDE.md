@@ -100,8 +100,16 @@ defines the minimum the assembler must encode.
   - **Two hypotheses died on the way, both by control rather than argument:** high local slots (a probe with
     the catch variable in slot **24** passes) and "a call from the catch" (arm B already calls
     `getMessage()` from its handler and passes).
-  - **QEMU:** probe all four arms exact; `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests
-    unchanged incl. `compiler: 37 checks`; overlay backlog 57.
+  - **PI-VALIDATED (`core 166MHz`, SMP on):** `ran 44, failures 0` / `ALL PASSED`, `SMP: 4 of 4`,
+    `gc: collections=8`, no `BAD THROW`, no `vtparity DIFF`. **The GC figures are essentially identical to the
+    pre-fix boot** (`lastProbes=0x10CB7A`, `roots=0x443B0`, `heap=0xC87CA`), which is what byte-identical
+    shallow codegen looks like from the outside.
+  - **INDEPENDENTLY CONFIRMED BY THE LAUNCHER**, which is stronger than the suite here: the console launcher's
+    `BAD THROW` is GONE (0 occurrences) and it now runs past picocli entirely into `sun/nio/cs/StreamEncoder`
+    -- output encoding, i.e. command parsing COMPLETED. Next blocker there is `sun/nio/cs/UTF_8.newEncoder`,
+    the ordinary overlay gap again.
+  - **QEMU:** probe all four arms exact; `ran 44, failures 0`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 57.
 
 - **`athrow` THREW `this` INSTEAD OF THE EXCEPTION PARAMETER -- located exactly (2026-09-02).** The console
   launcher's failure, chased from "wild branch" through "not a Throwable" to a named bytecode site.
