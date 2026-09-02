@@ -40,6 +40,20 @@ public class AccessibleObject
         return false;
     }
 
+    /**
+     * Null on the base, OVERRIDDEN by {@link Method}. Safe to declare now that annotation INSTANCES exist: it
+     * was held back while nothing could build one, because a null here would have claimed "no such annotation"
+     * against an {@code isAnnotationPresent} that answered true. With Method overriding both, the pair agrees.
+     *
+     * <p>{@code <T extends Annotation>} is not decoration -- the BOUND is what erases the return to
+     * {@code Ljava/lang/annotation/Annotation;}, the descriptor stock callers reference. An unbounded
+     * {@code <T>} erases to {@code Ljava/lang/Object;} and is a DIFFERENT METHOD that resolves nowhere.
+     */
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
+    {
+        return null;
+    }
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAtPc}): Class of the method containing frame PC {@code pc}. */
     static native Object callerClass0(long pc);
 

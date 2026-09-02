@@ -6,7 +6,6 @@
 # bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold
 # until the day they ran. The check exists to stop NEW ones appearing silently.
 java/io/FileInputStream#<init>(Ljava/io/File;)V
-java/lang/Class#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/Class#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/Class#getClasses()[Ljava/lang/Class;
 java/lang/Class#getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;
@@ -36,18 +35,15 @@ java/lang/RuntimeException#<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V
 java/lang/StringBuilder#append(D)Ljava/lang/StringBuilder;
 java/lang/Thread#getState()Ljava/lang/Thread$State;
 java/lang/Throwable#printStackTrace(Ljava/io/PrintWriter;)V
-java/lang/reflect/AccessibleObject#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Constructor#getParameterAnnotations()[[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Constructor#getParameterTypes()[Ljava/lang/Class;
 java/lang/reflect/Constructor#toGenericString()Ljava/lang/String;
-java/lang/reflect/Field#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Field#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
 java/lang/reflect/Field#getGenericType()Ljava/lang/reflect/Type;
 java/lang/reflect/Field#getType()Ljava/lang/Class;
 java/lang/reflect/Field#toGenericString()Ljava/lang/String;
-java/lang/reflect/Method#getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getGenericParameterTypes()[Ljava/lang/reflect/Type;

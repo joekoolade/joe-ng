@@ -118,7 +118,7 @@ public final class Method extends AccessibleObject
      * clobber the classfile cursor the walk is using.
      */
     @SuppressWarnings("unchecked")
-    public <T> T getAnnotation(Class<T> anno)
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
     {
         if (anno == null)
         {

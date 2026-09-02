@@ -353,9 +353,15 @@ public final class Class<T>
      * The annotation INSTANCE carried by this class, or null. Same machinery as {@link
      * java.lang.reflect.Method#getAnnotation} -- the returned object implements the annotation interface, so
      * calling an element method on it is an ordinary interface dispatch.
+     *
+     * <p>THE BOUND IS LOAD-BEARING. {@code <T extends Annotation>} erases the return to
+     * {@code Ljava/lang/annotation/Annotation;}, which is the descriptor stock callers reference. Declared as a
+     * plain {@code <T>} it erases to {@code Ljava/lang/Object;} -- a DIFFERENT METHOD, which resolves nowhere
+     * and traps. That is exactly what happened: the first cut of this compiled, ran green in a probe that
+     * called it directly, and still failed for JUnit's launcher.
      */
     @SuppressWarnings("unchecked")
-    public <T> T getAnnotation(Class<T> anno)
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
     {
         if (anno == null)
         {
@@ -364,9 +370,10 @@ public final class Class<T>
         return (T) annoGet0(this, annoDescriptorOf(anno));
     }
 
+    /** Takes a wildcard, as stock does, so it cannot call the BOUNDED {@code getAnnotation} directly. */
     public boolean isAnnotationPresent(Class<?> anno)
     {
-        return getAnnotation(anno) != null;
+        return anno != null && annoGet0(this, annoDescriptorOf(anno)) != null;
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAnnoGet}): mirror + descriptor -> instance. */
