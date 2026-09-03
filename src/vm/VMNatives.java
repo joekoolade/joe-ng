@@ -284,6 +284,39 @@ final class VMNatives
         return Loader.methodAnnotation((int) rgIndex, descArr, n);
     }
 
+    /** {@code Field.annoGet0(Class, byte[] fieldName, byte[] desc)} native: an annotation on a FIELD. */
+    static long fieldAnnoGet(long mirror, long nameArr, long descArr)
+    {
+        if (descArr <= 0x1000L || mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int n = (int) Magic.load64(descArr + 16L);
+        return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
+    }
+
+    /** {@code Method.paramTypes0(int)} native: a {@code Class[]} of the method's parameter types. */
+    static long methodParamTypes(long rgIndex)
+    {
+        return Loader.methodParamTypes((int) rgIndex);
+    }
+
+    /** {@code Method.returnType0(int)} native: the Class mirror of the method's declared return type. */
+    static long methodReturnType(long rgIndex)
+    {
+        return Loader.methodReturnType((int) rgIndex);
+    }
+
+    /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
+    static long fieldType(long mirror, long nameArr)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        return Loader.fieldTypeMirror(mirror, nameArr);
+    }
+
     /** {@code Class.annoGet0(Class, byte[])} native: the same, for an annotation on the CLASS itself. */
     static long classAnnoGet(long mirror, long descArr)
     {

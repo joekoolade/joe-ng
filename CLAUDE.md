@@ -76,6 +76,92 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LAUNCHER BUILDS ITS COMMAND SPEC: options are registered and parsing succeeds (2026-09-02).** The only
+  output is picocli's own warnings, and the 700 s QEMU timeout then hits with it STILL WORKING -- no trap.
+  Overlay backlog **54 -> 47**.
+  - **`java/lang/reflect/Type` NARROWED OUT of the denial rather than overlaid**, following the standing rule
+    that guestsrc is for classes that need NATIVES: `Type` is an empty marker interface with one default method
+    and no natives, so the STOCK class loads as-is. It was denied only by the broad prefix that keeps out the
+    reflection IMPLEMENTATION machinery, and a marker is not that. `Class` implements it (Class is a legitimate
+    overlay -- it carries natives).
+  - **`Field.getGenericType`/`toGenericString`, `Method.getParameterTypes`/`getReturnType`/
+    `getGenericParameterTypes`/`getGenericReturnType`/`toGenericString`.** The parameter and return types come
+    from the DESCRIPTOR, which the stored `paramChars`/`returnChar` cannot answer -- they keep only the first
+    character, so every reference type looked alike. That is why these were omitted when `getDeclaredFields`
+    landed, and why they are answerable now.
+  - **Generic forms return the ERASURE, and a caller is not misled by it:** stock returns a
+    `ParameterizedType` only when a `Signature` attribute is present, and every caller asks
+    `instanceof ParameterizedType` first -- false here, so it takes its raw-type path. For `List<String>` the
+    element type is UNKNOWN, not wrong.
+  - **An ARRAY parameter resolves to null rather than to `Object.class`:** visibly wrong at the caller, where
+    a plausible answer would be quietly wrong.
+  - **`getGenericParameterTypes` builds a fresh `Type[]` and copies** rather than returning the `Class[]`:
+    array covariance would permit it, but that leans on the VM's array-Type assignability for a cast the
+    CALLER makes; allocating the right array costs one loop and no assumptions.
+  - **THE DUPLICATE-OPTION WARNING IS REAL AND ITS CAUSE IS STILL UNKNOWN.** picocli warns that
+    `--help`/`--version` are each registered FOUR times. **The HOST JVM running the same jar and the same
+    command prints no such warning**, so it is joe-ng's, not picocli being noisy -- a ten-second control that
+    settled what a boot could not.
+  - **Two hypotheses ruled out by probe, not argument.** A superclass chain that revisits or fails to
+    terminate would make picocli's `cls = cls.getSuperclass()` collection loop: the chain is exactly
+    `Sub -> Fields -> Object`, 3 hops, terminating. And a stateful enumeration that drifts between calls:
+    `getDeclaredFields()` twice on the same class gives `2,2`. **Still open**, with `getDeclaredMethods`
+    (annotated SETTERS) the untested candidate.
+  - **The same host control also settled an earlier question:** `execute --select-class=... --disable-ansi-colors
+    --disable-banner` is a VALID command line, so the "Unknown options" seen before was a genuine VM gap (field
+    annotations) and never bad arguments.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; backlog 54 -> 47.
+
+- **THE JUnit CONSOLE LAUNCHER PRINTS ITS OWN OUTPUT ON BARE METAL (2026-09-02)** -- usage text, word-wrapped,
+  with ANSI colour escapes:
+  `Unknown options: '--select-class=SleepSanity' ...` / `Usage: junit execute` / `Execute tests` /
+  `For more information, please refer to the JUnit User Guide at https://docs.junit.org/current/`.
+  - **THE SILENT-OUTPUT BUG WAS AN OVERLAY DROPPING ITS STOCK SUPERCLASS.** joe-ng's `PrintStream` was declared
+    `public class PrintStream` -- extending nothing -- while stock is
+    `PrintStream extends FilterOutputStream extends OutputStream`. So `System.out` was NOT an `OutputStream`,
+    and every library that WRAPS it (`new PrintWriter(System.out)`, `new OutputStreamWriter(...)`) could not
+    bind. **The launcher produced no output at all -- not a crash, silence.** Same trap as StringBuilder
+    dropping `Appendable`, one rung up: **an overlay drops the stock SUPERCLASS as silently as an interface.**
+    Fixed by extending `java.io.OutputStream` directly (not `FilterOutputStream`, whose wrapped-stream field is
+    unused); `write(int)` already existed, so it cost no new code.
+  - **`Field.getAnnotation` + `isAnnotationPresent`** -- field annotations are how libraries declare
+    CONFIGURATION (`@Option`/`@Parameters` live on fields), so without them picocli's command spec had NO
+    OPTIONS: every argument came back "Unknown options" and the usage block listed none. The annotation
+    runtime already existed; this is the field-level entry point into it.
+  - **`Field.getType`**, recoverable now in a way it was not when `getDeclaredFields` landed: the DESCRIPTOR is
+    in the classfile and the annotation runtime already resolves a descriptor to a mirror, primitives included.
+    Only the type CHAR was kept before, which cannot name a reference type -- so it was omitted rather than
+    answering `Object` for everything. The descriptor's ABSOLUTE address is taken before resolving, since a
+    resolve may demand-load and move the cursor.
+  - **`Class.enumConstantDirectory`** for `Enum.valueOf`, built from `getEnumConstants()` so the constants are
+    the SAME objects the VM holds -- `valueOf(E.class,"X") == E.X` by identity. Not cached, unlike stock's
+    volatile field: caching would mean a new field on `Class`, whose mirrors the VM allocates itself.
+  - **NEXT: `Field.getGenericType`**, which returns a `java/lang/reflect/Type` -- and that interface is
+    DENYLISTED, so it needs a denial narrowing AND `Class` implementing the interface. A bigger step than the
+    last few.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 55 -> 54.
+
+- **`java/text/BreakIterator` overlaid, and NARROWED OUT of the `java/text/` denial (2026-09-02).** picocli
+  word-wraps its help and error output with it; without it the launcher trapped in `TextTable.putValue`.
+  - **Whitespace and hyphen boundaries only, stated as a real limit.** Stock line breaking follows the Unicode
+    line-breaking algorithm with locale tailoring; joe-ng carries none of those tables, so text in a script
+    that does not delimit words with spaces will not wrap where a reader expects. For ASCII -- every caller
+    reached -- the two agree. picocli uses exactly four methods: `getLineInstance`, `setText`, `first`, `next`.
+  - **THE OVERLAY ALONE DID NOTHING, and the reason is worth keeping: `java/text/` IS DENYLISTED.** A denied
+    class is trap-wired at PATCH TIME, so no link stub ever runs and the overlay is never consulted -- the
+    call failed with the identical `TRAPWIRE index=71` as before the overlay existed. It needed the narrow
+    allowance the denylist already has for this shape (as `java/lang/reflect/Method` is allowed out of
+    `java/lang/reflect/`). **An overlay cannot rescue a DENIED class; the denial has to be narrowed first.**
+  - **I MISSED THE DENIAL BY SAMPLING.** I dumped the tail of the prefix list, did not see `java/text/`, and
+    concluded it was absent -- it was two lines above the cut. **Third time this session a conclusion came from
+    partial output** (after `grep` on a binary log, and `classIndexByName` answering a different table).
+  - **Launcher: past word wrapping**, now at `java/lang/Class.enumConstantDirectory()` -- another `Class`
+    overlay gap, the ordinary kind.
+  - **QEMU:** `metal junit: ran 44, failures 0` / `ALL PASSED`; host tests unchanged incl. `compiler: 37
+    checks`; overlay backlog 55, unchanged.
+
 - **THE CONSOLE LAUNCHER RUNS: it parses, reports and exits (2026-09-02).** With the deep-handler fix in, three
   more gaps on the OUTPUT path fell and the launcher executed end to end -- `CommandLine.execute` ->
   `handleParseException` -> `DefaultExceptionHandler` -> `PrintWriter` -> `Runtime.exit`.

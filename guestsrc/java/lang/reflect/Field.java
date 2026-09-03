@@ -149,6 +149,116 @@ public final class Field extends AccessibleObject
         Magic.store32(addr(obj), v);
     }
 
+    /**
+     * The annotation INSTANCE on this field, or null.
+     *
+     * <p>Field annotations are how libraries declare CONFIGURATION -- picocli's {@code @Option} and
+     * {@code @Parameters} live on fields -- so without this a command spec has no options at all: JUnit's
+     * launcher printed "Unknown options" for every argument and a usage block listing none.
+     *
+     * <p>The BOUND is load-bearing: {@code <T extends Annotation>} erases the return to
+     * {@code Ljava/lang/annotation/Annotation;}, the descriptor stock callers reference. A plain {@code <T>}
+     * erases to {@code Object} and is a DIFFERENT METHOD that resolves nowhere.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno));
+    }
+
+    @Override
+    public boolean isAnnotationPresent(Class<?> anno)
+    {
+        return anno != null && fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno)) != null;
+    }
+
+    /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;}, the form the classfile stores. */
+    private static byte[] descriptorOf(Class<?> anno)
+    {
+        String n = anno.getName();
+        byte[] out = new byte[n.length() + 2];
+        out[0] = (byte) 'L';
+        for (int i = 0; i < n.length(); i++)
+        {
+            char c = n.charAt(i);
+            out[i + 1] = (byte) (c == '.' ? '/' : c);
+        }
+        out[out.length - 1] = (byte) ';';
+        return out;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.fieldAnnoGet}): mirror + field name + descriptor. */
+    private static native Object fieldAnnoGet0(Class<?> c, byte[] fieldName, byte[] descriptor);
+
+    /**
+     * The field's declared type. Resolved from the classfile DESCRIPTOR rather than from the stored type CHAR,
+     * which cannot name a reference type -- picocli reads it to decide how to convert an option's argument, so
+     * answering {@code Object} for every reference field would be worse than not answering at all.
+     */
+    public Class<?> getType()
+    {
+        return (Class<?>) fieldType0(clazz, nameBytes);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.fieldType}): mirror + field name -> Class. */
+    private static native Object fieldType0(Class<?> c, byte[] fieldName);
+
+    /**
+     * The declared type, EXACT for a non-generic field and the ERASURE for a generic one.
+     *
+     * <p>Stock returns a {@code ParameterizedType} when the field carries a {@code Signature} attribute, which
+     * needs a generic-signature parser joe-ng does not have. Returning the raw {@link Class} is what stock
+     * itself returns for every NON-generic field, and a caller that inspects the result asks
+     * {@code instanceof ParameterizedType} first -- which is false here, so it takes its raw-type path rather
+     * than misreading a wrong answer. For {@code List<String>} that means the element type is unknown, not
+     * wrong.
+     */
+    public java.lang.reflect.Type getGenericType()
+    {
+        return getType();
+    }
+
+    /**
+     * {@code "public java.lang.String com.x.Foo.bar"} -- modifiers, type, declaring class, name.
+     *
+     * <p>Built directly rather than through {@code Modifier.toString}, to avoid pulling the reflection
+     * modifier machinery for a string. The modifier ORDER is the one the JLS specifies and stock follows, so
+     * the output matches for every field joe-ng can describe; the erasure is used for the type, matching
+     * {@link #getGenericType()}.
+     *
+     * <p>picocli calls it while building an {@code ArgSpec} -- an option's own description -- so a missing
+     * one stops option construction entirely rather than merely degrading a message.
+     */
+    public String toGenericString()
+    {
+        StringBuilder b = new StringBuilder();
+        int m = modifiers;
+        if ((m & 0x0001) != 0) { b.append("public "); }
+        if ((m & 0x0002) != 0) { b.append("private "); }
+        if ((m & 0x0004) != 0) { b.append("protected "); }
+        if ((m & 0x0008) != 0) { b.append("static "); }
+        if ((m & 0x0010) != 0) { b.append("final "); }
+        if ((m & 0x0040) != 0) { b.append("volatile "); }
+        if ((m & 0x0080) != 0) { b.append("transient "); }
+        Class<?> t = getType();
+        b.append(t == null ? "java.lang.Object" : t.getTypeName());
+        b.append(' ');
+        b.append(clazz == null ? "?" : clazz.getName());
+        b.append('.');
+        b.append(name);
+        return b.toString();
+    }
+
+    @Override
+    public String toString()
+    {
+        return toGenericString();
+    }
+
     /** ACC_SYNTHETIC -- a compiler-generated field (an outer-instance {@code this$0}, a switch map). */
     public boolean isSynthetic()
     {

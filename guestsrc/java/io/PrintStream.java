@@ -18,10 +18,17 @@ import magic.Magic;
  * stock {@code System.initPhase1}/{@code setOut0} that would normally set them are native-heavy and unrunnable.
  * So these methods must not depend on any instance field; they write to the one global UART sink.
  *
+ * <p><b>It EXTENDS {@link java.io.OutputStream}, and that is load-bearing.</b> Stock is
+ * {@code PrintStream extends FilterOutputStream extends OutputStream}, so every library that wraps
+ * {@code System.out} in something -- {@code new PrintWriter(System.out)}, {@code new OutputStreamWriter(...)} --
+ * binds it as an OutputStream. A name-winning overlay silently drops the stock SUPERCLASS just as it drops
+ * interfaces (the StringBuilder/Appendable trap), and nothing complains: JUnit's ConsoleLauncher simply
+ * produced NO OUTPUT AT ALL, having wrapped a System.out that was not an OutputStream.
+ *
  * <p>Field-free by design (instance size stays a bare 16-byte header). Numeric overloads route through the
  * already-working {@code Integer.toString}/{@code Long.toString}; only methods a demo actually reaches compile.
  */
-public class PrintStream
+public class PrintStream extends java.io.OutputStream
 {
     /**
      * The stream this PrintStream wraps, or NULL for the UART.

@@ -185,6 +185,100 @@ public final class Method extends AccessibleObject
                 && (access & 0x0408) == 0;              // not ACC_ABSTRACT (0x0400), not ACC_STATIC (0x0008)
     }
 
+    /**
+     * The parameter types, resolved from this method's DESCRIPTOR by the VM.
+     *
+     * <p>The stored {@code paramChars} keeps only each parameter's first descriptor character, so it cannot
+     * name a reference type -- the descriptor can. An ARRAY parameter comes back null (see
+     * {@code Loader.methodParamTypes}): visibly wrong at the caller, where {@code Object.class} would be
+     * quietly wrong.
+     */
+    public Class<?>[] getParameterTypes()
+    {
+        Class<?>[] t = (Class<?>[]) paramTypes0(rgIndex);
+        return t == null ? new Class<?>[0] : t;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.methodParamTypes}): registry index -> Class[]. */
+    private static native Object paramTypes0(int rgIndex);
+
+    /**
+     * The ERASED parameter types, as {@link #getGenericType} is the erasure for a field.
+     *
+     * <p>A fresh {@code Type[]} is built and copied rather than returning the {@code Class[]} directly: Java
+     * array covariance would allow it, but that leans on the VM's array-Type assignability for a cast the
+     * caller makes, and allocating the right array outright costs one loop and no assumptions.
+     */
+    public java.lang.reflect.Type[] getGenericParameterTypes()
+    {
+        Class<?>[] p = getParameterTypes();
+        java.lang.reflect.Type[] t = new java.lang.reflect.Type[p.length];
+        for (int i = 0; i < p.length; i++)
+        {
+            t[i] = p[i];
+        }
+        return t;
+    }
+
+    /** The erased return type; {@code getReturnType}'s generic twin, same reasoning. */
+    public java.lang.reflect.Type getGenericReturnType()
+    {
+        return getReturnType();
+    }
+
+    /** The declared return type, resolved from the descriptor by the VM (see {@link #getParameterTypes}). */
+    public Class<?> getReturnType()
+    {
+        return (Class<?>) returnType0(rgIndex);
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VM.methodReturnType}): registry index -> Class. */
+    private static native Object returnType0(int rgIndex);
+
+    /**
+     * {@code "public java.lang.String com.x.Foo.bar(int)"} -- the {@link Field#toGenericString} twin, and
+     * built the same way: modifiers in JLS order, then return type, declaring class, name, parameter list.
+     *
+     * <p>picocli calls it while building an {@code ArgSpec} for an annotated SETTER, so a missing one stops
+     * option construction rather than merely degrading a message -- the same role it plays for fields.
+     */
+    public String toGenericString()
+    {
+        StringBuilder b = new StringBuilder();
+        int m = access;
+        if ((m & 0x0001) != 0) { b.append("public "); }
+        if ((m & 0x0002) != 0) { b.append("private "); }
+        if ((m & 0x0004) != 0) { b.append("protected "); }
+        if ((m & 0x0008) != 0) { b.append("static "); }
+        if ((m & 0x0010) != 0) { b.append("final "); }
+        if ((m & 0x0020) != 0) { b.append("synchronized "); }
+        if ((m & 0x0400) != 0) { b.append("abstract "); }
+        Class<?> r = getReturnType();
+        b.append(r == null ? "void" : r.getTypeName());
+        b.append(' ');
+        b.append(clazz == null ? "?" : clazz.getName());
+        b.append('.');
+        b.append(name);
+        b.append('(');
+        Class<?>[] p = getParameterTypes();
+        for (int i = 0; i < p.length; i++)
+        {
+            if (i > 0)
+            {
+                b.append(',');
+            }
+            b.append(p[i] == null ? "?" : p[i].getTypeName());
+        }
+        b.append(')');
+        return b.toString();
+    }
+
+    @Override
+    public String toString()
+    {
+        return toGenericString();
+    }
+
     public int getParameterCount()
     {
         return paramCount;
