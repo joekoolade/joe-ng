@@ -178,7 +178,9 @@ public final class Loader
     // call site from where the method happens to sit in a given class's vtable, so
     // two classes implementing the same interface at different vtable slots both
     // dispatch correctly. Interfaces are loaded before their implementors.
-    private static final int MAXIFM = 2048;   // flattened per-interface runs duplicate inherited signatures
+    private static final int MAXIFM = 8192;   // flattened per-interface runs duplicate inherited signatures
+                                              // (2048 overflowed once the console launcher reached picocli's
+                                              //  @ArgGroup members, whose closure is interface-dense)
     private static long[] ifBase;        // interface blob holding the signature
     private static int[] ifNameOff;
     private static int[] ifDescOff;
@@ -1182,6 +1184,11 @@ public final class Loader
                 // are inert; skip them (they'd trap on the unwired native otherwise).
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet4Address"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/net/Inet6Address"))
+                // Proxy.<clinit> builds a jdk/internal/loader/ClassLoaderValue proxy cache and a ClassValue
+                // of MethodHandles -- both denied, and both only for MAKING proxies, which metal never does.
+                // The one method reached (isProxyClass) reads no static of Proxy, just the class literal, so
+                // skipping the initializer leaves nothing it needs unset.
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/reflect/Proxy"))
                 // ContinuationSupport.<clinit> sets SUPPORTED = isSupported0() (a native). Metal has no
                 // continuations, so skipping it leaves SUPPORTED=false -- which is correct, and makes
                 // pinIfSupported/unpinIfSupported no-ops that never touch the denied Continuation class.
@@ -3775,7 +3782,19 @@ public final class Loader
                 //
                 // Needed because `Field.getGenericType()` and `Class` itself are declared in terms of it: a
                 // return type that cannot load makes the method unresolvable however simple its body.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Type")))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Type"))
+                // NARROWED OUT of the java/lang/reflect/ denial, and NOT overlaid: guestsrc is for classes
+                // that need NATIVES, and this one needs none. picocli's ObjectScope asks
+                // `Proxy.isProxyClass(obj.getClass())`, whose whole body is
+                //     Proxy.class.isAssignableFrom(cl) && ProxyBuilder.isProxyClass(cl)
+                // and the && SHORT-CIRCUITS: nothing on metal extends Proxy, so the answer is false and
+                // ProxyBuilder sits on a never-taken branch -- it stays denied and trap-wired, the same shape
+                // as Poller/IPAddressUtil. The stock class gives the true answer with no code of ours.
+                //
+                // Its <clinit> IS blocked (see clinitBlocked): it builds a jdk/internal/loader/ClassLoaderValue
+                // cache, which stays denied. Sound here because isProxyClass reads no static of Proxy -- only
+                // the class literal.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Proxy")))
         {
             return false;
         }
@@ -9396,6 +9415,36 @@ public final class Loader
         }
     }
 
+    /**
+     * Print a {@code {u2 len}{bytes}} Utf8 at an ABSOLUTE address, with the length CAPPED.
+     *
+     * <p>The cap is the whole point. {@link #printNameAt} trusts its length word, which is right where the
+     * pointer is known good and catastrophic where it is not: a diagnostic added to the bakeresolve halts read
+     * a length after a demand-load and streamed several hundred bytes of the stub table onto the console,
+     * burying the failure it was added to name. A name is never 512 bytes, so a longer one means the pointer
+     * is wrong -- which is itself worth saying, and worth saying in one short line.
+     */
+    private static void printUtf8Capped(long u)
+    {
+        if (u == 0L)
+        {
+            Uart.write(Magic.bytes("<null>"));
+            return;
+        }
+        int len = u2(u);
+        if (len <= 0 || len > 512)
+        {
+            Uart.write(Magic.bytes("<bad utf8 ptr>"));
+            return;
+        }
+        int i = 0;
+        while (i < len)
+        {
+            Uart.putc(u1(u + 2 + i));
+            i += 1;
+        }
+    }
+
     // ----- the lazy-compile engine: every method body compiles on its first call -----
     // A method is reached one of two ways, both landing in the same engine. A STATIC gets a phase-A cell at
     // structure registration (armPhaseACells) and its callers emit `ldr x16,[cell]; blr x16`; a VIRTUAL (or
@@ -9908,7 +9957,44 @@ public final class Loader
             printNameAt(nameU, 0);
             Uart.putc(0x0A);
         }
+        // VALIDATE BEFORE RENDERING ANYTHING AS TEXT. A stub firing with a bad clsU gives a garbage length,
+        // and every attempt to name the subject from it -- printNameAt, or even `new byte[len]` filled and
+        // written out -- streams the stub table onto the console and buries the failure. A class name is
+        // never 512 bytes; a longer one means the POINTER is wrong, which is a different bug from a class
+        // that will not load, and only hex can say so safely.
         int len = u2(clsU);
+        // Length AND content. 512 was still far too generous: a garbage entry whose length happened to be a
+        // few hundred sailed through and printed a few hundred bytes of the stub table. A class name is short
+        // and entirely printable ASCII, so anything else means the POINTER is wrong -- a different bug from a
+        // class that will not load, and one that must be reported in hex rather than rendered.
+        boolean sane = len > 0 && len <= 255;
+        int c = 0;
+        while (sane && c < len)
+        {
+            int b = u1(clsU + 2 + c);
+            if (b < 0x20 || b > 0x7E)
+            {
+                sane = false;
+            }
+            c += 1;
+        }
+        if (!sane)
+        {
+            Uart.write(Magic.bytes("\nBAD BAKE STUB ENTRY (pointer, not a missing class)\n  clsU="));
+            VM.printHex(clsU);
+            Uart.write(Magic.bytes(" nameU="));
+            VM.printHex(nameU);
+            Uart.write(Magic.bytes(" descU="));
+            VM.printHex(descU);
+            Uart.write(Magic.bytes("\n  u2(clsU)="));
+            VM.printHex((long) len);
+            Uart.write(Magic.bytes(" table="));
+            VM.printHex(VM.bakeStubTable);
+            Uart.write(Magic.bytes(" count="));
+            VM.printHex(VM.bakeStubCount);
+            Uart.putc(0x0A);
+            capHalt(Magic.bytes("bakestub-entry"), len);
+        }
         byte[] slash = new byte[len];
         int i = 0;
         while (i < len)
@@ -10466,6 +10552,18 @@ public final class Loader
         {
             if (loadClassIncremental(slash) == 0L)
             {
+                // NAME THE SUBJECT. `bakeresolve-load count=0` says only that some baked stub wanted a class
+                // that would not load -- true and unactionable, and the count is not even a count.
+                //
+                // Printed from `slash`, the byte[] copied out BEFORE the load, not from the stub-table
+                // pointers. `printNameAt(clsU, 0)` is the right idiom at the TOP of this method and the wrong
+                // one here: loadClassIncremental has just run, and reading the length word afterwards gave a
+                // huge value that walked hundreds of bytes of the stub table onto the console -- an instrument
+                // that buried the failure it was added to name.
+                Uart.write(Magic.bytes("\n  BAKERESOLVE CANNOT LOAD: "));
+                Uart.write(slash);
+                Uart.putc(0x0A);
+                printWhyUnpulled(clsU);
                 capHalt(Magic.bytes("bakeresolve-load"), 0);
             }
         }
@@ -10484,6 +10582,15 @@ public final class Loader
         }
         if (buf == 0L)
         {
+            // Class from `slash` (copied before the load); name and descriptor through the CAPPED printer,
+            // since these pointers are read after loadClassIncremental has run.
+            Uart.write(Magic.bytes("\n  BAKERESOLVE NO BODY: "));
+            Uart.write(slash);
+            Uart.putc(0x2E);
+            printUtf8Capped(nameU);
+            Uart.putc(0x20);
+            printUtf8Capped(descU);
+            Uart.putc(0x0A);
             capHalt(Magic.bytes("bakeresolve-find"), 0);
         }
         return buf;
@@ -12166,15 +12273,19 @@ public final class Loader
             }
             long q = p + 3L;
             int i = 0;
-            int outer = annoPendSlot;
-            annoPendSlot = -1;                          // an element INSIDE an array has no value slot of its
-            while (i < count)                           //   own; noting one would overwrite the array itself
+            int outerElem = annoPendElem;
+            while (i < count)
             {
+                // An element INSIDE an array keeps the enclosing value SLOT and adds its own INDEX, so a
+                // 'c'/'e' value here can be noted and resolved in phase 3 like any other. Suppressing the
+                // note (what this did before) left a Class[] element reading null for ever -- picocli's
+                // @Option(converter = ...) is exactly that shape.
+                annoPendElem = i;
                 Magic.store64(arr + 24L + i * 8L, annoElementValue(base, q));
                 q = skipElementValue(q);
                 i += 1;
             }
-            annoPendSlot = outer;
+            annoPendElem = outerElem;
             return arr;
         }
         if (tag == 0x63)                                // 'c' -- a Class literal; descriptor Utf8
@@ -12193,13 +12304,16 @@ public final class Loader
     // Pending Class/enum element resolutions for the annotation currently being built. Kept as a flat list
     // rather than resolved in place: see buildAnnoObject phase 3. `annoPendAt` is the value slot, recorded by
     // the caller because only it knows which element is being decoded.
-    private static final int MAXANNOPEND = 32;
+    private static final int MAXANNOPEND = 256;   // per annotation instance; ARRAY elements count too now
+                                                     //   (@Command.subcommands() is itself a Class[])
     private static int[] annoPendKind;
     private static long[] annoPendA;
     private static long[] annoPendB;
     private static int[] annoPendAt;
+    private static int[] annoPendIdx;                   // element index within the slot's array, or -1
     private static int annoPendN;
     private static int annoPendSlot = -1;               // the slot being decoded, or -1 outside an element
+    private static int annoPendElem = -1;               // array element index being decoded, or -1
     private static long annoArrayTib;                   // the array TIB for that slot's declared element type
 
     /**
@@ -12229,14 +12343,15 @@ public final class Loader
     {
         if (annoPendSlot < 0)
         {
-            return;                                     // inside an ARRAY element: per-element Class values in
-        }                                               //   an array are not modelled yet (see drainAnnoPending)
+            return;                                     // outside any element -- nothing to fill in
+        }
         if (annoPendKind == null)
         {
             annoPendKind = new int[MAXANNOPEND];
             annoPendA = new long[MAXANNOPEND];
             annoPendB = new long[MAXANNOPEND];
             annoPendAt = new int[MAXANNOPEND];
+            annoPendIdx = new int[MAXANNOPEND];
         }
         if (annoPendN >= MAXANNOPEND)
         {
@@ -12246,6 +12361,7 @@ public final class Loader
         annoPendA[annoPendN] = a;
         annoPendB[annoPendN] = b;
         annoPendAt[annoPendN] = annoPendSlot;
+        annoPendIdx[annoPendN] = annoPendElem;          // -1 = the value slot itself, >=0 = that array element
         annoPendN += 1;
     }
 
@@ -12268,7 +12384,22 @@ public final class Loader
                     : annoEnumValue(annoPendA[i], annoPendB[i]);
             if (v != 0L)
             {
-                Magic.store64(obj + 16L + annoPendAt[i] * 8L, v);
+                if (annoPendIdx[i] < 0)
+                {
+                    Magic.store64(obj + 16L + annoPendAt[i] * 8L, v);
+                }
+                else
+                {
+                    // Reached THROUGH the live object rather than through a cached array address: this runs
+                    // after the walks, and resolving a Class here can demand-load and collect. The array is
+                    // reachable from the object's value slot, so going via the slot keeps it alive; a stashed
+                    // address would not.
+                    long arr = Magic.load64(obj + 16L + annoPendAt[i] * 8L);
+                    if (arr != 0L)
+                    {
+                        Magic.store64(arr + 24L + annoPendIdx[i] * 8L, v);
+                    }
+                }
             }
             i += 1;
         }
