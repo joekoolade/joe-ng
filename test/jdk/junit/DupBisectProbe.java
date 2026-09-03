@@ -20,15 +20,23 @@ public class DupBisectProbe
                         .forAnnotatedObject(engines);
         report("A: engines alone", solo);
 
+        // Arm B is the real MainCommand's spec ALONE. It is cheap next to arm C and it answers a question
+        // arm C cannot: MainCommand's own --help is @Option(help=true), NOT usageHelp, so its spec must
+        // report usageHelp=0. Printed before arm C because arm C needs the whole subcommand closure and may
+        // not finish -- partial output from a slow harness is worth more than an all-or-nothing run.
         Object main = make("org.junit.platform.console.command.MainCommand");
+        report("B: junit alone", org.junit.platform.console.shadow.picocli.CommandLine.Model.CommandSpec
+                .forAnnotatedObject(main));
+
+        Object main2 = make("org.junit.platform.console.command.MainCommand");
         org.junit.platform.console.shadow.picocli.CommandLine cl =
-                new org.junit.platform.console.shadow.picocli.CommandLine(main)
+                new org.junit.platform.console.shadow.picocli.CommandLine(main2)
                         .addSubcommand(make("org.junit.platform.console.command.ListTestEnginesCommand"));
         org.junit.platform.console.shadow.picocli.CommandLine.Model.CommandSpec top = cl.getCommandSpec();
-        report("B: junit (parent)", top);
+        report("C: junit (parent)", top);
         for (String k : top.subcommands().keySet())
         {
-            report("B: sub " + k, top.subcommands().get(k).getCommandSpec());
+            report("C: sub " + k, top.subcommands().get(k).getCommandSpec());
         }
     }
 
@@ -64,13 +72,12 @@ public class DupBisectProbe
         System.out.println("BISECT " + label + " options=" + spec.options().size()
                 + " map=" + spec.optionsMap().size() + " usageHelp=" + help
                 + ((help <= 1) ? "  OK" : "  <== DUPLICATED"));
+        // EVERY option is named, not only the duplicated ones: arm A finds one option fewer than the host,
+        // and a count cannot say whether what went missing is an inherited option or the @Mixin's.
         for (org.junit.platform.console.shadow.picocli.CommandLine.Model.OptionSpec o : spec.options())
         {
-            if (o.usageHelp())
-            {
-                System.out.println("   h " + o.longestName() + " inherited=" + o.inherited()
-                        + " scope=" + o.scopeType());
-            }
+            System.out.println("   o " + o.longestName() + " usageHelp=" + o.usageHelp()
+                    + " inherited=" + o.inherited() + " scope=" + o.scopeType());
         }
     }
 }

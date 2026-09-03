@@ -54,7 +54,24 @@ public final class Field extends AccessibleObject
     /** Absolute address of this field's slot in {@code obj}. */
     private long addr(Object obj)
     {
-        return Magic.addrOf(obj) + fieldOffset0(nameBytes, obj);
+        if (obj == null)
+        {
+            throw new NullPointerException(name);
+        }
+        long off = fieldOffset0(nameBytes, obj);
+        if (off < 0L)
+        {
+            // A MISS MUST NOT BE ADDED TO THE OBJECT. fieldOffset0 answers -1 when it cannot place the field,
+            // and obj-1 is inside the header: a get reads a straddled word that looks like a plausible
+            // reference, and a set WRITES there, corrupting the heap far from the call that did it.
+            //
+            // IllegalArgumentException is what stock throws when the object is not an instance of the class
+            // declaring the field, which is exactly the condition a miss represents. The message is the bare
+            // field name -- no concatenation, because that lowers to invokedynamic and would pull the string
+            // concat machinery into java.base's bake closure from a path that must stay cold.
+            throw new IllegalArgumentException(name);
+        }
+        return Magic.addrOf(obj) + off;
     }
 
     // ---- reflective get/set: the field's value, boxed (get) / unboxed (set) per the declared type ----
