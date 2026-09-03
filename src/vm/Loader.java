@@ -8481,26 +8481,48 @@ public final class Loader
 
     /** VarHandle shim: byte offset of instance field {@code fname} (raw bytes at {@code fnBase..+fnLen}) within
      *  the class whose TIB is {@code tib}. Uses the class registry (TIB->class) + field registry (class+name->
-     *  slot). Returns -1 if unresolved. */
+     *  slot). Returns -1 if unresolved.
+     *
+     *  <p>WALKS THE SUPERCLASS CHAIN, most-derived first. The field registry records a field against the class
+     *  that DECLARES it, so matching only against the object's own class finds nothing for an INHERITED field
+     *  -- and this is reached with the object's class, not the field's. It returned -1 for every such field,
+     *  and {@code Field.addr} adds the result to the object's address, so a reflective get read 8 bytes at
+     *  {@code obj - 1} (straddling the header) and a reflective SET wrote there. Silent heap corruption, and
+     *  the read looked like a plausible reference.
+     *
+     *  <p>The declaring class's slot is the right answer for a subclass instance because layout is chain-aware
+     *  -- inherited fields are laid out FIRST ({@code ClassFile.chainFieldBase}) -- so a field keeps its slot
+     *  in every subclass. Same shape as {@code globalVtableSlot}'s chain tier, and for the same reason. */
     static long vhFieldOffset(long fnBase, int fnLen, long tib)
     {
+        int start = -1;
         int ci = 0;
         while (ci < clCount)
         {
-            if (clTab[ci].tib == tib)
+            if (clTab[ci] != null && clTab[ci].tib == tib)
             {
-                int j = 0;
-                while (j < fldCount)
-                {
-                    if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, fldTab[j].base, fldTab[j].classOff)
-                            && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
-                    {
-                        return 16L + fldTab[j].slot * 8L;
-                    }
-                    j += 1;
-                }
+                start = ci;
+                ci = clCount;
             }
-            ci += 1;
+            else
+            {
+                ci += 1;
+            }
+        }
+        int chain = start;
+        while (chain >= 0 && clTab[chain] != null)
+        {
+            int j = 0;
+            while (j < fldCount)
+            {
+                if (utf8EqAt(clTab[chain].base, clTab[chain].nameOff, fldTab[j].base, fldTab[j].classOff)
+                        && rawEqUtf8(fnBase, fnLen, fldTab[j].base, fldTab[j].nameOff))
+                {
+                    return 16L + fldTab[j].slot * 8L;
+                }
+                j += 1;
+            }
+            chain = clTab[chain].superReg;
         }
         return -1L;
     }
