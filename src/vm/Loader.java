@@ -418,8 +418,43 @@ public final class Loader
         compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
         int rcMark = rcCount;                           // this compile's own reloc sites start here
         int rsMark = rsCount;
+        // BRACKET THE COMPILE WITH lzCompiling, like the other two on-demand paths. A getstatic whose class is
+        // not registered yet resolves to the PERMANENTLY-ZERO cell, and the note-pull-recompile that fixes
+        // that is gated on lzCompiling -- so without this an initializer compiled here binds its statics to
+        // zero FOR EVER, and reads null however many times the owning class is initialized afterwards.
+        //
+        // This is the third path to need it: lazyCompileLocked had it, compileMethodOnDemand and
+        // compileSigOnDemand were fixed in PR #213, and clinitEntryOf was missed. It is what made picocli's
+        // GroupValidationResult.<clinit> build its SUCCESS_* instances with a null `type` even once the Type
+        // enum HAD been initialized first -- the initializer was reading a zero cell, not a stale one.
+        boolean outerCompiling = lzCompiling;
+        boolean outerRetried = lzRetried;
+        int outerPullN = lzPullN;
+        lzCompiling = true;
+        lzPullN = 0;
+        lzRetried = false;
         long buf = compile(clinitCode[i], clinitCodeLen[i], clinitDescOff[i], clinitStatic[i]);
+        lzCompiling = outerCompiling;
         compileReuseTib = false;
+        boolean pulled = lzPullN > 0;
+        if (pulled)
+        {
+            drainPendingPulls();
+            rcCount = rcMark;                           // drop the doomed body's reloc sites: patching them
+            rsCount = rsMark;                           //   later would write into reused memory
+        }
+        lzRetried = outerRetried;
+        lzPullN = outerPullN;
+        if (pulled && !odRetried)
+        {
+            // Recompile with the pulled classes present. Everything is re-derived from `i`, so the retry is
+            // this method again; the first buffer is abandoned before anything can have called it, since
+            // clinitEntry[i] is only assigned below. odRetried bounds it to one attempt.
+            odRetried = true;
+            long again = clinitEntryOf(i);
+            odRetried = false;
+            return again;
+        }
         patchRelocsFrom(rcMark, rsMark);                // resolve OUR sites: batch patchRelocs is long past
         if (buf == 0L)
         {
@@ -874,6 +909,33 @@ public final class Loader
      * re-enter lazyCompile, and each nested compile clobbers the {@code g*} context, so it must not run
      * inside ours.
      */
+    /**
+     * Initialize the classes a {@code <clinit>} names, before that {@code <clinit>} runs.
+     *
+     * <p>The dependency set is the PRECISE one {@code scanClinitDeps} already collected from the initializer's
+     * bytecode (getstatic/putstatic/invokestatic owners, {@code new}/{@code anewarray} targets, Class
+     * literals) -- not the whole constant pool, so this initializes what is actually used and nothing more.
+     */
+    private static void initClinitDeps(int i, int self)
+    {
+        int pd = clinitPd[i];
+        if (pd < 0)
+        {
+            return;
+        }
+        int e = clDepStart[i] + clDepN[i];
+        int d = clDepStart[i];
+        while (d < e)
+        {
+            int dep = classRegByNameAt(pdBase[pd], clDepOff[d]);
+            if (dep >= 0 && dep != self)
+            {
+                ensureClinit(dep);
+            }
+            d += 1;
+        }
+    }
+
     private static void ensureClinit(int reg)
     {
         if (reg < 0 || clTab == null || clTab[reg] == null)
@@ -900,6 +962,19 @@ public final class Loader
             if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
             {
                 clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
+                // AND BEFORE ITS DEPENDENCIES: the getstatic/invokestatic/new sites inside this initializer
+                // are active uses of the classes they name (JVMS 5.5), so those must be initialized first or
+                // this body reads their statics UNSET. runClinits enforces that for eagerly-run initializers
+                // (clinitDepBlocked); a GATED class runs HERE instead, where nothing did.
+                //
+                // The miss reads as a null, not an error. picocli's GroupValidationResult.<clinit> built its
+                // SUCCESS_* instances from an uninitialised Type enum, so every constant and every instance's
+                // `type` was null -- and blockingFailure() compares the two, so `null == null` reported a
+                // BLOCKING FAILURE on a SUCCESS and handed picocli a null exception to throw.
+                //
+                // clinitRan[i] is already 1, so an initializer cycle re-entering this class stops here rather
+                // than recursing -- the same guard the comment above relies on.
+                initClinitDeps(i, reg);
                 if (LOAD_LOG)
                 {
                     Uart.write(Magic.bytes("  clinit-lazy "));
@@ -1133,7 +1208,24 @@ public final class Loader
         while (d < e)                                   // the initializer's PRECISE (bytecode) deps, not the whole cp
         {
             int jpd = findPdByName(pdBase[pd], clDepOff[d]);   // the referenced class's blob
-            if (jpd >= 0 && jpd != pd)
+            if (jpd < 0)
+            {
+                // NOT IN THIS BATCH'S PENDING LIST -- which does not mean "not loaded". findPdByName searches
+                // pdNameOff[], the blobs this batch is working on; a dependency pulled by an EARLIER batch has
+                // settled and is absent from it. Such a class can still be UNINITIALIZED (initialization is
+                // lazy), and this getstatic is exactly its first active use, so it must be initialized here.
+                //
+                // Missing this read as a null rather than as an error: picocli's GroupValidationResult.<clinit>
+                // built its SUCCESS_* instances from an uninitialised Type enum, so every constant AND every
+                // instance's `type` field was null -- and `blockingFailure()` compares them, so `null == null`
+                // reported a blocking failure on a SUCCESS and handed picocli a null exception to throw.
+                int reg = classRegByNameAt(pdBase[pd], clDepOff[d]);
+                if (reg >= 0)
+                {
+                    ensureClinit(reg);
+                }
+            }
+            else if (jpd != pd)
             {
                 // An eagerly-run initializer that touches a LAZY-INIT class is an active use of it, and
                 // runClinits has already passed that class over. Initialize it here, which is exactly the
@@ -8224,6 +8316,26 @@ public final class Loader
     }
 
     /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
+    /** {@link #classRegByName} for a name in an ARBITRARY blob, not the one the parse cursor happens to be on.
+     *  A clinit dependency is named in the DEPENDENT's constant pool, so its offset is against that blob. */
+    private static int classRegByNameAt(long base, int nameOff)
+    {
+        if (nameOff == 0)
+        {
+            return -1;
+        }
+        int i = 0;
+        while (i < clCount)
+        {
+            if (clTab[i] != null && utf8EqAt(base, nameOff, clTab[i].base, clTab[i].nameOff))
+            {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
     private static int classRegByName(int nameOff)
     {
         if (nameOff == 0)
