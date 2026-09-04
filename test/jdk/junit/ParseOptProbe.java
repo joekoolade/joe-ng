@@ -37,6 +37,37 @@ public class ParseOptProbe
             t.printStackTrace();
         }
 
+        // Is the group-validation enum initialised? picocli's blockingFailure() is
+        //     type == Type.FAILURE_PRESENT || type == Type.FAILURE_PARTIAL
+        // so if the CONSTANTS read null AND the instance's `type` is null, `null == null` is TRUE: the result
+        // claims a blocking failure and hands over its null `exception`, which is the maybeThrow(null) the
+        // launcher dies on. `UNRESOLVED STATIC` cannot see this -- it fires on a MISSING cell, not on a cell
+        // that exists and was never written because the <clinit> did not run.
+        try
+        {
+            Class<?> ty = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult$Type");
+            Object[] cs = ty.getEnumConstants();
+            System.out.println("Type.getEnumConstants: " + (cs == null ? "NULL" : ("len=" + cs.length)));
+            java.lang.reflect.Field[] fs = ty.getDeclaredFields();
+            int i = 0;
+            while (i < fs.length)
+            {
+                if (fs[i].getType() == ty)                      // the constants themselves
+                {
+                    fs[i].setAccessible(true);
+                    Object v = fs[i].get(null);
+                    System.out.println("   const " + fs[i].getName() + " = "
+                            + (v == null ? "NULL  <== uninitialised" : "present"));
+                }
+                i += 1;
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("enum probe THREW " + t);
+        }
+
         // Now the real thing.
         try
         {
