@@ -1561,22 +1561,6 @@ public final class VM
      *  world, closed by the unification arc. */
     static long bakeResolve(int idx)
     {
-        // BOUNDS-CHECK THE INDEX. Without this an out-of-range idx reads past the table, and the three
-        // garbage pointers it returns are then handed to resolveBakeStub, which dutifully reports that some
-        // class "cannot load" -- naming a class it invented from whatever followed the table. The count is
-        // already tracked; not consulting it turned a table overrun into a diagnosis about the wrong thing.
-        if (idx < 0 || (long) idx >= bakeStubCount)
-        {
-            Uart.write(Magic.bytes("\nBAKE STUB INDEX OUT OF RANGE: idx="));
-            printHex((long) idx);
-            Uart.write(Magic.bytes(" count="));
-            printHex(bakeStubCount);
-            Uart.putc(0x0A);
-            while (true)
-            {
-                Magic.wfe();                            // halt loudly rather than read past the table
-            }
-        }
         long e = bakeStubTable + (long) idx * 32L;
         long memo = Magic.load64(e + 24L);
         if (memo != 0L)
