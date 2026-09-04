@@ -1095,6 +1095,7 @@ public final class VM
         if (dnsResolveAddr == 0L) { int u = VMNatives.dnsResolve(0L); }         // java.net.InetAddress.resolve0() native (M3)
         if (vhFieldOffsetAddr == 0L) { long u = VMNatives.vhFieldOffset(0L, 0L); }      // VarHandle.fieldOffset0 native (M3)
         if (fieldModsAddr == 0L) { int u = VMNatives.fieldMods(0L, 0L); }               // Class.fieldMods0 native (reflection)
+        if (staticCellAddr == 0L) { long u = VMNatives.staticCell(0L, 0L); }   // Field.staticCell0
         if (fieldTypeCharAddr == 0L) { int u = VMNatives.fieldTypeChar(0L, 0L); }       // Class.fieldTypeChar0 native
         if (classAtPcAddr == 0L) { long u = VMNatives.classAtPc(0L); }                  // getCallerClass native
         if (sockSocket0Addr == 0L) { int u = VMNatives.sockSocket0(0L, 0L, 0L, 0L); }   // M3 socket natives (dead calls,
@@ -2281,6 +2282,7 @@ public final class VM
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)
     static long vhFieldOffsetAddr;     // VM.vhFieldOffset(JJ)J — java.lang.invoke.VarHandle.fieldOffset0 (M3)
     static long fieldModsAddr;         // VM.fieldMods(JJ)I — Class.fieldMods0 (reflection)
+    static long staticCellAddr;        // VMNatives.staticCell(JJ)J — Field.staticCell0 (reflective statics)
     static long fieldTypeCharAddr;     // VM.fieldTypeChar(JJ)I — Class.fieldTypeChar0 (reflection)
     static long classAtPcAddr;         // VM.classAtPc(J)J — getCallerClass for the field-updater access check
     static long sockSocket0Addr;       // M3 socket natives (stock sun.nio.ch over net.Tcp)
