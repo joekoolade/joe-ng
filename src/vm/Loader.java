@@ -9567,7 +9567,28 @@ public final class Loader
         int s = 0;
         while (s < gvCount)
         {
-            Magic.store64(gTib + 8 + s * 8, slotBuf(s));   // TIB[1+slot] = impl code
+            long b = slotBuf(s);
+            // A HOLE IN hashCode/equals/toString IS A WILD BRANCH, not a trap. Those three are what BAKED code
+            // dispatches on -- String.valueOf(Object) calls toString, Objects.equals calls equals, HashMap
+            // calls hashCode -- and baked code carries no dispatchTargetGuard (implicitChecks is false for the
+            // writer, by design). So a 0 there is `blr 0`, which the firmware's low-memory shim turns into
+            // re-entry of the image entry point: `BOOT RE-ENTERED`, with no exception and no name.
+            //
+            // The slot goes empty when RTA never saw the class instantiated -- a NATIVE instantiation, or a
+            // path the batch's reachability pass cannot follow -- so its overrides were pruned and never got a
+            // deferral stub. StackTraceElement was special-cased for exactly this (nativelyInstantiated); this
+            // is the general form, and it is why that comment ends "this is the list to add to".
+            //
+            // Scope is deliberate. Minting EVERY vtable slot costs 3-4x the code arena (measured), and the
+            // universal holes here are slots 4..7 -- wait/wait(J)/notify/notifyAll -- which hole for all 891
+            // classes in a launcher closure, are final on Object, and dispatch through the monitor intrinsics
+            // rather than the vtable. Minting those would be ~3,500 stubs that can never be reached. Slots
+            // 1..3 hole for 55 classes in that same closure, and are the three baked code actually calls.
+            if (b == 0L && s >= 1 && s <= 3)
+            {
+                b = mintPrunedStub(s);
+            }
+            Magic.store64(gTib + 8 + s * 8, b);            // TIB[1+slot] = impl code
             s += 1;
         }
         long dir = buildItableDir();                    // M8 itables: per-interface tables (writer numbering)
