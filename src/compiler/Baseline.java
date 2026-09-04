@@ -1986,7 +1986,18 @@ public final class Baseline
     private void athrow(CodeBuffer cb, int pos)
     {
         int athrowStart = cb.wordCount();
-        emitStoreException(cb, popReg());                       // $exception = ref
+        int ref = popReg();
+        // JVMS athrow: "if objectref is null, athrow throws a NullPointerException instead of objectref."
+        // Without this the null goes to the handler search as the thrown object, where `instanceOf(null, T)`
+        // matches nothing, the unwind is handed 0, and the VM reports `BAD THROW exc=0x0` -- an internal
+        // diagnostic in place of an ordinary Java exception a catch block would have handled. picocli's
+        // Interpreter.maybeThrow is `aload_1; athrow`, so a null argument there stopped the console launcher
+        // with a VM error rather than the NPE stock produces.
+        //
+        // Same guard the deref/receiver checks use, so it costs one never-taken branch and is emitted ONLY by
+        // the metal JIT (implicitChecks) -- the writer stays check-free and the self-hosting fixpoint holds.
+        nullCheck(cb, ref, pos);
+        emitStoreException(cb, ref);                            // $exception = ref (non-null past the check)
         throwStored(cb, pos, athrowStart);
     }
 

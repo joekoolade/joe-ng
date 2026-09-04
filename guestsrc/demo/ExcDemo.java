@@ -49,6 +49,33 @@ public class ExcDemo
         }
         Magic.printStr("charAt aioobe caught=" + deep + "\n");
 
+        // JVMS athrow: a NULL operand throws NullPointerException, not the null. Both shapes, because they
+        // take different paths: caught in the SAME method (the inline handler search) and thrown by a CALLEE
+        // (the cross-method unwind). Before the check the null reached the unwinder as the thrown object and
+        // the VM reported `BAD THROW exc=0x0` -- an internal diagnostic where a catch block should have run.
+        int nullSame = 0;
+        try
+        {
+            RuntimeException r = null;
+            throw r;                                    // aload; athrow with null
+        }
+        catch (NullPointerException e)
+        {
+            nullSame = 1;
+        }
+        Magic.printStr("athrow null same-method NPE=" + nullSame + "\n");
+
+        int nullDeep = 0;
+        try
+        {
+            throwNull();                                // null athrow in a CALLEE -> unwinds to here
+        }
+        catch (NullPointerException e)
+        {
+            nullDeep = 1;
+        }
+        Magic.printStr("athrow null cross-method NPE=" + nullDeep + "\n");
+
         Magic.printStr("after: still running\n");       // control returned normally from every catch
 
         // printStackTrace(): throw a few frames deep, catch, and print the backtrace captured at throw time by
@@ -62,6 +89,13 @@ public class ExcDemo
             Magic.printStr("printStackTrace:");
             e.printStackTrace();
         }
+    }
+
+    /** athrow with a null operand, in a method that does NOT catch it -- forces the cross-method unwind. */
+    private static void throwNull()
+    {
+        RuntimeException r = null;
+        throw r;
     }
 
     private static void level1()
