@@ -231,6 +231,22 @@ final class VMNatives
         return Loader.declaredMethodDesc(mirror, (int) want);
     }
 
+    /**
+     * {@code Field.staticCell0(Class, byte[])} native: the ADDRESS of a static field's cell, or 0.
+     * Field.get/set reads and writes through this the way an instance field goes through an offset.
+     */
+    static long staticCell(long mirror, long nameArr)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        long type = Magic.load64(mirror + 16L);
+        long fnBase = nameArr + 24L;                    // byte[] payload
+        int fnLen = (int) Magic.load64(nameArr + 16L);  // byte[] length
+        return Loader.staticCellFor(type, fnBase, fnLen);
+    }
+
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
     static long declaredFieldAt(long mirror, long want)
     {

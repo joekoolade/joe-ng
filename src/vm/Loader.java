@@ -7792,6 +7792,10 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("stackTrace0")))       { return VM.stackTraceAddr; }    // (Throwable)[STE
         }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticCell0")))       { return VM.staticCellAddr; }    // (Class,byte[])J
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("methodResolve0")))   { return VM.methodResolveAddr; }    // (Class,byte[])I
@@ -8762,10 +8766,88 @@ public final class Loader
     }
 
     /** Reflection: access_flags of the instance field, or -1 if the class declares no such own field. */
+
+    // ----- reflective access to STATIC fields ----------------------------------------------------------
+    // The field registry (fldTab) holds INSTANCE fields only -- it exists to map a field to an offset within
+    // an object -- so every static answered -1 from fieldMods and getDeclaredFields dropped it silently. That
+    // is a real divergence from stock (getDeclaredFields must list statics, and Field.get(null) must read
+    // one), and it also made statics UNDIAGNOSABLE: no probe could read a static's value, which is exactly
+    // what chasing picocli's `blockingFailure()` needed.
+    //
+    // Statics are answered from the two places that do know about them: the CLASSFILE for the declaration
+    // (access flags, descriptor) and sgTab for the CELL.
+
+    private static int cfFieldAccess;                   // set by classfileFieldInfo
+    private static int cfFieldDescChar;
+
+    /** Find a field by name in the class's own FIELDS section; sets {@link #cfFieldAccess}/{@link
+     *  #cfFieldDescChar}. Both are read in ONE walk: each call re-parses the constant pool, and reading the
+     *  descriptor after a second walk would be against a re-derived cursor. */
+    private static boolean classfileFieldInfo(long typeAddr, long fnBase, int fnLen)
+    {
+        int ci = classRegByType(typeAddr);
+        if (ci < 0)
+        {
+            return false;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;                               // past access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int f = 0;
+        while (f < fcount)
+        {
+            if (rawEqUtf8(fnBase, fnLen, base, gcp[u2(p + 2)]))
+            {
+                cfFieldAccess = u2(p);
+                cfFieldDescChar = u1(base + gcp[u2(p + 4)] + 2L);
+                return true;
+            }
+            p = skipAttributes(p + 8, u2(p + 6));
+            f += 1;
+        }
+        return false;
+    }
+
+    /**
+     * The ADDRESS of a static field's cell, or 0. {@code Field.get/set} reads and writes through this exactly
+     * as an instance field goes through an offset.
+     *
+     * <p>Runs the class's initializer first, which is what stock does: reflective access to a static is an
+     * ACTIVE USE (JVMS 5.5), so returning the cell of a class whose {@code <clinit>} has not run would hand
+     * back a zero that looks like a value.
+     */
+    static long staticCellFor(long typeAddr, long fnBase, int fnLen)
+    {
+        int ci = classRegByType(typeAddr);
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        ensureClinit(ci);
+        int i = 0;
+        while (i < sgCount)
+        {
+            if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
+                    && rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
+            {
+                return sgTab[i].addr;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     static int fieldMods(long typeAddr, long fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        return j < 0 ? -1 : fldTab[j].access;
+        if (j >= 0)
+        {
+            return fldTab[j].access;
+        }
+        return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldAccess : -1;   // statics live only here
     }
 
     /**
@@ -9249,7 +9331,11 @@ public final class Loader
     static int fieldTypeChar(long typeAddr, long fnBase, int fnLen)
     {
         int j = fieldRegIndex(typeAddr, fnBase, fnLen);
-        return j < 0 ? -1 : u1(fldTab[j].base + fldTab[j].descOff + 2L);
+        if (j >= 0)
+        {
+            return u1(fldTab[j].base + fldTab[j].descOff + 2L);
+        }
+        return classfileFieldInfo(typeAddr, fnBase, fnLen) ? cfFieldDescChar : -1;
     }
 
     /** True if the raw byte range {@code rawBase..+rawLen} equals the Utf8 (u2 length + bytes) at {@code utBase+utOff}. */

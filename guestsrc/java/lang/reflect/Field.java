@@ -52,8 +52,26 @@ public final class Field extends AccessibleObject
     private static native long fieldOffset0(byte[] fname, Object obj);
 
     /** Absolute address of this field's slot in {@code obj}. */
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.staticCell}): the ADDRESS of a STATIC field's
+     *  cell, or 0. Statics are not in the loader's field registry -- that maps a field to an OFFSET within an
+     *  object -- so they resolve through the statics table instead. */
+    private static native long staticCell0(Class<?> c, byte[] fname);
+
     private long addr(Object obj)
     {
+        if (Modifier.isStatic(modifiers))
+        {
+            // A STATIC has no receiver: its value lives in a cell, not at an offset inside an object, so the
+            // `obj` argument is ignored exactly as stock ignores it. Before this, statics were not even
+            // enumerated -- the registry answered -1 and getDeclaredFields dropped them -- so `Field.get(null)`
+            // could not read one at all.
+            long cell = staticCell0(clazz, nameBytes);
+            if (cell == 0L)
+            {
+                throw new IllegalArgumentException(name);
+            }
+            return cell;
+        }
         if (obj == null)
         {
             throw new NullPointerException(name);
