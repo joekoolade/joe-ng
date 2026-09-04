@@ -644,6 +644,35 @@ final class VMNatives
     {
     }
 
+    /**
+     * {@code java.lang.Shutdown.beforeHalt()} native: a JVM TI notification that the VM is about to halt.
+     * There is nothing beneath this VM to notify, so a genuine no-op is the whole implementation -- not a stub
+     * standing in for something missing. Without it {@code System.exit} trapped: the class loads, the method
+     * has no body, and an unwired native resolves nowhere.
+     */
+    static void shutdownBeforeHalt()
+    {
+    }
+
+    /**
+     * {@code java.lang.Shutdown.halt0(int)} native: terminate. This is the end of {@code System.exit} --
+     * shutdown hooks have already run -- so the program is over and there is no OS to return an exit code to.
+     * Report the status on the console and stop, which is the truthful analogue of the
+     * {@code [main returned normally]} the loader prints when main returns instead.
+     */
+    static void shutdownHalt0(long status)
+    {
+        // Masked to 32 bits: the status is an int and arrives sign-extended, so an unmasked print renders
+        // exit(-1) as 0xFFFFFFFFFFFFFFFF -- technically the register, but not the value the program passed.
+        Uart.write(Magic.bytes("\n[exit status=0x"));
+        VM.printHex(status & 0xFFFFFFFFL);
+        Uart.write(Magic.bytes("]\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
     /** Shared 0 for the socket natives we stub: Net.localPort / getIntOption0 (SO_LINGER=0 -> close skips
      *  shutdown) / localInetAddress (null wildcard), NativeThread.current0. */
     static long sockZero()
