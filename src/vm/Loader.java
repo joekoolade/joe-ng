@@ -1511,6 +1511,9 @@ public final class Loader
         // works (System.<clinit> which normally registers the JLA is skipped). Pulled always -- tiny, and only
         // reached when something builds an EnumMap (e.g. java.util.stream's StreamOpFlag).
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
+        // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
+        // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
         // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
         // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
         // field registry (for getDeclaredField/newUpdater access checks) exist even when nothing instantiates them.
@@ -6029,6 +6032,7 @@ public final class Loader
         // JLA -- and boxes flag values via Integer.valueOf -- needs the IntegerCache). The seeds are independent
         // of any <clinit> (they build the JLA object / boxed caches directly), so running them first is sound.
         seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
+        seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
         seedIntegerCache();                             // the [-128,127] Integer cache valueOf uses (clinit skipped:
                                                         //   low=high=0 would index the NULL cache -> NPE); no-op if
                                                         //   Integer isn't in this batch
@@ -6832,6 +6836,30 @@ public final class Loader
      * {@code loadAll} BEFORE {@code runClinits}, since {@code StreamOpFlag.<clinit>} builds an EnumMap. No-op when
      * neither class is in the batch (non-EnumMap programs). Field-free overlay -> just the TIB (itable dispatch).
      */
+    /**
+     * Seed {@code SharedSecrets.javaIOAccess} with a {@link jdk.internal.access.MetalJavaIOAccess}.
+     *
+     * <p>Stock registers one from {@code java.io.Console}'s initializer, which needs a tty. Without it
+     * {@code System.console()} dereferences null -- it calls {@code .console()} on the shim unconditionally --
+     * so this is not an optional nicety: it is what makes {@code System.console()} answer NULL instead of
+     * throwing, which is what every stock caller is written for.
+     */
+    static void seedJavaIOAccess()
+    {
+        int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        if (mi < 0)
+        {
+            return;
+        }
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/access/SharedSecrets"), Magic.bytes("javaIOAccess"));
+        if (slot != 0L)
+        {
+            long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
+            Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
+            Magic.store64(slot, inst);
+        }
+    }
+
     static void seedJavaLangAccess()
     {
         int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
