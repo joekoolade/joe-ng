@@ -1106,6 +1106,8 @@ public final class VM
         if (fdValAddr == 0L) { int u = VMNatives.fdVal(0L); }
         if (setFdValAddr == 0L) { VMNatives.setFdVal(0L, 0L); }
         if (sockNoopAddr == 0L) { VMNatives.sockNoop(); }
+        if (shutdownBeforeHaltAddr == 0L) { VMNatives.shutdownBeforeHalt(); }   // Shutdown.beforeHalt (System.exit)
+        if (shutdownHalt0Addr == 0L) { VMNatives.shutdownHalt0(-1L); }          // Shutdown.halt0
         if (sockZeroAddr == 0L) { long u = VMNatives.sockZero(); }
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
@@ -2290,6 +2292,8 @@ public final class VM
     static long fdValAddr;
     static long setFdValAddr;
     static long sockNoopAddr;
+    static long shutdownBeforeHaltAddr;// VMNatives.shutdownBeforeHalt()V — java.lang.Shutdown.beforeHalt (no-op)
+    static long shutdownHalt0Addr;     // VMNatives.shutdownHalt0(J)V — java.lang.Shutdown.halt0 (System.exit)
     static long sockZeroAddr;
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)

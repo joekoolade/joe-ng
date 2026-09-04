@@ -6033,6 +6033,7 @@ public final class Loader
         // of any <clinit> (they build the JLA object / boxed caches directly), so running them first is sound.
         seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
         seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
+        seedVmInitLock();                               // jdk.internal.misc.VM.lock (System.exit -> VM.shutdown)
         seedIntegerCache();                             // the [-128,127] Integer cache valueOf uses (clinit skipped:
                                                         //   low=high=0 would index the NULL cache -> NPE); no-op if
                                                         //   Integer isn't in this batch
@@ -6844,6 +6845,34 @@ public final class Loader
      * so this is not an optional nicety: it is what makes {@code System.console()} answer NULL instead of
      * throwing, which is what every stock caller is written for.
      */
+    /**
+     * Seed {@code jdk/internal/misc/VM.lock} with a plain Object.
+     *
+     * <p>That class is {@code clinitBlocked} -- its initializer is a native {@code initialize()} that sets
+     * saved properties and direct-memory limits -- so its {@code private static final Object lock} stays null.
+     * {@code VM.initLevel(int)} opens with {@code synchronized (lock)}, so the null is a {@code monitorenter}
+     * on null: an NPE from inside java.base on the SHUTDOWN path, where {@code Shutdown.runHooks} calls
+     * {@code VM.shutdown()}. System.exit could not complete.
+     *
+     * <p>A bare Object is the whole requirement -- the field is only ever a monitor, never read for content --
+     * so this seeds exactly what the blocked initializer would have provided and nothing more.
+     */
+    static void seedVmInitLock()
+    {
+        int oi = classIndexByName(Magic.bytes("java/lang/Object"));
+        if (oi < 0)
+        {
+            return;
+        }
+        long slot = staticSlotOf(Magic.bytes("jdk/internal/misc/VM"), Magic.bytes("lock"));
+        if (slot != 0L && Magic.load64(slot) == 0L)
+        {
+            long inst = Heap.alloc(16);                          // header only: a monitor needs no fields
+            Magic.store64(inst + 0L, clTab[oi].tib);
+            Magic.store64(slot, inst);
+        }
+    }
+
     static void seedJavaIOAccess()
     {
         int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
@@ -7879,6 +7908,14 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
+        }
+        // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
+        // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as
+        // `LINK FAILED: java/lang/Shutdown.beforeHalt()V -- class OK but no body`, then a denylist trap.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Shutdown")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("beforeHalt")))        { return VM.shutdownBeforeHaltAddr; } // ()V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("halt0")))             { return VM.shutdownHalt0Addr; }      // (I)V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
         {
