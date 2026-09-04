@@ -30,10 +30,34 @@ public final class BootImageWriter
         this.code = code;
     }
 
+    /**
+     * The JIT code arena's base ({@code Heap.CODE_BASE}). The image is loaded at {@code 0x80000} and the arena
+     * bump-allocates upward from here, so THE IMAGE MUST END BELOW THIS ADDRESS. Duplicated as a literal
+     * because the writer runs on the seed JVM and must not load the metal {@code Heap}.
+     */
+    private static final long CODE_BASE = 0x0240_0000L;
+
     /** Write the raw image bytes to {@code path}. */
     public void writeImage(Path path) throws IOException
     {
         byte[] bytes = code.toBytes();
+        long end = code.base() + bytes.length;
+        if (end > CODE_BASE)
+        {
+            // THE IMAGE HAS GROWN INTO THE JIT CODE ARENA. Nothing at runtime can detect this: the arena
+            // bump-allocates from CODE_BASE and the first compiled body simply overwrites whatever the image
+            // put there -- which is its tail, where the bake stub table's Utf8 name runs live. The damage
+            // surfaces far away and much later, as a class or descriptor name with a few bytes replaced by
+            // machine code, and it MOVES with every layout change, so it reads like a mystery stray write.
+            //
+            // It went unnoticed because the overlap was small and only clobbered names nothing reached. Cost:
+            // a red demo suite on hardware and several boots bisecting a change that was only moving the
+            // furniture. Fail the BUILD instead -- this is the one place that knows both numbers.
+            throw new IllegalStateException(String.format(
+                    "image overruns the JIT code arena: ends at 0x%X, Heap.CODE_BASE is 0x%X (over by %d bytes)."
+                    + " Raise Heap.CODE_BASE (and this constant) above the image, or shrink the image.",
+                    end, CODE_BASE, end - CODE_BASE));
+        }
         Files.write(path, bytes);
     }
 

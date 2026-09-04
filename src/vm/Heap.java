@@ -39,7 +39,13 @@ public final class Heap
     // would exceed the A64 +-128MiB reach (FAIL_BL_RANGE). Placed at 32-48MiB (above the ~28MiB image, below
     // the 48MiB SEC_STUB scratch), every code buffer stays within ~48MiB of the helpers and of each other. The
     // whole boot's code is only a few MiB, so this simple no-reclaim bump arena has ample room.
-    public static final long CODE_BASE     = 0x0200_0000L;   // 32 MiB
+    // 36 MiB. MUST STAY ABOVE THE END OF THE IMAGE: the image loads at 0x80000 and this arena bump-allocates
+    // upward from here, so any overlap means the first compiled method overwrites the image's tail -- where
+    // the bake stub table's Utf8 name runs live. That is exactly what happened at 0x0200_0000 once the image
+    // passed 32 MiB (it reached 0x0200_2D48): class and descriptor names came back with a few bytes replaced
+    // by machine code, in a different place on every boot. BootImageWriter.writeImage now FAILS THE BUILD on
+    // the overlap, so this constant and the image size can never silently cross again.
+    public static final long CODE_BASE     = 0x0240_0000L;   // 36 MiB
     public static final long CODE_LIMIT    = 0x0300_0000L;   // 48 MiB (= VM.SEC_STUB) — overflow guard
     public static final long CODE_PTR_CELL = 0x03FF_0200L;   // code-arena bump pointer (near PTR_CELL/FREE_CELL)
 

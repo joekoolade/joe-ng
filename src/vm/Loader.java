@@ -1337,8 +1337,133 @@ public final class Loader
      * demos. Object is seeded first (its vtable slots are canonical and it is never auto-pulled); everything
      * else the program reaches is demand-loaded from the classDir by {@link #loadAll}.
      */
+
+    // ----- stub-table integrity watch ------------------------------------------------------------------
+    // The bake stub table's three Utf8 runs per entry are IMAGE DATA and never change after the writer emits
+    // them, so any difference means something scribbled on them. This is what found the code arena
+    // overlapping the tail of the image (Heap.CODE_BASE below the image end): reading the damage where it was
+    // USED said only that a name was corrupt, while checking here said WHEN, which named the demo and the
+    // entry in one boot after several had been spent bisecting.
+    //
+    // Kept, not deleted. BootImageWriter now fails the build on that particular overlap, but this costs one
+    // scan of a few hundred entries per launch and is SILENT on a healthy boot, so it still earns its place
+    // as the check that says "something is writing into the image" whatever the cause turns out to be.
+    //
+    // Checksum, not a compare against a copy: a copy would itself be heap the collector may move around,
+    // and the point is to touch nothing but the table.
+    private static long stubTabSum;
+
+    static long stubTabChecksum()
+    {
+        long h = 0x811C9DC5L;
+        long n = VM.bakeStubCount;
+        long i = 0;
+        while (i < n)
+        {
+            long e = VM.bakeStubTable + i * 32L;
+            int f = 0;
+            while (f < 3)                                   // classUtf8, nameUtf8, descUtf8 -- not the memo,
+            {                                               //   which is written at runtime by design
+                long u = Magic.load64(e + f * 8L);
+                h = (h * 31L) + u;                          // the POINTER too: one boot clobbered a pointer
+                if (u != 0L)                                //   while its neighbours in the entry survived
+                {
+                    int len = u2(u);
+                    if (len > 0 && len <= 512)
+                    {
+                        int c = 0;
+                        while (c < len)
+                        {
+                            h = (h * 31L) + u1(u + 2 + c);
+                            c += 1;
+                        }
+                    }
+                    else
+                    {
+                        h = (h * 31L) + 0xBADL;             // a wrecked length is itself a difference
+                    }
+                }
+                f += 1;
+            }
+            i += 1;
+        }
+        return h;
+    }
+
+    /** Snapshot on the first call; on every later call report a change and where. */
+    static void stubTabCheck(byte[] whenName)
+    {
+        if (VM.bakeStubTable == 0L || VM.bakeStubCount == 0L)
+        {
+            return;
+        }
+        long now = stubTabChecksum();
+        if (stubTabSum == 0L)
+        {
+            stubTabSum = now;
+            return;
+        }
+        if (now != stubTabSum)
+        {
+            Uart.write(Magic.bytes("\n  STUB TABLE CHANGED before "));
+            Uart.write(whenName);
+            Uart.putc(0x0A);
+            stubTabReportFirstBad();
+            stubTabSum = now;                               // resync so later launches report NEW damage only
+        }
+    }
+
+    /** Name the first entry whose Utf8 no longer looks like a name, with its index and address. */
+    private static void stubTabReportFirstBad()
+    {
+        long n = VM.bakeStubCount;
+        long i = 0;
+        while (i < n)
+        {
+            long e = VM.bakeStubTable + i * 32L;
+            int f = 0;
+            while (f < 3)
+            {
+                long u = Magic.load64(e + f * 8L);
+                boolean ok = u != 0L;
+                if (ok)
+                {
+                    int len = u2(u);
+                    ok = len > 0 && len <= 512;
+                    int c = 0;
+                    while (ok && c < len)
+                    {
+                        int b = u1(u + 2 + c);
+                        if (b < 0x20 || b > 0x7E)
+                        {
+                            ok = false;
+                        }
+                        c += 1;
+                    }
+                }
+                if (!ok)
+                {
+                    Uart.write(Magic.bytes("    entry="));
+                    VM.printHex(i);
+                    Uart.write(Magic.bytes(" field="));
+                    VM.printHex((long) f);
+                    Uart.write(Magic.bytes(" ptr="));
+                    VM.printHex(u);
+                    Uart.write(Magic.bytes(" entryAddr="));
+                    VM.printHex(e);
+                    Uart.putc(0x0A);
+                    return;
+                }
+                f += 1;
+            }
+            i += 1;
+        }
+        Uart.write(Magic.bytes("    (checksum moved but every entry still reads as a name)\n"));
+    }
+
     static void launch(byte[] className, byte[] argsLine)
     {
+        stubTabCheck(className);
         if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
         {                                                  //   makes lazyCompile reachable so the writer
             long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
