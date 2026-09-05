@@ -386,6 +386,27 @@ public final class Loader
     }
 
     /**
+     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
+     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
+     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
+     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
+     * already-locked path costs nothing.
+     *
+     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
+     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
+     * needs to compile before it can release.
+     */
+    private static long clinitEntryOf(int i)
+    {
+        VM.loaderLock();
+        long r = clinitEntryOfLocked(i);
+        VM.loaderUnlock();
+        return r;
+    }
+
+    /**
      * The compiled entry of initializer {@code i}, compiling its captured body on first request.
      *
      * <p>This is the whole point of deferring: an initializer that never runs never gets an A64 body. The
@@ -399,7 +420,7 @@ public final class Loader
      * heap {@code long[]}, so the conservative root scan sees the entry address and pins the block. An
      * uncompiled slot holds 0 and pins nothing, which is correct — there is nothing to keep.
      */
-    private static long clinitEntryOf(int i)
+    private static long clinitEntryOfLocked(int i)
     {
         if (clinitEntry[i] != 0L)
         {
@@ -9288,9 +9309,30 @@ public final class Loader
         return compileMethodOnDemand(type, nameArr, 0L);
     }
 
+    /**
+     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
+     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
+     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
+     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
+     * already-locked path costs nothing.
+     *
+     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
+     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
+     * needs to compile before it can release.
+     */
+    private static int compileMethodOnDemand(long type, long nameArr, long descArr)
+    {
+        VM.loaderLock();
+        int r = compileMethodOnDemandLocked(type, nameArr, descArr);
+        VM.loaderUnlock();
+        return r;
+    }
+
     /** {@link #compileMethodOnDemand} restricted to one DESCRIPTOR ({@code descArr} 0 = any). Without it the walk
      *  stops at the first method of that name, which for an overloaded class is a coin toss between two bodies. */
-    private static int compileMethodOnDemand(long type, long nameArr, long descArr)
+    private static int compileMethodOnDemandLocked(long type, long nameArr, long descArr)
     {
         int ci = 0;
         while (ci < clCount && clTab[ci].type != type)
@@ -9436,11 +9478,32 @@ public final class Loader
     }
 
     /**
+     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
+     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
+     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
+     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
+     * already-locked path costs nothing.
+     *
+     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
+     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
+     * needs to compile before it can release.
+     */
+    static int constructorResolve(long type, int paramCount)
+    {
+        VM.loaderLock();
+        int r = constructorResolveLocked(type, paramCount);
+        VM.loaderUnlock();
+        return r;
+    }
+
+    /**
      * Reflection ({@code Class.getDeclaredConstructor}): registry index of the {@code <init>} of the class whose
      * Type is {@code type} taking {@code paramCount} parameters (matched by ARITY — no param-type resolution yet),
      * compiling it on demand if it was never RTA-reached. Returns -1 if none.
      */
-    static int constructorResolve(long type, int paramCount)
+    static int constructorResolveLocked(long type, int paramCount)
     {
         if (type == 0L)
         {
@@ -10672,6 +10735,27 @@ public final class Loader
     }
 
     /**
+     * THE COMPILE CONTEXT IS STATIC, so exactly one task may be inside the compiler at a time. {@code
+     * lazyCompile} has always taken {@link VM#loaderLock} for that reason; this path reached {@code compile}
+     * without it, so a second task compiling here while another compiled elsewhere clobbered {@code gbytes}/
+     * {@code gcp} mid-compile -- which surfaces as a NULL bytecode array inside the compiler
+     * ({@code NullPointerException} in {@code Baseline.s4}, lowering a switch) rather than as anything
+     * resembling a locking bug. The lock is RECURSIVE and owned by TASK, so nesting inside an
+     * already-locked path costs nothing.
+     *
+     * <p>The lock covers the COMPILE only, never the running of an initializer: a {@code <clinit>} can block
+     * on a monitor or spawn threads, and holding the loader lock across that would deadlock any task that
+     * needs to compile before it can release.
+     */
+    private static long compileSigOnDemand(long clsU, long nameU, long descU)
+    {
+        VM.loaderLock();
+        long r = compileSigOnDemandLocked(clsU, nameU, descU);
+        VM.loaderUnlock();
+        return r;
+    }
+
+    /**
      * Compile one method of an already structure-loaded class, chosen by name AND descriptor, and return its
      * buffer. The last resort for a link stub: {@link #bufBySigU}'s three tiers all answer through a DISPATCH
      * table (a registered buffer, a static cell, a vtable slot), and a method can be perfectly callable while
@@ -10688,7 +10772,7 @@ public final class Loader
      * {@code of(T...)} are different methods at the same name, and compiling the wrong one links the call
      * site to a body with the wrong signature. Returns 0 if there is no such method or it has no Code.
      */
-    private static long compileSigOnDemand(long clsU, long nameU, long descU)
+    private static long compileSigOnDemandLocked(long clsU, long nameU, long descU)
     {
         int reg = regBySigU(clsU);
         if (reg < 0)
