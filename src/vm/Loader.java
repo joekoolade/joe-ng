@@ -970,36 +970,7 @@ public final class Loader
             return;
         }
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
-        if (runPendingClinit(reg) == 0 && clTab[reg].state < RVMClass.ST_INITIALIZED
-                && !hasClinitRecord(reg))
-        {
-            // No <clinit> record matched, yet the class is still uninitialized -- and that combination is
-            // never "this class has no initializer": such a class is set INITIALIZED by the lifecycle sweep
-            // at the end of the batch that loaded it, because only a PENDING record holds one back.
-            //
-            // So the record we were being held for has GONE. resetLoader rebuilds clinitCode/clinitRan/...
-            // every batch, and a blob that has already SETTLED does not re-run phase B, so it never
-            // re-enqueues its initializer. A class loaded in one batch and first USED in a later one
-            // therefore lost its initializer entirely: ensureClinit fell through this loop doing nothing and
-            // every static of that class read null for the rest of the boot, silently.
-            //
-            // Re-derive it from the class's OWN blob, under the same two gates as the load-time enqueue --
-            // so a deliberately-skipped initializer (natives/properties, statics seeded instead) stays
-            // skipped rather than being run late by this path.
-            int rc = recoverClinit(reg);
-            if (rc == 1)
-            {
-                runPendingClinit(reg);
-            }
-            else if (rc == 2)
-            {
-                clTab[reg].state = RVMClass.ST_INITIALIZED;   // gated off: seeded statics, which IS initialized
-            }
-            else
-            {
-                reportClinitLost(reg);                        // no <clinit> in the blob at all -- unexpected
-            }
-        }
+        runPendingClinit(reg);
         drainCtorInit(reg);                             // ... and whatever its constructors actively use
     }
 
@@ -1065,96 +1036,8 @@ public final class Loader
         return ran;
     }
 
-    /**
-     * True if ANY {@code <clinit>} record exists for {@code reg}, run or not.
-     *
-     * <p>The recovery below must be gated on this rather than on {@code runPendingClinit} coming back empty.
-     * An initializer that is CURRENTLY RUNNING has {@code clinitRan = 1} already (set before the call, so a
-     * cycle terminates) while its class is still short of INITIALIZED (set after) -- so a re-entrant
-     * {@code ensureClinit} looks exactly like a lost record, and recovering there re-enqueues the same
-     * initializer on every pass, which hangs the boot instead of finishing it.
-     */
-    private static boolean hasClinitRecord(int reg)
-    {
-        int i = 0;
-        while (i < clinitN)
-        {
-            if (clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
 
-    /**
-     * Re-enqueue {@code reg}'s {@code <clinit>} from its own blob, for a record lost to a batch reset.
-     * Returns 1 if a runnable record was enqueued, 2 if the initializer is deliberately not run (its statics
-     * are seeded), 0 if the class turns out to declare no {@code <clinit>} at all.
-     */
-    private static int recoverClinit(int reg)
-    {
-        long blob = clTab[reg].base;
-        restoreCtxForCompile(blob, blobLenOf(blob), reg);   // rebuild gcp/gbase for THIS class, as clinitEntryOf does
-        if (clinitBlocked())
-        {
-            return 2;                                   // same gate as the load-time enqueue
-        }
-        seek(0x3C636C696E69743EL, 8, 0x282956L, 3);     // "<clinit>" "()V"
-        long code = findMethod(blob);
-        if (code == 0L)
-        {
-            return 0;
-        }
-        if (!clinitCompilable(code, gcodeLen))
-        {
-            return 2;                                   // the other load-time gate
-        }
-        if (clinitN >= MAXBLOB)
-        {
-            return 0;
-        }
-        clDepStart[clinitN] = clDepTop;
-        scanClinitDeps(code, gcodeLen);                 // its deps, so initClinitDeps orders them as usual
-        clDepN[clinitN] = clDepTop - clDepStart[clinitN];
-        clinitCode[clinitN] = code;
-        clinitCodeLen[clinitN] = gcodeLen;
-        clinitDescOff[clinitN] = gFoundDescOff;
-        clinitStatic[clinitN] = gFoundStatic;
-        clinitLocals[clinitN] = gMaxLocals;
-        clinitEntry[clinitN] = 0L;                      // uncompiled: clinitEntryOf compiles it on the run below
-        clinitRan[clinitN] = 0;
-        clinitBase[clinitN] = blob;
-        clinitNameOff[clinitN] = gThisNameOff;
-        clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // -1 once the blob has settled; unused by the run
-        clinitN += 1;
-        return 1;
-    }
 
-    /** Name a class whose pending {@code <clinit>} record no longer exists, once per class. */
-    private static void reportClinitLost(int reg)
-    {
-        int k = 0;
-        while (k < clLostN)
-        {
-            if (clLost[k] == reg)
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (clLostN < clLost.length)
-        {
-            clLost[clLostN] = reg;
-            clLostN += 1;
-        }
-        Uart.write(Magic.bytes("  CLINIT LOST (statics read null): "));
-        printNameAt(clTab[reg].base, clTab[reg].nameOff);
-        Uart.write(Magic.bytes(" state="));
-        VM.printDec(clTab[reg].state);
-        Uart.putc(0x0A);
-    }
 
     // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
     // notInit), so lzCompiling is false while they compile and the collection above never sees their
@@ -1243,9 +1126,6 @@ public final class Loader
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
     // on lzCompiling: a load-time compile (an initializer) must leave ordering to runClinits.
-    private static final int[] clLost = new int[64];
-    private static int clLostN;
-
     private static final int MAXPENDINIT = 64;
     private static int[] lzInitReg;
     private static int lzInitN;
