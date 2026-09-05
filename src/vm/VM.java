@@ -1289,7 +1289,12 @@ public final class VM
         Uart.write(Magic.bytes("launch "));
         Uart.write(mainClass);
         Uart.putc(0x0A);
-        Loader.launch(mainClass, argsLine);
+        // launchMain, not launch: the manifest names ONE program, and running it is exactly "invoke main()".
+        // launch begins by resetting the loader, which re-derives the whole base closure -- parse, layout,
+        // compile and <clinit> for every class -- and there is nothing here for a reset to be undoing. The
+        // one-time bring-up inside launchMain loads and initializes that closure once, and main runs against
+        // it.
+        Loader.launchMain(mainClass, argsLine);
         return true;
     }
 

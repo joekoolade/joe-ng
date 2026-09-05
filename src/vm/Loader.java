@@ -1585,6 +1585,157 @@ public final class Loader
         Uart.write(Magic.bytes("    (checksum moved but every entry still reads as a name)\n"));
     }
 
+    /** True once {@link #bringUpRuntime} has allocated the loader tables and added the core blobs. */
+    private static boolean runtimeUp;
+
+    /** True once the system streams/properties and the run trampoline exist -- they are built from LOADED
+     *  classes, so this happens after the first {@code loadAll}, not during {@link #bringUpRuntime}. */
+    private static boolean runtimeSeeded;
+
+    /**
+     * One-time runtime bring-up: the loader tables and the core classes.
+     *
+     * <p>This is where the VM's ONE {@code resetLoader()} happens -- it is what ALLOCATES the loader tables
+     * (class/field/static registries, the pending-blob list, the {@code <clinit>} records), so it cannot be
+     * skipped; it just must not happen again. It deliberately does NOT compile anything: a closure built here,
+     * without the program in it, is a DIFFERENT closure, and the supers a program incidentally pulls
+     * ({@code java/lang/Number} for the atomics, {@code java/io/InputStream} for ByteArrayInputStream) would be
+     * missing from it -- which shows up as {@code UNREGISTERED SUPER (fields alias)} and a program that then
+     * NPEs. Loading belongs to the first {@link #launchMain}, which has the program in hand.
+     *
+     * <p>Idempotent, and the flag is set FIRST: a pull can run an initializer that reaches back here.
+     */
+    static void bringUpRuntime()
+    {
+        if (runtimeUp)
+        {
+            return;
+        }
+        runtimeUp = true;
+        if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
+        {                                                  //   makes lazyCompile reachable so the writer
+            long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
+        }
+        if (VM.resolveLinkStubAddr == 0L)                   // same trick for the link-stub trampoline's target
+        {
+            long u = resolveLinkStub(-1);
+        }
+        resetLoader();                                      // the only one: it ALLOCATES the loader tables
+        addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);        // String + System.out streams
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);      // number formatting (near-universal)
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+    }
+
+    /**
+     * Run {@code className.main(argsLine)} on the RUNNING VM, resetting nothing.
+     *
+     * <p>The difference from {@link #launch} is the whole point: {@code launch} begins with
+     * {@code resetLoader()}, so every program it starts re-derives the entire base closure from scratch --
+     * each class parsed, laid out, compiled and its {@code <clinit>} run AGAIN, with the previous program's
+     * loaded state discarded. This method inherits that state. A class already loaded stays loaded, and an
+     * initializer that already ran does NOT run again: its class is still registered at
+     * {@code ST_INITIALIZED}, so {@link #ensureClinit} returns at once.
+     *
+     * <p>Everything else keeps {@code launch}'s ORDER exactly, because that order is load-bearing -- the
+     * support classes are pulled into the same batch as the program (so their supers are present), the seeds
+     * come after {@code loadAll} (they are built from loaded classes), and argv is built after it too
+     * ({@code guestString} needs String's TIB). The first call therefore does what {@code launch} does minus
+     * the reset; each later call adds only what its own program pulls in.
+     */
+    static void launchMain(byte[] className, byte[] argsLine)
+    {
+        stubTabCheck(className);
+        bringUpRuntime();                                   // once per boot; a no-op on every later call
+        long entry = pullClass(className);                  // pull the program itself from the classDir by name
+        if (entry == 0L)
+        {
+            Uart.write(Magic.bytes("launchMain: class not found: "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        pullSupportClasses();
+        loadAll();                                          // first call: the base closure. Later: only the new.
+        if (!runtimeSeeded)
+        {
+            runtimeSeeded = true;
+            seedSystemStreams();                            // System.out/err -> UART
+            seedSystemProps();                              // System.props -> a real Properties (setProperty)
+            seedSystemIn();                                 // System.in -> an empty stream (never null)
+            seedNetExtendedOptions();                       // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
+            buildRunTramp();                                // enable Thread.start() (needs Runnable loaded)
+        }
+        long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
+        long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        if (buf == 0L)
+        {
+            Uart.write(Magic.bytes("launchMain: no main(String[]) in "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        long unused = Magic.call2(buf, argv, 0L);           // main(args) -- x1 unused by a 1-arg static
+        Uart.write(Magic.bytes("\n[main returned normally]\n"));
+        reportGc();
+    }
+
+    /**
+     * Force-load the classes a program cannot be relied on to NAME but the runtime still needs.
+     *
+     * <p>Shared by {@link #launch} and {@link #bringUpRuntime} so the two cannot drift: the implicit-check
+     * exceptions in particular are load-bearing -- a program that never names them leaves them unloaded, so
+     * {@code newExc} gives the thrown object a TIB of 0, which is uncatchable ({@code instanceOf} cannot walk
+     * its type chain) and nameless in a stack trace.
+     */
+    private static void pullSupportClasses()
+    {
+        pullClass(Magic.bytes("java/lang/NullPointerException"));
+        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+        pullClass(Magic.bytes("java/lang/ArithmeticException"));
+        pullClass(Magic.bytes("java/lang/ClassCastException"));
+        pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
+        pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
+        pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
+        // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
+        pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
+        // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
+        // works (System.<clinit> which normally registers the JLA is skipped).
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
+        // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
+        // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
+        // literal's Type/mirror + the field registry exist even when nothing instantiates them.
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicLong"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
+    }
+
+    /** Print the collection figures if the program collected. Shared by both launch paths. */
+    private static void reportGc()
+    {
+        if (Heap.gcPressure != 0)                           // the program collected: report it unconditionally,
+        {                                                   //   so GC evidence needs no debug flag on real HW
+            Uart.write(Magic.bytes("gc: collections="));
+            VM.printDec(Heap.gcPressure);
+            Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
+            VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
+            Uart.write(Magic.bytes(" roots="));             // ... split into the irreducibly conservative
+            VM.printHex(VMGc.rootProbes);                   //   root scan and the TRACE side, which is what
+            Uart.write(Magic.bytes(" heap="));              //   type metadata actually shrinks
+            VM.printHex(VMGc.probes - VMGc.rootProbes);
+            Uart.write(Magic.bytes(" nomap="));             // blocks still scanned without any metadata
+            VM.printHex(VMGc.nomap);
+            Uart.write(Magic.bytes(" lastReclaimed="));
+            VM.printHex(VM.reclaimed);
+            Uart.putc(0x0A);
+        }
+    }
+
     static void launch(byte[] className, byte[] argsLine)
     {
         stubTabCheck(className);
@@ -1611,32 +1762,7 @@ public final class Loader
             return;
         }
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
-        // Force-load the exceptions the JIT's implicit checks throw without a bytecode `new` (null/bounds/div/
-        // cast/negative-array). Otherwise a program that never NAMES them leaves them unloaded, so newExc gives
-        // the thrown object a TIB of 0 -> uncatchable (instanceOf can't walk its type chain) and nameless in traces.
-        pullClass(Magic.bytes("java/lang/NullPointerException"));
-        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
-        pullClass(Magic.bytes("java/lang/ArithmeticException"));
-        pullClass(Magic.bytes("java/lang/ClassCastException"));
-        pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
-        pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
-        pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
-        // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
-        // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
-        pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
-        // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
-        // works (System.<clinit> which normally registers the JLA is skipped). Pulled always -- tiny, and only
-        // reached when something builds an EnumMap (e.g. java.util.stream's StreamOpFlag).
-        pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
-        // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
-        // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
-        pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
-        // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
-        // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
-        // field registry (for getDeclaredField/newUpdater access checks) exist even when nothing instantiates them.
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicLong"));
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
+        pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
@@ -1658,22 +1784,7 @@ public final class Loader
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
-        if (Heap.gcPressure != 0)                           // the program collected: report it unconditionally,
-        {                                                   //   so GC evidence needs no debug flag on real HW
-            Uart.write(Magic.bytes("gc: collections="));
-            VM.printDec(Heap.gcPressure);
-            Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
-            VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
-            Uart.write(Magic.bytes(" roots="));             // ... split into the irreducibly conservative
-            VM.printHex(VMGc.rootProbes);                   //   root scan and the TRACE side, which is what
-            Uart.write(Magic.bytes(" heap="));              //   type metadata actually shrinks
-            VM.printHex(VMGc.probes - VMGc.rootProbes);
-            Uart.write(Magic.bytes(" nomap="));             // blocks still scanned without any metadata
-            VM.printHex(VMGc.nomap);
-            Uart.write(Magic.bytes(" lastReclaimed="));
-            VM.printHex(VM.reclaimed);
-            Uart.putc(0x0A);
-        }
+        reportGc();
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
