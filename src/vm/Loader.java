@@ -375,6 +375,8 @@ public final class Loader
             clinitLocals[clinitN] = gMaxLocals;
             clinitEntry[clinitN] = 0L;              // uncompiled: clinitCode[] is now the "enqueued" marker
                 clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // which blob (for dependency-ordered running)
+            clinitBase[clinitN] = gbase;                // batch-independent identity (see the declarations)
+            clinitNameOff[clinitN] = gThisNameOff;
             if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/io/FileDescriptor")))
             {
                 clinitFdFirst = clinitN;   // run FIRST in runClinits: it registers the JavaIOFileDescriptorAccess
@@ -407,13 +409,12 @@ public final class Loader
         {
             return 0L;                                  // empty slot: nothing was enqueued here
         }
-        int pd = clinitPd[i];
         int reg = clinitRegOf(i);
-        if (pd < 0 || reg < 0)
+        if (reg < 0)
         {
-            capHalt(Magic.bytes("clinit-compile-ctx"), i);   // no blob/class to compile against -- name it, don't guess
+            capHalt(Magic.bytes("clinit-compile-ctx"), i);   // no class to compile against -- name it, don't guess
         }
-        restoreCtxForCompile(pdBase[pd], pdLen[pd], reg);
+        restoreCtxForCompile(clinitBase[i], blobLenOf(clinitBase[i]), reg);
         gMaxLocals = clinitLocals[i];                   // AFTER the restore: parseFields/parseVtable clobber it
         compileReuseTib = true;                         // the class's TIB exists and is filled -- do not rebuild it
         int rcMark = rcCount;                           // this compile's own reloc sites start here
@@ -461,18 +462,31 @@ public final class Loader
             capHalt(Magic.bytes("clinit-compile-null"), i);  // about to call address 0 -- halt with an index instead
         }
         clinitEntry[i] = buf;
+        // INITIALIZE WHAT THIS INITIALIZER READS, before ensureClinit calls it. The compile above just
+        // recorded every cross-class getstatic/new site it contains (JVMS 5.5 active uses), and because this
+        // method brackets the compile with lzCompiling those land in lzInitReg -- which only lazyCompile
+        // drained. So they were noted and never acted on: the body then ran against classes whose statics
+        // were still unset, which is a null that looks exactly like a value.
+        //
+        // picocli's GroupValidationResult.<clinit> is the case: it builds SUCCESS_PRESENT/SUCCESS_ABSENT from
+        // `Type.SUCCESS_*`, so with the Type enum uninitialized every instance's `type` field was null --
+        // and blockingFailure() compares `type` against those same constants, so `null == null` reported a
+        // BLOCKING FAILURE on a SUCCESS and handed the launcher a null exception to throw.
+        //
+        // Memoized into clinitEntry[i] FIRST: a drained initializer can lead straight back here for this same
+        // class, and the assignment above is what makes that re-entry return the buffer instead of recursing.
+        drainPendingInit();
         return buf;
     }
 
     /** The class-registry index of initializer {@code i}'s owner, matched by blob base (as ensureClinit does). */
     private static int clinitRegOf(int i)
     {
-        int pd = clinitPd[i];
-        if (pd < 0 || clTab == null)
+        if (clTab == null)
         {
             return -1;
         }
-        long base = pdBase[pd];
+        long base = clinitBase[i];
         int r = 0;
         while (r < clCount)
         {
@@ -712,6 +726,12 @@ public final class Loader
     private static int[] clinitStatic;
     private static int[] clinitLocals;
     private static int[] clinitPd;       // pd-blob index of each enqueued <clinit> (for dependency-ordered running)
+    // The record's OWN blob identity. clinitPd indexes the pending-blob list, which resetLoader rebuilds every
+    // batch and which never re-lists a SETTLED blob -- so pd is meaningless to anything that outlives the batch
+    // that enqueued the record. Blob base + class-name offset are properties of the classfile itself, so they
+    // stay valid, and every use below that only wanted "which blob / which class" reads these instead.
+    private static long[] clinitBase;    // blob base of initializer i
+    private static int[] clinitNameOff;  // its class's name Utf8 offset within that blob
     private static int clinitN;
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
@@ -756,7 +776,7 @@ public final class Loader
         // when the first sun/nio/ch or java/net class does, which is both later and exactly as ordered. The
         // eager pre-run is kept only for a FileDescriptor that is NOT lazy (nothing today).
         if (clinitFdFirst >= 0 && clinitFdFirst < clinitN && !done[clinitFdFirst]
-                && !lazyClinitGated(pdBase[clinitPd[clinitFdFirst]], pdNameOff[clinitPd[clinitFdFirst]]))
+                && !lazyClinitGated(clinitBase[clinitFdFirst], clinitNameOff[clinitFdFirst]))
         {
             if (logClinit != 0)
             {
@@ -775,7 +795,7 @@ public final class Loader
             int i = 0;
             while (i < clinitN)
             {
-                if (!done[i] && lazyClinitGated(pdBase[clinitPd[i]], pdNameOff[clinitPd[i]]))
+                if (!done[i] && lazyClinitGated(clinitBase[i], clinitNameOff[i]))
                 {
                     // JVMS 5.5 initialization-on-first-active-use: leave this one PENDING. The class stays at
                     // ST_INSTANTIATED and its initializer runs from the barrier in lazyCompile, the first time
@@ -788,9 +808,8 @@ public final class Loader
                 {
                     if (logClinit != 0)                  // #43: name each <clinit> as it runs (spot a hanging one)
                     {
-                        int cpd = clinitPd[i];
                         Uart.write(Magic.bytes("  clinit "));
-                        writeName(pdBase[cpd] + pdNameOff[cpd] + 2, u2(pdBase[cpd] + pdNameOff[cpd]));
+                        writeName(clinitBase[i] + clinitNameOff[i] + 2, u2(clinitBase[i] + clinitNameOff[i]));
                         Uart.putc(0x0A);
                     }
                     long entry = clinitEntryOf(i);   // compiled HERE, on the run that actually needs it
@@ -918,16 +937,11 @@ public final class Loader
      */
     private static void initClinitDeps(int i, int self)
     {
-        int pd = clinitPd[i];
-        if (pd < 0)
-        {
-            return;
-        }
         int e = clDepStart[i] + clDepN[i];
         int d = clDepStart[i];
         while (d < e)
         {
-            int dep = classRegByNameAt(pdBase[pd], clDepOff[d]);
+            int dep = classRegByNameAt(clinitBase[i], clDepOff[d]);
             if (dep >= 0 && dep != self)
             {
                 ensureClinit(dep);
@@ -956,10 +970,50 @@ public final class Loader
             return;
         }
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
+        if (runPendingClinit(reg) == 0 && clTab[reg].state < RVMClass.ST_INITIALIZED
+                && !hasClinitRecord(reg))
+        {
+            // No <clinit> record matched, yet the class is still uninitialized -- and that combination is
+            // never "this class has no initializer": such a class is set INITIALIZED by the lifecycle sweep
+            // at the end of the batch that loaded it, because only a PENDING record holds one back.
+            //
+            // So the record we were being held for has GONE. resetLoader rebuilds clinitCode/clinitRan/...
+            // every batch, and a blob that has already SETTLED does not re-run phase B, so it never
+            // re-enqueues its initializer. A class loaded in one batch and first USED in a later one
+            // therefore lost its initializer entirely: ensureClinit fell through this loop doing nothing and
+            // every static of that class read null for the rest of the boot, silently.
+            //
+            // Re-derive it from the class's OWN blob, under the same two gates as the load-time enqueue --
+            // so a deliberately-skipped initializer (natives/properties, statics seeded instead) stays
+            // skipped rather than being run late by this path.
+            int rc = recoverClinit(reg);
+            if (rc == 1)
+            {
+                runPendingClinit(reg);
+            }
+            else if (rc == 2)
+            {
+                clTab[reg].state = RVMClass.ST_INITIALIZED;   // gated off: seeded statics, which IS initialized
+            }
+            else
+            {
+                reportClinitLost(reg);                        // no <clinit> in the blob at all -- unexpected
+            }
+        }
+        drainCtorInit(reg);                             // ... and whatever its constructors actively use
+    }
+
+    /**
+     * Run the pending {@code <clinit>} record belonging to {@code reg}, if one is still enqueued.
+     * Returns 1 if an initializer ran.
+     */
+    private static int runPendingClinit(int reg)
+    {
+        int ran = 0;
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
             {
                 clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
                 // AND BEFORE ITS DEPENDENCIES: the getstatic/invokestatic/new sites inside this initializer
@@ -1003,11 +1057,103 @@ public final class Loader
                 drainCtorInit(reg);
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
+                ran = 1;
                 break;
             }
             i += 1;
         }
-        drainCtorInit(reg);                             // ... and whatever its constructors actively use
+        return ran;
+    }
+
+    /**
+     * True if ANY {@code <clinit>} record exists for {@code reg}, run or not.
+     *
+     * <p>The recovery below must be gated on this rather than on {@code runPendingClinit} coming back empty.
+     * An initializer that is CURRENTLY RUNNING has {@code clinitRan = 1} already (set before the call, so a
+     * cycle terminates) while its class is still short of INITIALIZED (set after) -- so a re-entrant
+     * {@code ensureClinit} looks exactly like a lost record, and recovering there re-enqueues the same
+     * initializer on every pass, which hangs the boot instead of finishing it.
+     */
+    private static boolean hasClinitRecord(int reg)
+    {
+        int i = 0;
+        while (i < clinitN)
+        {
+            if (clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /**
+     * Re-enqueue {@code reg}'s {@code <clinit>} from its own blob, for a record lost to a batch reset.
+     * Returns 1 if a runnable record was enqueued, 2 if the initializer is deliberately not run (its statics
+     * are seeded), 0 if the class turns out to declare no {@code <clinit>} at all.
+     */
+    private static int recoverClinit(int reg)
+    {
+        long blob = clTab[reg].base;
+        restoreCtxForCompile(blob, blobLenOf(blob), reg);   // rebuild gcp/gbase for THIS class, as clinitEntryOf does
+        if (clinitBlocked())
+        {
+            return 2;                                   // same gate as the load-time enqueue
+        }
+        seek(0x3C636C696E69743EL, 8, 0x282956L, 3);     // "<clinit>" "()V"
+        long code = findMethod(blob);
+        if (code == 0L)
+        {
+            return 0;
+        }
+        if (!clinitCompilable(code, gcodeLen))
+        {
+            return 2;                                   // the other load-time gate
+        }
+        if (clinitN >= MAXBLOB)
+        {
+            return 0;
+        }
+        clDepStart[clinitN] = clDepTop;
+        scanClinitDeps(code, gcodeLen);                 // its deps, so initClinitDeps orders them as usual
+        clDepN[clinitN] = clDepTop - clDepStart[clinitN];
+        clinitCode[clinitN] = code;
+        clinitCodeLen[clinitN] = gcodeLen;
+        clinitDescOff[clinitN] = gFoundDescOff;
+        clinitStatic[clinitN] = gFoundStatic;
+        clinitLocals[clinitN] = gMaxLocals;
+        clinitEntry[clinitN] = 0L;                      // uncompiled: clinitEntryOf compiles it on the run below
+        clinitRan[clinitN] = 0;
+        clinitBase[clinitN] = blob;
+        clinitNameOff[clinitN] = gThisNameOff;
+        clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // -1 once the blob has settled; unused by the run
+        clinitN += 1;
+        return 1;
+    }
+
+    /** Name a class whose pending {@code <clinit>} record no longer exists, once per class. */
+    private static void reportClinitLost(int reg)
+    {
+        int k = 0;
+        while (k < clLostN)
+        {
+            if (clLost[k] == reg)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (clLostN < clLost.length)
+        {
+            clLost[clLostN] = reg;
+            clLostN += 1;
+        }
+        Uart.write(Magic.bytes("  CLINIT LOST (statics read null): "));
+        printNameAt(clTab[reg].base, clTab[reg].nameOff);
+        Uart.write(Magic.bytes(" state="));
+        VM.printDec(clTab[reg].state);
+        Uart.putc(0x0A);
     }
 
     // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
@@ -1097,6 +1243,9 @@ public final class Loader
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
     // on lzCompiling: a load-time compile (an initializer) must leave ordering to runClinits.
+    private static final int[] clLost = new int[64];
+    private static int clLostN;
+
     private static final int MAXPENDINIT = 64;
     private static int[] lzInitReg;
     private static int lzInitN;
@@ -1186,7 +1335,7 @@ public final class Loader
         int i = 0;
         while (i < clinitN)
         {
-            if (clinitRan[i] == 0 && clinitCode[i] != 0L && pdBase[clinitPd[i]] == clTab[reg].base)
+            if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
             {
                 return true;
             }
@@ -1198,16 +1347,12 @@ public final class Loader
     /** True if clinit {@code i} references a class whose own (still-unrun) {@code <clinit>} must run first. */
     private static boolean clinitDepBlocked(int i, boolean[] done)
     {
-        int pd = clinitPd[i];
-        if (pd < 0)
-        {
-            return false;
-        }
+        int pd = clinitPd[i];                           // this record's blob in THIS batch's pending list, or -1
         int e = clDepStart[i] + clDepN[i];
         int d = clDepStart[i];
         while (d < e)                                   // the initializer's PRECISE (bytecode) deps, not the whole cp
         {
-            int jpd = findPdByName(pdBase[pd], clDepOff[d]);   // the referenced class's blob
+            int jpd = findPdByName(clinitBase[i], clDepOff[d]);   // the referenced class's blob
             if (jpd < 0)
             {
                 // NOT IN THIS BATCH'S PENDING LIST -- which does not mean "not loaded". findPdByName searches
@@ -1219,7 +1364,7 @@ public final class Loader
                 // built its SUCCESS_* instances from an uninitialised Type enum, so every constant AND every
                 // instance's `type` field was null -- and `blockingFailure()` compares them, so `null == null`
                 // reported a blocking failure on a SUCCESS and handed picocli a null exception to throw.
-                int reg = classRegByNameAt(pdBase[pd], clDepOff[d]);
+                int reg = classRegByNameAt(clinitBase[i], clDepOff[d]);
                 if (reg >= 0)
                 {
                     ensureClinit(reg);
@@ -1826,8 +1971,7 @@ public final class Loader
         }
         else if (bestClin >= 0)
         {
-            int pd = clinitPd[bestClin];
-            clsStr = guestStringUtf8(pdBase[pd], pdNameOff[pd]);
+            clsStr = guestStringUtf8(clinitBase[bestClin], clinitNameOff[bestClin]);
             methStr = guestString(Magic.bytes("<clinit>"));
         }
         else
@@ -2432,6 +2576,8 @@ public final class Loader
         clinitStatic = new int[MAXBLOB];
         clinitLocals = new int[MAXBLOB];
         clinitPd = new int[MAXBLOB];
+        clinitBase = new long[MAXBLOB];
+        clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         ctorOwner = new int[MAXCTORINIT];
@@ -4819,8 +4965,7 @@ public final class Loader
         }
         else
         {
-            int pd = clinitPd[bestClin];
-            writeName(pdBase[pd] + pdNameOff[pd] + 2, u2(pdBase[pd] + pdNameOff[pd]));
+            writeName(clinitBase[bestClin] + clinitNameOff[bestClin] + 2, u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
             Uart.write(Magic.bytes(".<clinit>"));
         }
         Uart.write(Magic.bytes(" [pc="));                        // debug: absolute PC + offset into the method
@@ -4925,8 +5070,7 @@ public final class Loader
             }
             else
             {
-                int pd = clinitPd[bestClin];
-                writeName(pdBase[pd] + pdNameOff[pd] + 2, u2(pdBase[pd] + pdNameOff[pd]));
+                writeName(clinitBase[bestClin] + clinitNameOff[bestClin] + 2, u2(clinitBase[bestClin] + clinitNameOff[bestClin]));
                 Uart.write(Magic.bytes(".<clinit>"));
             }
             ceil = bestBuf;
@@ -5431,20 +5575,39 @@ public final class Loader
     static long staticAddr(int idx)
     {
         int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
-        int s = 0;
-        while (s < gsfCount)                            // same class: match by name Utf8 offset
+        // THE FAST PATH IS ONLY VALID FOR A REFERENCE TO THIS CLASS. It matches on the field NAME alone, and a
+        // classfile's constant pool DEDUPES Utf8 -- so `OtherClass.foo` and this class's own `foo` share one
+        // name entry and compare equal here. Without the class check a class that declares a static and reads
+        // a same-named static of another class silently gets its OWN cell.
+        //
+        // picocli's GroupValidationResult is exactly that: it declares SUCCESS_PRESENT/SUCCESS_ABSENT and its
+        // <clinit> reads Type.SUCCESS_PRESENT/Type.SUCCESS_ABSENT to build them. Each read returned the
+        // still-null static it was in the middle of assigning, so every instance's `type` was null -- and
+        // blockingFailure() compares `type` to those constants, so `null == null` reported a BLOCKING FAILURE
+        // on a SUCCESS and handed the console launcher a null exception to throw.
+        if (utf8EqAt(gbase, refClassNameOff(idx), gbase, gThisNameOff))
         {
-            if (gsfName[s] == nameOff)
+            int s = 0;
+            while (s < gsfCount)                        // same class: match by name Utf8 offset
             {
-                return gStatics + s * 8;
+                if (gsfName[s] == nameOff)
+                {
+                    return gStatics + s * 8;
+                }
+                s += 1;
             }
-            s += 1;
         }
         noteInitNeeded(classRegOf(u2(gbase + gcp[idx])));   // cross-class static access = an active use
         return globalStaticAddr(idx);                   // another class (e.g. Long -> Integer.digits)
     }
 
     /** Slot address of a static field declared in another loaded class, matched by class+name, or 0. */
+    // Print the CELL a static reference binds to, from both the compiled path (`staticaddr`) and the
+    // reflective one (`reflectcell`). Off by default. Comparing the two is what located the same-class
+    // fast-path bug below: a field read as null by compiled code and non-null by reflection is two different
+    // cells, and no amount of reading either path alone distinguishes that from a value that really is null.
+    static final boolean STATIC_ADDR_LOG = false;
+
     private static long globalStaticAddr(int idx)
     {
         int classOff = refClassNameOff(idx);
@@ -5455,6 +5618,16 @@ public final class Loader
             if (utf8EqAt(gbase, classOff, sgTab[i].base, sgTab[i].classOff)
                     && utf8EqAt(gbase, nameOff, sgTab[i].base, sgTab[i].nameOff))
             {
+                if (STATIC_ADDR_LOG)
+                {
+                    Uart.write(Magic.bytes("  staticaddr "));
+                    printNameAt(gbase, classOff);
+                    Uart.putc(0x2E);
+                    printNameAt(gbase, nameOff);
+                    Uart.write(Magic.bytes(" -> "));
+                    VM.printHex(sgTab[i].addr);
+                    Uart.putc(0x0A);
+                }
                 return sgTab[i].addr;
             }
             i += 1;
@@ -8945,6 +9118,14 @@ public final class Loader
             if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
                     && rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
             {
+                if (STATIC_ADDR_LOG)
+                {
+                    Uart.write(Magic.bytes("  reflectcell "));
+                    printNameAt(clTab[ci].base, clTab[ci].nameOff);
+                    Uart.write(Magic.bytes(" -> "));
+                    VM.printHex(sgTab[i].addr);
+                    Uart.putc(0x0A);
+                }
                 return sgTab[i].addr;
             }
             i += 1;
