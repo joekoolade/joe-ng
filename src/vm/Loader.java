@@ -1588,10 +1588,6 @@ public final class Loader
     /** True once {@link #bringUpRuntime} has allocated the loader tables and added the core blobs. */
     private static boolean runtimeUp;
 
-    /** True once the system streams/properties and the run trampoline exist -- they are built from LOADED
-     *  classes, so this happens after the first {@code loadAll}, not during {@link #bringUpRuntime}. */
-    private static boolean runtimeSeeded;
-
     /**
      * One-time runtime bring-up: the loader tables and the core classes.
      *
@@ -1659,15 +1655,17 @@ public final class Loader
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         pullSupportClasses();
         loadAll();                                          // first call: the base closure. Later: only the new.
-        if (!runtimeSeeded)
-        {
-            runtimeSeeded = true;
-            seedSystemStreams();                            // System.out/err -> UART
-            seedSystemProps();                              // System.props -> a real Properties (setProperty)
-            seedSystemIn();                                 // System.in -> an empty stream (never null)
-            seedNetExtendedOptions();                       // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
-            buildRunTramp();                                // enable Thread.start() (needs Runnable loaded)
-        }
+        // EVERY call, not once. Each of these is an ENSURE, not a set: it does nothing if its slot is already
+        // filled, and nothing if the class it needs is not registered YET. Those two cases are why a one-shot
+        // latch is wrong -- java/io/PrintStream was absent from the FIRST program's closure, so the streams
+        // seeded nothing, and a latch set before the work succeeded meant they were never seeded at all.
+        // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
+        // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
+        seedSystemStreams();                                // System.out/err -> UART
+        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSystemIn();                                     // System.in -> an empty stream (never null)
+        seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
+        buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -5080,6 +5078,10 @@ public final class Loader
      */
     static void buildRunTramp()
     {
+        if (VM.runTrampAddr != 0L)
+        {
+            return;                                     // already built; it is code, so rebuilding leaks an arena block
+        }
         // The itable scan this used to emit BY HAND was, in its own words, "unguarded past the sentinel", and
         // it also baked Runnable's Type in as an immediate -- built once, cached for the life of the VM. Both
         // are the hazards this VM has been closing everywhere else, and here they land on a FRESHLY SPAWNED
@@ -5583,6 +5585,16 @@ public final class Loader
             {
                 if (gsfName[s] == nameOff)
                 {
+                    if (STATIC_ADDR_LOG)
+                    {
+                        Uart.write(Magic.bytes("  ownstatic "));
+                        printNameAt(gbase, gThisNameOff);
+                        Uart.putc(0x2E);
+                        printNameAt(gbase, nameOff);
+                        Uart.write(Magic.bytes(" -> "));
+                        VM.printHex(gStatics + s * 8);
+                        Uart.putc(0x0A);
+                    }
                     return gStatics + s * 8;
                 }
                 s += 1;
@@ -7003,19 +7015,19 @@ public final class Loader
         int pi = classIndexByName(Magic.bytes("java/io/PrintStream"));
         if (pi < 0)
         {
-            return;
+            return;                                     // not registered yet -- a later launch seeds it
         }
         long ptib = clTab[pi].tib;
         int psize = 16 + clTab[pi].fieldCount * 8;          // field-free overlay -> 16, but honor any fields it declares
         long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
-        if (outSlot != 0L)
+        if (outSlot != 0L && Magic.load64(outSlot) == 0L)   // ENSURE: an already-seeded stream keeps its identity
         {
             long ps = Heap.alloc(psize);
             Magic.store64(ps + 0L, ptib);               // TIB (vtable for println dispatch)
             Magic.store64(outSlot, ps);
         }
         long errSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
-        if (errSlot != 0L)
+        if (errSlot != 0L && Magic.load64(errSlot) == 0L)
         {
             long ps = Heap.alloc(psize);
             Magic.store64(ps + 0L, ptib);
@@ -7054,9 +7066,9 @@ public final class Loader
     static void seedSystemIn()
     {
         long inSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
-        if (inSlot == 0L)
+        if (inSlot == 0L || Magic.load64(inSlot) != 0L)
         {
-            return;
+            return;                                     // unknown slot, or already seeded
         }
         int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
         if (bi < 0)
@@ -7169,7 +7181,7 @@ public final class Loader
             return;
         }
         long slot = staticSlotOf(Magic.bytes("sun/nio/ch/Net"), Magic.bytes("EXTENDED_OPTIONS"));
-        if (slot != 0L)
+        if (slot != 0L && Magic.load64(slot) == 0L)
         {
             long inst = Heap.alloc(16 + clTab[ei].fieldCount * 8);   // field-free overlay -> just the TIB header
             Magic.store64(inst + 0L, clTab[ei].tib);                 // TIB (vtable for isOptionSupported dispatch)

@@ -3004,7 +3004,7 @@ public final class VM
         Uart.write(Magic.bytes("dining philosophers (demand-loaded from embedded java.base):\n"));
         installSchedVectors();                             // rebuild the switch stubs (the GC demo freed them)
         resetTaskTable();                                  // fresh scheduler table: just task 0 (the boot flow)
-        Loader.launch(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes(""));                               // JIT + spawn the philosopher tasks (IRQs masked)
+        Loader.launchMain(Magic.bytes("demo/DiningPhilosophers"), Magic.bytes(""));                               // JIT + spawn the philosopher tasks (IRQs masked)
         Magic.writeCNTP_TVAL_EL0(timerReload);
         Magic.writeCNTP_CTL_EL0(1);
         Magic.enableIrq();                                 // preemption starts; the philosopher tasks run now
@@ -3018,7 +3018,7 @@ public final class VM
         Uart.putc(0x0A);
 
         prioDemo();
-        Loader.launch(Magic.bytes("demo/PipDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/PipDemo"), Magic.bytes(""));
         smpThreadsDemo();
 
         // Philosophers (the one demo with persistent scheduler tasks on the heap) is done; from here on it is
@@ -3029,13 +3029,13 @@ public final class VM
         // invokedynamic StringConcatFactory.makeConcatWithConstants. The metal JIT intrinsifies it into a
         // byte[] build wrapped in a mini java/lang/String (demand-loaded from classDir), then prints it.
         Uart.write(Magic.bytes("invokedynamic string concat (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/ConcatDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ConcatDemo"), Magic.bytes(""));
 
         // M-B slice 1c: invokedynamic lambdas. demo/LambdaDemo's () -> ... sites lower to
         // invokedynamic LambdaMetafactory.metafactory; the metal JIT synthesises a lambda class per site
         // (captured fields + an itable thunk into the lambda body), so r.run() dispatches into the body.
         Uart.write(Magic.bytes("invokedynamic lambdas (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/LambdaDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/LambdaDemo"), Magic.bytes(""));
 
         // Experiment: compile + run methods from a REAL, unmodified java.base class (java/lang/Integer).
         // First two pure methods (should just work), then a full-class load to see where the reach ends.
@@ -3050,31 +3050,31 @@ public final class VM
 
         // Float/double support: a demand-loaded class doing float+double arithmetic, conversions, compare.
         Uart.write(Magic.bytes("float/double (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/FloatDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/FloatDemo"), Magic.bytes(""));
 
         // Provided java.base natives: a demand-loaded class calls real java.lang native methods (no
         // bytecode) that the loader wires to VM helpers.
         Uart.write(Magic.bytes("java.base natives (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/NativeDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/NativeDemo"), Magic.bytes(""));
 
         // Real-shaped String + StringBuilder: build a string with an append-chain, then call String
         // methods on it (length/charAt/equals/hashCode). String literals are now real String objects.
         Uart.write(Magic.bytes("String + StringBuilder (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/StrDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/StrDemo"), Magic.bytes(""));
 
         // Implicit (JVM-synthesised) exceptions: the JIT emits null/bounds checks that throw a real mini
         // exception object; catch clauses catch it (main-local and via cross-method unwind).
         Uart.write(Magic.bytes("implicit exceptions (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/ExcDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ExcDemo"), Magic.bytes(""));
 
         // Mini collections: a real-shaped java/util/ArrayList (Object[] + grow via arraycopy).
         Uart.write(Magic.bytes("java/util/ArrayList (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/ListDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ListDemo"), Magic.bytes(""));
 
         // java/util/HashMap: String keys hashed/compared via their real hashCode/equals, dispatched
         // through the mini java/lang/Object root's vtable slots.
         Uart.write(Magic.bytes("java/util/HashMap (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/MapDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/MapDemo"), Magic.bytes(""));
 
         // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
         // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
@@ -3110,90 +3110,90 @@ public final class VM
         // run parseInt -- loadAll now compiles only the methods the entry reaches, so real Integer's
         // unreachable methods (toString/format) don't drag in unbuilt deps.
         Uart.write(Magic.bytes("real Integer via reachable loadAll:\n"));
-        Loader.launch(Magic.bytes("demo/ParseAllDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ParseAllDemo"), Magic.bytes(""));
 
         // Real Integer.toString: the produce-a-String direction -- real toString builds its result via
         // DecimalDigits + the real byte[]+coder String constructor.
         Uart.write(Magic.bytes("real Integer.toString (unmodified JDK + mini deps):\n"));
-        Loader.launch(Magic.bytes("demo/ToStringDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ToStringDemo"), Magic.bytes(""));
 
         // Real Integer.toHexString (formatUnsignedInt + the loader-seeded Integer.digits) and Long.toString
         // (the DecimalDigits long overloads).
         Uart.write(Magic.bytes("real Integer.toHexString + Long.toString (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/HexLongDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/HexLongDemo"), Magic.bytes(""));
 
         // Real Long.parseLong + Long.toHexString.
         Uart.write(Magic.bytes("real Long.parseLong + Long.toHexString (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/LongMoreDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/LongMoreDemo"), Magic.bytes(""));
 
         // Real integer Math: floorDiv/floorMod (pure) + addExact (real ArithmeticException on overflow).
         Uart.write(Magic.bytes("real Math floorDiv/floorMod/addExact (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/MathIntDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/MathIntDemo"), Magic.bytes(""));
 
         // More arguments than there are argument registers: x0..x14 by value, x15 a pointer to the rest.
         Uart.write(Magic.bytes("more args than argument registers (static, instance, and a wide one):\n"));
-        Loader.launch(Magic.bytes("demo/ManyArgsDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ManyArgsDemo"), Magic.bytes(""));
 
         // Real java.util.Objects: equals/hashCode via the Object root's vtable, requireNonNull's NPE.
         Uart.write(Magic.bytes("real java.util.Objects (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/ObjectsDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ObjectsDemo"), Magic.bytes(""));
 
         // Real java.util.Arrays: fill/equals/binarySearch on int[].
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
 
         // Real Integer.valueOf autoboxing: boxed Integer keys in a HashMap (real hashCode/equals dispatch).
         Uart.write(Magic.bytes("real Integer.valueOf boxing via HashMap (unmodified JDK):\n"));
-        Loader.launch(Magic.bytes("demo/BoxingDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/BoxingDemo"), Magic.bytes(""));
 
         // String indexOf/substring on the real-shaped mini String.
         Uart.write(Magic.bytes("String indexOf/substring (demand-loaded):\n"));
-        Loader.launch(Magic.bytes("demo/StrOpsDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/StrOpsDemo"), Magic.bytes(""));
 
         // M3: java.io -- the guest FileInputStream overlay reading the embedded read-only RAMFS.
         Uart.write(Magic.bytes("java.io FileInputStream (embedded RAMFS):\n"));
-        Loader.launch(Magic.bytes("demo/FileDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/FileDemo"), Magic.bytes(""));
 
         // M4: Thread identity (currentThread/getName) + Class reflection (getName/isInstance/...).
         Uart.write(Magic.bytes("Thread + Class reflection (M4):\n"));
-        Loader.launch(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ReflectDemo"), Magic.bytes(""));
 
         // Thread whose Runnable is a LAMBDA (plain, capturing, and created in a reflectively-reached body) --
         // every other thread demo passes a named class, so the synthesised-itable shape was never exercised.
         Uart.write(Magic.bytes("Thread on a lambda Runnable:\n"));
-        Loader.launch(Magic.bytes("demo/LambdaThreadDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/LambdaThreadDemo"), Magic.bytes(""));
 
         // Overloads under getDeclaredMethods: same name, different descriptors -- name alone identifies neither.
         Uart.write(Magic.bytes("overloaded methods under getDeclaredMethods:\n"));
-        Loader.launch(Magic.bytes("demo/OverloadReflectDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/OverloadReflectDemo"), Magic.bytes(""));
 
         // Late link resolution: a method reached only through Method.invoke calls a class RTA never pulled.
         Uart.write(Magic.bytes("reflective call into an unpulled class (late link resolution):\n"));
-        Loader.launch(Magic.bytes("demo/ReflectRtaDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ReflectRtaDemo"), Magic.bytes(""));
 
         // Class literals for arrays and primitives: `String[].class` and `int.class` produce real mirrors.
         Uart.write(Magic.bytes("array + primitive class literals:\n"));
-        Loader.launch(Magic.bytes("demo/ClassLitDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/ClassLitDemo"), Magic.bytes(""));
 
         // The real-program milestone: ordinary stock-Java WordCount from main(String[]) -- must match
         // the host JDK's output byte-for-byte on the same input file.
         Uart.write(Magic.bytes("WordCount (a real Java program, main(String[])):\n"));
-        Loader.launch(Magic.bytes("demo/WordCount"), Magic.bytes("/data/sample.txt 3"));
+        Loader.launchMain(Magic.bytes("demo/WordCount"), Magic.bytes("/data/sample.txt 3"));
 
         // The charset closure: stock new String(byte[]) + getBytes() via the UTF-8 fast path.
         Uart.write(Magic.bytes("charset: new String(byte[]) / getBytes() (stock, UTF-8 fast path):\n"));
-        Loader.launch(Magic.bytes("demo/CharsetDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/CharsetDemo"), Magic.bytes(""));
 
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
-        Loader.launch(Magic.bytes("demo/GcDemo"), Magic.bytes(""));
+        Loader.launchMain(Magic.bytes("demo/GcDemo"), Magic.bytes(""));
         Loader.printCodeArena();                           // code-arena rewind evidence: cur far below high
 
         // The long-running-program milestone: a Lisp interpreter whose churn forces collections
         // mid-computation -- every evaluation afterwards must still be correct.
         Uart.write(Magic.bytes("Lisp interpreter (long-running, stock java.base):\n"));
-        Loader.launch(Magic.bytes("demo/LispDemo"), Magic.bytes("/data/prog.lisp 600"));
+        Loader.launchMain(Magic.bytes("demo/LispDemo"), Magic.bytes("/data/prog.lisp 600"));
 
         // The runs above JIT-compiled framed methods and registered their frames.
         // Prove VM.unwind can now size a JIT'd frame: pick a real registered entry
