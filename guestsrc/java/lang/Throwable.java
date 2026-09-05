@@ -179,6 +179,41 @@ public class Throwable
     }
 
     /**
+     * {@code <class name>} or {@code <class name>: <message>}, exactly as stock.
+     *
+     * <p>Declared for the same reason as {@code getLocalizedMessage} above, and the cost of NOT declaring it
+     * was steep: without it a Throwable inherits {@code Object.toString()} and every exception renders as
+     * {@code java.lang.NullPointerException@6da4ee8} -- an identity hash where the MESSAGE should be. Library
+     * code reports failures by concatenating the exception, so this silently deleted the one piece of
+     * information those reports carry. The console launcher's `--disable-banner` failure printed exactly that
+     * and hid a message naming the field it could not set.
+     *
+     * <p>Built with a StringBuilder rather than {@code +}: string concatenation lowers to
+     * {@code invokedynamic}, which would drag the string-concat machinery into java.base's bake closure from
+     * a path that must stay cold.
+     */
+    public String toString()
+    {
+        // getClass() CAN answer null here, which stock never does: a mirror is derived from the object's Type,
+        // and an object whose TIB carries Type 0 has none. That is a real VM defect, but toString must not be
+        // the thing that dies of it -- library code calls toString on a CAUGHT exception precisely when
+        // something has already gone wrong, so throwing here replaces a diagnosable failure with a fatal one.
+        // Named rather than hidden: "<no-type>" in a report says the object has no Type, which is a fact worth
+        // seeing and cannot be mistaken for a class name.
+        Class<?> c = getClass();
+        String s = (c == null) ? "<no-type>" : c.getName();
+        String m = getLocalizedMessage();
+        if (m == null)
+        {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder(s);
+        sb.append(": ");
+        sb.append(m);
+        return sb.toString();
+    }
+
+    /**
      * A no-op that returns {@code this}, as the stock signature requires.
      *
      * <p>joe-ng captures the backtrace at CONSTRUCTION (the {@code bt0..bt7} slots the VM fills), so there is

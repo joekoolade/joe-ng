@@ -1718,6 +1718,15 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // The REFLECTION failures, for the same reason and with the same consequence. The VM throws these
+        // itself (Class.forName, getDeclaredMethod, getDeclaredField), so a program that never NAMES the class
+        // leaves it unloaded and the thrown object gets a TIB of 0 -- no Type, so getClass() answers null and
+        // the object is nameless. Library code REPORTS a caught exception by calling toString() on it, which
+        // is a virtual call through that missing Type: picocli's "Could not register converter" handler does
+        // exactly that for every converter it cannot load, which on joe-ng is several.
+        pullClass(Magic.bytes("java/lang/ClassNotFoundException"));
+        pullClass(Magic.bytes("java/lang/NoSuchMethodException"));
+        pullClass(Magic.bytes("java/lang/NoSuchFieldException"));
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
@@ -13610,10 +13619,43 @@ public final class Loader
     private static long newExc(byte[] name)
     {
         int i = classIndexByName(name);
+        if (i < 0)
+        {
+            // NAME IT. A missing exception class yields a bare header with TIB 0: no Type, so `instanceOf`
+            // cannot walk it (uncatchable), `getClass()` answers null, and it has no detailMessage slot --
+            // an exception carrying NOTHING, reported by library code as an identity hash. Silent until now,
+            // and indistinguishable at the catch site from an exception that simply says little.
+            excMissing(name);
+        }
         long tib = i >= 0 ? clTab[i].tib : 0L;
         long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
         Magic.store64(obj + 0L, tib);
         return obj;
+    }
+
+    private static final byte[][] excMissed = new byte[16][];
+    private static int excMissedN;
+
+    /** Report an exception class the VM had to throw but could not find, once per name. */
+    private static void excMissing(byte[] name)
+    {
+        int k = 0;
+        while (k < excMissedN)
+        {
+            if (excMissed[k] == name)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (excMissedN < excMissed.length)
+        {
+            excMissed[excMissedN] = name;
+            excMissedN += 1;
+        }
+        Uart.write(Magic.bytes("\n  EXCEPTION CLASS NOT LOADED (thrown object has no Type): "));
+        Uart.write(name);
+        Uart.putc(0x0A);
     }
 
     /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */
