@@ -970,36 +970,7 @@ public final class Loader
             return;
         }
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
-        if (runPendingClinit(reg) == 0 && clTab[reg].state < RVMClass.ST_INITIALIZED
-                && !hasClinitRecord(reg))
-        {
-            // No <clinit> record matched, yet the class is still uninitialized -- and that combination is
-            // never "this class has no initializer": such a class is set INITIALIZED by the lifecycle sweep
-            // at the end of the batch that loaded it, because only a PENDING record holds one back.
-            //
-            // So the record we were being held for has GONE. resetLoader rebuilds clinitCode/clinitRan/...
-            // every batch, and a blob that has already SETTLED does not re-run phase B, so it never
-            // re-enqueues its initializer. A class loaded in one batch and first USED in a later one
-            // therefore lost its initializer entirely: ensureClinit fell through this loop doing nothing and
-            // every static of that class read null for the rest of the boot, silently.
-            //
-            // Re-derive it from the class's OWN blob, under the same two gates as the load-time enqueue --
-            // so a deliberately-skipped initializer (natives/properties, statics seeded instead) stays
-            // skipped rather than being run late by this path.
-            int rc = recoverClinit(reg);
-            if (rc == 1)
-            {
-                runPendingClinit(reg);
-            }
-            else if (rc == 2)
-            {
-                clTab[reg].state = RVMClass.ST_INITIALIZED;   // gated off: seeded statics, which IS initialized
-            }
-            else
-            {
-                reportClinitLost(reg);                        // no <clinit> in the blob at all -- unexpected
-            }
-        }
+        runPendingClinit(reg);
         drainCtorInit(reg);                             // ... and whatever its constructors actively use
     }
 
@@ -1065,96 +1036,8 @@ public final class Loader
         return ran;
     }
 
-    /**
-     * True if ANY {@code <clinit>} record exists for {@code reg}, run or not.
-     *
-     * <p>The recovery below must be gated on this rather than on {@code runPendingClinit} coming back empty.
-     * An initializer that is CURRENTLY RUNNING has {@code clinitRan = 1} already (set before the call, so a
-     * cycle terminates) while its class is still short of INITIALIZED (set after) -- so a re-entrant
-     * {@code ensureClinit} looks exactly like a lost record, and recovering there re-enqueues the same
-     * initializer on every pass, which hangs the boot instead of finishing it.
-     */
-    private static boolean hasClinitRecord(int reg)
-    {
-        int i = 0;
-        while (i < clinitN)
-        {
-            if (clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
-            {
-                return true;
-            }
-            i += 1;
-        }
-        return false;
-    }
 
-    /**
-     * Re-enqueue {@code reg}'s {@code <clinit>} from its own blob, for a record lost to a batch reset.
-     * Returns 1 if a runnable record was enqueued, 2 if the initializer is deliberately not run (its statics
-     * are seeded), 0 if the class turns out to declare no {@code <clinit>} at all.
-     */
-    private static int recoverClinit(int reg)
-    {
-        long blob = clTab[reg].base;
-        restoreCtxForCompile(blob, blobLenOf(blob), reg);   // rebuild gcp/gbase for THIS class, as clinitEntryOf does
-        if (clinitBlocked())
-        {
-            return 2;                                   // same gate as the load-time enqueue
-        }
-        seek(0x3C636C696E69743EL, 8, 0x282956L, 3);     // "<clinit>" "()V"
-        long code = findMethod(blob);
-        if (code == 0L)
-        {
-            return 0;
-        }
-        if (!clinitCompilable(code, gcodeLen))
-        {
-            return 2;                                   // the other load-time gate
-        }
-        if (clinitN >= MAXBLOB)
-        {
-            return 0;
-        }
-        clDepStart[clinitN] = clDepTop;
-        scanClinitDeps(code, gcodeLen);                 // its deps, so initClinitDeps orders them as usual
-        clDepN[clinitN] = clDepTop - clDepStart[clinitN];
-        clinitCode[clinitN] = code;
-        clinitCodeLen[clinitN] = gcodeLen;
-        clinitDescOff[clinitN] = gFoundDescOff;
-        clinitStatic[clinitN] = gFoundStatic;
-        clinitLocals[clinitN] = gMaxLocals;
-        clinitEntry[clinitN] = 0L;                      // uncompiled: clinitEntryOf compiles it on the run below
-        clinitRan[clinitN] = 0;
-        clinitBase[clinitN] = blob;
-        clinitNameOff[clinitN] = gThisNameOff;
-        clinitPd[clinitN] = findPdByName(gbase, gThisNameOff);   // -1 once the blob has settled; unused by the run
-        clinitN += 1;
-        return 1;
-    }
 
-    /** Name a class whose pending {@code <clinit>} record no longer exists, once per class. */
-    private static void reportClinitLost(int reg)
-    {
-        int k = 0;
-        while (k < clLostN)
-        {
-            if (clLost[k] == reg)
-            {
-                return;
-            }
-            k += 1;
-        }
-        if (clLostN < clLost.length)
-        {
-            clLost[clLostN] = reg;
-            clLostN += 1;
-        }
-        Uart.write(Magic.bytes("  CLINIT LOST (statics read null): "));
-        printNameAt(clTab[reg].base, clTab[reg].nameOff);
-        Uart.write(Magic.bytes(" state="));
-        VM.printDec(clTab[reg].state);
-        Uart.putc(0x0A);
-    }
 
     // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
     // notInit), so lzCompiling is false while they compile and the collection above never sees their
@@ -1243,9 +1126,6 @@ public final class Loader
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
     // on lzCompiling: a load-time compile (an initializer) must leave ordering to runClinits.
-    private static final int[] clLost = new int[64];
-    private static int clLostN;
-
     private static final int MAXPENDINIT = 64;
     private static int[] lzInitReg;
     private static int lzInitN;
@@ -1705,6 +1585,155 @@ public final class Loader
         Uart.write(Magic.bytes("    (checksum moved but every entry still reads as a name)\n"));
     }
 
+    /** True once {@link #bringUpRuntime} has allocated the loader tables and added the core blobs. */
+    private static boolean runtimeUp;
+
+    /**
+     * One-time runtime bring-up: the loader tables and the core classes.
+     *
+     * <p>This is where the VM's ONE {@code resetLoader()} happens -- it is what ALLOCATES the loader tables
+     * (class/field/static registries, the pending-blob list, the {@code <clinit>} records), so it cannot be
+     * skipped; it just must not happen again. It deliberately does NOT compile anything: a closure built here,
+     * without the program in it, is a DIFFERENT closure, and the supers a program incidentally pulls
+     * ({@code java/lang/Number} for the atomics, {@code java/io/InputStream} for ByteArrayInputStream) would be
+     * missing from it -- which shows up as {@code UNREGISTERED SUPER (fields alias)} and a program that then
+     * NPEs. Loading belongs to the first {@link #launchMain}, which has the program in hand.
+     *
+     * <p>Idempotent, and the flag is set FIRST: a pull can run an initializer that reaches back here.
+     */
+    static void bringUpRuntime()
+    {
+        if (runtimeUp)
+        {
+            return;
+        }
+        runtimeUp = true;
+        if (VM.lazyCompileAddr == 0L)                       // dead at runtime (writer stashes the address);
+        {                                                  //   makes lazyCompile reachable so the writer
+            long u = lazyCompile(-1);                       //   compiles + stashes it for the 1b trampoline
+        }
+        if (VM.resolveLinkStubAddr == 0L)                   // same trick for the link-stub trampoline's target
+        {
+            long u = resolveLinkStub(-1);
+        }
+        resetLoader();                                      // the only one: it ALLOCATES the loader tables
+        addBlob(VM.objectBytes, (int) VM.objectLen);        // Object first: canonical hashCode/equals/toString slots
+        addBlob(VM.stringBytes, (int) VM.stringLen);        // String + System.out streams
+        addBlob(VM.stringLatin1Bytes, (int) VM.stringLatin1Len);
+        addBlob(VM.integerBytes, (int) VM.integerLen);      // number formatting (near-universal)
+        addBlob(VM.decimalDigitsBytes, (int) VM.decimalDigitsLen);
+    }
+
+    /**
+     * Run {@code className.main(argsLine)} on the RUNNING VM, resetting nothing.
+     *
+     * <p>The difference from {@link #launch} is the whole point: {@code launch} begins with
+     * {@code resetLoader()}, so every program it starts re-derives the entire base closure from scratch --
+     * each class parsed, laid out, compiled and its {@code <clinit>} run AGAIN, with the previous program's
+     * loaded state discarded. This method inherits that state. A class already loaded stays loaded, and an
+     * initializer that already ran does NOT run again: its class is still registered at
+     * {@code ST_INITIALIZED}, so {@link #ensureClinit} returns at once.
+     *
+     * <p>Everything else keeps {@code launch}'s ORDER exactly, because that order is load-bearing -- the
+     * support classes are pulled into the same batch as the program (so their supers are present), the seeds
+     * come after {@code loadAll} (they are built from loaded classes), and argv is built after it too
+     * ({@code guestString} needs String's TIB). The first call therefore does what {@code launch} does minus
+     * the reset; each later call adds only what its own program pulls in.
+     */
+    static void launchMain(byte[] className, byte[] argsLine)
+    {
+        stubTabCheck(className);
+        bringUpRuntime();                                   // once per boot; a no-op on every later call
+        long entry = pullClass(className);                  // pull the program itself from the classDir by name
+        if (entry == 0L)
+        {
+            Uart.write(Magic.bytes("launchMain: class not found: "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        pullSupportClasses();
+        loadAll();                                          // first call: the base closure. Later: only the new.
+        // EVERY call, not once. Each of these is an ENSURE, not a set: it does nothing if its slot is already
+        // filled, and nothing if the class it needs is not registered YET. Those two cases are why a one-shot
+        // latch is wrong -- java/io/PrintStream was absent from the FIRST program's closure, so the streams
+        // seeded nothing, and a latch set before the work succeeded meant they were never seeded at all.
+        // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
+        // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
+        seedSystemStreams();                                // System.out/err -> UART
+        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSystemIn();                                     // System.in -> an empty stream (never null)
+        seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
+        buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
+        long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
+        long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
+        if (buf == 0L)
+        {
+            Uart.write(Magic.bytes("launchMain: no main(String[]) in "));
+            Uart.write(className);
+            Uart.putc(0x0A);
+            return;
+        }
+        long unused = Magic.call2(buf, argv, 0L);           // main(args) -- x1 unused by a 1-arg static
+        Uart.write(Magic.bytes("\n[main returned normally]\n"));
+        reportGc();
+    }
+
+    /**
+     * Force-load the classes a program cannot be relied on to NAME but the runtime still needs.
+     *
+     * <p>Shared by {@link #launch} and {@link #bringUpRuntime} so the two cannot drift: the implicit-check
+     * exceptions in particular are load-bearing -- a program that never names them leaves them unloaded, so
+     * {@code newExc} gives the thrown object a TIB of 0, which is uncatchable ({@code instanceOf} cannot walk
+     * its type chain) and nameless in a stack trace.
+     */
+    private static void pullSupportClasses()
+    {
+        pullClass(Magic.bytes("java/lang/NullPointerException"));
+        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
+        pullClass(Magic.bytes("java/lang/ArithmeticException"));
+        pullClass(Magic.bytes("java/lang/ClassCastException"));
+        pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
+        pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
+        pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
+        // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
+        pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
+        // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
+        // works (System.<clinit> which normally registers the JLA is skipped).
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
+        // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
+        // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
+        pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
+        // literal's Type/mirror + the field registry exist even when nothing instantiates them.
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicLong"));
+        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
+    }
+
+    /** Print the collection figures if the program collected. Shared by both launch paths. */
+    private static void reportGc()
+    {
+        if (Heap.gcPressure != 0)                           // the program collected: report it unconditionally,
+        {                                                   //   so GC evidence needs no debug flag on real HW
+            Uart.write(Magic.bytes("gc: collections="));
+            VM.printDec(Heap.gcPressure);
+            Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
+            VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
+            Uart.write(Magic.bytes(" roots="));             // ... split into the irreducibly conservative
+            VM.printHex(VMGc.rootProbes);                   //   root scan and the TRACE side, which is what
+            Uart.write(Magic.bytes(" heap="));              //   type metadata actually shrinks
+            VM.printHex(VMGc.probes - VMGc.rootProbes);
+            Uart.write(Magic.bytes(" nomap="));             // blocks still scanned without any metadata
+            VM.printHex(VMGc.nomap);
+            Uart.write(Magic.bytes(" lastReclaimed="));
+            VM.printHex(VM.reclaimed);
+            Uart.putc(0x0A);
+        }
+    }
+
     static void launch(byte[] className, byte[] argsLine)
     {
         stubTabCheck(className);
@@ -1731,32 +1760,7 @@ public final class Loader
             return;
         }
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
-        // Force-load the exceptions the JIT's implicit checks throw without a bytecode `new` (null/bounds/div/
-        // cast/negative-array). Otherwise a program that never NAMES them leaves them unloaded, so newExc gives
-        // the thrown object a TIB of 0 -> uncatchable (instanceOf can't walk its type chain) and nameless in traces.
-        pullClass(Magic.bytes("java/lang/NullPointerException"));
-        pullClass(Magic.bytes("java/lang/ArrayIndexOutOfBoundsException"));
-        pullClass(Magic.bytes("java/lang/ArithmeticException"));
-        pullClass(Magic.bytes("java/lang/ClassCastException"));
-        pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
-        pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
-        pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
-        // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
-        // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
-        pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
-        // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
-        // works (System.<clinit> which normally registers the JLA is skipped). Pulled always -- tiny, and only
-        // reached when something builds an EnumMap (e.g. java.util.stream's StreamOpFlag).
-        pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
-        // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
-        // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
-        pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
-        // The atomic scalar wrappers are frequently referenced only by a class literal ({@code AtomicInteger
-        // .class}, e.g. reflectively via a field updater); force-load them so the literal's Type/mirror + the
-        // field registry (for getDeclaredField/newUpdater access checks) exist even when nothing instantiates them.
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicLong"));
-        pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicReference"));
+        pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
@@ -1778,22 +1782,7 @@ public final class Loader
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
-        if (Heap.gcPressure != 0)                           // the program collected: report it unconditionally,
-        {                                                   //   so GC evidence needs no debug flag on real HW
-            Uart.write(Magic.bytes("gc: collections="));
-            VM.printDec(Heap.gcPressure);
-            Uart.write(Magic.bytes(" lastProbes="));        // words examined by the last collection: the
-            VM.printHex(VMGc.probes);                       //   precision metric (PLAN.md "GC metadata")
-            Uart.write(Magic.bytes(" roots="));             // ... split into the irreducibly conservative
-            VM.printHex(VMGc.rootProbes);                   //   root scan and the TRACE side, which is what
-            Uart.write(Magic.bytes(" heap="));              //   type metadata actually shrinks
-            VM.printHex(VMGc.probes - VMGc.rootProbes);
-            Uart.write(Magic.bytes(" nomap="));             // blocks still scanned without any metadata
-            VM.printHex(VMGc.nomap);
-            Uart.write(Magic.bytes(" lastReclaimed="));
-            VM.printHex(VM.reclaimed);
-            Uart.putc(0x0A);
-        }
+        reportGc();
     }
 
     /** Build a guest {@code String[]} from a space-separated {@code argsLine} (each token becomes a
@@ -5089,6 +5078,10 @@ public final class Loader
      */
     static void buildRunTramp()
     {
+        if (VM.runTrampAddr != 0L)
+        {
+            return;                                     // already built; it is code, so rebuilding leaks an arena block
+        }
         // The itable scan this used to emit BY HAND was, in its own words, "unguarded past the sentinel", and
         // it also baked Runnable's Type in as an immediate -- built once, cached for the life of the VM. Both
         // are the hazards this VM has been closing everywhere else, and here they land on a FRESHLY SPAWNED
@@ -5592,6 +5585,16 @@ public final class Loader
             {
                 if (gsfName[s] == nameOff)
                 {
+                    if (STATIC_ADDR_LOG)
+                    {
+                        Uart.write(Magic.bytes("  ownstatic "));
+                        printNameAt(gbase, gThisNameOff);
+                        Uart.putc(0x2E);
+                        printNameAt(gbase, nameOff);
+                        Uart.write(Magic.bytes(" -> "));
+                        VM.printHex(gStatics + s * 8);
+                        Uart.putc(0x0A);
+                    }
                     return gStatics + s * 8;
                 }
                 s += 1;
@@ -7012,19 +7015,19 @@ public final class Loader
         int pi = classIndexByName(Magic.bytes("java/io/PrintStream"));
         if (pi < 0)
         {
-            return;
+            return;                                     // not registered yet -- a later launch seeds it
         }
         long ptib = clTab[pi].tib;
         int psize = 16 + clTab[pi].fieldCount * 8;          // field-free overlay -> 16, but honor any fields it declares
         long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
-        if (outSlot != 0L)
+        if (outSlot != 0L && Magic.load64(outSlot) == 0L)   // ENSURE: an already-seeded stream keeps its identity
         {
             long ps = Heap.alloc(psize);
             Magic.store64(ps + 0L, ptib);               // TIB (vtable for println dispatch)
             Magic.store64(outSlot, ps);
         }
         long errSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
-        if (errSlot != 0L)
+        if (errSlot != 0L && Magic.load64(errSlot) == 0L)
         {
             long ps = Heap.alloc(psize);
             Magic.store64(ps + 0L, ptib);
@@ -7063,9 +7066,9 @@ public final class Loader
     static void seedSystemIn()
     {
         long inSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
-        if (inSlot == 0L)
+        if (inSlot == 0L || Magic.load64(inSlot) != 0L)
         {
-            return;
+            return;                                     // unknown slot, or already seeded
         }
         int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
         if (bi < 0)
@@ -7178,7 +7181,7 @@ public final class Loader
             return;
         }
         long slot = staticSlotOf(Magic.bytes("sun/nio/ch/Net"), Magic.bytes("EXTENDED_OPTIONS"));
-        if (slot != 0L)
+        if (slot != 0L && Magic.load64(slot) == 0L)
         {
             long inst = Heap.alloc(16 + clTab[ei].fieldCount * 8);   // field-free overlay -> just the TIB header
             Magic.store64(inst + 0L, clTab[ei].tib);                 // TIB (vtable for isOptionSupported dispatch)
