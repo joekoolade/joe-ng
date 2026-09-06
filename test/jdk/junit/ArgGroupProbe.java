@@ -93,6 +93,34 @@ public class ArgGroupProbe
                             .forAnnotatedObject(inst);
             System.out.println("SPEC BUILT ok, options=" + spec.options().size()
                     + " argGroups=" + spec.argGroups().size());
+            // THE SPEC'S OWN VALUES, which is what validation reads -- not the annotation's.
+            // GroupMatchContainer.validate fails a subgroup only when `subgroup.validate()` is TRUE and the
+            // group is not effectively optional. JUnit WRITES validate=false, and the annotation reads back
+            // false (above), but nothing has checked that the value survives into the built ArgGroupSpec:
+            // it travels annotation -> updateArgGroupAttributes -> Builder.validate(boolean) -> spec, and a
+            // boolean lost anywhere on that path turns every one of these groups into a validated, required
+            // group -- which is exactly the failure the launcher ends in.
+            for (Object g : spec.argGroups())
+            {
+                org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec gs =
+                        (org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec) g;
+                System.out.println("   SPEC group: validate=" + gs.validate()
+                        + " (want false)"
+                        + " exclusive=" + gs.exclusive()
+                        + " multiplicity=" + gs.multiplicity()
+                        + " args=" + gs.args().size()
+                        + (gs.validate() ? "  <== WRONG, a written false became true" : "  OK"));
+                // Range.min IS THE DECIDER. isGroupEffectivelyOptional returns true immediately when
+                // `multiplicity().min == 0` -- a getfield, not a method -- and that early exit is what stops
+                // the unmatched-subgroup loop from building a failure result. toString() can render "0..1"
+                // from the original string while the min/max FIELDS read wrong, so the printed multiplicity
+                // above proves nothing about this.
+                org.junit.platform.console.shadow.picocli.CommandLine.Range r = gs.multiplicity();
+                System.out.println("     multiplicity fields: min=" + r.min + " (want 0)"
+                        + " max=" + r.max + " (want 1)"
+                        + " isVariable=" + r.isVariable
+                        + (r.min == 0 ? "  OK" : "  <== WRONG, group reads as REQUIRED"));
+            }
         }
         catch (Throwable t)
         {
