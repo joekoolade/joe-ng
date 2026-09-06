@@ -60,12 +60,49 @@ public class BannerProbe
      * validateGroups runs at the END of every parse, so if the bare command with no arguments also throws,
      * neither is required and the fault is in the parse epilogue itself.
      */
+    /** A SUBCOMMAND, which is the shape the launcher parses ("execute ..."). */
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "sub")
+    public static class Sub
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--x")
+        boolean x;
+    }
+
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "top",
+            subcommands = { Sub.class })
+    public static class Top
+    {
+    }
+
+    /** A @Mixin, the other structural feature JUnit's commands have and the bare one lacks. */
+    public static class MixedIn
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--m")
+        boolean m;
+    }
+
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "host")
+    public static class WithMixin
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Mixin
+        MixedIn mixin = new MixedIn();
+    }
+
     private static void bisect()
     {
         System.out.println("--- bisect");
         arm("bare command, no args   ", new Bare(), new String[] { });
         arm("option declared, no args", new Tiny(), new String[] { });
         arm("option declared, passed ", new Tiny(), new String[] { "--flag" });
+        // GROW TOWARD THE LAUNCHER. The bare case is fixed; the launcher still fails, and a broad spill after
+        // every virtual call does NOT fix it -- so its cause is a different one. These two arms add the
+        // structural features JUnit's commands have and the bare command lacks, one at a time, to find which
+        // brings the failure back in something small.
+        arm("mixin, no args       ", new WithMixin(), new String[] { });
+        arm("mixin, --m           ", new WithMixin(), new String[] { "--m" });
+        arm("subcommand, none     ", new Top(), new String[] { });
+        arm("subcommand, invoked  ", new Top(), new String[] { "sub" });
+        arm("subcommand + option  ", new Top(), new String[] { "sub", "--x" });
     }
 
     /**
