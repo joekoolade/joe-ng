@@ -1730,6 +1730,12 @@ public final class Loader
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
+        // seedSystemProps needs this class the same way, and the consequence of its absence is worse: seeding
+        // returns early, System.props stays null, and stock System.getProperty -- `getstatic props;
+        // invokevirtual Properties.getProperty` -- has nothing to resolve against. That surfaces as a
+        // DENYLIST TRAP with TRAPWIRE index=-1 (a FAILED RESOLVE, not a denied class) reported inside
+        // System.getProperty, which is what stopped picocli's Tracer in BannerProbe's smaller closure.
+        pullClass(Magic.bytes("java/util/Properties"));
         // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
         // works (System.<clinit> which normally registers the JLA is skipped).
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
@@ -9575,9 +9581,43 @@ public final class Loader
         {
             return -1;
         }
+        // THE SAME DEFERRED-PULL RETRY THE OTHER ON-DEMAND PATHS HAVE. This is the FOURTH path that reaches
+        // compile() -- lazyCompileLocked, compileMethodOnDemand and compileSigOnDemand were given it in #213,
+        // clinitEntryOf in #241, and this one was missed. Without it a getstatic naming a class RTA never
+        // pulled resolves to the PERMANENTLY-ZERO cell: `compileReuseTib` means there is no later batch
+        // patchRelocs to fill it in, so 0 is the final answer and the field reads null for the life of the VM.
+        //
+        // picocli's CommandLine.<init> is exactly that: it reads Help.Ansi.AUTO, and reflective construction
+        // compiled it here, so the read bound to the zero cell and `defaultColorScheme` NPE'd on a null ansi
+        // ("in the classDir, but resolved outside the retry window" -- the report named the cause precisely).
+        int rcMark = rcCount;                              // patch only THIS compile's relocs
+        int rsMark = rsCount;
         compileReuseTib = true;
+        boolean outerCompiling = lzCompiling;
+        boolean outerRetried = lzRetried;
+        int outerPullN = lzPullN;
+        lzCompiling = true;
+        lzPullN = 0;
+        lzRetried = false;
         compile(code, gcodeLen, descOff, 0);               // <init> is an instance method (receiver = the new object)
+        lzCompiling = outerCompiling;
         compileReuseTib = false;
+        boolean pulled = lzPullN > 0;
+        if (pulled)
+        {
+            drainPendingPulls();
+            rcCount = rcMark;                              // drop the doomed body's reloc sites: patching them
+            rsCount = rsMark;                              //   later would write into reused memory
+        }
+        lzRetried = outerRetried;
+        lzPullN = outerPullN;
+        if (pulled && !odRetried)
+        {
+            odRetried = true;                              // re-derived from (type, paramCount); bounded to one
+            int again = constructorResolveLocked(type, paramCount);
+            odRetried = false;
+            return again;
+        }
         registerAll();
         patchRelocs();
         return ctorResolveRegistry(ci, paramCount);
