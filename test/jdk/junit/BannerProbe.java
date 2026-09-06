@@ -14,8 +14,46 @@
  */
 public class BannerProbe
 {
+    /**
+     * A MINIMAL picocli command, defined here so nothing about JUnit's structure is involved.
+     *
+     * <p>The JUnit command reaching this failure turned out to have ZERO arg groups, so the fault is in the
+     * root container's validation of an empty group set -- i.e. core picocli parsing, not the command being
+     * parsed. If this trivial one throws too, the reproduction shrinks from a 2135-entry jar to four lines
+     * that can be bisected; if it PARSES, the fault needs something JUnit's commands have and this lacks
+     * (mixins, inheritance, subcommands), which is just as useful a split.
+     */
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "tiny")
+    public static class Tiny
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--flag")
+        boolean flag;
+    }
+
+    private static void tiny()
+    {
+        try
+        {
+            org.junit.platform.console.shadow.picocli.CommandLine c =
+                    new org.junit.platform.console.shadow.picocli.CommandLine(new Tiny());
+            System.out.println("--- tiny: CommandLine built");
+            c.parseArgs(new String[] { "--flag" });
+            System.out.println("    tiny parseArgs OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("    tiny THREW " + t.getClass().getName()
+                    + " root " + r.getClass().getName() + ": " + r.getMessage());
+            r.printStackTrace();
+        }
+    }
+
     public static void main(String[] args) throws Exception
     {
+        tiny();
+
         // ListTestEnginesCommand, not ExecuteTestsCommand: it has a no-arg constructor and extends the same
         // BaseCommand, so it inherits `disableBanner` in exactly the same way -- the condition is preserved.
         Class<?> cmd = Class.forName("org.junit.platform.console.command.ListTestEnginesCommand");
@@ -34,6 +72,47 @@ public class BannerProbe
 
         one(parseArgs, cl, "--disable-ansi-colors");   // the one that WORKS, as the control
         one(parseArgs, cl, "--disable-banner");        // the one that fails
+
+        // WHAT validateArgs ACTUALLY RETURNS. GroupMatch.validate ends with
+        //     this.validationResult = group.validateArgs(commandLine, matchedArgs);
+        // and GroupMatchContainer.validate then throws on that result -- passing its `exception`, which is
+        // null. A result whose `type` is NULL explains every observation at once: success() is false
+        // (null == SUCCESS_PRESENT fails), blockingFailure() is false (null == FAILURE_* fails), and there is
+        // no exception to hand over. The constants and predicates are already proven sound in isolation, so
+        // the question is what THIS call produces.
+        try
+        {
+            Class<?> gspec = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$Model$ArgGroupSpec");
+            Class<?> gvr = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult");
+            java.lang.reflect.Method va = gspec.getDeclaredMethod("validateArgs", clazz, java.util.Collection.class);
+            va.setAccessible(true);
+            java.lang.reflect.Field tf = gvr.getDeclaredField("type");
+            java.lang.reflect.Field ef = gvr.getDeclaredField("exception");
+            java.lang.reflect.Method succ = gvr.getDeclaredMethod("success");
+            tf.setAccessible(true);
+            ef.setAccessible(true);
+            succ.setAccessible(true);
+            java.lang.reflect.Method groups = clazz.getDeclaredMethod("getCommandSpec");
+            Object spec = groups.invoke(cl);
+            java.lang.reflect.Method ag = spec.getClass().getDeclaredMethod("argGroups");
+            ag.setAccessible(true);
+            java.util.List<?> gs = (java.util.List<?>) ag.invoke(spec);
+            System.out.println("--- validateArgs on " + gs.size() + " group(s)");
+            for (Object g : gs)
+            {
+                Object r = va.invoke(g, cl, new java.util.ArrayList<Object>());
+                System.out.println("    result type=" + tf.get(r)
+                        + " exception=" + ef.get(r)
+                        + " success=" + succ.invoke(r)
+                        + (tf.get(r) == null ? "  <== NULL TYPE" : ""));
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("validateArgs probe unavailable: " + t.getClass().getName() + ": " + t.getMessage());
+        }
     }
 
     private static void one(java.lang.reflect.Method parseArgs, Object cl, String opt)
