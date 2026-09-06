@@ -353,6 +353,15 @@ public final class Loader
         }
         seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
         long code = findMethod(bytes);
+        if (code != 0L && !clinitCompilable(code, gcodeLen))
+        {
+            // SAY SO. A REJECTED initializer is indistinguishable from one that ran: the class loads, gets
+            // its static cells, and the batch-end sweep marks it INITIALIZED because no record is pending --
+            // so every static reads null FOR EVER and nothing ever revisits it. That silence cost a full
+            // debugging round for HexFormat, and it is what makes an enum whose constants are all null look
+            // like a resolution bug rather than an initializer that was never run.
+            reportClinitRejected();
+        }
         if (code != 0L && clinitCompilable(code, gcodeLen))
         {
             if (clinitN >= MAXBLOB) { capHalt(Magic.bytes("MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
@@ -565,6 +574,14 @@ public final class Loader
             }
             pc += insnLen(code, pc);
         }
+    }
+
+    /** Name a class whose {@code <clinit>} the compiler gate refused, once per class. */
+    private static void reportClinitRejected()
+    {
+        Uart.write(Magic.bytes("\n  CLINIT REJECTED (statics stay null): "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x0A);
     }
 
     /** Append a precise clinit dependency (name Utf8 offset in the current blob), deduped within this <clinit>. */

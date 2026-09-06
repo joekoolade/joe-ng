@@ -68,6 +68,121 @@ public class BannerProbe
         arm("option declared, passed ", new Tiny(), new String[] { "--flag" });
     }
 
+    /**
+     * Drive the failing decision DIRECTLY, with the object in hand.
+     *
+     * <p>Five rounds have asked which INPUT to `GroupMatchContainer.validate` is wrong and answered "none":
+     * the SUCCESS constants, their identity, success()/blockingFailure(), the vtable slots (9 and 11, both
+     * correct), the static cells, the spec, Range.min and the field offsets all measure right. So build the
+     * root container exactly as picocli does -- `new GroupMatchContainer(null, commandLine)`, a null group
+     * being what makes it the ROOT -- and read `validationResult` before and after calling validate().
+     *
+     * <p>That answers the question the bytecode cannot: what the field actually HOLDS at the moment
+     * `success()` is asked, and whether the same call throws when it is not reached from picocli's own
+     * JIT-compiled frame.
+     */
+    /**
+     * Read the constants in the NATURAL order, before anything else touches them.
+     *
+     * <p>GvrProbe reported these as correct, but its first act is `Class.forName(...$Type)` -- which FORCES
+     * the enum's initialisation ahead of GroupValidationResult's. That contaminated the measurement: it
+     * proved the constants are right WHEN Type is initialised first, which is not the order the launcher
+     * takes. So read GroupValidationResult's statics FIRST here (triggering its initialiser, and through it
+     * whatever it depends on), and only then the enum's, so the two can be told apart:
+     *   enum constants null      -> Type's initialiser did not populate its own statics
+     *   enum fine, `type` null   -> the constants are right and GroupValidationResult read them as null
+     */
+    private static void constantsFirst()
+    {
+        System.out.println("--- constants, natural order");
+        try
+        {
+            Class<?> gvr = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult");
+            java.lang.reflect.Field sp = gvr.getDeclaredField("SUCCESS_PRESENT");
+            sp.setAccessible(true);
+            Object inst = sp.get(null);
+            java.lang.reflect.Field tf = gvr.getDeclaredField("type");
+            tf.setAccessible(true);
+            System.out.println("    GroupValidationResult.SUCCESS_PRESENT = " + (inst != null)
+                    + "  its .type = " + (inst == null ? "n/a" : String.valueOf(tf.get(inst))));
+
+            Class<?> ty = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupValidationResult$Type");
+            java.lang.reflect.Field tsp = ty.getDeclaredField("SUCCESS_PRESENT");
+            tsp.setAccessible(true);
+            System.out.println("    Type.SUCCESS_PRESENT = " + tsp.get(null));
+            Object[] cs = ty.getEnumConstants();
+            System.out.println("    Type.getEnumConstants = " + (cs == null ? "NULL" : "len=" + cs.length));
+        }
+        catch (Throwable t)
+        {
+            System.out.println("    unavailable: " + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void inspectRoot()
+    {
+        System.out.println("--- root container");
+        try
+        {
+            org.junit.platform.console.shadow.picocli.CommandLine c =
+                    new org.junit.platform.console.shadow.picocli.CommandLine(new Bare());
+            Class<?> gmc = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParseResult$GroupMatchContainer");
+            Class<?> gspec = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$Model$ArgGroupSpec");
+            Class<?> clazz = org.junit.platform.console.shadow.picocli.CommandLine.class;
+            java.lang.reflect.Constructor<?> cc = gmc.getDeclaredConstructor(gspec, clazz);
+            cc.setAccessible(true);
+            Object root = cc.newInstance(null, c);
+            System.out.println("    built root, group=null");
+
+            java.lang.reflect.Field vr = gmc.getDeclaredField("validationResult");
+            java.lang.reflect.Field ms = gmc.getDeclaredField("matches");
+            vr.setAccessible(true);
+            ms.setAccessible(true);
+            Object before = vr.get(root);
+            Object matches = ms.get(root);
+            System.out.println("    before: validationResult=" + before
+                    + " matches=" + (matches == null ? "NULL" : "" + ((java.util.List<?>) matches).size()));
+
+            java.lang.reflect.Method v = gmc.getDeclaredMethod("validate", clazz);
+            v.setAccessible(true);
+            try
+            {
+                v.invoke(root, c);
+                System.out.println("    validate() returned NORMALLY");
+            }
+            catch (Throwable t)
+            {
+                Throwable r = t;
+                while (r.getCause() != null) { r = r.getCause(); }
+                System.out.println("    validate() THREW " + r.getClass().getName());
+            }
+
+            Object after = vr.get(root);
+            System.out.println("    after:  validationResult=" + after);
+            if (after != null)
+            {
+                Class<?> gvr = after.getClass();
+                java.lang.reflect.Field tf = gvr.getDeclaredField("type");
+                java.lang.reflect.Field ef = gvr.getDeclaredField("exception");
+                java.lang.reflect.Method su = gvr.getDeclaredMethod("success");
+                tf.setAccessible(true);
+                ef.setAccessible(true);
+                su.setAccessible(true);
+                System.out.println("    after:  type=" + tf.get(after)
+                        + " exception=" + ef.get(after)
+                        + " success()=" + su.invoke(after));
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("    root probe unavailable: " + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
     private static void tiny()
     {
         try
@@ -90,7 +205,9 @@ public class BannerProbe
 
     public static void main(String[] args) throws Exception
     {
+        constantsFirst();
         bisect();
+        inspectRoot();
         tiny();
 
         // ListTestEnginesCommand, not ExecuteTestsCommand: it has a no-arg constructor and extends the same
