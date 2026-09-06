@@ -9825,6 +9825,28 @@ public final class Loader
      * names a subclass for a field its superclass declares), a name-only match finds
      * the inherited field's slot — the flattened layout keeps it consistent.
      */
+    /** Watch ONE field name's resolved offset. A getfield that resolves to a WRONG-but-valid slot is silent:
+     *  `UNRESOLVED FIELD (aliases slot 0)` fires only on a total miss. Set to a name to trace it. */
+    private static final byte[] FIELD_WATCH = Magic.bytes("validationResult");
+    private static final boolean FIELD_WATCH_ON = false;
+
+    private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
+    {
+        if (!FIELD_WATCH_ON || !utf8IsAtBase(gbase, nameOff, FIELD_WATCH))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  fieldoff "));
+        printNameAt(gbase, classOff);
+        Uart.putc(0x2E);
+        printNameAt(gbase, nameOff);
+        Uart.write(Magic.bytes(" -> +"));
+        VM.printDec(off);
+        Uart.write(Magic.bytes(" tier"));
+        VM.printDec(tier);
+        Uart.putc(0x0A);
+    }
+
     private static int globalFieldOffset(int idx)
     {
         int classOff = refClassNameOff(idx);
@@ -9835,6 +9857,7 @@ public final class Loader
             if (utf8EqAt(gbase, classOff, fldTab[i].base, fldTab[i].classOff)
                     && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
             {
+                fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
                 return 16 + fldTab[i].slot * 8;
             }
             i += 1;
@@ -9853,6 +9876,7 @@ public final class Loader
                 if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldTab[i2].base, fldTab[i2].classOff)   // declared by THIS ancestor
                         && utf8EqAt(gbase, nameOff, fldTab[i2].base, fldTab[i2].nameOff))
                 {
+                    fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
                     return 16 + fldTab[i2].slot * 8;
                 }
                 i2 += 1;
