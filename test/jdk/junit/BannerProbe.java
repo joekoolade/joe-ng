@@ -88,6 +88,132 @@ public class BannerProbe
         MixedIn mixin = new MixedIn();
     }
 
+    /**
+     * A command with 40 options -- SCALE, which is the one remaining difference that changes CODEGEN rather
+     * than structure.
+     *
+     * <p>The launcher's command has 39 options and 5 groups; every passing arm above has one. picocli builds
+     * its parse over the whole option set, so a big spec means bigger methods and a deeper operand stack --
+     * `deepStack` territory, where the spill/reload window lives and where the opSlot bug was. Mixins and
+     * subcommands are already ruled out, so if scale reproduces it, the remaining fault is codegen again
+     * rather than anything about what a command CONTAINS.
+     */
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "big")
+    public static class Big
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o0")
+        boolean o0;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o1")
+        boolean o1;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o2")
+        boolean o2;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o3")
+        boolean o3;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o4")
+        boolean o4;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o5")
+        boolean o5;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o6")
+        boolean o6;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o7")
+        boolean o7;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o8")
+        boolean o8;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o9")
+        boolean o9;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o10")
+        boolean o10;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o11")
+        boolean o11;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o12")
+        boolean o12;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o13")
+        boolean o13;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o14")
+        boolean o14;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o15")
+        boolean o15;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o16")
+        boolean o16;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o17")
+        boolean o17;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o18")
+        boolean o18;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o19")
+        boolean o19;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o20")
+        boolean o20;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o21")
+        boolean o21;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o22")
+        boolean o22;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o23")
+        boolean o23;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o24")
+        boolean o24;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o25")
+        boolean o25;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o26")
+        boolean o26;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o27")
+        boolean o27;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o28")
+        boolean o28;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o29")
+        boolean o29;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o30")
+        boolean o30;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o31")
+        boolean o31;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o32")
+        boolean o32;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o33")
+        boolean o33;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o34")
+        boolean o34;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o35")
+        boolean o35;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o36")
+        boolean o36;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o37")
+        boolean o37;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o38")
+        boolean o38;
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--o39")
+        boolean o39;
+    }
+
+    /** INHERITANCE: options declared by a SUPERCLASS, which is how BaseCommand carries --help/--version. */
+    public static class BaseCmd
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--inherited")
+        boolean inherited;
+    }
+
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "derived")
+    public static class Derived extends BaseCmd
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--own")
+        boolean own;
+    }
+
+    /** An @ArgGroup member, the last structural feature the launcher has and the passing arms lack. */
+    public static class GroupBody
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--g1")
+        boolean g1;
+
+        @org.junit.platform.console.shadow.picocli.CommandLine.Option(names = "--g2")
+        boolean g2;
+    }
+
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "grouped")
+    public static class Grouped
+    {
+        @org.junit.platform.console.shadow.picocli.CommandLine.ArgGroup(validate = false, heading = "G%n")
+        GroupBody group = new GroupBody();
+    }
+
     private static void bisect()
     {
         System.out.println("--- bisect");
@@ -103,6 +229,13 @@ public class BannerProbe
         arm("subcommand, none     ", new Top(), new String[] { });
         arm("subcommand, invoked  ", new Top(), new String[] { "sub" });
         arm("subcommand + option  ", new Top(), new String[] { "sub", "--x" });
+        arm("40 options, none      ", new Big(), new String[] { });
+        arm("40 options, one       ", new Big(), new String[] { "--o0" });
+        arm("40 options, several   ", new Big(), new String[] { "--o0", "--o17", "--o39" });
+        arm("inherited option, none", new Derived(), new String[] { });
+        arm("inherited option, set ", new Derived(), new String[] { "--inherited" });
+        arm("argGroup, none        ", new Grouped(), new String[] { });
+        arm("argGroup, one member  ", new Grouped(), new String[] { "--g1" });
     }
 
     /**
