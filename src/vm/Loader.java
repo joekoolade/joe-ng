@@ -9765,9 +9765,31 @@ public final class Loader
         return true;
     }
 
+    /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
+    private static final boolean METHOD_WATCH_ON = false;
+
     /** #43: print a high-slot vtable resolution (class.name slot [Q|F]) so a garbage-slot wild-branch is traceable. */
     private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
     {
+        if (METHOD_WATCH_ON
+                && (utf8IsAtBase(gbase, nameOff, Magic.bytes("success"))
+                    || utf8IsAtBase(gbase, nameOff, Magic.bytes("blockingFailure"))))
+        {
+            // Watch two SPECIFIC methods regardless of slot. picocli's GroupMatchContainer.validate calls
+            // `validationResult.success()`; reflection proves success() answers TRUE on both SUCCESS
+            // constants, while the direct invokevirtual behaves as though it answered false. If these two
+            // no-arg booleans resolve to the SAME slot, success() is really running blockingFailure() --
+            // which returns false for a SUCCESS and produces exactly the observed maybeThrow(null).
+            Uart.write(Magic.bytes("  VW "));
+            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            Uart.putc(0x2E);
+            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            Uart.write(Magic.bytes(" slot "));
+            VM.printDec(slot);
+            Uart.putc(0x20);
+            Uart.putc((byte) path);
+            Uart.putc(0x0A);
+        }
         if (logVtable == 0 || slot < 20) { return; }
         Uart.write(Magic.bytes("  V "));
         writeName(gbase + classOff + 2, u2(gbase + classOff));

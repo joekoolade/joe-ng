@@ -30,6 +30,44 @@ public class BannerProbe
         boolean flag;
     }
 
+    /** No options at all: the smallest command picocli can be handed. */
+    @org.junit.platform.console.shadow.picocli.CommandLine.Command(name = "bare")
+    public static class Bare
+    {
+    }
+
+    /** One arm of the bisect: build a CommandLine on {@code obj} and parse {@code argv}. */
+    private static void arm(String label, Object obj, String[] argv)
+    {
+        try
+        {
+            org.junit.platform.console.shadow.picocli.CommandLine c =
+                    new org.junit.platform.console.shadow.picocli.CommandLine(obj);
+            c.parseArgs(argv);
+            System.out.println("  " + label + ": OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  " + label + ": THREW " + r.getClass().getName());
+        }
+    }
+
+    /**
+     * BISECT. Three arms that differ in one thing each, so the failing condition is read off directly rather
+     * than reasoned about: whether an OPTION must be declared, and whether an ARGUMENT must be supplied.
+     * validateGroups runs at the END of every parse, so if the bare command with no arguments also throws,
+     * neither is required and the fault is in the parse epilogue itself.
+     */
+    private static void bisect()
+    {
+        System.out.println("--- bisect");
+        arm("bare command, no args   ", new Bare(), new String[] { });
+        arm("option declared, no args", new Tiny(), new String[] { });
+        arm("option declared, passed ", new Tiny(), new String[] { "--flag" });
+    }
+
     private static void tiny()
     {
         try
@@ -52,6 +90,7 @@ public class BannerProbe
 
     public static void main(String[] args) throws Exception
     {
+        bisect();
         tiny();
 
         // ListTestEnginesCommand, not ExecuteTestsCommand: it has a no-arg constructor and extends the same
