@@ -11332,6 +11332,19 @@ public final class Loader
         }
         if (buf == 0L)
         {
+            // THE SAME FOURTH TIER THE LINK-STUB PATH HAS. bufBySigU answers only through a DISPATCH table --
+            // a registered buffer, a static cell, or a TIB slot -- so a method RTA pruned (never compiled and
+            // never given a slot) is invisible to all three even though its bytecode is right there in the
+            // class's blob. resolveLinkTarget compiles it on demand for exactly this case; the bake path
+            // halted instead.
+            //
+            // `java/lang/String.toUpperCase(Ljava/util/Locale;)` is the shape: a baked java.base body calls
+            // it, nothing statically reachable does, so it has no buffer and no slot -- and the bake stub had
+            // nowhere left to look.
+            buf = compileSigOnDemand(clsU, nameU, descU);
+        }
+        if (buf == 0L)
+        {
             // Class from `slash` (copied before the load); name and descriptor through the CAPPED printer,
             // since these pointers are read after loadClassIncremental has run.
             Uart.write(Magic.bytes("\n  BAKERESOLVE NO BODY: "));
