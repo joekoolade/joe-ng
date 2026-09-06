@@ -13575,6 +13575,17 @@ public final class Loader
         return classIndexByName(Magic.bytes("java/lang/String"));
     }
 
+    /** True if {@code exc}'s TIB is java/lang/NullPointerException's -- the JIT's implicit null check. */
+    static boolean isNpe(long exc)
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/NullPointerException"));
+        if (i < 0 || exc == 0L)
+        {
+            return false;
+        }
+        return Magic.load64(exc + 0L) == clTab[i].tib;
+    }
+
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
     static long newNpe()
     {

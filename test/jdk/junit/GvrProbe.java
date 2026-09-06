@@ -68,6 +68,45 @@ public class GvrProbe
         // the <clinit>'s own invokespecial not reaching that body. Building one HERE, through a completely
         // different call path, tells the two apart: a fresh instance with a non-null `type` exonerates the
         // body and puts the fault at the <clinit> call site.
+        // THE TWO-ARG CONSTRUCTOR, which is what every FAILURE result is built with. The one-arg form above
+        // covers the SUCCESS_* statics; a failure carries an exception, and picocli's validate() does
+        //     if (result.blockingFailure()) { maybeThrow(result.exception); }
+        // so an `exception` field that does not hold what the constructor stored means maybeThrow(null) --
+        // which our athrow-null rule then turns into the messageless NullPointerException the launcher dies
+        // of, at CommandLine.java:13583 (`aload_1; athrow`).
+        try
+        {
+            Class<?> pex = Class.forName(
+                    "org.junit.platform.console.shadow.picocli.CommandLine$ParameterException");
+            java.lang.reflect.Constructor<?> two = gvr.getDeclaredConstructor(ty, pex);
+            two.setAccessible(true);
+            java.lang.reflect.Field tf2 = gvr.getDeclaredField("type");
+            java.lang.reflect.Field ef2 = gvr.getDeclaredField("exception");
+            tf2.setAccessible(true);
+            ef2.setAccessible(true);
+            Object failType = null;
+            Object[] cs2 = ty.getEnumConstants();
+            int q = 0;
+            while (q < cs2.length)
+            {
+                if (String.valueOf(cs2[q]).startsWith("FAILURE"))
+                {
+                    failType = cs2[q];
+                    break;
+                }
+                q += 1;
+            }
+            Object made = two.newInstance(failType, null);      // null exception is legal; the FIELD is the test
+            System.out.println("two-arg ctor: type=" + tf2.get(made)
+                    + " (want " + failType + ")"
+                    + (String.valueOf(tf2.get(made)).equals(String.valueOf(failType)) ? "  OK" : "  <== WRONG"));
+            System.out.println("two-arg ctor: exception=" + ef2.get(made) + " (want null)");
+        }
+        catch (Throwable t)
+        {
+            System.out.println("two-arg ctor probe unavailable: " + t.getClass().getName());
+        }
+
         try
         {
             java.lang.reflect.Constructor<?> ctor = gvr.getDeclaredConstructor(ty);
