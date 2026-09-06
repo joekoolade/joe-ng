@@ -68,6 +68,70 @@ public class GvrProbe
         // the <clinit>'s own invokespecial not reaching that body. Building one HERE, through a completely
         // different call path, tells the two apart: a fresh instance with a non-null `type` exonerates the
         // body and puts the fault at the <clinit> call site.
+        // ENUM IDENTITY, which is what picocli's success()/blockingFailure() actually test:
+        //     boolean success() { return type == Type.SUCCESS_PRESENT || type == Type.SUCCESS_ABSENT; }
+        // Reference comparison, not equals. Printing the field shows "SUCCESS_PRESENT" whether or not it is
+        // THE constant, so every earlier reading of this probe was blind to a duplicate object -- and
+        // GroupMatchContainer.validate throws precisely when success() is false, passing a null exception.
+        try
+        {
+            java.lang.reflect.Field spf = gvr.getDeclaredField("SUCCESS_PRESENT");
+            spf.setAccessible(true);
+            Object inst0 = spf.get(null);
+            java.lang.reflect.Field tf0 = gvr.getDeclaredField("type");
+            tf0.setAccessible(true);
+            Object held = tf0.get(inst0);
+            System.out.println("enum identity: instance.type == Type.SUCCESS_PRESENT -> " + (held == spv)
+                    + (held == spv ? "  OK" : "  <== WRONG (same name, different object)"));
+            Object[] cs3 = ty.getEnumConstants();
+            int z = 0;
+            while (z < cs3.length)
+            {
+                if (String.valueOf(cs3[z]).equals("SUCCESS_PRESENT"))
+                {
+                    System.out.println("enum identity: getEnumConstants()[i] == static field -> " + (cs3[z] == spv));
+                }
+                z += 1;
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("enum identity probe unavailable: " + t.getClass().getName());
+        }
+
+        // THE PREDICATES THEMSELVES, which is what picocli actually calls:
+        //     GroupMatchContainer.validate does `if (validationResult.success()) return;` and throws otherwise,
+        //     passing a null exception -- the messageless NPE the launcher dies of.
+        // Reading the `type` FIELD (above) does not test these: success() reads Type.SUCCESS_PRESENT and
+        // Type.SUCCESS_ABSENT, whose names COLLIDE with this class's own statics of the same names, which is
+        // the exact shape of the same-class static fast-path bug. The field being right does not make the
+        // predicate right.
+        try
+        {
+            java.lang.reflect.Method succ = gvr.getDeclaredMethod("success");
+            java.lang.reflect.Method block = gvr.getDeclaredMethod("blockingFailure");
+            succ.setAccessible(true);
+            block.setAccessible(true);
+            String[] names = { "SUCCESS_PRESENT", "SUCCESS_ABSENT" };
+            int n = 0;
+            while (n < names.length)
+            {
+                java.lang.reflect.Field cf = gvr.getDeclaredField(names[n]);
+                cf.setAccessible(true);
+                Object v = cf.get(null);
+                Object sv = succ.invoke(v);
+                Object bv = block.invoke(v);
+                System.out.println(names[n] + ".success()=" + sv + " (want true)"
+                        + "  blockingFailure()=" + bv + " (want false)"
+                        + (Boolean.TRUE.equals(sv) ? "  OK" : "  <== WRONG"));
+                n += 1;
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("predicate probe unavailable: " + t.getClass().getName() + ": " + t.getMessage());
+        }
+
         // THE TWO-ARG CONSTRUCTOR, which is what every FAILURE result is built with. The one-arg form above
         // covers the SUCCESS_* statics; a failure carries an exception, and picocli's validate() does
         //     if (result.blockingFailure()) { maybeThrow(result.exception); }
