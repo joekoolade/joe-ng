@@ -15038,6 +15038,14 @@ public final class Loader
         return classMirror(Magic.load64(tib));              // TIB[0] = Type (class Type or array Type)
     }
 
+    /** Watch ONE method name's call sites: the compiler emits a WATCH_RET print of whatever each returns. */
+    private static final boolean CALL_WATCH_ON = false;
+
+    static boolean isWatchedCall(int idx)
+    {
+        return CALL_WATCH_ON && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("success"));
+    }
+
     /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */
     static boolean isGetClass(int idx)
     {

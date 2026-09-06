@@ -59,6 +59,7 @@ public interface Symbols
     int NEW_ARITH = 24;         // vm/VM.newArith()J  — a java/lang/ArithmeticException (integer / or % by zero)
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
+    int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
     int VIRTUAL_RESOLVE = 48;   // the late virtual-dispatch trampoline: resolve x17's site against x0's
                                 //   receiver, restore the args, and tail-branch to the real method
     int MON_NOTIFY = 26;        // vm/VM.objNotify(J)V     — wake one waiter on an object
@@ -117,6 +118,10 @@ public interface Symbols
 
     /** Load into {@code reg} the Class-mirror address for the CONSTANT_Class at {@code classCp} (a class literal). */
     void classLiteral(CodeBuffer cb, int reg, int classCp);
+
+    /** True if the call at {@code methodCp} is being WATCHED: the compiler follows it with a WATCH_RET
+     *  helper call that prints what it returned. Debug only; the writer always answers false. */
+    boolean isWatchedCall(int methodCp);
 
     /** True if the method ref at {@code methodCp} is {@code getClass()Ljava/lang/Class;} — intrinsified to GET_CLASS. */
     boolean isGetClass(int methodCp);

@@ -1670,6 +1670,19 @@ public final class Baseline
         if (returnsValue(cpIndex))
         {
             cb.emit(A64Enc.movReg(pushReg(), 0));
+            if (symbols.isWatchedCall(cpIndex))
+            {
+                // DEBUG: print what THIS call returned, at the call site itself. Every cheaper instrument
+                // measures something ADJACENT to it -- the constants, the same predicate called reflectively
+                // or from another package, the slots, the cells -- and all of those came back correct while
+                // the branch still went the wrong way.
+                //
+                // dup first: the helper consumes its argument and the program still needs the value. Metal
+                // only -- WriterSymbols.isWatchedCall is always false, so baked code is byte-for-byte
+                // unchanged and the self-hosting fixpoint holds.
+                dup(cb);
+                emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+            }
         }
     }
 

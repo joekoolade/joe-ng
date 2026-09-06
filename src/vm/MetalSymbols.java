@@ -84,6 +84,11 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.classLiteral(classCp));
     }
+    public boolean isWatchedCall(int methodCp)
+    {
+        return Loader.isWatchedCall(methodCp);
+    }
+
     public boolean isGetClass(int methodCp)
     {
         return Loader.isGetClass(methodCp);
@@ -459,6 +464,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.GET_CLASS)
         {
             return VM.getClassAddr;
+        }
+        if (helper == Symbols.WATCH_RET)
+        {
+            return VM.watchRetAddr;
         }
         if (helper == Symbols.ARRAY_CLONE)
         {
