@@ -10458,7 +10458,10 @@ public final class Loader
     // A cold site costs one 32-byte stub and never runs; a genuinely unresolvable one still lands in
     // denylistTrap, with the trapwire index intact because the trampoline restores LR before tail-branching.
 
-    private static final int MAXLINKSTUB = 256;
+    // 256 was enough for every closure until the console launcher, whose picocli+JUnit graph exhausts it --
+    // and running out is NOT a cap that merely limits an optimisation: the caller leaves the site pointing at
+    // denylistTrap, so the program dies blaming a denylist the class is not on.
+    private static final int MAXLINKSTUB = 4096;
     private static long[] lkClsU  = new long[MAXLINKSTUB];   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
     private static long[] lkNameU = new long[MAXLINKSTUB];
     private static long[] lkDescU = new long[MAXLINKSTUB];
@@ -10487,6 +10490,11 @@ public final class Loader
         }
         if (lkCount >= MAXLINKSTUB)
         {
+            // SAY SO. Returning 0 here leaves patchRelocsFrom's target as denylistTrap, and the runtime then
+            // reports `denied callee: <class>.<method>` for a class on NO denylist -- the exact
+            // misattribution that has cost this project several debugging sessions. `java/util/LinkedHashSet
+            // .<init>`, reached from picocli's CommandSpec.aliases, was one: shipped, allowed, and trapped.
+            linkStubFull(clsU, nameU, descU);
             return 0L;
         }
         if (linkTrampAddr == 0L)
@@ -10501,6 +10509,27 @@ public final class Loader
         lkCount += 1;
         return lkStub[lkCount - 1];
     }
+
+    /** Report the link-stub table overflowing, once -- the site it could not serve becomes a denylist trap. */
+    private static void linkStubFull(long clsU, long nameU, long descU)
+    {
+        if (lkFullReported)
+        {
+            return;
+        }
+        lkFullReported = true;
+        Uart.write(Magic.bytes("\n  LINK STUB TABLE FULL at "));
+        VM.printDec(MAXLINKSTUB);
+        Uart.write(Magic.bytes(" -- this site becomes a DENYLIST TRAP for a class that is NOT denied: "));
+        printUtf8Capped(clsU);
+        Uart.putc(0x2E);
+        printUtf8Capped(nameU);
+        Uart.putc(0x20);
+        printUtf8Capped(descU);
+        Uart.putc(0x0A);
+    }
+
+    private static boolean lkFullReported;
 
     /** x17 = stub index, then jump to the shared link trampoline. Same shape as the lazy deferral stub, and
      *  x16/x17 for the same reason: x0.. are the call's arguments and must survive untouched. */
