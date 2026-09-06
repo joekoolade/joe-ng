@@ -1747,12 +1747,6 @@ public final class Loader
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
-        // seedSystemProps needs this class the same way, and the consequence of its absence is worse: seeding
-        // returns early, System.props stays null, and stock System.getProperty -- `getstatic props;
-        // invokevirtual Properties.getProperty` -- has nothing to resolve against. That surfaces as a
-        // DENYLIST TRAP with TRAPWIRE index=-1 (a FAILED RESOLVE, not a denied class) reported inside
-        // System.getProperty, which is what stopped picocli's Tracer in BannerProbe's smaller closure.
-        pullClass(Magic.bytes("java/util/Properties"));
         // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
         // works (System.<clinit> which normally registers the JLA is skipped).
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
