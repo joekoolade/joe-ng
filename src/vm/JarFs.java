@@ -113,6 +113,28 @@ public final class JarFs
      * into a heap blob. Returns -1 when no jar is open, the name is too long, or the entry is absent — a miss
      * is itself cached (slot with a 0 blob) so the next ask costs one name compare instead of a directory scan.
      */
+    /**
+     * True if the open classpath jar carries an entry at exactly this path.
+     *
+     * <p>Unlike {@link #classBytes} the path is taken VERBATIM: a resource name is not a class name, so it
+     * gets no {@code .class} suffix and no dot-to-slash rewriting. Nothing is cached -- resource lookups are
+     * rare (a handful per run) and caching them would evict class entries, which are asked for constantly.
+     */
+    public static boolean hasResource(long namePtr, int len)
+    {
+        if (dir == null || len <= 0 || len > MAXNAME)
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < len)
+        {
+            key[k] = (byte) Magic.load8(namePtr + k);
+            k += 1;
+        }
+        return dir.find(key, len) >= 0;
+    }
+
     private static int entry(long namePtr, int len)
     {
         int i = 0;

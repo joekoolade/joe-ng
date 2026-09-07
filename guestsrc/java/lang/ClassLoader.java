@@ -78,4 +78,53 @@ public class ClassLoader
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.defineClass} -> {@code Loader.defineFromBytes}). */
     private static native Class<?> defineClass0(String name, byte[] b, int off, int len);
+
+    /**
+     * Every classpath resource matching {@code name} -- which on metal is NONE, and says so honestly.
+     *
+     * <p>joe-ng serves classes out of the classpath jar but not resources, because a resource is handed back
+     * as a {@link java.net.URL} and a working URL needs a protocol handler, which needs the
+     * {@code jdk/internal/loader} machinery this VM denies. An EMPTY enumeration is therefore the exactly
+     * correct answer whenever the resource is genuinely absent, and callers are written for it: JUnit's
+     * {@code LauncherConfigurationParameters.findConfigFile} does
+     * {@code Collections.list(cl.getResources(name))} and returns null on an empty list, so its caller simply
+     * skips loading {@code junit-platform.properties} -- which this jar does not contain.
+     *
+     * <p>WHEN THE RESOURCE DOES EXIST, THIS SAYS SO RATHER THAN ANSWERING EMPTY IN SILENCE. That case is a
+     * real gap, and a silently empty answer would present "we cannot serve this" as "there is nothing here" --
+     * the caller would then run with default configuration and no indication why. {@code resourceExists0}
+     * exists purely to keep those two apart.
+     *
+     * <p>Serving resources for real is the same piece of work as {@code ServiceLoader} discovery, which reads
+     * {@code META-INF/services/*} out of this jar; both wait on a resource-stream path that does not go
+     * through URL.
+     */
+    public java.util.Enumeration<java.net.URL> getResources(String name) throws java.io.IOException
+    {
+        if (name != null && resourceExists0(name.getBytes()) != 0L)
+        {
+            // No concatenation: in a java.base overlay that lowers to invokedynamic and drags the
+            // string-concat machinery into a closure that must stay cold.
+            System.err.print("joe-ng: classpath resource present but not served (no URL support): ");
+            System.err.println(name);
+        }
+        return java.util.Collections.enumeration(new java.util.ArrayList<java.net.URL>());
+    }
+
+    /**
+     * As {@link #getResources}, for a single resource: always null, for the same reason. Stock returns null
+     * when nothing matches, so an absent resource is answered exactly; a present one is reported first.
+     */
+    public java.net.URL getResource(String name)
+    {
+        if (name != null && resourceExists0(name.getBytes()) != 0L)
+        {
+            System.err.print("joe-ng: classpath resource present but not served (no URL support): ");
+            System.err.println(name);
+        }
+        return null;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.resourceExists} -> {@code JarFs.hasResource}). */
+    private static native long resourceExists0(byte[] name);
 }
