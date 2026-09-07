@@ -84,6 +84,11 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.classLiteral(classCp));
     }
+    public boolean isWatchedField(int fieldCp)
+    {
+        return Loader.isWatchedField(fieldCp);
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return Loader.isWatchedCall(methodCp);

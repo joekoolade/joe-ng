@@ -1354,6 +1354,15 @@ public final class Baseline
 
     private void putfield(CodeBuffer cb, int cpIndex, int pos)
     {
+        if (symbols.isWatchedField(cpIndex))
+        {
+            // DEBUG (off unless Loader.FIELD_STORE_WATCH): print the value being STORED, at the store itself.
+            // Watching the READ of a field says only what it ended up holding; watching the WRITES says which
+            // assignment put it there, which is the question once the read is known correct. dup first -- the
+            // helper consumes its argument and the putfield below still needs the value. Metal only.
+            dup(cb);
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+        }
         int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
         int obj = popReg();
@@ -1685,6 +1694,18 @@ public final class Baseline
         if (returnsValue(cpIndex))
         {
             cb.emit(A64Enc.movReg(pushReg(), 0));
+            if (symbols.isWatchedCall(cpIndex))
+            {
+                // DEBUG (off unless Loader.CALL_WATCH_ON): print what THIS call returned, at the call site
+                // itself. Reflection and same-package calls both marshal a return differently from a compiled
+                // invokevirtual, so this is the only way to see the value the PROGRAM actually branched on.
+                //
+                // dup first -- the helper consumes its argument and the program still needs the value. Metal
+                // only: WriterSymbols.isWatchedCall is always false, so baked code is byte-for-byte unchanged
+                // and the self-hosting fixpoint holds.
+                dup(cb);
+                emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+            }
         }
     }
 

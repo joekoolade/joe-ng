@@ -133,6 +133,11 @@ final class MetalWriterSymbols implements Symbols
     {
         throw new UnsupportedOperationException("ldc class-literal not compiled by the metal writer");
     }
+    public boolean isWatchedField(int fieldCp)
+    {
+        return false;
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return false;

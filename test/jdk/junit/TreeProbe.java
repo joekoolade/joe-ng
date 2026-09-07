@@ -27,6 +27,7 @@ public class TreeProbe
     public static void main(String[] args)
     {
         System.out.println("--- open questions first (the rest below are known results)");
+        stack();
         parent("E real Ansi mixin     ", new PE());
         parent("F replica + raw fields ", new MainLike());
         System.out.println("--- launcher command tree");
@@ -109,6 +110,66 @@ public class TreeProbe
         protected Void execute(java.io.PrintWriter out)
         {
             return null;
+        }
+    }
+
+    /**
+     * The failing case WITH ITS STACK, and a jar-loaded parent that is not MainCommand beside it.
+     *
+     * <p>Everything so far has printed only the exception's class. The site is the missing fact -- naming it
+     * is what cracked the previous two bugs -- and the second arm asks the other open question: whether ANY
+     * jar-loaded command fails as a parent, or only MainCommand. A replica compiled into the image's class
+     * directory passes, so "loaded from the jar" is the one property the replica could not have.
+     */
+    private static void stack()
+    {
+        // THE FULL TREE, exactly as MainCommand.run assembles it, parsing the launcher's own arguments.
+        // The os.name failure that used to stop this arm is fixed (natives now resolve on a writer-baked
+        // receiver), so this asks the question that matters: does the launcher's remaining failure reproduce
+        // HERE -- a 7-minute probe with a printable stack -- rather than only in a 10-minute boot?
+        try
+        {
+            CommandLine cl = new CommandLine(new MainCommand(null));
+            cl.addSubcommand(new DiscoverTestsCommand(null));
+            cl.addSubcommand(new ExecuteTestsCommand(null));
+            cl.addSubcommand(new ListTestEnginesCommand());
+            cl.parseArgs(new String[] {
+                    "execute", "--select-class=SleepSanity", "--disable-ansi-colors", "--disable-banner" });
+            System.out.println("  FULL TREE + real args: OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  FULL TREE + real args: THREW " + r.getClass().getName());
+            r.printStackTrace();
+        }
+        try
+        {
+            CommandLine cl = new CommandLine(new MainCommand(null));
+            cl.addSubcommand(new PlainSub());
+            cl.parseArgs(new String[] { "--help" });
+            System.out.println("  MainCommand + plain sub: OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  MainCommand + plain sub: THREW " + r.getClass().getName());
+            r.printStackTrace();
+        }
+        try
+        {
+            CommandLine cl = new CommandLine(new ListTestEnginesCommand());
+            cl.addSubcommand(new PlainSub());
+            cl.parseArgs(new String[] { "--help" });
+            System.out.println("  jar-loaded ListTestEngines + plain sub: OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  jar-loaded ListTestEngines + plain sub: THREW " + r.getClass().getName());
         }
     }
 
