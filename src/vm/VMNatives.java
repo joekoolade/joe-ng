@@ -390,6 +390,23 @@ final class VMNatives
     }
 
     /**
+     * {@code ClassLoader.resourceExists0(byte[])} native: does the classpath jar carry this exact path?
+     *
+     * <p>The guest side serves resources as an EMPTY enumeration, which is the truthful answer only when the
+     * resource is genuinely absent. This is what lets it tell the two cases apart and report the second
+     * rather than answer it wrongly in silence.
+     */
+    static long resourceExists(long nameArr)
+    {
+        if (nameArr == 0L)
+        {
+            return 0L;
+        }
+        int len = (int) Magic.load64(nameArr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        return JarFs.hasResource(nameArr + ObjectModel.ARRAY_BASE_OFFSET, len) ? 1L : 0L;
+    }
+
+    /**
      * Reflection M3: {@code ClassLoader.defineClass0(name, byte[], off, len)} native — materialize a class from
      * the SUPPLIED classfile bytes into the live program and return its Class mirror. 0 => the guest throws
      * {@code ClassFormatError}/returns null. The {@code name} arg is advisory (the loader uses the classfile's

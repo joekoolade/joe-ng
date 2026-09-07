@@ -76,6 +76,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`ClassLoader.getResources`: AN EMPTY ENUMERATION, AND A REPORT WHEN THAT IS A LIE (2026-09-07,
+  PI-VALIDATED).** The console launcher stopped at `ClassLoader.getResources`, which the overlay did not
+  declare at all.
+  - **AN EMPTY ENUMERATION IS THE CORRECT ANSWER HERE, NOT A WORKAROUND**, and the bytecode is what says so:
+    `LauncherConfigurationParameters.findConfigFile` does `Collections.list(cl.getResources(name))` and
+    returns **null on an empty list**, whereupon its caller simply skips loading `junit-platform.properties`
+    -- which this jar does not contain. Disassembled rather than assumed.
+  - **What joe-ng cannot do is serve a resource that IS present**: a resource comes back as a
+    `java.net.URL`, a working URL needs a protocol handler, and that needs the `jdk/internal/loader`
+    machinery this VM denies. So the two cases are kept APART instead of both answering empty --
+    **absent -> empty, silently; present -> the same empty enumeration, but the run SAYS SO by name.** An
+    always-empty `getResources` would present "we cannot serve this" as "there is nothing here", and the
+    caller would run with default configuration with no indication why. That silent-wrong-answer shape is
+    the one this VM keeps getting bitten by.
+  - **`JarFs.hasResource(ptr,len)` looks the path up VERBATIM** -- a resource name is not a class name, so no
+    `.class` suffix and no dot rewriting -- over the `ZipDir` central directory that was already there.
+    **Deliberately NOT cached:** resource lookups are rare and would evict class entries, which are asked for
+    constantly. The native takes a `byte[]` following `Class.forName0`'s pattern, so no native reads a String.
+  - **I REGISTERED THE NATIVE UNDER THE WRONG CLASS FIRST.** `nativeBuf`'s blocks are keyed by DECLARING
+    CLASS, and `resourceExists0` went under `java/lang/Class` instead of `java/lang/ClassLoader` --
+    `LINK FAILED: java/lang/ClassLoader.resourceExists0([B)J`, one wasted boot. The report named it exactly.
+  - **`test/jdk/junit/ResourceProbe` exercises BOTH arms**, because the present arm would otherwise have
+    shipped untested and is the one that can be wrong with nothing noticing.
+  - **PI-VALIDATED TWICE, and the two boots claim different things.** The full suite (`ticks/core c1=50 c2=50
+    c3=50`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `steps/core 61/60/60/59`, `churnMB=625
+    live=32 intact=32`, `gc: collections=60`, WPA2 -> HTTP 200 OK) shows **NO `LINK FAILED` and no parity
+    DIFF** -- the assertion that matters, since the overlay gained two public methods and WIDENED
+    `ClassLoader`'s vtable. But the suite carries no jar-backed program, so it never runs the new code: the
+    **`ResourceProbe` boot** (`classpath /lib/junit.jar entries=2135`) is what puts `hasResource` on real
+    silicon against a real jar -- `absent size = 0` silently, the `not served` line for
+    `META-INF/services/org.junit.platform.engine.TestEngine`, `present size = 0`, both `getResource` forms
+    null, `ResourceProbe done`.
+  - **LAUNCHER: past `LauncherConfigurationParameters` and ALL of `LauncherFactory`**, now at
+    `ConsoleTestExecutor.registerListeners` -> `createXmlWritingListener`, on an `Optional.map` dispatch.
+    `overlay-check` 47 -> 45. **Serving resources for real is the same piece of work as `ServiceLoader`
+    engine discovery** (`META-INF/services/*` out of this jar); both want a resource-STREAM path that does
+    not go through URL.
+
 - **AN INTERFACE'S CONSTANTS GET STATIC CELLS, AND ITS `<clinit>` GETS ENQUEUED (2026-09-07,
   PI-VALIDATED).** An interface field is implicitly `public static final`, but **`loadStructure` builds an
   interface's registry entry itself and returns early** -- before `registerClassStructure`, which is what
