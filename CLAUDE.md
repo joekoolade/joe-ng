@@ -76,6 +76,57 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **LINKING MUST NOT RUN AN INITIALIZER -- the `<clinit>` ordering inversion, ROOT-CAUSED AND FIXED
+  (2026-09-07, PI-VALIDATED).** A class's `<clinit>` was running as a side effect of **COMPILING** another
+  class's `<clinit>`. JVMS 5.4 lets loading/verification/preparation/resolution be lazy but forbids any of
+  them from running an initializer; only an **EXECUTED** active use (5.5) does. **Compilation is not
+  execution**, and joe-ng was treating it as if it were.
+  - **`clinitEntryOfLocked` ended with `drainPendingInit()`**, which initializes every class the COMPILE
+    noted -- a far wider set than the initializer's active uses, since compiling a body pulls whatever its
+    constant pool names, **nest-host and inner-class references included**. Those `<clinit>`s therefore ran
+    before the body being compiled had executed a single instruction.
+  - **picocli is where it showed.** `GroupValidationResult$Type` merely **NAMES** its enclosing
+    `GroupValidationResult`, so compiling the enum's initializer pulled GVR and drained it: `GVR.<clinit>`
+    built `SUCCESS_PRESENT`/`SUCCESS_ABSENT` from `Type.SUCCESS_*`, still null because Type had assigned
+    nothing. Every GVR constant carried a null `type`; `blockingFailure()` compares `type` against those
+    constants, so **`null == null` reported a BLOCKING FAILURE on a SUCCESS** and handed the launcher a null
+    exception to throw.
+  - **Fix, two moves.** The compile-noted drain moves to **AFTER `Magic.call0`** in `runPendingClinit`, so a
+    class's own statics are assigned before anything it touched initializes and reads them; and the pre-run
+    pass narrows from `drainCtorInit(reg)` to **`initClinitDeps(i, reg)`** -- the PRECISE bytecode dep set,
+    walked a second time now that the compile has demand-loaded the deps that could not resolve before it.
+    **That second walk is what `StandardCharsets` needs** (its initializer copies `sun.nio.cs.UTF_8.INSTANCE`,
+    and running the body with `sun/nio/cs/UTF_8` uninitialized left the field null).
+  - **GVR now initializes inside Type's EXECUTION rather than inside its compile**, which is exactly what a
+    real JVM does for a mutually-referencing pair -- and what such a pair legitimately observes is
+    **partially assigned state, not null**.
+  - **THERE WAS NO CYCLE, and four consecutive fixes failed because of that.** `Type` does not depend on GVR;
+    it only names it. Every attempt guarded `initClinitDeps` for a dependency cycle, which was doing its job
+    correctly the whole time. **One of those attempts was also gated on a `clinitDepth` that LEAKED** -- the
+    decrement sat on the success path, and an initializer that throws exits `Magic.call0` non-locally, so the
+    drain condition was unreachable from the first instruction. One print would have said so before three
+    boots were spent on it.
+  - **WHAT FOUND IT, after three wrong mechanisms:** bracketing the initializer with
+    `CLINIT START`/`COMPILE<`/`COMPILE>`/`END` markers and **tagging every `ensureClinit` call site with an
+    id**. That put GVR's whole initialization visibly inside `COMPILE< Type ... COMPILE> Type` and named
+    `drainPendingInit` as the caller, in ONE boot. Every earlier round inferred nesting from indirect lines
+    (a `NO CLINIT RECORD` that actually meant "already in flight"; a by-name search showing `ran=1`) and each
+    inference pointed somewhere wrong. **When the question is "who called this, and inside what", print the
+    brackets and tag the callers -- do not reconstruct it from symptoms.**
+  - **LAUNCHER: the command PARSES now.** The `NullPointerException ... at or before arg[3]
+    '--disable-banner'` is GONE and picocli's usage dump with it. It reaches `LauncherFactory`; next blocker
+    is `LauncherConfig.DEFAULT` (registered but no static cell), and behind that **`ServiceLoader` engine
+    discovery** -- denylisted, and needing `META-INF/services` enumeration out of the jar
+    (`org.junit.platform.engine.TestEngine` names the three engines). That is the largest remaining piece.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** `ticks/core c1=50 c2=50 c3=50`,
+    `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, `priority inversion ... HIGH blocked 61ms`, ExcDemo's seven-frame trace,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, `gc: collections=60`, WPA2 ->
+    HTTP 200 OK (828 bytes). **No `CLINIT ENTRY WAS SWEPT`** -- the specific hazard of holding a compiled
+    initializer entry across more work before calling it, and cold DRAM with 60 collections is where it would
+    have shown. No parity DIFF, no `BOOT RE-ENTERED`, no `unclaimed pc`. QEMU: `metal junit: ran 44,
+    failures 0`; full suite 30 programs clean; host tests unchanged incl. `compiler: 37 checks`.
+
 - **THE LAUNCHER BUILDS ITS COMMAND SPEC: options are registered and parsing succeeds (2026-09-02).** The only
   output is picocli's own warnings, and the 700 s QEMU timeout then hits with it STILL WORKING -- no trap.
   Overlay backlog **54 -> 47**.

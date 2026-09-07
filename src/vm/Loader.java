@@ -505,7 +505,13 @@ public final class Loader
         //
         // Memoized into clinitEntry[i] FIRST: a drained initializer can lead straight back here for this same
         // class, and the assignment above is what makes that re-entry return the buffer instead of recursing.
-        drainPendingInit();
+        //
+        // THE DRAIN IS DELIBERATELY NOT DONE HERE -- see runPendingClinit, which does it AFTER the body runs.
+        // Draining at this point initializes classes the COMPILE noted while the compiled initializer has not
+        // executed a single instruction, and that is a rule a real JVM does not have: linking (JVMS 5.4) may
+        // never run an initializer, only an EXECUTED active use (5.5) does. Compilation is not execution.
+        // What this method's compile owes the body is covered by the PRECISE bytecode dep set, which
+        // runPendingClinit walks both before and after this call.
         return buf;
     }
 
@@ -1092,16 +1098,42 @@ public final class Loader
                     VMGc.reportSweptPc(entry);
                     while (true) { Magic.wfe(); }
                 }
-                // BEFORE running it: initialize what the initializer ITSELF reads. Compiling the body just
-                // recorded its cross-class getstatic/new sites (lzCompiling is false here, so they land in
-                // the ctor-init table), and running it first would read those classes' statics while they
-                // are still null. That is exactly what made an overlaid StandardCharsets useless -- its
-                // initializer copied `sun.nio.cs.UTF_8.INSTANCE` into UTF_8 before sun/nio/cs/UTF_8 had
-                // initialized, so the field came out null and `s.getBytes(UTF_8)` threw a bare NPE.
-                drainCtorInit(reg);
+                // BEFORE running it: initialize what the initializer ITSELF reads -- and ONLY that.
+                //
+                // The pre-compile initClinitDeps above resolves the deps that were already registered; the
+                // ones this compile had to demand-load could not resolve then, so the same PRECISE set is
+                // walked once more now that they are. StandardCharsets is the case that requires this pass at
+                // all: its initializer copies `sun.nio.cs.UTF_8.INSTANCE` into UTF_8, and running the body
+                // with sun/nio/cs/UTF_8 uninitialized left the field null and `s.getBytes(UTF_8)` throwing a
+                // bare NPE.
+                //
+                // IT USED TO BE `drainCtorInit(reg)`, AND THAT WAS AN ORDERING BUG. The drain fires every
+                // class the COMPILE touched, which is a far wider set than the initializer's active uses:
+                // compiling a body pulls everything its constant pool names, nest host and inner-class
+                // references included. Initializing those here runs their <clinit>s BEFORE this body has
+                // executed a single instruction -- and a real JVM cannot do that, because linking (JVMS 5.4)
+                // may never run an initializer; only an EXECUTED active use (5.5) does. Compilation is not
+                // execution.
+                //
+                // picocli is where it showed: `GroupValidationResult$Type` merely NAMES its enclosing
+                // GroupValidationResult, so compiling the enum's initializer pulled GVR and the drain ran
+                // GVR.<clinit> first -- which reads Type.SUCCESS_*, still null, because Type's own body had
+                // not run yet. Every GVR constant came out with a null `type`, blockingFailure() compared
+                // null to null, and a SUCCESS reported a BLOCKING FAILURE.
+                initClinitDeps(i, reg);
                 clinitCellWatch(reg, Magic.bytes("before"));
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
+                // NOW -- and not before -- initialize the classes this initializer's COMPILE noted. They are
+                // an over-approximation of its active uses (the compile pulls whatever the constant pool
+                // names, nest-host and inner-class references included) and running them ahead of this body
+                // inverts a mutually-referencing pair: picocli's GroupValidationResult$Type merely NAMES its
+                // enclosing GroupValidationResult, so draining inside the compile ran GVR.<clinit> first,
+                // which read Type.SUCCESS_* while Type had assigned nothing. Every GVR constant then carried
+                // a null `type`, blockingFailure() compared null to null, and a SUCCESS reported a BLOCKING
+                // FAILURE. Draining here matches the JVMS order: this class's statics are set, then whatever
+                // it touched initializes and can read them.
+                drainPendingInit();
                 clinitCellWatch(reg, Magic.bytes("after "));
                 ran = 1;
                 break;
