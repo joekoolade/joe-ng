@@ -76,6 +76,39 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **AN INTERFACE'S CONSTANTS GET STATIC CELLS, AND ITS `<clinit>` GETS ENQUEUED (2026-09-07,
+  PI-VALIDATED).** An interface field is implicitly `public static final`, but **`loadStructure` builds an
+  interface's registry entry itself and returns early** -- before `registerClassStructure`, which is what
+  enters a class's static fields in `sgTab`. So **no interface constant had ever been registered**, and every
+  cross-class `getstatic` on one resolved to nothing. The report named it outright:
+  `UNRESOLVED STATIC (reads null): org/junit/platform/launcher/core/LauncherConfig.DEFAULT -- class IS
+  REGISTERED but has no static cell (registration gap)`.
+  - **`loadBodies` returns early for an interface too, before `runClinit`** -- so even WITH a cell the
+    constant would have stayed null, because no `<clinit>` record was ever enqueued. An interface whose
+    constant is not a compile-time constant has a `<clinit>` exactly like a class
+    (`LauncherConfig DEFAULT = builder().build()` compiles to one). **Both halves are needed; either alone
+    still reads null.**
+  - The static-field registration is split out into `registerStaticFields()` and called from both paths.
+    `runClinit` only CAPTURES the body (it stopped compiling in the lazy-init arc), so the interface path
+    pays nothing until `ensureClinit` runs it on first active use.
+  - **`armPhaseACells` is deliberately NOT added to the interface path**: it arms cells for static METHODS,
+    which interfaces reach through `compileSigOnDemand`'s separate tier. Widening that here would be an
+    unmeasured change to dispatch rather than the field gap being fixed.
+  - **LAUNCHER: through `LauncherFactory` now.** `LauncherFactory.create` -> `LauncherConfigurationParameters
+    $Builder.build` -> `propertiesFile` -> `loadClasspathResource` -> `findConfigFile`, stopping at
+    **`ClassLoader.getResources`** -- jar resource enumeration, the same wall `ServiceLoader` engine
+    discovery sits behind (`META-INF/services/org.junit.platform.engine.TestEngine` names the three
+    engines). That is the largest remaining piece of this arc.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** **no `CAP EXCEEDED`/`MAXREG-statics`** (the new
+    guard, and every interface in the image now feeds `sgTab`) and **no `vtparity`/`itparity` DIFF** -- the
+    real assertion, since interface registration is where itable slot numbering is established. Every
+    interface arm exact (`ifaceinst`, `ifacestat`, `ifacecall`, `ifaceprune`, `ifacelate`, `ifacedflt`),
+    `subList(1,3).size=2`, `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `gc: collections=60`, WPA2 -> HTTP 200 OK. QEMU: both old
+    signatures 1 -> 0; `metal junit: ran 44, failures 0`; suite 30 programs clean; host tests unchanged incl.
+    `compiler: 37 checks`.
+
 - **LINKING MUST NOT RUN AN INITIALIZER -- the `<clinit>` ordering inversion, ROOT-CAUSED AND FIXED
   (2026-09-07, PI-VALIDATED).** A class's `<clinit>` was running as a side effect of **COMPILING** another
   class's `<clinit>`. JVMS 5.4 lets loading/verification/preparation/resolution be lazy but forbids any of

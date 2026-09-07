@@ -6831,6 +6831,12 @@ public final class Loader
             checkIfParity(clCount);                     // M8 itables: writer/loader slot numbering must agree
             clTab[clCount].state = RVMClass.ST_RESOLVED;    // lifecycle: structure complete
             clCount += 1;
+            // AN INTERFACE'S CONSTANTS NEED CELLS TOO. Interface fields are implicitly public static final,
+            // and this branch never reaches registerClassStructure -- so until now no interface constant was
+            // ever entered in sgTab, and every cross-class `getstatic` on one resolved to nothing. The report
+            // said so in as many words: "class IS REGISTERED but has no static cell (registration gap)", for
+            // org/junit/platform/launcher/core/LauncherConfig.DEFAULT.
+            registerStaticFields();
             return;                                     // bodies (default/static methods) compiled in phase B
         }
         parseVtable(bytes);                             // flatten against the superclass: SLOT numbering (bufs still 0)
@@ -6862,6 +6868,12 @@ public final class Loader
                                                         // calling this.get()) bakes the REAL interface Type -- else
                                                         // it bakes a stale gType and the implementor's itable-dir
                                                         // walk never matches (invokeinterface sentinel NPE).
+            // AND ITS INITIALIZER. An interface with a constant whose value is not a compile-time constant
+            // has a <clinit> exactly like a class (JVMS 4.7 / 5.5: `LauncherConfig DEFAULT = builder()
+            // .build()` compiles to one). This branch used to skip runClinit, so no record was ever enqueued
+            // and the constant read null for the life of the VM even once its cell existed. runClinit only
+            // CAPTURES the body -- ensureClinit compiles and runs it on the first active use.
+            runClinit(bytes);
             compileClass(bytes);                        // interface CONCRETE methods (static like List.of + defaults)
             registerAll();
             clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies done
@@ -8408,6 +8420,30 @@ public final class Loader
      * (name/descriptor/slot per slot). The vtable BUFFERS are left 0 -- the method bodies aren't compiled yet;
      * {@link #fillClassVtBuf} fills them in phase B. clVtStart pins where this class's vt entries begin.
      */
+    /**
+     * Register this class's static fields, so a cross-class {@code getstatic} can find their cells.
+     *
+     * <p>Split out of {@link #registerClassStructure} because an INTERFACE needs it too and never reaches
+     * that method -- {@code loadStructure} builds an interface's registry entry itself and returns early.
+     * Interface fields are implicitly {@code public static final}, so an interface that declares any
+     * constant at all depends on this.
+     */
+    private static void registerStaticFields()
+    {
+        if (sgCount + gsfCount >= MAXREG) { capHalt(Magic.bytes("MAXREG-statics"), sgCount); }
+        int st = 0;
+        while (st < gsfCount)
+        {
+            sgTab[sgCount] = new RVMField();
+            sgTab[sgCount].base = gbase;
+            sgTab[sgCount].classOff = gThisNameOff;
+            sgTab[sgCount].nameOff = gsfName[st];
+            sgTab[sgCount].addr = gStatics + st * 8L;
+            sgCount += 1;
+            st += 1;
+        }
+    }
+
     private static void registerClassStructure()
     {
         if (clCount >= MAXCLASS) { capHalt(Magic.bytes("MAXCLASS"), clCount); }              // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
@@ -8439,17 +8475,7 @@ public final class Loader
         captureDirectIfaces();
         clCount += 1;
         armPhaseACells();                               // cells for this class's statics, before any body compiles
-        int st = 0;
-        while (st < gsfCount)                           // register this class's static fields (cross-class getstatic)
-        {
-            sgTab[sgCount] = new RVMField();
-            sgTab[sgCount].base = gbase;
-            sgTab[sgCount].classOff = gThisNameOff;
-            sgTab[sgCount].nameOff = gsfName[st];
-            sgTab[sgCount].addr = gStatics + st * 8L;
-            sgCount += 1;
-            st += 1;
-        }
+        registerStaticFields();
         int s = 0;
         while (s < gifCount)
         {
