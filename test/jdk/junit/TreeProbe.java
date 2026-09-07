@@ -123,6 +123,27 @@ public class TreeProbe
      */
     private static void stack()
     {
+        // THE FULL TREE, exactly as MainCommand.run assembles it, parsing the launcher's own arguments.
+        // The os.name failure that used to stop this arm is fixed (natives now resolve on a writer-baked
+        // receiver), so this asks the question that matters: does the launcher's remaining failure reproduce
+        // HERE -- a 7-minute probe with a printable stack -- rather than only in a 10-minute boot?
+        try
+        {
+            CommandLine cl = new CommandLine(new MainCommand(null));
+            cl.addSubcommand(new DiscoverTestsCommand(null));
+            cl.addSubcommand(new ExecuteTestsCommand(null));
+            cl.addSubcommand(new ListTestEnginesCommand());
+            cl.parseArgs(new String[] {
+                    "execute", "--select-class=SleepSanity", "--disable-ansi-colors", "--disable-banner" });
+            System.out.println("  FULL TREE + real args: OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  FULL TREE + real args: THREW " + r.getClass().getName());
+            r.printStackTrace();
+        }
         try
         {
             CommandLine cl = new CommandLine(new MainCommand(null));
