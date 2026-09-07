@@ -812,6 +812,14 @@ public final class VM
     {
         Uart.write(Magic.bytes("  WATCHRET "));
         printHex(v);
+        // ... and its first instance field. For a GroupValidationResult slot 0 is `type`, which is the thing
+        // that decides success()/blockingFailure() -- so this says WHICH result was stored, not just that
+        // something was.
+        if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
+        {
+            Uart.write(Magic.bytes(" field0="));
+            printHex(Magic.load64(v + 16L));
+        }
         Uart.putc((byte) 0x0A);
     }
 

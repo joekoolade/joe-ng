@@ -1354,6 +1354,15 @@ public final class Baseline
 
     private void putfield(CodeBuffer cb, int cpIndex, int pos)
     {
+        if (symbols.isWatchedField(cpIndex))
+        {
+            // DEBUG (off unless Loader.FIELD_STORE_WATCH): print the value being STORED, at the store itself.
+            // Watching the READ of a field says only what it ended up holding; watching the WRITES says which
+            // assignment put it there, which is the question once the read is known correct. dup first -- the
+            // helper consumes its argument and the putfield below still needs the value. Metal only.
+            dup(cb);
+            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+        }
         int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
         int obj = popReg();

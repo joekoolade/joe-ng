@@ -119,6 +119,10 @@ public interface Symbols
     /** Load into {@code reg} the Class-mirror address for the CONSTANT_Class at {@code classCp} (a class literal). */
     void classLiteral(CodeBuffer cb, int reg, int classCp);
 
+    /** True if the field STORE at {@code fieldCp} is being watched: the compiler precedes it with a
+     *  WATCH_RET helper call printing the value stored. Debug only; the writer always answers false. */
+    boolean isWatchedField(int fieldCp);
+
     /** True if the call at {@code methodCp} is being WATCHED: the compiler follows it with a WATCH_RET
      *  helper call that prints what it returned. Debug only; the writer always answers false. */
     boolean isWatchedCall(int methodCp);

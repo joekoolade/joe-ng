@@ -15124,6 +15124,14 @@ public final class Loader
     /** Watch ONE method name's call sites: the compiler emits a WATCH_RET print of whatever each returns. */
     private static final boolean CALL_WATCH_ON = false;
 
+    /** Watch STORES to one field name: the compiler prints each value as it is written. */
+    private static final boolean FIELD_STORE_WATCH = false;
+
+    static boolean isWatchedField(int idx)
+    {
+        return FIELD_STORE_WATCH && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("validationResult"));
+    }
+
     static boolean isWatchedCall(int idx)
     {
         return CALL_WATCH_ON && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("success"));
