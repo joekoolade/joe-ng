@@ -38,6 +38,7 @@ public class TreeProbe
         variant("v2 + discovery mixin ", new V2());
         variant("v3 + output mixin    ", new V3());
         variant("v4 + argGroup        ", new V4());
+        sides();
     }
 
     /**
@@ -100,6 +101,58 @@ public class TreeProbe
         protected Void execute(java.io.PrintWriter out)
         {
             return null;
+        }
+    }
+
+    /** A plain top-level command, standing in for MainCommand. */
+    @CommandLine.Command(name = "plaintop")
+    public static class PlainTop
+    {
+    }
+
+    /** A plain subcommand, standing in for a BaseCommand subclass. */
+    @CommandLine.Command(name = "plainsub")
+    public static class PlainSub
+    {
+        @CommandLine.Option(names = "--p")
+        boolean p;
+    }
+
+    /**
+     * SEPARATE THE TWO VARIABLES. `MainCommand + V1` fails and `PlainTop + PlainSub` passes, but those differ
+     * on BOTH sides at once. Swapping one side at a time says which carries the fault: if the plain parent
+     * with a BaseCommand child fails, it is the CHILD's shape (BaseCommand brings an @Spec field and a
+     * generic Callable supertype, neither yet tested); if MainCommand with a plain child fails, it is the
+     * PARENT's.
+     */
+    private static void sides()
+    {
+        System.out.println("--- which side carries it");
+        try
+        {
+            CommandLine a = new CommandLine(new PlainTop());
+            a.addSubcommand(new V1());
+            a.parseArgs(new String[] { "--help" });
+            System.out.println("  plain parent + BaseCommand child : OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  plain parent + BaseCommand child : THREW " + r.getClass().getName());
+        }
+        try
+        {
+            CommandLine b = new CommandLine(new MainCommand(null));
+            b.addSubcommand(new PlainSub());
+            b.parseArgs(new String[] { "--help" });
+            System.out.println("  MainCommand  + plain child       : OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  MainCommand  + plain child       : THREW " + r.getClass().getName());
         }
     }
 
