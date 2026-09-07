@@ -26,6 +26,9 @@ public class TreeProbe
 {
     public static void main(String[] args)
     {
+        System.out.println("--- open questions first (the rest below are known results)");
+        parent("E real Ansi mixin     ", new PE());
+        parent("F replica + raw fields ", new MainLike());
         System.out.println("--- launcher command tree");
         arm("main alone           ", 0, new String[] { "--help" });
         arm("main + execute       ", 1, new String[] { "execute", "--select-class=SleepSanity" });
@@ -39,6 +42,11 @@ public class TreeProbe
         variant("v3 + output mixin    ", new V3());
         variant("v4 + argGroup        ", new V4());
         sides();
+        System.out.println("--- parent features, one at a time (each + a plain subcommand, parsing --help)");
+        parent("A legacy help=true    ", new PA());
+        parent("B no @Command         ", new PB());
+        parent("C @Spec field         ", new PC());
+        parent("D implements Runnable ", new PD());
     }
 
     /**
@@ -153,6 +161,116 @@ public class TreeProbe
             Throwable r = t;
             while (r.getCause() != null) { r = r.getCause(); }
             System.out.println("  MainCommand  + plain child       : THREW " + r.getClass().getName());
+        }
+    }
+
+    // ---- the four ways MainCommand differs from the plain parent that passes, one per class ----
+
+    /** A: legacy `help = true` instead of usageHelp. */
+    @CommandLine.Command(name = "pa")
+    public static class PA
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        boolean helpRequested;
+    }
+
+    /** B: NO class-level @Command at all -- picocli derives a default spec, as it must for MainCommand. */
+    public static class PB
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        boolean helpRequested;
+    }
+
+    /** C: an @Spec field. */
+    @CommandLine.Command(name = "pc")
+    public static class PC
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        boolean helpRequested;
+
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec commandSpec;
+    }
+
+    /** D: implements Runnable, as MainCommand does. */
+    @CommandLine.Command(name = "pd")
+    public static class PD implements Runnable
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        boolean helpRequested;
+
+        public void run()
+        {
+        }
+    }
+
+    /** E: the REAL mixin MainCommand carries -- my earlier mixin arm used a trivial stand-in, and this one
+     *  has its own @Spec and a setter-bound option. */
+    @CommandLine.Command(name = "pe")
+    public static class PE
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        boolean helpRequested;
+
+        @CommandLine.Mixin
+        org.junit.platform.console.options.AnsiColorOptionMixin ansiColorOption =
+                new org.junit.platform.console.options.AnsiColorOptionMixin();
+    }
+
+    /**
+     * F: a full replica of MainCommand's declaration -- every member and annotation it has, and no
+     * class-level @Command, exactly as the real one. If this FAILS while each feature alone passes, the fault
+     * is in the COMBINATION and this replica becomes the thing to strip; if it PASSES, then something about
+     * MainCommand that is not visible in its declaration is involved.
+     */
+    public static class MainLike implements Runnable, CommandLine.IExitCodeGenerator
+    {
+        @CommandLine.Option(names = { "-h", "--help" }, help = true)
+        private boolean helpRequested;
+
+        @CommandLine.Option(names = { "-V", "--version" }, versionHelp = true)
+        private boolean versionRequested;
+
+        @CommandLine.Mixin
+        org.junit.platform.console.options.AnsiColorOptionMixin ansiColorOption =
+                new org.junit.platform.console.options.AnsiColorOptionMixin();
+
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec commandSpec;
+
+        // THE TWO UNANNOTATED FIELDS the replica omitted. picocli walks EVERY declared field when building a
+        // spec, so it reads these too -- and reading a field means resolving its TYPE. Both are package-private
+        // types the real MainCommand carries and my first replica did not, which is the only remaining
+        // difference between a replica that passes and the class that fails.
+        private final ConsoleTestExecutor.Factory consoleTestExecutorFactory = null;
+
+        CommandResult<?> commandResult;
+
+        public void run()
+        {
+        }
+
+        public int getExitCode()
+        {
+            return 0;
+        }
+    }
+
+    /** Attach a plain subcommand to {@code parent} and parse --help: the shape MainCommand fails on. */
+    private static void parent(String label, Object p)
+    {
+        try
+        {
+            CommandLine cl = new CommandLine(p);
+            cl.addSubcommand(new PlainSub());
+            cl.parseArgs(new String[] { "--help" });
+            System.out.println("  " + label + ": OK");
+        }
+        catch (Throwable t)
+        {
+            Throwable r = t;
+            while (r.getCause() != null) { r = r.getCause(); }
+            System.out.println("  " + label + ": THREW " + r.getClass().getName());
         }
     }
 
