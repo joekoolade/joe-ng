@@ -1747,6 +1747,17 @@ public final class Loader
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
+        // seedSystemProps needs Properties the same way, and without it NOTHING is seeded: System.props stays
+        // null, System.getProperty answers nothing, and picocli's `Ansi.isWindows()` --
+        // `System.getProperty("os.name").toLowerCase()` -- NPEs INSIDE the library. That is the console
+        // launcher's second failure, reached from addSubcommand via usage-width detection.
+        //
+        // Unsafe comes WITH it, and that pairing is the point: `Properties.<init>` ends in
+        // `Unsafe.storeFence()`, and a link stub for it has nothing to resolve against unless the class is
+        // registered. Pulling Properties alone therefore traded one failure for another -- it broke the demo
+        // suite with a failed resolve (TRAPWIRE index=-1) inside that very constructor.
+        pullClass(Magic.bytes("jdk/internal/misc/Unsafe"));
+        pullClass(Magic.bytes("java/util/Properties"));
         // Metal JavaLangAccess: seeded into SharedSecrets so EnumMap.getKeyUniverse (getEnumConstantsShared)
         // works (System.<clinit> which normally registers the JLA is skipped).
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
@@ -7715,6 +7726,42 @@ public final class Loader
     private static int rsCount;
     // #43 trap diagnostics: every call site rewritten to bl denylistTrap, recorded so denylistTrap can read x30
     // (the return address) and report WHICH pruned callee actually fired at runtime (vs the dead-branch refs).
+    /** Name a call site left pointing at denylistTrap, once per class+method. */
+    private static final byte[][] twNamed = new byte[64][];
+    private static int twNamedN;
+
+    private static void reportTrapWired(long base, int clsOff, int nameOff, int descOff)
+    {
+        int k = 0;
+        while (k < twNamedN)
+        {
+            if (utf8EqAt(base, clsOff, twNamedBase[k], twNamedCls[k])
+                    && utf8EqAt(base, nameOff, twNamedBase[k], twNamedMth[k]))
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (twNamedN < 64)
+        {
+            twNamedBase[twNamedN] = base;
+            twNamedCls[twNamedN] = clsOff;
+            twNamedMth[twNamedN] = nameOff;
+            twNamedN += 1;
+        }
+        Uart.write(Magic.bytes("\n  TRAP-WIRED (call will halt if reached): "));
+        printNameAt(base, clsOff);
+        Uart.putc(0x2E);
+        printNameAt(base, nameOff);
+        printNameAt(base, descOff);
+        Uart.write(Magic.bytes(isDenylisted(base, clsOff) ? " -- DENYLISTED" : " -- NOT denied: no stub could be minted"));
+        Uart.putc(0x0A);
+    }
+
+    private static final long[] twNamedBase = new long[64];
+    private static final int[] twNamedCls = new int[64];
+    private static final int[] twNamedMth = new int[64];
+
     private static final int MAXTRAPWIRE = 512;
     private static long[] trapWireSite = new long[MAXTRAPWIRE];   // the bl call-site address
     // The callee's class+name Utf8 ADDRESSES (blob base + offset), so a fired trap can NAME what it denied.
@@ -7857,6 +7904,17 @@ public final class Loader
                     {
                         target = stub;
                     }
+                }
+                if (target == VM.denylistTrapAddr)
+                {
+                    // NAME IT HERE, where the information exists. A site left pointing at the trap reports
+                    // `TRAPWIRE index=-1` and an EMPTY callee at runtime once trapWireCount passes
+                    // MAXTRAPWIRE -- and with launchMain sharing loader state across every program, those
+                    // sites now ACCUMULATE where they used to reset per launch, so the table fills and the
+                    // name is the first thing lost. A trap that cannot say what it was calling is
+                    // unactionable; this is the same "report a checked cause" the static and link paths
+                    // already do.
+                    reportTrapWired(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
                 }
             }
             if (target != 0L)
@@ -8741,6 +8799,10 @@ public final class Loader
     private static final int MAXVSITE = 16384;
     private static final int VSHASH = 32768;             // power of two, > 2x MAXVSITE (open addressing)
     private static long[] vsName, vsDesc;                // Utf8 ADDRESSES (blob base + offset), not offsets
+    // The site's OWNER class, recorded for the same reason: a native has no bytecode and no vtable slot, so
+    // when the receiver's Type is not in the class registry the native table is the only thing that can
+    // answer -- and nativeBufAt is keyed by CLASS + name.
+    private static long[] vsCls;
     private static int vsCount;
     private static int[] vsBucket;                       // hash -> site index + 1 (0 = empty)
     private static long virtualTrampAddr;
@@ -8755,6 +8817,7 @@ public final class Loader
         {
             vsName = new long[MAXVSITE];
             vsDesc = new long[MAXVSITE];
+            vsCls = new long[MAXVSITE];
             vsBucket = new int[VSHASH];                  // allocArray does NOT zero: fill it explicitly
             int z = 0;
             while (z < VSHASH)
@@ -8765,6 +8828,7 @@ public final class Loader
         }
         long nameAddr = gbase + mrefNameOff(methodCp);
         long descAddr = gbase + mrefDescOff(methodCp);
+        long clsAddr = gbase + refClassNameOff(methodCp);
         // Dedup, because a site is now allocated for EVERY dispatch guard, and the compiler visits each site
         // more than once (size pass then emit pass). Without this the table would fill with duplicates and
         // the two passes would bake different indices for the same call.
@@ -8772,10 +8836,11 @@ public final class Loader
         while (vsBucket[h] != 0)
         {
             int cand = vsBucket[h] - 1;
-            if (vsName[cand] == nameAddr && vsDesc[cand] == descAddr)
+            if (vsName[cand] == nameAddr && vsDesc[cand] == descAddr && vsCls[cand] == clsAddr)
             {
-                return cand;
-            }
+                return cand;                            // the CLASS joins the key: two classes can declare
+            }                                           //   the same name+descriptor, and the native lookup
+                                                        //   below would then use the wrong owner
             h = (h + 1) & (VSHASH - 1);
         }
         if (vsCount >= MAXVSITE)
@@ -8785,6 +8850,7 @@ public final class Loader
         int idx = vsCount;
         vsName[idx] = nameAddr;
         vsDesc[idx] = descAddr;
+        vsCls[idx] = clsAddr;
         vsBucket[h] = idx + 1;
         vsCount += 1;
         return idx;
@@ -8837,6 +8903,29 @@ public final class Loader
             // A receiver whose Type is not in the class registry -- a writer-baked class the loader never
             // adopted, say -- has no blob to resolve against. Image code carries no implicit null check, so
             // the missing entry has to be tested here or the dereference reads from a wild address.
+            //
+            // NAME IT. Silent, this is the worst report the VM produces: `DENYLIST TRAP` with an EMPTY callee
+            // and `TRAPWIRE index=-1`, blaming a denylist that has nothing to do with it, because no
+            // patch-time site was ever recorded for a late-resolved call. The method and descriptor are in
+            // hand here and cost one line to print.
+            // A PROVIDED NATIVE needs no registry entry: it has no bytecode and no vtable slot, so the
+            // class registry has nothing to say about it and the native table is the only thing that can
+            // answer. `Properties.<init>` calling `Unsafe.storeFence()` is exactly that -- the UNSAFE
+            // receiver is a writer-BAKED object whose Type the loader never adopted, so the chain walk below
+            // could never run, and the call surfaced as a DENYLIST TRAP with an EMPTY callee blaming a
+            // denylist that has nothing to do with a native.
+            if (vsCls != null && idx >= 0 && idx < vsCount)
+            {
+                long nb = nativeBufAt(vsCls[idx], 0, vsName[idx], 0);
+                if (nb != 0L)
+                {
+                    return nb;
+                }
+                Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
+                printNameAt(vsName[idx], 0);
+                printNameAt(vsDesc[idx], 0);
+                Uart.putc(0x0A);
+            }
             return VM.denylistTrapAddr;
         }
         // Walk the receiver's superclass chain, most-derived first -- which IS virtual dispatch: the
