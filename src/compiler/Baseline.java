@@ -1685,6 +1685,18 @@ public final class Baseline
         if (returnsValue(cpIndex))
         {
             cb.emit(A64Enc.movReg(pushReg(), 0));
+            if (symbols.isWatchedCall(cpIndex))
+            {
+                // DEBUG (off unless Loader.CALL_WATCH_ON): print what THIS call returned, at the call site
+                // itself. Reflection and same-package calls both marshal a return differently from a compiled
+                // invokevirtual, so this is the only way to see the value the PROGRAM actually branched on.
+                //
+                // dup first -- the helper consumes its argument and the program still needs the value. Metal
+                // only: WriterSymbols.isWatchedCall is always false, so baked code is byte-for-byte unchanged
+                // and the self-hosting fixpoint holds.
+                dup(cb);
+                emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+            }
         }
     }
 
