@@ -76,6 +76,50 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAMBDA WITH A CAPTURED RECEIVER DROPPED EVERY CAPTURE AFTER THE FIRST (2026-09-07, PI-VALIDATED).**
+  `buildLambdaTib`'s `kind == 5 || kind == 9` branch is written for a METHOD REFERENCE -- zero captures
+  (unbound, `String::compareTo`) or one (bound, `obj::method`). With `nc >= 1` it emitted exactly one
+  instruction, `ldrx(0, 0, 16)` (x0 = the captured receiver), and **never loaded captures 1..nc-1 at all.**
+  - **Correct for a one-capture method reference, silently wrong for a lambda BODY** -- whose implementation
+    kind is ALSO 5 when javac targets a private nestmate instance method. The `kind 6/7` path immediately
+    below does the full job; 5/9 was never generalised past a single capture.
+  - **The symptom is specific: capture 0 arrives intact and every later capture is whatever the caller left
+    in x1..**, because nothing wrote them. picocli hit it as an `Optional` local holding an ENUM CONSTANT --
+    `VIRTUALRESOLVE FAILED CustomClassLoaderCloseStrategy$2.map(Function)Optional` in
+    `ConsoleTestExecutor.createXmlWritingListener`.
+  - **Fix:** for kind 5/9 with a captured receiver, do what 6/7 does -- shift the SAM args UP to
+    `x(nc)..x(nc+ia-1)` (high->low, so no shift clobbers a source), then load `field[0..nc-1]` into
+    `x0..x(nc-1)` with **x0 LAST**, since x0 is the object being read from. At `nc == 1` the shift is a
+    no-op mov and the load is the single receiver load it used to emit, so a genuine bound method reference
+    is byte-for-byte unchanged -- which is what `compiler: 37 checks` asserts.
+  - **MY BISECT PRODUCED A CONFIDENT RULE AND IT WAS WRONG.** Nine arms over `CaptureProbe` said "the
+    captured reference arrives as the RECEIVER's field 1, whenever the receiver has two or more fields". The
+    receiver's field count mattered only because constructing a two-field receiver and calling `invoke()`
+    **CLOBBERED x1..x3 before the thunk ran**; with a one-field receiver the correct values happened to still
+    be sitting in those registers, so those arms **passed by luck, not by correctness**. A bisect can only
+    rank ingredients by whether they perturb the accident.
+  - **ONE COMPILE-TIME LINE SETTLED IT**, printed from `MetalSymbols` where no shared `Symbols` seam had to
+    change: `LAMBDA idx=88 nc=4 samArgc=0 size=48 kind=5`. A four-capture lambda going down a branch that
+    handles one; reading the branch then took a minute. Kept behind `LAMBDA_WATCH` (default false).
+  - **Two mechanisms were eliminated by READING first**, which is why the trace was aimed where it was:
+    `lambdaSize` and `paramCount` agree (both count the indy descriptor, so the object is sized right and the
+    stores are at the right offsets), and `opSlot` in shallow mode returns `OP_BASE + slot` -- exactly what
+    `lowerLambda`'s capture store uses, with `deepStack` refused outright.
+  - **THE PROBE HAD TO REPORT EVERY CAPTURE, not just the one that crashed.** `this` arriving intact while
+    `out` faulted inside `PrintStream.print` is what showed this was a DROPPED-capture bug rather than a
+    wrong-value one. It prints directly rather than concatenating: building the report with `+` allocates
+    enough to hit `large region OOM`, which killed the first attempt at the instrument.
+  - **PI-VALIDATED TWICE.** Full suite: lambda demos exact (`apply(5)=105`, `capturing lambda ran = 105`,
+    `reflective lambda thread = 7`), `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `steps/core 61/59/60/60`, `churnMB=625 live=32 intact=32`, `gc: collections=60`,
+    WPA2 -> HTTP 200 OK, no parity DIFF / `BOOT RE-ENTERED` / `unclaimed pc`. **But the suite's lambdas have
+    small capture lists, so that boot claims NO REGRESSION on the unchanged `nc == 1` path.** The
+    `CaptureProbe` boot is what proves the repaired path on silicon: all three arms exact.
+  - **LAUNCHER: into TEST DISCOVERY now** -- past `createXmlWritingListener` and all of `registerListeners`,
+    through `launchTests` -> `DiscoveryRequestCreator.toDiscoveryRequestBuilder` -> `createDiscoverySelectors`
+    -> `TestDiscoveryOptions.getExplicitSelectors`. Next blocker there is an `ArrayList.addAll` whose
+    argument is a `ClassSelector` rather than a `Collection`.
+
 - **`ClassLoader.getResources`: AN EMPTY ENUMERATION, AND A REPORT WHEN THAT IS A LIE (2026-09-07,
   PI-VALIDATED).** The console launcher stopped at `ClassLoader.getResources`, which the overlay did not
   declare at all.
