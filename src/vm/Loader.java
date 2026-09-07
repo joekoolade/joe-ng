@@ -988,6 +988,41 @@ public final class Loader
         }
     }
 
+    /** Watch a named class's STATIC CELLS around its initializer, and again whenever any watched class is
+     *  initialised later. The launcher stores a GroupValidationResult whose `type` is null even though the
+     *  enum's initializer runs FIRST and the cells resolve consistently -- so the question is whether the
+     *  values are ever written, and whether they are still there afterwards. */
+    private static final boolean CELL_WATCH = false;
+
+    private static void clinitCellWatch(int reg, byte[] when)
+    {
+        if (!CELL_WATCH || clTab[reg] == null || clTab[reg].statics == 0L)
+        {
+            return;
+        }
+        if (!utf8HasPrefix(clTab[reg].base, clTab[reg].nameOff,
+                Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine$ParseResult$GroupValidationResult")))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  CELLS "));
+        Uart.write(when);
+        Uart.putc(0x20);
+        printNameAt(clTab[reg].base, clTab[reg].nameOff);
+        Uart.write(Magic.bytes(" block="));
+        VM.printHex(clTab[reg].statics);
+        int k = 0;
+        while (k < 4)
+        {
+            Uart.write(Magic.bytes(" ["));
+            VM.printDec(k);
+            Uart.write(Magic.bytes("]="));
+            VM.printHex(Magic.load64(clTab[reg].statics + k * 8L));
+            k += 1;
+        }
+        Uart.putc(0x0A);
+    }
+
     private static void ensureClinit(int reg)
     {
         if (reg < 0 || clTab == null || clTab[reg] == null)
@@ -1064,8 +1099,10 @@ public final class Loader
                 // initializer copied `sun.nio.cs.UTF_8.INSTANCE` into UTF_8 before sun/nio/cs/UTF_8 had
                 // initialized, so the field came out null and `s.getBytes(UTF_8)` threw a bare NPE.
                 drainCtorInit(reg);
+                clinitCellWatch(reg, Magic.bytes("before"));
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
+                clinitCellWatch(reg, Magic.bytes("after "));
                 ran = 1;
                 break;
             }
