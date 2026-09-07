@@ -25,11 +25,29 @@ final class VMUnwind
      * CAPTURE_TRACE helper) so {@code printStackTrace()} has frames even for a same-method inline catch;
      * {@link #unwind} also calls it (idempotent) for the uncaught path. Walks saved LRs with {@link #frameSizeAt}.
      */
+    /** Print the throw site of every implicit NullPointerException (debug; off by default). */
+    static final boolean NPE_TRACE = false;
+
     static void captureTrace(long exc, long pc, long sp)
     {
         if (exc <= 0x1000L || Magic.load64(exc + 16L) != 0L)   // boot force-compile passes 0; already captured -> keep
         {
             return;
+        }
+        if (NPE_TRACE && Loader.isNpe(exc))
+        {
+            // A MESSAGELESS NPE is the JIT's own null check, so it names no cause and picocli can only report
+            // that one happened. Its throw SITE is the missing fact, and it is already in hand here: this is
+            // the moment the backtrace is captured. Filtered to NPEs because the launcher throws typed
+            // exceptions as ordinary control flow by the dozen.
+            Uart.write(Magic.bytes("  NPE at "));
+            Loader.printFrameAt(pc);
+            long fs = frameSizeAt(pc);
+            if (fs != 0L)
+            {
+                Uart.write(Magic.bytes("      <- "));
+                Loader.printFrameAt(Magic.load64(sp) - 4L);
+            }
         }
         long cpc = pc;
         long csp = sp;

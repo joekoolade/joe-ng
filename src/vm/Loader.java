@@ -353,6 +353,15 @@ public final class Loader
         }
         seek(0x3C636C696E69743EL, 8, 0x282956L, 3);    // "<clinit>" "()V"
         long code = findMethod(bytes);
+        if (code != 0L && !clinitCompilable(code, gcodeLen))
+        {
+            // SAY SO. A REJECTED initializer is indistinguishable from one that ran: the class loads, gets
+            // its static cells, and the batch-end sweep marks it INITIALIZED because no record is pending --
+            // so every static reads null FOR EVER and nothing ever revisits it. That silence cost a full
+            // debugging round for HexFormat, and it is what makes an enum whose constants are all null look
+            // like a resolution bug rather than an initializer that was never run.
+            reportClinitRejected();
+        }
         if (code != 0L && clinitCompilable(code, gcodeLen))
         {
             if (clinitN >= MAXBLOB) { capHalt(Magic.bytes("MAXBLOB-clinit"), clinitN); }   // loader-table overflow guard: halt with a clear message rather than OOB-corrupt
@@ -565,6 +574,14 @@ public final class Loader
             }
             pc += insnLen(code, pc);
         }
+    }
+
+    /** Name a class whose {@code <clinit>} the compiler gate refused, once per class. */
+    private static void reportClinitRejected()
+    {
+        Uart.write(Magic.bytes("\n  CLINIT REJECTED (statics stay null): "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x0A);
     }
 
     /** Append a precise clinit dependency (name Utf8 offset in the current blob), deduped within this <clinit>. */
@@ -1718,6 +1735,15 @@ public final class Loader
         pullClass(Magic.bytes("java/lang/NegativeArraySizeException"));
         pullClass(Magic.bytes("java/lang/ArrayStoreException"));           // aastore covariant type mismatch
         pullClass(Magic.bytes("java/lang/InternalError"));                 // any other unexpected hardware trap
+        // The REFLECTION failures, for the same reason and with the same consequence. The VM throws these
+        // itself (Class.forName, getDeclaredMethod, getDeclaredField), so a program that never NAMES the class
+        // leaves it unloaded and the thrown object gets a TIB of 0 -- no Type, so getClass() answers null and
+        // the object is nameless. Library code REPORTS a caught exception by calling toString() on it, which
+        // is a virtual call through that missing Type: picocli's "Could not register converter" handler does
+        // exactly that for every converter it cannot load, which on joe-ng is several.
+        pullClass(Magic.bytes("java/lang/ClassNotFoundException"));
+        pullClass(Magic.bytes("java/lang/NoSuchMethodException"));
+        pullClass(Magic.bytes("java/lang/NoSuchFieldException"));
         // System.in's empty-stream seed needs this class present; nothing else guarantees it, and a program
         // that touches System.in would otherwise find null (see seedSystemIn). Tiny, and loaded once.
         pullClass(Magic.bytes("java/io/ByteArrayInputStream"));
@@ -9566,9 +9592,43 @@ public final class Loader
         {
             return -1;
         }
+        // THE SAME DEFERRED-PULL RETRY THE OTHER ON-DEMAND PATHS HAVE. This is the FOURTH path that reaches
+        // compile() -- lazyCompileLocked, compileMethodOnDemand and compileSigOnDemand were given it in #213,
+        // clinitEntryOf in #241, and this one was missed. Without it a getstatic naming a class RTA never
+        // pulled resolves to the PERMANENTLY-ZERO cell: `compileReuseTib` means there is no later batch
+        // patchRelocs to fill it in, so 0 is the final answer and the field reads null for the life of the VM.
+        //
+        // picocli's CommandLine.<init> is exactly that: it reads Help.Ansi.AUTO, and reflective construction
+        // compiled it here, so the read bound to the zero cell and `defaultColorScheme` NPE'd on a null ansi
+        // ("in the classDir, but resolved outside the retry window" -- the report named the cause precisely).
+        int rcMark = rcCount;                              // patch only THIS compile's relocs
+        int rsMark = rsCount;
         compileReuseTib = true;
+        boolean outerCompiling = lzCompiling;
+        boolean outerRetried = lzRetried;
+        int outerPullN = lzPullN;
+        lzCompiling = true;
+        lzPullN = 0;
+        lzRetried = false;
         compile(code, gcodeLen, descOff, 0);               // <init> is an instance method (receiver = the new object)
+        lzCompiling = outerCompiling;
         compileReuseTib = false;
+        boolean pulled = lzPullN > 0;
+        if (pulled)
+        {
+            drainPendingPulls();
+            rcCount = rcMark;                              // drop the doomed body's reloc sites: patching them
+            rsCount = rsMark;                              //   later would write into reused memory
+        }
+        lzRetried = outerRetried;
+        lzPullN = outerPullN;
+        if (pulled && !odRetried)
+        {
+            odRetried = true;                              // re-derived from (type, paramCount); bounded to one
+            int again = constructorResolveLocked(type, paramCount);
+            odRetried = false;
+            return again;
+        }
         registerAll();
         patchRelocs();
         return ctorResolveRegistry(ci, paramCount);
@@ -9716,9 +9776,31 @@ public final class Loader
         return true;
     }
 
+    /** Watch the vtable slot chosen for two named methods, whatever the slot number (see logVtableSlot). */
+    private static final boolean METHOD_WATCH_ON = false;
+
     /** #43: print a high-slot vtable resolution (class.name slot [Q|F]) so a garbage-slot wild-branch is traceable. */
     private static void logVtableSlot(int classOff, int nameOff, int descOff, int slot, int path)
     {
+        if (METHOD_WATCH_ON
+                && (utf8IsAtBase(gbase, nameOff, Magic.bytes("success"))
+                    || utf8IsAtBase(gbase, nameOff, Magic.bytes("blockingFailure"))))
+        {
+            // Watch two SPECIFIC methods regardless of slot. picocli's GroupMatchContainer.validate calls
+            // `validationResult.success()`; reflection proves success() answers TRUE on both SUCCESS
+            // constants, while the direct invokevirtual behaves as though it answered false. If these two
+            // no-arg booleans resolve to the SAME slot, success() is really running blockingFailure() --
+            // which returns false for a SUCCESS and produces exactly the observed maybeThrow(null).
+            Uart.write(Magic.bytes("  VW "));
+            writeName(gbase + classOff + 2, u2(gbase + classOff));
+            Uart.putc(0x2E);
+            writeName(gbase + nameOff + 2, u2(gbase + nameOff));
+            Uart.write(Magic.bytes(" slot "));
+            VM.printDec(slot);
+            Uart.putc(0x20);
+            Uart.putc((byte) path);
+            Uart.putc(0x0A);
+        }
         if (logVtable == 0 || slot < 20) { return; }
         Uart.write(Magic.bytes("  V "));
         writeName(gbase + classOff + 2, u2(gbase + classOff));
@@ -9816,6 +9898,28 @@ public final class Loader
      * names a subclass for a field its superclass declares), a name-only match finds
      * the inherited field's slot — the flattened layout keeps it consistent.
      */
+    /** Watch ONE field name's resolved offset. A getfield that resolves to a WRONG-but-valid slot is silent:
+     *  `UNRESOLVED FIELD (aliases slot 0)` fires only on a total miss. Set to a name to trace it. */
+    private static final byte[] FIELD_WATCH = Magic.bytes("validationResult");
+    private static final boolean FIELD_WATCH_ON = false;
+
+    private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
+    {
+        if (!FIELD_WATCH_ON || !utf8IsAtBase(gbase, nameOff, FIELD_WATCH))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  fieldoff "));
+        printNameAt(gbase, classOff);
+        Uart.putc(0x2E);
+        printNameAt(gbase, nameOff);
+        Uart.write(Magic.bytes(" -> +"));
+        VM.printDec(off);
+        Uart.write(Magic.bytes(" tier"));
+        VM.printDec(tier);
+        Uart.putc(0x0A);
+    }
+
     private static int globalFieldOffset(int idx)
     {
         int classOff = refClassNameOff(idx);
@@ -9826,6 +9930,7 @@ public final class Loader
             if (utf8EqAt(gbase, classOff, fldTab[i].base, fldTab[i].classOff)
                     && utf8EqAt(gbase, nameOff, fldTab[i].base, fldTab[i].nameOff))
             {
+                fieldOffsetLog(classOff, nameOff, 16 + fldTab[i].slot * 8, 1);
                 return 16 + fldTab[i].slot * 8;
             }
             i += 1;
@@ -9844,6 +9949,7 @@ public final class Loader
                 if (utf8EqAt(pdBase[pd], pdNameOff[pd], fldTab[i2].base, fldTab[i2].classOff)   // declared by THIS ancestor
                         && utf8EqAt(gbase, nameOff, fldTab[i2].base, fldTab[i2].nameOff))
                 {
+                    fieldOffsetLog(classOff, nameOff, 16 + fldTab[i2].slot * 8, 2);
                     return 16 + fldTab[i2].slot * 8;
                 }
                 i2 += 1;
@@ -10385,7 +10491,10 @@ public final class Loader
     // A cold site costs one 32-byte stub and never runs; a genuinely unresolvable one still lands in
     // denylistTrap, with the trapwire index intact because the trampoline restores LR before tail-branching.
 
-    private static final int MAXLINKSTUB = 256;
+    // 256 was enough for every closure until the console launcher, whose picocli+JUnit graph exhausts it --
+    // and running out is NOT a cap that merely limits an optimisation: the caller leaves the site pointing at
+    // denylistTrap, so the program dies blaming a denylist the class is not on.
+    private static final int MAXLINKSTUB = 4096;
     private static long[] lkClsU  = new long[MAXLINKSTUB];   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
     private static long[] lkNameU = new long[MAXLINKSTUB];
     private static long[] lkDescU = new long[MAXLINKSTUB];
@@ -10414,6 +10523,11 @@ public final class Loader
         }
         if (lkCount >= MAXLINKSTUB)
         {
+            // SAY SO. Returning 0 here leaves patchRelocsFrom's target as denylistTrap, and the runtime then
+            // reports `denied callee: <class>.<method>` for a class on NO denylist -- the exact
+            // misattribution that has cost this project several debugging sessions. `java/util/LinkedHashSet
+            // .<init>`, reached from picocli's CommandSpec.aliases, was one: shipped, allowed, and trapped.
+            linkStubFull(clsU, nameU, descU);
             return 0L;
         }
         if (linkTrampAddr == 0L)
@@ -10428,6 +10542,27 @@ public final class Loader
         lkCount += 1;
         return lkStub[lkCount - 1];
     }
+
+    /** Report the link-stub table overflowing, once -- the site it could not serve becomes a denylist trap. */
+    private static void linkStubFull(long clsU, long nameU, long descU)
+    {
+        if (lkFullReported)
+        {
+            return;
+        }
+        lkFullReported = true;
+        Uart.write(Magic.bytes("\n  LINK STUB TABLE FULL at "));
+        VM.printDec(MAXLINKSTUB);
+        Uart.write(Magic.bytes(" -- this site becomes a DENYLIST TRAP for a class that is NOT denied: "));
+        printUtf8Capped(clsU);
+        Uart.putc(0x2E);
+        printUtf8Capped(nameU);
+        Uart.putc(0x20);
+        printUtf8Capped(descU);
+        Uart.putc(0x0A);
+    }
+
+    private static boolean lkFullReported;
 
     /** x17 = stub index, then jump to the shared link trampoline. Same shape as the lazy deferral stub, and
      *  x16/x17 for the same reason: x0.. are the call's arguments and must survive untouched. */
@@ -11256,6 +11391,19 @@ public final class Loader
         if (buf == 0L)
         {
             buf = nativeBufAt(clsU, 0, nameU, 0);       // a PROVIDED NATIVE has no bytecode to find: link the VM helper
+        }
+        if (buf == 0L)
+        {
+            // THE SAME FOURTH TIER THE LINK-STUB PATH HAS. bufBySigU answers only through a DISPATCH table --
+            // a registered buffer, a static cell, or a TIB slot -- so a method RTA pruned (never compiled and
+            // never given a slot) is invisible to all three even though its bytecode is right there in the
+            // class's blob. resolveLinkTarget compiles it on demand for exactly this case; the bake path
+            // halted instead.
+            //
+            // `java/lang/String.toUpperCase(Ljava/util/Locale;)` is the shape: a baked java.base body calls
+            // it, nothing statically reachable does, so it has no buffer and no slot -- and the bake stub had
+            // nowhere left to look.
+            buf = compileSigOnDemand(clsU, nameU, descU);
         }
         if (buf == 0L)
         {
@@ -13566,6 +13714,17 @@ public final class Loader
         return classIndexByName(Magic.bytes("java/lang/String"));
     }
 
+    /** True if {@code exc}'s TIB is java/lang/NullPointerException's -- the JIT's implicit null check. */
+    static boolean isNpe(long exc)
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/NullPointerException"));
+        if (i < 0 || exc == 0L)
+        {
+            return false;
+        }
+        return Magic.load64(exc + 0L) == clTab[i].tib;
+    }
+
     /** Allocate a mini {@code java/lang/NullPointerException} (TIB set, field-free) — the JIT's null-check helper. */
     static long newNpe()
     {
@@ -13610,10 +13769,43 @@ public final class Loader
     private static long newExc(byte[] name)
     {
         int i = classIndexByName(name);
+        if (i < 0)
+        {
+            // NAME IT. A missing exception class yields a bare header with TIB 0: no Type, so `instanceOf`
+            // cannot walk it (uncatchable), `getClass()` answers null, and it has no detailMessage slot --
+            // an exception carrying NOTHING, reported by library code as an identity hash. Silent until now,
+            // and indistinguishable at the catch site from an exception that simply says little.
+            excMissing(name);
+        }
         long tib = i >= 0 ? clTab[i].tib : 0L;
         long obj = Heap.alloc(i >= 0 ? (16 + clTab[i].fieldCount * 8) : 16);
         Magic.store64(obj + 0L, tib);
         return obj;
+    }
+
+    private static final byte[][] excMissed = new byte[16][];
+    private static int excMissedN;
+
+    /** Report an exception class the VM had to throw but could not find, once per name. */
+    private static void excMissing(byte[] name)
+    {
+        int k = 0;
+        while (k < excMissedN)
+        {
+            if (excMissed[k] == name)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (excMissedN < excMissed.length)
+        {
+            excMissed[excMissedN] = name;
+            excMissedN += 1;
+        }
+        Uart.write(Magic.bytes("\n  EXCEPTION CLASS NOT LOADED (thrown object has no Type): "));
+        Uart.write(name);
+        Uart.putc(0x0A);
     }
 
     /** TIB of the loaded mini {@code java/lang/String} (for the concat's {@code newStringFromBytes}), or 0. */
@@ -14838,6 +15030,14 @@ public final class Loader
             return 0L;                                      // a raw array (no Type) — no mirror
         }
         return classMirror(Magic.load64(tib));              // TIB[0] = Type (class Type or array Type)
+    }
+
+    /** Watch ONE method name's call sites: the compiler emits a WATCH_RET print of whatever each returns. */
+    private static final boolean CALL_WATCH_ON = false;
+
+    static boolean isWatchedCall(int idx)
+    {
+        return CALL_WATCH_ON && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("success"));
     }
 
     /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */

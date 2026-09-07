@@ -801,6 +801,20 @@ public final class VM
      * routes the object through the normal athrow/unwind. The Loader supplies its TIB (its Type chain is
      * what {@code catch} dispatch walks); the object is otherwise field-free.
      */
+    /**
+     * DEBUG: print the value a watched call site returned.
+     *
+     * <p>Every cheaper instrument measures something ADJACENT to the failing call -- the constants, the
+     * predicates called some other way, the slots, the cells. This one runs at the call site itself, so
+     * "what did picocli's own invokevirtual actually get back" is answered by the program.
+     */
+    static void watchRet(long v)
+    {
+        Uart.write(Magic.bytes("  WATCHRET "));
+        printHex(v);
+        Uart.putc((byte) 0x0A);
+    }
+
     static long newNpe()
     {
         return Loader.newNpe();
@@ -1061,6 +1075,7 @@ public final class VM
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
         if (arraycopyAddr == 0L) { VMNatives.arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
+        if (watchRetAddr == 0L) { watchRet(0L); }                     // force-compile the debug watch helper
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
@@ -2313,6 +2328,7 @@ public final class VM
     static long allocInstanceAddr;     // VM.allocInstance(J)J — Constructor.allocInstance0 (reflection M2)
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
+    static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)

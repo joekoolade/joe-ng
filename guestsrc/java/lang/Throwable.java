@@ -178,6 +178,19 @@ public class Throwable
         return getMessage();
     }
 
+    // toString() IS DELIBERATELY NOT DECLARED, and this is the reason -- do not "fix" the missing member.
+    //
+    // Stock's toString is `getClass().getName()` plus the message, and `getClass()` is INTRINSIFIED: the
+    // compiler rewrites the call site to the GET_CLASS helper instead of dispatching, because
+    // `Object.getClass()`'s body is literally `return null`. The METAL compiler does that rewrite;
+    // `WriterSymbols.isGetClass` returns false ("VM's own code doesn't call it") and its HELPER_KEY table
+    // stops at 6 entries, so the HOST WRITER does not -- and java/lang/Throwable is in the bake domain, with
+    // BAKED_LINK pointing the loaded class's slot at the baked body. An overlaid toString therefore runs the
+    // writer-compiled copy, gets null from getClass(), and NPEs inside the very report it exists to produce.
+    //
+    // Declaring it costs more than the gap it fills: library code reports a caught exception with
+    // getClass().getSimpleName() + getLocalizedMessage() far more often than with toString(), and those work.
+    // Add it only after the writer gains the getClass intrinsic.
     /**
      * A no-op that returns {@code this}, as the stock signature requires.
      *

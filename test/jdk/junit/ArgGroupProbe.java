@@ -93,6 +93,35 @@ public class ArgGroupProbe
                             .forAnnotatedObject(inst);
             System.out.println("SPEC BUILT ok, options=" + spec.options().size()
                     + " argGroups=" + spec.argGroups().size());
+            dumpExecuteSpec();
+            // THE SPEC'S OWN VALUES, which is what validation reads -- not the annotation's.
+            // GroupMatchContainer.validate fails a subgroup only when `subgroup.validate()` is TRUE and the
+            // group is not effectively optional. JUnit WRITES validate=false, and the annotation reads back
+            // false (above), but nothing has checked that the value survives into the built ArgGroupSpec:
+            // it travels annotation -> updateArgGroupAttributes -> Builder.validate(boolean) -> spec, and a
+            // boolean lost anywhere on that path turns every one of these groups into a validated, required
+            // group -- which is exactly the failure the launcher ends in.
+            for (Object g : spec.argGroups())
+            {
+                org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec gs =
+                        (org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec) g;
+                System.out.println("   SPEC group: validate=" + gs.validate()
+                        + " (want false)"
+                        + " exclusive=" + gs.exclusive()
+                        + " multiplicity=" + gs.multiplicity()
+                        + " args=" + gs.args().size()
+                        + (gs.validate() ? "  <== WRONG, a written false became true" : "  OK"));
+                // Range.min IS THE DECIDER. isGroupEffectivelyOptional returns true immediately when
+                // `multiplicity().min == 0` -- a getfield, not a method -- and that early exit is what stops
+                // the unmatched-subgroup loop from building a failure result. toString() can render "0..1"
+                // from the original string while the min/max FIELDS read wrong, so the printed multiplicity
+                // above proves nothing about this.
+                org.junit.platform.console.shadow.picocli.CommandLine.Range r = gs.multiplicity();
+                System.out.println("     multiplicity fields: min=" + r.min + " (want 0)"
+                        + " max=" + r.max + " (want 1)"
+                        + " isVariable=" + r.isVariable
+                        + (r.min == 0 ? "  OK" : "  <== WRONG, group reads as REQUIRED"));
+            }
         }
         catch (Throwable t)
         {
@@ -113,5 +142,76 @@ public class ArgGroupProbe
     private static String q(String s)
     {
         return s == null ? "<<NULL>>" : ("[" + s + "]");
+    }
+
+    /**
+     * The LAUNCHER's OWN spec, which is the only one that matters.
+     *
+     * <p>Every earlier reading here built a spec for a simple object and saw ONE group; the command the
+     * launcher runs is ExecuteTestsCommand, whose groups arrive through @Mixin fields --
+     * TestDiscoveryOptionsMixin alone declares three. The mixin path is exactly where an earlier bug (#231)
+     * silently lost options, so a group's `validate` surviving on a simple spec says nothing about surviving
+     * on this one. GroupMatchContainer.validate fails an unmatched subgroup only when `validate()` is TRUE
+     * and multiplicity().min != 0, so those two values, per group, decide the launcher's failure.
+     */
+    private static void dumpExecuteSpec()
+    {
+        try
+        {
+            Class<?> cmd = Class.forName("org.junit.platform.console.command.ExecuteTestsCommand");
+            Class<?> fac = Class.forName("org.junit.platform.console.command.ConsoleTestExecutor$Factory");
+            java.lang.reflect.Constructor<?> cc = cmd.getDeclaredConstructor(fac);
+            cc.setAccessible(true);
+            Object inst = cc.newInstance(new Object[] { null });   // the factory is unused for spec building
+            org.junit.platform.console.shadow.picocli.CommandLine.Model.CommandSpec sp =
+                    org.junit.platform.console.shadow.picocli.CommandLine.Model.CommandSpec
+                            .forAnnotatedObject(inst);
+            System.out.println("EXECUTE SPEC: options=" + sp.options().size()
+                    + " argGroups=" + sp.argGroups().size());
+            for (Object g : sp.argGroups())
+            {
+                dumpGroup((org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec) g, "  ");
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println("EXECUTE SPEC FAILED: " + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void dumpGroup(org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec g,
+                                  String pad)
+    {
+        // One accessor at a time. The whole-line print NPE'd, and which member is null is the finding --
+        // picocli reads `multiplicity().min` with no null check, so a null multiplicity is a crash in its
+        // own validation path rather than a wrong answer.
+        String vs = "?";
+        String ms = "?";
+        String as = "?";
+        String ss = "?";
+        try { vs = String.valueOf(g.validate()); } catch (Throwable t) { vs = "THREW " + t.getClass().getName(); }
+        try
+        {
+            org.junit.platform.console.shadow.picocli.CommandLine.Range r = g.multiplicity();
+            ms = (r == null) ? "NULL <== " : ("min=" + r.min + " max=" + r.max);
+        }
+        catch (Throwable t) { ms = "THREW " + t.getClass().getName(); }
+        try { as = String.valueOf(g.args() == null ? "NULL" : "" + g.args().size()); }
+        catch (Throwable t) { as = "THREW " + t.getClass().getName(); }
+        try { ss = String.valueOf(g.subgroups() == null ? "NULL" : "" + g.subgroups().size()); }
+        catch (Throwable t) { ss = "THREW " + t.getClass().getName(); }
+        System.out.println(pad + "group validate=" + vs + " " + ms + " args=" + as + " subgroups=" + ss);
+        if (!"?".equals(ss) && ss.startsWith("THREW")) { return; }
+        try
+        {
+            for (Object sub : g.subgroups())
+            {
+                dumpGroup((org.junit.platform.console.shadow.picocli.CommandLine.Model.ArgGroupSpec) sub, pad + "  ");
+            }
+        }
+        catch (Throwable t)
+        {
+            System.out.println(pad + "  subgroup walk THREW " + t.getClass().getName());
+        }
     }
 }

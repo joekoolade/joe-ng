@@ -874,6 +874,21 @@ public final class Baseline
         int r = slot % OP_MAX;
         if (regHolds[r] != slot)
         {
+            // SAVE WHAT WE ARE ABOUT TO EVICT. Slots differing by a multiple of OP_MAX share this register by
+            // construction, so reloading `slot` overwrites whatever it currently holds. pushReg has always
+            // spilled the displaced slot before reusing a register; this path did not, and a value whose ONLY
+            // copy was that register was simply LOST -- the next read of it reloaded a memory home nobody had
+            // written and got whatever was there.
+            //
+            // Unlike pushReg, the held slot need not be exactly `slot - OP_MAX`: any live slot congruent mod
+            // OP_MAX can be resident. `held < sp` is the liveness test -- a popped slot is dead and its memory
+            // home is nobody's business. Spilling a slot that happens to be clean is a redundant store;
+            // failing to spill a dirty one loses it.
+            int held = regHolds[r];
+            if (held >= 0 && held < sp && held != slot)
+            {
+                curCb.emit(A64Enc.strx(OP_BASE + r, 31, opStackBase + held * 8));
+            }
             curCb.emit(A64Enc.ldrx(OP_BASE + r, 31, opStackBase + slot * 8));
             regHolds[r] = slot;
         }

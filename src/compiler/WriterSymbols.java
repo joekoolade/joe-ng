@@ -149,6 +149,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     {
         throw new UnsupportedOperationException("ldc class-literal not compiled by the host writer");
     }
+    public boolean isWatchedCall(int methodCp)
+    {
+        return false;   // host writer: never watches a call site
+    }
+
     public boolean isGetClass(int methodCp)
     {
         return false;   // host writer: no getClass intrinsic (VM's own code doesn't call it)
