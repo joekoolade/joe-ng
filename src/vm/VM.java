@@ -46,6 +46,11 @@ public final class VM
      */
     public static void boot()
     {
+        // FIRST OP OF THE IMAGE ENTRY, and the order is load-bearing. x16 is the assembler's scratch register
+        // and every compiled dispatch does `blr x16`, so after a wild branch it still holds the target that was
+        // branched TO -- the one fact the branch itself destroys. Anything executed before this can clobber it.
+        // On a normal boot the value is meaningless and unused.
+        long tgt = Magic.readX16();
         // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
         // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
         // vtable-or-itable slot resolving to 0x80000). Silently re-running boot then looks like an endless reboot
@@ -69,12 +74,19 @@ public final class VM
             // Without this the report names a method (unreliably -- the frame walk guesses nearest-body-below)
             // and says nothing about WHAT went wrong, which is the difference between chasing the linker and
             // chasing dispatch.
+            Uart.write(Magic.bytes("\n    branched TO x16=0x"));
+            printHex(tgt);
+            Uart.write(Magic.bytes(" (image entry=0x"));
+            printHex(0x80000L);
+            Uart.write(Magic.bytes(", code arena base=0x"));
+            printHex(Heap.CODE_BASE);
+            Uart.putc(0x29);
             Uart.write(Magic.bytes("\n    call site x30-4=0x"));
             printHex(src - 4L);
             Uart.write(Magic.bytes(" insn=0x"));
             printHex(Magic.load32(src - 4L) & 0xFFFFFFFFL);
             Uart.write(Magic.bytes("\n    preceding: "));
-            long w = src - 20L;
+            long w = src - 96L;
             while (w < src)
             {
                 Uart.write(Magic.bytes(" 0x"));
@@ -93,8 +105,7 @@ public final class VM
                 printHex(Magic.load32(w) & 0xFFFFFFFFL);
                 w += 4L;
             }
-            Uart.write(Magic.bytes("\n    code arena base=0x"));
-            printHex(Heap.CODE_BASE);
+
             Uart.write(Magic.bytes("\n    Halting (was an endless silent reboot loop). ***\n"));
             while (true)
             {
