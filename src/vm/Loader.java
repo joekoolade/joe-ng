@@ -3427,8 +3427,19 @@ public final class Loader
         {
             q += 1;
         }
-        addPend(indyNameBuf, internIndyNameAt(start, (int) (q - start)), 0, 0, PEND_PULL);
+        int off = internIndyNameAt(start, (int) (q - start));
+        if (INDY_IFACE_WATCH)
+        {
+            Uart.write(Magic.bytes("  pendiface "));
+            printNameAt(indyNameBuf, off);
+            Uart.putc(0x0A);
+        }
+        addPend(indyNameBuf, off, 0, 0, PEND_PULL);
     }
+
+    /** Trace every functional interface RTA records for a pull -- the step between "the indy names it" and
+     *  "the class is registered", which is where a lambda's interface can go missing without a word. */
+    private static final boolean INDY_IFACE_WATCH = false;
 
     /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gcp}/{@code gbase}). */
     private static int classCpNameOff(int idx)
@@ -3437,10 +3448,26 @@ public final class Loader
     }
 
     /** Append a pending ref (dedup-free; the pull/resolve phases idempotently re-check registration). */
+    /** One-time report: the pend list filled, so RTA is silently incomplete from here on. */
+    private static boolean pendFullReported;
+
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
     {
         if (pendN >= MAXPEND)
         {
+            // SAY SO. Every other loader table capHalts on overflow ("halt with a clear message rather than
+            // OOB-corrupt"); this one just stops recording, which makes RTA silently incomplete -- a class
+            // that IS referenced simply never gets pulled, and the failure surfaces arbitrarily far away as
+            // an unresolved type. It is not halted because a truncated closure still boots, and halting an
+            // image that merely brushes the cap would be worse than finishing with a named gap.
+            if (!pendFullReported)
+            {
+                pendFullReported = true;
+                Uart.write(Magic.bytes("\n  PEND LIST FULL: RTA is now INCOMPLETE -- refs past this point are"
+                        + " dropped and their classes never pulled. MAXPEND="));
+                VM.printDec(MAXPEND);
+                Uart.putc(0x0A);
+            }
             return;
         }
         pendBase[pendN] = base;
