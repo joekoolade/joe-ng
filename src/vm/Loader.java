@@ -14454,6 +14454,41 @@ public final class Loader
     }
 
     /** Build the synthetic lambda class (thunk + imap + itable dir + Type + TIB); returns the TIB address. */
+    /**
+     * RESOLVE instead of branching when a hand-emitted thunk's target is 0.
+     *
+     * <p>COMPILED dispatch sites get {@code dispatchTargetGuard}, whose null arm diverts to VIRTUAL_RESOLVE.
+     * A hand-emitted thunk had no such arm: it does {@code ldr x16, vtable[slot]} and {@code br x16}, so a
+     * slot RTA pruned reads 0 and branches to 0 -- which the firmware's low-memory shim turns into a silent
+     * re-entry of the image entry.
+     *
+     * <p>THAT FAILURE IS UNTRACEABLE, and specifically so: {@code br} does not write x30, so the
+     * BOOT RE-ENTERED report's x30 is a STALE return address from an earlier, healthy call, and every frame
+     * it names is an artifact. The launcher's wild branch was mis-attributed for several boots to a perfectly
+     * good `blr` in ArraySpliterator.forEachRemaining because of exactly that.
+     *
+     * <p>The thunk already handles the sibling case: when {@code globalVtableSlot} answers -1 it emits
+     * `movz x17, siteIndex` + the trampoline address and lets the shared branch call it. This is the same
+     * repair for the case that slipped through -- a slot number that IS valid but whose vtable BUFFER is
+     * still 0 because the body was never compiled. Same registers, same trampoline, same first-call
+     * resolution against the receiver.
+     *
+     * <p>Five words, and it cannot make a working thunk fail: it fires only on a target of 0, which could
+     * not have branched anywhere useful.
+     */
+    private static int emitThunkTargetGuard(long thunk, int w, int mref)
+    {
+        long tramp = virtualTramp();
+        if (tramp == 0L)
+        {
+            return w;                                   // no trampoline to route to: leave the thunk as it was
+        }
+        w = emitAt(thunk, w, A64Enc.cbnz(16, 5));       // target non-zero -> skip the four words below
+        w = emitAt(thunk, w, A64Enc.movz(17, virtualSiteIndex(mref), 0));   // x17 = site (name+descriptor)
+        w = emitTrampAddr(thunk, w, tramp);             // x16 = the late-dispatch trampoline (3 words)
+        return w;
+    }
+
     static long buildLambdaTib(int idx)
     {
         long ifaceType = lambdaIfaceType(idx);
@@ -14552,6 +14587,7 @@ public final class Loader
                 w = emitAt(thunk, w, A64Enc.ldrx(16, 0, 0));                 // x16 = recv.tib (TIB@0)
                 w = emitAt(thunk, w, A64Enc.ldrx(16, 16, 8 + slot * 8));     // x16 = vtable[slot]
             }
+            w = emitThunkTargetGuard(thunk, w, lambdaImplMref(idx));    // x16 == 0 -> resolve late, not a wild branch
             if (boxRet)
             {
                 w = emitAt(thunk, w, A64Enc.blr(16));                        // CALL: the result must be boxed
