@@ -76,6 +76,29 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`StringBuilder implements CharSequence` -- the supertype diff's FIRST find (2026-09-07, PI-VALIDATED).**
+  Stock is `implements Appendable, CharSequence`; the overlay declared only `Appendable`. An overlay WINS the
+  name, so a stock interface it omits **ceases to exist for that class** -- nothing declaring a
+  `CharSequence` parameter could bind to a StringBuilder.
+  - **The identical trap to this class dropping `Appendable`** (which broke `String.replaceAll`, since stock
+    `Matcher` declares its sink as `Appendable`) and to `PrintStream` dropping `OutputStream` (which silenced
+    the launcher completely). **The difference is that this one was reported at BUILD TIME** by
+    `make overlaycheck`'s new supertype diff, instead of by a library failing somewhere unrelated at run time.
+  - `subSequence` was the only missing member -- `length`, `charAt` and `toString` were already here. It
+    returns the `String` from `substring` (a String IS a CharSequence), so the existing bounds checks apply
+    and an out-of-range request throws where stock throws.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite): NO PARITY DIFF**, which is the assertion for this
+    change -- adding an interface widens the itable directory and `subSequence` adds a virtual slot, and a
+    writer/loader disagreement prints ungated. **The log printing at all is the second check**: `System.out`
+    and every string built on the way there go through this class. `count=42 ok=true`,
+    `length=16 charAt(6)=4`, `Str.split[0..2] = a/b/c`, `words=25 distinct=16`, `ticks/core c1=50 c2=50
+    c3=50`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `steps/core 61/59/59/61`, `churnMB=625
+    live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK. QEMU: suite 30 programs,
+    `metal junit: ran 44, failures 0`; `overlay-check` 101 -> 100 dropped supertype(s), 0 new -- the tool
+    confirming its own finding closed. **Nothing in the suite passes a StringBuilder AS a CharSequence**, so
+    the boot proves no regression from widening the tables; the binding itself is javac's guarantee once the
+    interface is declared.
+
 - **A LAMBDA WITH A CAPTURED RECEIVER DROPPED EVERY CAPTURE AFTER THE FIRST (2026-09-07, PI-VALIDATED).**
   `buildLambdaTib`'s `kind == 5 || kind == 9` branch is written for a METHOD REFERENCE -- zero captures
   (unbound, `String::compareTo`) or one (bound, `obj::method`). With `nc >= 1` it emitted exactly one

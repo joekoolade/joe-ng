@@ -6,7 +6,7 @@ package java.lang;
  * {@code System.arraycopy} native). Fixed initial capacity (grown lazily) — enough for demand-loaded
  * demos. Compiled as a {@code java.base} patch.
  */
-public final class StringBuilder implements Appendable
+public final class StringBuilder implements Appendable, CharSequence
 {
     private byte[] value;
     private int count;
@@ -206,6 +206,26 @@ public final class StringBuilder implements Appendable
     public String substring(int start)
     {
         return substring(start, count);
+    }
+
+    /**
+     * {@code CharSequence.subSequence}, which is the only member of that interface this class did not
+     * already have -- {@code length}, {@code charAt} and {@code toString} were here all along.
+     *
+     * <p>Declaring the interface is the point, not this method. An overlay WINS the name, so a stock
+     * interface it omits ceases to exist for this class: nothing that declares a {@code CharSequence}
+     * parameter can bind to a StringBuilder. That is the same trap as this class dropping
+     * {@code Appendable}, which broke {@code String.replaceAll} because stock {@code Matcher} declares its
+     * sink as {@code Appendable} -- and it was found the same way both times, except that this time
+     * {@code make overlaycheck}'s supertype diff reported it at BUILD TIME instead of a library NPE-ing
+     * somewhere unrelated.
+     *
+     * <p>Returns the {@link String} from {@code substring}, which is a {@code CharSequence} -- the same
+     * bounds checks apply, so an out-of-range request throws where stock throws.
+     */
+    public CharSequence subSequence(int start, int end)
+    {
+        return substring(start, end);
     }
 
     public String substring(int start, int end)

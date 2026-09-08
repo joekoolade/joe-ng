@@ -90,7 +90,6 @@ supertype#java/lang/Short#java/lang/constant/Constable
 supertype#java/lang/StackTraceElement#java/io/Serializable
 supertype#java/lang/StringBuilder#java/io/Serializable
 supertype#java/lang/StringBuilder#java/lang/AbstractStringBuilder
-supertype#java/lang/StringBuilder#java/lang/CharSequence
 supertype#java/lang/StringBuilder#java/lang/Comparable
 supertype#java/lang/ThreadGroup#java/lang/Thread$UncaughtExceptionHandler
 supertype#java/lang/Throwable#java/io/Serializable
