@@ -1300,6 +1300,9 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFence(J)V", "vm/VM.unsafeFenceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setOut0(J)V",     "vm/VM.setOut0Addr");   // System.setOut
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setErr0(J)V",     "vm/VM.setErr0Addr");   // System.setErr
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setIn0(J)V",      "vm/VM.setIn0Addr");    // System.setIn
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.annoGet(JJ)J",      "vm/VM.annoGetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classAnnoGet(JJ)J", "vm/VM.classAnnoGetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoGet(JJJ)J", "vm/VM.fieldAnnoGetAddr");
