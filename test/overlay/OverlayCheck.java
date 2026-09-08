@@ -53,6 +53,10 @@ public final class OverlayCheck
     private final Map<String, ClassFile> parsed = new HashMap<>();
     /** owner#name#desc -> the classes that reference it. */
     private final Map<String, Set<String>> missing = new TreeMap<>();
+    /** {@code supertype#<overlay>#<stock supertype>} for each supertype an overlay drops. */
+    private final Set<String> droppedTypes = new TreeSet<>();
+    /** Internal name -> parsed STOCK class. Separate from {@link #parsed}, which prefers the OVERLAY. */
+    private final Map<String, ClassFile> stockParsed = new HashMap<>();
 
     private FileSystem jrt;
 
@@ -104,6 +108,7 @@ public final class OverlayCheck
         findOverlays(outDir);
         System.out.println("overlays that shadow a stock java.base class: " + overlays.size());
 
+        checkSupertypes();
         scanTree(outDir);
         scanJars(jarDir);
         if (deep)
@@ -122,8 +127,13 @@ public final class OverlayCheck
             out.add("# bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold");
             out.add("# until the day they ran. The check exists to stop NEW ones appearing silently.");
             out.addAll(missing.keySet());
+            out.add("#");
+            out.add("# Supertypes an overlay drops. A dropped SUPERCLASS or INTERFACE is as silent as a");
+            out.add("# dropped member and strictly worse: nothing that WRAPS the class can bind to it.");
+            out.addAll(droppedTypes);
             Files.write(write, out);
-            System.out.println("wrote " + missing.size() + " known gap(s) to " + write);
+            System.out.println("wrote " + missing.size() + " known gap(s) and "
+                    + droppedTypes.size() + " dropped supertype(s) to " + write);
             return;
         }
 
@@ -139,11 +149,39 @@ public final class OverlayCheck
                 fresh.add(key);
             }
         }
+        List<String> freshTypes = new ArrayList<>();
+        for (String key : droppedTypes)
+        {
+            if (!allowed.contains(key))
+            {
+                freshTypes.add(key);
+            }
+        }
 
+        if (!freshTypes.isEmpty())
+        {
+            System.out.println();
+            System.out.println("OVERLAY DROPS A SUPERTYPE -- nothing that WRAPS the class can bind to it:");
+            for (String key : freshTypes)
+            {
+                String[] part = key.split("#");
+                System.out.println("  " + part[1] + "  is missing  " + part[2]);
+            }
+            System.out.println();
+            System.out.println("Declare it on the overlay (`extends`/`implements`), or -- if the overlay");
+            System.out.println("deliberately binds to a different ancestor -- add the line to the baseline.");
+        }
+
+        if (fresh.isEmpty() && freshTypes.isEmpty())
+        {
+            System.out.println("overlay-check: " + missing.size() + " known gap(s), "
+                    + droppedTypes.size() + " known dropped supertype(s), 0 new -- OK");
+            return;
+        }
         if (fresh.isEmpty())
         {
-            System.out.println("overlay-check: " + missing.size() + " known gap(s), 0 new -- OK");
-            return;
+            System.out.println("overlay-check: " + freshTypes.size() + " NEW dropped supertype(s)");
+            System.exit(1);
         }
         System.out.println();
         System.out.println("OVERLAY DROPS A REFERENCED MEMBER -- each of these traps if the call is reached:");
@@ -164,7 +202,8 @@ public final class OverlayCheck
         System.out.println();
         System.out.println("Declare the member on the overlay, or -- if it is genuinely unreachable on metal --");
         System.out.println("add the line to the baseline file to record that as a deliberate decision.");
-        System.out.println("overlay-check: " + fresh.size() + " NEW gap(s)");
+        System.out.println("overlay-check: " + fresh.size() + " NEW gap(s), "
+                + freshTypes.size() + " NEW dropped supertype(s)");
         System.exit(1);
     }
 
@@ -416,6 +455,115 @@ public final class OverlayCheck
             }
         }
         return false;
+    }
+
+    /**
+     * Every supertype a stock class has that its overlay's own supertype closure does not.
+     *
+     * <p><b>A dropped SUPERCLASS or INTERFACE is as silent as a dropped member, and strictly worse.</b> A
+     * dropped member breaks calls TO it; a dropped supertype breaks everything that WRAPS the class. joe-ng
+     * has paid for this twice: {@code StringBuilder} not implementing {@code Appendable} broke
+     * {@code String.replaceAll} (stock {@code Matcher} declares its sink as {@code Appendable}), and
+     * {@code PrintStream} not extending {@code OutputStream} meant {@code System.out} was not an
+     * {@code OutputStream} at all -- so {@code new PrintWriter(System.out)} could not bind and the console
+     * launcher produced <b>no output whatsoever</b>, not a crash. Neither was visible to the member check
+     * this class was built around, which is why that arc's postmortem named this the highest-value gap.
+     *
+     * <p>Compared as a CLOSURE (superclasses and interfaces, transitively) rather than as the direct
+     * supertype, because an overlay may legitimately bind to a different ancestor: joe-ng's
+     * {@code PrintStream} extends {@code java.io.OutputStream} directly, skipping stock's
+     * {@code FilterOutputStream} whose wrapped-stream field is unused. The closure comparison still reports
+     * {@code FilterOutputStream} as dropped -- correctly, since it IS absent -- and that line belongs in the
+     * baseline as a recorded decision. Same rule as the member backlog: a line means known, not safe.
+     *
+     * <p>The overlay side is walked with {@link #parse}, which prefers an overlaid ancestor at each step --
+     * what the metal loader does -- so an overlay inheriting a supertype through another overlay counts.
+     */
+    private void checkSupertypes()
+    {
+        for (String name : new TreeSet<>(overlays.keySet()))
+        {
+            ClassFile stockCf = parseStock(name);
+            if (stockCf == null)
+            {
+                continue;                                // not a shadowed class after all
+            }
+            Set<String> want = new TreeSet<>();
+            collectSupers(stockCf, want, true);
+            Set<String> have = new TreeSet<>();
+            ClassFile overlayCf = parse(name);
+            if (overlayCf == null)
+            {
+                continue;
+            }
+            collectSupers(overlayCf, have, false);
+            for (String t : want)
+            {
+                if (!have.contains(t))
+                {
+                    droppedTypes.add("supertype#" + name + "#" + t);
+                }
+            }
+        }
+    }
+
+    /**
+     * The transitive superclass + interface closure of {@code cf}, excluding {@code java/lang/Object} (which
+     * every class has, so reporting it would be noise). {@code stockSide} selects which world each ancestor
+     * is read from: the stock one for what SHOULD be there, the overlay-preferring one for what IS.
+     */
+    private void collectSupers(ClassFile cf, Set<String> into, boolean stockSide)
+    {
+        String sup = cf.superClassName();
+        if (sup != null && !sup.equals("java/lang/Object") && into.add(sup))
+        {
+            ClassFile s = stockSide ? parseStock(sup) : parse(sup);
+            if (s != null)
+            {
+                collectSupers(s, into, stockSide);
+            }
+        }
+        String[] ifs = cf.interfaceNames();
+        if (ifs == null)
+        {
+            return;
+        }
+        for (String in : ifs)
+        {
+            if (!into.add(in))
+            {
+                continue;
+            }
+            ClassFile i = stockSide ? parseStock(in) : parse(in);
+            if (i != null)
+            {
+                collectSupers(i, into, stockSide);
+            }
+        }
+    }
+
+    /** The STOCK java.base class, parsed once -- {@link #parse} prefers the overlay, which this must not. */
+    private ClassFile parseStock(String name)
+    {
+        if (stockParsed.containsKey(name))
+        {
+            return stockParsed.get(name);
+        }
+        ClassFile cf = null;
+        byte[] b = stockBytes(name);
+        if (b != null)
+        {
+            try
+            {
+                cf = new ClassFile(b);
+            }
+            catch (Exception ex)
+            {
+                cf = null;                               // unparseable stock class: not this check's business
+            }
+        }
+        stockParsed.put(name, cf);
+        return cf;
     }
 
     /** Overlay bytes if this class is overlaid, else the stock java.base bytes; parsed once. */
