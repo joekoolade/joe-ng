@@ -76,6 +76,28 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Collections.singletonSpliterator`, DELEGATED rather than hand-written (2026-09-08, PI-VALIDATED).** The
+  overlay dropped it, so `ImmutableCollections$List12.spliterator()` -- reached from `Collection.stream()` on
+  any one- or two-element immutable list -- resolved nowhere and surfaced as a DENYLIST TRAP naming a list
+  Collections is not on. The overlay-drops-stock-members trap again.
+  - **It delegates to stock `Spliterators.spliterator(Object[], int)` instead of returning an anonymous
+    `Spliterator`, and that is the point:** a NEW CLASS INSIDE A java.base OVERLAY has broken the boot before
+    (`CAP EXCEEDED: bakeresolve-find`). `Spliterators` is public, not denylisted, not overlaid, and its
+    `ArraySpliterator` has been demand-loadable since the zip arc; it adds `SIZED|SUBSIZED` itself, so the
+    characteristics match stock's.
+  - **LAUNCHER: RUNNING REAL STREAM EVALUATION** -- `AbstractPipeline.evaluateToArrayNode` ->
+    `wrapAndCopyInto` -> `copyInto` -> `Streams$ConcatSpliterator.forEachRemaining` ->
+    `StreamSpliterators$WrappingSpliterator` -> the Sink chain. It stops on a DIFFERENT family:
+    **`DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): begin(J)V`** at
+    `Sink$ChainedReference.begin`, with `TRAPWIRE index=-1` -- which per this project's own note means a
+    LATE-RESOLUTION failure, not a denylisted class.
+  - **PI-VALIDATED:** no `CAP EXCEEDED` (the one real risk -- the new method references `Spliterators`, so
+    any image reaching it grows its closure), collections arms exact (`subList`, `keySet/values/entrySet`,
+    `linkedList`, `Arrays.sort`), `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `churnMB=625 live=32 intact=32`, `gc: collections=62`, WPA2 -> HTTP 200 OK.
+    **The suite never calls `Collection.stream()` on a 1-2 element immutable list**, so this boot confirms no
+    regression; the method itself was proven on QEMU by the launcher getting past the trap.
+
 - **`Class.isAssignableFrom` IGNORED INTERFACES ENTIRELY (2026-09-07, PI-VALIDATED).** The mirror answered
   by walking `Type.superType` -- the SUPERCLASS chain and nothing else -- so every interface answer was
   false: `Collection.class.isAssignableFrom(List.class)`, `...(ArrayList.class)` and
