@@ -130,6 +130,45 @@ public final class VM
                 }
                 p2 -= 4L;
             }
+            // IS THE GUARD THERE AT ALL? dispatchTargetGuard's null arm is `cbz x16 -> resolve`, and it is
+            // the only thing that can stop a zero target reaching the blr. If no `cbz x16` sits between the
+            // slot load and the branch, the site was lowered WITHOUT a guard -- which is a different bug from
+            // a guard that let 0 through, and the two are indistinguishable from the target value alone.
+            // Also report the slot load itself, since `ldr x16,[x17,#imm]` is itableDispatch's own
+            // `ldr x16,[itable + slot*8]` -- x17 is a runtime pointer there, not an immediate.
+            Uart.write(Magic.bytes("\n    guard: "));
+            long cbzAt = 0L;
+            long ldrAt = 0L;
+            long q = src - 8L;
+            while (q > src - 520L)
+            {
+                long i2 = Magic.load32(q) & 0xFFFFFFFFL;
+                if (cbzAt == 0L && (i2 & 0xFF00001FL) == 0xB4000010L)     // cbz x16, <off>
+                {
+                    cbzAt = q;
+                }
+                if (ldrAt == 0L && (i2 & 0xFFC003FFL) == 0xF9400230L)     // ldr x16,[x17,#imm]
+                {
+                    ldrAt = q;
+                }
+                q -= 4L;
+            }
+            if (cbzAt == 0L)
+            {
+                Uart.write(Magic.bytes("NO `cbz x16` within 130 words -- SITE LOWERED WITHOUT A GUARD"));
+            }
+            else
+            {
+                Uart.write(Magic.bytes("`cbz x16` at -"));
+                VM.printDec((int) ((src - cbzAt) / 4L));
+            }
+            if (ldrAt != 0L)
+            {
+                Uart.write(Magic.bytes("   slot load at -"));
+                VM.printDec((int) ((src - ldrAt) / 4L));
+                Uart.write(Magic.bytes(" slot#"));
+                VM.printDec((int) (((Magic.load32(ldrAt) >> 10) & 0xFFFL)));
+            }
             Uart.write(Magic.bytes("\n    following:  "));
             w = src;
             while (w < src + 32L)
