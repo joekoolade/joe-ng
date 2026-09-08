@@ -335,19 +335,34 @@ public final class Class<T> implements java.lang.reflect.Type
      * the Type nodes ({@code superType} at Type+8) via the {@code Magic.load64} intrinsic. Interface
      * assignability (itables) is not consulted; extend when reached code needs it.
      */
+    /**
+     * Is a value of {@code other} assignable to this type?
+     *
+     * <p>THIS USED TO WALK {@code Type.superType} AND NOTHING ELSE -- the SUPERCLASS chain -- so every
+     * INTERFACE answer was false: {@code Collection.class.isAssignableFrom(List.class)} said no, and so did
+     * {@code List.class.isAssignableFrom(ArrayList.class)}. The demo suite never caught it because the arm it
+     * asserts, {@code Number.isAssignableFrom(Integer)}, is a class-chain question that always worked.
+     *
+     * <p>picocli's {@code isMultiValue()} IS this call: {@code Collection.class.isAssignableFrom(
+     * field.getType())}. Answering false meant a {@code List<ClassSelector>} option was treated as
+     * single-valued, so a bare ClassSelector was stored into the List field -- and JUnit's
+     * {@code getExplicitSelectors} then called {@code addAll} on it, whose first act is {@code toArray()}.
+     *
+     * <p>It asks the VM now. {@code VM.typeAssignable} has always been the real rule: itable directories for
+     * interfaces, array covariance, and an O(1) display check for class targets. Keeping a second, weaker
+     * copy of that rule here bought nothing.
+     */
     public boolean isAssignableFrom(Class other)
     {
-        long t = other.typeAddr;
-        while (t != 0L)
+        if (other == null)
         {
-            if (t == typeAddr)
-            {
-                return true;
-            }
-            t = Magic.load64(t + 8L);                   // Type.superType
+            throw new NullPointerException();
         }
-        return false;
+        return assignable0(other.typeAddr, typeAddr);
     }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.assignable} -> {@code VM.typeAssignable}). */
+    private static native boolean assignable0(long fromType, long targetType);
 
     /**
      * The cheap half of the reflection surface {@code make overlaycheck} listed as REFERENCED but dropped.

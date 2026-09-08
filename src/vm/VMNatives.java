@@ -389,6 +389,12 @@ final class VMNatives
         return Loader.forNameMirror(nameArr);
     }
 
+    /** {@code Class.assignable0(from, target)} native: the VM's own type assignability, interfaces included. */
+    static long assignable(long fromType, long targetType)
+    {
+        return VM.typesAssignable(fromType, targetType);
+    }
+
     /**
      * {@code ClassLoader.resourceExists0(byte[])} native: does the classpath jar carry this exact path?
      *
