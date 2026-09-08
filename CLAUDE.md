@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A DEFAULT METHOD ON A LAMBDA RECEIVER RESOLVED NOWHERE (2026-09-08, PI-VALIDATED).**
+  `java.util.stream.Sink` has ONE abstract method (`accept`, inherited from `Consumer`) and defaults for
+  `begin`/`end`/`cancellationRequested` -- so javac makes a lambda a Sink, and the pipeline then calls
+  `downstream.begin(size)` on it from `Sink$ChainedReference.begin`.
+  - **A synthesised lambda has a Type and an itable directory but NO `clTab` entry**
+    (`finishLambdaClass` builds no registry entry), so `classRegByType` answers -1 and **both** existing
+    tiers -- the class-chain walk and `resolveViaInterfaces` -- are keyed on a registry index and cannot run.
+    The lambda's itable holds a thunk for the SAM only; the default body lives on the interface.
+  - **`resolveViaItableDir` is the missing tier:** the Type's itable DIRECTORY names the interfaces the
+    receiver satisfies, so walk those, resolve there, and search their super-interfaces too (Sink's `accept`
+    comes from Consumer). It runs only where the code previously returned `denylistTrap` unconditionally, so
+    it can turn a hard failure into a resolution and nothing else.
+  - **A PROBE THAT FAILED TO REPRODUCE IS PART OF THE EVIDENCE.** `test/jdk/junit/StreamProbe` PASSES all
+    five arms -- count, toArray, map, concat, and the launcher's exact
+    `concat().map().toArray(String[]::new)`. Stream evaluation is not broken; the launcher's failure is
+    CLOSURE-DEPENDENT, the "works in one closure, broken in another" signature this VM keeps producing. That
+    is evidence about the PROBE, so the program was instrumented instead.
+  - **The first probe also had the WRONG SHAPE:** two-element lists take `List12.spliterator`'s
+    `super.spliterator()` path, not the `singletonSpliterator` path the launcher takes. It cost a boot -- and
+    found a REAL ADJACENT GAP still unfixed: **`AbstractImmutableList.spliterator()` inherits from the `List`
+    DEFAULT and fails to resolve**, which any 2+-element immutable-list stream will hit.
+  - **What named it was printing WHAT THE RECEIVER IS, not just what was called on it:**
+    `synthesised(lambda/anno TIB)=1`, `super == Object`, no display, `size=0x18` (one capture), `itableDir`
+    non-zero. An unregistered class cannot be named from the registry, so the Type's SHAPE is what makes that
+    report actionable -- one boot instead of a chase.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no `DISPATCH ON UNREGISTERED TYPE`, no
+    `VIRTUALRESOLVE FAILED`, no `BOOT RE-ENTERED` -- and the paths this touches exact: `apply(5)=105`,
+    `lambda thread ran = 42`, `capturing lambda ran = 105`, `reflective lambda thread = 7`,
+    `ifacecall`/`ifacelate`/`ifacedflt`. `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `churnMB=625 live=32 intact=32`, `gc: collections=62`, WPA2 -> HTTP 200 OK. **The
+    suite has no lambda carrying a DEFAULT method**, so this boot confirms no regression on the dispatch
+    path; the new tier was proven on QEMU by the launcher clearing the blocker.
+  - **LAUNCHER: past it, into `java/nio/file` trap-wires (denylisted, expected) and then a NEW failure** --
+    a `BOOT RE-ENTERED` wild branch around `Spliterators$ArraySpliterator.forEachRemaining`. A wild branch is
+    a different and nastier family than the resolution gaps of the last several fixes.
+
 - **`Collections.singletonSpliterator`, DELEGATED rather than hand-written (2026-09-08, PI-VALIDATED).** The
   overlay dropped it, so `ImmutableCollections$List12.spliterator()` -- reached from `Collection.stream()` on
   any one- or two-element immutable list -- resolved nowhere and surfaced as a DENYLIST TRAP naming a list

@@ -8456,6 +8456,74 @@ public final class Loader
         return false;
     }
 
+    /**
+     * Resolve {@code name+desc} through the interfaces named in a Type's ITABLE DIRECTORY, for a receiver
+     * whose class is not in the registry at all.
+     *
+     * <p>A SYNTHESISED LAMBDA is exactly that receiver: {@code finishLambdaClass} builds it a Type and an
+     * itable directory but no {@code clTab} entry, so {@code classRegByType} answers -1 and the class-chain
+     * and {@code resolveViaInterfaces} tiers -- both keyed on a registry index -- cannot run.
+     *
+     * <p>That matters because a lambda can carry DEFAULT methods. {@code java.util.stream.Sink} has one
+     * abstract method ({@code accept}, inherited from {@code Consumer}) and defaults for {@code begin},
+     * {@code end} and {@code cancellationRequested}, so javac happily makes a lambda a Sink -- and the stream
+     * pipeline then calls {@code downstream.begin(size)} on it from
+     * {@code Sink$ChainedReference.begin}. The lambda's itable holds a thunk for the SAM only; the default
+     * body lives on the interface, which the directory names and nothing else did.
+     *
+     * <p>The interface's own super-interfaces are searched too, since a default can be inherited (Sink's
+     * {@code accept} comes from Consumer).
+     */
+    private static long resolveViaItableDir(long type, long nameOff, long descOff)
+    {
+        long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
+        if (dir == 0L)
+        {
+            return 0L;
+        }
+        long entry = dir;
+        long iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        while (iface != 0L)                             // 0 interfaceType terminates the directory
+        {
+            int ir = classRegByType(iface);
+            if (ir >= 0 && ir < clCount && clTab[ir] != null)
+            {
+                long b = resolveLinkTarget(clTab[ir].base + clTab[ir].nameOff, nameOff, descOff);
+                if (b != 0L)
+                {
+                    return b;
+                }
+                b = resolveViaInterfaces(ir, nameOff, descOff);
+                if (b != 0L)
+                {
+                    return b;
+                }
+            }
+            entry += ObjectModel.ITABLE_ENTRY_SIZE;
+            iface = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_IFACE_OFFSET);
+        }
+        return 0L;
+    }
+
+    /** 1 if {@code tib} is one of the synthesised TIBs (lambda / annotation) held in {@code lambdaTibRoots}. */
+    private static int isSynthesisedTib(long tib)
+    {
+        if (lambdaTibRoots == null)
+        {
+            return 0;
+        }
+        int i = 0;
+        while (i < lambdaTibRoots.length)
+        {
+            if (lambdaTibRoots[i] == tib)
+            {
+                return 1;
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
     private static void captureDirectIfaces()
     {
         int n = 0;
@@ -9075,9 +9143,48 @@ public final class Loader
                 {
                     return nb;
                 }
+                // A DEFAULT METHOD ON A LAMBDA. The receiver has no registry entry, but its Type carries an
+                // itable directory naming the interface it satisfies -- and that interface is where the
+                // default body lives. Try it before reporting; this is the whole reason a stream pipeline
+                // could not call Sink.begin on a lambda downstream.
+                long ib = resolveViaItableDir(type, vsName[idx], vsDesc[idx]);
+                if (ib != 0L && plausibleCode(ib))
+                {
+                    vsMemoIdx = idx;
+                    vsMemoType = type;
+                    vsMemoBuf = ib;
+                    return ib;
+                }
                 Uart.write(Magic.bytes("\n  DISPATCH ON UNREGISTERED TYPE (receiver's class not in the registry): "));
                 printNameAt(vsName[idx], 0);
                 printNameAt(vsDesc[idx], 0);
+                // WHAT the receiver is, not just what was called on it. Unregistered means the name is not
+                // recoverable from the class registry, so print the SHAPE instead: a synthesised lambda or
+                // annotation Type has superType == Object and no display, a writer-baked adopted Type has a
+                // real display, and an array Type carries an element type. Those are distinguishable, and
+                // without them this report says only "something".
+                Uart.write(Magic.bytes("\n    recv="));
+                VM.printHex(recv);
+                Uart.write(Magic.bytes(" tib="));
+                VM.printHex(tib);
+                Uart.write(Magic.bytes(" type="));
+                VM.printHex(type);
+                Uart.write(Magic.bytes("\n    size="));
+                VM.printHex(Magic.load64(type + 0));
+                Uart.write(Magic.bytes(" super="));
+                VM.printHex(Magic.load64(type + ObjectModel.TYPE_SUPER_OFFSET));
+                Uart.write(Magic.bytes(" itableDir="));
+                VM.printHex(Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET));
+                Uart.write(Magic.bytes("\n    depth="));
+                VM.printHex(Magic.load64(type + ObjectModel.TYPE_DEPTH_OFFSET));
+                Uart.write(Magic.bytes(" display="));
+                VM.printHex(Magic.load64(type + ObjectModel.TYPE_DISPLAY_OFFSET));
+                Uart.write(Magic.bytes(" elem="));
+                VM.printHex(Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET));
+                Uart.write(Magic.bytes(" objectType="));
+                VM.printHex(objectTypeAddr());
+                Uart.write(Magic.bytes("\n    synthesised(lambda/anno TIB)="));
+                VM.printDec(isSynthesisedTib(tib));
                 Uart.putc(0x0A);
             }
             return VM.denylistTrapAddr;
