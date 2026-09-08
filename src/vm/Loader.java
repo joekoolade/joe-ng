@@ -14149,6 +14149,22 @@ public final class Loader
     }
 
     /** Instance size of a lambda object: header + one field per captured value. */
+    /** Debug accessors for the lambda-site trace in MetalSymbols. */
+    static int lambdaCaptureCount(int idx)
+    {
+        return ClassReader.descParamCount(gbytes, mrefDescOff(idx));
+    }
+
+    static int lambdaSamArgcOf(int idx)
+    {
+        return lambdaSamArgc(idx);
+    }
+
+    static int lambdaImplKindOf(int idx)
+    {
+        return lambdaImplKind(idx);
+    }
+
     static int lambdaSize(int idx)
     {
         return 16 + ClassReader.descParamCount(gbytes, mrefDescOff(idx)) * 8;
@@ -14293,10 +14309,35 @@ public final class Loader
             }
             else
             {
-                // BOUND (obj::method): the receiver is the captured field[0]; the SAM args are ALREADY in
-                // x1..x(ia) where the instance method wants them. Load the receiver into x0.
-                Magic.store32(thunk + w * 4L, A64Enc.ldrx(0, 0, 16));          // x0 = obj.field[0] (captured recv)
-                w += 1;
+                // BOUND: the receiver is captured field[0]. ANY FURTHER CAPTURES ARE LEADING ARGUMENTS and
+                // must be loaded too -- this branch used to emit only the receiver load, which is correct
+                // for a one-capture method reference (obj::method) and SILENTLY DROPS captures 1..nc-1 for
+                // a lambda BODY, whose kind is also 5 when javac targets a private nestmate instance method.
+                //
+                // The symptom is very specific and was reproduced before this was found: capture 0 arrives
+                // intact and every later one is garbage, because x1.. still hold whatever the caller left
+                // there. picocli's launcher hit it as an Optional local containing an enum constant
+                // (VIRTUALRESOLVE FAILED ...$2.map(Function)Optional); see test/jdk/junit/CaptureProbe.
+                //
+                // Same shape as the kind 6/7 path below: shift the SAM args UP to x(nc)..x(nc+ia-1) first
+                // (high->low, so a shift never clobbers a source), then load the captures into x0..x(nc-1)
+                // with x0 LAST, since x0 is the object being read from. With nc == 1 the shift is a no-op
+                // mov and the load is the single receiver load this used to emit, so a genuine bound method
+                // reference is byte-for-byte unchanged.
+                int j = ia - 1;
+                while (j >= 0)
+                {
+                    Magic.store32(thunk + w * 4L, A64Enc.movReg(nc + j, 1 + j));   // x(nc+j) = samArg[j]
+                    w += 1;
+                    j -= 1;
+                }
+                int c = nc - 1;
+                while (c >= 0)
+                {
+                    Magic.store32(thunk + w * 4L, A64Enc.ldrx(c, 0, 16 + c * 8));  // xC = obj.field[c] (x0 last)
+                    w += 1;
+                    c -= 1;
+                }
             }
             int slot = globalVtableSlot(lambdaImplMref(idx));                 // vtable slot of the referenced method
             if (slot < 0)

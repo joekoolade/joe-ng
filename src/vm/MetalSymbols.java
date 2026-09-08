@@ -1,5 +1,7 @@
 package vm;
 
+import board.bcm2711.Uart;
+import magic.Magic;
 import asm.A64Enc;
 import asm.CodeBuffer;
 import compiler.Intrinsics;
@@ -262,8 +264,26 @@ final class MetalSymbols implements Symbols
     }
     public void lambdaTib(CodeBuffer cb, int reg, int idx)
     {
-        emitAddr(cb, reg, Loader.buildLambdaTib(idx));      // synthesise the lambda class now; bake its TIB
+        long tib = Loader.buildLambdaTib(idx);              // synthesise the lambda class now; bake its TIB
+        if (LAMBDA_WATCH)
+        {
+            Uart.write(Magic.bytes("  LAMBDA idx="));
+            VM.printDec(idx);
+            Uart.write(Magic.bytes(" nc="));
+            VM.printDec(Loader.lambdaCaptureCount(idx));
+            Uart.write(Magic.bytes(" samArgc="));
+            VM.printDec(Loader.lambdaSamArgcOf(idx));
+            Uart.write(Magic.bytes(" size="));
+            VM.printDec(Loader.lambdaSize(idx));
+            Uart.write(Magic.bytes(" kind="));
+            VM.printDec(Loader.lambdaImplKindOf(idx));
+            Uart.putc(0x0A);
+        }
+        emitAddr(cb, reg, tib);
     }
+
+    /** Compile-time trace of every lambda site: capture count, SAM argc, allocated size, impl kind. */
+    private static final boolean LAMBDA_WATCH = false;
     public boolean isRecordIndy(int idx)
     {
         return Loader.isRecordIndy(idx);
