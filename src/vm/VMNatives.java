@@ -57,6 +57,24 @@ final class VMNatives
         Magic.dsb();
     }
 
+    /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
+    static void setOut0(long ps)
+    {
+        Loader.setStdStream(Magic.bytes("out"), ps);
+    }
+
+    /** {@code System.setErr0(PrintStream)} native. */
+    static void setErr0(long ps)
+    {
+        Loader.setStdStream(Magic.bytes("err"), ps);
+    }
+
+    /** {@code System.setIn0(InputStream)} native. */
+    static void setIn0(long is)
+    {
+        Loader.setStdStream(Magic.bytes("in"), is);
+    }
+
     static long identity(long x)
     {
         return x;

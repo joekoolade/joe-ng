@@ -7221,6 +7221,27 @@ public final class Loader
         }
     }
 
+    /**
+     * Point {@code System.out}/{@code err}/{@code in} at {@code ref} -- the body of stock's {@code setOut0}
+     * family, which are natives precisely because those fields are {@code final} and the JDK reassigns them
+     * from the VM side.
+     *
+     * <p>Here the field is an ordinary static cell that {@link #seedSystemStreams} already writes at boot, so
+     * redirection is one store. JUnit's {@code StandardStreamsHandler} calls {@code System.setOut} to CAPTURE
+     * a test's output; without the native the call resolved nowhere and surfaced as a DENYLIST TRAP naming a
+     * list System is not on.
+     *
+     * <p>No {@code checkIO}: there is no SecurityManager on metal, and stock's own check is a no-op now.
+     */
+    static void setStdStream(byte[] name, long ref)
+    {
+        long slot = staticSlotOf(Magic.bytes("java/lang/System"), name);
+        if (slot != 0L)
+        {
+            Magic.store64(slot, ref);
+        }
+    }
+
     /** Byte offset of instance field {@code fname} declared by registered class {@code classIdx}, or -1.
      *  The byte[]-name sibling of {@link #vhFieldOffset} (which keys on a raw pointer + a TIB). */
     private static long instanceFieldOffset(int classIdx, byte[] fname)
@@ -8238,6 +8259,9 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentTimeMillis"))) { return VM.currentTimeMillisAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arraycopy")))         { return VM.arraycopyAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("identityHashCode")))  { return VM.identityAddr; }  // ref IS its address -> identity hash
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setOut0")))           { return VM.setOut0Addr; }   // (PrintStream)V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setErr0")))           { return VM.setErr0Addr; }   // (PrintStream)V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("setIn0")))            { return VM.setIn0Addr; }    // (InputStream)V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/Unsafe")))
         {
