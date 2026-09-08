@@ -97,6 +97,39 @@ public final class VM
             // boxing thunk has `blr x16` followed by its boxing epilogue and a frame teardown, while a
             // compiled body continues with ordinary code. Hand-emitted stubs carry NO dispatchTargetGuard,
             // which is the difference between "the guard let a bad target through" and "there was no guard".
+            // WHICH PATH WROTE x16. Scanning back for the instructions that can set it answers the one
+            // question the raw dump cannot: a `movz x16` is the miss path materialising a trampoline address
+            // (which SKIPS the dispatch guard by design -- "x16 is already a call"), an `ldr x16,[xN,#imm]` is
+            // the found path loading an itable/vtable slot (which the guard then checks), and a `mov x16,x0`
+            // is a helper's result being taken. Whichever appears LAST before the branch is the path taken.
+            Uart.write(Magic.bytes("\n    x16 written at:"));
+            long p2 = src - 4L;
+            long stop = src - 520L;
+            while (p2 > stop)
+            {
+                long insn = Magic.load32(p2) & 0xFFFFFFFFL;
+                // MASKS MUST NOT KEEP THE VARIABLE FIELDS. The first cut of this scan kept `hw` in the movk
+                // mask and `Rn` in the ldr mask, so BOTH silently never matched and the scan reported only
+                // movz -- which read as "x16 is only ever set by an immediate", a conclusion the instrument
+                // had manufactured. mask out hw (bits 22-21) and imm12/Rn (bits 21-5).
+                boolean movz = (insn & 0xFF80001FL) == 0xD2800010L;   // movz x16, #imm16, lsl #hw
+                boolean movk = (insn & 0xFF80001FL) == 0xF2800010L;   // movk x16, #imm16, lsl #hw
+                boolean ldr  = (insn & 0xFFC0001FL) == 0xF9400010L;   // ldr  x16, [xN, #imm]
+                boolean movr = (insn & 0xFFE0FFFFL) == 0xAA0003F0L;   // mov  x16, xN
+                if (movz || movk || ldr || movr)
+                {
+                    Uart.write(Magic.bytes(" -"));
+                    VM.printDec((int) ((src - p2) / 4L));
+                    Uart.putc(0x3A);
+                    if (movz) { Uart.write(Magic.bytes("movz")); }
+                    else if (movk) { Uart.write(Magic.bytes("movk")); }
+                    else if (ldr) { Uart.write(Magic.bytes("ldr")); }
+                    else { Uart.write(Magic.bytes("mov")); }
+                    Uart.write(Magic.bytes("=0x"));
+                    printHex(insn);
+                }
+                p2 -= 4L;
+            }
             Uart.write(Magic.bytes("\n    following:  "));
             w = src;
             while (w < src + 32L)
