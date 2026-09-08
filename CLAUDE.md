@@ -76,6 +76,47 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAMBDA THUNK'S TAIL BRANCH RESOLVES A NULL SLOT INSTEAD OF BRANCHING TO 0 (2026-09-08,
+  PI-VALIDATED).** A hand-emitted thunk had no equivalent of `dispatchTargetGuard`: it does
+  `ldr x16, vtable[slot]` then `br x16`, so a slot RTA pruned reads 0 and branches to 0 -- which the
+  firmware's low-memory shim turns into a silent re-entry of the image entry.
+  - **THE FAILURE IS UNTRACEABLE BY CONSTRUCTION, and that is the lesson. `br` DOES NOT WRITE x30**, so
+    `BOOT RE-ENTERED`'s x30 is a STALE return address from an earlier, healthy call and **every frame the
+    report derives from it is an artifact.** This bug was mis-attributed for several boots to a perfectly
+    good `blr x16` in `ArraySpliterator.forEachRemaining`, and THREE readings were built on that wrong
+    instruction: an unpatched relocation, an unguarded M8 indirect call, and an interface phase-A cell that
+    was never armed (that last one tested with a real change and REFUTED, then reverted).
+  - **WHAT FOUND IT: making the thunk CHECK before branching.** Six words turned an untraceable reboot into
+    a `DENYLIST TRAP` with a real stack -- `forEachRemaining` -> `ReferencePipeline$Head.forEach` ->
+    `LauncherDiscoveryRequestBuilder.filters` -- naming `action` as a method-reference lambda whose
+    referent's vtable slot number is valid but whose vtable BUFFER is still 0, the body never compiled.
+    **When a wild branch erases its own provenance, do not chase the provenance: make the branch refuse to
+    happen.**
+  - **The fix then writes itself**, because the thunk already handles the sibling case: when
+    `globalVtableSlot` answers -1 it emits `movz x17, siteIndex` + the trampoline and lets the shared branch
+    call it. The null arm now does the same for a valid slot number over an empty buffer -- same registers,
+    same trampoline, same first-call resolution against the receiver. Five words; it cannot break a working
+    thunk, firing only on a target of 0 which could not have branched anywhere useful.
+  - **Instruments kept, all off-cost (they run only in the wild-branch handler, which halts):** the report
+    now prints the branching INSTRUCTION (`bl 0` vs `blr xN` vs `br xN` are three different bugs), the words
+    around it, `Magic.readX16` for what it branched TO, and a backward scan naming which instruction last
+    wrote x16 plus whether a `cbz x16` guard exists. **The scan's first cut LIED** -- its movk mask kept the
+    `hw` field and its ldr mask kept `Rn`, so neither ever matched and it reported "only movz writes x16",
+    a conclusion the instrument had manufactured. **A mask must clear every VARIABLE field; a scan that
+    finds nothing looks exactly like a scan with nothing to find.**
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no `BOOT RE-ENTERED`, no fault/parity markers, and
+    every method-reference and lambda arm exact -- `reflective lambda thread = 7`, `apply(5)=105`,
+    `twice`/`twice`, `lambda thread ran = 42`, `capturing lambda ran = 105`. `ticks/core c1=50 c2=50 c3=50`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `churnMB=625 live=32 intact=32`,
+    `gc: collections=62`, WPA2 -> HTTP 200 OK. The change rewrites EVERY method-reference thunk, so thunk
+    layout and the code arena shift -- this project has twice had latent bugs surface from layout movement
+    alone, which is why hardware matters here.
+  - **LAUNCHER: past the wild branch and past discovery entirely, into SESSION CREATION** --
+    `SessionPerRequestLauncher.execute` -> `createSession` -> `DefaultLauncherSession.<init>`. Stops on
+    another case of the lambda-receiver family: `ClasspathAlignmentCheckingLauncherInterceptor.intercept`,
+    a synthesised-lambda receiver whose method the itable-directory tier does not find (the
+    `LauncherInterceptor$Invocation` gap).
+
 - **A DEFAULT METHOD ON A LAMBDA RECEIVER RESOLVED NOWHERE (2026-09-08, PI-VALIDATED).**
   `java.util.stream.Sink` has ONE abstract method (`accept`, inherited from `Consumer`) and defaults for
   `begin`/`end`/`cancellationRequested` -- so javac makes a lambda a Sink, and the pipeline then calls

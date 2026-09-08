@@ -46,6 +46,11 @@ public final class VM
      */
     public static void boot()
     {
+        // FIRST OP OF THE IMAGE ENTRY, and the order is load-bearing. x16 is the assembler's scratch register
+        // and every compiled dispatch does `blr x16`, so after a wild branch it still holds the target that was
+        // branched TO -- the one fact the branch itself destroys. Anything executed before this can clobber it.
+        // On a normal boot the value is meaningless and unused.
+        long tgt = Magic.readX16();
         // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
         // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
         // vtable-or-itable slot resolving to 0x80000). Silently re-running boot then looks like an endless reboot
@@ -59,6 +64,120 @@ public final class VM
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(src);
+            // THE INSTRUCTION THAT BRANCHED. x30 is the return address, so the call is at x30-4, and its
+            // ENCODING says which of two very different bugs this is:
+            //   0x94000000            -> `bl 0`: an UNPATCHED RELOCATION. patchRelocs never resolved the
+            //                            site, so it still holds the placeholder displacement.
+            //   0xD63F0000|(Rn<<5)    -> `blr xN`: a DISPATCH through a register that held 0 -- a pruned
+            //                            vtable/itable slot in code whose guard did not catch it.
+            //   0xD61F0000|(Rn<<5)    -> `br xN`: the same, from a tail-branching stub or thunk.
+            // Without this the report names a method (unreliably -- the frame walk guesses nearest-body-below)
+            // and says nothing about WHAT went wrong, which is the difference between chasing the linker and
+            // chasing dispatch.
+            Uart.write(Magic.bytes("\n    branched TO x16=0x"));
+            printHex(tgt);
+            Uart.write(Magic.bytes(" (image entry=0x"));
+            printHex(0x80000L);
+            Uart.write(Magic.bytes(", code arena base=0x"));
+            printHex(Heap.CODE_BASE);
+            Uart.putc(0x29);
+            Uart.write(Magic.bytes("\n    call site x30-4=0x"));
+            printHex(src - 4L);
+            Uart.write(Magic.bytes(" insn=0x"));
+            printHex(Magic.load32(src - 4L) & 0xFFFFFFFFL);
+            Uart.write(Magic.bytes("\n    preceding: "));
+            long w = src - 96L;
+            while (w < src)
+            {
+                Uart.write(Magic.bytes(" 0x"));
+                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                w += 4L;
+            }
+            // AND WHAT FOLLOWS. A hand-emitted thunk is identifiable by its shape: a lambda/method-ref
+            // boxing thunk has `blr x16` followed by its boxing epilogue and a frame teardown, while a
+            // compiled body continues with ordinary code. Hand-emitted stubs carry NO dispatchTargetGuard,
+            // which is the difference between "the guard let a bad target through" and "there was no guard".
+            // WHICH PATH WROTE x16. Scanning back for the instructions that can set it answers the one
+            // question the raw dump cannot: a `movz x16` is the miss path materialising a trampoline address
+            // (which SKIPS the dispatch guard by design -- "x16 is already a call"), an `ldr x16,[xN,#imm]` is
+            // the found path loading an itable/vtable slot (which the guard then checks), and a `mov x16,x0`
+            // is a helper's result being taken. Whichever appears LAST before the branch is the path taken.
+            Uart.write(Magic.bytes("\n    x16 written at:"));
+            long p2 = src - 4L;
+            long stop = src - 520L;
+            while (p2 > stop)
+            {
+                long insn = Magic.load32(p2) & 0xFFFFFFFFL;
+                // MASKS MUST NOT KEEP THE VARIABLE FIELDS. The first cut of this scan kept `hw` in the movk
+                // mask and `Rn` in the ldr mask, so BOTH silently never matched and the scan reported only
+                // movz -- which read as "x16 is only ever set by an immediate", a conclusion the instrument
+                // had manufactured. mask out hw (bits 22-21) and imm12/Rn (bits 21-5).
+                boolean movz = (insn & 0xFF80001FL) == 0xD2800010L;   // movz x16, #imm16, lsl #hw
+                boolean movk = (insn & 0xFF80001FL) == 0xF2800010L;   // movk x16, #imm16, lsl #hw
+                boolean ldr  = (insn & 0xFFC0001FL) == 0xF9400010L;   // ldr  x16, [xN, #imm]
+                boolean movr = (insn & 0xFFE0FFFFL) == 0xAA0003F0L;   // mov  x16, xN
+                if (movz || movk || ldr || movr)
+                {
+                    Uart.write(Magic.bytes(" -"));
+                    VM.printDec((int) ((src - p2) / 4L));
+                    Uart.putc(0x3A);
+                    if (movz) { Uart.write(Magic.bytes("movz")); }
+                    else if (movk) { Uart.write(Magic.bytes("movk")); }
+                    else if (ldr) { Uart.write(Magic.bytes("ldr")); }
+                    else { Uart.write(Magic.bytes("mov")); }
+                    Uart.write(Magic.bytes("=0x"));
+                    printHex(insn);
+                }
+                p2 -= 4L;
+            }
+            // IS THE GUARD THERE AT ALL? dispatchTargetGuard's null arm is `cbz x16 -> resolve`, and it is
+            // the only thing that can stop a zero target reaching the blr. If no `cbz x16` sits between the
+            // slot load and the branch, the site was lowered WITHOUT a guard -- which is a different bug from
+            // a guard that let 0 through, and the two are indistinguishable from the target value alone.
+            // Also report the slot load itself, since `ldr x16,[x17,#imm]` is itableDispatch's own
+            // `ldr x16,[itable + slot*8]` -- x17 is a runtime pointer there, not an immediate.
+            Uart.write(Magic.bytes("\n    guard: "));
+            long cbzAt = 0L;
+            long ldrAt = 0L;
+            long q = src - 8L;
+            while (q > src - 520L)
+            {
+                long i2 = Magic.load32(q) & 0xFFFFFFFFL;
+                if (cbzAt == 0L && (i2 & 0xFF00001FL) == 0xB4000010L)     // cbz x16, <off>
+                {
+                    cbzAt = q;
+                }
+                if (ldrAt == 0L && (i2 & 0xFFC003FFL) == 0xF9400230L)     // ldr x16,[x17,#imm]
+                {
+                    ldrAt = q;
+                }
+                q -= 4L;
+            }
+            if (cbzAt == 0L)
+            {
+                Uart.write(Magic.bytes("NO `cbz x16` within 130 words -- SITE LOWERED WITHOUT A GUARD"));
+            }
+            else
+            {
+                Uart.write(Magic.bytes("`cbz x16` at -"));
+                VM.printDec((int) ((src - cbzAt) / 4L));
+            }
+            if (ldrAt != 0L)
+            {
+                Uart.write(Magic.bytes("   slot load at -"));
+                VM.printDec((int) ((src - ldrAt) / 4L));
+                Uart.write(Magic.bytes(" slot#"));
+                VM.printDec((int) (((Magic.load32(ldrAt) >> 10) & 0xFFFL)));
+            }
+            Uart.write(Magic.bytes("\n    following:  "));
+            w = src;
+            while (w < src + 32L)
+            {
+                Uart.write(Magic.bytes(" 0x"));
+                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                w += 4L;
+            }
+
             Uart.write(Magic.bytes("\n    Halting (was an endless silent reboot loop). ***\n"));
             while (true)
             {

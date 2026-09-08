@@ -428,6 +428,21 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /**
+     * Read x16 = the TARGET of a dispatch, which is the one fact a wild branch destroys.
+     *
+     * <p>Every compiled dispatch loads its target into x16 and does {@code blr x16}, so after a branch to a
+     * bad target x16 still holds the value that was branched to -- but only until something clobbers it, and
+     * x16 is the assembler's scratch register. Read it as the FIRST op of the handler, before anything else.
+     *
+     * <p>The wild-branch report can already say WHERE the branch came from (x30) and WHAT instruction made it
+     * (the word at x30-4). This is the missing third fact: what it branched TO. Without it a `blr x16` whose
+     * target passed the inline guard -- non-zero, 4-aligned, below the code ceiling -- is unattributable.
+     */
+    public static long readX16()
+    {
+        throw intrinsic();
+    }
     /** Read x0 = the faulting call's receiver (for a wild-branch via blr). Must be the FIRST body op of a fault
      *  handler entered via B (not BL), before x0 is clobbered. */
     public static long readX0()

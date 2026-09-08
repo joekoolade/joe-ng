@@ -2681,6 +2681,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.movReg(pushReg(), 0));              // x0 = the faulting call's receiver (trap diagnostic)
         }
+        else if (id == Intrinsics.READ_X16)
+        {
+            cb.emit(A64Enc.movReg(pushReg(), 16));             // x16 = a dispatch's target (wild-branch diagnostic)
+        }
         else if (id == Intrinsics.RESUME)
         // restore the handler's callee-saved locals, exc->x9, SP=sp, br pc (no return)
         {

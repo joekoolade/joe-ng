@@ -95,6 +95,7 @@ public final class Intrinsics
     public static final int DC_CVAC = 49;            // clean D-cache line to PoC (cross-core / uncached visibility)
     public static final int READ_LR = 59;            // read x30 (link register) — caller return addr, for trap diagnostics
     public static final int READ_X0 = 60;            // read x0 — the faulting call's receiver, for trap diagnostics
+    public static final int READ_X16 = 81;           // read x16 — a dispatch's TARGET, for wild-branch diagnostics
     public static final int DC_CIVAC = 61;           // clean+invalidate D-cache line to PoC (read DMA/mailbox replies)
     public static final int IC_IVAU = 78;            // invalidate I-cache line by VA to PoU -- BROADCAST to every core
     public static final int SET_PRIO = 79;           // magic.setprio(Object,int) -> VMScheduler.setPriority
