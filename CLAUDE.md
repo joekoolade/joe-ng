@@ -2677,6 +2677,32 @@ defines the minimum the assembler must encode.
 
 ## Working agreements for the agent
 
+- **Run the HOST JVM control first when a library misbehaves.** Running the same jar and the same command
+  line on a stock JVM takes ten seconds and separates "our VM is wrong" from "the library does that anyway".
+  In the launcher arc this settled the four-times `--help` warning instantly -- and it was run late, after
+  boots had been spent. It is the FIRST action on any library-misbehaviour symptom, not the last.
+- **Reduce to a probe as the SECOND step, right after naming the symptom.** A launcher boot is ~10 minutes;
+  a probe boots in seconds. The lambda-capture bug went from open to fixed in an afternoon because it was
+  reduced first; earlier bugs in the same arc were chased at full-launcher scale for days.
+- **A new test should be an adversarial SHAPE probe, not another feature demo.** The suite's demos prove a
+  feature exists; they do not prove it survives a large program. Reproducing the SHAPE is not reproducing the
+  CONDITION -- a 4-capture lambda, a cross-method throw into a deep-stack handler, a reflective read of an
+  INHERITED field, two classes with same-named statics, a mutually-referencing `<clinit>` pair. Each is ~30
+  lines, and every one of them would have failed on a shipping image before the launcher ever ran. **The
+  probes written to diagnose an arc ARE its regression suite -- run them, do not just keep them.**
+- **A diagnostic must print the state it MEASURED, never one it assumed.** Three separate reports lied during
+  the launcher arc (the unwinder decoding a Throwable layout it never checked; `UNRESOLVED STATIC` asserting
+  "class never pulled"; a `CLINIT LOST` report that could not tell "never ran" from "already ran"), and each
+  redirected the search. A report that states an unmeasured cause is worse than no report.
+- **A bisect assumes the culprit is inside the change.** When every single-variable removal still fails in a
+  NEW place, the change is a perturbation, not a cause. And over a bug that depends on stale registers, a
+  bisect ranks ingredients by whether they disturb the accident -- arms can pass by LUCK. Ask what a passing
+  arm left undisturbed, not only what it removed.
+- **`make overlaycheck` does NOT see a dropped superclass or interface** (it diffs members only). That blind
+  spot has now cost two of the worst bugs in the project -- StringBuilder dropping `Appendable`, and
+  PrintStream dropping `OutputStream`, the latter producing TOTAL SILENCE from the launcher. Until the tool
+  diffs the supertype chain, check it by hand whenever an overlay is added or edited.
+
 - Validate on a **real Pi 4** (USB-TTL serial) from M0 onward; QEMU `raspi4b` is
   a test aid with partial peripheral emulation, not ground truth, and it is not
   part of building the VM.
