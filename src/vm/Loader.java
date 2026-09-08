@@ -3428,6 +3428,10 @@ public final class Loader
             q += 1;
         }
         int off = internIndyNameAt(start, (int) (q - start));
+        if (regBySigU(indyNameBuf + off) >= 0)
+        {
+            return;                                      // already registered: re-pending it every round
+        }                                                //   would grow the pend list for nothing
         if (INDY_IFACE_WATCH)
         {
             Uart.write(Magic.bytes("  pendiface "));
@@ -6552,6 +6556,22 @@ public final class Loader
                     if (gcpTag[c] == 18)
                     {
                         addIndyIfaceDep(i, c);          // ... and names its functional interface in a descriptor
+                        // AND PEND IT FOR A PULL. The dep list drives phase-A ORDERING, not pulling: a dep
+                        // naming a class that is not in this batch counts as satisfied. Pulling is RTA's job
+                        // in collectRefs -- which is SKIPPED for a settled blob (markSettled), so a lambda in
+                        // a class compiled by an earlier batch never gets its interface pulled at all.
+                        //
+                        // For a CALL that is survivable: it becomes a link stub and resolves on first use,
+                        // which is what makes the settled skip safe in general. A functional interface has no
+                        // such fallback -- it is named ONLY as the indy descriptor's return type, never as a
+                        // CONSTANT_Class, and buildLambdaTib bakes the resolved Type into the synthesised TIB
+                        // at compile time. A miss stores 0, which is ALSO the itable directory's end
+                        // sentinel, so the lambda satisfies no interface and every dispatch on it fails far
+                        // from the indy that caused it.
+                        //
+                        // probeAll is the right place precisely because it is the ONE pass markSettled does
+                        // not skip, and it already parses this blob's constant pool and visits this tag.
+                        pendIndyIface(c);
                     }
                 }
                 c += 1;
