@@ -11,6 +11,26 @@ package java.util;
  */
 public final class Collections
 {
+    /**
+     * A {@link Spliterator} over exactly one element -- package-private in stock, and reached from
+     * {@code ImmutableCollections$List12.spliterator()}, i.e. from {@code Collection.stream()} on any
+     * one- or two-element immutable list. JUnit's {@code DiscoveryRequestCreator.includedClassNamePatterns}
+     * does exactly that, and without this the call resolved nowhere and surfaced as a DENYLIST TRAP naming a
+     * list Collections is not on -- the overlay-drops-stock-members trap again.
+     *
+     * <p>DELEGATES rather than defining an anonymous {@code Spliterator}, which is the interesting part. A
+     * NEW CLASS INSIDE A java.base OVERLAY has broken the boot before ({@code CAP EXCEEDED:
+     * bakeresolve-find}), so the one-element spliterator is built from stock {@code Spliterators} instead --
+     * already demand-loadable here, and its {@code ArraySpliterator} adds {@code SIZED|SUBSIZED} itself, so
+     * the characteristics match what stock reports.
+     */
+    static <T> Spliterator<T> singletonSpliterator(T element)
+    {
+        Object[] one = new Object[1];
+        one[0] = element;
+        return Spliterators.<T>spliterator(one, Spliterator.ORDERED | Spliterator.IMMUTABLE | Spliterator.DISTINCT);
+    }
+
     public static void sort(List list)
     {
         int n = list.size();
