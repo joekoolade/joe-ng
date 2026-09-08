@@ -1135,6 +1135,7 @@ public final class VM
         if (sockZeroAddr == 0L) { long u = VMNatives.sockZero(); }
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
+        if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
         if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
         if (classModifiersAddr == 0L) { long u = VMNatives.classModifiers(0L); } // Class.getModifiers() native (reflection M1)
@@ -1850,6 +1851,35 @@ public final class VM
      * primitive-element arrays are invariant (only the exact-match in the walk succeeds). {@code arr instanceof
      * Object} works through the array Type's super = Object.
      */
+    /**
+     * Type-to-type assignability for {@code Class.isAssignableFrom}: is a value of {@code fromType}
+     * assignable to {@code targetType}?
+     *
+     * <p>The mirror used to answer this itself by walking {@code Type.superType}, which is the SUPERCLASS
+     * chain and nothing else -- so every INTERFACE answer was false. {@code Collection.isAssignableFrom(
+     * List.class)} said no, and picocli's {@code isMultiValue()} is exactly that call: a
+     * {@code List<ClassSelector>} option was treated as single-valued, so a bare ClassSelector was set into
+     * the List field and {@code getExplicitSelectors}' addAll called toArray() on it.
+     *
+     * <p>{@link #typeAssignable} has always been correct -- it walks itable directories, handles array
+     * covariance, and takes the O(1) display fast path for class targets. This just makes the mirror ask it
+     * instead of keeping a second, weaker copy of the rule.
+     */
+    static int typesAssignable(long fromType, long targetType)
+    {
+        if (fromType == 0L || targetType == 0L)
+        {
+            return fromType == targetType ? 1 : 0;      // a mirror with no Type answers only about itself
+        }
+        if (typeAssignable(fromType, targetType))
+        {
+            return 1;
+        }
+        // ...and the one relation a Type node cannot express: interface EXTENDS interface. An interface Type
+        // is a chain dead end, so typeAssignable answers class-implements-interface and stops there.
+        return Loader.ifaceExtends(fromType, targetType);
+    }
+
     private static boolean typeAssignable(long type, long targetType)
     {
         if (type != targetType && targetType != 0L && isArrayType(type) && isArrayType(targetType))
@@ -2328,6 +2358,7 @@ public final class VM
     static long sockZeroAddr;
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
+    static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
     static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)
     static long classModifiersAddr;    // VM.classModifiers(J)I — Class.getModifiers() native (reflection M1)

@@ -8338,6 +8338,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("assignable0")))       { return VM.assignableAddr; }    // (J,J)Z -- interfaces too
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("superclass0")))       { return VM.superclassAddr; }    // (Class)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldMods0")))        { return VM.fieldModsAddr; }     // (Class,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldTypeChar0")))    { return VM.fieldTypeCharAddr; } // (Class,byte[])I
@@ -8398,6 +8399,63 @@ public final class Loader
      * at {@code clCount}, for {@link #buildItableDir}'s transitive closure. Interfaces this class implements
      * are already loaded (dep ordering), so they resolve now.
      */
+    /**
+     * Does {@code fromType} extend the INTERFACE {@code targetType}, walking direct interfaces transitively?
+     *
+     * <p>The one subtype relation a Type node cannot express. An interface Type is a chain dead end -- depth
+     * -1, no display, no superclass link, and no itable directory of its own -- so {@code VM.typeAssignable}
+     * answers class-implements-interface (from the CLASS's itable dir) but not interface-EXTENDS-interface:
+     * {@code Collection.isAssignableFrom(List.class)} came back false. The relation is recorded, just
+     * elsewhere: {@code captureDirectIfaces} puts every class's and interface's direct interfaces in the
+     * class registry.
+     *
+     * <p>Deliberately consulted ONLY from the reflection path ({@code Class.isAssignableFrom}) and not from
+     * {@code typeAssignable} itself. {@code instanceof}/{@code checkcast} always have an OBJECT receiver,
+     * whose Type is a class, so they never ask this question -- putting a registry walk in that hot,
+     * dispatch-critical routine would buy nothing and risk everything.
+     */
+    static int ifaceExtends(long fromType, long targetType)
+    {
+        if (fromType == 0L || targetType == 0L || clTab == null)
+        {
+            return 0;
+        }
+        int reg = classRegByType(fromType);
+        if (reg < 0)
+        {
+            return 0;
+        }
+        return extendsIfaceFrom(reg, targetType, 0) ? 1 : 0;
+    }
+
+    /** Depth-bounded so a malformed (cyclic) interface graph cannot hang the reflection path. */
+    private static boolean extendsIfaceFrom(int reg, long targetType, int depth)
+    {
+        if (depth > 8)
+        {
+            return false;
+        }
+        int n = clIfaceRegN[reg];
+        int i = 0;
+        while (i < n)
+        {
+            int r = clIfaceReg[reg * MAX_DIRECT_IF + i];
+            if (r >= 0 && clTab[r] != null)
+            {
+                if (clTab[r].type == targetType)
+                {
+                    return true;
+                }
+                if (extendsIfaceFrom(r, targetType, depth + 1))
+                {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     private static void captureDirectIfaces()
     {
         int n = 0;

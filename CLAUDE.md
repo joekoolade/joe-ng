@@ -76,6 +76,43 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.isAssignableFrom` IGNORED INTERFACES ENTIRELY (2026-09-07, PI-VALIDATED).** The mirror answered
+  by walking `Type.superType` -- the SUPERCLASS chain and nothing else -- so every interface answer was
+  false: `Collection.class.isAssignableFrom(List.class)`, `...(ArrayList.class)` and
+  `List.class.isAssignableFrom(ArrayList.class)` all said NO.
+  - **picocli's `isMultiValue()` IS that call** (`Collection.class.isAssignableFrom(field.getType())`), so a
+    `List<ClassSelector>` option was treated as SINGLE-valued: picocli reflectively stored a bare
+    `ClassSelector` into a List field, and JUnit's `getExplicitSelectors` then did
+    `list.addAll(getSelectedClasses())` -- whose first act is `toArray()` on the argument.
+  - **LOCATED BY READING, WITH NO BOOT.** The failing line is bytecode 74, the
+    `addAll(getSelectedClasses())` arm, and that getter is a bare `getfield` -- so the FIELD held a scalar,
+    which is a picocli decision, and picocli makes it with isAssignableFrom. **The probe was then written to
+    CONFIRM the diagnosis BEFORE the fix**, which is the discipline the launcher postmortem asked for.
+  - **Two shapes, two halves.** Class-implements-interface: `VM.typeAssignable` already answers it (the
+    class's itable directory, plus array covariance and an O(1) display check), so the mirror ASKS THE VM
+    instead of keeping a second, weaker copy of the rule. Interface-EXTENDS-interface: **a Type node cannot
+    express it** -- an interface Type is a chain dead end (depth -1, no display, no superclass link, no
+    itable directory of its own) -- so `Loader.ifaceExtends` walks the class registry's direct-interface
+    records transitively, depth-bounded.
+  - **`ifaceExtends` is consulted from the REFLECTION PATH ONLY, deliberately.**
+    `instanceof`/`checkcast` always have an OBJECT receiver whose Type is a class, so they never ask the
+    interface-from-interface question; a registry walk in that hot, dispatch-critical routine would buy
+    nothing and risk everything.
+  - **WHY THE SUITE NEVER CAUGHT IT:** its one assertion is `Number.isAssignableFrom(Integer)`, a CLASS-chain
+    question, which always worked. `test/jdk/junit/AssignableProbe` now pins the interface arms, the class
+    controls, and three NEGATIVES (`List <- Collection`, `Integer <- Number`, `List <- String`) so that
+    "fixed" cannot quietly mean "answers true".
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** the bootstrap battery's twelve `instanceof` checks
+    all PASS (they run before `launch`, straight through `typeAssignable`), `Number.isAssignableFrom(Integer)
+    =1 reverse=0 self=1` including its negative, `isInstance: str=1 num=0 null=0`, `YNW`/`RP`, every
+    `iface*` arm exact, **no `LINK FAILED` for the new `assignable0` native**, `ticks/core c1=50 c2=50
+    c3=50`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `churnMB=625 live=32 intact=32`,
+    `gc: collections=62`, WPA2 -> HTTP 200 OK, no parity DIFF. QEMU: probe all eleven arms exact incl.
+    `picocli isMultiValue(List) = true`; suite 30 programs; `metal junit: ran 44, failures 0`.
+  - **LAUNCHER: into discovery FILTERS** -- `addFilters` -> `includedClassNamePatterns` ->
+    `Collection.stream()` -> `ImmutableCollections$List12.spliterator` ->
+    `java/util/Collections.singletonSpliterator`, which the Collections overlay drops.
+
 - **`StringBuilder implements CharSequence` -- the supertype diff's FIRST find (2026-09-07, PI-VALIDATED).**
   Stock is `implements Appendable, CharSequence`; the overlay declared only `Appendable`. An overlay WINS the
   name, so a stock interface it omits **ceases to exist for that class** -- nothing declaring a
