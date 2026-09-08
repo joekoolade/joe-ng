@@ -3427,8 +3427,23 @@ public final class Loader
         {
             q += 1;
         }
-        addPend(indyNameBuf, internIndyNameAt(start, (int) (q - start)), 0, 0, PEND_PULL);
+        int off = internIndyNameAt(start, (int) (q - start));
+        if (regBySigU(indyNameBuf + off) >= 0)
+        {
+            return;                                      // already registered: re-pending it every round
+        }                                                //   would grow the pend list for nothing
+        if (INDY_IFACE_WATCH)
+        {
+            Uart.write(Magic.bytes("  pendiface "));
+            printNameAt(indyNameBuf, off);
+            Uart.putc(0x0A);
+        }
+        addPend(indyNameBuf, off, 0, 0, PEND_PULL);
     }
+
+    /** Trace every functional interface RTA records for a pull -- the step between "the indy names it" and
+     *  "the class is registered", which is where a lambda's interface can go missing without a word. */
+    private static final boolean INDY_IFACE_WATCH = false;
 
     /** Name Utf8 offset of a {@code CONSTANT_Class} at cp index {@code idx} (for the current {@code gcp}/{@code gbase}). */
     private static int classCpNameOff(int idx)
@@ -3437,10 +3452,26 @@ public final class Loader
     }
 
     /** Append a pending ref (dedup-free; the pull/resolve phases idempotently re-check registration). */
+    /** One-time report: the pend list filled, so RTA is silently incomplete from here on. */
+    private static boolean pendFullReported;
+
     private static void addPend(long base, int classOff, int nameOff, int descOff, int kind)
     {
         if (pendN >= MAXPEND)
         {
+            // SAY SO. Every other loader table capHalts on overflow ("halt with a clear message rather than
+            // OOB-corrupt"); this one just stops recording, which makes RTA silently incomplete -- a class
+            // that IS referenced simply never gets pulled, and the failure surfaces arbitrarily far away as
+            // an unresolved type. It is not halted because a truncated closure still boots, and halting an
+            // image that merely brushes the cap would be worse than finishing with a named gap.
+            if (!pendFullReported)
+            {
+                pendFullReported = true;
+                Uart.write(Magic.bytes("\n  PEND LIST FULL: RTA is now INCOMPLETE -- refs past this point are"
+                        + " dropped and their classes never pulled. MAXPEND="));
+                VM.printDec(MAXPEND);
+                Uart.putc(0x0A);
+            }
             return;
         }
         pendBase[pendN] = base;
@@ -6525,6 +6556,22 @@ public final class Loader
                     if (gcpTag[c] == 18)
                     {
                         addIndyIfaceDep(i, c);          // ... and names its functional interface in a descriptor
+                        // AND PEND IT FOR A PULL. The dep list drives phase-A ORDERING, not pulling: a dep
+                        // naming a class that is not in this batch counts as satisfied. Pulling is RTA's job
+                        // in collectRefs -- which is SKIPPED for a settled blob (markSettled), so a lambda in
+                        // a class compiled by an earlier batch never gets its interface pulled at all.
+                        //
+                        // For a CALL that is survivable: it becomes a link stub and resolves on first use,
+                        // which is what makes the settled skip safe in general. A functional interface has no
+                        // such fallback -- it is named ONLY as the indy descriptor's return type, never as a
+                        // CONSTANT_Class, and buildLambdaTib bakes the resolved Type into the synthesised TIB
+                        // at compile time. A miss stores 0, which is ALSO the itable directory's end
+                        // sentinel, so the lambda satisfies no interface and every dispatch on it fails far
+                        // from the indy that caused it.
+                        //
+                        // probeAll is the right place precisely because it is the ONE pass markSettled does
+                        // not skip, and it already parses this blob's constant pool and visits this tag.
+                        pendIndyIface(c);
                     }
                 }
                 c += 1;
@@ -14267,6 +14314,35 @@ public final class Loader
     }
 
     /** Print the functional interface named by the indy descriptor at {@code idx}. */
+    /**
+     * Report WHY a lambda's functional interface resolved to Type 0, using the same checked-cause routing as
+     * the unresolved-static and null-class-literal reports. The name lives MID-DESCRIPTOR with no length
+     * prefix, so it is interned into {@code indyNameBuf} first -- {@code printWhyUnpulled} wants a
+     * Utf8-shaped run.
+     */
+    private static void printWhyLambdaIface(int idx)
+    {
+        long p = gbase + mrefDescOff(idx) + 2;
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;
+        if (u1(p) != 'L')
+        {
+            Uart.write(Magic.bytes("non-reference return"));
+            return;
+        }
+        long start = p + 1;
+        long q = start;
+        while (u1(q) != ';')
+        {
+            q += 1;
+        }
+        int off = internIndyNameAt(start, (int) (q - start));
+        printWhyUnpulled(indyNameBuf + off);
+    }
+
     private static void printLambdaIfaceName(int idx)
     {
         long p = gbase + mrefDescOff(idx) + 2;
@@ -14499,6 +14575,27 @@ public final class Loader
             // Name it rather than let that happen quietly.
             Uart.write(Magic.bytes("  LAMBDA IFACE UNRESOLVED "));
             printLambdaIfaceName(idx);
+            // AND THE CHECKED CAUSE, not just the name. A Type of 0 here has several possible reasons and
+            // they call for opposite responses: DENYLISTED means the null is intended, "absent from the
+            // classDir" means the jar/dir lookup failed, and "registered" means the class IS loaded and the
+            // problem is ORDERING -- the interface arrived after this thunk was built. Naming which one
+            // costs two lines and is the difference between a fix and a guess; the same routing already
+            // settled `NULL CLASS LITERAL` and `UNRESOLVED STATIC` in one boot each.
+            Uart.write(Magic.bytes(" -- "));
+            printWhyLambdaIface(idx);
+            // WHICH COMPILE. "outside the retry window" has two very different causes and the fixes are
+            // opposite: compileReuseTib TRUE means a LATE compile that failed to bracket itself with
+            // lzCompiling (the bug fixed three times already -- lazyCompileLocked had the bracket,
+            // compileMethodOnDemand and compileSigOnDemand got it in #213, clinitEntryOf later), while FALSE
+            // means a BATCH phase-B compile, where there is no retry by design and the interface should have
+            // arrived as a probeAll/addIndyIfaceDep dependency instead.
+            Uart.write(Magic.bytes(" [reuseTib="));
+            VM.printDec(compileReuseTib ? 1 : 0);
+            Uart.write(Magic.bytes(" lzCompiling="));
+            VM.printDec(lzCompiling ? 1 : 0);
+            Uart.write(Magic.bytes(" lzRetried="));
+            VM.printDec(lzRetried ? 1 : 0);
+            Uart.putc(0x5D);
             Uart.putc(0x0A);
         }
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
