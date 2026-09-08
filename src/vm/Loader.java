@@ -11429,6 +11429,17 @@ public final class Loader
         }
         registerAll();
         patchRelocsFrom(rcMark, rsMark);                // its own callees, including further link stubs
+        // INITIALIZE WHAT THIS BODY TOUCHES, before it can run -- what lazyCompileLocked does and this path
+        // did not. The compile above recorded every cross-class getstatic/new site it contains (JVMS 5.5
+        // active uses); without the drain they are noted and never acted on, so the body reads those classes'
+        // statics while they are still 0. A null that looks exactly like a value.
+        //
+        // This tier is the one that compiles a STATIC INTERFACE METHOD, which is registered nowhere else, and
+        // that is where it bit: JUnit's `CancellationToken.disabled()` is `getstatic
+        // DisabledCancellationToken.INSTANCE; areturn`. With that class never initialized the cell read 0, so
+        // `disabled()` returned null, and `Objects.requireNonNullElseGet(x, CancellationToken::disabled)`
+        // threw `NullPointerException: supplier.get()` -- three frames and one lambda away from the cause.
+        drainPendingInit();
         return bufBySigU(clsU, nameU, descU);
     }
 
