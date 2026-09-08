@@ -59,6 +59,42 @@ public final class VM
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(src);
+            // THE INSTRUCTION THAT BRANCHED. x30 is the return address, so the call is at x30-4, and its
+            // ENCODING says which of two very different bugs this is:
+            //   0x94000000            -> `bl 0`: an UNPATCHED RELOCATION. patchRelocs never resolved the
+            //                            site, so it still holds the placeholder displacement.
+            //   0xD63F0000|(Rn<<5)    -> `blr xN`: a DISPATCH through a register that held 0 -- a pruned
+            //                            vtable/itable slot in code whose guard did not catch it.
+            //   0xD61F0000|(Rn<<5)    -> `br xN`: the same, from a tail-branching stub or thunk.
+            // Without this the report names a method (unreliably -- the frame walk guesses nearest-body-below)
+            // and says nothing about WHAT went wrong, which is the difference between chasing the linker and
+            // chasing dispatch.
+            Uart.write(Magic.bytes("\n    call site x30-4=0x"));
+            printHex(src - 4L);
+            Uart.write(Magic.bytes(" insn=0x"));
+            printHex(Magic.load32(src - 4L) & 0xFFFFFFFFL);
+            Uart.write(Magic.bytes("\n    preceding: "));
+            long w = src - 20L;
+            while (w < src)
+            {
+                Uart.write(Magic.bytes(" 0x"));
+                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                w += 4L;
+            }
+            // AND WHAT FOLLOWS. A hand-emitted thunk is identifiable by its shape: a lambda/method-ref
+            // boxing thunk has `blr x16` followed by its boxing epilogue and a frame teardown, while a
+            // compiled body continues with ordinary code. Hand-emitted stubs carry NO dispatchTargetGuard,
+            // which is the difference between "the guard let a bad target through" and "there was no guard".
+            Uart.write(Magic.bytes("\n    following:  "));
+            w = src;
+            while (w < src + 32L)
+            {
+                Uart.write(Magic.bytes(" 0x"));
+                printHex(Magic.load32(w) & 0xFFFFFFFFL);
+                w += 4L;
+            }
+            Uart.write(Magic.bytes("\n    code arena base=0x"));
+            printHex(Heap.CODE_BASE);
             Uart.write(Magic.bytes("\n    Halting (was an endless silent reboot loop). ***\n"));
             while (true)
             {

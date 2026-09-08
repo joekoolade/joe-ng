@@ -8474,6 +8474,9 @@ public final class Loader
      * <p>The interface's own super-interfaces are searched too, since a default can be inherited (Sink's
      * {@code accept} comes from Consumer).
      */
+    /** Trace every resolution the itable-directory tier makes: which interface, which member, what address. */
+    private static final boolean ITABLE_DIR_WATCH = false;
+
     private static long resolveViaItableDir(long type, long nameOff, long descOff)
     {
         long dir = Magic.load64(type + ObjectModel.TYPE_ITABLE_DIR_OFFSET);
@@ -8491,11 +8494,33 @@ public final class Loader
                 long b = resolveLinkTarget(clTab[ir].base + clTab[ir].nameOff, nameOff, descOff);
                 if (b != 0L)
                 {
+                    if (ITABLE_DIR_WATCH)
+                    {
+                        Uart.write(Magic.bytes("  itabledir "));
+                        printNameAt(clTab[ir].base, clTab[ir].nameOff);
+                        Uart.putc(0x2E);
+                        printNameAt(nameOff, 0);
+                        printNameAt(descOff, 0);
+                        Uart.write(Magic.bytes(" -> 0x"));
+                        VM.printHex(b);
+                        Uart.putc(0x0A);
+                    }
                     return b;
                 }
                 b = resolveViaInterfaces(ir, nameOff, descOff);
                 if (b != 0L)
                 {
+                    if (ITABLE_DIR_WATCH)
+                    {
+                        Uart.write(Magic.bytes("  itabledir(super) "));
+                        printNameAt(clTab[ir].base, clTab[ir].nameOff);
+                        Uart.putc(0x2E);
+                        printNameAt(nameOff, 0);
+                        printNameAt(descOff, 0);
+                        Uart.write(Magic.bytes(" -> 0x"));
+                        VM.printHex(b);
+                        Uart.putc(0x0A);
+                    }
                     return b;
                 }
             }
