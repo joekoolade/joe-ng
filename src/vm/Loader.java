@@ -14267,6 +14267,35 @@ public final class Loader
     }
 
     /** Print the functional interface named by the indy descriptor at {@code idx}. */
+    /**
+     * Report WHY a lambda's functional interface resolved to Type 0, using the same checked-cause routing as
+     * the unresolved-static and null-class-literal reports. The name lives MID-DESCRIPTOR with no length
+     * prefix, so it is interned into {@code indyNameBuf} first -- {@code printWhyUnpulled} wants a
+     * Utf8-shaped run.
+     */
+    private static void printWhyLambdaIface(int idx)
+    {
+        long p = gbase + mrefDescOff(idx) + 2;
+        while (u1(p) != ')')
+        {
+            p += 1;
+        }
+        p += 1;
+        if (u1(p) != 'L')
+        {
+            Uart.write(Magic.bytes("non-reference return"));
+            return;
+        }
+        long start = p + 1;
+        long q = start;
+        while (u1(q) != ';')
+        {
+            q += 1;
+        }
+        int off = internIndyNameAt(start, (int) (q - start));
+        printWhyUnpulled(indyNameBuf + off);
+    }
+
     private static void printLambdaIfaceName(int idx)
     {
         long p = gbase + mrefDescOff(idx) + 2;
@@ -14499,6 +14528,27 @@ public final class Loader
             // Name it rather than let that happen quietly.
             Uart.write(Magic.bytes("  LAMBDA IFACE UNRESOLVED "));
             printLambdaIfaceName(idx);
+            // AND THE CHECKED CAUSE, not just the name. A Type of 0 here has several possible reasons and
+            // they call for opposite responses: DENYLISTED means the null is intended, "absent from the
+            // classDir" means the jar/dir lookup failed, and "registered" means the class IS loaded and the
+            // problem is ORDERING -- the interface arrived after this thunk was built. Naming which one
+            // costs two lines and is the difference between a fix and a guess; the same routing already
+            // settled `NULL CLASS LITERAL` and `UNRESOLVED STATIC` in one boot each.
+            Uart.write(Magic.bytes(" -- "));
+            printWhyLambdaIface(idx);
+            // WHICH COMPILE. "outside the retry window" has two very different causes and the fixes are
+            // opposite: compileReuseTib TRUE means a LATE compile that failed to bracket itself with
+            // lzCompiling (the bug fixed three times already -- lazyCompileLocked had the bracket,
+            // compileMethodOnDemand and compileSigOnDemand got it in #213, clinitEntryOf later), while FALSE
+            // means a BATCH phase-B compile, where there is no retry by design and the interface should have
+            // arrived as a probeAll/addIndyIfaceDep dependency instead.
+            Uart.write(Magic.bytes(" [reuseTib="));
+            VM.printDec(compileReuseTib ? 1 : 0);
+            Uart.write(Magic.bytes(" lzCompiling="));
+            VM.printDec(lzCompiling ? 1 : 0);
+            Uart.write(Magic.bytes(" lzRetried="));
+            VM.printDec(lzRetried ? 1 : 0);
+            Uart.putc(0x5D);
             Uart.putc(0x0A);
         }
         int nc = ClassReader.descParamCount(gbytes, mrefDescOff(idx));   // number of captured values
