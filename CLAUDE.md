@@ -76,6 +76,30 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`ConcurrentHashMap.newKeySet()` -- the overlay-drops-stock-members trap for the TENTH time (2026-09-09).**
+  The overlay declared no `newKeySet`, and a member a name-winning overlay does not declare CEASES TO EXIST:
+  the call resolved nowhere and surfaced as `LINK FAILED ... class OK but no body for that name+descriptor`
+  followed by a `DENYLIST TRAP` blaming a list `ConcurrentHashMap` is not on.
+  - **`KeySetView` extends `AbstractSet`, not stock's `CollectionView`** -- the same binding `EntryView` and
+    `ValueView` already use here, and its iterator walks a `snapshot()` so the view is weakly consistent
+    rather than fail-fast, which is the CHM semantics callers rely on.
+  - **`newKeySet()`, `newKeySet(int)` and `keySet(V)` all land together**, deliberately: adding only the one
+    method that trapped is how this family keeps costing a boot each time. A null mapped value makes `add`
+    throw `UnsupportedOperationException`, exactly as stock -- that is how `keySet()` differs from
+    `newKeySet()`.
+  - **`make overlaycheck` CAUGHT MY OWN NEW CLASS**, which is the supertype diff earning its keep on the tool
+    that was built for exactly this: `KeySetView is missing java/io/Serializable` (a free marker stock
+    declares -- FIXED by declaring it) and `is missing ConcurrentHashMap$CollectionView` (a deliberate
+    different-ancestor binding -- recorded in the baseline, which is what the baseline is for). Backlog
+    45 -> 44 gaps, 100 -> 101 supertypes.
+  - **`demo/DefaultIfaceDemo` IS IN THE BOOT SUITE NOW, and it was not before.** The previous entry claimed
+    its interface-typed `getClass`/`hashCode`/`toString`/`equals` arms were Pi-gated; they were not -- the
+    suite never launched that demo, so that boot claimed NO REGRESSION and nothing more. Wired in, together
+    with `newKeySet` arms in `demo/MapDemo`, so both are gated from here.
+  - **QEMU:** `newKeySet size=2 added=1 dup=0 has(a)=1 has(z)=0 iter=2` / `remove=1 again=0 size=1 empty=0`,
+    all four interface-typed arms `= 1`, `metal junit: ran 44, failures 0` / `ALL PASSED`, suite clean with no
+    fault, parity DIFF, `LINK FAILED` or mirror report. Host tests unchanged incl. `compiler: 37 checks`.
+
 - **`ServiceLoader` AND JAR RESOURCE STREAMS ON THE METAL -- and the INTERFACE-TYPED `getClass()` bug they
   found (2026-09-08).** The launcher is past `ServiceLoader.load`, which had been a denylist trap, and now
   stops inside `ServiceLoaderRegistry.load` on an ordinary overlay gap.

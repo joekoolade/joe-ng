@@ -46,7 +46,6 @@ java/util/Collections#emptyNavigableSet()Ljava/util/NavigableSet;
 java/util/Collections#emptySortedMap()Ljava/util/SortedMap;
 java/util/Collections#emptySortedSet()Ljava/util/SortedSet;
 java/util/Collections#unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;
-java/util/concurrent/ConcurrentHashMap#newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;
 java/util/concurrent/Semaphore#availablePermits()I
 java/util/concurrent/Semaphore#tryAcquire()Z
 java/util/jar/JarFile#<init>(Ljava/io/File;)V
@@ -131,6 +130,7 @@ supertype#java/util/Locale$Category#java/lang/Enum
 supertype#java/util/Locale$Category#java/lang/constant/Constable
 supertype#java/util/Random#java/io/Serializable
 supertype#java/util/Random#java/util/random/RandomGenerator
+supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
 supertype#java/util/concurrent/ConcurrentSkipListMap#java/util/concurrent/ConcurrentNavigableMap
 supertype#java/util/concurrent/Semaphore#java/io/Serializable
 supertype#java/util/concurrent/TimeUnit#java/io/Serializable
