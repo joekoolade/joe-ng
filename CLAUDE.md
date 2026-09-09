@@ -76,6 +76,35 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`java.util.logging` PROVIDED -- the blocker that was neither a denial nor a dropped overlay member
+  (2026-09-09).** `Logger`/`Level`/`LogRecord` live in the **`java.logging` MODULE**, and joe-ng's image
+  carries only `java.base` -- so the classes were **ABSENT ENTIRELY**. The report said exactly that
+  (`LINK FAILED ... class not in the classDir (nothing can load it)`), which is a THIRD diagnosis distinct
+  from `DENYLISTED` and from the overlay-drops-stock-members trap, and it named the cause with no boot spent
+  narrowing it.
+  - **This is a PROVISION, not an overlay**, and the distinction is load-bearing for the standing
+    guestsrc rule: that rule governs SHADOWING a stock class, and there is no stock class here to shadow.
+    `make overlaycheck` confirms it independently -- 0 new gaps and 0 new dropped supertypes, because the
+    tool finds nothing to diff against.
+  - **`java/` is already on `ImageBuilder.demandLoadable`**, so no writer change was needed; javac accepts
+    `--patch-module java.base=guestsrc` for a package owned by another module, which was the one structural
+    risk and was checked with a throwaway compile before any of it was written.
+  - **IT IS DELIBERATELY NOT SILENT: WARNING and above go to `System.err`, below is dropped.** Silence was
+    the easy choice and the wrong one -- libraries report real trouble through this and then CARRY ON, so a
+    dropped warning turns a nameable failure into a mystery somewhere later. JUnit's launcher logs a
+    `TestEngine` that fails to load at WARNING and continues with the engines that did load; on this VM that
+    is exactly the line worth having. `isLoggable` answers against the same threshold, so a dropped record is
+    never formatted -- the quiet levels cost nothing.
+  - **No `LogManager`, no handler chain, no hierarchy, no configuration, no resource bundles.** A logger is a
+    NAME, cached so the same name gives the same object (callers hold the reference). `getResourceBundle()`
+    is null, which is what stock answers for a logger created without one -- every logger here.
+  - **`demo/LoggingDemo` is in the boot suite**, and its arms are the ones that could be quietly wrong:
+    same-name identity, the level ORDERING (a level whose value did not order would silently change which
+    records survive), record field round-trip, and the visible write -- exactly one `[WARNING]` line and no
+    `[INFO]` line.
+  - **QEMU:** every `LoggingDemo` arm exact; host tests unchanged incl. `compiler: 37 checks`;
+    `overlay-check: 44 known gap(s), 101 known dropped supertype(s), 0 new`.
+
 - **`ConcurrentHashMap.newKeySet()` -- the overlay-drops-stock-members trap for the TENTH time (2026-09-09).**
   The overlay declared no `newKeySet`, and a member a name-winning overlay does not declare CEASES TO EXIST:
   the call resolved nowhere and surfaced as `LINK FAILED ... class OK but no body for that name+descriptor`
