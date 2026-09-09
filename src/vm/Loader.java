@@ -8562,6 +8562,28 @@ public final class Loader
             int ir = classRegByType(iface);
             if (ir >= 0 && ir < clCount && clTab[ir] != null)
             {
+                // THE RECEIVER'S OWN ENTRY FIRST. For a lambda the sought method is usually the SAM, which is
+                // ABSTRACT on the interface -- there is no body to resolve to, and the implementation is the
+                // synthesised THUNK sitting in this very itable. Reading the slot answers that; searching the
+                // interface for a body cannot, and reported `DISPATCH ON UNREGISTERED TYPE ... get()` for
+                // every Supplier lambda whose call site missed the directory.
+                //
+                // Correct for defaults too, and preferred for them: buildItableFor already resolves a default
+                // to the implementation THIS receiver should run, which is more specific than whatever body
+                // the declaring interface happens to carry.
+                int slot = ifmSlotAbs(ir, nameOff, descOff);
+                if (slot >= 0)
+                {
+                    long itable = Magic.load64(entry + ObjectModel.ITABLE_ENTRY_TABLE_OFFSET);
+                    if (itable != 0L)
+                    {
+                        long hit = Magic.load64(itable + slot * 8L);
+                        if (hit != 0L)
+                        {
+                            return hit;
+                        }
+                    }
+                }
                 long b = resolveLinkTarget(clTab[ir].base + clTab[ir].nameOff, nameOff, descOff);
                 if (b != 0L)
                 {
@@ -8834,6 +8856,26 @@ public final class Loader
         }
         int s = ifmSlotIn(r, gbase, mrefNameOff(idx), mrefDescOff(idx));
         return s >= 0 ? s : 0;
+    }
+
+    /**
+     * As {@link #ifmSlotIn}, but with the name and descriptor at two INDEPENDENT absolute Utf8 addresses --
+     * which is how a dispatch site carries them ({@code vsName}/{@code vsDesc}), one per blob.
+     */
+    private static int ifmSlotAbs(int r, long nameU, long descU)
+    {
+        int s = 0;
+        while (s < clTab[r].ifmCount)
+        {
+            int i = clTab[r].ifmStart + s;
+            if (utf8EqAt(nameU, 0, ifBase[i], ifNameOff[i])
+                    && utf8EqAt(descU, 0, ifBase[i], ifDescOff[i]))
+            {
+                return s;
+            }
+            s += 1;
+        }
+        return -1;
     }
 
     /** Slot of (name, desc in {@code base}) within registered interface {@code r}'s run, or -1. */
