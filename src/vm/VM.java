@@ -3267,6 +3267,12 @@ public final class VM
         Uart.write(Magic.bytes("interface defaults + Object methods through an interface:\n"));
         Loader.launchMain(Magic.bytes("demo/DefaultIfaceDemo"), Magic.bytes(""));
 
+        // java.util.logging: NOT java.base -- it lives in the java.logging module, so these classes were
+        // absent from the image entirely until joe-ng provided them. Libraries report real trouble through
+        // this and then carry on, so WARNING and above are written rather than dropped.
+        Uart.write(Magic.bytes("java.util.logging (provided; java.logging is not in the image):\n"));
+        Loader.launchMain(Magic.bytes("demo/LoggingDemo"), Magic.bytes(""));
+
         // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
         // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
         // results. Pure/leaf methods that touch no static state -- the frontier of "real java.base on metal".
