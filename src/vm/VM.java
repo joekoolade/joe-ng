@@ -3260,6 +3260,13 @@ public final class VM
         Uart.write(Magic.bytes("java/util/HashMap (demand-loaded):\n"));
         Loader.launchMain(Magic.bytes("demo/MapDemo"), Magic.bytes(""));
 
+        // Interface DISPATCH, including java/lang/Object's public methods called through an INTERFACE-typed
+        // receiver. javac emits those as an invokeinterface owned by the INTERFACE (JVMS 5.4.3.4), and no
+        // Object method has an itable slot -- so the directory walk used to call a REAL interface method and
+        // return a plausible, stable, wrong value. Each arm is compared against the Object-typed path.
+        Uart.write(Magic.bytes("interface defaults + Object methods through an interface:\n"));
+        Loader.launchMain(Magic.bytes("demo/DefaultIfaceDemo"), Magic.bytes(""));
+
         // Real-java.base probe: compile + run a battery of UNMODIFIED OpenJDK numeric methods (Integer/Long/
         // Math), each in isolation (transitively pulling same-class callees), checked against JDK-known
         // results. Pure/leaf methods that touch no static state -- the frontier of "real java.base on metal".

@@ -71,5 +71,24 @@ public class MapDemo
         }
         Magic.printStr("keySet=" + ks + " values=" + vs + " entrySet=" + es
                 + " pairsOk=" + (pairsOk ? 1 : 0) + "\n");                                     // 3,3,3,1
+
+        // ConcurrentHashMap.newKeySet(): a concurrent Set backed by a map. The overlay did not declare it, and
+        // a member a name-winning overlay drops CEASES TO EXIST -- the call resolved nowhere and trapped
+        // blaming a denylist this class is not on. Driven through the Set interface, which is how it is used.
+        java.util.Set<String> ks2 = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        boolean addedNew = ks2.add("a");
+        boolean addedDup = ks2.add("a");                    // false: already present
+        ks2.add("b");
+        int iter = 0;
+        for (Object o : ks2)
+        {
+            iter += 1;
+        }
+        Magic.printStr("newKeySet size=" + ks2.size() + " added=" + (addedNew ? 1 : 0)
+                + " dup=" + (addedDup ? 1 : 0) + " has(a)=" + (ks2.contains("a") ? 1 : 0)
+                + " has(z)=" + (ks2.contains("z") ? 1 : 0) + " iter=" + iter + "\n");   // 2,1,0,1,0,2
+        Magic.printStr("newKeySet remove=" + (ks2.remove("a") ? 1 : 0)
+                + " again=" + (ks2.remove("a") ? 1 : 0)
+                + " size=" + ks2.size() + " empty=" + (ks2.isEmpty() ? 1 : 0) + "\n");  // 1,0,1,0
     }
 }

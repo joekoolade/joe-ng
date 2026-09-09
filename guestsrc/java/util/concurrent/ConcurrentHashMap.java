@@ -60,7 +60,7 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> implements Concurrent
     }
 
     /** Snapshot the live entries (key+value) as fresh write-through entries -- the basis of every view. */
-    private ArrayList<Map.Entry<K, V>> snapshot()
+    ArrayList<Map.Entry<K, V>> snapshot()
     {
         ArrayList<Map.Entry<K, V>> snap = new ArrayList<Map.Entry<K, V>>();
         for (Map.Entry<K, V> e : super.entrySet())
@@ -151,6 +151,109 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> implements Concurrent
                 }
             }
             return removed;
+        }
+    }
+
+    /**
+     * A concurrent {@link Set} backed by a map -- stock's {@code ConcurrentHashMap.newKeySet()}.
+     *
+     * <p>The overlay had no {@code newKeySet}, and a member a name-winning overlay does not declare CEASES TO
+     * EXIST: the call resolved nowhere and surfaced on metal as a {@code DENYLIST TRAP} naming a list this
+     * class is not on. That is the same trap this project has now paid for ten times; see the
+     * "overlay-drops-stock-members" note in CLAUDE.md.
+     */
+    public static <K> KeySetView<K, Boolean> newKeySet()
+    {
+        return new KeySetView<K, Boolean>(new ConcurrentHashMap<K, Boolean>(), Boolean.TRUE);
+    }
+
+    /** As {@link #newKeySet()}; the capacity is a sizing hint with no observable effect on the Set contract. */
+    public static <K> KeySetView<K, Boolean> newKeySet(int initialCapacity)
+    {
+        return new KeySetView<K, Boolean>(new ConcurrentHashMap<K, Boolean>(initialCapacity), Boolean.TRUE);
+    }
+
+    /**
+     * The {@link Set} of keys, with {@code mappedValue} stored for every key {@code add} inserts.
+     *
+     * <p>The RETURN TYPE is what makes this worth declaring separately from the inherited {@code keySet()}:
+     * stock code assigns it to a {@code KeySetView}, and a {@code Set} would not bind.
+     */
+    public KeySetView<K, V> keySet(V mappedValue)
+    {
+        if (mappedValue == null)
+        {
+            throw new NullPointerException("mappedValue");
+        }
+        return new KeySetView<K, V>(this, mappedValue);
+    }
+
+    /**
+     * A {@link Set} view of a map's KEYS, each mapped to one fixed value.
+     *
+     * <p>Weakly consistent like the other views here: {@link #iterator} walks a snapshot rather than failing
+     * fast, which is the CHM semantics callers rely on. A null {@code value} makes {@link #add} unsupported,
+     * exactly as in stock -- that is how {@code keySet()} differs from {@code newKeySet()}.
+     */
+    public static class KeySetView<K, V> extends AbstractSet<K> implements java.io.Serializable
+    {
+        private final ConcurrentHashMap<K, V> map;
+        private final V value;
+
+        KeySetView(ConcurrentHashMap<K, V> map, V value)
+        {
+            this.map = map;
+            this.value = value;
+        }
+
+        /** The backing map, as stock exposes it. */
+        public ConcurrentHashMap<K, V> getMap()
+        {
+            return map;
+        }
+
+        public int size()
+        {
+            return map.size();
+        }
+
+        public boolean isEmpty()
+        {
+            return map.isEmpty();
+        }
+
+        public boolean contains(Object o)
+        {
+            return map.containsKey(o);
+        }
+
+        public boolean add(K e)
+        {
+            if (value == null)
+            {
+                throw new UnsupportedOperationException();
+            }
+            return map.put(e, value) == null;
+        }
+
+        public boolean remove(Object o)
+        {
+            return map.remove(o) != null;
+        }
+
+        public void clear()
+        {
+            map.clear();
+        }
+
+        public Iterator<K> iterator()
+        {
+            ArrayList<K> keys = new ArrayList<K>();
+            for (Map.Entry<K, V> e : map.snapshot())
+            {
+                keys.add(e.getKey());
+            }
+            return keys.iterator();
         }
     }
 
