@@ -137,6 +137,19 @@ public interface Symbols
     default boolean isArrayClone(int methodCp) { return false; }
 
     /**
+     * True if the *ref at {@code methodCp} names one of {@code java/lang/Object}'s PUBLIC methods, whatever
+     * its owner.
+     *
+     * <p>JVMS 5.4.3.4: interface method resolution searches the interface, its superinterfaces, AND Object's
+     * public methods. javac relies on that -- {@code interfaceTyped.getClass()} is emitted as an
+     * {@code invokeinterface} whose owner is the INTERFACE -- and such a method has no itable slot, so
+     * dispatching it through the directory indexes a slot belonging to a real interface method and calls
+     * that instead. These refs must take the VIRTUAL path, where Object's methods are intrinsics or occupy
+     * the prefix every vtable shares.
+     */
+    default boolean isObjectPublicMethod(int methodCp) { return false; }
+
+    /**
      * Object-monitor op for an invokevirtual to {@code java/lang/Object}: 0 = none, 1 = {@code wait()V},
      * 2 = {@code wait(J)V}, 3 = {@code notify()V}, 4 = {@code notifyAll()V}. Lowered DIRECTLY to a VM helper
      * (like getClass) rather than dispatched through the vtable — wait/notify are final (never overridden),

@@ -1717,6 +1717,17 @@ public final class Baseline
      */
     private void lowerInvokeInterface(int cpIndex, CodeBuffer cb, int pos)
     {
+        if (symbols.isObjectPublicMethod(cpIndex))
+        {
+            // JVMS 5.4.3.4: interface method resolution also searches java/lang/Object's public methods, and
+            // javac emits `interfaceTyped.getClass()` (and toString/hashCode/equals/wait/notify) as an
+            // invokeinterface whose owner is the INTERFACE. None of those has an itable slot, so the
+            // directory walk would index a slot holding a REAL interface method and call it -- returning a
+            // plausible, stable, completely wrong value rather than failing. They take the virtual path,
+            // where they are intrinsics or sit in the prefix every vtable shares.
+            lowerInvokeVirtual(cpIndex, cb, pos);
+            return;
+        }
         marshalReceiverAndArgs(cb, pos, paramCount(cpIndex) + 1);
         symbols.interfaceType(cb, 16, cpIndex);                       // x16 = &interfaceType
         itableDispatch(cb, pos, symbols.interfaceSlot(cpIndex), cpIndex);

@@ -41,6 +41,22 @@ public class ResourceProbe
         System.out.println("-- expect a second 'not served' line next --");
         System.out.println("getResource(present)= " + (cl.getResource("META-INF/services/org.junit.platform.engine.TestEngine") == null ? "null" : "NON-NULL <== BUG") + " (want null)");
 
+        // STREAM: the path that DOES serve the bytes, because it never mentions a URL.
+        java.io.InputStream miss = cl.getResourceAsStream("no/such/thing");
+        System.out.println("stream(absent)      = " + (miss == null ? "null" : "NON-NULL <== BUG") + " (want null)");
+
+        java.io.InputStream in = cl.getResourceAsStream("META-INF/services/org.junit.platform.engine.TestEngine");
+        System.out.println("stream(present)     = " + (in != null ? 1 : 0) + " (want 1)");
+        byte[] all = in.readAllBytes();
+        System.out.println("stream bytes        = " + all.length + " (want 133)");
+        String text = new String(all);
+        System.out.println("stream text         = [" + text + "]");
+        // Line-splitting is what a services parser does, and the last line has NO terminator.
+        String[] lines = text.split("\n");
+        System.out.println("stream lines        = " + lines.length + " (want 3)");
+        System.out.println("stream line[2]      = " + lines[2] + " (want org.junit.vintage.engine.VintageTestEngine)");
+        in.close();
+
         System.out.println("ResourceProbe done");
     }
 }

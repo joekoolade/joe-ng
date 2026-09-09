@@ -431,6 +431,23 @@ final class VMNatives
     }
 
     /**
+     * {@code ClassLoader.resourceBytes0(byte[])} native: the classpath jar entry's bytes, or 0 when absent.
+     *
+     * <p>The bytes are COPIED into a guest {@code byte[]} rather than handed over as ZipDir produced them: the
+     * inflate runs in the baked world, whose arrays carry no array Type, and guest code goes on to
+     * {@code checkcast} and store what it gets.
+     */
+    static long resourceBytes(long nameArr)
+    {
+        if (nameArr == 0L)
+        {
+            return 0L;
+        }
+        int len = (int) Magic.load64(nameArr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        return Loader.guestBytes(JarFs.resourceData(nameArr + ObjectModel.ARRAY_BASE_OFFSET, len));
+    }
+
+    /**
      * Reflection M3: {@code ClassLoader.defineClass0(name, byte[], off, len)} native — materialize a class from
      * the SUPPLIED classfile bytes into the live program and return its Class mirror. 0 => the guest throws
      * {@code ClassFormatError}/returns null. The {@code name} arg is advisory (the loader uses the classfile's

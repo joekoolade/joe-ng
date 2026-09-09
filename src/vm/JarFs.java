@@ -135,6 +135,32 @@ public final class JarFs
         return dir.find(key, len) >= 0;
     }
 
+    /**
+     * The uncompressed bytes of the entry at exactly this path, or null when no jar is open, the path is too
+     * long, or the archive has no such entry.
+     *
+     * <p>VERBATIM like {@link #hasResource} -- a resource name is not a class name -- and uncached for the same
+     * reason: resource reads are a handful per run, and caching them would evict class entries.
+     *
+     * <p>The array is ZipDir's own, allocated in whichever world called in. Callers handing it to guest code
+     * must copy it into a properly-typed guest array ({@code Loader.guestBytes}) rather than pass it through.
+     */
+    public static byte[] resourceData(long namePtr, int len)
+    {
+        if (dir == null || len <= 0 || len > MAXNAME)
+        {
+            return null;
+        }
+        int k = 0;
+        while (k < len)
+        {
+            key[k] = (byte) Magic.load8(namePtr + k);
+            k += 1;
+        }
+        int idx = dir.find(key, len);
+        return idx < 0 ? null : dir.read(idx);
+    }
+
     private static int entry(long namePtr, int len)
     {
         int i = 0;
