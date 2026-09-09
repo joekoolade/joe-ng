@@ -76,6 +76,67 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`ServiceLoader` AND JAR RESOURCE STREAMS ON THE METAL -- and the INTERFACE-TYPED `getClass()` bug they
+  found (2026-09-08).** The launcher is past `ServiceLoader.load`, which had been a denylist trap, and now
+  stops inside `ServiceLoaderRegistry.load` on an ordinary overlay gap.
+  - **`ClassLoader.getResourceAsStream` serves the classpath jar** (`resourceBytes0` -> `VMNatives.resourceBytes`
+    -> `JarFs.resourceData`). This is the resource path that CAN work here: `getResource`/`getResources` return
+    `java.net.URL`, which needs a protocol handler in the denied `jdk/internal/loader`, and there is no way to
+    hand stock the bytes. Those two still report "present but not served" rather than answering empty.
+  - **The bytes are COPIED into a guest `byte[]`** (`Loader.guestBytes`, a real `[B`): the inflate runs in the
+    baked world, whose arrays carry no array Type, and guest code goes on to `checkcast` and store what it gets.
+  - **`java/util/ServiceLoader` is OVERLAID, and the denial had to be NARROWED first** -- a denied class is
+    trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted. **This is a stated
+    exception to "guestsrc is only for classes that need natives":** stock discovery goes through
+    `getResources` -> URL, scans the module graph, and instantiates through `MethodHandles`/`AccessController`
+    -- three denied subsystems. The FORMAT is stock's, read from the specification (one binary name per line,
+    `#` comments, blanks skipped, duplicates ignored, file order).
+  - **Laziness is preserved where it is load-bearing:** `stream()` hands back a `Provider` per NAME, so
+    `ServiceLoaderUtils.filter` -- which rejects on `type()` before calling `get()` -- never constructs the
+    engines it discards. Only the provider FILE is read eagerly. **Scope, stated: ONE classpath jar**, so a
+    second jar's providers would be invisible; stock concatenates every `META-INF/services/*` on the path.
+  - **THE REAL FIND: `getClass()` ON AN INTERFACE-TYPED RECEIVER RETURNED THE WRONG OBJECT.** javac compiles
+    `interfaceTyped.getClass()` to an **`invokeinterface` whose owner is the INTERFACE** -- JVMS 5.4.3.4 makes
+    interface method resolution search `java/lang/Object`'s public methods too. No Object method has an itable
+    slot, so the directory walk **indexed a slot holding a REAL interface method and called it**. The result
+    was non-null, STABLE, and completely wrong: a mirror that failed `instanceof Class`, whose `getName()`
+    then dispatched into `String.codePointAt` and threw `IndexOutOfBoundsException` from a method the program
+    never calls. `hashCode`/`equals`/`toString`/`wait`/`notify`/`notifyAll` had the same hole.
+  - **Fixed where resolution is decided, not at the symptom:** `lowerInvokeInterface` routes a *ref naming one
+    of Object's PUBLIC methods to the VIRTUAL path, where they are intrinsics or sit in the prefix every
+    vtable shares. `monitorOp` dropped its owner check for the same reason and it is unambiguous:
+    `wait`/`notify`/`notifyAll`/`getClass` are FINAL in Object and an interface may not declare a default
+    override-equivalent to `hashCode`/`equals`/`toString` (JLS 9.4.1.2), so name+descriptor always means
+    Object's method. **The writer is untouched** (`isObjectPublicMethod` defaults false, and only
+    `MetalSymbols` overrides `monitorOp`), which is why `compiler: 37 checks` still passes -- the
+    byte-for-byte self-hosting fixpoint.
+  - **FIVE HYPOTHESES DIED TO INSTRUMENTS, NONE TO ARGUMENT**, and each instrument is still in the tree: a
+    TIB-0 mirror (new `CLASS MIRROR WITHOUT A TIB` report -- never fired), an exhausted mirror cache (new
+    `CLASS MIRROR CACHE FULL` report -- never fired), a duplicate class from resolving a name twice (refuted
+    by a probe arm), a mid-run `resetLoader` invalidating mirrors (`MIRROR_RESET_WATCH` showed exactly one, at
+    boot), and construction through `newInstance` (the same sequence run from `main` was perfect).
+  - **WHAT ACTUALLY CRACKED IT WAS INSTRUMENTING THE FAILING CODE, THEN A HOST CONTROL WITH NO BOOT.** Prints
+    inside `ServiceLoader.It.next()` showed `o.getClass() == c` was **correct there** -- the same object gave
+    the wrong mirror only once returned to `main`. Every working case had an `Object`-typed receiver and the
+    failing one was interface-typed; `javap -c` on the probe then showed
+    `invokeinterface ...DiscoverySelectorIdentifierParser.getClass` in ten seconds. **Reproducing the shape is
+    not reproducing the condition** -- the earlier `forName`-twice control passed because BOTH its resolves
+    were fresh.
+  - **AN INSTRUMENT THAT CANNOT SAY NO PROVES NOTHING:** `first.isInstance(p0)` answering 1 was load-bearing
+    evidence, and it was only worth anything after `first.isInstance("x")` was checked to answer 0.
+  - **Regression is in the Pi-gated suite, not only the probe:** `demo/DefaultIfaceDemo` now calls
+    `getClass`/`hashCode`/`toString`/`equals` through an interface-typed reference and compares each against
+    the `Object`-typed path.
+  - **QEMU:** `ServiceLoaderProbe` every arm exact (3 and 13 providers incl. the unterminated last line, empty
+    for an absent service, resolve, subtype, construct, `get()` distinct instances, and the identity arms);
+    `ResourceProbe` reads the 133-byte services file and splits it; `metal junit: ran 44, failures 0` /
+    `ALL PASSED`; the demo suite runs end to end (`lisp evals=600 result=610 stable=1`, `SMP: 4 of 4`,
+    `finish HML`, `churnMB=625 live=32 intact=32`) with no fault, parity DIFF or uncaught exception. Host
+    tests unchanged incl. `compiler: 37 checks`; backlog 45.
+  - **NEXT BLOCKER, NAMED: `ConcurrentHashMap.newKeySet()` -- the overlay-drops-stock-members trap for the
+    TENTH time.** `LINK FAILED ... class OK but no body for that name+descriptor`, then a denylist trap
+    blaming a list CHM is not on. It needs a `KeySetView`, which the overlay does not carry.
+
 - **A LAMBDA THUNK'S TAIL BRANCH RESOLVES A NULL SLOT INSTEAD OF BRANCHING TO 0 (2026-09-08,
   PI-VALIDATED).** A hand-emitted thunk had no equivalent of `dispatchTargetGuard`: it does
   `ldr x16, vtable[slot]` then `br x16`, so a slot RTA pruned reads 0 and branches to 0 -- which the

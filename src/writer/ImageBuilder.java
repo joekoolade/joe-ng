@@ -1342,6 +1342,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.forName(J)J",        "vm/VM.forNameAddr");    // reflection M1: Class.forName0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.assignable(JJ)J",    "vm/VM.assignableAddr"); // Class.isAssignableFrom
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.resourceExists(J)J", "vm/VM.resourceExistsAddr"); // ClassLoader.resourceExists0
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.resourceBytes(J)J", "vm/VM.resourceBytesAddr"); // ClassLoader.resourceBytes0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.defineClass(JJJJ)J", "vm/VM.defineClassAddr"); // reflection M3: ClassLoader.defineClass0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.classModifiers(J)J", "vm/VM.classModifiersAddr"); // reflection M1: Class.getModifiers
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.methodResolve(JJ)I", "vm/VM.methodResolveAddr");  // reflection M2: Method.methodResolve0

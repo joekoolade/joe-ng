@@ -125,6 +125,35 @@ public class ClassLoader
         return null;
     }
 
+    /**
+     * The bytes of a classpath resource as a stream, or null when the classpath jar has no such entry.
+     *
+     * <p>This is the resource path that DOES work here, because it never mentions {@link java.net.URL}: the
+     * entry is located and inflated by the VM and handed back as a {@code byte[]}. {@link #getResource} and
+     * {@link #getResources} still cannot be served for the reason above -- their return type is the URL.
+     *
+     * <p>Stock consults the parent loader first and then the boot class path; there is one loader here, so the
+     * jar is the whole search. A resource baked into the image rather than the jar is not visible.
+     */
+    public java.io.InputStream getResourceAsStream(String name)
+    {
+        if (name == null)
+        {
+            return null;
+        }
+        byte[] b = resourceBytes0(name.getBytes());
+        return b == null ? null : new java.io.ByteArrayInputStream(b);
+    }
+
+    /** As {@link #getResourceAsStream}, against the single application loader. */
+    public static java.io.InputStream getSystemResourceAsStream(String name)
+    {
+        return SYSTEM.getResourceAsStream(name);
+    }
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.resourceExists} -> {@code JarFs.hasResource}). */
     private static native long resourceExists0(byte[] name);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.resourceBytes} -> {@code JarFs.resourceData}). */
+    private static native byte[] resourceBytes0(byte[] name);
 }

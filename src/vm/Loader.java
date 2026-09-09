@@ -2015,6 +2015,34 @@ public final class Loader
 
     // ----- M-B: Thread.getStackTrace() -> StackTraceElement[] (walk the frame chain, materialise elements) -----
 
+    /**
+     * A fresh guest {@code byte[]} holding a copy of {@code src}, or 0 for a null source.
+     *
+     * <p>The copy is the point: {@code src} was allocated by whichever world produced it (a writer-baked
+     * {@code new byte[]} carries no array Type), while this one is a real {@code [B} -- so guest code may
+     * {@code checkcast} it, store it in a field the collector traces, and hand it on.
+     */
+    static long guestBytes(byte[] src)
+    {
+        if (src == null)
+        {
+            return 0L;
+        }
+        long arr = Heap.allocArray(src.length, 1);
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);
+        }
+        int i = 0;
+        while (i < src.length)
+        {
+            Magic.store8(arr + 24L + i, src[i]);
+            i += 1;
+        }
+        return arr;
+    }
+
     /** A guest java/lang/String from a length-prefixed Utf8 at {@code base+off} (u2 length, then bytes); 0 if base 0. */
     static long guestStringUtf8(long base, int off)
     {
@@ -2509,6 +2537,10 @@ public final class Loader
 
     private static void resetLoader()
     {
+        if (MIRROR_RESET_WATCH)
+        {
+            Uart.write(Magic.bytes("\n  LOADER RESET (Class mirrors invalidated)\n"));
+        }
         CodeCompact.plan();          // ONE plan per batch, taken HERE: the previous batch's class/method
                                      //   registries are still live (this method is about to clear them) and
                                      //   the arena reflects everything that batch compiled. Taking it from a
@@ -4318,7 +4350,12 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/file/"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/loader/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/util/ServiceLoader"))
+                // java/util/ServiceLoader is NOT denied: it is OVERLAID (guestsrc/java/util/ServiceLoader).
+                // Stock discovery goes through ClassLoader.getResources -> java/net/URL -> a protocol handler
+                // in jdk/internal/loader, which stays denied -- so there is no way to hand the stock class the
+                // jar's bytes. The overlay reads META-INF/services/* through getResourceAsStream instead. The
+                // denial had to come out first: a denied class is trap-wired at PATCH TIME, so no link stub
+                // ever runs and the overlay would never be consulted.
                 || utf8HasPrefix(base, off, Magic.bytes("java/util/spi/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/util/"))
                 // java/net is LOADABLE now (M3: stock java.net over net.Tcp). SocksSocketImpl IS taken
@@ -8439,6 +8476,7 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resourceExists0")))   { return VM.resourceExistsAddr; } // (byte[])J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("resourceBytes0")))    { return VM.resourceBytesAddr; }  // (byte[])[B
         }
         // System.exit -> Runtime.exit -> Shutdown.exit -> beforeHalt(); runHooks(); halt(status) -> halt0.
         // Both ends are NATIVE, so the class loaded fine and the calls resolved nowhere -- reported as
@@ -15525,7 +15563,16 @@ public final class Loader
             i += 1;
         }
         long obj = Heap.alloc(24);                          // header(16) + Type-pointer field(@16)
-        Magic.store64(obj + 0L, classTib());                // TIB (0 -> a bare identity object; fine for ==)
+        long ctib = classTib();
+        if (mirN >= mirType.length)
+        {
+            reportMirrorCacheFull(type, ctib);              // past here getClass() mints a NEW mirror each ask
+        }
+        if (ctib == 0L)
+        {
+            reportMirrorNoTib(type);                        // a TIB-0 mirror is a WILD DISPATCH, not an identity
+        }
+        Magic.store64(obj + 0L, ctib);                      // TIB (0 -> a bare identity object; see the report)
         Magic.store64(obj + 16L, type);                     // the VM Type this Class mirrors
         if (mirN < mirType.length)
         {
@@ -15534,6 +15581,69 @@ public final class Loader
             mirN += 1;
         }
         return obj;
+    }
+
+    /** Print each loader reset: it clears the Class-mirror table, so mirrors minted before it go stale. */
+    private static final boolean MIRROR_RESET_WATCH = false;
+
+    private static boolean mirFullReported;
+
+    /**
+     * Report the Class-mirror cache filling up, ONCE.
+     *
+     * <p>The cache is what makes {@code X.class} and {@code obj.getClass()} the same object. Past its end
+     * every ask mints a fresh mirror, so {@code getClass() == getClass()} can still hold by luck while
+     * {@code getClass() == X.class} does not -- and stock code compares mirrors constantly.
+     */
+    private static void reportMirrorCacheFull(long type, long ctib)
+    {
+        if (mirFullReported)
+        {
+            return;
+        }
+        mirFullReported = true;
+        Uart.write(Magic.bytes("\n  CLASS MIRROR CACHE FULL at "));
+        VM.printHex(mirN);
+        Uart.write(Magic.bytes(" -- getClass() identity is no longer stable; first overflow is "));
+        int r = regOfType(type);
+        if (r < 0)
+        {
+            Uart.write(Magic.bytes("<type not registered>"));
+        }
+        else
+        {
+            printNameAt(clTab[r].base + clTab[r].nameOff, 0);
+        }
+        Uart.write(Magic.bytes(" classTib="));
+        VM.printHex(ctib);
+        Uart.putc(0x0A);
+    }
+
+    /**
+     * Report a Class mirror built with NO TIB, naming the class it mirrors.
+     *
+     * <p>The old comment called a TIB-0 mirror "a bare identity object, fine for ==", and that is true only
+     * until someone calls a method on it. {@code instanceof Class} reads {@code [[obj]]}, i.e. address 0 --
+     * the firmware's low-memory shim -- and a virtual call loads its target from there too, so the dispatch
+     * lands on a plausible-looking address in unrelated code. That is the "reads firmware memory" family
+     * again, and it destroys the evidence: the failure surfaces inside whatever method it happened to reach.
+     *
+     * <p>{@code getClass()} is called on everything, so this is worth a line even though it costs one.
+     */
+    private static void reportMirrorNoTib(long type)
+    {
+        Uart.write(Magic.bytes("\n  CLASS MIRROR WITHOUT A TIB (getClass/instanceof will misdispatch): "));
+        int r = regOfType(type);
+        if (r < 0)
+        {
+            Uart.write(Magic.bytes("<type not registered> type="));
+            VM.printHex(type);
+        }
+        else
+        {
+            printNameAt(clTab[r].base + clTab[r].nameOff, 0);
+        }
+        Uart.write(Magic.bytes(" -- java/lang/Class is not registered in this batch\n"));
     }
 
     /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
@@ -15681,6 +15791,32 @@ public final class Loader
                 && utf8IsAtBase(gbase, mrefDescOff(idx), Magic.bytes("()Ljava/lang/Class;"));
     }
 
+    /**
+     * True if the *ref at {@code idx} names one of {@code java/lang/Object}'s PUBLIC methods, whatever its
+     * owner -- the set interface method resolution has to consider (JVMS 5.4.3.4).
+     *
+     * <p>Owner-agnostic on purpose, and unambiguous: {@code getClass}/{@code wait}/{@code notify}/
+     * {@code notifyAll} are final in Object, and an interface may not declare a default method
+     * override-equivalent to {@code hashCode}/{@code equals}/{@code toString} (JLS 9.4.1.2). So a *ref with
+     * one of these name+descriptor pairs always means Object's method, and routing it to the virtual path
+     * dispatches to the receiver's override exactly as an {@code invokevirtual} would.
+     */
+    static boolean isObjectPublicMethod(int idx)
+    {
+        if (isGetClass(idx) || monitorOp(idx) != 0)
+        {
+            return true;
+        }
+        int n = mrefNameOff(idx);
+        int d = mrefDescOff(idx);
+        return (utf8IsAtBase(gbase, n, Magic.bytes("hashCode"))
+                        && utf8IsAtBase(gbase, d, Magic.bytes("()I")))
+                || (utf8IsAtBase(gbase, n, Magic.bytes("toString"))
+                        && utf8IsAtBase(gbase, d, Magic.bytes("()Ljava/lang/String;")))
+                || (utf8IsAtBase(gbase, n, Magic.bytes("equals"))
+                        && utf8IsAtBase(gbase, d, Magic.bytes("(Ljava/lang/Object;)Z")));
+    }
+
     /** {@code invokevirtual "[T".clone()} — a virtual call on an ARRAY receiver (owner Utf8 starts '[').
      *  Array TIBs carry no vtable, so this is intrinsified to {@code VM.arrayClone} instead of dispatching. */
     static boolean isArrayClone(int idx)
@@ -15706,10 +15842,12 @@ public final class Loader
      */
     static int monitorOp(int idx)
     {
-        if (!utf8IsAtBase(gbase, refClassNameOff(idx), Magic.bytes("java/lang/Object")))
-        {
-            return 0;
-        }
+        // The OWNER is deliberately not checked. `wait`/`notify`/`notifyAll` are FINAL in Object, so no class
+        // or interface can declare a method override-equivalent to them (JLS 8.4.3.3 / 9.4) -- the name and
+        // descriptor alone are unambiguous. Matching on the owner missed the shape JVMS 5.4.3.4 allows:
+        // `interfaceTyped.wait()` is an invokeinterface whose owner is the INTERFACE, and Object's monitor
+        // methods have no itable slot AND no usable vtable slot (their bodies are bake stubs), so it would
+        // dispatch into whatever the directory's slot happened to hold.
         int n = mrefNameOff(idx);
         int d = mrefDescOff(idx);
         if (utf8IsAtBase(gbase, n, Magic.bytes("wait")))

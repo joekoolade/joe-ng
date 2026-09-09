@@ -38,6 +38,18 @@ public class DefaultIfaceDemo
         attrs.forEach((k, v) -> System.out.println("  attrs " + k + "=" + v));
         System.out.println("attributes forEach ok (inherits Map.forEach)");
 
+        // java/lang/Object's PUBLIC methods, called through an INTERFACE-typed receiver. javac emits these as
+        // an invokeinterface whose owner is the INTERFACE (JVMS 5.4.3.4 makes interface resolution search
+        // Object too), and no such method has an itable slot -- so the directory walk used to index a slot
+        // holding a REAL interface method and call that, returning a plausible, stable, wrong value instead
+        // of failing. Compared against the same calls on an Object-typed reference, which always worked.
+        Object obj = lhm;
+        System.out.println("iface getClass ok = " + (lhm.getClass() == obj.getClass() ? 1 : 0) + " (want 1)");
+        System.out.println("iface hashCode ok = " + (lhm.hashCode() == obj.hashCode() ? 1 : 0) + " (want 1)");
+        System.out.println("iface toString ok = " + (lhm.toString().equals(obj.toString()) ? 1 : 0) + " (want 1)");
+        System.out.println("iface equals   ok = " + (lhm.equals(obj) ? 1 : 0) + " (want 1)");
+        System.out.println("iface getClass    = " + lhm.getClass().getName() + " (want java.util.LinkedHashMap)");
+
         System.out.println("done");
     }
 }

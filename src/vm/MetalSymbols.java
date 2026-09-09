@@ -104,6 +104,10 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isArrayClone(methodCp);
     }
+    public boolean isObjectPublicMethod(int methodCp)
+    {
+        return Loader.isObjectPublicMethod(methodCp);
+    }
     public boolean isDesiredAssertionStatus(int methodCp)
     {
         return Loader.isDesiredAssertionStatus(methodCp);
