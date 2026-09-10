@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A SYNTHESISED LAMBDA'S TIB CARRIES `java/lang/Object`'s VTABLE NOW (2026-09-10).** It was ONE WORD --
+  the Type and no vtable at all -- on the premise, stated in its own comment, that "a lambda is only ever
+  type-checked through its interface dir". An `Object` method on a lambda receiver therefore resolved
+  NOWHERE: not in the class registry, and not in the itable directory, which holds only interface methods.
+  The launcher hit it as `DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z` from
+  `Stream.sorted()` -> `SortedOps$OfRef.<init>`.
+  - **THE MISSING REGISTRY ENTRY IS NOT THE BUG, AND THE SPEC SAYS SO.** A real JVM's lambda class is a
+    HIDDEN class (`LambdaMetafactory` uses `Lookup.defineHiddenClass`), whose specification states it "is not
+    discoverable by `Class.forName`... `ClassLoader.loadClass`... or `findClass`" and "does not have a binary
+    name, so there is no internal form available to record in any class's constant pool". joe-ng's lambda
+    having no `clTab` entry MIRRORS that. What HotSpot still gives it is a full method table rooted at
+    Object; only lookup BY NAME is suppressed. This VM had conflated "unregistered" with "no vtable".
+  - **JVMS specifies the behaviour, not the layout:** selection picks the maximally-specific override in the
+    receiver's hierarchy, which is rooted at Object -- so `equals` on a lambda MUST select `Object.equals`.
+    Identity semantics are right here: `LambdaMetafactory` specifies the identity of a captured function
+    object as "unpredictable", warning callers off depending on it.
+  - **ANNOTATION TIBs GET THE SAME PREFIX, and that is required rather than opportunistic:** they are
+    synthesised the same way (`allocData(16)`, unregistered, itable-only) and share the `lambdaTibRoots`
+    array, so a single refill pass over that array is only SOUND if every entry has the same shape.
+  - **The refill is capacity-bounded**, via a new parallel `lambdaTibVtCap`. A TIB built before
+    `java/lang/Object` is registered reserves ZERO slots, and refilling it blind once Object arrives with
+    nine virtuals would write past an 8-byte allocation. Same repair as `refillArrayTibVtables` -- **which is
+    where this whole shape was solved once already**, for array TIBs, with the identical symptom recorded:
+    "without the vtable the dispatch read past a 1-word TIB and BLR'd garbage".
+  - **A SUITE-ONLY REGRESSION CAUGHT AN ARM THAT DID NOT BELONG.** The `Stream.sorted()` arm -- the
+    launcher's own trigger -- passes when the demo is launched ALONE and NPEs in the suite:
+    `StreamOpFlag.<clinit>` -> `EnumMap.<init>` -> `getKeyUniverse`, i.e.
+    `SharedSecrets.getJavaLangAccess()` reads null in the suite's SHARED loader state. Pre-existing and
+    unrelated to dispatch; the arm was removed from the suite (with the finding recorded beside it) rather
+    than the suite being made to carry the whole stream pipeline. **OPEN.**
+  - **QEMU:** the five Object-method arms on a lambda receiver exact (`equals` self 1 / other 0, stable
+    hash, non-null `toString`/`getClass`), demo suite end to end, `metal junit: ran 44, failures 0`, host
+    tests unchanged incl. `compiler: 37 checks`.
+  - **LAUNCHER: past it, into ENGINE DISCOVERY** -- `DefaultLauncher.discover` ->
+    `EngineDiscoveryOrchestrator.discover` -> `discoverSafely`, where it NPEs (line 171).
+
 - **A SERVICE PROVIDER THIS VM CANNOT LOAD IS SKIPPED AND SAID SO, NOT HALTED ON (2026-09-10).** JUnit's
   `OpenTestReportGeneratingListener` is on the `TestExecutionListener` services path, and its CONSTRUCTOR
   calls `java/nio/file/Path.of` -- denied, because there is no filesystem under this VM. A denylist trap

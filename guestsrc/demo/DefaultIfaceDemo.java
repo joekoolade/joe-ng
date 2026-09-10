@@ -50,6 +50,29 @@ public class DefaultIfaceDemo
         System.out.println("iface equals   ok = " + (lhm.equals(obj) ? 1 : 0) + " (want 1)");
         System.out.println("iface getClass    = " + lhm.getClass().getName() + " (want java.util.LinkedHashMap)");
 
+        // Object's methods on a SYNTHESISED LAMBDA receiver. A lambda has no classfile, so it is in no class
+        // registry -- exactly as a real JVM's HIDDEN classes are undiscoverable by Class.forName -- and its
+        // TIB used to be one word, with no vtable at all. equals/hashCode/toString then resolved NOWHERE:
+        // not in the registry, and not in the itable directory, which holds only interface methods.
+        // JVMS 5.4.6 says selection walks the receiver's hierarchy, which is rooted at Object, so these must
+        // select Object's implementations -- identity semantics, which LambdaMetafactory specifies as
+        // unpredictable-but-identity for a captured function object.
+        Runnable lam = () -> { };
+        Object lamObj = lam;
+        System.out.println("lambda equals self = " + (lam.equals(lamObj) ? 1 : 0) + " (want 1)");
+        System.out.println("lambda equals othr = " + (lam.equals(new Object()) ? 1 : 0) + " (want 0)");
+        System.out.println("lambda hash stable = " + (lam.hashCode() == lam.hashCode() ? 1 : 0) + " (want 1)");
+        System.out.println("lambda toString ok = " + (lam.toString() != null ? 1 : 0) + " (want 1)");
+        System.out.println("lambda getClass ok = " + (lam.getClass() != null ? 1 : 0) + " (want 1)");
+
+        // The launcher's own trigger is a lambda comparator through Stream.sorted(), whose SortedOps$OfRef
+        // constructor calls equals on it. That arm is NOT here, and deliberately: it drags the whole stream
+        // pipeline into every suite boot and then dies in an UNRELATED, PRE-EXISTING gap --
+        // StreamOpFlag.<clinit> -> EnumMap.<init> -> getKeyUniverse NPEs, i.e.
+        // SharedSecrets.getJavaLangAccess() reads null in the suite's SHARED loader state. The same statement
+        // passes when this demo is launched ALONE, which is the "works in one closure, broken in another"
+        // signature rather than anything about lambda dispatch. The five arms above test the fix directly.
+
         System.out.println("done");
     }
 }
