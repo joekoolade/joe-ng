@@ -60,6 +60,10 @@ public class ReflectRtaDemo
         Method r = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceDefault");
         r.setAccessible(true);
         System.out.println("ifacedflt  = " + r.invoke(null));
+
+        Method c = ReflectRtaDemo.class.getDeclaredMethod("viaReflectionIfaceDefaultChain");
+        c.setAccessible(true);
+        System.out.println("ifacedfltch= " + c.invoke(null));
     }
 
     /**
@@ -88,6 +92,24 @@ public class ReflectRtaDemo
     static String viaReflectionIfaceDefault()
     {
         RtaLater x = new RtaLater();
+        return x.viaDefault();
+    }
+
+    /**
+     * The same late default, but declared by an interface implemented TWO CLASSES UP the receiver's chain --
+     * {@link RtaChainLeaf} extends {@link RtaChainMid} extends {@link RtaChainBase} implements
+     * {@link RtaLate}.
+     *
+     * <p>The arm above passes with a receiver that implements the interface ITSELF, so it never exercised the
+     * chain: the fallback collected the receiver's own interfaces and found the answer at once. Here that
+     * list is EMPTY and the walk is the only thing that can answer. This is JUnit's shape --
+     * SuiteEngineDescriptor extends EngineDescriptor extends AbstractTestDescriptor implements TestDescriptor
+     * with {@code accept} a default on TestDescriptor -- and reproducing the SHAPE without the late CONDITION
+     * proves nothing, which is why this is reached reflectively like the rest.
+     */
+    static String viaReflectionIfaceDefaultChain()
+    {
+        RtaChainLeaf x = new RtaChainLeaf();
         return x.viaDefault();
     }
 

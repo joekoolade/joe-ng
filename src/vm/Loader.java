@@ -9611,7 +9611,25 @@ public final class Loader
     private static long resolveViaInterfaces(int ci, long nameU, long descU)
     {
         long[] names = new long[MAXIFACEFALLBACK];
-        int n = collectIfaceNames(ci, names, 0);
+        // WALK THE SUPERCLASS CHAIN, not just the receiver's own interfaces. A default method is declared by
+        // an interface that ANY class in the chain may implement, and the receiver itself often implements
+        // nothing: SuiteEngineDescriptor extends EngineDescriptor extends AbstractTestDescriptor implements
+        // TestDescriptor, and `accept` is a DEFAULT on TestDescriptor -- two classes up. Collecting only the
+        // receiver's own interfaces searched an EMPTY list and reported the method missing.
+        //
+        // A lookup that does not walk the chain has now been the bug three times here (globalVtableSlot's
+        // slot numbering, vhFieldOffset's field offsets, and this). The names collected are ABSOLUTE Utf8
+        // addresses, which is what makes the walk safe: collectIfaceNames re-parses each class's constant
+        // pool and moves the cursor, and an offset would then be read against the wrong blob.
+        int n = 0;
+        int c = ci;
+        int hops = 0;
+        while (c >= 0 && hops < MAXIFACECHAIN)
+        {
+            n = collectIfaceNames(c, names, n);
+            c = clTab != null && c < clCount && clTab[c] != null ? clTab[c].superReg : -1;
+            hops += 1;
+        }
         int direct = n;
         int i = 0;
         while (i < direct)                              // level 2: each interface's own super-interfaces
@@ -9635,6 +9653,9 @@ public final class Loader
         }
         return 0L;
     }
+
+    /** Hop cap on the superclass walk above -- a malformed or cyclic chain must not spin. */
+    private static final int MAXIFACECHAIN = 32;
 
     /** Append class {@code ci}'s directly-declared interface name Utf8 ADDRESSES to {@code out}; new length. */
     private static int collectIfaceNames(int ci, long[] out, int n)

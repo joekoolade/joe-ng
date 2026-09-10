@@ -73,6 +73,37 @@ public class DefaultIfaceDemo
         // passes when this demo is launched ALONE, which is the "works in one closure, broken in another"
         // signature rather than anything about lambda dispatch. The five arms above test the fix directly.
 
+        // A DEFAULT method declared by an interface implemented TWO CLASSES UP the chain, invoked on a
+        // class-typed receiver that implements nothing itself. That is JUnit's shape:
+        // SuiteEngineDescriptor extends EngineDescriptor extends AbstractTestDescriptor implements
+        // TestDescriptor, with accept() a default on TestDescriptor. The late-resolution fallback used to
+        // collect only the RECEIVER's own interfaces -- an empty list here -- and report the method missing.
+        System.out.println("chain default      = " + new Leaf().greet() + " (want hi from Greets)");
+        System.out.println("chain dflt via mid = " + ((Mid) new Leaf()).greet() + " (want hi from Greets)");
+
         System.out.println("done");
+    }
+
+    /** The default lives HERE, on an interface no subclass re-declares. */
+    interface Greets
+    {
+        default String greet()
+        {
+            return "hi from Greets";
+        }
+    }
+
+    /** Implements the interface... */
+    static class Base implements Greets
+    {
+    }
+
+    /** ...and these two do not, so a receiver-only interface search finds nothing. */
+    static class Mid extends Base
+    {
+    }
+
+    static class Leaf extends Mid
+    {
     }
 }

@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LATE INTERFACE DEFAULT NOW SEARCHES THE WHOLE SUPERCLASS CHAIN -- and the launcher reaches the JUPITER
+  ENGINE (2026-09-10).** `resolveViaInterfaces` collected only the RECEIVER's directly-declared interfaces,
+  then those interfaces' own super-interfaces. For a receiver that implements nothing itself that list is
+  EMPTY, so the search had nothing to look in and reported the method missing.
+  - **JUnit's shape, read from the classfiles rather than guessed:** `SuiteEngineDescriptor extends
+    EngineDescriptor extends AbstractTestDescriptor implements TestDescriptor`, with `accept` a DEFAULT on
+    `TestDescriptor` -- two classes up. Only `AbstractTestDescriptor` implements anything.
+  - **A LOOKUP THAT DOES NOT WALK THE CHAIN HAS NOW BEEN THE BUG THREE TIMES** here: `globalVtableSlot`'s slot
+    numbering, `vhFieldOffset`'s field offsets, and this. The collected names are ABSOLUTE Utf8 addresses,
+    which is what makes the walk safe -- `collectIfaceNames` re-parses each class's constant pool and moves
+    the cursor, and an offset would then be read against the wrong blob.
+  - **THE FIRST REGRESSION DEMO I WROTE TESTED NOTHING, AND THE NEGATIVE CONTROL SAID SO.** A three-deep
+    chain in `DefaultIfaceDemo` passed with the fix REVERTED: instantiated directly, the default resolves
+    through the ordinary itable and never reaches the fallback at all. Reproducing the SHAPE is not
+    reproducing the CONDITION -- the condition is a LATE resolve, which this family creates by reaching the
+    code REFLECTIVELY so RTA never pulls the interface.
+  - **The real test is `ifacedfltch`** (`RtaChainLeaf extends RtaChainMid extends RtaChainBase implements
+    RtaLate`, reached reflectively, in `demo/ReflectRtaDemo` which the suite already runs). Reverted, it
+    fails with exactly `VIRTUALRESOLVE FAILED demo/RtaChainLeaf.viaDefault()Ljava/lang/String;` while the
+    existing one-level `ifacedflt` arm still passes -- which is precisely why the one-level arm never caught
+    this.
+  - **LAUNCHER: through the Suite engine and into the JUPITER ENGINE** -- the engine that actually runs
+    `@Test` methods. Next blocker: `CLINIT REJECTED ... org/junit/jupiter/engine/config/DefaultJupiterConfiguration`
+    and then an NPE in its `validateConfigurationParameters` -- a null static, but NOT covered by the
+    self-class-literal rule, so its initializer names some OTHER class.
+  - **QEMU:** `ifacedflt` and `ifacedfltch` both `late-default`; demo suite end to end, `metal junit: ran 44,
+    failures 0`, host tests unchanged incl. `compiler: 37 checks`.
+
 - **`Class.getDeclaredAnnotations` + `getInterfaces` -- JUnit's ANNOTATION SEARCH COMPLETES (2026-09-10).**
   `AnnotationUtils.findAnnotation` walks a class's own annotations, then its META-annotations, then its
   interfaces and enclosing class. All of it runs now; the launcher is out of `IsSuiteClass` entirely and into
