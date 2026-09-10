@@ -417,6 +417,31 @@ public final class Class<T> implements java.lang.reflect.Type
         return (T) annoGet0(this, annoDescriptorOf(anno));
     }
 
+    /**
+     * The annotation DECLARED DIRECTLY on this class, or null.
+     *
+     * <p>In stock this differs from {@link #getAnnotation} by {@code @Inherited} alone: getAnnotation also
+     * finds an {@code @Inherited} annotation on a SUPERCLASS. The native here reads THIS class's own
+     * {@code RuntimeVisibleAnnotations} and nothing else, so the two coincide -- which makes THIS method
+     * exact and {@code getAnnotation} the one that diverges. Stated rather than hidden: an {@code @Inherited}
+     * annotation on a superclass is found by neither, and nothing reached so far asks for one.
+     *
+     * <p>THE BOUND IS LOAD-BEARING, for the reason spelled out on {@link #getAnnotation}: it erases the
+     * return to {@code Ljava/lang/annotation/Annotation;}, which is the descriptor stock callers reference.
+     * JUnit reaches this through {@code AnnotatedElement}, whose method it is -- and this class does not
+     * declare that interface (recorded in the overlay baseline), so the call arrives by LATE dispatch against
+     * the receiver's class and only resolves if the name AND descriptor match exactly.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getDeclaredAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(this, annoDescriptorOf(anno));
+    }
+
     /** Takes a wildcard, as stock does, so it cannot call the BOUNDED {@code getAnnotation} directly. */
     public boolean isAnnotationPresent(Class<?> anno)
     {

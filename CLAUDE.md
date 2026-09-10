@@ -76,6 +76,33 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getDeclaredAnnotation` -- and a spec-checked correction to my own probe (2026-09-10).** The
+  `Class` overlay did not declare it, so JUnit's `AnnotationUtils.findAnnotation` trapped with
+  `VIRTUALRESOLVE FAILED java/lang/Class.getDeclaredAnnotation(...)`. Backlog 44 -> 43.
+  - **The native already had DECLARED semantics**, so this is exact rather than approximate: `classAnnotation`
+    reads THIS class's own `RuntimeVisibleAnnotations` and nothing else. In stock the two differ only by
+    `@Inherited`, which means it is `getAnnotation` that diverges here, not this method -- stated in the code.
+  - **THE BOUND IS LOAD-BEARING, for the third time.** `<T extends Annotation>` erases the return to
+    `Ljava/lang/annotation/Annotation;`, which is the descriptor stock references. And it matters more than
+    usual here: `Class` does NOT declare `AnnotatedElement` (recorded in the overlay baseline), so JUnit's
+    interface-typed call arrives by LATE dispatch against the receiver's class and resolves only on an exact
+    name+descriptor match.
+  - **A PROBE ARM OF MINE ASSERTED SOMETHING THE SPEC DOES NOT GUARANTEE, and the spec is what settled it.**
+    `declared == getAnnotation(...)` came back 0, which looked like a bug; `Annotation`'s specification
+    defines equality by ELEMENT VALUES ("an instance of the same annotation interface ... all of whose members
+    are equal") and says nothing about identity across calls. Stock caches instances so identity happens to
+    hold there. The arm was wrong, not the VM -- corrected to assert the values.
+  - **It did expose a REAL gap, now recorded rather than papered over:** joe-ng's annotation objects inherit
+    Object's IDENTITY equals, so two instances with equal members compare UNEQUAL, which the specification
+    forbids. Implementing it needs element ENUMERATION -- `equals`, `hashCode` and `toString` all do -- and
+    the annotation runtime can find one element by name but cannot walk them. **OPEN.**
+  - **LAUNCHER: six lines further into the same method**, and the next blocker is that same enumeration:
+    **`VIRTUALRESOLVE FAILED java/lang/Class.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;`** --
+    the PLURAL, which `findAnnotation` uses to walk META-ANNOTATIONS. It needs a native that iterates the
+    class's `RuntimeVisibleAnnotations` and builds an instance per entry.
+  - **QEMU:** `AnnoProxyProbe` arms exact (declared present, value `onclass`, absent null); demo suite end to
+    end, `metal junit: ran 44, failures 0`, host tests unchanged incl. `compiler: 37 checks`.
+
 - **AN APPLICATION CLASS MAY `ldc` ITS OWN CLASS IN `<clinit>` -- the LOGGER IDIOM, and the launcher reaches
   TEST DISCOVERY (2026-09-10).** `EngineDiscoveryOrchestrator.discoverSafely` NPE'd on `logger.debug(...)`,
   called UNGUARDED, because the class's initializer had been skipped and `logger` stayed null. The VM had
