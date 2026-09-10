@@ -76,6 +76,33 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE CONSOLE LAUNCHER RUNS TO COMPLETION AND RENDERS ITS FULL USAGE TEXT (2026-09-09).** With the literal
+  decode in, picocli's whole word-wrapped help -- every option, every description, the SELECTORS section --
+  prints on bare metal. The wrap path that had been the blocker for three increments is closed.
+  - **`ReflectionUtils.<clinit>` WAS SKIPPED, so `classNameToTypeMap` was null** and every
+    `tryToLoadClass` NPE'd -- which is what aborted `execute` after the launcher had otherwise run. The VM
+    named it outright: `CLINIT REJECTED (statics stay null): org/junit/platform/commons/util/ReflectionUtils`.
+    Its body `ldc`s class literals (its own class for `getLogger`, and `"[Z".."[Ljava/lang/String;"` for the
+    map), which the tag-7 gate rejects.
+  - **Everything that initializer needs now exists**, which is why allowing it is safe today and would not
+    have been a month ago: `getLogger` (java.util.logging provided), `Pattern.compile`,
+    `ClasspathScannerLoader` via `ServiceLoader`, `ConcurrentHashMap.newKeySet`, and array/primitive class
+    literals.
+  - **A BROADER FIX WAS TRIED AND REJECTED ON MEASUREMENT, NOT ARGUMENT.** The gate's own comment says a
+    rejected initializer is "clinitBlocked/seeded anyway" -- true in the bake domain, FALSE for an application
+    class, where rejecting guarantees null statics for ever. Allowing tag-7 outside `java/`/`jdk/`/`sun/`
+    therefore looked principled, and it is the same gap `HexFormat` fell into. Measured, it made the launcher
+    run **~4x longer without reaching the point it had already reached** -- stalled at one log position for
+    ten minutes at 299% CPU. Running every application initializer in a ~900-class closure is a different cost
+    class. The narrowing may still be right; it needs its own increment with that cost understood.
+  - **NEXT BLOCKER, NAMED:** `JIT unsupported: reason=0 a=0xBA b=3 in
+    org/junit/platform/commons/util/ClasspathScannerLoader` -- `0xBA` is `invokedynamic`, an indy form the JIT
+    cannot lower (neither a lambda nor a string concat). Reached only now, because ReflectionUtils'
+    initializer runs and calls `ClasspathScannerLoader.getInstance()`.
+  - **QEMU:** demo suite end to end (`lisp evals=600 result=610 stable=1`, charset arms exact, newKeySet, the
+    interface arms, `LoggingDemo done`), `metal junit: ran 44, failures 0`, host tests unchanged incl.
+    `compiler: 37 checks`.
+
 - **NON-ASCII STRING LITERALS ARE NEVER DECODED FROM MODIFIED UTF-8 -- the root of the picocli blocker,
   MEASURED (2026-09-09).** `Loader.internString` copies a `CONSTANT_Utf8` body VERBATIM into the String's
   `value` byte[] and leaves `coder` LATIN1. A classfile stores literals in MODIFIED UTF-8, so every non-ASCII
