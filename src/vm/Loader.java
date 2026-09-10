@@ -16138,21 +16138,108 @@ public final class Loader
      * (the writer's [null TIB][status][length][bytes] layout, i.e. an ordinary array)
      * and return its address, so the shared core's {@code ldc} loads a real ref.
      */
+    /** The character decoded by {@link #decodeUtf8At}, and the byte index just past it. */
+    private static int decCh;
+    private static int decNext;
+
+    /**
+     * Decode ONE character of MODIFIED UTF-8 at {@code src + i}, leaving it in {@link #decCh} and the next
+     * byte index in {@link #decNext}.
+     *
+     * <p>Modified UTF-8, not standard: a NUL is the two bytes {@code C0 80}, and a character outside the BMP
+     * is encoded as its two SURROGATES separately (three bytes each) rather than as one four-byte sequence.
+     * Decoding surrogates individually is exactly what a UTF16 String wants -- each becomes one char.
+     *
+     * <p>A malformed sequence keeps the lead byte as its own character rather than consuming bytes it cannot
+     * verify: a decoder that ran off the end of a literal would read whatever followed it in the blob.
+     */
+    private static void decodeUtf8At(long src, int i, int len)
+    {
+        int b0 = u1(src + i);
+        if (b0 < 0x80)
+        {
+            decCh = b0;
+            decNext = i + 1;
+        }
+        else if ((b0 & 0xE0) == 0xC0 && i + 1 < len)
+        {
+            decCh = ((b0 & 0x1F) << 6) | (u1(src + i + 1) & 0x3F);
+            decNext = i + 2;
+        }
+        else if ((b0 & 0xF0) == 0xE0 && i + 2 < len)
+        {
+            decCh = ((b0 & 0x0F) << 12) | ((u1(src + i + 1) & 0x3F) << 6) | (u1(src + i + 2) & 0x3F);
+            decNext = i + 3;
+        }
+        else
+        {
+            decCh = b0;                                 // malformed: keep the byte, consume nothing extra
+            decNext = i + 1;
+        }
+    }
+
+    /** The coder of the value array {@link #internString} last built: 0 = LATIN1, 1 = UTF16. */
+    private static int lastLiteralCoder;
+
+    /**
+     * The value array for a {@code CONSTANT_String} literal, DECODED from modified UTF-8.
+     *
+     * <p>This used to copy the Utf8 body VERBATIM and leave the coder LATIN1, which is right for ASCII and
+     * wrong for everything else: {@code "\u00ff"} came out as its two encoded bytes, so it had LENGTH 2 and a
+     * first character of 195. Every non-ASCII literal in the VM had the wrong length AND the wrong contents,
+     * and ASCII being unaffected is why it went unnoticed for so long.
+     *
+     * <p>It surfaced through picocli, which word-wraps by handing
+     * {@code plainString().replace("-", "\u00ff")} to a {@code BreakIterator} and then slicing the original
+     * text with the boundaries that come back -- a replacement one character too long shifts every boundary
+     * past a hyphen and the slice runs off the end of the buffer.
+     *
+     * <p>LATIN1 whenever every character fits a byte, UTF16 otherwise -- the same choice stock makes, and the
+     * reason the coder has to travel back to {@link #internStringObj}. The UTF16 byte order is little-endian
+     * because {@code StringUTF16.LO_BYTE_SHIFT} is seeded to 8 for AArch64 (its {@code <clinit>} asks Unsafe
+     * and cannot run here); storing it the other way round would read back with the bytes swapped.
+     */
     static long internString(int stringCp)
     {
         int off = ClassReader.stringUtf8Off(gbytes, gcp, stringCp);   // Utf8 body offset
         int len = u2(gbase + off);
-        long arr = Heap.allocArray(len, 1);             // byte[] (raw element-size header), length set
+        long src = gbase + off + 2L;
+        int nchars = 0;                                 // pass 1: how many CHARS, and do they all fit a byte?
+        int maxCh = 0;
+        int i = 0;
+        while (i < len)
+        {
+            decodeUtf8At(src, i, len);
+            if (decCh > maxCh)
+            {
+                maxCh = decCh;
+            }
+            nchars += 1;
+            i = decNext;
+        }
+        lastLiteralCoder = maxCh < 256 ? 0 : 1;
+        long arr = Heap.allocArray(lastLiteralCoder == 0 ? nchars : nchars * 2, 1);
         long bt = byteArrayTib();
         if (bt != 0L)
         {
             Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);   // type it as [B so `checkcast [B` on String.value resolves
         }
-        int i = 0;
+        i = 0;
+        int k = 0;                                      // pass 2: store the decoded characters
         while (i < len)
         {
-            Magic.store8(arr + 24 + i, u1(gbase + off + 2 + i));   // ARRAY_BASE_OFFSET = 24
-            i += 1;
+            decodeUtf8At(src, i, len);
+            if (lastLiteralCoder == 0)
+            {
+                Magic.store8(arr + 24 + k, decCh);      // ARRAY_BASE_OFFSET = 24
+            }
+            else
+            {
+                Magic.store8(arr + 24 + (k << 1), decCh & 0xFF);            // LO first (HI_BYTE_SHIFT = 0)
+                Magic.store8(arr + 24 + (k << 1) + 1, (decCh >> 8) & 0xFF);
+            }
+            i = decNext;
+            k += 1;
         }
         return arr;
     }
@@ -16185,6 +16272,7 @@ public final class Loader
             long obj = Heap.alloc(stringSize());
             Magic.store64(obj + 0L, tib);               // TIB
             Magic.store64(obj + 16L, bytes);            // value field (offset 16)
+            Magic.store64(obj + 24L, lastLiteralCoder); // coder (offset 24): 0 LATIN1, 1 UTF16
             result = anchorLiteral(obj);
         }
         if (litObjByCp != null && stringCp < litObjByCp.length)

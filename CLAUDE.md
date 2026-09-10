@@ -107,12 +107,27 @@ defines the minimum the assembler must encode.
   - **I wrongly suspected the frame attribution** when the print instrument stayed silent, because the trace
     carries two `<unclaimed pc ... after putValue>` frames. The recorder showed the frame was RIGHT all
     along -- the print, not the attribution, was the broken thing.
-  - **THE FIX IS SCOPED AND NOT YET WRITTEN:** decode modified UTF-8 in `internString` (1-byte, 2-byte
-    `C0..DF`, 3-byte `E0..EF`; supplementary characters arrive as surrogate PAIRS, which is already what a
-    UTF16 String wants), then store LATIN1 when every unit is < 256 and UTF16 otherwise -- the UTF16 case
-    also needs `internStringObj` to set `coder = 1`, which it never does today. It touches EVERY string
-    literal in the VM, so it wants its own increment and a Pi boot.
-  - **QEMU:** `TextProbe` and `UsageProbe` both wired in; host tests unchanged incl. `compiler: 37 checks`.
+  - **FIXED: `internString` DECODES.** One character at a time (1-byte, 2-byte `C0..DF`, 3-byte `E0..EF`),
+    LATIN1 when every unit fits a byte and UTF16 otherwise, with `internStringObj` now writing `coder = 1`
+    for the UTF16 case -- which it never did. A malformed sequence keeps its lead byte rather than consuming
+    bytes it cannot verify: a decoder that ran off the end of a literal would read whatever followed it in
+    the blob.
+  - **Modified UTF-8, not standard, and the difference is what makes this simple:** a character outside the
+    BMP is encoded as its two SURROGATES separately, so decoding them individually is exactly what a UTF16
+    String wants. NUL is `C0 80`, which the 2-byte branch already handles.
+  - **The UTF16 path only works because `StringUTF16.LO_BYTE_SHIFT` is SEEDED to 8** -- its `<clinit>` asks
+    Unsafe for the byte order and cannot run here, and the existing seed's comment already records the symptom
+    (the euro read back as `0xAC`). Checking that before writing the code is what made the full fix safe
+    rather than a LATIN1-only subset.
+  - **QEMU, every arm now matching the host exactly:** `"\u00ff"` len 1 char 255, `"\u00e9"` len 1,
+    `"\u20ac"` len 1 (the UTF16 path), `replace sameLen = 1`, `loop inBounds = 1` -- and **picocli's usage
+    RENDERS**, option table byte-for-byte identical to the host including the wrapped hyphenated description.
+    Regression: demo suite end to end with the charset arms exact (`out latin1: é`, `euro len=1 char=8364`,
+    `out utf16: €` -- the surface most sensitive to this change), `lisp evals=600 result=610 stable=1`,
+    `metal junit: ran 44, failures 0`, host tests unchanged incl. `compiler: 37 checks`.
+  - **NOT changed: the WRITER's literal interning**, which lays out image literals as ASCII bytes. No baked
+    literal in the closure is non-ASCII today, so nothing is wrong now -- but it is the same bug waiting, and
+    it would surface exactly as this one did.
 
 - **THE SYSTEM PROPERTIES WERE NEVER SEEDED IN MOST CLOSURES -- two library NPEs, one cause (2026-09-09).**
   `seedStandardProps` found `Properties.setProperty` through `methodResolveRegistry`, and **`rgTab` holds one
