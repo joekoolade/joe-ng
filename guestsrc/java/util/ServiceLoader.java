@@ -146,28 +146,65 @@ public final class ServiceLoader<S> implements Iterable<S>
         }
     }
 
-    /** The providers, each as an unresolved handle; class loading and construction are deferred. */
+    /**
+     * The providers whose classes this VM can load, each as a handle whose INSTANCE is not yet built.
+     *
+     * <p>DIVERGENCE FROM STOCK, and it is deliberate: a provider whose class cannot be loaded is SKIPPED
+     * (with a line naming it) instead of aborting the whole service with a {@code ServiceConfigurationError}.
+     * On a VM where some classes are deliberately absent -- there is no filesystem, so JUnit's
+     * {@code OpenTestReportGeneratingListener} cannot exist -- stock's abort would make every service
+     * containing one provider like that unusable, which is a worse answer than running the rest.
+     *
+     * <p>The consequence is that the class is resolved HERE rather than on first {@link Provider#type}. That
+     * costs nothing on the path this exists for: {@code ServiceLoaderUtils.filter} calls {@code type()} on
+     * every provider anyway. The laziness that is load-bearing -- not CONSTRUCTING a provider that is then
+     * filtered out -- is untouched.
+     */
     public Stream<Provider<S>> stream()
     {
         ArrayList<Provider<S>> out = new ArrayList<Provider<S>>();
         int i = 0;
         while (i < names.size())
         {
-            out.add(new Lazy<S>(this, names.get(i)));
+            Class<? extends S> c = tryResolve(names.get(i));
+            if (c != null)
+            {
+                out.add(new Lazy<S>(this, c));
+            }
             i += 1;
         }
         return out.stream();
     }
 
-    /** The provider instances, constructed as the iteration reaches them. */
+    /** The provider instances, constructed as the iteration reaches them; unloadable providers are skipped. */
     @Override
     public Iterator<S> iterator()
     {
-        return new It<S>(this);
+        ArrayList<Class<? extends S>> classes = new ArrayList<Class<? extends S>>();
+        int i = 0;
+        while (i < names.size())
+        {
+            Class<? extends S> c = tryResolve(names.get(i));
+            if (c != null)
+            {
+                classes.add(c);
+            }
+            i += 1;
+        }
+        return new It<S>(this, classes);
     }
 
-    /** Resolve a provider class name, checking it really is a subtype -- stock's own check. */
-    Class<? extends S> resolve(String cn)
+    /**
+     * Resolve a provider class, or null when this VM cannot load it.
+     *
+     * <p>Only an ABSENT class is skipped. A class that loads but is NOT a subtype is still a
+     * {@code ServiceConfigurationError}, because that is a genuine configuration mistake rather than a
+     * missing capability -- swallowing it would hide a real error behind a policy meant for a different one.
+     *
+     * <p>The skip is REPORTED. A silently shorter provider list is exactly the shape that turns a missing
+     * capability into a mystery somewhere downstream.
+     */
+    private Class<? extends S> tryResolve(String cn)
     {
         Class<?> c;
         try
@@ -176,7 +213,17 @@ public final class ServiceLoader<S> implements Iterable<S>
         }
         catch (ClassNotFoundException e)
         {
-            throw new ServiceConfigurationError(service.getName() + ": provider " + cn + " not found", e);
+            // No concatenation: this class is reached during launcher start-up, where the string-concat
+            // machinery is not somewhere to drag a cold path into.
+            System.err.print("joe-ng: service provider not loadable here, skipped: ");
+            System.err.println(cn);
+            return null;
+        }
+        catch (LinkageError e)
+        {
+            System.err.print("joe-ng: service provider not linkable here, skipped: ");
+            System.err.println(cn);
+            return null;
         }
         if (!service.isAssignableFrom(c))
         {
@@ -205,33 +252,28 @@ public final class ServiceLoader<S> implements Iterable<S>
         return "java.util.ServiceLoader[" + service.getName() + "]";
     }
 
-    /** A {@link Provider} that remembers only a NAME until asked. */
+    /** A {@link Provider} whose class is known and whose INSTANCE is built only when {@link #get} is called. */
     private static final class Lazy<S> implements Provider<S>
     {
         private final ServiceLoader<S> sl;
-        private final String name;
-        private Class<? extends S> cls;
+        private final Class<? extends S> cls;
 
-        Lazy(ServiceLoader<S> sl, String name)
+        Lazy(ServiceLoader<S> sl, Class<? extends S> cls)
         {
             this.sl = sl;
-            this.name = name;
+            this.cls = cls;
         }
 
         @Override
         public Class<? extends S> type()
         {
-            if (cls == null)
-            {
-                cls = sl.resolve(name);
-            }
             return cls;
         }
 
         @Override
         public S get()
         {
-            return sl.construct(type());
+            return sl.construct(cls);
         }
     }
 
@@ -239,29 +281,31 @@ public final class ServiceLoader<S> implements Iterable<S>
     private static final class It<S> implements Iterator<S>
     {
         private final ServiceLoader<S> sl;
+        private final ArrayList<Class<? extends S>> classes;
         private int at;
 
-        It(ServiceLoader<S> sl)
+        It(ServiceLoader<S> sl, ArrayList<Class<? extends S>> classes)
         {
             this.sl = sl;
+            this.classes = classes;
         }
 
         @Override
         public boolean hasNext()
         {
-            return at < sl.names.size();
+            return at < classes.size();
         }
 
         @Override
         public S next()
         {
-            if (at >= sl.names.size())
+            if (at >= classes.size())
             {
                 throw new NoSuchElementException();
             }
-            String cn = sl.names.get(at);
+            Class<? extends S> c = classes.get(at);
             at += 1;
-            return sl.construct(sl.resolve(cn));
+            return sl.construct(c);
         }
     }
 }

@@ -76,6 +76,78 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A SYNTHESISED LAMBDA'S TIB CARRIES `java/lang/Object`'s VTABLE NOW (2026-09-10).** It was ONE WORD --
+  the Type and no vtable at all -- on the premise, stated in its own comment, that "a lambda is only ever
+  type-checked through its interface dir". An `Object` method on a lambda receiver therefore resolved
+  NOWHERE: not in the class registry, and not in the itable directory, which holds only interface methods.
+  The launcher hit it as `DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z` from
+  `Stream.sorted()` -> `SortedOps$OfRef.<init>`.
+  - **THE MISSING REGISTRY ENTRY IS NOT THE BUG, AND THE SPEC SAYS SO.** A real JVM's lambda class is a
+    HIDDEN class (`LambdaMetafactory` uses `Lookup.defineHiddenClass`), whose specification states it "is not
+    discoverable by `Class.forName`... `ClassLoader.loadClass`... or `findClass`" and "does not have a binary
+    name, so there is no internal form available to record in any class's constant pool". joe-ng's lambda
+    having no `clTab` entry MIRRORS that. What HotSpot still gives it is a full method table rooted at
+    Object; only lookup BY NAME is suppressed. This VM had conflated "unregistered" with "no vtable".
+  - **JVMS specifies the behaviour, not the layout:** selection picks the maximally-specific override in the
+    receiver's hierarchy, which is rooted at Object -- so `equals` on a lambda MUST select `Object.equals`.
+    Identity semantics are right here: `LambdaMetafactory` specifies the identity of a captured function
+    object as "unpredictable", warning callers off depending on it.
+  - **ANNOTATION TIBs GET THE SAME PREFIX, and that is required rather than opportunistic:** they are
+    synthesised the same way (`allocData(16)`, unregistered, itable-only) and share the `lambdaTibRoots`
+    array, so a single refill pass over that array is only SOUND if every entry has the same shape.
+  - **The refill is capacity-bounded**, via a new parallel `lambdaTibVtCap`. A TIB built before
+    `java/lang/Object` is registered reserves ZERO slots, and refilling it blind once Object arrives with
+    nine virtuals would write past an 8-byte allocation. Same repair as `refillArrayTibVtables` -- **which is
+    where this whole shape was solved once already**, for array TIBs, with the identical symptom recorded:
+    "without the vtable the dispatch read past a 1-word TIB and BLR'd garbage".
+  - **A SUITE-ONLY REGRESSION CAUGHT AN ARM THAT DID NOT BELONG.** The `Stream.sorted()` arm -- the
+    launcher's own trigger -- passes when the demo is launched ALONE and NPEs in the suite:
+    `StreamOpFlag.<clinit>` -> `EnumMap.<init>` -> `getKeyUniverse`, i.e.
+    `SharedSecrets.getJavaLangAccess()` reads null in the suite's SHARED loader state. Pre-existing and
+    unrelated to dispatch; the arm was removed from the suite (with the finding recorded beside it) rather
+    than the suite being made to carry the whole stream pipeline. **OPEN.**
+  - **QEMU:** the five Object-method arms on a lambda receiver exact (`equals` self 1 / other 0, stable
+    hash, non-null `toString`/`getClass`), demo suite end to end, `metal junit: ran 44, failures 0`, host
+    tests unchanged incl. `compiler: 37 checks`.
+  - **LAUNCHER: past it, into ENGINE DISCOVERY** -- `DefaultLauncher.discover` ->
+    `EngineDiscoveryOrchestrator.discover` -> `discoverSafely`, where it NPEs (line 171).
+
+- **A SERVICE PROVIDER THIS VM CANNOT LOAD IS SKIPPED AND SAID SO, NOT HALTED ON (2026-09-10).** JUnit's
+  `OpenTestReportGeneratingListener` is on the `TestExecutionListener` services path, and its CONSTRUCTOR
+  calls `java/nio/file/Path.of` -- denied, because there is no filesystem under this VM. A denylist trap
+  HALTS, so stock's "a provider that fails to construct throws `ServiceConfigurationError`" never got a
+  chance to run.
+  - **Three changes, and the ORDER of the failure is the point.** `org/junit/platform/reporting/` is
+    denylisted, which moves the failure EARLIER -- from a trap at construction to a
+    `ClassNotFoundException` at `Class.forName`, where a caller can handle it.
+  - **`Class.forName` HONOURS THE DENYLIST NOW, and it did not before.** `pullClass` goes straight to the
+    classDir -- the same bypass already recorded for the deferred-`new` path -- so forName loaded a denied
+    class happily and the denial only bit later, at a trap-wired call site, where it halts. A denied class is
+    NOT FOUND, which is the truth: it is deliberately absent.
+  - **The `ServiceLoader` overlay SKIPS an unloadable provider and REPORTS it by name.** Stated divergence
+    from stock, which aborts the whole service: on a VM where some classes are deliberately absent, that
+    abort makes every service containing one such provider unusable, which is a worse answer than running the
+    rest. Only an ABSENT class is skipped -- a class that loads but is not a subtype is still a
+    `ServiceConfigurationError`, because that is a real configuration mistake rather than a missing
+    capability.
+  - **`stream()` now resolves at build time rather than on first `type()`**, and that costs nothing on the
+    path it exists for: `ServiceLoaderUtils.filter` calls `type()` on every provider anyway. The laziness
+    that is load-bearing -- not CONSTRUCTING a provider that is then filtered out -- is untouched.
+  - **MY FIRST ATTEMPT WAS WRONG AND THE PROBE CAUGHT IT.** Denying the package alone changed nothing:
+    `listeners count = 2` with no skip line, because forName does not consult the denylist. The arm that
+    pinned the COUNT is what said so -- an arm that only checked "no crash" would have passed.
+  - **QEMU:** `ServiceLoaderProbe` exact -- the skip line names the provider, `listeners count = 1`, the
+    survivor (`UniqueIdTrackingListener`) resolves AND constructs, and engines/parsers are unaffected (3 and
+    13). Demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged incl.
+    `compiler: 37 checks`.
+  - **LAUNCHER: past the halt and into DISCOVERY.** It now stops on a different family:
+    **`DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z`** with `synthesised(lambda/anno TIB)=1`
+    -- an `Object` PUBLIC method invoked on a synthesised LAMBDA receiver, from
+    `Stream.sorted()` -> `SortedOps$OfRef.<init>`. A lambda has a Type and an itable directory but no `clTab`
+    entry, so neither the registry tier nor `resolveViaItableDir` can answer, and `equals` is not an
+    interface method for the directory to hold. The likely shape of the fix is the one the interface-typed
+    `getClass` bug took: resolve an Object public method against `java/lang/Object` itself.
+
 - **A LAMBDA IN A DEEP-STACK METHOD COMPILES NOW -- and the launcher reaches REAL `ServiceLoader`
   DISCOVERY THROUGH A STREAM PIPELINE (2026-09-10).** `lowerLambda` began
   `if (deepStack) { fail(FAIL_OPCODE, 0xBA, 3); return; }` -- a flat refusal, with a `TODO` for the reason.

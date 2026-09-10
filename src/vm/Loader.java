@@ -151,6 +151,11 @@ public final class Loader
     // making a later Function.apply on it NPE. Holding each TIB here (a scanned static array) keeps it live.
     private static final int MAXLAMBDATIB = 8192;
     private static long[] lambdaTibRoots;
+    // Vtable CAPACITY of each synthesised TIB above, so refillSynthTibVtables can never write past one. The
+    // capacity is whatever java/lang/Object's vtable count was WHEN THE TIB WAS BUILT, and Object may not have
+    // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
+    // allocation once Object arrives with nine virtuals.
+    private static int[] lambdaTibVtCap;
     private static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
@@ -2810,6 +2815,7 @@ public final class Loader
         instImapReg = new int[MAXIMAP];
         instImapN = 0;
         lambdaTibRoots = new long[MAXLAMBDATIB];
+        lambdaTibVtCap = new int[MAXLAMBDATIB];
         lambdaTibRootN = 0;
         pcBase = new long[MAXPARSECACHE];
         pcBytes = new byte[MAXPARSECACHE][];
@@ -4415,6 +4421,17 @@ public final class Loader
                 // NOT denied. The HTTP-CONNECT proxy impl + www/ext + GC-auto-close SocketCleanable stay trapped.
                 || utf8HasPrefix(base, off, Magic.bytes("java/net/HttpConnectSocketImpl"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/net/SocketCleanable"))
+                // org/junit/platform/reporting/ writes an XML report to a FILE. Its
+                // OpenTestReportGeneratingListener is on the TestExecutionListener services path, so
+                // ServiceLoader discovers it and constructs it -- and its constructor calls
+                // java/nio/file/Path.of, which is denied because there is no filesystem under this VM. A
+                // denylist trap HALTS, so stock's "a provider that fails to construct throws
+                // ServiceConfigurationError" never gets a chance to run.
+                //
+                // Denying the package moves the failure EARLIER, to Class.forName, where it is an ordinary
+                // ClassNotFoundException that the ServiceLoader overlay can skip and REPORT. A listener that
+                // can only write files cannot work here; the choice is between saying so and halting.
+                || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
                 // Heavy socket subtrees statically referenced by NioSocketImpl/Net but never TAKEN on the
@@ -5005,6 +5022,18 @@ public final class Loader
         {
             ensureClinit(ci);                               // JVMS 5.5: Class.forName(name) INITIALIZES the class
             return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
+        }
+        // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
+        //
+        // `pullClass` goes straight to the classDir and does not consult the denylist -- the same bypass
+        // already recorded for the deferred-`new` path. So forName would LOAD a denied class happily, and the
+        // denial would only bite later, at a trap-wired call site, where it HALTS. Answering not-found here
+        // moves that to a ClassNotFoundException the caller can handle: it is what lets ServiceLoader skip a
+        // provider it cannot load (JUnit's file-writing OpenTestReportGeneratingListener) instead of halting
+        // the run.
+        if (isDenylisted(utf8Blob(slash), 0))
+        {
+            return 0L;                                  // => the guest throws ClassNotFoundException
         }
         long type = loadClassIncremental(slash);
         ensureClinit(classRegByType(type));             // JVMS 5.5: forName INITIALIZES, and this batch's
@@ -6541,6 +6570,7 @@ public final class Loader
                                                         // CALLs left unresolved while their target compiled later
         long tRest = Magic.readCNTPCT_EL0();
         refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
+        refillSynthTibVtables();                        // ... and every synthesised lambda/annotation TIB
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
         // Seed BEFORE runClinits: a <clinit> can call these (StreamOpFlag.<clinit> builds an EnumMap -- needs the
@@ -13548,15 +13578,22 @@ public final class Loader
         Magic.store64(type + 0L, (long) (16 + n * 8));
         Magic.store64(type + ObjectModel.TYPE_SUPER_OFFSET, objectTypeAddr());   // NOT 0 -- see finishLambdaClass
         Magic.store64(type + 16L, dir);
-        long tib = Heap.allocData(16);
+        // TIB { Type, Object's vtable } -- see finishLambdaClass. An annotation instance is synthesised the
+        // same way and has the same gap: unregistered, itable-only, so equals/hashCode/toString on one had
+        // nowhere to resolve. It also has to be the same SHAPE as a lambda TIB, because both live in
+        // lambdaTibRoots and refillSynthTibVtables walks that one array.
+        int onv2 = objectVtableCount();
+        long tib = Heap.allocData(8 + onv2 * 8);
         Magic.store64(tib + 0L, type);
+        fillObjectVtable(tib);
         annoTibKey[annoTibN] = ifaceType;
         annoTibVal[annoTibN] = tib;
         annoTibN += 1;
         if (lambdaTibRoots != null && lambdaTibRootN < MAXLAMBDATIB)
         {
             lambdaTibRoots[lambdaTibRootN] = tib;       // same GC root as a lambda TIB, for the same reason:
-            lambdaTibRootN += 1;                        //   nothing scanned would otherwise reference it
+            lambdaTibVtCap[lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
+            lambdaTibRootN += 1;
         }
         return tib;
     }
@@ -15095,12 +15132,27 @@ public final class Loader
         Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET, 0L);
         Magic.store64(type + ObjectModel.TYPE_IMPLEMENTS_OFFSET + 8L, 0L);
         buildImplBitmap(type);                           // a lambda's dir interfaces ARE numbered
-        // TIB { Type } (slot 0; the lambda has no vtable methods of its own).
-        long tib = Heap.allocData(8);
+        // TIB { Type, Object's vtable }. The lambda declares no virtual method of its OWN -- its SAM is
+        // reached through the itable directory above -- but it is still an ordinary object, and
+        // equals/hashCode/toString on it must select java/lang/Object's implementations (JVMS 5.4.6: the
+        // maximally-specific override in the receiver's hierarchy, which is rooted at Object).
+        //
+        // This TIB used to be ONE WORD, on the premise that "a lambda is only ever type-checked through its
+        // interface dir". An Object method on a lambda receiver then had nowhere to resolve: the class
+        // registry has no entry (a lambda has no classfile and, exactly as for a real JVM's HIDDEN classes,
+        // no binary name to register under), and the itable directory holds only interface methods. The
+        // launcher hit it as `DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z` from
+        // Stream.sorted(). Identity semantics inherited from Object are exactly right here --
+        // LambdaMetafactory specifies the identity of a captured function object as unpredictable.
+        int onv = objectVtableCount();
+        long tib = Heap.allocData(8 + onv * 8);
         Magic.store64(tib + 0L, type);
+        fillObjectVtable(tib);                           // may copy zeros if Object is not compiled yet;
+                                                         //   refillSynthTibVtables repairs that at loadAll's end
         if (lambdaTibRoots != null && lambdaTibRootN < lambdaTibRoots.length)
         {
             lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
+            lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
             lambdaTibRootN += 1;
         }
         return tib;
@@ -15257,15 +15309,17 @@ public final class Loader
         // type is Object at a dispatch site (e.g. Arrays.deepEquals0's `e1.equals(e2)`, or `element.toString()` in
         // String.valueOf/join), so the receiver's TIB must resolve equals/hashCode/toString to Object's impls.
         // Without the vtable the dispatch read past a 1-word TIB and BLR'd garbage (a wild branch to the image entry).
-        int nv = arrayVtableCount();
+        int nv = objectVtableCount();
         long tib = Heap.allocData(8 + nv * 8);
         Magic.store64(tib + ObjectModel.TIB_TYPE_SLOT * 8, type);                // TIB[0] = Type
         fillObjectVtable(tib);                                                   // TIB[1..] = Object's vtable slots
         return tib;
     }
 
-    /** Number of vtable slots an array TIB reserves (= java/lang/Object's flattened vtable count), or 0. */
-    private static int arrayVtableCount()
+    /** Number of vtable slots a SYNTHESISED TIB reserves (= java/lang/Object's flattened vtable count), or 0.
+     *  Used by array, lambda and annotation TIBs alike -- none of them has a classfile, and all of them are
+     *  nonetheless ordinary objects whose equals/hashCode/toString must select Object's implementations. */
+    private static int objectVtableCount()
     {
         int oi = objectClassIndex();
         return oi >= 0 ? clTab[oi].vtCount : 0;
@@ -15275,6 +15329,45 @@ public final class Loader
      *  are only FILLED when Object's body is compiled (fillTib), which can happen AFTER an array TIB is first
      *  created (e.g. a string literal interns a byte[] before Object compiles) -- so a freshly-made array TIB may
      *  copy zeros. {@link #refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
+    /** {@link #fillObjectVtable} bounded by the TIB's own slot capacity (see {@code lambdaTibVtCap}). */
+    private static void fillObjectVtableUpTo(long tib, int cap)
+    {
+        int oi = objectClassIndex();
+        if (oi < 0)
+        {
+            return;
+        }
+        int nv = clTab[oi].vtCount;
+        int n = nv < cap ? nv : cap;
+        int k = 0;
+        while (k < n)
+        {
+            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTab[oi].tib + 8L + (long) k * 8L));
+            k += 1;
+        }
+    }
+
+    /** Re-copy Object's (now-filled) vtable into every synthesised lambda/annotation TIB, bounded by the
+     *  capacity each was built with. Same repair as {@link #refillArrayTibVtables} and for the same reason:
+     *  a TIB built before Object's body was compiled copied zeros, and a 0 slot is a wild branch from baked
+     *  code (which carries no dispatch guard) rather than a named trap. */
+    private static void refillSynthTibVtables()
+    {
+        if (lambdaTibRoots == null)
+        {
+            return;
+        }
+        int i = 0;
+        while (i < lambdaTibRootN)
+        {
+            if (lambdaTibRoots[i] != 0L)
+            {
+                fillObjectVtableUpTo(lambdaTibRoots[i], lambdaTibVtCap[i]);
+            }
+            i += 1;
+        }
+    }
+
     private static void fillObjectVtable(long tib)
     {
         int oi = objectClassIndex();
