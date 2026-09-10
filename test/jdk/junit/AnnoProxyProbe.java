@@ -55,6 +55,17 @@ public class AnnoProxyProbe
         String[] tags() default { "x", "y" };
     }
 
+    /** A CLASS-level annotation, for the Class-side getAnnotation/getDeclaredAnnotation pair. */
+    @Tag(value = "onclass", count = 3, names = { "x" })
+    static class Annotated
+    {
+    }
+
+    /** Deliberately un-annotated, so the absent arm can say NO. */
+    static class Bare
+    {
+    }
+
     @Tag(value = "hello", count = 7, names = { "a", "b", "c" })
     public void tagged()
     {
@@ -185,6 +196,29 @@ public class AnnoProxyProbe
         // getFields: PUBLIC only, and up the chain -- so Sub's inherited `pub` appears and `priv` does not.
         java.lang.reflect.Field[] pf = Sub.class.getFields();
         System.out.println("fields = " + pf.length + " (want 2)");
+        // getDeclaredAnnotation on a CLASS -- the method JUnit reaches through AnnotatedElement, and the one
+        // that stopped the launcher in AnnotationSupport.isAnnotated. It must AGREE with getAnnotation here,
+        // because the native reads this class's own RuntimeVisibleAnnotations for both.
+        java.lang.annotation.Annotation da = Annotated.class.getDeclaredAnnotation(Tag.class);
+        System.out.println("class declared    = " + (da != null ? 1 : 0) + " (want 1)");
+        System.out.println("declared value    = " + ((Tag) da).value() + " (want onclass)");
+        System.out.println("getAnno  value    = " + Annotated.class.getAnnotation(Tag.class).value()
+                + " (want onclass)");
+        // NOT asserted: `da == getAnnotation(...)`. Stock caches annotation instances so identity happens to
+        // hold there, but the API does not specify it, and an arm asserting it would be testing an accident.
+        //
+        // What IS specified is Annotation.equals -- "an instance of the same annotation interface ... all of
+        // whose members are equal" -- and joe-ng's annotation objects inherit Object's IDENTITY equals, so
+        // two instances with equal members compare unequal. That is a real gap, and this probe finding it is
+        // how it got recorded rather than papered over. Implementing it needs element ENUMERATION (equals,
+        // hashCode and toString all do), which the annotation runtime does not have: it can find one element
+        // by name, not walk them.
+        System.out.println("distinct instances= "
+                + (da == Annotated.class.getAnnotation(Tag.class) ? "same" : "fresh (see note)"));
+        System.out.println("declared on bare  = "
+                + (Bare.class.getDeclaredAnnotation(Tag.class) == null ? "null" : "NON-NULL <== BUG")
+                + " (want null)");
+
         System.out.println("[probe done]");
     }
 }

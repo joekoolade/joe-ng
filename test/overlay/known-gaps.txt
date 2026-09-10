@@ -10,7 +10,6 @@ java/lang/Class#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/Class#getClasses()[Ljava/lang/Class;
 java/lang/Class#getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;
 java/lang/Class#getConstructors()[Ljava/lang/reflect/Constructor;
-java/lang/Class#getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;
 java/lang/Class#getDeclaredClasses()[Ljava/lang/Class;
 java/lang/Class#getDeclaredConstructors()[Ljava/lang/reflect/Constructor;
 java/lang/Class#getGenericSuperclass()Ljava/lang/reflect/Type;
