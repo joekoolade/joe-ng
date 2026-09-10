@@ -1769,10 +1769,15 @@ public final class Loader
         // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
         // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
         seedSystemStreams();                                // System.out/err -> UART
-        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
+        // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
+        // resolving Properties.setProperty rebuilds the loader's compile cursor (gcp/gbase/gStatics) for
+        // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
+        // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
+        // different direction.
+        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -1890,12 +1895,17 @@ public final class Loader
         pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
         seedSystemStreams();                                // System.out/err -> UART
-        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
                                                             //   trampoline (needs Runnable loaded by loadAll;
                                                             //   harmless if the program spawns no threads)
+        // seedSystemProps runs LAST of the seeds, because it is the only one that COMPILES a method:
+        // resolving Properties.setProperty rebuilds the loader's compile cursor (gcp/gbase/gStatics) for
+        // java/util/Properties, and every seed after it would then be standing on the wrong class's state.
+        // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
+        // different direction.
+        seedSystemProps();                                  // System.props -> a real Properties (setProperty)
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -2041,6 +2051,29 @@ public final class Loader
             i += 1;
         }
         return arr;
+    }
+
+    /**
+     * A heap blob holding {@code s} in CLASSFILE Utf8 SHAPE: a big-endian u2 length, then the bytes.
+     *
+     * <p>Needed because the resolver family ({@code compileSigOnDemand}, {@code bufBySigU},
+     * {@code resolveLinkTarget}) takes pointers INTO a class blob, where every name is length-prefixed --
+     * while VM-side code holds names as plain {@code byte[]}. Passing {@code Magic.addrOf(Magic.bytes(...))}
+     * to one of those reads the first two characters as a length and then garbage; that mistake was made once
+     * already, in a class-chain fallback that was written and removed before it shipped.
+     */
+    static long utf8Blob(byte[] s)
+    {
+        long p = Heap.allocData(s.length + 2);
+        Magic.store8(p, (byte) ((s.length >> 8) & 0xFF));
+        Magic.store8(p + 1L, (byte) (s.length & 0xFF));
+        int i = 0;
+        while (i < s.length)
+        {
+            Magic.store8(p + 2L + i, s[i]);
+            i += 1;
+        }
+        return p;
     }
 
     /** A guest java/lang/String from a length-prefixed Utf8 at {@code base+off} (u2 length, then bytes); 0 if base 0. */
@@ -7134,29 +7167,54 @@ public final class Loader
     static void seedSystemProps()
     {
         long slot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("props"));
-        if (slot == 0L || Magic.load64(slot) != 0L)
+        if (slot == 0L)
         {
+            reportPropsGap(Magic.bytes("java/lang/System.props has no static cell"));
             return;
+        }
+        if (Magic.load64(slot) != 0L)
+        {
+            return;                                     // already seeded: not a failure, say nothing
         }
         int pi = classIndexByName(Magic.bytes("java/util/Properties"));
         if (pi < 0)
         {
+            reportPropsGap(Magic.bytes("java/util/Properties is not registered"));
             return;
         }
         long obj = allocInstance(clTab[pi].type);
         if (obj == 0L)
         {
+            reportPropsGap(Magic.bytes("java/util/Properties could not be allocated"));
             return;
         }
         int ctor = constructorResolve(clTab[pi].type, 0);
         if (ctor < 0 || rgTab[ctor].buf == 0L)
         {
+            reportPropsGap(Magic.bytes("java/util/Properties.<init>() has no compiled body"));
             return;                                     // no runnable <init>: leaving props null is honest
         }
         Magic.call2(rgTab[ctor].buf, obj, 0L);          // receiver in x0; a no-arg ctor reads nothing else
         Magic.store64(slot, obj);
         seedStandardProps(obj, pi);
         seedLineSeparator();
+    }
+
+    /**
+     * Say WHY the system properties could not be seeded.
+     *
+     * <p>Every exit on this path used to be silent, and that silence is the whole problem: an empty property
+     * map does not fail where it is created, it fails much later inside a library that reads a property
+     * unconditionally and does not expect null. picocli's {@code Ansi.isWindows()} does
+     * {@code System.getProperty("os.name").toLowerCase()}; its {@code trimLineSeparator} does
+     * {@code result.endsWith(System.getProperty("line.separator"))}. Both NPE deep inside the library, naming
+     * nothing the VM did, and the two look like unrelated bugs while sharing one cause.
+     */
+    private static void reportPropsGap(byte[] why)
+    {
+        Uart.write(Magic.bytes("\n  SYSTEM PROPERTIES NOT SEEDED (every getProperty answers null): "));
+        Uart.write(why);
+        Uart.putc(0x0A);
     }
 
     /**
@@ -7191,12 +7249,35 @@ public final class Loader
      */
     private static void seedStandardProps(long props, int propsClass)
     {
-        int m = methodResolveRegistry(clTab[propsClass].type, Magic.addrOf(Magic.bytes("setProperty")));
-        if (m < 0 || rgTab[m] == null || rgTab[m].buf == 0L)
+        // NOT through the method registry: `rgTab` holds one entry per COMPILED method, and bodies compile on
+        // FIRST CALL -- this runs during loader init, so nothing has called setProperty and it is not in there
+        // at all. Asking the registry could therefore only ever succeed by accident, in a closure that had
+        // already compiled it for some other reason. That is exactly the shape of the bug this replaced: the
+        // launcher image worked and a smaller one left EVERY property null.
+        long buf = bufBySigU(utf8Blob(Magic.bytes("java/util/Properties")),
+                utf8Blob(Magic.bytes("setProperty")),
+                utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
+        if (buf == 0L)
         {
-            return;                                     // no setProperty: leave the map empty rather than halt
+            // A BODY COMPILES ON FIRST CALL, and nothing has called setProperty yet: this runs during loader
+            // init, long before any program. So a zero buffer here does NOT mean "unavailable", it means "not
+            // yet" -- and treating the two alike is what left EVERY property null in any closure that had not
+            // already compiled it for some other reason. That is the "works in one closure, broken in
+            // another" signature: the launcher image happened to compile it and worked, while a smaller one
+            // NPE'd inside picocli reading os.name.
+            //
+            // The registry entry already holds the three Utf8-shaped pointers compileSigOnDemand wants
+            // (`base + *Off` is a u2 length followed by bytes), so this is the method's own identity, not a
+            // reconstruction of it.
+            buf = compileSigOnDemand(utf8Blob(Magic.bytes("java/util/Properties")),
+                    utf8Blob(Magic.bytes("setProperty")),
+                    utf8Blob(Magic.bytes("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;")));
         }
-        long buf = rgTab[m].buf;
+        if (buf == 0L)
+        {
+            reportPropsGap(Magic.bytes("java/util/Properties.setProperty would not compile"));
+            return;
+        }
         putProp(buf, props, Magic.bytes("os.name"), Magic.bytes("joe-ng"));
         putProp(buf, props, Magic.bytes("os.arch"), Magic.bytes("aarch64"));
         putProp(buf, props, Magic.bytes("os.version"), Magic.bytes("1.0"));
