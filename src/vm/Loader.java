@@ -679,6 +679,25 @@ public final class Loader
         {
             return true;
         }
+        // org/junit/platform/commons/util/ReflectionUtils.<clinit> ldc's its own class (for getLogger) and
+        // the array class literals "[Z".."[Ljava/lang/String;" for classNameToTypeMap -- tag-7 literals, which
+        // the gate below rejects. It MUST run: `tryToLoadClass` reads classNameToTypeMap UNGUARDED, so a
+        // skipped initializer is an NPE on the first class-name lookup, and that is what aborted the console
+        // launcher after it had otherwise run to completion. Everything the body needs now exists: getLogger
+        // (java.util.logging is provided), Pattern.compile, ClasspathScannerLoader via ServiceLoader,
+        // ConcurrentHashMap.newKeySet, and array/primitive class literals.
+        //
+        // A BROADER FIX WAS TRIED AND REJECTED ON EVIDENCE, not argument. The gate's own comment says a
+        // rejected initializer is "clinitBlocked/seeded anyway" -- true in the bake domain, false for an
+        // application class -- so allowing tag-7 for everything OUTSIDE java//jdk//sun/ looked principled.
+        // Measured, it made the launcher run ~4x longer without reaching the point it had reached before
+        // (stalled at the same log position for 10 minutes at full CPU): running every application
+        // initializer in a ~900-class closure is a different cost class. The narrowing may still be right,
+        // but it needs its own increment with that cost understood.
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("org/junit/platform/commons/util/ReflectionUtils")))
+        {
+            return true;
+        }
         // A pervasive idiom is a <clinit> that ONLY disables assertions: `ldc X.class; invokevirtual
         // desiredAssertionStatus; ...; putstatic $assertionsDisabled` (many java.util.stream classes). Its lone
         // tag-7 ldc trips the gate below, so those <clinit>s were skipped -> $assertionsDisabled stayed false ->
