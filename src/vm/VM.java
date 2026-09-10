@@ -3267,6 +3267,12 @@ public final class VM
         Uart.write(Magic.bytes("interface defaults + Object methods through an interface:\n"));
         Loader.launchMain(Magic.bytes("demo/DefaultIfaceDemo"), Magic.bytes(""));
 
+        // A lambda built while the operand stack is DEEP (past OP_MAX), so its captures come from frame
+        // memory rather than registers. lowerLambda refused that mode outright until now, which is what
+        // stopped the console launcher inside ClasspathScannerLoader.
+        Uart.write(Magic.bytes("lambda in a deep-stack method:\n"));
+        Loader.launchMain(Magic.bytes("demo/DeepLambdaDemo"), Magic.bytes(""));
+
         // java.util.logging: NOT java.base -- it lives in the java.logging module, so these classes were
         // absent from the image entirely until joe-ng provided them. Libraries report real trouble through
         // this and then carry on, so WARNING and above are written rather than dropped.
