@@ -8610,6 +8610,8 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.classAnnoGetAddr; }  // (Class,byte[]) -> instance
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.classAnnoAllAddr; }   // (Class)[Annotation
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("isInstance0")))       { return VM.instanceOfAddr; }    // (Object,J)Z == VM.instanceOf(JJ)I
@@ -13419,6 +13421,174 @@ public final class Loader
             a += 1;
         }
         return 0L;
+    }
+
+    /**
+     * This class's DIRECTLY DECLARED interfaces, as Class mirrors, in declaration order.
+     *
+     * <p>Read from {@code clIfaceReg}, which the loader fills from the classfile's {@code interfaces} array --
+     * so it is the declared set, not the transitive closure. That is what stock returns, and what JUnit's
+     * {@code AnnotationUtils.findAnnotation} needs: it recurses into each interface itself, so handing it a
+     * flattened closure would make it walk the same interfaces repeatedly.
+     */
+    static long classInterfaces(long mirror)
+    {
+        long elemType = classMirrorTypeAddr();
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        int n = reg >= 0 ? clIfaceRegN[reg] : 0;
+        long arr = Heap.allocArray(n, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(elemType));
+        int i = 0;
+        while (i < n)
+        {
+            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + i * 8L,
+                    classMirror(clTab[clIfaceReg[reg * MAX_DIRECT_IF + i]].type));
+            i += 1;
+        }
+        return arr;
+    }
+
+    /** Cap on annotations enumerated per class -- a classfile may declare any number; nothing real declares
+     *  more than a handful, and a fixed cap keeps the two passes below on plain locals. */
+    private static final int MAXDECLANNO = 32;
+
+    /**
+     * Every annotation DECLARED on this class, as instances, in a fresh {@code Annotation[]}.
+     *
+     * <p>Fresh each call because stock specifies the caller may modify the returned array, and because
+     * nothing here caches annotation instances (see the note on identity in {@code Class.getAnnotation}).
+     *
+     * <p>TWO PASSES, over ABSOLUTE addresses. Pass 1 records each entry's type descriptor and element-pair
+     * position as addresses into the blob; pass 2 builds. That split is not tidiness: {@code buildAnnoObject}
+     * reads {@code gcp[nameIdx]}, the parse CURSOR, and anything that resolves during a build re-parses a
+     * blob and moves it. Blob addresses do not move; the parse state does -- the same reason the written-pair
+     * and default phases are kept apart, and the reason a 'c'/'e' element defers.
+     *
+     * <p>An annotation whose INTERFACE is not loaded is skipped, and {@code buildAnnoObject}'s existing report
+     * names it: there is no itable to give such an instance, so the alternative is a null element, which
+     * reads to the caller as an annotation that is present but broken.
+     */
+    static long classAnnotationsAll(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return emptyAnnoArray();
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return emptyAnnoArray();
+        }
+        long lp = annoListPos(base, ap + 2L, u2(ap));
+        if (lp == 0L)
+        {
+            return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
+        }
+        long[] descAbs = new long[MAXDECLANNO];
+        long[] pairsAbs = new long[MAXDECLANNO];
+        int n = u2(lp);
+        long p = lp + 2L;
+        int found = 0;
+        int i = 0;
+        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
+        {
+            int typeIdx = u2(p);
+            p += 2;
+            descAbs[found] = base + gcp[typeIdx];
+            pairsAbs[found] = p;
+            found += 1;
+            p = skipElementPairs(p);
+            i += 1;
+        }
+        long[] objs = new long[found];                   // PASS 2: resolve + build
+        int built = 0;
+        int k = 0;
+        while (k < found)
+        {
+            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
+            if (ifaceReg >= 0)
+            {
+                long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
+                if (obj != 0L)
+                {
+                    objs[built] = obj;
+                    built += 1;
+                }
+            }
+            k += 1;
+        }
+        long arr = Heap.allocArray(built, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        int j = 0;
+        while (j < built)
+        {
+            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
+            j += 1;
+        }
+        return arr;
+    }
+
+    /** A zero-length {@code Annotation[]} -- what a class with no declared annotations answers. */
+    private static long emptyAnnoArray()
+    {
+        long arr = Heap.allocArray(0, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        return arr;
+    }
+
+    /** {@code java/lang/annotation/Annotation}'s Type, or Object's if it is not loaded. */
+    private static long annotationTypeAddr()
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/annotation/Annotation"));
+        return i >= 0 ? clTab[i].type : objectTypeAddr();
+    }
+
+    /** Position of the {@code RuntimeVisibleAnnotations} list ({@code u2 count} first), or 0 if absent. */
+    private static long annoListPos(long base, long p, int attrs)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("RuntimeVisibleAnnotations")))
+            {
+                return p;
+            }
+            p += alen;
+            a += 1;
+        }
+        return 0L;
+    }
+
+    /** As {@link #regOfAnnoDesc}, for a descriptor at an ABSOLUTE length-prefixed Utf8 address. */
+    private static int regOfAnnoDescAbs(long utf8Addr)
+    {
+        int len = u2(utf8Addr);
+        if (len < 3)
+        {
+            return -1;
+        }
+        byte[] name = new byte[len - 2];                // strip the leading 'L' and the trailing ';'
+        int i = 0;
+        while (i < len - 2)
+        {
+            name[i] = (byte) u1(utf8Addr + 2 + 1 + i);
+            i += 1;
+        }
+        return classIndexByName(name);
     }
 
     /** {@code "Lcom/x/Foo;"} -> the class-registry index of {@code com/x/Foo}, or -1 if it is not loaded. */

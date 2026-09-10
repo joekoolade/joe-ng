@@ -215,6 +215,35 @@ public class AnnoProxyProbe
         // by name, not walk them.
         System.out.println("distinct instances= "
                 + (da == Annotated.class.getAnnotation(Tag.class) ? "same" : "fresh (see note)"));
+
+        // getDeclaredAnnotations: the PLURAL, which JUnit's findAnnotation walks to reach META-annotations.
+        // An empty answer would not fail -- it would silently report that nothing is annotated -- so the
+        // count and the type are both pinned.
+        java.lang.annotation.Annotation[] all = Annotated.class.getDeclaredAnnotations();
+        System.out.println("declaredAnnos len = " + all.length + " (want 1)");
+        System.out.println("declaredAnnos[0]  = " + (all[0] instanceof Tag ? "Tag" : "OTHER <== BUG")
+                + " (want Tag)");
+        System.out.println("declaredAnnos val = " + ((Tag) all[0]).value() + " (want onclass)");
+        System.out.println("getAnnotations len= " + Annotated.class.getAnnotations().length + " (want 1)");
+        System.out.println("bare declaredLen  = " + Bare.class.getDeclaredAnnotations().length + " (want 0)");
+        // A FRESH array each call, as stock specifies the caller may modify what it gets back.
+        System.out.println("fresh array       = "
+                + (Annotated.class.getDeclaredAnnotations() != all ? 1 : 0) + " (want 1)");
+
+        // getInterfaces: DIRECTLY declared, in order -- what findAnnotation recurses into. Sub implements
+        // none; a class that does is checked below so "empty" cannot pass for "works".
+        System.out.println("bare interfaces   = " + Bare.class.getInterfaces().length + " (want 0)");
+        Class<?>[] ifs = java.util.ArrayList.class.getInterfaces();
+        System.out.println("ArrayList ifaces  = " + ifs.length + " (want 4)");
+        boolean sawList = false;
+        for (int q = 0; q < ifs.length; q++)
+        {
+            if (ifs[q] == java.util.List.class)
+            {
+                sawList = true;
+            }
+        }
+        System.out.println("ArrayList has List= " + (sawList ? 1 : 0) + " (want 1)");
         System.out.println("declared on bare  = "
                 + (Bare.class.getDeclaredAnnotation(Tag.class) == null ? "null" : "NON-NULL <== BUG")
                 + " (want null)");
