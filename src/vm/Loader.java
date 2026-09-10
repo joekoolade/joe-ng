@@ -729,13 +729,33 @@ public final class Loader
             if (cpi >= 0)
             {
                 int tag = gcpTag[cpi];
-                if (tag == 7)                            // Class literal: OK only as the assertion idiom
+                if (tag == 7)                            // Class literal: OK as the assertion idiom...
                 {
-                    if (!isAssertionIdiom(code, pc))
+                    if (isAssertionIdiom(code, pc))
+                    {
+                        sawAssertIdiom = true;
+                    }
+                    else if (!selfClassLiteral(cpi))
                     {
                         return false;
                     }
-                    sawAssertIdiom = true;
+                    // ... or when the literal is THIS CLASS'S OWN and the class is outside the bake domain.
+                    //
+                    // That is the LOGGER IDIOM, and it is what every one of these looks like:
+                    //     ldc Own.class; invokestatic LoggerFactory.getLogger; putstatic logger
+                    // Ten application classes in the launcher's closure were rejected for it, leaving `logger`
+                    // null -- and `logger.debug(...)` is called UNGUARDED, so discovery NPE'd in
+                    // EngineDiscoveryOrchestrator. One allowlist entry per class does not scale.
+                    //
+                    // Deliberately NOT `sawAssertIdiom`: that flag exists to reject "idiom PLUS real work",
+                    // which is right inside java.base (those classes are clinitBlocked or seeded instead) and
+                    // wrong for an application class, where the real work is the whole point and there is no
+                    // substitute for running it.
+                    //
+                    // A SELF literal is also the narrow half of a broader rule I tried and backed out:
+                    // allowing ALL tag-7 outside java//jdk//sun/ made the launcher run ~4x longer without
+                    // reaching where it already was. A clinit naming OTHER classes is where the closures come
+                    // from; naming its own class pulls nothing new, because the class is already being loaded.
                 }
                 else if (tag != 3 && tag != 4 && tag != 8)   // not Integer / Float / String
                 {
@@ -760,6 +780,23 @@ public final class Loader
             return false;
         }
         return true;
+    }
+
+    /**
+     * True if the {@code CONSTANT_Class} at {@code cpi} names the class currently being parsed, AND that class
+     * is outside the bake domain ({@code java/}, {@code jdk/}, {@code sun/}) where a rejected initializer is
+     * clinitBlocked or seeded instead.
+     */
+    private static boolean selfClassLiteral(int cpi)
+    {
+        if (utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("jdk/"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("sun/")))
+        {
+            return false;
+        }
+        int nameOff = gcp[u2(gbase + gcp[cpi])];         // CONSTANT_Class -> its name Utf8 offset
+        return utf8EqAt(gbase, nameOff, gbase, gThisNameOff);
     }
 
     /** True if the {@code ldc} at {@code pc} is immediately followed by {@code invokevirtual Class
