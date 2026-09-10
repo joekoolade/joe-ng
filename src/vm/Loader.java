@@ -4415,6 +4415,17 @@ public final class Loader
                 // NOT denied. The HTTP-CONNECT proxy impl + www/ext + GC-auto-close SocketCleanable stay trapped.
                 || utf8HasPrefix(base, off, Magic.bytes("java/net/HttpConnectSocketImpl"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/net/SocketCleanable"))
+                // org/junit/platform/reporting/ writes an XML report to a FILE. Its
+                // OpenTestReportGeneratingListener is on the TestExecutionListener services path, so
+                // ServiceLoader discovers it and constructs it -- and its constructor calls
+                // java/nio/file/Path.of, which is denied because there is no filesystem under this VM. A
+                // denylist trap HALTS, so stock's "a provider that fails to construct throws
+                // ServiceConfigurationError" never gets a chance to run.
+                //
+                // Denying the package moves the failure EARLIER, to Class.forName, where it is an ordinary
+                // ClassNotFoundException that the ServiceLoader overlay can skip and REPORT. A listener that
+                // can only write files cannot work here; the choice is between saying so and halting.
+                || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
                 // Heavy socket subtrees statically referenced by NioSocketImpl/Net but never TAKEN on the
@@ -5005,6 +5016,18 @@ public final class Loader
         {
             ensureClinit(ci);                               // JVMS 5.5: Class.forName(name) INITIALIZES the class
             return classMirror(clTab[ci].type);             // already loaded: cached mirror (identity-stable)
+        }
+        // A DENIED CLASS IS NOT FOUND, which is the truth: it is deliberately absent from this VM.
+        //
+        // `pullClass` goes straight to the classDir and does not consult the denylist -- the same bypass
+        // already recorded for the deferred-`new` path. So forName would LOAD a denied class happily, and the
+        // denial would only bite later, at a trap-wired call site, where it HALTS. Answering not-found here
+        // moves that to a ClassNotFoundException the caller can handle: it is what lets ServiceLoader skip a
+        // provider it cannot load (JUnit's file-writing OpenTestReportGeneratingListener) instead of halting
+        // the run.
+        if (isDenylisted(utf8Blob(slash), 0))
+        {
+            return 0L;                                  // => the guest throws ClassNotFoundException
         }
         long type = loadClassIncremental(slash);
         ensureClinit(classRegByType(type));             // JVMS 5.5: forName INITIALIZES, and this batch's

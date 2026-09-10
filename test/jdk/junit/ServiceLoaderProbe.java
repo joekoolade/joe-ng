@@ -55,6 +55,22 @@ public class ServiceLoaderProbe
         List<ServiceLoader.Provider<DiscoverySelectorIdentifierParser>> pl = parsers.stream().toList();
         System.out.println("parsers count       = " + pl.size() + " (want 13)");
 
+        // ---- A PROVIDER THIS VM CANNOT LOAD IS SKIPPED, NOT FATAL. The TestExecutionListener file names two:
+        // UniqueIdTrackingListener, and OpenTestReportGeneratingListener -- which writes an XML report to a
+        // FILE and is therefore denied here (no filesystem). Stock aborts the whole service with a
+        // ServiceConfigurationError; this overlay skips the one it cannot load and REPORTS it, so the other
+        // provider still works. The count is what proves the survivor is kept rather than the file dropped.
+        System.out.println("-- expect a 'not loadable here' line next --");
+        ServiceLoader<org.junit.platform.launcher.TestExecutionListener> listeners =
+                ServiceLoader.load(org.junit.platform.launcher.TestExecutionListener.class, cl);
+        java.util.List<ServiceLoader.Provider<org.junit.platform.launcher.TestExecutionListener>> ll =
+                listeners.stream().toList();
+        System.out.println("listeners count     = " + ll.size() + " (want 1 of 2; one is denied)");
+        System.out.println("listener kept       = " + (ll.size() == 1 ? ll.get(0).type().getName() : "?")
+                + " (want org.junit.platform.launcher.listeners.UniqueIdTrackingListener)");
+        System.out.println("listener constructs = " + (ll.size() == 1 && ll.get(0).get() != null ? 1 : 0)
+                + " (want 1)");
+
         // ---- ABSENT: no provider file is an empty service, not an error.
         ServiceLoader<Runnable> none = ServiceLoader.load(Runnable.class, cl);
         System.out.println("absent count        = " + none.stream().toList().size() + " (want 0)");

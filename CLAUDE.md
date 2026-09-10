@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A SERVICE PROVIDER THIS VM CANNOT LOAD IS SKIPPED AND SAID SO, NOT HALTED ON (2026-09-10).** JUnit's
+  `OpenTestReportGeneratingListener` is on the `TestExecutionListener` services path, and its CONSTRUCTOR
+  calls `java/nio/file/Path.of` -- denied, because there is no filesystem under this VM. A denylist trap
+  HALTS, so stock's "a provider that fails to construct throws `ServiceConfigurationError`" never got a
+  chance to run.
+  - **Three changes, and the ORDER of the failure is the point.** `org/junit/platform/reporting/` is
+    denylisted, which moves the failure EARLIER -- from a trap at construction to a
+    `ClassNotFoundException` at `Class.forName`, where a caller can handle it.
+  - **`Class.forName` HONOURS THE DENYLIST NOW, and it did not before.** `pullClass` goes straight to the
+    classDir -- the same bypass already recorded for the deferred-`new` path -- so forName loaded a denied
+    class happily and the denial only bit later, at a trap-wired call site, where it halts. A denied class is
+    NOT FOUND, which is the truth: it is deliberately absent.
+  - **The `ServiceLoader` overlay SKIPS an unloadable provider and REPORTS it by name.** Stated divergence
+    from stock, which aborts the whole service: on a VM where some classes are deliberately absent, that
+    abort makes every service containing one such provider unusable, which is a worse answer than running the
+    rest. Only an ABSENT class is skipped -- a class that loads but is not a subtype is still a
+    `ServiceConfigurationError`, because that is a real configuration mistake rather than a missing
+    capability.
+  - **`stream()` now resolves at build time rather than on first `type()`**, and that costs nothing on the
+    path it exists for: `ServiceLoaderUtils.filter` calls `type()` on every provider anyway. The laziness
+    that is load-bearing -- not CONSTRUCTING a provider that is then filtered out -- is untouched.
+  - **MY FIRST ATTEMPT WAS WRONG AND THE PROBE CAUGHT IT.** Denying the package alone changed nothing:
+    `listeners count = 2` with no skip line, because forName does not consult the denylist. The arm that
+    pinned the COUNT is what said so -- an arm that only checked "no crash" would have passed.
+  - **QEMU:** `ServiceLoaderProbe` exact -- the skip line names the provider, `listeners count = 1`, the
+    survivor (`UniqueIdTrackingListener`) resolves AND constructs, and engines/parsers are unaffected (3 and
+    13). Demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged incl.
+    `compiler: 37 checks`.
+  - **LAUNCHER: past the halt and into DISCOVERY.** It now stops on a different family:
+    **`DISPATCH ON UNREGISTERED TYPE ... equals(Ljava/lang/Object;)Z`** with `synthesised(lambda/anno TIB)=1`
+    -- an `Object` PUBLIC method invoked on a synthesised LAMBDA receiver, from
+    `Stream.sorted()` -> `SortedOps$OfRef.<init>`. A lambda has a Type and an itable directory but no `clTab`
+    entry, so neither the registry tier nor `resolveViaItableDir` can answer, and `equals` is not an
+    interface method for the directory to hold. The likely shape of the fix is the one the interface-typed
+    `getClass` bug took: resolve an Object public method against `java/lang/Object` itself.
+
 - **A LAMBDA IN A DEEP-STACK METHOD COMPILES NOW -- and the launcher reaches REAL `ServiceLoader`
   DISCOVERY THROUGH A STREAM PIPELINE (2026-09-10).** `lowerLambda` began
   `if (deepStack) { fail(FAIL_OPCODE, 0xBA, 3); return; }` -- a flat refusal, with a `TODO` for the reason.
