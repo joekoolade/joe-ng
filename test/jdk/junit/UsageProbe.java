@@ -53,8 +53,19 @@ public class UsageProbe
         // never reaches Ansi.enabled(). Rendering with ansi AUTO instead introduces a DIFFERENT failure --
         // Ansi.isWindows() NPEs here -- and a probe that stops on a bug the target never hits proves nothing
         // about the target.
-        cl.usage(System.out, CommandLine.Help.Ansi.OFF);
-        System.out.println("-- usage ends --");
+        try
+        {
+            cl.usage(System.out, CommandLine.Help.Ansi.OFF);
+            System.out.println("-- usage ends --");
+        }
+        catch (Throwable t)
+        {
+            // Expected until non-ASCII string LITERALS are decoded from modified UTF-8: picocli word-wraps by
+            // handing `plainString().replace("-", "\u00ff")` to a BreakIterator, and on joe-ng that
+            // replacement string is TWO characters, so every boundary past a hyphen is shifted right and the
+            // Text is sliced past the end of its own buffer. See TextProbe, which measures the cause directly.
+            System.out.println("usage threw          = " + t.getClass().getName());
+        }
         System.out.println("UsageProbe done");
     }
 }
