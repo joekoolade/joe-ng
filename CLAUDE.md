@@ -76,6 +76,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **NON-ASCII STRING LITERALS ARE NEVER DECODED FROM MODIFIED UTF-8 -- the root of the picocli blocker,
+  MEASURED (2026-09-09).** `Loader.internString` copies a `CONSTANT_Utf8` body VERBATIM into the String's
+  `value` byte[] and leaves `coder` LATIN1. A classfile stores literals in MODIFIED UTF-8, so every non-ASCII
+  literal has the wrong LENGTH and the wrong CONTENTS:
+
+  ```
+                 host        metal
+  "\u00ff"      len 1, 255   len 2, first char 195 (0xC3)
+  "\u00e9"      len 1        len 2
+  "\u20ac"      len 1        len 3
+  "abc"         len 3        len 3   (ASCII is unaffected, which is why nothing noticed)
+  ```
+
+  - **How picocli exposed it.** `TextTable.copy` word-wraps by handing
+    `text.plainString().replace("-", "\u00ff")` to a `BreakIterator` -- a deliberate trick to stop breaks
+    after a hyphen -- and then slices the TEXT with the boundaries that come back. On joe-ng the replacement
+    is TWO characters, so the replaced string grows by one per hyphen, every boundary past a hyphen shifts
+    right, and `Text.substring(start, end)` produces a length that runs off the end of the shared `plain`
+    buffer: **`plain.substring(33, 42)` with `count = 39`** -- exactly three hyphens' worth.
+  - **FOUND BY REDUCTION, and the intermediate probe's PASSING is part of the evidence.** `TextProbe` drives
+    `Ansi.Text` directly and every arm -- construction, `substring`, `append`, `concat`, `getStyledChars` --
+    matches the host EXACTLY. So Text's arithmetic is sound and the fault is upstream of it. That is
+    "reproducing the shape is not reproducing the condition" again: the failing sequence needs the
+    `replace`, and the replace needs a non-ASCII literal.
+  - **A temporary recorder in `StringBuilder` named the site in one boot** -- `site=3 (substring) a=33 b=42
+    count=39` -- after an earlier print-based instrument in the same method DID NOT FIRE. **Recorded, not
+    printed:** this class is used BY the printing path, so printing from inside a failed bounds check can
+    recurse or perturb the state being reported; a probe read the statics from outside. Removed after use.
+  - **I wrongly suspected the frame attribution** when the print instrument stayed silent, because the trace
+    carries two `<unclaimed pc ... after putValue>` frames. The recorder showed the frame was RIGHT all
+    along -- the print, not the attribution, was the broken thing.
+  - **THE FIX IS SCOPED AND NOT YET WRITTEN:** decode modified UTF-8 in `internString` (1-byte, 2-byte
+    `C0..DF`, 3-byte `E0..EF`; supplementary characters arrive as surrogate PAIRS, which is already what a
+    UTF16 String wants), then store LATIN1 when every unit is < 256 and UTF16 otherwise -- the UTF16 case
+    also needs `internStringObj` to set `coder = 1`, which it never does today. It touches EVERY string
+    literal in the VM, so it wants its own increment and a Pi boot.
+  - **QEMU:** `TextProbe` and `UsageProbe` both wired in; host tests unchanged incl. `compiler: 37 checks`.
+
 - **THE SYSTEM PROPERTIES WERE NEVER SEEDED IN MOST CLOSURES -- two library NPEs, one cause (2026-09-09).**
   `seedStandardProps` found `Properties.setProperty` through `methodResolveRegistry`, and **`rgTab` holds one
   entry per COMPILED method** while bodies compile on FIRST CALL. This runs during loader init, so nothing had
