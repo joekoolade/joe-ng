@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAMBDA IN A DEEP-STACK METHOD COMPILES NOW -- and the launcher reaches REAL `ServiceLoader`
+  DISCOVERY THROUGH A STREAM PIPELINE (2026-09-10).** `lowerLambda` began
+  `if (deepStack) { fail(FAIL_OPCODE, 0xBA, 3); return; }` -- a flat refusal, with a `TODO` for the reason.
+  - **The whole of the incompatibility was ONE LINE:** the capture store used a raw `OP_BASE + slot` register
+    number, valid only while every operand is resident. Past `OP_MAX = 7` the operand stack lives in FRAME
+    MEMORY, and `opSlot(slot)` is the accessor that works in both worlds -- it loads the slot's memory home
+    into a circular-window register, spilling whatever it evicts. `lowerConcat` had been using it all along.
+  - **Shallow codegen is BYTE-FOR-BYTE UNCHANGED**, because `opSlot` returns exactly `OP_BASE + slot` when
+    the method is shallow -- which is what `compiler: 37 checks` passing asserts, the self-hosting fixpoint.
+  - **THE DEMO WAS VERIFIED TO REACH THE MODE, WITH A NEGATIVE CONTROL, BEFORE BEING TRUSTED.** Seven or
+    fewer live operands stay in registers and compile the shallow way, so a probe that did not pass `OP_MAX`
+    would test NOTHING. With the refusal temporarily restored, `demo/DeepLambdaDemo` fails with exactly
+    `JIT unsupported: reason=0 a=0xBA b=3 in demo/DeepLambdaDemo`; with it removed, all three arms are exact
+    (`168`, `1275`, and an OBJECT capture `13` -- a wrong slot there is a bad reference, not a bad int).
+    It is in the boot suite, so it is Pi-gated.
+  - **LAUNCHER: `ServiceLoader` discovery is running FOR REAL** -- `ServiceLoader$Lazy.get` ->
+    `Constructor.newInstance`, driven through `ReferencePipeline` (the stream path this VM synthesises), which
+    is the overlay written two increments ago being exercised end to end rather than by a probe.
+  - **NEXT BLOCKER, AND IT IS A SCOPE BOUNDARY RATHER THAN A BUG:** one discovered `TestExecutionListener`
+    provider, `OpenTestReportGeneratingListener`, calls `java/nio/file/Path.of` in its CONSTRUCTOR -- and
+    `java/nio/file/` is denylisted because there is no filesystem under this VM. A denylist trap HALTS, so
+    stock's "a provider that fails to construct throws `ServiceConfigurationError`" never gets a chance.
+    Choosing between denying the reporting package (so `Class.forName` fails cleanly and this overlay's
+    `ServiceLoader` can SKIP the provider, a stated divergence from stock) and making a denylist trap
+    throwable is a policy decision, not a mechanical fix.
+  - **QEMU:** demo suite end to end with the three deep-lambda arms exact, `metal junit: ran 44, failures 0`,
+    host tests unchanged incl. `compiler: 37 checks`.
+
 - **THE CONSOLE LAUNCHER RUNS TO COMPLETION AND RENDERS ITS FULL USAGE TEXT (2026-09-09).** With the literal
   decode in, picocli's whole word-wrapped help -- every option, every description, the SELECTORS section --
   prints on bare metal. The wrap path that had been the blocker for three increments is closed.

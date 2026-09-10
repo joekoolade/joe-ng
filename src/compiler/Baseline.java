@@ -1876,7 +1876,6 @@ public final class Baseline
      */
     private void lowerLambda(int cpIndex, CodeBuffer cb)
     {
-        if (deepStack) { symbols.fail(Symbols.FAIL_OPCODE, 0xBA, 3); return; }   // captures via OP_BASE+slot vs circular window: TODO
         int nc = paramCount(cpIndex);                            // captured values, on operand slots argBase..
         int argBase = sp - nc;
         cb.emitAll(A64Enc.loadImm64(0, symbols.lambdaSize(cpIndex)));   // x0 = instance size
@@ -1888,7 +1887,18 @@ public final class Baseline
         int c = 0;
         while (c < nc)
         {
-            cb.emit(A64Enc.strx(OP_BASE + argBase + c, 0, 16 + c * 8));   // obj.field[c] = capture c
+            // opSlot, NOT `OP_BASE + slot`: in a DEEP method the operand stack lives in frame memory and a
+            // slot's register is a circular-window one that opSlot loads (spilling whatever it evicts). The raw
+            // form is only valid while every operand is resident, which is why this used to refuse deepStack
+            // outright -- and that refusal is what stopped the console launcher, whose stream-chaining
+            // `ClasspathScannerLoader.getInstance()` pushes past OP_MAX. In a SHALLOW method opSlot returns
+            // exactly `OP_BASE + slot`, so shallow codegen is byte-for-byte unchanged and the self-hosting
+            // fixpoint holds.
+            //
+            // Read-then-store per capture, so no eviction can lose one: the value is consumed immediately, and
+            // `sp` still counts the captures here (opSlot's liveness test needs that) -- it drops to argBase
+            // only after the loop.
+            cb.emit(A64Enc.strx(opSlot(argBase + c), 0, 16 + c * 8));   // obj.field[c] = capture c
             c = c + 1;
         }
         sp = argBase;                                            // drop the captures
