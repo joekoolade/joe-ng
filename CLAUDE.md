@@ -76,6 +76,31 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **AN APPLICATION CLASS MAY `ldc` ITS OWN CLASS IN `<clinit>` -- the LOGGER IDIOM, and the launcher reaches
+  TEST DISCOVERY (2026-09-10).** `EngineDiscoveryOrchestrator.discoverSafely` NPE'd on `logger.debug(...)`,
+  called UNGUARDED, because the class's initializer had been skipped and `logger` stayed null. The VM had
+  already said so: `CLINIT REJECTED (statics stay null): .../EngineDiscoveryOrchestrator`.
+  - **TEN application classes in that closure were rejected for the same three instructions:**
+    `ldc Own.class; invokestatic LoggerFactory.getLogger; putstatic logger`. One allowlist entry per class
+    does not scale, and the list was already eight long.
+  - **The rule is now: a tag-7 literal naming THIS CLASS is allowed, outside the bake domain.** A class
+    naming ITSELF pulls nothing new -- it is already being loaded -- which is exactly what separates this
+    from the broader rule I tried and backed out two increments ago (allow ALL tag-7 outside
+    `java/`/`jdk/`/`sun/`), which made the launcher run ~4x longer without reaching where it already was. The
+    closures come from initializers naming OTHER classes.
+  - **Deliberately NOT flagged as the assertion idiom:** that flag exists to reject "idiom PLUS real work",
+    which is right inside java.base -- those classes are `clinitBlocked` or seeded instead -- and wrong for an
+    application class, where the real work IS the point and there is no substitute for running it.
+  - **The bake domain keeps the old rule**, because there the premise the gate was written on still holds.
+  - **LAUNCHER: INSIDE TEST DISCOVERY NOW** -- `EngineDiscoveryOrchestrator` -> `ClassSelectorResolver.resolve`
+    -> `IsSuiteClass.test` -> `AnnotationSupport.isAnnotated`, i.e. the Suite engine inspecting the selected
+    class through a real stream pipeline. Next blocker is an ordinary overlay gap:
+    **`VIRTUALRESOLVE FAILED java/lang/Class.getDeclaredAnnotation`**, which the `Class` overlay does not
+    declare (the annotation runtime behind it already exists -- `getAnnotation` is implemented).
+  - **QEMU:** no application-class `CLINIT REJECTED` left in the launcher closure (34 remain, all
+    `java/`/`jdk/`/`sun/`); demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged
+    incl. `compiler: 37 checks`.
+
 - **A SYNTHESISED LAMBDA'S TIB CARRIES `java/lang/Object`'s VTABLE NOW (2026-09-10).** It was ONE WORD --
   the Type and no vtable at all -- on the premise, stated in its own comment, that "a lambda is only ever
   type-checked through its interface dir". An `Object` method on a lambda receiver therefore resolved
