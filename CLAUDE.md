@@ -76,6 +76,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE SYSTEM PROPERTIES WERE NEVER SEEDED IN MOST CLOSURES -- two library NPEs, one cause (2026-09-09).**
+  `seedStandardProps` found `Properties.setProperty` through `methodResolveRegistry`, and **`rgTab` holds one
+  entry per COMPILED method** while bodies compile on FIRST CALL. This runs during loader init, so nothing had
+  called `setProperty` and it was not in the registry at all -- the lookup could only ever succeed **by
+  accident**, in a closure that had already compiled it for some other reason. The launcher image had, and
+  worked; a smaller one left EVERY property null.
+  - **It surfaced as two unrelated-looking failures far from the VM:** picocli's `Ansi.isWindows()` does
+    `System.getProperty("os.name").toLowerCase()` and NPEs, and its `trimLineSeparator` does
+    `result.endsWith(System.getProperty("line.separator"))` and NPEs. Same cause; neither names the VM.
+  - **SIX SILENT `return`s ON THAT PATH NOW SAY WHY** (`SYSTEM PROPERTIES NOT SEEDED: <which step>`). An empty
+    property map does not fail where it is created. **My first report conflated three conditions under one
+    message** ("has no compiled body") and was itself an unchecked assertion -- split, it said
+    `setProperty is not registered`, which is the actual cause and points somewhere else entirely.
+  - **Resolved through `bufBySigU`/`compileSigOnDemand` instead of the registry**, with a new `utf8Blob`
+    helper: those resolvers take CLASSFILE-SHAPED pointers (u2 length, then bytes) while VM-side code holds
+    names as plain `byte[]`, and passing `Magic.addrOf(Magic.bytes(...))` reads the first two characters as a
+    length -- a mistake made once before, in a class-chain fallback removed before it shipped.
+  - **`seedSystemProps` MOVED TO LAST OF THE SEEDS, and that half is load-bearing.** It is the only seed that
+    COMPILES a method, and compiling rebuilds the loader's cursor (`gcp`/`gbase`/`gStatics`) for
+    `java/util/Properties` -- so every seed after it stood on the wrong class's state. Left in its old
+    position the fix made things WORSE: the probe's own `System.out.println` calls produced nothing at all.
+    Same hazard already recorded for demand-loading inside `buildLambdaTib`, reached from a new direction.
+  - **`test/jdk/junit/UsageProbe` reproduces the launcher's picocli blocker in ~5 minutes instead of ~12**, and
+    it renders with `Ansi.OFF` **because that is the launcher's CONDITION** (it runs with
+    `--disable-ansi-colors`). With ansi AUTO the probe stopped on a DIFFERENT bug the launcher never reaches,
+    which would have proved nothing about the target. The HOST CONTROL renders the same command perfectly, so
+    the wrap path itself is not picocli being odd.
+  - **STILL OPEN, and the next thing to chase:** `Text.getCJKAdjustedLength` -> `plain.substring(from,
+    from + length)` throwing with `start = 33` (22 in the launcher), i.e. picocli's shared `plain` is shorter
+    than its own `from`/`length` claim. **An instrument printing start/end/count inside that exact throw did
+    NOT FIRE while the trace still named the method** -- unexplained, and worth resolving before trusting the
+    frame attribution. `StringBuilder.append(CharSequence)`, `append(CharSequence,int,int)`, `put`,
+    `setLength` and `charAt` all read correct.
+  - **QEMU:** `prop os.name = joe-ng`, `line.separator` non-null, `System.lineSeparator()` non-null, absent
+    property still null; demo suite clean with every new arm exact (`newKeySet`, the interface-typed arms,
+    `LoggingDemo done`, `churnMB=625 live=32 intact=32`) and no `SYSTEM PROPERTIES NOT SEEDED` line; host
+    tests unchanged incl. `compiler: 37 checks`.
+
 - **`java.util.logging` PROVIDED -- the blocker that was neither a denial nor a dropped overlay member
   (2026-09-09).** `Logger`/`Level`/`LogRecord` live in the **`java.logging` MODULE**, and joe-ng's image
   carries only `java.base` -- so the classes were **ABSENT ENTIRELY**. The report said exactly that
