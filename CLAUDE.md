@@ -76,6 +76,34 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getDeclaredAnnotations` + `getInterfaces` -- JUnit's ANNOTATION SEARCH COMPLETES (2026-09-10).**
+  `AnnotationUtils.findAnnotation` walks a class's own annotations, then its META-annotations, then its
+  interfaces and enclosing class. All of it runs now; the launcher is out of `IsSuiteClass` entirely and into
+  the Suite engine's selector resolution. Backlog 43 -> 41.
+  - **The enumeration is TWO PASSES over ABSOLUTE addresses, and that is not tidiness.** Pass 1 records each
+    entry's type descriptor and element-pair position as blob addresses; pass 2 builds. `buildAnnoObject`
+    reads `gcp[nameIdx]` -- the parse CURSOR -- and anything that resolves during a build re-parses a blob and
+    moves it. Blob addresses do not move; the parse state does. Same reason the written-pair and default
+    phases are kept apart, and the reason a `'c'`/`'e'` element defers.
+  - **An annotation whose INTERFACE is not loaded is omitted, not returned as a null element** -- there is no
+    itable to give such an instance, and a null in the array reads to the caller as "present but broken". The
+    existing report names it.
+  - **`getInterfaces` returns the DECLARED interfaces, not the closure** -- what stock returns, and what
+    `findAnnotation` needs: it recurses into each interface itself, so a flattened closure would make it walk
+    the same interfaces repeatedly.
+  - **WHAT AVOIDED THREE MORE TEN-MINUTE BOOTS:** rather than fix one method per launcher run, the recursive
+    `findAnnotation` was disassembled and its whole `Class` surface listed --
+    `getEnclosingClass`/`getSuperclass`/`isAnnotationPresent` were already present and `getInterfaces` was the
+    only other gap. Evidence, not speculation: the list came from the bytecode.
+  - **QEMU:** `AnnoProxyProbe` exact -- `declaredAnnos len = 1`, element is a `Tag` with value `onclass`,
+    `getAnnotations` agrees, a bare class answers 0, a FRESH array each call, `ArrayList ifaces = 4` with
+    `List` among them. Demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged incl.
+    `compiler: 37 checks`.
+  - **NEXT BLOCKER, a DIFFERENT family:** `VIRTUALRESOLVE FAILED
+    org/junit/platform/suite/engine/SuiteEngineDescriptor.accept(...)` from
+    `DiscoverySelectorResolver.resolveSelectors` -- a JUnit class's OWN method failing to resolve, not an
+    overlay gap.
+
 - **`Class.getDeclaredAnnotation` -- and a spec-checked correction to my own probe (2026-09-10).** The
   `Class` overlay did not declare it, so JUnit's `AnnotationUtils.findAnnotation` trapped with
   `VIRTUALRESOLVE FAILED java/lang/Class.getDeclaredAnnotation(...)`. Backlog 44 -> 43.

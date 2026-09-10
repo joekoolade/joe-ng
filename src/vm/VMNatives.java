@@ -352,6 +352,18 @@ final class VMNatives
     }
 
     /** {@code Class.annoGet0(Class, byte[])} native: the same, for an annotation on the CLASS itself. */
+    /** {@code Class.interfaces0(Class)} native: the class's directly declared interfaces as mirrors. */
+    static long classIfaces(long mirror)
+    {
+        return Loader.classInterfaces(mirror);
+    }
+
+    /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
+    static long classAnnoAll(long mirror)
+    {
+        return Loader.classAnnotationsAll(mirror);
+    }
+
     static long classAnnoGet(long mirror, long descArr)
     {
         if (descArr <= 0x1000L || mirror <= 0x1000L)

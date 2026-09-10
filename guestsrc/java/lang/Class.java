@@ -448,8 +448,54 @@ public final class Class<T> implements java.lang.reflect.Type
         return anno != null && annoGet0(this, annoDescriptorOf(anno)) != null;
     }
 
+    /**
+     * Every annotation DECLARED DIRECTLY on this class. Never null; empty when there are none.
+     *
+     * <p>This is what JUnit's {@code AnnotationUtils.findAnnotation} walks to find META-ANNOTATIONS -- an
+     * annotation carried by another annotation -- so an empty answer would not fail, it would silently report
+     * that nothing is annotated.
+     *
+     * <p>A FRESH array each call, as stock specifies ("the caller of this method is free to modify the
+     * returned array"). An annotation whose interface is not loaded is omitted and named on the console by
+     * the VM, rather than appearing as a null element.
+     */
+    public java.lang.annotation.Annotation[] getDeclaredAnnotations()
+    {
+        java.lang.annotation.Annotation[] a = annoAll0(this);
+        return a == null ? new java.lang.annotation.Annotation[0] : a;
+    }
+
+    /**
+     * As {@link #getDeclaredAnnotations}. In stock these differ by {@code @Inherited} alone -- getAnnotations
+     * also reports an {@code @Inherited} annotation carried by a SUPERCLASS -- and this VM does not implement
+     * that, so the two coincide. Stated rather than hidden, and the same divergence {@code getAnnotation}
+     * already carries.
+     */
+    public java.lang.annotation.Annotation[] getAnnotations()
+    {
+        return getDeclaredAnnotations();
+    }
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAnnoGet}): mirror + descriptor -> instance. */
     private static native Object annoGet0(Class c, byte[] descriptor);
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classAnnoAll}): mirror -> Annotation[]. */
+    private static native java.lang.annotation.Annotation[] annoAll0(Class c);
+
+    /**
+     * The interfaces this class DIRECTLY declares, in declaration order; empty when it declares none.
+     *
+     * <p>Declared, not the transitive closure -- which is what stock returns, and what JUnit's
+     * {@code findAnnotation} needs, since it recurses into each interface itself.
+     */
+    public Class<?>[] getInterfaces()
+    {
+        Class<?>[] a = interfaces0(this);
+        return a == null ? new Class<?>[0] : a;
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classIfaces}): mirror -> Class[]. */
+    private static native Class<?>[] interfaces0(Class c);
 
     /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;} -- the form the classfile stores. */
     private static byte[] annoDescriptorOf(Class<?> anno)
