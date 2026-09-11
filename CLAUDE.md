@@ -76,6 +76,26 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getMethods` -- the launcher reaches `IsTestableMethod.test`, i.e. DECIDING WHETHER A METHOD IS A
+  `@Test` (2026-09-10).** `ReflectionUtils.getDefaultMethods` needs the PUBLIC methods of a class including
+  inherited ones; the overlay had only `getDeclaredMethods`. Backlog 41 -> 40.
+  - **The dedupe key is built at ENUMERATION time, not from a `Method`**, and that is forced rather than
+    stylistic: a `Method` keeps only the FIRST CHARACTER of each parameter type (`paramChars`) -- enough to
+    marshal a call, not enough to tell two overloads apart. The enumeration natives hand back the full
+    descriptor, so name+descriptor is available there and nowhere else.
+  - **Most-derived-first is what makes overriding correct**: the subclass's method is seen first and the
+    superclass's is skipped as a duplicate, with no override test needed. Interfaces are walked after the
+    class chain, transitively, which is where DEFAULT methods live.
+  - **Constructors and `<clinit>` are filtered by name.** The VM's enumeration is the method REGISTRY's view
+    and lists them; stock's `getMethods` does not.
+  - **QEMU:** `AnnoProxyProbe` arms exact -- non-empty, the INHERITED `Object.hashCode` present (a
+    receiver-only enumeration would miss it), `toString` appearing ONCE rather than once per class in the
+    chain, no constructors, and `Iterable.forEach` reachable through `ArrayList` (the default-method path).
+    Demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged incl. `compiler: 37 checks`.
+  - **NEXT BLOCKER: `java/lang/reflect/Method.getDeclaredAnnotation`** -- the Method-level sibling of what
+    `Class` just gained, from the same `AnnotationUtils.findAnnotation`, now reached with a METHOD rather
+    than a class as the element.
+
 - **`DefaultJupiterConfiguration.<clinit>` RUNS -- and the broad clinit rule was RE-TESTED and rejected on a
   CHECKED cause this time (2026-09-10).** Its initializer `ldc`s OTHER classes
   (`ExecutionMode.class`, `TestInstance$Lifecycle.class`, handed to
