@@ -75,6 +75,14 @@ public class AnnoProxyProbe
     {
     }
 
+    /** TWO annotations on one method: an enumeration that stops after the first, or mis-steps the element
+     *  pairs of the first, reports 1 here. A single-annotation method cannot tell those apart. */
+    @Tag(value = "twice", count = 2, names = { "p" })
+    @Marker
+    public void doubleTagged()
+    {
+    }
+
     /** Writes ONE element; the other two must come from AnnotationDefault. */
     @Defaulted(size = 9)
     public void partlyDefaulted()
@@ -286,6 +294,64 @@ public class AnnoProxyProbe
         System.out.println("declared on bare  = "
                 + (Bare.class.getDeclaredAnnotation(Tag.class) == null ? "null" : "NON-NULL <== BUG")
                 + " (want null)");
+
+        // ---- Method.getDeclaredAnnotation / getDeclaredAnnotations / getAnnotations ----
+        // findAnnotation calls exactly these three on an AnnotatedElement (verified with javap on the jar).
+        java.lang.reflect.Method mt = AnnoProxyProbe.class.getDeclaredMethod("tagged");
+        java.lang.reflect.Method mu = AnnoProxyProbe.class.getDeclaredMethod("untagged");
+        java.lang.reflect.Method md = AnnoProxyProbe.class.getDeclaredMethod("doubleTagged");
+        java.lang.reflect.Method mp = AnnoProxyProbe.class.getDeclaredMethod("partlyDefaulted");
+
+        java.lang.annotation.Annotation mda = mt.getDeclaredAnnotation(Tag.class);
+        System.out.println("m.declared present= " + (mda != null ? 1 : 0) + " (want 1)");
+        System.out.println("m.declared value  = " + (mda == null ? "NULL" : ((Tag) mda).value())
+                + " (want hello)");
+        System.out.println("m.declared count  = " + (mda == null ? -1 : ((Tag) mda).count()) + " (want 7)");
+        System.out.println("m.declared absent = "
+                + (mu.getDeclaredAnnotation(Tag.class) == null ? "null" : "NON-NULL <== BUG") + " (want null)");
+
+        java.lang.annotation.Annotation[] ma = mt.getDeclaredAnnotations();
+        System.out.println("m.annos len       = " + ma.length + " (want 1)");
+        System.out.println("m.annos[0] is Tag = " + (ma.length == 1 && ma[0] instanceof Tag ? 1 : 0)
+                + " (want 1)");
+        System.out.println("m.annos[0] value  = " + (ma.length == 1 ? ((Tag) ma[0]).value() : "NONE")
+                + " (want hello)");
+
+        // An un-annotated method must answer an EMPTY array, never null: findAnnotation walks it unguarded.
+        java.lang.annotation.Annotation[] ua = mu.getDeclaredAnnotations();
+        System.out.println("m.annos empty     = " + (ua != null && ua.length == 0 ? 1 : 0) + " (want 1)");
+
+        // Two annotations on one method -- order is not specified, so check membership, not position.
+        java.lang.annotation.Annotation[] dda = md.getDeclaredAnnotations();
+        boolean sawTag = false;
+        boolean sawMarker = false;
+        for (int i = 0; i < dda.length; i++)
+        {
+            if (dda[i] instanceof Tag && ((Tag) dda[i]).value().equals("twice"))
+            {
+                sawTag = true;
+            }
+            if (dda[i] instanceof Marker)
+            {
+                sawMarker = true;
+            }
+        }
+        System.out.println("m.two len         = " + dda.length + " (want 2)");
+        System.out.println("m.two both        = " + (sawTag && sawMarker ? 1 : 0) + " (want 1)");
+
+        // getAnnotations coincides with declared for a method (@Inherited does not reach methods).
+        System.out.println("m.getAnnotations  = " + mt.getAnnotations().length + " (want 1)");
+
+        // A fresh array each call: stock lets the caller modify what it gets back.
+        System.out.println("m.annos fresh     = " + (mt.getDeclaredAnnotations() != ma ? 1 : 0) + " (want 1)");
+
+        // DEFAULTS through the array path, not just the by-descriptor one: the element walk and the default
+        // walk are separate phases, so the plural path can be wrong where the singular is right.
+        java.lang.annotation.Annotation[] pa = mp.getDeclaredAnnotations();
+        Defaulted dd = pa.length == 1 && pa[0] instanceof Defaulted ? (Defaulted) pa[0] : null;
+        System.out.println("m.dflt size       = " + (dd == null ? -1 : dd.size()) + " (want 9, written)");
+        System.out.println("m.dflt name       = " + (dd == null ? "NULL" : dd.name()) + " (want anon)");
+        System.out.println("m.dflt tags       = " + (dd == null ? -1 : dd.tags().length) + " (want 2)");
 
         System.out.println("[probe done]");
     }

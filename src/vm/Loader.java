@@ -8656,6 +8656,7 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoPresent0")))      { return VM.annoPresentAddr; }   // (I,byte[])I
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.annoGetAddr; }       // (I,byte[]) -> instance
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
         }
@@ -13099,42 +13100,16 @@ public final class Loader
     // itself is declared @Retention(RUNTIME) -- so an annotation without that is not merely unreadable here, it
     // is absent from the classfile entirely.
 
-    /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
-     *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
-    static boolean methodAnnoPresent(int rgIndex, long descArr, int descLen)
-    {
-        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
-        {
-            return false;
-        }
-        long base = rgTab[rgIndex].base;
-        int nameOff = rgTab[rgIndex].nameOff;
-        int descOff = rgTab[rgIndex].descOff;
-        parseForMethods(base, blobLenOf(base));
-        long p = gMethodsStart;
-        int mcount = u2(p);
-        p += 2;
-        int m = 0;
-        while (m < mcount)
-        {
-            int attrs = u2(p + 6);
-            if (utf8EqAt(base, gcp[u2(p + 2)], base, nameOff)
-                    && utf8EqAt(base, gcp[u2(p + 4)], base, descOff))
-            {
-                return annoInAttrs(base, p + 8, attrs, descArr, descLen);
-            }
-            p = skipAttributes(p + 8, attrs);
-            m += 1;
-        }
-        return false;
-    }
-
     /**
-     * {@code Method.getAnnotation0}: the annotation instance for descriptor {@code descArr} carried by the
-     * method registered at {@code rgIndex}, or 0 if it is absent (or its interface is not loaded, since
-     * without the interface there is no itable to give the object).
+     * The {@code method_info} position (at {@code access_flags}) for the method registered at {@code rgIndex},
+     * or 0 when there is no such registration or the class does not declare it. Its {@code attributes_count}
+     * is {@code u2(p + 6)} and its attributes begin at {@code p + 8}.
+     *
+     * <p>Matched on name AND descriptor, which is what separates two overloads -- a name-only match returns
+     * whichever came first, the bug that made a {@code @ParameterizedTest} report the test's annotation for
+     * its own factory.
      */
-    static long methodAnnotation(int rgIndex, long descArr, int descLen)
+    private static long methodInfoPos(int rgIndex)
     {
         if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
         {
@@ -13154,12 +13129,39 @@ public final class Loader
             if (utf8EqAt(base, gcp[u2(p + 2)], base, nameOff)
                     && utf8EqAt(base, gcp[u2(p + 4)], base, descOff))
             {
-                return annoFromAttrs(base, p + 8, attrs, descArr, descLen);
+                return p;
             }
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
         return 0L;
+    }
+
+    /** True if the method registered at {@code rgIndex} carries the annotation whose descriptor is the
+     *  {@code descLen} bytes at the {@code byte[]} payload {@code descArr} (e.g. "Lorg/junit/jupiter/api/Test;"). */
+    static boolean methodAnnoPresent(int rgIndex, long descArr, int descLen)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return false;
+        }
+        return annoInAttrs(rgTab[rgIndex].base, p + 8, u2(p + 6), descArr, descLen);
+    }
+
+    /**
+     * {@code Method.getAnnotation0}: the annotation instance for descriptor {@code descArr} carried by the
+     * method registered at {@code rgIndex}, or 0 if it is absent (or its interface is not loaded, since
+     * without the interface there is no itable to give the object).
+     */
+    static long methodAnnotation(int rgIndex, long descArr, int descLen)
+    {
+        long p = methodInfoPos(rgIndex);
+        if (p == 0L)
+        {
+            return 0L;
+        }
+        return annoFromAttrs(rgTab[rgIndex].base, p + 8, u2(p + 6), descArr, descLen);
     }
 
     /** The class-level {@code attributes_count} position: past every method, which is where they begin. */
@@ -13529,6 +13531,83 @@ public final class Loader
             return emptyAnnoArray();
         }
         long lp = annoListPos(base, ap + 2L, u2(ap));
+        if (lp == 0L)
+        {
+            return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
+        }
+        long[] descAbs = new long[MAXDECLANNO];
+        long[] pairsAbs = new long[MAXDECLANNO];
+        int n = u2(lp);
+        long p = lp + 2L;
+        int found = 0;
+        int i = 0;
+        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
+        {
+            int typeIdx = u2(p);
+            p += 2;
+            descAbs[found] = base + gcp[typeIdx];
+            pairsAbs[found] = p;
+            found += 1;
+            p = skipElementPairs(p);
+            i += 1;
+        }
+        long[] objs = new long[found];                   // PASS 2: resolve + build
+        int built = 0;
+        int k = 0;
+        while (k < found)
+        {
+            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
+            if (ifaceReg >= 0)
+            {
+                long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
+                if (obj != 0L)
+                {
+                    objs[built] = obj;
+                    built += 1;
+                }
+            }
+            k += 1;
+        }
+        long arr = Heap.allocArray(built, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        int j = 0;
+        while (j < built)
+        {
+            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
+            j += 1;
+        }
+        return arr;
+    }
+
+    /**
+     * {@code Method.annoAll0}: every annotation DECLARED on the method registered at {@code rgIndex}, as an
+     * {@code Annotation[]}. Never 0; a method with none answers a zero-length array.
+     *
+     * <p>The method-level twin of {@link #classAnnotationsAll}, and it keeps that method's TWO PASSES OVER
+     * ABSOLUTE ADDRESSES for the same non-negotiable reason: {@code buildAnnoObject} reads {@code gcp[..]},
+     * the parse CURSOR, and anything that resolves during a build re-parses a blob and moves it. Blob
+     * addresses survive that; the parse state does not. Pass 1 therefore records addresses only -- and
+     * {@code methodInfoPos} must run BEFORE pass 1 for the same reason, since it parses too.
+     *
+     * <p>The only difference from the class version is WHERE the attributes live: a method's own
+     * {@code attributes} rather than the class's. There is no inheritance to consider -- JLS 9.6.4.3 gives
+     * {@code @Inherited} effect on class declarations ALONE, and an overriding method does not inherit the
+     * annotations of the method it overrides -- so for a method "declared" and "present" coincide exactly,
+     * which is why {@code getAnnotations} may share this and diverge from stock nowhere.
+     */
+    static long methodAnnotationsAll(int rgIndex)
+    {
+        if (rgIndex < 0 || rgIndex >= rgCount || rgTab[rgIndex] == null)
+        {
+            return 0L;                                  // no such registration; the guest answers an empty
+        }                                               // array. ALLOCATION-FREE, because VM.forceCompile
+        long mp = methodInfoPos(rgIndex);               // probes this native with rgIndex -1 during boot.
+        if (mp == 0L)
+        {
+            return emptyAnnoArray();                    // registered but not declared here: none to read
+        }
+        long base = rgTab[rgIndex].base;
+        long lp = annoListPos(base, mp + 8L, u2(mp + 6));
         if (lp == 0L)
         {
             return emptyAnnoArray();                    // no RuntimeVisibleAnnotations: none declared
