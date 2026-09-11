@@ -102,6 +102,27 @@ public class AnnoProxyProbe
     {
     }
 
+    /** A member class declared in a SUPER-interface: getClasses must inherit it transitively, which a walk
+     *  of the direct interfaces alone would miss. */
+    public interface TopIface
+    {
+        public static class FromIface
+        {
+        }
+    }
+
+    public interface MidIface extends TopIface
+    {
+    }
+
+    public static class ImplBase implements MidIface
+    {
+    }
+
+    public static class Impl extends ImplBase
+    {
+    }
+
     @Tag(value = "hello", count = 7, names = { "a", "b", "c" })
     public void tagged()
     {
@@ -446,6 +467,16 @@ public class AnnoProxyProbe
         }
         System.out.println("getClasses pub    = " + (gpub ? 1 : 0) + " (want 1)");
         System.out.println("getClasses noPriv = " + (gpriv ? 0 : 1) + " (want 1)");
+
+        // getClasses inherits a member declared in a SUPER-interface (Impl -> ImplBase -> MidIface -> TopIface).
+        Class<?>[] gi = Impl.class.getClasses();
+        boolean deep = false;
+        for (int i = 0; i < gi.length; i++)
+        {
+            if (gi[i].getName().endsWith("$FromIface")) { deep = true; }
+        }
+        System.out.println("getClasses ifaceDeep = " + (deep ? 1 : 0)
+                + " (want 1, inherited through 2 interfaces)");
 
         System.out.println("[probe done]");
     }

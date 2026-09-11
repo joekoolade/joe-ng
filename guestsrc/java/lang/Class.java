@@ -611,14 +611,32 @@ public final class Class<T> implements java.lang.reflect.Type
         while (c != null)
         {
             collectPublicClasses(c, out, seen);
-            Class<?>[] ifs = c.getInterfaces();
+            c = c.getSuperclass();
+        }
+        collectInterfaceClasses(this, out, seen);
+        return out.toArray(new Class<?>[0]);
+    }
+
+    /**
+     * Public member classes of {@code c}'s interfaces, TRANSITIVELY -- a super-interface's members are
+     * inherited too, so a walk of the DIRECT interfaces alone misses them. Same shape as
+     * {@link #collectInterfaceMethods}, deliberately: two walks over the same relation that disagreed about
+     * transitivity would be the kind of half-correct member this overlay keeps getting bitten by.
+     */
+    private static void collectInterfaceClasses(Class<?> c, java.util.ArrayList<Class<?>> out,
+            java.util.HashSet<String> seen)
+    {
+        Class<?> k = c;
+        while (k != null)
+        {
+            Class<?>[] ifs = k.getInterfaces();
             for (int i = 0; i < ifs.length; i++)
             {
                 collectPublicClasses(ifs[i], out, seen);
+                collectInterfaceClasses(ifs[i], out, seen);   // super-interfaces
             }
-            c = c.getSuperclass();
+            k = k.getSuperclass();
         }
-        return out.toArray(new Class<?>[0]);
     }
 
     /** Adds {@code c}'s public member classes that have not been seen; a member of an interface is public. */
