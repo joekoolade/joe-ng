@@ -684,6 +684,24 @@ public final class Loader
         {
             return true;
         }
+        // org/junit/jupiter/engine/config/DefaultJupiterConfiguration.<clinit> ldc's OTHER classes --
+        // ExecutionMode.class and TestInstance$Lifecycle.class, handed to EnumConfigurationParameterConverter
+        // -- so the self-literal rule below does not reach it. It MUST run: validateConfigurationParameters
+        // reads UNSUPPORTED_CONFIGURATION_PARAMETERS unguarded, and a skipped initializer is an NPE the
+        // moment the Jupiter engine configures itself.
+        //
+        // TARGETED RATHER THAN GENERAL, and this time the general rule was MEASURED rather than argued.
+        // Allowing every tag-7 outside java//jdk//sun/ does clear all ten of these at once, and the launcher
+        // does get further -- but it also lets application initializers pull SERIALIZATION in, and the run
+        // then dies inside java/io/ObjectStreamClass$Caches.<clinit> -> ClassCache.<init>, a subsystem this
+        // VM deliberately does not carry. That is a correctness cost, not the speed cost I wrongly recorded
+        // the first time: the earlier "stall" was this rule being slow, and the LOADER LOCK watchdog that
+        // looked like a hang said `state 1` (TASK_READY) and recovered on its own.
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/engine/config/DefaultJupiterConfiguration")))
+        {
+            return true;
+        }
         // org/junit/platform/commons/util/ReflectionUtils.<clinit> ldc's its own class (for getLogger) and
         // the array class literals "[Z".."[Ljava/lang/String;" for classNameToTypeMap -- tag-7 literals, which
         // the gate below rejects. It MUST run: `tryToLoadClass` reads classNameToTypeMap UNGUARDED, so a
