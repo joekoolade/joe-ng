@@ -4495,6 +4495,14 @@ public final class Loader
                 // Denying the package moves the failure EARLIER, to Class.forName, where it is an ordinary
                 // ClassNotFoundException that the ServiceLoader overlay can skip and REPORT. A listener that
                 // can only write files cannot work here; the choice is between saying so and halting.
+                // The VINTAGE engine (JUnit 4 support) is denied, so ServiceLoader SKIPS it by name -- the
+                // same route already used for org/junit/platform/reporting/. Its VintageTestEngine runs
+                // JUnit4VersionCheck, which does `new BigDecimal(version)`, and java.math does not work here
+                // yet (see the java.math note in CLAUDE.md: its initializers are rejected, and allowing them
+                // pulls BigInteger's PARALLEL path and ForkJoin behind it). Nothing selects a JUnit 4 test on
+                // this VM, so the engine is cost without benefit -- but this is a SCOPE decision, not a
+                // statement that vintage could not work, and it is the line to delete when java.math does.
+                || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
