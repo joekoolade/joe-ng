@@ -6,10 +6,8 @@
 # bit us (Boolean.getBoolean, ConcurrentHashMap.<init>(IFI)V) looked exactly this cold
 # until the day they ran. The check exists to stop NEW ones appearing silently.
 java/io/FileInputStream#<init>(Ljava/io/File;)V
-java/lang/Class#getClasses()[Ljava/lang/Class;
 java/lang/Class#getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;
 java/lang/Class#getConstructors()[Ljava/lang/reflect/Constructor;
-java/lang/Class#getDeclaredClasses()[Ljava/lang/Class;
 java/lang/Class#getDeclaredConstructors()[Ljava/lang/reflect/Constructor;
 java/lang/Class#getGenericSuperclass()Ljava/lang/reflect/Type;
 java/lang/Class#getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;

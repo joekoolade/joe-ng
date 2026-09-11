@@ -364,6 +364,12 @@ final class VMNatives
         return Loader.methodAnnotationsAll((int) rgIndex);
     }
 
+    /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
+    static long classDeclClasses(long mirror)
+    {
+        return Loader.classDeclaredClasses(mirror);
+    }
+
     /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
     static long classAnnoAll(long mirror)
     {

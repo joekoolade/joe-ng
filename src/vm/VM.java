@@ -1261,6 +1261,7 @@ public final class VM
         if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
         if (resourceBytesAddr == 0L) { long u = VMNatives.resourceBytes(0L); }  // ClassLoader.resourceBytes0
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Method.annoAll0
+        if (classDeclClassesAddr == 0L) { long u = VMNatives.classDeclClasses(0L); } // Class.declaredClasses0
         if (classAnnoAllAddr == 0L) { long u = VMNatives.classAnnoAll(0L); }    // Class.annoAll0
         if (classIfacesAddr == 0L) { long u = VMNatives.classIfaces(0L); }      // Class.interfaces0
         if (defineClassAddr == 0L) { long u = VMNatives.defineClass(0L, 0L, 0L, 0L); } // ClassLoader.defineClass0 (M3)
@@ -2491,6 +2492,7 @@ public final class VM
     static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
     static long resourceBytesAddr;     // VMNatives.resourceBytes(J)J — ClassLoader.resourceBytes0(byte[])
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Method.annoAll0(int)
+    static long classDeclClassesAddr;  // VMNatives.classDeclClasses(J)J — Class.declaredClasses0(Class)
     static long classAnnoAllAddr;      // VMNatives.classAnnoAll(J)J — Class.annoAll0(Class)
     static long classIfacesAddr;       // VMNatives.classIfaces(J)J — Class.interfaces0(Class)
     static long defineClassAddr;       // VM.defineClass(JJJJ)J — ClassLoader.defineClass0 native (reflection M3)

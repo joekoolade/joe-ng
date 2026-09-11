@@ -570,6 +570,74 @@ public final class Class<T> implements java.lang.reflect.Type
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.classAnnoGet}): mirror + descriptor -> instance. */
     private static native Object annoGet0(Class c, byte[] descriptor);
 
+    /**
+     * The classes and interfaces declared as MEMBERS of this class -- public, protected, package and private
+     * alike -- excluding inherited ones. Never null; empty when there are none.
+     *
+     * <p>Read from the classfile's {@code InnerClasses} attribute, not from the binary name. The nesting
+     * PREDICATES above work from the name because they ask "is THIS class a member", which {@code Outer$Inner}
+     * answers; this asks the reverse, "which classes are members of this one", and no name can answer that.
+     *
+     * <p>LOCAL AND ANONYMOUS CLASSES ARE EXCLUDED, as stock excludes them: JVMS 4.7.6 requires a zero
+     * {@code outer_class_info_index} for both, which is exactly the field the VM filters on.
+     *
+     * <p>Getting these mirrors does NOT initialize the classes -- obtaining a Class is not an active use
+     * (JVMS 5.5). A member class this VM cannot load is omitted and named on the console rather than returned
+     * as a null element.
+     */
+    public Class<?>[] getDeclaredClasses()
+    {
+        Class<?>[] a = declaredClasses0(this);
+        return a == null ? new Class<?>[0] : a;
+    }
+
+    /**
+     * The PUBLIC member classes of this class, including those inherited from superclasses and
+     * superinterfaces. Never null.
+     *
+     * <p>Landed beside {@link #getDeclaredClasses} deliberately: a member a name-winning overlay does not
+     * declare CEASES TO EXIST, and shipping one half of a pair is how that trap has cost this project a boot
+     * ten times over. Nothing reached so far calls it -- {@code ReflectionUtils} uses the declared form -- so
+     * it is here to be present and correct rather than because something waits on it.
+     *
+     * <p>Walks the superclass chain and the interfaces, most-derived first, and de-duplicates by name: a
+     * class and its superclass may both report the same inherited member.
+     */
+    public Class<?>[] getClasses()
+    {
+        java.util.ArrayList<Class<?>> out = new java.util.ArrayList<Class<?>>();
+        java.util.HashSet<String> seen = new java.util.HashSet<String>();
+        Class<?> c = this;
+        while (c != null)
+        {
+            collectPublicClasses(c, out, seen);
+            Class<?>[] ifs = c.getInterfaces();
+            for (int i = 0; i < ifs.length; i++)
+            {
+                collectPublicClasses(ifs[i], out, seen);
+            }
+            c = c.getSuperclass();
+        }
+        return out.toArray(new Class<?>[0]);
+    }
+
+    /** Adds {@code c}'s public member classes that have not been seen; a member of an interface is public. */
+    private static void collectPublicClasses(Class<?> c, java.util.ArrayList<Class<?>> out,
+            java.util.HashSet<String> seen)
+    {
+        Class<?>[] d = c.getDeclaredClasses();
+        for (int i = 0; i < d.length; i++)
+        {
+            if (java.lang.reflect.Modifier.isPublic(d[i].getModifiers()) && seen.add(d[i].getName()))
+            {
+                out.add(d[i]);
+            }
+        }
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classDeclClasses}): mirror -> Class[]. */
+    private static native Class<?>[] declaredClasses0(Class c);
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classAnnoAll}): mirror -> Annotation[]. */
     private static native java.lang.annotation.Annotation[] annoAll0(Class c);
 
