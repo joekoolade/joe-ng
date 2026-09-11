@@ -715,6 +715,33 @@ public final class Loader
         {
             return true;
         }
+        // Three more Jupiter initializers of the SAME shape as DefaultJupiterConfiguration above: each ldc's
+        // OTHER classes, so the self-class-literal rule cannot reach them, and being application classes the
+        // bake-domain rule does not either. None is clinitBlocked or seeded, so a rejection leaves their
+        // statics null FOR EVER -- and all three are read UNGUARDED:
+        //
+        //   DisplayNameUtils            ldc's the four DisplayNameGenerator$* classes and stores a generator
+        //                               static for each; every rendered test name reads one.
+        //   IndicativeSentencesGeneration  ldc's DisplayNameGenerator$Standard into DEFAULT_GENERATOR.
+        //   IsTestFactoryMethod         ldc's DynamicNode, formats EXPECTED_RETURN_TYPE_MESSAGE from it.
+        //
+        // All three are runnable here now: static interface methods resolve, Class.getName works, and
+        // String.formatted has a real Formatter behind it.
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/engine/descriptor/DisplayNameUtils")))
+        {
+            return true;
+        }
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/api/IndicativeSentencesGeneration")))
+        {
+            return true;
+        }
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/engine/discovery/predicates/IsTestFactoryMethod")))
+        {
+            return true;
+        }
         // org/junit/platform/commons/util/ReflectionUtils.<clinit> ldc's its own class (for getLogger) and
         // the array class literals "[Z".."[Ljava/lang/String;" for classNameToTypeMap -- tag-7 literals, which
         // the gate below rejects. It MUST run: `tryToLoadClass` reads classNameToTypeMap UNGUARDED, so a
