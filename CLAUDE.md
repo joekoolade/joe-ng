@@ -76,6 +76,33 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`DefaultJupiterConfiguration.<clinit>` RUNS -- and the broad clinit rule was RE-TESTED and rejected on a
+  CHECKED cause this time (2026-09-10).** Its initializer `ldc`s OTHER classes
+  (`ExecutionMode.class`, `TestInstance$Lifecycle.class`, handed to
+  `EnumConfigurationParameterConverter`), so the self-class-literal rule cannot reach it, and
+  `validateConfigurationParameters` reads `UNSUPPORTED_CONFIGURATION_PARAMETERS` UNGUARDED -- a skipped
+  initializer is an NPE the moment the Jupiter engine configures itself.
+  - **I RE-RAN THE BROAD RULE, BECAUSE MY EARLIER REASON FOR REJECTING IT WAS NOT SOUND.** I had recorded
+    "~4x longer, stalled" from a SIXTEEN-MINUTE observation -- but 4x on an already-ten-minute boot needs
+    ~40 minutes, so that observation could not tell "hung" from "still going". It was not hung: the run
+    recovered and reached line 286.
+  - **The real objection is CORRECTNESS, and it only showed up on the long run.** Allowing every tag-7
+    outside `java/`/`jdk/`/`sun/` does clear all ten rejected initializers at once and the launcher does get
+    further -- and then it dies inside `java/io/ObjectStreamClass$Caches.<clinit>` -> `ClassCache.<init>`,
+    because an application initializer pulled SERIALIZATION in. That is a subsystem this VM deliberately does
+    not carry, so the broad rule trades ten null statics for a whole failing subsystem.
+  - **A watchdog that looked like a hang was not one:** `LOADER LOCK stuck >10s` said **`state 1`**
+    (`TASK_READY`) rather than the usual `state 4` (`TASK_RUNNING`), which looked like the owner starving --
+    and it recovered on its own. Read the state field before calling it a deadlock.
+  - **So: one targeted entry, with the measurement recorded beside it.** The general narrowing may still be
+    right, but it needs the serialization pull solved first.
+  - **LAUNCHER: past it, through Jupiter's descriptor and discovery classes.** Next blocker is an ordinary
+    overlay gap: **`VIRTUALRESOLVE FAILED java/lang/Class.getMethods()[Ljava/lang/reflect/Method;`** from
+    `ReflectionUtils.getDefaultMethods` -- the public-methods-including-inherited sibling of
+    `getDeclaredMethods`, which already exists.
+  - **QEMU:** demo suite end to end, `metal junit: ran 44, failures 0`, host tests unchanged incl.
+    `compiler: 37 checks`.
+
 - **A LATE INTERFACE DEFAULT NOW SEARCHES THE WHOLE SUPERCLASS CHAIN -- and the launcher reaches the JUPITER
   ENGINE (2026-09-10).** `resolveViaInterfaces` collected only the RECEIVER's directly-declared interfaces,
   then those interfaces' own super-interfaces. For a receiver that implements nothing itself that list is
