@@ -991,6 +991,14 @@ public final class VM
         {
             return 1;      // a RAW array (no Type node) cast to an array class: trust the verifier, as checkCast does
         }
+        // FAILING PATH ONLY: hand the two types to newCce so the exception can NAME them, as stock does.
+        // Recorded rather than printed -- a print here would fire inside whatever the cast was part of, and
+        // a caught ClassCastException is legitimate control flow in some libraries.
+        // A RAW ARRAY carries a small TAG in its TIB slot, not a Type pointer, so it must NOT be
+        // dereferenced -- one reaches here whenever the cast target is not an array type. 0 means "cannot be
+        // named", which the message renders rather than faulting on.
+        long tib = Magic.load64(ref);
+        Loader.noteCastFailure(tib, tib > ObjectModel.MAX_RAW_ARRAY_TIB ? Magic.load64(tib) : 0L, targetType);
         return 0;
     }
 
