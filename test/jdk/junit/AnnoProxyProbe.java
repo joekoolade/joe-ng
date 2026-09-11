@@ -518,6 +518,19 @@ public class AnnoProxyProbe
         System.out.println("rec inHashSet    = " + hs.size() + " (want 1, dup rejected=" + (!dup) + ")");
         System.out.println("rec contains     = " + (hs.contains(new Pt(7, "a")) ? 1 : 0) + " (want 1)");
 
+        // annotationType(): JUnit's findRepeatableAnnotations calls it on EVERY annotation it walks, and a
+        // null flowed through isInJavaLangAnnotationPackage's own null guard to NPE one line later.
+        java.lang.annotation.Annotation[] ata = Annotated.class.getDeclaredAnnotations();
+        Class<?> at = ata.length == 1 ? ata[0].annotationType() : null;
+        System.out.println("annoType nonNull = " + (at != null ? 1 : 0) + " (want 1)");
+        System.out.println("annoType isTag   = " + (at == Tag.class ? 1 : 0) + " (want 1, identity)");
+        System.out.println("annoType name    = " + (at == null ? "NULL" : at.getName())
+                + " (want ...$Tag)");
+        java.lang.reflect.Method atm = AnnoProxyProbe.class.getDeclaredMethod("tagged");
+        java.lang.annotation.Annotation[] mta = atm.getDeclaredAnnotations();
+        System.out.println("annoType onMeth  = "
+                + (mta.length == 1 && mta[0].annotationType() == Tag.class ? 1 : 0) + " (want 1)");
+
         System.out.println("[probe done]");
     }
 }

@@ -103,6 +103,9 @@ public final class Loader
     // Class registry: per loaded class, what another class needs to `new` it and
     // dispatch through it — its name (base+offset), TIB, and instance-field count.
     private static final int MAXCLASS = 4096;
+    /** Class-mirror cache entries. An overflow breaks getClass()/X.class IDENTITY, so this is sized
+     *  for the largest closure we run, not for the common case. */
+    private static final int MAXMIRROR = 4096;
     // The class registry, reified: one RVMClass per loaded class (base/nameOff/tib/type/statics/fieldCount/
     // vtCount/vtStart/superReg/modifiers/isIface). The direct-interface list (clIfaceReg/clIfaceRegN) and the
     // <clinit> dependency arrays (clDep*) stay separate.
@@ -2857,8 +2860,14 @@ public final class Loader
         refArrTib = new long[64];
         refArrAdopted = new boolean[64];
         refArrCount = 0;
-        mirType = new long[256];           // Class mirrors: also per batch (reclaimed heap)
-        mirObj = new long[256];
+        // CLASS MIRRORS. 256 was not enough for the console launcher, which overflowed it mid-discovery
+        // (`CLASS MIRROR CACHE FULL ... first overflow is org/junit/jupiter/api/parallel/ResourceLock`) --
+        // and an overflow is not a capacity nuisance, it SILENTLY BREAKS IDENTITY: past the end every ask
+        // mints a fresh mirror, so `getClass() == X.class` answers false while `getClass() == getClass()`
+        // can still hold by luck, and stock code compares mirrors constantly. Sized for a launcher-scale
+        // closure with room over: the cost is two words per entry, and only for classes actually asked.
+        mirType = new long[MAXMIRROR];     // Class mirrors: also per batch (reclaimed heap)
+        mirObj = new long[MAXMIRROR];
         mirN = 0;
         classTibCache = 0L;
         clTab = new RVMClass[MAXCLASS];
@@ -14432,7 +14441,25 @@ public final class Loader
             int z = 0;
             while (z < cn)
             {
-                Magic.store64(cit + z * 8L, 0L);
+                // annotationType() IS implemented: it reads the mirror buildAnnoObject stored in the trailing
+                // word. Leaving it zero cost a launcher boot -- JUnit's findRepeatableAnnotations calls it on
+                // every annotation it walks, and a null flowed through isInJavaLangAnnotationPackage's own
+                // null guard to NPE one line later, naming a JUnit method rather than this gap.
+                boolean isAnnoType = utf8IsAtBase(ifBase[clTab[cr].ifmStart + z],
+                        ifNameOff[clTab[cr].ifmStart + z], Magic.bytes("annotationType"));
+                if (isAnnoType)
+                {
+                    long at = Heap.allocCode(8);
+                    Heap.pinCodeAt(at);
+                    Magic.store32(at + 0L, A64Enc.ldrx(0, 0, 16 + n * 8));
+                    Magic.store32(at + 4L, A64Enc.ret());
+                    Heap.publishCode(at, at + 8L);
+                    Magic.store64(cit + z * 8L, at);
+                }
+                else
+                {
+                    Magic.store64(cit + z * 8L, 0L);
+                }
                 z += 1;
             }
             Magic.store64(dir + e * 16L + 0L, clTab[cr].type);
@@ -14485,8 +14512,12 @@ public final class Loader
             return 0L;
         }
         int n = clTab[ifaceReg].ifmCount;
-        long obj = Heap.alloc(16 + n * 8);
+        // ONE EXTRA TRAILING WORD holds this annotation's own Class mirror, which is what
+        // Annotation.annotationType() answers. Keeping it IN THE INSTANCE is what lets that method reuse the
+        // same two-instruction thunk shape as every element accessor -- see annoTibFor.
+        long obj = Heap.alloc(16 + (n + 1) * 8);
         Magic.store64(obj + ObjectModel.TIB_OFFSET, tib);
+        Magic.store64(obj + 16L + n * 8L, classMirror(clTab[ifaceReg].type));
         int start = clTab[ifaceReg].ifmStart;
         int pairs = u2(pairsPos);
         // PHASE 1 -- every element the annotation USE writes, decoded against the annotated class's blob.
