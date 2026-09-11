@@ -358,6 +358,12 @@ final class VMNatives
         return Loader.classInterfaces(mirror);
     }
 
+    /** {@code Method.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
+    static long methodAnnoAll(long rgIndex)
+    {
+        return Loader.methodAnnotationsAll((int) rgIndex);
+    }
+
     /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
     static long classAnnoAll(long mirror)
     {

@@ -127,6 +127,64 @@ public final class Method extends AccessibleObject
         return (T) annoGet0(rgIndex, descriptorOf(anno));
     }
 
+    /**
+     * The annotation DECLARED DIRECTLY on this method, or null.
+     *
+     * <p>IDENTICAL to {@link #getAnnotation}, and for a method that is EXACT rather than an approximation --
+     * unlike the {@code Class} pair, where the two differ by {@code @Inherited}. JLS 9.6.4.3 gives
+     * {@code @Inherited} effect on class declarations ALONE, and an overriding method does not inherit the
+     * annotations of the method it overrides, so for a method "declared" and "present" are the same set.
+     * Stock agrees by construction: {@code Executable.getAnnotation} reads {@code declaredAnnotations()}.
+     *
+     * <p>THE BOUND IS LOAD-BEARING, for the third time in this family. {@code <T extends Annotation>} erases
+     * the return to {@code Ljava/lang/annotation/Annotation;} -- the descriptor JUnit's
+     * {@code AnnotationUtils.findAnnotation} references. Declared as a plain {@code <T>} it would erase to
+     * {@code Ljava/lang/Object;}: a DIFFERENT METHOD that resolves nowhere and traps.
+     *
+     * <p>Reached by LATE dispatch: {@code findAnnotation} holds its element as an {@code AnnotatedElement},
+     * an interface this class does not declare, so the call resolves against the RECEIVER's class on an
+     * exact name+descriptor match.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getDeclaredAnnotation(Class<T> anno)
+    {
+        if (anno == null)
+        {
+            return null;
+        }
+        return (T) annoGet0(rgIndex, descriptorOf(anno));
+    }
+
+    /**
+     * Every annotation DECLARED on this method. Never null; empty when there are none.
+     *
+     * <p>{@code findAnnotation} walks this to find META-ANNOTATIONS -- an annotation carried by another
+     * annotation -- so an empty answer would not fail, it would silently report "not annotated". That is the
+     * shape this VM keeps getting bitten by, which is why it enumerates rather than answering empty.
+     *
+     * <p>A fresh array each call, because stock specifies the caller may modify the returned one. An
+     * annotation whose interface is not loaded is omitted and named on the console: there is no itable to
+     * give such an instance, and a null element reads as "present but broken".
+     */
+    public java.lang.annotation.Annotation[] getDeclaredAnnotations()
+    {
+        java.lang.annotation.Annotation[] a = annoAll0(rgIndex);
+        return a == null ? new java.lang.annotation.Annotation[0] : a;
+    }
+
+    /**
+     * As {@link #getDeclaredAnnotations}. For a method the two coincide EXACTLY, for the reason given on
+     * {@link #getDeclaredAnnotation}: {@code @Inherited} does not reach method declarations, so there is no
+     * indirectly-present annotation for this to add. No divergence from stock here.
+     */
+    public java.lang.annotation.Annotation[] getAnnotations()
+    {
+        return getDeclaredAnnotations();
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.methodAnnoAll}): registry index -> Annotation[]. */
+    private static native java.lang.annotation.Annotation[] annoAll0(int rgIndex);
+
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.annoGet}): registry index + descriptor -> instance. */
     private static native Object annoGet0(int rgIndex, byte[] descriptor);
 

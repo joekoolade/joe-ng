@@ -30,8 +30,6 @@ java/lang/reflect/Constructor#toGenericString()Ljava/lang/String;
 java/lang/reflect/Field#getAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
-java/lang/reflect/Method#getAnnotations()[Ljava/lang/annotation/Annotation;
-java/lang/reflect/Method#getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getParameterAnnotations()[[Ljava/lang/annotation/Annotation;
 java/lang/reflect/Method#getParameters()[Ljava/lang/reflect/Parameter;
 java/time/Duration#between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;

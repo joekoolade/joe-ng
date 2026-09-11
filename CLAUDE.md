@@ -76,6 +76,58 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Method.getDeclaredAnnotation` + BOTH ARRAY FORMS -- `findAnnotation`'s whole element surface, taken in
+  ONE increment (2026-09-11, PI-VALIDATED).** The Method-level sibling of what `Class` gained two increments
+  ago, from the same recursive `AnnotationUtils.findAnnotation`, now reached with a METHOD as the element.
+  Backlog 40 -> 38.
+  - **THE SURFACE CAME FROM `javap` ON THE JAR, NOT FROM GUESSING WHICH METHOD TRAPPED FIRST.**
+    `findAnnotation` calls exactly three methods on its `AnnotatedElement` -- `getDeclaredAnnotation`,
+    `getDeclaredAnnotations`, `getAnnotations` -- and notably NOT `getAnnotation`. Fixing one method per
+    launcher run is what made this family cost a ten-minute boot each time.
+  - **FOR A METHOD "DECLARED" AND "PRESENT" COINCIDE EXACTLY**, so these are exact rather than approximate --
+    unlike the `Class` pair, which differ by `@Inherited`. JLS 9.6.4.3 gives `@Inherited` effect on CLASS
+    declarations alone, and an overriding method does not inherit the annotations of the method it overrides.
+    Stock agrees by construction: `Executable.getAnnotation` reads `declaredAnnotations()`. So `getAnnotations`
+    may share the declared path and diverge from stock NOWHERE -- checked, not assumed from the symmetry.
+  - **THE BOUND IS LOAD-BEARING FOR THE THIRD TIME, and this time it was VERIFIED rather than trusted:**
+    `javap -s` on the compiled overlay gives `(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;` and
+    `()[Ljava/lang/annotation/Annotation;`, byte-for-byte the descriptors the jar references. Reached by LATE
+    dispatch, since `Method` does not declare `AnnotatedElement`.
+  - **`methodAnnotationsAll` keeps `classAnnotationsAll`'s TWO PASSES OVER ABSOLUTE ADDRESSES**, required
+    rather than copied: `buildAnnoObject` reads `gcp[..]`, the parse CURSOR, and anything that resolves during
+    a build re-parses a blob and moves it. `methodInfoPos` must therefore run BEFORE pass 1, since it parses
+    too. The only difference from the class version is where the attributes live (`mp + 8`, count `u2(mp + 6)`).
+  - **ALLOCATION-FREE FOR A BAD INDEX, because `VM.forceCompile` probes this native with `rgIndex -1` on
+    EVERY image during loader init.** Every sibling probe there returns before allocating; one that allocated
+    would be the odd one out on a path that runs before `launch` on every boot.
+  - **DELIBERATELY NOT ADDED TO `AccessibleObject`:** a base answering an empty array would tell an annotated
+    `Field` it has none -- the silent-wrong-answer shape. Omitted, an `AccessibleObject`-typed call takes the
+    late-virtual path and resolves against the receiver, so nothing is lost.
+  - **`methodInfoPos` also replaces the identical method_info walk `methodAnnoPresent` and `methodAnnotation`
+    each carried** -- adding a third copy is what prompted factoring it. It matches on name AND descriptor,
+    which is what separates two overloads.
+  - **TWO PROBE ARMS EXIST TO CATCH A WALK THAT MERELY LOOKS RIGHT:** a method carrying TWO annotations (an
+    enumeration that stops after the first, or mis-steps the first's element pairs, reports 1 -- a
+    single-annotation method cannot tell those apart), and defaults read through the ARRAY path, a separate
+    phase from the by-descriptor one. An un-annotated method must answer an EMPTY array, never null, because
+    `findAnnotation` walks it unguarded.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no `vtparity`/`itparity` DIFF (Method's vtable
+    gained three slots), no `LINK FAILED` for the new native, and the reflective demos exact
+    (`overloads named pick = 3`, `invoked = none int:7 two:42`, `reflective = unseen`,
+    `reflective lambda thread = 7`, `ifacedfltch = late-default`). `ticks/core c1=50 c2=50 c3=50`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK (829 bytes). **The suite calls none of these
+    three methods**, so the boot claims NO REGRESSION and proves the native links; `AnnoProxyProbe` on QEMU
+    is what proves the feature -- every arm exact first run. Also `metal junit: ran 44, failures 0`, host
+    tests unchanged incl. `compiler: 37 checks`.
+  - **`scripts/sdcard.sh` BUILDS FROM THE COMMITTED MANIFEST, so flashing straight after restoring it gives a
+    `demo/NetDemo` IMAGE, NOT THE SUITE** -- and that cost a Pi boot here. The suite image is the NO-MANIFEST
+    build: empty `ramfs/etc/init`, build, restore. Sizes are the tell (suite 33,229,960 vs NetDemo
+    33,230,008), and a NetDemo boot goes straight to WiFi with no `generation 12`.
+  - **A `bytes=0` ON THAT NetDemo BOOT WAS NOT THIS CHANGE AND NOT A STANDING FAILURE:** the suite's WiFi
+    finale, which uses the all-Java `net.Tcp` stack rather than stock `Socket`, pulled the full 829 bytes on
+    the very next boot, with DNS returning a different Cloudflare anycast address.
+
 - **`Class.getMethods` -- the launcher reaches `IsTestableMethod.test`, i.e. DECIDING WHETHER A METHOD IS A
   `@Test` (2026-09-10).** `ReflectionUtils.getDefaultMethods` needs the PUBLIC methods of a class including
   inherited ones; the overlay had only `getDeclaredMethods`. Backlog 41 -> 40.
