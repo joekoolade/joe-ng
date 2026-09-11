@@ -349,4 +349,16 @@ public interface Symbols
 
     /** Emit a runtime trap for an unsupported record {@code equals}/{@code hashCode}/{@code toString}; never returns. */
     void recordTrap(CodeBuffer cb);
+
+    /** Which record method an ObjectMethods indy implements: 1 hashCode, 2 equals, 3 toString, 0 other. */
+    default int recordKind(int idx)
+    {
+        return 0;
+    }
+
+    /** BL the VM helper that implements record method {@code kind}. */
+    default void recordCall(CodeBuffer cb, int kind)
+    {
+    }
+
 }

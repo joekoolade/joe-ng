@@ -102,6 +102,16 @@ public class AnnoProxyProbe
     {
     }
 
+    /** A real RECORD: its hashCode/equals/toString are an ObjectMethods invokedynamic. */
+    public record Pt(int x, String name)
+    {
+    }
+
+    /** A second record with the SAME component values -- equals must still say no, being a different type. */
+    public record Pt2(int x, String name)
+    {
+    }
+
     /** A member class declared in a SUPER-interface: getClasses must inherit it transitively, which a walk
      *  of the direct interfaces alone would miss. */
     public interface TopIface
@@ -477,6 +487,36 @@ public class AnnoProxyProbe
         }
         System.out.println("getClasses ifaceDeep = " + (deep ? 1 : 0)
                 + " (want 1, inherited through 2 interfaces)");
+
+        // ---- records: hashCode / equals / toString via ObjectMethods indy ----
+        Pt p1 = new Pt(7, "a");
+        Pt p2 = new Pt(7, "a");
+        Pt p3 = new Pt(8, "a");
+        Pt p4 = new Pt(7, "b");
+        System.out.println("rec equals same  = " + (p1.equals(p2) ? 1 : 0) + " (want 1)");
+        System.out.println("rec equals self  = " + (p1.equals(p1) ? 1 : 0) + " (want 1)");
+        System.out.println("rec equals intDf = " + (p1.equals(p3) ? 1 : 0) + " (want 0)");
+        System.out.println("rec equals refDf = " + (p1.equals(p4) ? 1 : 0) + " (want 0)");
+        System.out.println("rec equals null  = " + (p1.equals(null) ? 1 : 0) + " (want 0)");
+        // A DIFFERENT record type with identical components must not be equal -- the arm that catches an
+        // equals that compares components without checking the class.
+        System.out.println("rec equals othTy = " + (p1.equals(new Pt2(7, "a")) ? 1 : 0) + " (want 0)");
+
+        // Equal records must hash equally (the algorithm itself is unspecified, so only this is asserted).
+        System.out.println("rec hash equal   = " + (p1.hashCode() == p2.hashCode() ? 1 : 0) + " (want 1)");
+        System.out.println("rec hash stable  = " + (p1.hashCode() == p1.hashCode() ? 1 : 0) + " (want 1)");
+        // Both components must reach the hash: vary each alone and the hash should move.
+        System.out.println("rec hash usesInt = " + (p1.hashCode() != p3.hashCode() ? 1 : 0) + " (want 1)");
+        System.out.println("rec hash usesRef = " + (p1.hashCode() != p4.hashCode() ? 1 : 0) + " (want 1)");
+
+        System.out.println("rec toString     = " + p1.toString() + " (want Pt[x=7, name=a])");
+
+        // The launcher's actual shape: a record used as a HashSet element (add calls hashCode then equals).
+        java.util.HashSet<Pt> hs = new java.util.HashSet<Pt>();
+        hs.add(p1);
+        boolean dup = hs.add(p2);
+        System.out.println("rec inHashSet    = " + hs.size() + " (want 1, dup rejected=" + (!dup) + ")");
+        System.out.println("rec contains     = " + (hs.contains(new Pt(7, "a")) ? 1 : 0) + " (want 1)");
 
         System.out.println("[probe done]");
     }
