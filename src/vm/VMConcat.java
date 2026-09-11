@@ -102,7 +102,22 @@ final class VMConcat
     /** Append a String/byte[] {@code ref}'s bytes to the concat builder. */
     static void scStr(long sb, long ref)
     {
+        // A NULL REFERENCE CONCATENATES AS "null" (JLS 15.18.1), and getting this wrong was not merely
+        // cosmetic: the old code ran strBytes(0) and then read `0 + 16`, i.e. ADDRESS 16 -- low firmware
+        // memory on this board, which is readable. It happened to answer a zero length and print nothing;
+        // any other value there would have appended that many bytes of garbage. Found by a probe printing
+        // `q.peek()` on an empty queue, where stock prints "null" and this printed an empty string.
+        if (ref == 0L)
+        {
+            appendNull(sb);
+            return;
+        }
         long arr = strBytes(ref);
+        if (arr == 0L)
+        {
+            appendNull(sb);                                // a String with no value array: say so, never read +16
+            return;
+        }
         long len = Magic.load64(arr + 16L);
         long i = 0L;
         while (i < len)
@@ -110,6 +125,15 @@ final class VMConcat
             scChar(sb, Magic.load8(arr + 24L + i));
             i = i + 1L;
         }
+    }
+
+    /** Append the four characters of "null" -- what a null reference converts to (JLS 15.18.1). */
+    private static void appendNull(long sb)
+    {
+        scChar(sb, 0x6E);                                  // 'n'
+        scChar(sb, 0x75);                                  // 'u'
+        scChar(sb, 0x6C);                                  // 'l'
+        scChar(sb, 0x6C);                                  // 'l'
     }
 
     /** Append {@code v} in decimal to the concat builder. */

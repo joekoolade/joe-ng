@@ -30,5 +30,19 @@ public class ConcatDemo
         String u = label + " big=" + big + "!\n";       // String arg (label) + long arg (big)
         Magic.printStr(u);
         Magic.printStr("bare literal ok\n");            // a raw byte[] literal -> printStr handles it too
+
+        // A NULL REFERENCE CONCATENATES AS "null" (JLS 15.18.1). This printed an EMPTY STRING, and not
+        // merely cosmetically: the append read `0 + 16`, i.e. address 16 -- low firmware memory, readable --
+        // so a non-zero length there would have appended that many bytes of garbage.
+        String ns = null;
+        Object no = null;
+        System.out.println("null String  = [" + ns + "] (want [null])");
+        System.out.println("null Object  = [" + no + "] (want [null])");
+        // Surrounded by text on BOTH sides: an append that emitted nothing still looks right at the end.
+        System.out.println("null middle  = [a" + ns + "b] (want [anullb])");
+        // Two in a row, so a fix that emits one "null" and stops is caught.
+        System.out.println("null twice   = [" + ns + no + "] (want [nullnull])");
+        // A non-null reference beside it, so the fix cannot be "always print null".
+        System.out.println("null mixed   = [" + ns + "x" + no + "] (want [nullxnull])");
     }
 }

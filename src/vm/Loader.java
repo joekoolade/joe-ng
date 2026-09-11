@@ -650,6 +650,16 @@ public final class Loader
         {
             return true;
         }
+        // java/util/concurrent/ConcurrentLinkedQueue.<clinit> is java/net/Socket's case exactly: it ldc's
+        // ConcurrentLinkedQueue.class and Node.class to bind its HEAD/TAIL/ITEM/NEXT VarHandles through the
+        // overlaid MethodHandles/MhUtil/VarHandle shim, and the tag-7 gate rejects it for the Node literal.
+        // It MUST run -- CLQ drives its ENTIRE structure through those handles, so a skipped initializer is a
+        // null ITEM and an NPE in Node.<init> on the first offer(), which is where the console launcher
+        // stopped (ConcurrentLinkedQueue.java:193).
+        if (utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/concurrent/ConcurrentLinkedQueue")))
+        {
+            return true;
+        }
         // java/net/StandardSocketOptions.<clinit> creates its option constants with Integer.class/Boolean.class
         // (tag-7 Class literals, supported). It MUST run: close() reads SO_LINGER, and an unbound (null) option
         // makes Net.getSocketOption(fd, null) NPE on name.type().
@@ -4203,14 +4213,25 @@ public final class Loader
         {
             if (!markSettled(b) && pdSeeded[b] == 0)
             {
-                pdSeeded[b] = 1;                         // these five signatures do not change; one look each
-                // ONE parse, five scans: findMethodByBytes reads gp/gcp and never advances them, so the
-                // constant pool this sets up is good for all five lookups.
+                pdSeeded[b] = 1;                         // these signatures do not change; one look each
+                // ONE parse, many scans: findMethodByBytes reads gp/gcp and never advances them, so the
+                // constant pool this sets up is good for every lookup below.
                 parseForMethods(pdBase[b], pdLen[b]);
                 grew = addReach(findMethodByBytes(gbase, Magic.bytes("run"), Magic.bytes("()V"))) || grew;
                 grew = addReach(findMethodByBytes(gbase, Magic.bytes("getAndBitwiseOr"),
                         Magic.bytes("(Ljava/lang/Object;I)I"))) || grew;
                 grew = addReach(findMethodByBytes(gbase, Magic.bytes("compareAndSet"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
+                // The REFERENCE accessors java.util.concurrent drives its structures through. Seeded for the
+                // same reason as the two above: their call sites are signature-polymorphic, so RTA never sees
+                // them named and would prune the bodies, leaving a 0 vtable slot behind the by-name resolve.
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("set"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("get"),
+                        Magic.bytes("(Ljava/lang/Object;)Ljava/lang/Object;"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("setRelease"),
+                        Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;)V"))) || grew;
+                grew = addReach(findMethodByBytes(gbase, Magic.bytes("weakCompareAndSet"),
                         Magic.bytes("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"))) || grew;
                 grew = addReach(findMethodByBytes(gbase, Magic.bytes("getMethodName"),
                         Magic.bytes("()Ljava/lang/String;"))) || grew;
@@ -8559,6 +8580,10 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticCell0")))       { return VM.staticCellAddr; }    // (Class,byte[])J
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/VarHandle")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; } // ()V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {

@@ -76,6 +76,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`ConcurrentLinkedQueue` ON THE METAL, and a NULL REFERENCE CONCATENATES AS "null" (2026-09-11).**
+  - **CLQ was FOUR STACKED GAPS, each exposed by fixing the one before.** The launcher stopped in
+    `Node.<init>` (line 193) with a `DENYLIST TRAP` whose callee was EMPTY and `TRAPWIRE index=-1` -- a
+    late-resolution failure, blaming a denylist CLQ is not on.
+    1. **The VarHandle shim carried only two ops.** CLQ drives its ENTIRE structure through VarHandles;
+       `javap` gives the exact set (`set`/`get`/`setRelease`/`compareAndSet`/`weakCompareAndSet`), added as a
+       SURFACE rather than one method per boot.
+    2. **They needed SEEDING** -- signature-polymorphic call sites are never seen by RTA, so the bodies would
+       be pruned and leave a 0 vtable slot behind the by-name resolve.
+    3. **CLQ's `<clinit>` was rejected**: it `ldc`s `Node.class` to bind its handles -- `java/net/Socket`'s
+       case exactly, already allowlisted for the same reason. Skipped, `ITEM` stayed null and `Node.<init>`
+       NPE'd on the first `offer()`.
+    4. **`Lookup.findVarHandle` did not exist.** CLQ calls it DIRECTLY on `Lookup`; Socket reaches the same
+       binding through `MhUtil`.
+  - **`Magic.dsb()` IS NOT LOWERED BY THE METAL JIT from guest code** (`JIT unsupported: reason=5`, an
+    unsupported intrinsic id). `setRelease` uses a `fence0` native wired to the address the Unsafe fences
+    already resolve to -- a dispatch entry, no new helper. Full barrier: no release-store intrinsic exists
+    here, so a one-way form could only be wrong invisibly.
+  - **STATED LIMIT: the accessors are REFERENCE-typed**, and `vtableSlotOf` resolves these BY NAME ALONE, so
+    one `set` serves every `set` call site whatever its descriptor -- a VarHandle over an `int` field would
+    store an int as a reference. Nothing reached does that; the fix is descriptor-based resolution.
+  - **A NULL REFERENCE NOW CONCATENATES AS "null" (JLS 15.18.1) -- AND IT WAS A WILD READ.** `scStr` ran
+    `strBytes(0)` then read **address 16**, low firmware memory and perfectly readable. It happened to answer
+    a zero length and print nothing; ANY OTHER VALUE THERE WOULD HAVE APPENDED THAT MANY BYTES OF GARBAGE.
+    The empty string was luck, not a bounded failure.
+  - **`ConcatDemo` HAS BEEN IN THE BOOT SUITE SINCE M2 AND NEVER CAUGHT IT**, because every arm concatenated
+    NON-NULL values. A demo that exercises a feature is not one that exercises its EDGES. Found while probing
+    something else entirely (`ClqDemo` printing `peek()` on an empty queue).
+  - **The new arms are chosen so a LUCKY fix fails:** a null SURROUNDED by text (an append emitting nothing
+    still looks right at end-of-line), TWO nulls in a row (catches a fix that emits one and stops), and a null
+    BESIDE a non-null (so the fix cannot be "always print null").
+  - **QEMU:** `ClqDemo` every arm exact (size 3, peek a, poll a/b/c in order, iterated 1, contains c, second
+    queue x); all five null-concat arms exact IN THE SUITE; suite end to end with ZERO markers;
+    `metal junit: ran 44, failures 0`; host tests unchanged incl. `compiler: 37 checks` -- the writer lowers
+    concat too, so a change perturbing its codegen would break the self-hosting fixpoint.
+
 - **A LATE CONSTRUCTOR REFERENCE BAKED A ZERO TIB -- and `ClassCastException` now NAMES BOTH SIDES
   (2026-09-11, PI-VALIDATED).** The launcher died in JUnit with a bare `ClassCastException` at
   `EngineExecutionOrchestrator.buildEngineExecutionListener`. It was not a JUnit problem.
