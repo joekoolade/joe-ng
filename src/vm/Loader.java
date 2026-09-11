@@ -16055,8 +16055,15 @@ public final class Loader
             // is why a demand-load inside this method was tried once and reverted.
             if (cr < 0)
             {
+                // Note it and let the retry pull it. SILENT on the first attempt: this is the EXPECTED state
+                // for any late-compiled constructor reference, and a report that fires on a run which then
+                // works is worse than none. Only a target still missing AFTER the pull is a real failure --
+                // and that one still bakes a zero TIB, so it must be said out loud.
                 notePullNeeded(refClassNameOff(lambdaImplMref(idx)) + gbase);
-                reportLambdaCtorNoTib(cr);
+                if (lzRetried)
+                {
+                    reportLambdaCtorNoTib(cr);
+                }
                 return finishLambdaClass(thunk, ifaceType, idx, nc);   // discarded by the retry
             }
             int size = 16 + clTab[cr].fieldCount * 8;
