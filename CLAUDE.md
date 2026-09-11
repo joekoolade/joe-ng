@@ -76,6 +76,40 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Annotation.annotationType()`, and the CLASS-MIRROR CACHE WAS OVERFLOWING AT 256 (2026-09-11,
+  PI-VALIDATED).** Two defects from one `LOAD_LOG` launcher boot; the second was spotted by the USER in a log
+  line I had read past while chasing the first.
+  - **`annotationType()` RETURNED NULL.** The launcher NPE'd at `AnnotationUtils:339`, which `javap` places at
+    `annotationType().equals(annotationType)` -- so the receiver's `annotationType()` had answered null. The
+    VM's own comment stated the gap outright: the closure interfaces' itables are zero-filled because
+    *"nothing here implements `Annotation.annotationType()`"*.
+  - **WHY IT SURFACED AS SOMEBODY ELSE'S NPE rather than a named trap:** JUnit's `isInJavaLangAnnotationPackage`
+    does `ifnull -> return false`, so the null flowed PAST its own guard and died one line later, naming a
+    JUnit method instead of this gap. A null that passes through a library's null check is reported wherever
+    it is finally DEREFERENCED, which can be a different class entirely.
+  - **Implemented with the shape already in use:** `buildAnnoObject` stores the annotation's own Class mirror
+    in ONE EXTRA TRAILING WORD, and `annotationType()` gets the same two-instruction
+    `ldr x0,[x0,#off]; ret` thunk as every element accessor. No new mechanism.
+  - **THE MIRROR CACHE WAS 256 ENTRIES AND THE LAUNCHER OVERFLOWED IT MID-DISCOVERY:**
+    `CLASS MIRROR CACHE FULL at 0x100 ... first overflow is org/junit/jupiter/api/parallel/ResourceLock`.
+    **That is not a capacity nuisance -- it SILENTLY BREAKS IDENTITY:** past the end `classMirror` mints a
+    FRESH mirror per ask, so `getClass() == X.class` answers false while `getClass() == getClass()` can still
+    hold by luck, and stock code compares mirrors constantly. `MAXMIRROR` is now 4096. It had been firing 550
+    lines BEFORE the NPE.
+  - **THE INSTRUMENT EARNED ITS KEEP AND WAS NEARLY WASTED.** This report was added during the
+    interface-typed-`getClass` arc and recorded as *"never fired"*. It fired -- in a log already scrolled
+    past. **An instrument only pays if its output is READ**; the reading was there and was not done.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no `MIRROR CACHE FULL` (the changed report checked
+    against a PASSING boot), `mirror identity=1` and `literal == getClass(): 1` (the two arms the overflow
+    breaks), no parity DIFF, no `LINK FAILED`, **62 collections on cold DRAM** with `churnMB=625 live=32
+    intact=32` -- the real test for the new pinned thunk, since a mis-rooted one is swept under pressure and
+    wild-branches rather than failing an assertion. `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20,
+    `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK. **The 16x bigger table cost nothing
+    measurable** -- collections and live/intact identical to the previous boot.
+  - **QEMU:** `annoType nonNull/isTag/name/onMeth` all exact -- `isTag` is IDENTITY, which is precisely what a
+    still-overflowing cache would fail. `metal junit: ran 44, failures 0`; suite clean; host tests unchanged
+    incl. `compiler: 37 checks`.
+
 - **RECORDS ON THE METAL -- `hashCode`/`equals`/`toString` SYNTHESISED from `ObjectMethods`, and the launcher
   is into METHOD-LEVEL discovery (2026-09-11, PI-VALIDATED).** `DeclaredMethodSelector.hashCode` trapped while
   Jupiter put a method selector into a `LinkedHashSet`; `javap` settles it in one line -- the body is a single
