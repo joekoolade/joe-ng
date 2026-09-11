@@ -1863,10 +1863,31 @@ public final class Baseline
      */
     private void lowerRecordTrap(int cpIndex, CodeBuffer cb)
     {
-        int nargs = paramCount(cpIndex);                         // the indy's call-site args, on the operand stack
-        sp = sp - nargs;                                         // consume them
-        symbols.recordTrap(cb);                                  // BL a trap helper — does not return
-        cb.emit(A64Enc.movz(pushReg(), 0, 0));                   // dummy result (null / 0 / false)
+        int kind = symbols.recordKind(cpIndex);
+        if (kind == 0)
+        {
+            int nargs0 = paramCount(cpIndex);                    // an ObjectMethods site that is none of the
+            sp = sp - nargs0;                                    // three -- halt loudly rather than answer 0
+            symbols.recordTrap(cb);
+            cb.emit(A64Enc.movz(pushReg(), 0, 0));
+            return;
+        }
+        // The call-site args ARE the arguments: (record) for hashCode/toString, (record, Object) for equals.
+        // Move them into x0..x1 BEFORE spilling -- spillLive writes the operand registers to their frame
+        // homes and reloadLive brings them back, and neither touches x0/x1, so the args survive the call.
+        int nargs = paramCount(cpIndex);
+        int argBase = sp - nargs;
+        int a = 0;
+        while (a < nargs)
+        {
+            cb.emit(A64Enc.movReg(a, opSlot(argBase + a)));
+            a += 1;
+        }
+        sp = sp - nargs;
+        spillLive(cb);
+        symbols.recordCall(cb, kind);                            // x0 = int hash / 0-1 equals / String ref
+        reloadLive(cb);
+        cb.emit(A64Enc.movReg(pushReg(), 0));
     }
 
     /**

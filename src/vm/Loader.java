@@ -13835,6 +13835,362 @@ public final class Loader
         return 0L;
     }
 
+    // ---- records: hashCode / equals / toString, SYNTHESISED ------------------------------------------
+    //
+    // javac compiles a record's hashCode/equals/toString to an `invokedynamic` bootstrapped by
+    // java/lang/runtime/ObjectMethods, which hands back a MethodHandle -- the machinery this VM denies. They
+    // are synthesised here instead, which is the same choice already made for a lambda: recognise the
+    // bootstrap and BUILD THE BEHAVIOUR, rather than run the bootstrap.
+    //
+    // THE COMPONENTS ARE THE CLASS'S OWN INSTANCE FIELDS, and that is a GUARANTEE, not a convenience: JLS
+    // 8.10.3 forbids a record declaring any instance field other than the private final ones corresponding
+    // to its components. So no filtering is needed, and declaration order IS component order -- which is why
+    // nothing per-site is baked here. Everything is read from the object at call time.
+    //
+    // WHAT IS SPECIFIED AND WHAT IS NOT, because the three differ and it decides how exact each must be:
+    // `Record.equals` is fully specified (same record type, every component equal) and is exact here.
+    // `Record.hashCode` explicitly leaves its algorithm unspecified, so this need only be a consistent
+    // function of the component hashes -- equal records hash equally because it is derived from them alone.
+    // `Record.toString`'s exact format is likewise unspecified; this matches the standard rendering.
+
+    /** Registry index of {@code obj}'s class, or -1 (null, or a raw array carrying no Type). */
+    private static int regOfObject(long obj)
+    {
+        if (obj == 0L)
+        {
+            return -1;
+        }
+        long tib = Magic.load64(obj + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return -1;                                  // raw array: no Type node to key on
+        }
+        return regOfType(Magic.load64(tib));            // TIB[0] = Type
+    }
+
+    /** {@code fldTab} index of the {@code want}-th instance field DECLARED by class {@code reg}, or -1. */
+    private static int recordComponent(int reg, int want)
+    {
+        int seen = 0;
+        int j = 0;
+        while (j < fldCount)
+        {
+            if (fldTab[j] != null
+                    && utf8EqAt(clTab[reg].base, clTab[reg].nameOff, fldTab[j].base, fldTab[j].classOff))
+            {
+                if (seen == want)
+                {
+                    return j;
+                }
+                seen += 1;
+            }
+            j += 1;
+        }
+        return -1;
+    }
+
+    /** How many components (declared instance fields) class {@code reg} has. */
+    private static int recordComponentCount(int reg)
+    {
+        int n = 0;
+        int j = 0;
+        while (j < fldCount)
+        {
+            if (fldTab[j] != null
+                    && utf8EqAt(clTab[reg].base, clTab[reg].nameOff, fldTab[j].base, fldTab[j].classOff))
+            {
+                n += 1;
+            }
+            j += 1;
+        }
+        return n;
+    }
+
+    /**
+     * Call {@code name desc} on the guest object {@code obj}, with {@code obj} as the receiver and
+     * optionally one further argument. 0 when the method cannot be resolved -- the caller decides what an
+     * unanswerable component means rather than this inventing a value.
+     */
+    private static long callOnObject(long obj, byte[] name, byte[] desc, long arg1, int argc)
+    {
+        int reg = regOfObject(obj);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        long code = resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name), utf8Blob(desc));
+        if (code == 0L)
+        {
+            return 0L;
+        }
+        long[] slots = new long[2];                     // fresh per call: a component's own equals/hashCode
+        long argBase = Magic.addrOf(slots) + 24L;       // may re-enter this for a nested record
+        Magic.store64(argBase, obj);
+        if (argc > 1)
+        {
+            Magic.store64(argBase + 8L, arg1);
+        }
+        return Magic.callN(code, argBase);
+    }
+
+    /** The hash of one component, by its descriptor's first character. */
+    private static int componentHash(long v, int tc)
+    {
+        if (tc == 'Z')
+        {
+            return v != 0L ? 1231 : 1237;               // Boolean.hashCode's specified values
+        }
+        if (tc == 'J' || tc == 'D')
+        {
+            return (int) (v ^ (v >>> 32));              // Long.hashCode; D uses its raw bits
+        }
+        if (tc == 'L' || tc == '[')
+        {
+            return v == 0L ? 0 : (int) callOnObject(v, Magic.bytes("hashCode"), Magic.bytes("()I"), 0L, 1);
+        }
+        return (int) v;                                 // B S C I, and F by its raw bits
+    }
+
+    /** {@code Record.hashCode}: a fold over the components. See the note above on why 31 is free to choose. */
+    static long recordHash(long obj)
+    {
+        int reg = regOfObject(obj);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        int n = recordComponentCount(reg);
+        int h = 0;
+        int i = 0;
+        while (i < n)
+        {
+            int j = recordComponent(reg, i);
+            long v = Magic.load64(obj + 16L + fldTab[j].slot * 8L);
+            h = h * 31 + componentHash(v, u1(fldTab[j].base + fldTab[j].descOff + 2L));
+            i += 1;
+        }
+        return h;
+    }
+
+    /** {@code Record.equals}: same record class, and every component equal. Fully specified, so exact. */
+    static long recordEquals(long a, long b)
+    {
+        if (a == b)
+        {
+            return 1L;                                  // includes both null
+        }
+        if (a == 0L || b == 0L)
+        {
+            return 0L;
+        }
+        int ra = regOfObject(a);
+        int rb = regOfObject(b);
+        if (ra < 0 || ra != rb)
+        {
+            return 0L;                                  // a different class is never equal to a record
+        }
+        int n = recordComponentCount(ra);
+        int i = 0;
+        while (i < n)
+        {
+            int j = recordComponent(ra, i);
+            long off = 16L + fldTab[j].slot * 8L;
+            long va = Magic.load64(a + off);
+            long vb = Magic.load64(b + off);
+            int tc = u1(fldTab[j].base + fldTab[j].descOff + 2L);
+            if (tc == 'L' || tc == '[')
+            {
+                if (va != vb)                           // reference components compare with equals()
+                {
+                    if (va == 0L || vb == 0L)
+                    {
+                        return 0L;
+                    }
+                    if (callOnObject(va, Magic.bytes("equals"), Magic.bytes("(Ljava/lang/Object;)Z"), vb, 2) == 0L)
+                    {
+                        return 0L;
+                    }
+                }
+            }
+            else if (va != vb)
+            {
+                return 0L;                              // primitives compare by value
+            }
+            i += 1;
+        }
+        return 1L;
+    }
+
+    /** Cap on the rendered length of one record's toString, so the buffer below stays a plain local. */
+    private static final int MAXRECSTR = 1024;
+
+    /** Append the ASCII of {@code v} (decimal, signed) at {@code p}; returns the new position. */
+    private static int putDec(byte[] out, int p, long v, boolean signed)
+    {
+        if (signed && v < 0L)
+        {
+            if (p < out.length)
+            {
+                out[p] = (byte) '-';
+                p += 1;
+            }
+            v = -v;
+        }
+        byte[] tmp = new byte[24];
+        int k = 0;
+        if (v == 0L)
+        {
+            tmp[0] = (byte) '0';
+            k = 1;
+        }
+        while (v > 0L)
+        {
+            tmp[k] = (byte) ('0' + (int) (v % 10L));
+            v = v / 10L;
+            k += 1;
+        }
+        while (k > 0 && p < out.length)
+        {
+            k -= 1;
+            out[p] = tmp[k];
+            p += 1;
+        }
+        return p;
+    }
+
+    /** Append the Utf8 at {@code utf8Addr} (u2 length, then bytes); returns the new position. */
+    private static int putUtf8(byte[] out, int p, long utf8Addr)
+    {
+        int len = u2(utf8Addr);
+        int i = 0;
+        while (i < len && p < out.length)
+        {
+            out[p] = (byte) u1(utf8Addr + 2L + i);
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /** Append one component's rendered VALUE; returns the new position. */
+    private static int putComponent(byte[] out, int p, long v, int tc)
+    {
+        if (tc == 'Z')
+        {
+            return putUtf8Bytes(out, p, v != 0L ? Magic.bytes("true") : Magic.bytes("false"));
+        }
+        if (tc == 'C')
+        {
+            if (p < out.length)
+            {
+                out[p] = (byte) (int) v;
+                p += 1;
+            }
+            return p;
+        }
+        if (tc == 'L' || tc == '[')
+        {
+            if (v == 0L)
+            {
+                return putUtf8Bytes(out, p, Magic.bytes("null"));
+            }
+            long str = callOnObject(v, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
+            if (str == 0L)
+            {
+                return putUtf8Bytes(out, p, Magic.bytes("?"));
+            }
+            long arr = VM.strBytes(str);
+            if (arr == 0L)
+            {
+                return putUtf8Bytes(out, p, Magic.bytes("?"));
+            }
+            int n = (int) Magic.load64(arr + 16L);
+            int i = 0;
+            while (i < n && p < out.length)
+            {
+                out[p] = (byte) u1(arr + 24L + i);
+                p += 1;
+                i += 1;
+            }
+            return p;
+        }
+        return putDec(out, p, v, true);                  // B S I J, and F/D by their raw bits
+    }
+
+    /** Append a plain ASCII {@code byte[]}; returns the new position. */
+    private static int putUtf8Bytes(byte[] out, int p, byte[] b)
+    {
+        int i = 0;
+        while (i < b.length && p < out.length)
+        {
+            out[p] = b[i];
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /**
+     * {@code Record.toString}: {@code Simple[a=1, b=x]}. The exact format is unspecified by
+     * {@code Record.toString()}; this is the standard rendering, and the SIMPLE name is used (the part after
+     * the last '/' or '$'), as stock does.
+     */
+    static long recordToString(long obj)
+    {
+        int reg = regOfObject(obj);
+        if (reg < 0)
+        {
+            return guestString(Magic.bytes("null"));
+        }
+        byte[] out = new byte[MAXRECSTR];
+        int p = 0;
+        long nm = clTab[reg].base + clTab[reg].nameOff;  // the binary name, as a Utf8
+        int nlen = u2(nm);
+        int start = 0;
+        int i = 0;
+        while (i < nlen)
+        {
+            int c = u1(nm + 2L + i);
+            if (c == '/' || c == '$')
+            {
+                start = i + 1;                           // keep only the simple name
+            }
+            i += 1;
+        }
+        i = start;
+        while (i < nlen && p < out.length)
+        {
+            out[p] = (byte) u1(nm + 2L + i);
+            p += 1;
+            i += 1;
+        }
+        p = putUtf8Bytes(out, p, Magic.bytes("["));
+        int n = recordComponentCount(reg);
+        int k = 0;
+        while (k < n)
+        {
+            if (k > 0)
+            {
+                p = putUtf8Bytes(out, p, Magic.bytes(", "));
+            }
+            int j = recordComponent(reg, k);
+            p = putUtf8(out, p, fldTab[j].base + fldTab[j].nameOff);
+            p = putUtf8Bytes(out, p, Magic.bytes("="));
+            p = putComponent(out, p, Magic.load64(obj + 16L + fldTab[j].slot * 8L),
+                    u1(fldTab[j].base + fldTab[j].descOff + 2L));
+            k += 1;
+        }
+        p = putUtf8Bytes(out, p, Magic.bytes("]"));
+        byte[] exact = new byte[p];
+        int q = 0;
+        while (q < p)
+        {
+            exact[q] = out[q];
+            q += 1;
+        }
+        return guestString(exact);
+    }
+
     /** A zero-length {@code Class[]} -- what a class declaring no member classes answers. */
     private static long emptyClassArray()
     {
@@ -15014,6 +15370,30 @@ public final class Loader
     // loads the captures into arg registers and tail-calls the lambda-body method. So `iface.sam()` on the
     // lambda dispatches (via the normal itable path) into the body with the captured values. Slice 1c
     // supports a zero-arg SAM (Runnable-like); the body may capture any number of values.
+
+    /**
+     * Which record method an {@code ObjectMethods} indy site implements: 1 hashCode, 2 equals, 3 toString,
+     * 0 anything else. The name is the indy's own NameAndType -- one bootstrap serves all three, so the
+     * site cannot be told apart by its bootstrap.
+     */
+    static int recordIndyKind(int idx)
+    {
+        int nat = u2(gbase + gcp[idx] + 2);             // invokedynamic.name_and_type_index
+        int off = gcp[u2(gbase + gcp[nat])];            // NameAndType.name_index -> Utf8
+        if (utf8IsStr(off, Magic.bytes("hashCode")))
+        {
+            return 1;
+        }
+        if (utf8IsStr(off, Magic.bytes("equals")))
+        {
+            return 2;
+        }
+        if (utf8IsStr(off, Magic.bytes("toString")))
+        {
+            return 3;
+        }
+        return 0;
+    }
 
     private static int indyBsmIndex(int idx)
     {

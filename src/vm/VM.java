@@ -1047,6 +1047,24 @@ public final class VM
     }
 
     /** {@code Object.getClass()} (intrinsified): the Class mirror for the object's Type (header→TIB→Type→Class). */
+    /** A record's synthesised {@code hashCode} (the ObjectMethods indy lowers to a call here). */
+    static long recordHash(long obj)
+    {
+        return Loader.recordHash(obj);
+    }
+
+    /** A record's synthesised {@code equals}. */
+    static long recordEquals(long a, long b)
+    {
+        return Loader.recordEquals(a, b);
+    }
+
+    /** A record's synthesised {@code toString}. */
+    static long recordToString(long obj)
+    {
+        return Loader.recordToString(obj);
+    }
+
     static long getClassOf(long obj)
     {
         return Loader.getClassOf(obj);
@@ -1261,6 +1279,9 @@ public final class VM
         if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
         if (resourceBytesAddr == 0L) { long u = VMNatives.resourceBytes(0L); }  // ClassLoader.resourceBytes0
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Method.annoAll0
+        if (recordHashAddr == 0L) { long u = recordHash(0L); }                   // record hashCode
+        if (recordEqualsAddr == 0L) { long u = recordEquals(0L, 0L); }           // record equals
+        if (recordToStringAddr == 0L) { long u = recordToString(0L); }           // record toString
         if (classDeclClassesAddr == 0L) { long u = VMNatives.classDeclClasses(0L); } // Class.declaredClasses0
         if (classAnnoAllAddr == 0L) { long u = VMNatives.classAnnoAll(0L); }    // Class.annoAll0
         if (classIfacesAddr == 0L) { long u = VMNatives.classIfaces(0L); }      // Class.interfaces0
@@ -2492,6 +2513,9 @@ public final class VM
     static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
     static long resourceBytesAddr;     // VMNatives.resourceBytes(J)J — ClassLoader.resourceBytes0(byte[])
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Method.annoAll0(int)
+    static long recordHashAddr;        // VM.recordHash(J)J — a record's synthesised hashCode
+    static long recordEqualsAddr;      // VM.recordEquals(JJ)J — a record's synthesised equals
+    static long recordToStringAddr;    // VM.recordToString(J)J — a record's synthesised toString
     static long classDeclClassesAddr;  // VMNatives.classDeclClasses(J)J — Class.declaredClasses0(Class)
     static long classAnnoAllAddr;      // VMNatives.classAnnoAll(J)J — Class.annoAll0(Class)
     static long classIfacesAddr;       // VMNatives.classIfaces(J)J — Class.interfaces0(Class)

@@ -292,6 +292,16 @@ final class MetalSymbols implements Symbols
     {
         return Loader.isRecordIndy(idx);
     }
+    public int recordKind(int idx)
+    {
+        return Loader.recordIndyKind(idx);
+    }
+
+    public void recordCall(CodeBuffer cb, int kind)
+    {
+        emitBl(cb, kind == 1 ? VM.recordHashAddr : kind == 2 ? VM.recordEqualsAddr : VM.recordToStringAddr);
+    }
+
     public void recordTrap(CodeBuffer cb)
     {
         emitBl(cb, VM.denylistTrapAddr);   // unsupported record ObjectMethods method — halt loudly if ever called
