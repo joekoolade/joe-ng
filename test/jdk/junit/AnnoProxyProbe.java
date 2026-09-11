@@ -244,6 +244,45 @@ public class AnnoProxyProbe
             }
         }
         System.out.println("ArrayList has List= " + (sawList ? 1 : 0) + " (want 1)");
+
+        // getMethods: PUBLIC including INHERITED, deduplicated -- what ReflectionUtils.getDefaultMethods
+        // walks. The arms that could be quietly wrong are the inherited one (a receiver-only enumeration
+        // would miss it), the dedupe (an override must appear ONCE), and the exclusions.
+        java.lang.reflect.Method[] ms = Sub.class.getMethods();
+        boolean sawInherited = false;
+        boolean sawCtor = false;
+        int toStringCount = 0;
+        for (int q = 0; q < ms.length; q++)
+        {
+            String mn = ms[q].getName();
+            if (mn.equals("toString"))
+            {
+                toStringCount += 1;
+            }
+            if (mn.equals("hashCode"))
+            {
+                sawInherited = true;          // from java.lang.Object, two hops up
+            }
+            if (mn.startsWith("<"))
+            {
+                sawCtor = true;
+            }
+        }
+        System.out.println("getMethods nonEmpty= " + (ms.length > 0 ? 1 : 0) + " (want 1)");
+        System.out.println("getMethods inherit = " + (sawInherited ? 1 : 0) + " (want 1, Object.hashCode)");
+        System.out.println("getMethods noCtor  = " + (sawCtor ? 0 : 1) + " (want 1)");
+        System.out.println("getMethods dedupe  = " + toStringCount + " (want 1, not once per class)");
+        // An INTERFACE default must be reachable through an implementing class.
+        java.lang.reflect.Method[] am = java.util.ArrayList.class.getMethods();
+        boolean sawForEach = false;
+        for (int q = 0; q < am.length; q++)
+        {
+            if (am[q].getName().equals("forEach"))
+            {
+                sawForEach = true;
+            }
+        }
+        System.out.println("getMethods default = " + (sawForEach ? 1 : 0) + " (want 1, Iterable.forEach)");
         System.out.println("declared on bare  = "
                 + (Bare.class.getDeclaredAnnotation(Tag.class) == null ? "null" : "NON-NULL <== BUG")
                 + " (want null)");

@@ -161,6 +161,97 @@ public final class Class<T> implements java.lang.reflect.Type
     }
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodAt}): the n-th declared method's NAME. */
+    /**
+     * Every PUBLIC method of this class: its own, those inherited from superclasses, and those reachable
+     * through its interfaces (including defaults). Deduplicated by name AND descriptor.
+     *
+     * <p>The key has to be built HERE rather than from a {@link java.lang.reflect.Method}, because a Method
+     * keeps only the first character of each parameter type -- enough to marshal a call, not enough to tell
+     * two overloads apart. The enumeration natives hand back the full descriptor, so the dedupe happens
+     * before the Method is ever constructed.
+     *
+     * <p>A subclass method wins over the superclass method it overrides simply by being seen first, which is
+     * what walking the chain most-derived-first gives.
+     *
+     * <p>Constructors and {@code <clinit>} are excluded, as stock does -- the VM's method enumeration is the
+     * registry's view and lists them, so they are filtered by name.
+     */
+    public java.lang.reflect.Method[] getMethods()
+    {
+        java.util.ArrayList<String> seen = new java.util.ArrayList<String>();
+        java.util.ArrayList<java.lang.reflect.Method> out =
+                new java.util.ArrayList<java.lang.reflect.Method>();
+        Class<?> c = this;
+        while (c != null)
+        {
+            collectPublicMethods(c, seen, out);
+            c = c.getSuperclass();
+        }
+        collectInterfaceMethods(this, seen, out);
+        java.lang.reflect.Method[] arr = new java.lang.reflect.Method[out.size()];
+        int i = 0;
+        while (i < arr.length)
+        {
+            arr[i] = out.get(i);
+            i += 1;
+        }
+        return arr;
+    }
+
+    /** Append {@code c}'s own public methods that no more-derived class has already contributed. */
+    private static void collectPublicMethods(Class<?> c, java.util.ArrayList<String> seen,
+            java.util.ArrayList<java.lang.reflect.Method> out)
+    {
+        int n = (int) declaredMethodCount0(c);
+        int i = 0;
+        while (i < n)
+        {
+            String nm = declaredMethodAt0(c, i);
+            String ds = declaredMethodDescAt0(c, i);
+            if (nm != null && ds != null && nm.length() > 0 && nm.charAt(0) != '<')
+            {
+                String key = nm + ds;
+                if (!seen.contains(key))
+                {
+                    try
+                    {
+                        java.lang.reflect.Method m = java.lang.reflect.Method.resolve(c, nm, ds);
+                        if (java.lang.reflect.Modifier.isPublic(m.getModifiers()))
+                        {
+                            seen.add(key);
+                            out.add(m);
+                        }
+                    }
+                    catch (NoSuchMethodException e)
+                    {
+                        // a declared method the VM cannot resolve (a native with no helper) -- skip it, as
+                        // getDeclaredMethods does
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /** Append the public methods of {@code c}'s interfaces, transitively -- where DEFAULT methods live. */
+    private static void collectInterfaceMethods(Class<?> c, java.util.ArrayList<String> seen,
+            java.util.ArrayList<java.lang.reflect.Method> out)
+    {
+        Class<?> k = c;
+        while (k != null)
+        {
+            Class<?>[] ifs = k.getInterfaces();
+            int i = 0;
+            while (i < ifs.length)
+            {
+                collectPublicMethods(ifs[i], seen, out);
+                collectInterfaceMethods(ifs[i], seen, out);   // super-interfaces
+                i += 1;
+            }
+            k = k.getSuperclass();
+        }
+    }
+
     private static native String declaredMethodAt0(Class<?> c, int want);
 
     /** VM native ({@code Loader.nativeBuf} -> {@code VM.declaredMethodDescAt}): the n-th method's DESCRIPTOR. */
