@@ -76,6 +76,57 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **RECORDS ON THE METAL -- `hashCode`/`equals`/`toString` SYNTHESISED from `ObjectMethods`, and the launcher
+  is into METHOD-LEVEL discovery (2026-09-11, PI-VALIDATED).** `DeclaredMethodSelector.hashCode` trapped while
+  Jupiter put a method selector into a `LinkedHashSet`; `javap` settles it in one line -- the body is a single
+  `invokedynamic` and the class is a RECORD, bootstrapped by `java/lang/runtime/ObjectMethods`.
+  - **NOT AN UNRECOGNISED FORM -- the VM already identified it and deliberately halted.** `isRecordIndy`
+    matched the bootstrap class and `lowerRecordTrap` emitted a halting trap, whose comment stated the premise
+    this retires: *"they are essentially never actually invoked in the paths we run"*. A record used as a SET
+    ELEMENT is hashed and compared on the very first `add`.
+  - **SYNTHESISED, NOT BOOTSTRAPPED**, the same choice already made for a lambda: `ObjectMethods.bootstrap`
+    returns a `MethodHandle`, machinery this VM denies, so an overlay of it could not work whatever its shape.
+  - **THE COMPONENTS ARE THE CLASS'S OWN INSTANCE FIELDS, and that is a GUARANTEE:** JLS 8.10.3 forbids a
+    record declaring any instance field other than the private final ones corresponding to its components. So
+    no filtering, declaration order IS component order, and -- the reason this increment stayed small --
+    **NOTHING PER-SITE IS BAKED**: no descriptor table, no new GC root, no compile-time resolution. Everything
+    is read from the object at call time through the instance-field registry.
+  - **WHAT IS SPECIFIED DECIDED HOW EXACT EACH HAD TO BE, and the three differ.** `equals` is fully specified
+    (same record type, every component equal) and is exact. `Record.hashCode` explicitly leaves its ALGORITHM
+    unspecified, so it need only be a consistent function of the component hashes. `Record.toString`'s format
+    is likewise unspecified; this is the standard rendering. **Checking which of the three were pinned was the
+    design step** -- it is what made hashCode cheap and kept equals honest.
+  - **A component's own `hashCode`/`equals`/`toString` is reached by resolving against THAT object's class**,
+    which is safe only because those three vtable slots are now MINTED for every class ([[baked-dispatch-vtable-holes]],
+    PR #237) -- before that fix a pruned slot there was a wild branch, not a call.
+  - **TWO PROBE ARMS EXIST TO CATCH AN IMPLEMENTATION THAT LOOKS RIGHT:** a DIFFERENT record type with
+    identical components must not be equal (an `equals` that compares components without checking the class
+    passes every other arm), and varying each component ALONE must move the hash (a hash reading only the
+    first component passes "equal records hash equally"). Plus the launcher's real shape -- a record in a
+    HashSet, where `add` calls hashCode then equals.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no `LINK FAILED` for the three new helpers (the
+    boot-time force-compile calls all three before `launch`, so reaching `generation 12` IS that check), no
+    parity DIFF, reflective demos exact, `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion
+    61ms, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+    **The suite instantiates no record**, so the boot claims NO REGRESSION and proves the helpers link;
+    `AnnoProxyProbe` proves the feature -- every arm exact first run, `rec toString = Pt[x=7, name=a]`.
+    `metal junit: ran 44, failures 0`; host tests unchanged incl. `compiler: 37 checks` (the writer never
+    lowers an indy, so the self-hosting fixpoint cannot move).
+
+- **`getDeclaredClasses` CONFIRMED ON THE LAUNCHER, and `getClasses` corrected (2026-09-11, PI-VALIDATED).**
+  - **The fix cleared its blocker, proven rather than inferred:** `linkresolve java/lang/Class.getDeclaredClasses`
+    at log lines 1539 and 1555 -- resolved and CALLED twice -- where the previous run died at line 1544 with
+    `VIRTUALRESOLVE FAILED` on exactly that method. No `VIRTUALRESOLVE FAILED` anywhere in the new run.
+  - **`getClasses` walked only the DIRECT interfaces** where stock inherits member classes through
+    super-interfaces transitively. **Found by reading it against its sibling, not by a failure:**
+    `collectInterfaceMethods` recurses and this did not. Two walks over the same relation disagreeing about
+    transitivity is the half-correct-member shape this overlay keeps being bitten by.
+  - **The `StreamOpFlag` -> `EnumMap` chain ran WITHOUT the recorded NPE**, consistent with that failure being
+    specific to the SUITE's shared loader state rather than to the code.
+  - **A `LOAD_LOG` run is ~4x slower than the quiet one and bursty** -- it sat at one line count for twenty
+    minutes and was still working; measure GROWTH (bytes and lines over a fixed interval) before calling it
+    stalled. Two identical readings twenty minutes apart were misleading, not evidence.
+
 - **`Class.getDeclaredClasses` (+ `getClasses`) -- MEMBER CLASSES READ FROM `InnerClasses`, and the launcher
   reaches JUPITER'S DESCRIPTOR TREE (2026-09-11, PI-VALIDATED).** `ReflectionUtils.visitAllNestedClasses`
   trapped looking for `@Nested` test classes. Backlog 38 -> 36.
