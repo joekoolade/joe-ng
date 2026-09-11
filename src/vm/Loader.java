@@ -4495,6 +4495,14 @@ public final class Loader
                 // Denying the package moves the failure EARLIER, to Class.forName, where it is an ordinary
                 // ClassNotFoundException that the ServiceLoader overlay can skip and REPORT. A listener that
                 // can only write files cannot work here; the choice is between saying so and halting.
+                // The VINTAGE engine (JUnit 4 support) is denied, so ServiceLoader SKIPS it by name -- the
+                // same route already used for org/junit/platform/reporting/. Its VintageTestEngine runs
+                // JUnit4VersionCheck, which does `new BigDecimal(version)`, and java.math does not work here
+                // yet (see the java.math note in CLAUDE.md: its initializers are rejected, and allowing them
+                // pulls BigInteger's PARALLEL path and ForkJoin behind it). Nothing selects a JUnit 4 test on
+                // this VM, so the engine is cost without benefit -- but this is a SCOPE decision, not a
+                // statement that vintage could not work, and it is the line to delete when java.math does.
+                || utf8HasPrefix(base, off, Magic.bytes("org/junit/vintage/"))
                 || utf8HasPrefix(base, off, Magic.bytes("org/junit/platform/reporting/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/www/"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/net/ext/"))
@@ -15323,9 +15331,149 @@ public final class Loader
     }
 
     /** Allocate a mini {@code java/lang/ClassCastException} — the JIT's failed-checkcast helper. */
+    private static long cceFromTib;
+    private static long cceFromType;
+    private static long cceToType;
+
+    /** {@link VM#castOk} records a FAILING cast here so {@link #newCce} can describe it. */
+    static void noteCastFailure(long fromTib, long fromType, long toType)
+    {
+        cceFromTib = fromTib;
+        cceFromType = fromType;
+        cceToType = toType;
+    }
+
+    /**
+     * A {@code ClassCastException} that SAYS WHAT COULD NOT BE CAST TO WHAT, as stock does.
+     *
+     * <p>A bare ClassCastException names neither side, so the only way to find out is to disassemble the
+     * method and work out which {@code checkcast} it was -- which is exactly what the console launcher's
+     * failure in {@code EngineExecutionOrchestrator} cost. The names come from the pair {@code castOk}
+     * recorded on its failing path; if either is unavailable the message is simply omitted, so this can
+     * never turn a cast failure into a different failure.
+     */
     static long newCce()
     {
-        return newExc(Magic.bytes("java/lang/ClassCastException"));
+        long e = newExc(Magic.bytes("java/lang/ClassCastException"));
+        if (e != 0L && cceToType != 0L)
+        {
+            Magic.store64(e + 80L, guestString(castFailureMessage(cceFromType, cceToType)));
+        }
+        cceFromTib = 0L;
+        cceFromType = 0L;
+        cceToType = 0L;
+        return e;
+    }
+
+    /** "class a.B cannot be cast to class c.D", or null when either Type cannot be named. */
+    private static byte[] castFailureMessage(long fromType, long toType)
+    {
+        byte[] out = new byte[512];
+        int p = putUtf8Bytes(out, 0, Magic.bytes("class "));
+        p = putTypeName(out, p, fromType);
+        p = putUtf8Bytes(out, p, Magic.bytes(" cannot be cast to class "));
+        p = putTypeName(out, p, toType);
+        byte[] exact = new byte[p];
+        int q = 0;
+        while (q < p)
+        {
+            exact[q] = out[q];
+            q += 1;
+        }
+        return exact;
+    }
+
+    /**
+     * Append the name of {@code type}, or a description when it has none.
+     *
+     * <p>AN UNREGISTERED TYPE IS NOT A REASON TO GO SILENT -- it is the most interesting answer there is. A
+     * synthesised lambda or annotation object has a Type and an itable but NO class-registry entry (it has no
+     * binary name, mirroring a hidden class), so a message that bailed out on one would omit itself exactly
+     * when the cast failed for the most surprising reason.
+     */
+    private static int putTypeName(byte[] out, int p, long type)
+    {
+        if (type <= 0x1000L)
+        {
+            // No Type node. Say what was actually READ rather than guessing which kind of object it is --
+            // inferring from an absence is what produced two wrong readings of this very failure.
+            p = putUtf8Bytes(out, p, Magic.bytes("<no Type; tib="));
+            p = putHex(out, p, cceFromTib);
+            return putUtf8Bytes(out, p, Magic.bytes(">"));
+        }
+        int r = regOfType(type);
+        if (r >= 0 && clTab != null && clTab[r] != null)
+        {
+            return putDotted(out, p, clTab[r].base + clTab[r].nameOff);
+        }
+        // No binary name, so say what it SATISFIES instead: the itable directory lists the interfaces, and
+        // for a lambda that is its functional interface -- which is what distinguishes "the factory object
+        // came back unchanged" from "some other synthesised object was returned".
+        p = putUtf8Bytes(out, p, Magic.bytes("<synthesised, implements"));
+        long dir = Magic.load64(type + 16L);
+        int n = 0;
+        while (dir != 0L && n < 8)
+        {
+            long ifType = Magic.load64(dir + n * 16L);
+            if (ifType == 0L)
+            {
+                break;                                   // sentinel ends the directory
+            }
+            int ir = regOfType(ifType);
+            p = putUtf8Bytes(out, p, Magic.bytes(" "));
+            if (ir >= 0 && clTab != null && clTab[ir] != null)
+            {
+                p = putDotted(out, p, clTab[ir].base + clTab[ir].nameOff);
+            }
+            else
+            {
+                p = putUtf8Bytes(out, p, Magic.bytes("?"));
+            }
+            n += 1;
+        }
+        if (n == 0)
+        {
+            p = putUtf8Bytes(out, p, Magic.bytes(" nothing"));
+        }
+        return putUtf8Bytes(out, p, Magic.bytes(">"));
+    }
+
+    /** Append {@code v} as 0x-prefixed hex -- a measured address, for when a name is not available. */
+    private static int putHex(byte[] out, int p, long v)
+    {
+        p = putUtf8Bytes(out, p, Magic.bytes("0x"));
+        int sh = 60;
+        boolean lead = true;
+        while (sh >= 0)
+        {
+            int d = (int) ((v >>> sh) & 0xFL);
+            if (d != 0 || !lead || sh == 0)
+            {
+                lead = false;
+                if (p < out.length)
+                {
+                    out[p] = (byte) (d < 10 ? '0' + d : 'a' + d - 10);
+                    p += 1;
+                }
+            }
+            sh -= 4;
+        }
+        return p;
+    }
+
+    /** Append an internal class name with '/' rendered as '.', the form a Java programmer reads. */
+    private static int putDotted(byte[] out, int p, long utf8Addr)
+    {
+        int len = u2(utf8Addr);
+        int i = 0;
+        while (i < len && p < out.length)
+        {
+            int c = u1(utf8Addr + 2L + i);
+            out[p] = (byte) (c == '/' ? '.' : c);
+            p += 1;
+            i += 1;
+        }
+        return p;
     }
 
     /** Allocate a mini {@code java/lang/InternalError} — the fault handler's catch-all for an unexpected trap. */
@@ -15740,6 +15888,21 @@ public final class Loader
         return w;
     }
 
+    /** Names a constructor-reference target whose TIB is not built yet -- see the call site for why. */
+    private static void reportLambdaCtorNoTib(int cr)
+    {
+        Uart.write(Magic.bytes("\n  CTOR-REF TARGET HAS NO TIB (the reference would build a null-TIB object): "));
+        if (clTab != null && cr >= 0 && cr < clCount && clTab[cr] != null)
+        {
+            printNameAt(clTab[cr].base, clTab[cr].nameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<unregistered>"));
+        }
+        Uart.putc(0x0A);
+    }
+
     static long buildLambdaTib(int idx)
     {
         long ifaceType = lambdaIfaceType(idx);
@@ -15878,8 +16041,45 @@ public final class Loader
             // the object. Unlike the other thunks this makes two CALLS (Heap.alloc, <init>), so it needs a frame
             // to preserve LR and the SAM args across them. (No captures: the ctor args are all SAM args.)
             int cr = classRegByName(refClassNameOff(lambdaImplMref(idx)));    // the class being constructed
+            // THE TARGET MAY NOT BE LOADED YET, and this is the late-compile blind spot again: RTA marks a
+            // constructor reference's class instantiated at BATCH time (collectBlob's `mk == 8` arm), so a
+            // lambda in a body compiled LATER names a class nothing ever pulled. classRegByName then answers
+            // -1, and the code below indexed clTab[-1] -- baked code carries no bounds check, so it read
+            // garbage and BAKED A ZERO TIB as an immediate, with no reloc for a later batch to patch.
+            //
+            // The object then came back with a null TIB and failed a dozen frames away inside JUnit
+            // (`ClassCastException: class <no Type; tib=0x0>`), which is what made this look like a JUnit bug.
+            //
+            // Noted for the pull-and-recompile the lazy path already runs -- NOT demand-loaded here: a load
+            // parses every blob and can collect, and the code buffer being written is not reachable yet, which
+            // is why a demand-load inside this method was tried once and reverted.
+            if (cr < 0)
+            {
+                // Note it and let the retry pull it. SILENT on the first attempt: this is the EXPECTED state
+                // for any late-compiled constructor reference, and a report that fires on a run which then
+                // works is worse than none. Only a target still missing AFTER the pull is a real failure --
+                // and that one still bakes a zero TIB, so it must be said out loud.
+                notePullNeeded(refClassNameOff(lambdaImplMref(idx)) + gbase);
+                if (lzRetried)
+                {
+                    reportLambdaCtorNoTib(cr);
+                }
+                return finishLambdaClass(thunk, ifaceType, idx, nc);   // discarded by the retry
+            }
             int size = 16 + clTab[cr].fieldCount * 8;
             long ctib = clTab[cr].tib;
+            // A ZERO TIB HERE WOULD BE BAKED AS AN IMMEDIATE AND STAY ZERO FOR EVER -- there is no reloc on
+            // this store for a later batch to patch, the same trap a class literal for an unpulled class fell
+            // into. The object then comes back with a null TIB, and the first thing done with it (a checkcast,
+            // a virtual call) fails somewhere else entirely: the console launcher saw it as
+            // `ClassCastException: class <no Type; tib=0x0>` inside JUnit, a dozen frames from here.
+            //
+            // Report it by NAME rather than bake a zero. A class registered without a TIB is one whose phase B
+            // has not run yet, so this says exactly which class and when.
+            if (ctib == 0L)
+            {
+                reportLambdaCtorNoTib(cr);              // registered but phase B has not built its TIB yet
+            }
             long initBuf = lambdaImplBuf(idx);                               // its <init> buffer (cross-class ok)
             int frame = ((2 + ia + 1) & ~1) * 8;                            // LR + obj + ia args, 16-byte aligned
             Magic.store32(thunk + w * 4L, A64Enc.subImm(31, 31, frame));                 w += 1;  // sub sp, #frame

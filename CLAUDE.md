@@ -76,6 +76,62 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LATE CONSTRUCTOR REFERENCE BAKED A ZERO TIB -- and `ClassCastException` now NAMES BOTH SIDES
+  (2026-09-11, PI-VALIDATED).** The launcher died in JUnit with a bare `ClassCastException` at
+  `EngineExecutionOrchestrator.buildEngineExecutionListener`. It was not a JUnit problem.
+  - **ROOT CAUSE: RTA marks a constructor reference's target instantiated at BATCH time**
+    (`collectBlob`'s `mk == 8` arm), so `X::new` inside a body compiled LAZILY names a class nothing ever
+    pulled. `classRegByName` answered -1 and the kind-8 thunk indexed `clTab[-1]`; baked VM code carries no
+    bounds check, so it read garbage and **BAKED A ZERO TIB AS AN IMMEDIATE**, with no reloc for a later batch
+    to patch -- the same trap a class literal for an unpulled class fell into. The object came back with a
+    null TIB and failed a dozen frames away, INSIDE JUNIT.
+  - **Fixed with the proven late-resolution pattern**: `notePullNeeded` + the pull-and-recompile-once
+    `lazyCompileLocked` already runs. Deliberately NOT a demand-load inside `buildLambdaTib` -- a load parses
+    every blob and can collect, and the code buffer being written is not reachable yet, which is why that was
+    tried once before and reverted.
+  - **HALF THIS CHANGE IS DIAGNOSTICS, and that is what made it findable.** A `ClassCastException` naming
+    NEITHER side means the only way to identify the cast is to disassemble the method. It now names both, as
+    stock does -- and the version that actually solved it prints the MEASURED word:
+    `class <no Type; tib=0x0> cannot be cast to ...` named the mechanism in ONE read.
+  - **TWO SELF-INFLICTED DETOURS, both the same mistake:** the message first went SILENT when a side had no
+    registry entry (the most interesting case), then FAULTED on a raw array (whose TIB slot holds a small TAG,
+    not a pointer, and must not be dereferenced). **Every wrong reading in this arc came from inferring off
+    what the report did NOT say.** Print what you measured.
+  - **THE PROBE HAD TO REPRODUCE THE CONDITION, NOT THE SHAPE.** A ctor-reference factory behind an erased
+    generic return -- the launcher's exact shape -- PASSES, because its target is in the batch.
+    `demo/CtorRefLate` is reached only REFLECTIVELY, so RTA never walks it. **NEGATIVE CONTROL: with only the
+    `cr < 0` arm reverted, that demo CRASHES.**
+  - **AN INSTRUMENT THAT FIRES ON A RUN THAT THEN WORKS IS WORSE THAN NONE, and I broke that rule and fixed
+    it:** the ctor-ref report fired 3x on a launcher run that carried on fine. An unpulled target is the
+    EXPECTED state for any late-compiled constructor reference; only one still missing AFTER the retry is a
+    failure. Silent on the first attempt now.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no ctor-ref report, no parity DIFF, no
+    `LINK FAILED`, no `MIRROR CACHE FULL`; every lambda/ctor-ref arm exact (`apply(5)=105`, deep lambda
+    168/1275/13, `lambda thread ran = 42`, `reflective lambda thread = 7`); **62 collections on cold DRAM**
+    with `churnMB=625 live=32 intact=32` -- the real test for a fix that discards a compiled body and
+    recompiles. `metal junit: ran 44, failures 0`; host tests unchanged incl. `compiler: 37 checks`.
+  - **THE VINTAGE ENGINE IS DENIED** so `ServiceLoader` skips it by name (`joe-ng: service provider not
+    loadable here, skipped: org.junit.vintage.engine.VintageTestEngine`). Its `JUnit4VersionCheck` does
+    `new BigDecimal(version)` and **java.math does not work here** -- a SCOPE decision, and the comment marks
+    the line to delete once it does.
+  - **WHY java.math WAS NOT FIXED, recorded because the finding is reusable.** BigInteger/BigDecimal/
+    MutableBigInteger are the HexFormat shape (assertion idiom PLUS real init), neither `clinitBlocked` nor
+    seeded, so a rejection leaves their statics null for ever. Allowlisting all three WORKS and immediately
+    exposes the next layer: initialising BigInteger compiles `squareToomCook3`, which REFERENCES
+    `BigInteger$RecursiveOp`, so the clinit dependency drain initialises it -- and that calls
+    `ForkJoinPool.getCommonPoolParallelism()`. **Regardless of operand size.** Pulling ForkJoin in behind
+    BigInteger is the "an initializer pulled a whole subsystem in" trade the broad clinit rule was rejected
+    for. Denying RecursiveOp then surfaced `BigDecimal.<clinit>` ITSELF reaching Toom-Cook squaring, which
+    needs ~216-int operands it has no reason to build and which the host runs fine -- unexplained. **Backed
+    out rather than committed half-working: an allowlist that opens a path into a trap is a landmine.**
+  - **LAUNCHER: into EXECUTION SETUP.** Past discovery entirely; the ClassCastException is gone and it now
+    stops at **`ConcurrentLinkedQueue$Node.<init>`** with `TRAPWIRE index=-1` and an EMPTY callee -- a
+    late-resolution failure, not a denial.
+  - **ALSO DIAGNOSED, QUEUED:** `DisplayNameUtils.<clinit>` `ldc`s FOUR OTHER classes
+    (`DisplayNameGenerator$Standard/$Simple/$ReplaceUnderscores/$IndicativeSentences`), so neither the
+    self-class-literal rule nor the bake-domain rule reaches it -- the `DefaultJupiterConfiguration` shape.
+    Its statics are read unguarded when a test name is rendered.
+
 - **`Annotation.annotationType()`, and the CLASS-MIRROR CACHE WAS OVERFLOWING AT 256 (2026-09-11,
   PI-VALIDATED).** Two defects from one `LOAD_LOG` launcher boot; the second was spotted by the USER in a log
   line I had read past while chasing the first.
