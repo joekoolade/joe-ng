@@ -66,6 +66,42 @@ public class AnnoProxyProbe
     {
     }
 
+    /** Member classes of several access levels, plus a LOCAL and an ANONYMOUS class that must NOT appear:
+     *  JVMS 4.7.6 gives both a zero outer_class_info_index, which is the field the filter keys on. */
+    public static class Outer
+    {
+        public static class PubMember
+        {
+        }
+
+        private static class PrivMember
+        {
+        }
+
+        interface IfaceMember
+        {
+        }
+
+        static Object makeLocalAndAnon()
+        {
+            class LocalOnly
+            {
+            }
+            Runnable anon = new Runnable()
+            {
+                public void run()
+                {
+                }
+            };
+            return new Object[] { new LocalOnly(), anon };
+        }
+    }
+
+    /** Declares no member class at all -- the arm that catches an enumeration inventing entries. */
+    static class NoMembers
+    {
+    }
+
     @Tag(value = "hello", count = 7, names = { "a", "b", "c" })
     public void tagged()
     {
@@ -352,6 +388,64 @@ public class AnnoProxyProbe
         System.out.println("m.dflt size       = " + (dd == null ? -1 : dd.size()) + " (want 9, written)");
         System.out.println("m.dflt name       = " + (dd == null ? "NULL" : dd.name()) + " (want anon)");
         System.out.println("m.dflt tags       = " + (dd == null ? -1 : dd.tags().length) + " (want 2)");
+
+        // ---- Class.getDeclaredClasses / getClasses ----
+        // The blocker: ReflectionUtils.visitAllNestedClasses needs the MEMBER classes of a class.
+        Outer.makeLocalAndAnon();                        // force the local+anon classes to exist
+        Class<?>[] dc = Outer.class.getDeclaredClasses();
+        boolean pub = false;
+        boolean priv = false;
+        boolean ifc = false;
+        boolean localOrAnon = false;
+        for (int i = 0; i < dc.length; i++)
+        {
+            String nm = dc[i].getName();
+            if (nm.endsWith("$PubMember")) { pub = true; }
+            if (nm.endsWith("$PrivMember")) { priv = true; }
+            if (nm.endsWith("$IfaceMember")) { ifc = true; }
+            int dollar = nm.lastIndexOf('$');
+            if (dollar >= 0 && dollar + 1 < nm.length() && nm.charAt(dollar + 1) >= '0' && nm.charAt(dollar + 1) <= '9')
+            {
+                localOrAnon = true;                      // Outer$1 / Outer$1LocalOnly
+            }
+        }
+        System.out.println("declClasses len   = " + dc.length + " (want 3)");
+        System.out.println("declClasses pub   = " + (pub ? 1 : 0) + " (want 1)");
+        System.out.println("declClasses priv  = " + (priv ? 1 : 0) + " (want 1, private IS declared)");
+        System.out.println("declClasses iface = " + (ifc ? 1 : 0) + " (want 1)");
+        System.out.println("declClasses noLoc = " + (localOrAnon ? 0 : 1)
+                + " (want 1, local/anonymous excluded)");
+
+        // A class declaring none must answer EMPTY, never null and never someone else's members.
+        Class<?>[] nm2 = NoMembers.class.getDeclaredClasses();
+        System.out.println("declClasses empty = " + (nm2 != null && nm2.length == 0 ? 1 : 0) + " (want 1)");
+
+        // A NESTED class must not report its SIBLINGS: its own InnerClasses table lists them all, so this is
+        // what proves the outer_class_info_index filter is doing the work rather than the table order.
+        System.out.println("nested sees none  = " + (Outer.PubMember.class.getDeclaredClasses().length == 0
+                ? 1 : 0) + " (want 1)");
+
+        // Mirrors are the SAME objects the rest of the VM uses.
+        boolean ident = false;
+        for (int i = 0; i < dc.length; i++)
+        {
+            if (dc[i] == Outer.PubMember.class) { ident = true; }
+        }
+        System.out.println("declClasses ident = " + (ident ? 1 : 0) + " (want 1)");
+        System.out.println("declClasses fresh = " + (Outer.class.getDeclaredClasses() != dc ? 1 : 0)
+                + " (want 1)");
+
+        // getClasses: PUBLIC members only.
+        Class<?>[] gc = Outer.class.getClasses();
+        boolean gpub = false;
+        boolean gpriv = false;
+        for (int i = 0; i < gc.length; i++)
+        {
+            if (gc[i].getName().endsWith("$PubMember")) { gpub = true; }
+            if (gc[i].getName().endsWith("$PrivMember")) { gpriv = true; }
+        }
+        System.out.println("getClasses pub    = " + (gpub ? 1 : 0) + " (want 1)");
+        System.out.println("getClasses noPriv = " + (gpriv ? 0 : 1) + " (want 1)");
 
         System.out.println("[probe done]");
     }

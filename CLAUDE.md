@@ -76,6 +76,47 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getDeclaredClasses` (+ `getClasses`) -- MEMBER CLASSES READ FROM `InnerClasses`, and the launcher
+  reaches JUPITER'S DESCRIPTOR TREE (2026-09-11, PI-VALIDATED).** `ReflectionUtils.visitAllNestedClasses`
+  trapped looking for `@Nested` test classes. Backlog 38 -> 36.
+  - **NAMED BY A `LOAD_LOG` BOOT, and the resolver's work is visible in it:** the late-virtual tier walks
+    `Class`'s chain (`java/lang/Object`) then its interfaces (`java/lang/reflect/Type`) before reporting
+    `VIRTUALRESOLVE FAILED java/lang/Class.getDeclaredClasses()[Ljava/lang/Class;`. It surfaces as a
+    `DENYLIST TRAP` with an **EMPTY callee and `TRAPWIRE index=-1`** -- the known shape for a LATE-RESOLUTION
+    failure rather than a denied class.
+  - **READ FROM THE `InnerClasses` ATTRIBUTE (JVMS 4.7.6), NOT THE BINARY NAME.** The nesting PREDICATES on
+    `Class` do use the name and legitimately: they ask "is THIS class a member", which `Outer$Inner` answers.
+    This asks the REVERSE -- "which classes are members of this one" -- and no name answers that without
+    scanning the whole classDir on a javac convention the spec does not mandate.
+  - **THE `outer_class_info_index` FILTER IS THE WHOLE CORRECTNESS ARGUMENT.** A class's own `InnerClasses`
+    table lists every nested class it MENTIONS -- itself when nested, and others' nested classes it merely
+    references -- so "declared by me" means the entry whose outer names this class. That filter also excludes
+    LOCAL and ANONYMOUS classes for free, which stock excludes too: JVMS 4.7.6 requires a ZERO outer index for
+    both, and a zero `inner_name_index` for an anonymous class.
+  - **IT DOES NOT INITIALIZE.** Obtaining a mirror is not one of JVMS 5.5's active uses -- `forName`
+    initializes because the specification says so, `getDeclaredClasses` does not. Running the initializer of
+    every nested class a caller merely LOOKS at is the "an initializer pulled a whole subsystem in" hazard that
+    made the broad clinit rule untenable.
+  - **TWO PASSES OVER ABSOLUTE ADDRESSES**, for `classAnnotationsAll`'s reason: pass 2 RESOLVES, a resolve may
+    demand-load, and a load re-parses a blob and moves the `gcp` cursor pass 1 reads.
+  - **`getClasses` LANDED BESIDE IT** though nothing reached calls it: a member a name-winning overlay does not
+    declare CEASES TO EXIST, and shipping half a pair is how that trap has cost a boot ten times.
+  - **THE ARM THAT DOES THE REAL WORK IS `nested sees none`:** a nested class's OWN `InnerClasses` table lists
+    all its siblings, so a nested class reporting zero members is what proves the outer filter rather than
+    table order. Plus `noLoc = 1` (local/anonymous excluded), private members present, `ident`/`fresh`.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite):** no parity DIFF (Class gained two virtuals), no
+    `LINK FAILED`, and **no `MEMBER CLASS NOT LOADED`** -- the new report checked against a PASSING boot.
+    `ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK.
+    **The suite calls neither method**, so the boot claims NO REGRESSION; `AnnoProxyProbe` proves the feature.
+    Also `metal junit: ran 44, failures 0`, host tests unchanged incl. `compiler: 37 checks`.
+  - **LAUNCHER, from the same `LOAD_LOG` boot: INTO JUPITER'S `ClassBasedTestDescriptor`** -- resolving
+    `@BeforeAll`/`@AfterAll`/`@BeforeEach`/`@AfterEach` in turn, with `ConditionEvaluator` and
+    `InterceptingExecutableInvoker` in the closure, and the previous increments' `Class.getDeclaredAnnotations`
+    /`getAnnotations` appearing as `linkresolve` lines driven by the real engine rather than a probe.
+  - **`LOAD_LOG` DOES NOT REVEAL A HIDDEN FAILURE -- failures are NEVER gated.** What it buys is what the VM
+    was DOING when a quiet run goes silent. A quiet run stalling at N lines is not a suppressed report.
+
 - **`Method.getDeclaredAnnotation` + BOTH ARRAY FORMS -- `findAnnotation`'s whole element surface, taken in
   ONE increment (2026-09-11, PI-VALIDATED).** The Method-level sibling of what `Class` gained two increments
   ago, from the same recursive `AnnotationUtils.findAnnotation`, now reached with a METHOD as the element.

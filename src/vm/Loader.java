@@ -8629,6 +8629,7 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getName0")))          { return VM.classNameAddr; }     // (Class)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoGet0")))          { return VM.classAnnoGetAddr; }  // (Class,byte[]) -> instance
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.classAnnoAllAddr; }   // (Class)[Annotation
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredClasses0")))  { return VM.classDeclClassesAddr; } // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("interfaces0")))       { return VM.classIfacesAddr; }   // (Class)[Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("forName0")))          { return VM.forNameAddr; }       // (byte[])Class
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("classModifiers0")))   { return VM.classModifiersAddr; } // (Class)I
@@ -13653,6 +13654,192 @@ public final class Loader
             Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
             j += 1;
         }
+        return arr;
+    }
+
+    /** Cap on member classes enumerated per class -- fixed so the two passes below stay on plain locals. */
+    private static final int MAXDECLCLASS = 64;
+
+    /**
+     * {@code Class.declaredClasses0}: the MEMBER classes this class declares, as a fresh {@code Class[]}.
+     * Never 0 for a registered class; one that declares none answers a zero-length array.
+     *
+     * <p>Read from the {@code InnerClasses} attribute (JVMS 4.7.6), which is where the relationship is
+     * actually written down -- NOT from the binary name. The nesting PREDICATES on {@code Class} do use the
+     * name, and can: they ask "is THIS class a member", which {@code Outer$Inner} answers. This asks the
+     * reverse question, "which classes are members of this one", and a name cannot answer it without scanning
+     * the whole classDir and assuming javac's naming, which the spec does not mandate.
+     *
+     * <p>A class's own {@code InnerClasses} table lists every nested class it MENTIONS -- including itself
+     * when it is nested, and others' nested classes it merely references -- so filtering on
+     * {@code outer_class_info_index} naming THIS class is what makes the answer "declared by me". That
+     * filter also excludes local and anonymous classes for free, which stock excludes too: JVMS 4.7.6
+     * requires {@code outer_class_info_index} to be ZERO for both, and {@code inner_name_index} to be zero
+     * for an anonymous class. Both are checked.
+     *
+     * <p>TWO PASSES OVER ABSOLUTE ADDRESSES, for the reason {@link #classAnnotationsAll} records: pass 2
+     * RESOLVES, a resolve may demand-load, and a load re-parses a blob and moves the {@code gcp} cursor that
+     * pass 1 reads. Blob addresses survive that; parse state does not.
+     *
+     * <p>A member class that cannot be loaded is OMITTED and named on the console, rather than left as a null
+     * element -- a null reads to the caller as a class that exists but is broken.
+     */
+    static long classDeclaredClasses(long mirror)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;                                  // boot force-compile guard passes 0; allocates nothing
+        }
+        int reg = regOfType(Magic.load64(mirror + 16L));
+        if (reg < 0)
+        {
+            return emptyClassArray();
+        }
+        long base = clTab[reg].base;
+        long ap = classAttrsPos(base);
+        if (ap == 0L)
+        {
+            return emptyClassArray();
+        }
+        long lp = innerClassesPos(base, ap + 2L, u2(ap));
+        if (lp == 0L)
+        {
+            return emptyClassArray();                   // no InnerClasses attribute: declares no member class
+        }
+        int thisIdx = u2(base + gAfterCp + 2);          // this_class, per the ClassReader.afterCp layout
+        if (thisIdx == 0)
+        {
+            return emptyClassArray();
+        }
+        int thisNameOff = gcp[u2(base + gcp[thisIdx])]; // CONSTANT_Class -> name_index -> Utf8
+        long[] nameAbs = new long[MAXDECLCLASS];
+        int n = u2(lp);
+        long p = lp + 2L;
+        int found = 0;
+        int i = 0;
+        while (i < n && found < MAXDECLCLASS)            // PASS 1: addresses only, nothing resolved
+        {
+            int innerIdx = u2(p);
+            int outerIdx = u2(p + 2);
+            int simpleIdx = u2(p + 4);
+            if (innerIdx != 0 && outerIdx != 0 && simpleIdx != 0)
+            {
+                int outerNameOff = gcp[u2(base + gcp[outerIdx])];
+                if (utf8EqAt(base, outerNameOff, base, thisNameOff))
+                {
+                    nameAbs[found] = base + gcp[u2(base + gcp[innerIdx])];
+                    found += 1;
+                }
+            }
+            p += 8;                                      // inner, outer, simple name, access flags
+            i += 1;
+        }
+        long[] mirrors = new long[found];                // PASS 2: resolve, which may demand-load
+        int built = 0;
+        int k = 0;
+        while (k < found)
+        {
+            long m = mirrorForNameAt(nameAbs[k]);
+            if (m != 0L)
+            {
+                mirrors[built] = m;
+                built += 1;
+            }
+            k += 1;
+        }
+        long arr = Heap.allocArray(built, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(classMirrorTypeAddr()));
+        int j = 0;
+        while (j < built)
+        {
+            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, mirrors[j]);
+            j += 1;
+        }
+        return arr;
+    }
+
+    /**
+     * The mirror for the class whose internal name is the Utf8 at {@code utf8Addr}, demand-loading it if
+     * needed, or 0 when it cannot be loaded (denied, or absent from the classDir).
+     *
+     * <p>It does NOT initialize. Obtaining a mirror is not one of JVMS 5.5's active uses -- {@code forName}
+     * initializes because the specification says so, and {@code getDeclaredClasses} does not. Running the
+     * initializer of every nested class a caller merely LOOKS at would be both wrong and, on this VM,
+     * expensive: it is exactly the "an initializer pulled a whole subsystem in" hazard.
+     */
+    private static long mirrorForNameAt(long utf8Addr)
+    {
+        int len = u2(utf8Addr);
+        if (len <= 0 || len > 4096)
+        {
+            return 0L;
+        }
+        byte[] name = new byte[len];
+        int i = 0;
+        while (i < len)
+        {
+            name[i] = (byte) u1(utf8Addr + 2 + i);
+            i += 1;
+        }
+        int ci = classIndexByName(name);
+        if (ci >= 0)
+        {
+            return classMirror(clTab[ci].type);
+        }
+        if (isDenylisted(utf8Blob(name), 0))
+        {
+            reportNestedNotLoaded(name);
+            return 0L;
+        }
+        long type = loadClassIncremental(name);
+        if (type == 0L)
+        {
+            reportNestedNotLoaded(name);
+            return 0L;
+        }
+        return classMirror(type);
+    }
+
+    /** Names a member class that could not be loaded, so an omission from getDeclaredClasses is never silent. */
+    private static void reportNestedNotLoaded(byte[] name)
+    {
+        Uart.write(Magic.bytes("\n  MEMBER CLASS NOT LOADED (omitted from getDeclaredClasses): "));
+        Uart.write(name);
+        Uart.write(Magic.bytes("\n"));
+    }
+
+    /**
+     * Position of the {@code InnerClasses} list ({@code u2 number_of_classes} first), or 0 if absent.
+     *
+     * <p>{@link #innerAccessOf} scans the same attribute, but asks the opposite question -- "what are THIS
+     * class's own inner-class access flags", keyed on {@code inner_class_info_index} -- and works off the
+     * current parse state rather than a {@code base}. The two are different queries over one table, not
+     * redundant copies.
+     */
+    private static long innerClassesPos(long base, long p, int attrs)
+    {
+        int a = 0;
+        while (a < attrs)
+        {
+            int anIdx = u2(p);
+            p += 2;
+            int alen = u4(p);
+            p += 4;
+            if (utf8IsAtBase(base, gcp[anIdx], Magic.bytes("InnerClasses")))
+            {
+                return p;
+            }
+            p += alen;
+            a += 1;
+        }
+        return 0L;
+    }
+
+    /** A zero-length {@code Class[]} -- what a class declaring no member classes answers. */
+    private static long emptyClassArray()
+    {
+        long arr = Heap.allocArray(0, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(classMirrorTypeAddr()));
         return arr;
     }
 
