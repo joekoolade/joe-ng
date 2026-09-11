@@ -47,5 +47,23 @@ public final class MethodHandles
         {
             return c;
         }
+
+        /**
+         * Bind a VarHandle to an instance field BY NAME, the same thing {@code MhUtil.findVarHandle} does.
+         *
+         * <p>Declared on Lookup itself because java.util.concurrent calls it DIRECTLY --
+         * {@code ConcurrentLinkedQueue.<clinit>} does {@code l.findVarHandle(CLQ.class, "head", Node.class)}
+         * -- whereas {@code java/net/Socket} reaches the same binding through MhUtil. Without it the
+         * initializer traps, every handle stays null, and the first {@code offer()} NPEs in
+         * {@code Node.<init>}, which is where the console launcher stopped.
+         *
+         * <p>The receiver and type Classes are IGNORED, as they are in MhUtil: this shim resolves the field's
+         * offset from the TARGET OBJECT's class at access time (see the VarHandle overlay), so the declaring
+         * class is not needed here and the field type is carried by the accessor that is called.
+         */
+        public VarHandle findVarHandle(Class<?> recv, String name, Class<?> type)
+        {
+            return VarHandle.ofField(name.getBytes());
+        }
     }
 }
