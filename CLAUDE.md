@@ -33,16 +33,24 @@ the standing rules and current state so we don't re-litigate them each session.
      that objection is gone. The old measurements were correct about the VM as it was, not about this one.
 
 3. **A `guestsrc/` OVERLAY STARTS FROM THE JDK 26 SOURCE CLASS**, not from a hand-written minimum.
-   - Source: `/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home/lib/src.zip` (JDK 26.0.1,
-     3395 `java.base` files). **The seed JDK on PATH IS 26.0.1** (`jenv`; note `/usr/libexec/java_home` does
-     not list Homebrew JDKs), so an overlay taken from this zip matches the java.base the writer bakes --
-     field layouts, signatures and `jdk.internal.*` all agree by construction.
+   - **Source: `/Users/joe/git/jdk/src` -- a FULL OpenJDK tree at feature version 26** (3301 `java.base`
+     java files). Preferred over the JDK's `lib/src.zip` because it also carries the **native C sources**,
+     which is what makes the stub decisions below answerable by READING instead of guessing.
+   - **The seed JDK on PATH IS 26.0.1** (`jenv`; note `/usr/libexec/java_home` does NOT list Homebrew JDKs,
+     so it looks like only 17/11/8/7 are installed). Seed and source therefore agree, and an overlay taken
+     from this tree matches the java.base the writer bakes -- field layouts, signatures and `jdk.internal.*`
+     all agree by construction.
+   - **Take the RIGHT PLATFORM VARIANT.** The tree is `share/` + `unix/` + `macosx/` + `linux/` + `aix/` +
+     `windows/`; a class can exist in more than one (`java/io/UnixFileSystem.java` is under `unix/classes`,
+     not `share/classes`). Copying the wrong one is a silent mismatch with the baked class.
    - **Natives that are not implemented are STUBBED, and a stub THROWS rather than answering.** A stub that
      returns a plausible value is indistinguishable from a working one; a throw names the class and method
      the moment it is reached, which turns "implement everything" into a worklist the program itself writes.
-   - **A void native may be EMPTY only where doing nothing is the CORRECT semantics here** (`registerNatives`,
-     `initIDs` on a VM with no OS beneath it), and that judgement is recorded at the stub. Empty-by-default is
-     the same silence rule 2 exists to remove.
+   - **A void native may be EMPTY only where doing nothing is the CORRECT semantics here, and the C source is
+     how that is DECIDED rather than assumed.** Worked example: `UnixFileSystem.initIDs`
+     (`unix/native/libjava/UnixFileSystem_md.c`) caches a JNI `fieldID` for `File.path` and has no effect
+     outside JNI -- so on a VM with no JNI, empty is PROVABLY right. Empty-by-default, without reading the
+     native, is the same silence rule 2 exists to remove.
    - **This supersedes "guestsrc is only for classes that need natives."** That rule existed to stop overlays
      accumulating as minimal hand-written shells that silently drop stock members -- the trap that has cost
      ELEVEN debugging sessions. Starting from the real source removes the cause rather than the symptom.
