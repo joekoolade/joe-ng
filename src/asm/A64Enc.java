@@ -385,6 +385,23 @@ public final class A64Enc
     {
         return 0x8800_FC00 | (rs << 16) | (rn << 5) | rt;
     }
+    /**
+     * {@code LDAXR Xt, [Xn]} — load-acquire exclusive (64-bit).
+     *
+     * <p>The 64-bit sibling of {@link #ldaxrw}: identical encoding with the size field (bits 31-30) 11 rather
+     * than 10, i.e. the top nibble 0xC rather than 0x8. Needed for a compare-and-swap over a REFERENCE or a
+     * long -- joe-ng's refs are 8-byte pointers, so the 32-bit pair that serves {@code Magic.spinLock} cannot
+     * carry one.
+     */
+    public static int ldaxr(int rt, int rn)
+    {
+        return 0xC85F_FC00 | (rn << 5) | rt;
+    }
+    /** {@code STLXR Ws, Xt, [Xn]} — store-release exclusive (64-bit); Ws = 0 on success. */
+    public static int stlxr(int rs, int rt, int rn)
+    {
+        return 0xC800_FC00 | (rs << 16) | (rn << 5) | rt;
+    }
     /** {@code STLR Wt, [Xn]} — store-release (32-bit); releases a spinlock. */
     public static int stlrw(int rt, int rn)
     {

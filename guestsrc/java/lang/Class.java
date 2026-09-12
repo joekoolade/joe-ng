@@ -16,6 +16,21 @@ public final class Class<T> implements java.lang.reflect.Type
 {
     private long typeAddr;      // the VM Type node this Class mirrors (set by the VM at materialisation)
 
+    /**
+     * Per-Class map of {@link ClassValue} entries, declared exactly as JDK 26 does
+     * ({@code transient ClassValue.ClassValueMap classValueMap;}, Class.java:3717).
+     *
+     * <p>{@code ClassValue.get} reads and writes this field on the Class it is keyed by; without it the
+     * access resolved NOWHERE and the VM aliased it to SLOT 0 -- i.e. it read and wrote {@code typeAddr},
+     * the Type pointer every Class native dereferences. The loader said so
+     * ({@code UNRESOLVED FIELD (aliases slot 0): java/lang/Class.classValueMap}) and the corruption surfaced
+     * as an NPE inside the VM's own dispatch resolver, a long way from here.
+     *
+     * <p>ADDING IT REQUIRED WIDENING THE MIRROR: {@code Loader.classMirror} allocates Class objects itself,
+     * and its size was header(16) + one field. A declaration without that change writes past the object.
+     */
+    transient ClassValue.ClassValueMap classValueMap;
+
     private Class()
     {
     }
@@ -330,6 +345,26 @@ public final class Class<T> implements java.lang.reflect.Type
     public boolean isEnum()
     {
         return (getModifiers() & 0x4000) != 0;
+    }
+
+    /**
+     * Is this a record class? Answered by its SUPERCLASS being {@code java.lang.Record}, which is the check
+     * stock makes first (Class.java:3386) before its intrinsified fast path.
+     *
+     * <p>The FINAL-modifier and {@code isRecord0()} halves of stock's test are deliberately not reproduced:
+     * the superclass check is decisive on its own here, because {@code java.lang.Record} is abstract and the
+     * compiler is the only thing that may extend it -- JLS 8.10 forbids a class declaring
+     * {@code extends Record} directly. Stock's own comment says as much: "this superclass and final modifier
+     * check is not strictly necessary".
+     *
+     * <p>Reached from {@code java/io/ObjectStreamClass.<init>}, which is how serialization describes any
+     * class at all; without it that constructor resolved nowhere and surfaced as a trap with an EMPTY callee
+     * and {@code TRAPWIRE index=-1} -- the signature of a LATE-RESOLUTION failure rather than a denial.
+     */
+    public boolean isRecord()
+    {
+        Class<?> sup = getSuperclass();
+        return sup != null && "java.lang.Record".equals(sup.getName());
     }
 
     /**

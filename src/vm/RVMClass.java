@@ -18,10 +18,16 @@ final class RVMClass
     int     vtCount;     // flattened vtable size (for subclass vtable copy)
     int     vtStart;     // start index of its slots in the vt registry
     int     superReg;    // superclass registry index (-1 = none), for the full-chain itable closure
+    int     superNameOff;// ... and its NAME offset in `base`, so a super registered LATER can still be found:
+                         //   superReg is resolved once at registration and is -1 for ever if the superclass
+                         //   was not yet registered then. The blob does not move, so the offset stays valid.
     int     modifiers;   // Class.getModifiers() value, computed at load (ACC_SUPER stripped)
     boolean isIface;     // interface? (phase B compiles only its default/static bodies, no TIB fill)
     int     ifmStart;    // interfaces only: start of the FLATTENED per-interface method run in ifBase/ifNameOff/ifDescOff
     int     ifmCount;    // ... its length = this interface's itable slot count (0 for classes)
+    boolean superInited; // has the SUPERCLASS chain been initialized for this class? (JVMS 5.5) -- tracked
+                         //   separately from `state` because a class with no <clinit> of its own reaches
+                         //   ST_INITIALIZED at LOAD, which says nothing about its superclass.
     int     state;       // 4-phase lifecycle position (ST_*), advanced by the loader, never regressed
 
     // ----- JikesRVM 4-phase class lifecycle: load -> resolve -> instantiate -> initialize -----

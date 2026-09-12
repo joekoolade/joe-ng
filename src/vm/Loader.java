@@ -623,8 +623,25 @@ public final class Loader
      * seeding. Extend as other fatal gaps surface. (Native-calling <clinit>s compile fine but wild-branch at
      * run time, so those stay in the name blocklist.)
      */
+    /** Rule 2: every class initializer runs. Set false only to recover the old gate for a bisect. */
+    static final boolean RUN_ALL_CLINITS = true;
+
     private static boolean clinitCompilable(long code, int len)
     {
+        // RULE 2 (2026-09-12): ALL <clinit>s RUN. A skipped initializer is a SILENT WRONG ANSWER -- the class
+        // loads, gets static cells, and answers null for ever -- and chasing those one null static at a time
+        // is the most expensive thing this project has done. The gate below is kept, unreached, because its
+        // per-class comments are the record of WHY each of those initializers matters; it is not deleted until
+        // the arc that replaces it is finished.
+        //
+        // The two earlier rejections of this rule were measured against a VM that DENIES natives (Form 1 died
+        // at java/io/UnixFileSystem.<clinit> -> the denied native initIDs; Form 2 in ObjectStreamClass$Caches).
+        // Rule 3 removes that cause by overlaying from JDK 26 source with natives STUBBED, so those
+        // measurements no longer describe this VM.
+        if (RUN_ALL_CLINITS)
+        {
+            return true;
+        }
         // Allowlist: java/util/regex/Pattern.<clinit> ldc's Pattern.class for the `desiredAssertionStatus()`
         // assertions idiom (a tag-7 Class literal), which the generic ldc-tag gate below rejects. Its remaining
         // work (accept/lastAccept = new Node()/new LastNode(); putstatic) is runnable, and it MUST run -- compile
@@ -1211,6 +1228,38 @@ public final class Loader
         {
             return;
         }
+        // JVMS 5.5: BEFORE A CLASS IS INITIALIZED, ITS DIRECT SUPERCLASS MUST BE -- and this has to happen
+        // BEFORE the state check below, not after it.
+        //
+        // A class with NO <clinit> of its own reaches ST_INITIALIZED at LOAD (see noteInitNeeded), so for such
+        // a class the state check returns immediately. "I have no initializer" says nothing whatever about my
+        // SUPERCLASS, and skipping it is how java/io/ClassCache$1 -- an anonymous java/lang/ClassValue
+        // subclass with no initializer -- got constructed while ClassValue's own statics were still null:
+        // ClassValue.<init> reads `nextHashCode` and NPE'd at ClassValue.java:267.
+        //
+        // That is the failure the FIRST run-all-clinits attempt died of, recorded at the time only as "dies
+        // inside ObjectStreamClass$Caches.<clinit> -> ClassCache.<init>" and read as serialization being too
+        // big a subsystem to carry. It was never about serialization; it was this ordering rule missing.
+        //
+        // Guarded by its own flag rather than by `state`, and done ONCE: the walk must run even for a class
+        // the loader considers initialized, but re-walking on every call would cost O(depth) per dispatch.
+        if (!clTab[reg].superInited)
+        {
+            clTab[reg].superInited = true;              // set BEFORE recursing: a cycle must not re-enter
+            int sup = clTab[reg].superReg;
+            if (sup < 0 && clTab[reg].superNameOff != 0)
+            {
+                // superReg is resolved ONCE at registration and is -1 for ever if the superclass was not yet
+                // registered then -- the common case for a demand-loaded pair. Re-resolve by NAME (the blob
+                // does not move, so the offset is still valid) and cache it.
+                sup = classRegByNameAt(clTab[reg].base, clTab[reg].superNameOff);
+                clTab[reg].superReg = sup;
+            }
+            if (sup >= 0 && sup != reg)
+            {
+                ensureClinit(sup);
+            }
+        }
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
             drainCtorInit(reg);                         // already initialized -- but see drainCtorInit
@@ -1224,6 +1273,19 @@ public final class Loader
             // to be pending for that class, ahead of the ones it depends on.
             return;
         }
+        // JVMS 5.5: BEFORE A CLASS IS INITIALIZED, ITS DIRECT SUPERCLASS MUST BE. joe-ng did not do this --
+        // initPrereq below is a narrow special case (FileDescriptor for sun/nio/ch and java/net), not the rule
+        // -- so a subclass could be constructed while its SUPERCLASS's statics were still null.
+        //
+        // That is not theoretical: java/io/ClassCache$1 extends java/lang/ClassValue, and ClassValue's
+        // constructor reads its own static `nextHashCode`. With the superclass uninitialized that read is
+        // null and the constructor NPEs at ClassValue.java:267 -- which is precisely where the first
+        // run-all-clinits attempt died inside ObjectStreamClass$Caches.<clinit>, recorded at the time only as
+        // "dies in ClassCache.<init>".
+        //
+        // Walked one level here and recursively by the callee, so the whole chain is initialized bottom-up in
+        // the order the specification requires. State is checked first, so an already-initialized ancestor
+        // costs nothing and a cycle cannot recurse for ever.
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
         runPendingClinit(reg);
         drainCtorInit(reg);                             // ... and whatever its constructors actively use
@@ -3327,11 +3389,19 @@ public final class Loader
      * — invokestatic/special to the named class's method, invokevirtual/interface to that name+descriptor in
      * every loaded class (a receiver could be any of them) — until the set stops growing.
      */
-    private static final int MAXPEND = 49152;
+    // RAISED 49152 -> 262144 (2026-09-12). The launcher closure overflowed the old cap in EVERY boot, at the
+    // FIRST batch -- so RTA was silently incomplete and classes that are plainly referenced were never pulled.
+    // That is not a capacity nuisance: a dropped ref means the class is never registered, so classRegByName
+    // answers -1, superReg is pinned at -1, and its <clinit> is never enqueued -- symptoms that surface
+    // arbitrarily far away and look like a dozen unrelated bugs. Running EVERY <clinit> widens the closure
+    // further, so the old cap was never going to hold. ~36 bytes per entry across the parallel arrays, so
+    // this is ~9.4 MB of a 96 MiB pre-zeroed span.
+    private static final int MAXPEND = 262144;
     private static final int PEND_PULL = 2;              // kind: pull the class only (field/type ref; no method)
     private static long[] pendBase;                      // call-site refs of the round's reachable methods:
     private static int[] pendClass, pendName, pendDesc, pendKind;   // (base, class/name/desc offsets, kind)
     private static int pendN;
+    private static int pendDropped;                      // refs RTA had to discard for want of room (0 = closure complete)
 
     // Rapid Type Analysis (RTA): a virtual/interface call's targets are only the methods that an INSTANTIATED
     // receiver could dispatch to -- not every loaded class carrying the name+desc (the old CHA over-approx,
@@ -3497,6 +3567,19 @@ public final class Loader
             mrDflt += Magic.readCNTPCT_EL0() - tp;
         }                                               //   class hierarchies, so an unoverridden default is missed)
         markActive = 1;
+        // UNGATED, because a truncated closure is a FAILURE and failures are never gated here. "Full" on its
+        // own cannot say whether the cap is short by ten refs or ten thousand, so sizing it was a guess
+        // repeated once per boot; the count makes one boot answer it.
+        if (pendDropped != 0)
+        {
+            Uart.write(Magic.bytes("  RTA CLOSURE INCOMPLETE: "));
+            VM.printDec(pendDropped);
+            Uart.write(Magic.bytes(" refs dropped past MAXPEND="));
+            VM.printDec(MAXPEND);
+            Uart.write(Magic.bytes(" -- those classes are NEVER PULLED; raise MAXPEND above "));
+            VM.printDec(MAXPEND + pendDropped);
+            Uart.putc(0x0A);
+        }
     }
 
     /**
@@ -3733,6 +3816,9 @@ public final class Loader
             // that IS referenced simply never gets pulled, and the failure surfaces arbitrarily far away as
             // an unresolved type. It is not halted because a truncated closure still boots, and halting an
             // image that merely brushes the cap would be worse than finishing with a named gap.
+            pendDropped += 1;                       // COUNT them: "full" alone cannot say whether the cap is
+                                                    // short by ten or by ten thousand, so sizing it was a
+                                                    // guess repeated per boot. The total is reported below.
             if (!pendFullReported)
             {
                 pendFullReported = true;
@@ -7189,6 +7275,7 @@ public final class Loader
             clTab[clCount].isIface = true;
             clTab[clCount].ifmStart = gIfmStart;            // the flattened per-interface method run
             clTab[clCount].ifmCount = gIfmCount;            //   = this interface's itable slot numbering
+            clTab[clCount].superNameOff = gSuperNameOff;
             clTab[clCount].superReg = classRegByName(gSuperNameOff);   // an interface's super is Object (-1); kept for symmetry
             captureDirectIfaces();                      // an interface's extended interfaces (List extends Iterable)
             clTab[clCount].modifiers = gClassModifiers;     // cached Class.getModifiers() (captured post-cp, no re-parse)
@@ -7540,6 +7627,20 @@ public final class Loader
         putProp(buf, props, Magic.bytes("user.dir"), Magic.bytes("/"));
         putProp(buf, props, Magic.bytes("user.name"), Magic.bytes("root"));
         putProp(buf, props, Magic.bytes("java.io.tmpdir"), Magic.bytes("/tmp"));
+        // THE SET BELOW IS NOT AD HOC: jdk/internal/util/StaticProperty.<clinit> reads fourteen keys through a
+        // private getProperty(props, key) that THROWS InternalError("null property: " + key) on a null, so any
+        // one of them missing halts the VM as soon as that initializer runs. Under the run-all-clinits rule it
+        // always runs. The list was taken from the JDK 26 source in one pass rather than one key per ten-minute
+        // boot -- `java.home` was simply the first of six to be reached.
+        putProp(buf, props, Magic.bytes("java.home"), Magic.bytes("/"));
+        putProp(buf, props, Magic.bytes("user.home"), Magic.bytes("/"));
+        // The three console encodings and sun.jnu.encoding: everything this VM reads or writes is UTF-8 (the
+        // String fast paths compare against UTF_8.INSTANCE), so naming anything else here would be a claim the
+        // rest of the VM does not honour.
+        putProp(buf, props, Magic.bytes("stdout.encoding"), Magic.bytes("UTF-8"));
+        putProp(buf, props, Magic.bytes("stderr.encoding"), Magic.bytes("UTF-8"));
+        putProp(buf, props, Magic.bytes("stdin.encoding"), Magic.bytes("UTF-8"));
+        putProp(buf, props, Magic.bytes("sun.jnu.encoding"), Magic.bytes("UTF-8"));
     }
 
     /** One {@code props.setProperty(key, value)} through the ordinary call convention. */
@@ -8632,6 +8733,9 @@ public final class Loader
         {
             // One full barrier for all three: see VMNatives.unsafeFence. Reached from Hashtable/Properties
             // and the JUnit launcher's lazy holders.
+            // Unsafe.objectFieldOffset(Class,String) -> the field registry, keyed on the CLASS (no instance
+            // exists at initializer time, so the TIB-keyed VarHandle path cannot serve it).
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
@@ -8646,6 +8750,22 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Throwable")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("printStackTrace0")))  { return VM.printStackTraceAddr; }   // (this)V
+        }
+        // java/io/UnixFileSystem.initIDs caches a JNI fieldID for File.path and does nothing else
+        // (unix/native/libjava/UnixFileSystem_md.c). No JNI here, so the empty stub is exactly right. This is
+        // what stopped the FIRST run-all-clinits boot, in UnixFileSystem.<clinit> itself.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/UnixFileSystem")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initIDs")))           { return VM.noopNativeAddr; }  // ()V
+        }
+        // java/io/ObjectStreamClass.initNative caches a JNI global ref to NoSuchMethodError's class, read only
+        // by other natives in the same C file (share/native/libjava/ObjectStreamClass.c). No JNI here, so
+        // empty is exactly right. Its SIBLING native hasStaticInitializer(Class)Z is deliberately NOT wired:
+        // that one does real work (does this class declare its OWN <clinit>?), and answering a plausible
+        // `false` would be a silent wrong answer -- it must be implemented or fail loudly.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/ObjectStreamClass")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("initNative")))        { return VM.noopNativeAddr; }  // ()V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/io/FileInputStream")))
         {
@@ -9080,6 +9200,8 @@ public final class Loader
         clTab[clCount].statics = gStatics;
         clTab[clCount].vtStart = vtCount;                   // this class's slots occupy vt[vtCount .. vtCount+gvCount)
         clTab[clCount].isIface = false;
+        clTab[clCount].superNameOff = gSuperNameOff;        // keep the NAME too: superReg is -1 for ever if the
+                                                        //   super was not registered yet (see RVMClass)
         clTab[clCount].superReg = classRegByName(gSuperNameOff);   // superclass registry index (-1 for Object), for the
                                                         //   FULL-chain itable closure (an interface implemented N levels
                                                         //   up the superclass chain must still land in this class's dir)
@@ -10064,6 +10186,25 @@ public final class Loader
             i += 1;
         }
         return 0L;
+    }
+
+    /**
+     * Byte offset of the instance field {@code fnBase/fnLen} declared by the class whose Type is
+     * {@code typeAddr}, or -1. The Class-keyed sibling of {@link #vhFieldOffset} (which keys on a TIB read
+     * from a live object) -- {@code Unsafe.objectFieldOffset(Class, String)} has only the class, never an
+     * instance, so it cannot go through the TIB.
+     *
+     * <p>Same registry and the same {@code 16 + slot*8} layout as every other field access here, so a handle
+     * obtained this way and an ordinary {@code getfield} address the same memory by construction.
+     */
+    static long fieldOffsetOfType(long typeAddr, long fnBase, int fnLen)
+    {
+        int j = fieldRegIndex(typeAddr, fnBase, fnLen);
+        if (j >= 0)
+        {
+            return 16L + fldTab[j].slot * 8L;
+        }
+        return -1L;
     }
 
     static int fieldMods(long typeAddr, long fnBase, int fnLen)
@@ -17008,7 +17149,10 @@ public final class Loader
             }
             i += 1;
         }
-        long obj = Heap.alloc(24);                          // header(16) + Type-pointer field(@16)
+        // header(16) + typeAddr(@16) + classValueMap(@24). Class mirrors are allocated HERE rather than by a
+        // constructor, so this size must track the overlay's field count by hand: a field declared in
+        // guestsrc/java/lang/Class.java but not counted here is written PAST the object.
+        long obj = Heap.alloc(32);
         long ctib = classTib();
         if (mirN >= mirType.length)
         {

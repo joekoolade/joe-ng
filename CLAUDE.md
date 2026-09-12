@@ -16,6 +16,45 @@ the standing rules and current state so we don't re-litigate them each session.
   (e.g. not `p += 1; i += 1;`). One variable declaration per line (no
   `int a = 0, b = 0;`). Every control-flow body is braced, even one-liners.
 
+## Standing rules (2026-09-12) -- THESE SUPERSEDE EARLIER CONCLUSIONS
+
+1. **THE GOAL IS A FULLY FUNCTIONAL VM.** Not a minimal one that runs the demos. Where a subsystem is
+   currently absent by denial (java/nio/file, java/lang/invoke, sun/security, parts of java.math), the
+   direction of travel is to IMPLEMENT or STUB it, not to prune further.
+
+2. **ALL `<clinit>`s RUN.** The `clinitCompilable` gate, its per-class allowlist and the
+   `CLINIT REJECTED (statics stay null)` outcome are being retired. A skipped initializer is a SILENT WRONG
+   ANSWER -- the class loads, gets static cells, and answers null for ever -- which is the single most
+   expensive failure mode in this project's history.
+   - **This reverses two recorded rejections, and the reason they no longer apply is rule 3.** Both earlier
+     attempts were measured against a VM that DENIES natives: Form 1 died in 3 minutes at
+     `java/io/UnixFileSystem.<clinit>` -> the denylisted native `UnixFileSystem.initIDs`, and Form 2 died in
+     `ObjectStreamClass$Caches.<clinit>` for want of serialization. With natives STUBBED instead of denied,
+     that objection is gone. The old measurements were correct about the VM as it was, not about this one.
+
+3. **A `guestsrc/` OVERLAY STARTS FROM THE JDK 26 SOURCE CLASS**, not from a hand-written minimum.
+   - **Source: `/Users/joe/git/jdk/src` -- a FULL OpenJDK tree at feature version 26** (3301 `java.base`
+     java files). Preferred over the JDK's `lib/src.zip` because it also carries the **native C sources**,
+     which is what makes the stub decisions below answerable by READING instead of guessing.
+   - **The seed JDK on PATH IS 26.0.1** (`jenv`; note `/usr/libexec/java_home` does NOT list Homebrew JDKs,
+     so it looks like only 17/11/8/7 are installed). Seed and source therefore agree, and an overlay taken
+     from this tree matches the java.base the writer bakes -- field layouts, signatures and `jdk.internal.*`
+     all agree by construction.
+   - **Take the RIGHT PLATFORM VARIANT.** The tree is `share/` + `unix/` + `macosx/` + `linux/` + `aix/` +
+     `windows/`; a class can exist in more than one (`java/io/UnixFileSystem.java` is under `unix/classes`,
+     not `share/classes`). Copying the wrong one is a silent mismatch with the baked class.
+   - **Natives that are not implemented are STUBBED, and a stub THROWS rather than answering.** A stub that
+     returns a plausible value is indistinguishable from a working one; a throw names the class and method
+     the moment it is reached, which turns "implement everything" into a worklist the program itself writes.
+   - **A void native may be EMPTY only where doing nothing is the CORRECT semantics here, and the C source is
+     how that is DECIDED rather than assumed.** Worked example: `UnixFileSystem.initIDs`
+     (`unix/native/libjava/UnixFileSystem_md.c`) caches a JNI `fieldID` for `File.path` and has no effect
+     outside JNI -- so on a VM with no JNI, empty is PROVABLY right. Empty-by-default, without reading the
+     native, is the same silence rule 2 exists to remove.
+   - **This supersedes "guestsrc is only for classes that need natives."** That rule existed to stop overlays
+     accumulating as minimal hand-written shells that silently drop stock members -- the trap that has cost
+     ELEVEN debugging sessions. Starting from the real source removes the cause rather than the symptom.
+
 ## Hard constraints (do not violate)
 
 - **Everything is Java.** Assembler, compiler, boot-image writer, runtime, and
@@ -75,6 +114,65 @@ The boot-path magic intrinsic list (system-register moves, `ERET`, barriers,
 defines the minimum the assembler must encode.
 
 ## Current status
+
+- **EVERY `<clinit>` RUNS, AND THREE SILENT-CORRUPTION BUGS FELL OUT OF IT (2026-09-12).** Rule 2 is in: the
+  `clinitCompilable` gate short-circuits and `CLINIT REJECTED` is gone from every boot. Each blocker it
+  exposed was named by the VM and decided by READING THE JDK 26 SOURCE, not guessed.
+  - **THE RECORDED POSTMORTEM OF THE BROAD RULE WAS WRONG, and this retires it.** It concluded the rule
+    "trades ten null statics for a whole failing subsystem" -- that `ObjectStreamClass$Caches.<clinit>` died
+    because an initializer pulled SERIALIZATION, a subsystem this VM does not carry. It was never about
+    subsystem size. The whole chain `UniqueId.<clinit>` -> `ObjectStreamClass.lookup` -> `ClassCache.get` ->
+    `ClassValue.get` -> `computeValue` RUNS NOW. What actually stopped it was two missing rules below, whose
+    symptoms surfaced far from their cause -- and the trace that names them was only readable after the
+    unwind-table fix earlier the same day.
+  - **(1) A CLASS WITH NO `<clinit>` OF ITS OWN REACHED `ST_INITIALIZED` AT LOAD, SO ITS SUPERCLASS WAS NEVER
+    INITIALIZED.** JVMS 5.5 requires the direct superclass first; `ensureClinit` had only `initPrereq`, a
+    narrow special case (FileDescriptor for `sun/nio/ch/` and `java/net/`), and its STATE CHECK returned
+    before any superclass walk. `java/io/ClassCache$1` is an anonymous `java/lang/ClassValue` subclass with
+    no initializer -- exactly that shape -- so it was constructed while `ClassValue`'s statics were still
+    null and `ClassValue.<init>` NPE'd reading `nextHashCode` (ClassValue.java:267).
+    - **The walk must go ABOVE the state check, and be guarded by its OWN flag rather than by `state`**:
+      "I have no initializer" says nothing whatever about my superclass, and `state` is precisely the field
+      that lies here. Set before recursing so a cycle cannot re-enter; done once, or it is O(depth) per call.
+    - **`superReg` IS RESOLVED ONCE AT REGISTRATION and is -1 for ever if the superclass was not registered
+      yet** -- the normal case for a demand-loaded pair. Re-resolved by NAME on first use (the blob does not
+      move, so the offset stays valid) and cached, or the corrected walk is a no-op exactly when needed.
+  - **(2) `java/lang/Class.classValueMap` WAS NOT DECLARED, SO IT ALIASED SLOT 0.** `ClassValue.get` reads and
+    writes that field on the Class it is keyed by; undeclared, the access read and wrote `typeAddr` -- the
+    Type pointer EVERY `Class` native dereferences. The loader said so outright
+    (`UNRESOLVED FIELD (aliases slot 0)`) and the corruption surfaced as an NPE inside the VM's own dispatch
+    resolver. Declared exactly as JDK 26 does (Class.java:3717).
+    - **ADDING IT REQUIRED WIDENING THE MIRROR.** `classMirror` allocates Class objects itself at
+      header(16) + one field; a field declared in the overlay but not counted there is written PAST the
+      object. That coupling is hand-maintained and is now stated at both sites.
+  - **(3) RTA's PEND LIST WAS OVERFLOWING IN EVERY LAUNCHER BOOT -- CAUGHT BY THE USER, NOT BY ME.**
+    `PEND LIST FULL: RTA is now INCOMPLETE` fired at LINE 26 of every log, including every earlier boot in
+    this arc. A dropped ref means the class is never pulled, never registered, `classRegByName` answers -1,
+    and its `<clinit>` is never enqueued -- so it manufactures exactly the symptoms above, arbitrarily far
+    from the cause. The code's own comment predicted this and the cap was under-sized anyway.
+    `MAXPEND` 49152 -> 262144, the drops are COUNTED (full alone cannot say short-by-ten from
+    short-by-ten-thousand), and the report is UNGATED because a truncated closure is a failure.
+    **SECOND TIME THIS SESSION A CAPACITY REPORT I READ PAST WAS THE ANSWER** (after `CLASS MIRROR CACHE
+    FULL`). An instrument only pays if its output is READ.
+  - **RULE 3 IN PRACTICE: `initIDs` and `initNative` ARE EMPTY BECAUSE THE C SAYS SO, NOT BY DEFAULT.**
+    `UnixFileSystem.initIDs` caches a JNI `fieldID` and `ObjectStreamClass.initNative` a JNI global ref;
+    neither has an effect outside JNI, and this VM has none -- so empty is PROVABLY right. Its sibling
+    `ObjectStreamClass.hasStaticInitializer(Class)Z` is deliberately NOT wired: it does real work, and a
+    plausible `false` is the silent wrong answer rules 2 and 3 exist to remove.
+  - **Also: 14 `StaticProperty` keys** (six were missing; that initializer throws `InternalError` on ANY null
+    key, so it halts the VM -- read from source in one pass rather than one key per ten-minute boot),
+    **`Unsafe.objectFieldOffset(Class,String)`** (the CLASS-keyed sibling of the TIB-keyed VarHandle path --
+    at initializer time there is no instance to read a TIB from), **`Class.isRecord`** (the
+    overlay-drops-stock-members trap for the TWELFTH time), and the **64-bit CAS encodings** with
+    bit-for-bit ARM ARM tests -- the 32-bit pair backing `Magic.spinLock` had shipped with NO test at all.
+  - **QEMU:** demo suite clean with THIRTEEN markers zero -- incl. `aliases slot 0`, `UNREGISTERED SUPER` and
+    `RTA CLOSURE INCOMPLETE`, the three that would catch this change specifically -- every arm exact
+    (`finish HML` 20/20/20, inversion 64ms, all five null-concat arms, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`) and `printStackTrace` still walking to `vm/VM.boot`, which is what
+    a VM-wide initialization-order change most needed to show. `metal junit: ran 44, failures 0`. Host tests
+    unchanged incl. `compiler: 37 checks` and `overlay-check 0 new` (36 -> 35 gaps).
+  - **LAUNCHER: into real discovery**, past `ClassValue`/`ClassCache` entirely. **The suite never launches the
+    console launcher, so a clean boot claims NO REGRESSION and nothing more.**
 
 - **THE CONSOLE LAUNCHER RUNS TESTS AND PRINTS ITS OWN SUMMARY -- discovery, execution and reporting, end to
   end on bare metal (2026-09-12).** `Test run finished after 434161 ms` / `[3 containers found]` /

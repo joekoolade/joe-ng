@@ -1225,6 +1225,8 @@ public final class VM
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
+        if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(0L, 0L); }
+        if (noopNativeAddr == 0L) { VMNatives.noopNative(0L); }
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
         if (setOut0Addr == 0L) { VMNatives.setOut0(0L); }                       // System.setOut0
         if (setErr0Addr == 0L) { VMNatives.setErr0(0L); }                       // System.setErr0
@@ -2524,6 +2526,8 @@ public final class VM
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
+    static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(JJ)J — Unsafe.objectFieldOffset(Class,String)
+    static long noopNativeAddr;        // VMNatives.noopNative(J)V — a native whose C body does nothing observable here
     static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
     static long setOut0Addr;           // VMNatives.setOut0(J)V — System.setOut0(PrintStream)
     static long setErr0Addr;           // VMNatives.setErr0(J)V — System.setErr0(PrintStream)
