@@ -173,7 +173,9 @@ public final class Heap
      *  way a table allocated in the heap gets its memory reused by a later `new byte[]` (e.g. a loaded classfile
      *  copy) while addJitFrame keeps writing to it via the stale pointer, scribbling the live object. Sits in the
      *  free scratch window between {@code MARK_BITMAP}'s end (0x03E0_0000) and the heap cells (0x03FF_0000);
-     *  needs 2*JIT_FRAME_MAX*24 + JIT_HANDLER_MAX*32 = 0x50000 bytes, well under the ~2 MiB window. */
+     *  needs 2*JIT_FRAME_MAX*24 + JIT_HANDLER_MAX*32 = 0x140000 bytes, inside the 0x1F0000 window with
+     *  0xB0000 to spare. Raised from 0x50000 (4096 entries) because the console launcher OUTGREW it and the
+     *  overflow was SILENT -- see VM.reportJitTableFull. */
     public static final long JIT_TABLES = 0x03E0_0000L;
 
     static int  lastFromFreeList;      // 1 if the last alloc reused a freed block (GC evidence)
