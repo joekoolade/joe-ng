@@ -76,6 +76,35 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE BROAD CLINIT RULE WAS RE-TESTED AND REJECTED AGAIN -- this time with the boundary MEASURED
+  (2026-09-11).** Five Jupiter initializers had been allowlisted one at a time; the scan that ended that
+  approach: **of the 74 classes with a `<clinit>` in the first 400 JUnit classes, 44 `ldc` a class OTHER than
+  themselves** and are therefore rejected. Each costs a ten-minute launcher boot to discover. A per-class
+  allowlist cannot finish.
+  - **FORM 1 -- RUN EVERY INITIALIZER (no gate at all): DIED IN 3 MINUTES**, against ~40 for the control.
+    `java/io/File.<clinit>` pulls `java/io/UnixFileSystem.<clinit>`, which calls the DENYLISTED native
+    `UnixFileSystem.initIDs` -- there is no filesystem under this VM. `UnixFileSystem` is not in
+    `clinitBlocked`, and that list cannot realistically be completed: it would have to enumerate every
+    native-calling initializer in java.base.
+  - **FORM 2 -- RUN EVERY INITIALIZER OUTSIDE THE BAKE DOMAIN: GETS LESS FAR, NOT FURTHER.** It reproduces
+    the recorded death exactly -- an application initializer pulls SERIALIZATION and
+    `java/io/ObjectStreamClass$Caches.<clinit>` NPEs in `ClassValue.<init>` via `ClassCache.<init>`. The
+    launcher error-handles that into printing its USAGE and exiting.
+    **THE LOG GREW (6.8 KB -> 15.7 KB) AND THAT WAS THE USAGE DUMP, NOT PROGRESS** -- measured by which JUnit
+    packages were reached: the per-class build gets to `commons/util`, `console/output`, `engine/UniqueId`;
+    this one stops at `ConsoleLauncher`/`console/shadow`. **Byte count is not depth.**
+  - **WHAT THE EXPERIMENT ESTABLISHED, and why it was worth running:** the old gate tested a bytecode PATTERN
+    (a tag-7 class literal) as a proxy for "will this initializer run", and the pattern does not predict it.
+    The real distinction is that **java.base initializers call natives that do not exist here and application
+    initializers do not** -- but freeing the application side alone still pulls serialization THROUGH it.
+  - **THE CONCRETE NEXT STEP, not a dead end:** make serialization unreachable (deny the
+    `java/io/ObjectStream*` / `ClassCache` / `ClassValue` family -- this VM carries no serialization anyway)
+    and re-run Form 2. That removes the one confirmed objection; the cost objection did not reproduce
+    (`metal junit: ran 44, failures 0` in ~90s with NO gate at all, and the suite ran end to end with ZERO
+    `CLINIT REJECTED` lines and every arm exact).
+  - **NOT MERGED.** Both forms are regressions in a different place, and shipping one would trade a known
+    blocker for an unknown one.
+
 - **`ConcurrentLinkedQueue` ON THE METAL, and a NULL REFERENCE CONCATENATES AS "null" (2026-09-11).**
   - **CLQ was FOUR STACKED GAPS, each exposed by fixing the one before.** The launcher stopped in
     `Node.<init>` (line 193) with a `DENYLIST TRAP` whose callee was EMPTY and `TRAPWIRE index=-1` -- a
