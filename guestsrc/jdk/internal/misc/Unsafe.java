@@ -74,6 +74,22 @@ public final class Unsafe
     }
 
     /** AArch64 is little-endian. */
+    /**
+     * Byte offset of an instance field, resolved from the CLASS rather than from a live object.
+     *
+     * <p>Reached first from {@code java/io/File.<clinit>}, and behind that by the ForkJoinPool /
+     * CompletableFuture family, which uses Unsafe offsets rather than VarHandles by deliberate design (see
+     * ForkJoinPool's own comment: "to avoid initialization dependencies"). The VM resolves it out of the same
+     * instance-field registry every ordinary {@code getfield} uses, at the same {@code 16 + slot*8} layout, so
+     * an offset obtained here and a normal field access address the same memory by construction.
+     */
+    public long objectFieldOffset(Class<?> c, String name)
+    {
+        return fieldOffsetOfClass0(c, name.getBytes());
+    }
+
+    private static native long fieldOffsetOfClass0(Class<?> c, byte[] name);
+
     public boolean isBigEndian()
     {
         return false;

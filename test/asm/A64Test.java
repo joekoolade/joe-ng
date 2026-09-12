@@ -142,6 +142,26 @@ public final class A64Test
         T.eqWord("TBZ x3,#5,.",0x36280003, A64.tbz(3, 5, 0));
         T.eqWord("TBNZ x0,#40,.",0xB7400000, A64.tbnz(0, 40, 0));
 
+        // ---- load/store exclusive (the CAS primitives) ----------------------
+        // Pinned bit-for-bit against the ARM ARM because a mis-encoded exclusive corrupts memory INVISIBLY:
+        // a wrong size field writes 4 bytes where 8 were meant (or the reverse), and a wrong Rs reports the
+        // store's success in the wrong register, so the retry loop either spins for ever or -- far worse --
+        // believes a failed store succeeded. The 32-bit pair had shipped with NO test at all; they back
+        // Magic.spinLock, which every scheduler lock goes through.
+        //
+        // C6.2.{LDAXR,STLXR}: size(31:30) = 10 for 32-bit, 11 for 64-bit; Rs(20:16), Rn(9:5), Rt(4:0).
+        T.eqWord("LDAXR w0,[x0]",  0x885FFC00, A64Enc.ldaxrw(0, 0));
+        T.eqWord("LDAXR w17,[x3]", 0x885FFC71, A64Enc.ldaxrw(17, 3));
+        T.eqWord("STLXR w0,w0,[x0]",   0x8800FC00, A64Enc.stlxrw(0, 0, 0));
+        T.eqWord("STLXR w17,w16,[x3]", 0x8811FC70, A64Enc.stlxrw(17, 16, 3));
+        T.eqWord("LDAXR x0,[x0]",  0xC85FFC00, A64Enc.ldaxr(0, 0));
+        T.eqWord("LDAXR x17,[x3]", 0xC85FFC71, A64Enc.ldaxr(17, 3));
+        T.eqWord("STLXR w0,x0,[x0]",   0xC800FC00, A64Enc.stlxr(0, 0, 0));
+        T.eqWord("STLXR w17,x16,[x3]", 0xC811FC70, A64Enc.stlxr(17, 16, 3));
+        // The 64-bit forms differ from the 32-bit ONLY in the size field -- assert that rather than trust it.
+        T.eqWord("LDAXR size bit", 0x40000000, A64Enc.ldaxr(5, 7) ^ A64Enc.ldaxrw(5, 7));
+        T.eqWord("STLXR size bit", 0x40000000, A64Enc.stlxr(5, 6, 7) ^ A64Enc.stlxrw(5, 6, 7));
+
         // ---- range checks throw --------------------------------------------
         T.throwsIAE("B unaligned",     () -> A64.b(3));
         T.throwsIAE("MOVZ bad hw",     () -> A64.movz(0, 0, 4));

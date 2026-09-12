@@ -52,6 +52,27 @@ final class VMNatives
      * passes it in x0, exactly as {@link #identity} receives its argument -- and ignores it: a fence has no
      * state.
      */
+    /**
+     * RULE 3's empty stub: a native whose C implementation provably does nothing observable HERE.
+     *
+     * Empty is a DECISION, not a default, and the JDK 26 native source is how it is decided. The first user
+     * is {@code java/io/UnixFileSystem.initIDs}, whose body in
+     * {@code unix/native/libjava/UnixFileSystem_md.c} is
+     * {@code ids.path = GetFieldID(FindClass("java/io/File"), "path", ...)} -- it caches a JNI fieldID and has
+     * no effect outside JNI. This VM has no JNI, so doing nothing is EXACTLY right rather than merely
+     * survivable.
+     *
+     * Anything whose native does real work must NOT come here: it gets a real implementation, or a stub that
+     * THROWS. A stub that returns a plausible value is indistinguishable from a working one, which is the
+     * silent-wrong-answer trap that the run-all-clinits rule exists to remove.
+     *
+     * Takes one ignored argument so it serves both shapes: a static native (nothing in x0) and an instance
+     * native (receiver in x0) both land here correctly, since the extra register is simply unread.
+     */
+    static void noopNative(long ignoredArg)
+    {
+    }
+
     static void unsafeFence(long ignoredReceiver)
     {
         Magic.dsb();
@@ -649,6 +670,25 @@ final class VMNatives
         long fnBase = fnameArrRef + 24L;                     // guest byte[] data
         long tib = Magic.load64(objRef);                     // obj header TIB
         return Loader.vhFieldOffset(fnBase, fnLen, tib);
+    }
+
+    /**
+     * {@code Unsafe.objectFieldOffset(Class,String)} -> the named instance field's byte offset, or -1.
+     *
+     * <p>Reached from {@code java/io/File.<clinit>} and, behind it, the whole ForkJoinPool/CompletableFuture
+     * family, which drives its atomics through Unsafe offsets rather than VarHandles by design. Keyed on the
+     * CLASS, not on an instance: at initializer time there is no object to read a TIB from.
+     */
+    static long unsafeFieldOffset(long mirrorRef, long nameArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        {
+            return -1L;
+        }
+        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
+        int fnLen = (int) Magic.load64(nameArrRef + 16L);    // guest byte[] length
+        long fnBase = nameArrRef + 24L;                      // guest byte[] data
+        return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
     }
 
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
