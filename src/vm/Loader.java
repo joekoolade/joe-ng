@@ -755,6 +755,50 @@ public final class Loader
         {
             return true;
         }
+        // org/junit/jupiter/engine/extension/TimeoutExtension.<clinit> is three instructions --
+        // ldc Timeout.class; Namespace.create(new Object[]{that}); putstatic NAMESPACE -- so it names ANOTHER
+        // class and the self-class-literal rule below cannot reach it. It MUST run: every store access goes
+        // through LauncherStoreFacade.getStoreAdapter, whose FIRST act is Preconditions.notNull on the
+        // namespace, so a skipped initializer is "Namespace must not be null" the moment Jupiter sets up
+        // EXECUTION -- which is exactly where the console launcher stopped
+        // (LauncherStoreFacade.java:48). Nothing new is pulled: Namespace is an inner class of
+        // ExtensionContext, already in the closure, and the literal is an annotation type.
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/engine/extension/TimeoutExtension")))
+        {
+            return true;
+        }
+        // org/junit/platform/console/output/ColorPalette.<clinit> ldc's Style.class (another class, so the
+        // self-literal rule misses it) to build its SINGLE_COLOR/DEFAULT/NONE palettes. Added in the SAME
+        // increment as TimeoutExtension rather than waiting for it to trap, because it is the same shape on
+        // the very next phase: the launcher runs with --disable-ansi-colors, which selects ColorPalette.NONE,
+        // and a skipped initializer makes that null at the first line of test output. Its body is an EnumMap
+        // plus `new ColorPalette(...)` over Style constants -- no denied subsystem, unlike the four converters
+        // below.
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/platform/console/output/ColorPalette")))
+        {
+            return true;
+        }
+        // DELIBERATELY NOT ALLOWLISTED, and this is the whole reason the BROAD rule keeps failing. A scan of
+        // the jar (1484 classes, 293 with a <clinit>) finds exactly FOURTEEN whose initializer ldc's a class
+        // other than itself -- so the per-class list is finishable, contrary to what was recorded here
+        // earlier. But four of the remaining ones pull a subsystem this VM does not carry, and running them
+        // is precisely what the broad rule did:
+        //   org/junit/platform/commons/support/conversion/StringToNumberConverter  -> BigInteger/BigDecimal
+        //   org/junit/platform/commons/support/conversion/StringToJavaTimeConverter -> java/time/*
+        //   org/junit/jupiter/params/converter/JavaTimeArgumentConverter            -> java/time/*
+        //   org/junit/platform/commons/support/conversion/StringToCommonJavaTypesConverter
+        //                                                    -> java/io/File, java/nio/file/Path, java/net/URL
+        // java.math is a known landmine here (BigInteger's initializer reaches ForkJoinPool through
+        // BigInteger$RecursiveOp) and java/nio/file + java/net/URL are denylisted outright. Their statics are
+        // read only by the string-conversion path of @ParameterizedTest, which nothing reached calls, so
+        // leaving them null is correct rather than merely convenient.
+        //
+        // org/junit/platform/engine/UniqueId is the fifth deliberate rejection: its <clinit> calls
+        // ObjectStreamClass.lookup to fill serialPersistentFields, which only SERIALIZATION reads. Denying
+        // ObjectStreamClass instead was tried and is worse -- it turns a harmless null into a halting trap
+        // inside UniqueId.<clinit> itself.
         // org/junit/platform/commons/util/ReflectionUtils.<clinit> ldc's its own class (for getLogger) and
         // the array class literals "[Z".."[Ljava/lang/String;" for classNameToTypeMap -- tag-7 literals, which
         // the gate below rejects. It MUST run: `tryToLoadClass` reads classNameToTypeMap UNGUARDED, so a
