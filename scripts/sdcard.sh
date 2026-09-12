@@ -36,4 +36,19 @@ echo "Copy these to the FAT32 boot partition of an SD card, insert into the Pi 4
 echo "connect a USB-TTL serial adapter (see scripts/flash.md), and power on."
 cp sdcard/* /Volumes/bootfs
 ls -tl /Volumes/bootfs | head -n 10
+
+# VERIFY BEFORE EJECTING. A matching byte COUNT is not a matching FILE, and once the card is ejected the
+# reader drops it off the bus entirely -- so there is no second chance to check: a remount afterwards fails
+# with "Failed to find disk". A boot from a half-written card looks exactly like a boot from a good one that
+# regressed, and this project has already lost a boot to reading output that predated the flash.
+echo "== verifying card contents =="
+for f in kernel8.img config.txt; do
+    if cmp -s "sdcard/$f" "/Volumes/bootfs/$f"; then
+        echo "  OK   $f"
+    else
+        echo "  FAIL $f DIFFERS -- do NOT boot this card" >&2
+        exit 1
+    fi
+done
+
 diskutil eject /dev/disk4s1
