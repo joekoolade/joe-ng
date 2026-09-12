@@ -2349,6 +2349,27 @@ public final class Loader
                 }
             }
         }
+        // declaringClass MUST NOT be null, and this is not tidiness: a caller that walks EVERY element and
+        // asks getClassName() gets a null and NPEs inside its own code, naming ITS class rather than this gap.
+        // JUnit's ExceptionUtils.pruneStackTrace does exactly that (className.startsWith("org.junit.start.")),
+        // and it is what stopped the console launcher while it was REPORTING an engine failure -- so the real
+        // failure was replaced by a mystery NPE in the reporter.
+        //
+        // The image-frame branch above fills in only the method (the combined "owner/Class.method"), on the
+        // premise -- stated in this method's own comment -- that such frames "sit above the guest frames the
+        // caller inspects, so their exact split doesn't matter". That holds for PRINTING and is false for any
+        // caller that reads the fields. A pc found in no table at all leaves BOTH null.
+        //
+        // The placeholder is deliberately not a plausible class name: it must not collide with a prefix a
+        // caller prunes on, and a reader seeing it should know the frame was unnameable rather than believe it.
+        if (clsStr == 0L)
+        {
+            clsStr = guestString(Magic.bytes("<vm>"));
+        }
+        if (methStr == 0L)
+        {
+            methStr = guestString(Magic.bytes("<unknown>"));
+        }
         long ste = Heap.alloc(48);                          // header(16) + 4 field slots
         Magic.store64(ste + 0L, steTib);
         Magic.store64(ste + 16L, clsStr);

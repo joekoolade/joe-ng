@@ -2178,24 +2178,65 @@ public final class VM
         }
     }
 
+    /** One report per boot per table: the first overflow is the informative one, the rest are its wreckage. */
+    private static boolean jitFrameFullReported;
+    private static boolean jitHandlerFullReported;
+
+    /**
+     * A FULL unwind table used to be a SILENT `if (count < MAX)` that simply dropped the entry, and both
+     * consequences are severe and look like something else entirely:
+     *
+     *   - a dropped FRAME entry cannot be popped, so every stack trace STOPS there -- indistinguishable from
+     *     reaching the top of the stack, which is how a launcher failure came to be reported as three frames
+     *     with no caller;
+     *   - a dropped HANDLER entry means the catch block DOES NOT EXIST as far as the unwinder is concerned,
+     *     so an exception the program handles correctly escapes and is reported UNCAUGHT.
+     *
+     * Neither is survivable-but-slow; both are wrong answers. Reported by name so a boot that outgrows the
+     * table says so instead of misbehaving somewhere else.
+     */
+    static void reportJitTableFull(byte[] which, long count)
+    {
+        if (which[0] == 'f' ? jitFrameFullReported : jitHandlerFullReported)
+        {
+            return;
+        }
+        if (which[0] == 'f')
+        {
+            jitFrameFullReported = true;
+        }
+        else
+        {
+            jitHandlerFullReported = true;
+        }
+        Uart.write(Magic.bytes("\n  JIT UNWIND TABLE FULL: "));
+        Uart.write(which);
+        Uart.write(Magic.bytes(" table at "));
+        printDec((int) count);
+        Uart.write(Magic.bytes(" entries -- further methods have NO unwind record, so traces truncate and a\n"));
+        Uart.write(Magic.bytes("  catch above such a frame is MISSED (the exception reports as uncaught).\n"));
+    }
+
     /** Record a JIT'd method's machine-PC range, frame size, and callee-saved local count, so unwind can pop it
      *  and restore its handler's pre-try locals (x19..x(19+regLocals-1), saved at [SP+8..]). */
     static void addJitFrame(long codeStart, long codeEnd, long frameSize, long regLocals)
     {
         ensureJitTables();
-        if (jitFrameCount < JIT_FRAME_MAX)
+        if (jitFrameCount >= JIT_FRAME_MAX)
         {
-            long e = jitFrameTable + jitFrameCount * 24L;
-            Magic.store64(e, codeStart);
-            Magic.store64(e + 8L, codeEnd);
-            Magic.store64(e + 16L, frameSize);
-            long le = jitLocalTable + jitLocalCount * 24L;           // same pc-range, parallel table (frameSizeIn reads it)
-            Magic.store64(le, codeStart);
-            Magic.store64(le + 8L, codeEnd);
-            Magic.store64(le + 16L, regLocals);
-            jitFrameCount = jitFrameCount + 1L;
-            jitLocalCount = jitLocalCount + 1L;
+            reportJitTableFull(Magic.bytes("frame"), jitFrameCount);
+            return;
         }
+        long e = jitFrameTable + jitFrameCount * 24L;
+        Magic.store64(e, codeStart);
+        Magic.store64(e + 8L, codeEnd);
+        Magic.store64(e + 16L, frameSize);
+        long le = jitLocalTable + jitLocalCount * 24L;               // same pc-range, parallel table (frameSizeIn reads it)
+        Magic.store64(le, codeStart);
+        Magic.store64(le + 8L, codeEnd);
+        Magic.store64(le + 16L, regLocals);
+        jitFrameCount = jitFrameCount + 1L;
+        jitLocalCount = jitLocalCount + 1L;
     }
 
     /** Callee-saved local count of the JIT'd method covering machine PC {@code pc} (0 = none / image method). */
@@ -2203,7 +2244,7 @@ public final class VM
     {
         return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // 3rd word = regLocals
     }
-    static final int JIT_FRAME_MAX = 4096;     // one BATCH's framed methods must fit (compacted at each
+    static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
                                                //   the unwinder could not size the dropped frames
 
@@ -2301,21 +2342,23 @@ public final class VM
     // try/catch is findable during a cross-method unwind. Entries {machStart, machEnd, handler,
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
     static long jitHandlerTable, jitHandlerCount;
-    static final int JIT_HANDLER_MAX = 4096;   // same sizing rule as JIT_FRAME_MAX
+    static final int JIT_HANDLER_MAX = 16384;  // same sizing rule as JIT_FRAME_MAX
 
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
     static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
     {
         ensureJitTables();
-        if (jitHandlerCount < JIT_HANDLER_MAX)
+        if (jitHandlerCount >= JIT_HANDLER_MAX)
         {
-            long e = jitHandlerTable + jitHandlerCount * 32L;
-            Magic.store64(e, machStart);
-            Magic.store64(e + 8L, machEnd);
-            Magic.store64(e + 16L, handler);
-            Magic.store64(e + 24L, catchType);
-            jitHandlerCount = jitHandlerCount + 1L;
+            reportJitTableFull(Magic.bytes("handler"), jitHandlerCount);
+            return;
         }
+        long e = jitHandlerTable + jitHandlerCount * 32L;
+        Magic.store64(e, machStart);
+        Magic.store64(e + 8L, machEnd);
+        Magic.store64(e + 16L, handler);
+        Magic.store64(e + 24L, catchType);
+        jitHandlerCount = jitHandlerCount + 1L;
     }
 
     /**

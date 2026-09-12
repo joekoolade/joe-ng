@@ -76,6 +76,63 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE CONSOLE LAUNCHER RUNS TESTS AND PRINTS ITS OWN SUMMARY -- discovery, execution and reporting, end to
+  end on bare metal (2026-09-12).** `Test run finished after 434161 ms` / `[3 containers found]` /
+  `[2 containers started]` / `[2 tests found]`, printed by stock `MutableTestExecutionSummary`. Three VM bugs,
+  each hidden by the one before it, and **every one of them the same shape: a silent `if (room) { record it }`
+  with no else, where losing the record looks exactly like success.**
+  - **(1) BOTH JIT UNWIND TABLES SILENTLY DROPPED ENTRIES WHEN FULL**, at `JIT_FRAME_MAX = 4096` -- a cap the
+    launcher's closure exceeds. Two consequences, both WRONG ANSWERS rather than degraded ones: a dropped
+    FRAME entry cannot be popped, so a trace STOPS there and is indistinguishable from reaching the top; and a
+    dropped HANDLER entry means **the catch block DOES NOT EXIST to the unwinder**, so an exception the
+    program handles correctly escapes and is reported UNCAUGHT. That second one WAS the
+    `Namespace must not be null` failure -- JUnit catches it and reports a container failure, and joe-ng was
+    losing the catch. Caps -> 16384 (budget checked: `0x140000` of the `0x1F0000` scratch window, 704 KiB
+    spare) and the overflow is REPORTED by name with both consequences stated.
+  - **(2) `frameToElement` LEFT `declaringClass` NULL** for an image frame -- and for a pc found in no table it
+    left BOTH class and method null. Its own comment stated the premise: image frames "sit above the guest
+    frames the caller inspects, so their exact split doesn't matter". True for PRINTING, FALSE for any caller
+    that reads the fields. JUnit's `ExceptionUtils.pruneStackTrace` does
+    `className.startsWith("org.junit.start.")` on EVERY element, so the null NPE'd inside JUnit's own reporter
+    -- replacing the real failure with a mystery. Never null now; the placeholder is deliberately not a
+    plausible class name, so it cannot collide with a prefix a caller prunes on.
+  - **(3) `java/util/Formatter` DROPPED `Formatter(Appendable)` -- THE OVERLAY-DROPS-STOCK-MEMBERS TRAP FOR THE
+    ELEVENTH TIME.** Stock `PrintWriter.format` builds `new Formatter(this)` and expects the formatter to
+    write THROUGH to the writer; the overlay declared only `Formatter()`. It surfaced as a `DENYLIST TRAP`
+    naming a list `java/util/Formatter` is not on. The whole surface was taken from the stock BYTECODE in one
+    pass rather than one member per boot -- `<init>(Appendable)`, `locale()` (compared against
+    `Locale.getDefault()` BY IDENTITY, so answering the default keeps the writer's cached formatter) and
+    `format(Locale,String,Object[])` -- and the three descriptors were checked byte-for-byte against what
+    stock references.
+    - **A formatter that ACCUMULATED instead of writing through would print NOTHING and look like a working
+      call**, so the probe arms assert the text ARRIVED. One calls `printf` TWICE on the same writer, because
+      `PrintWriter` caches its Formatter and a flush that failed to reset would repeat the first call's text
+      -- which a single-shot arm cannot see. `[pw n=7]`, `[a1b2]`, `[x-9]`, all exact.
+  - **WHAT MADE ANY OF IT FINDABLE: an instrument that says WHY the trace ended.** `captureTrace` broke out of
+    its walk on `frameSizeAt == 0` with the comment "top of the JIT/image stack" -- a condition with TWO
+    meanings and one appearance. It now records the stopping pc AND the word under the stopped frame, and
+    reports `TRACE TRUNCATED` only when that word is a plausible code address, i.e. when there DEMONSTRABLY
+    was more stack. Checked against a PASSING boot before being trusted (ExcDemo's trace is unchanged and the
+    line stays silent). A three-frame trace with no caller became a named one, and "a compiled method with no
+    frame entry" is what pointed at the table rather than at JUnit.
+  - **STILL OPEN, AND IT IS A SCOPE BOUNDARY, NOT A GAP:** the one container failure is
+    `createCloseAction` -> `getSessionLevelStore` -> `Preconditions.notNull`, caused by
+    `CLINIT REJECTED java/util/concurrent/CompletableFuture` -- so `NIL` is null and `completedFuture` NPEs.
+    That initializer needs **`ForkJoinPool.asyncCommonPool()`**, the landmine already backed out of once, so
+    allowlisting it would open a path straight into a trap. The narrow route is to SEED `NIL` and its three
+    VarHandles the way `Net.EXTENDED_OPTIONS` is seeded -- its own increment.
+  - **QEMU:** demo suite clean with ZERO `DIFF`/`FAULT`/`TRAP`/`LINK FAILED`/`BOOT RE-ENTERED`/`CAP EXCEEDED`
+    and -- the two that matter for this change -- zero `JIT UNWIND TABLE FULL` and zero `TRACE TRUNCATED`,
+    with `printStackTrace` still walking to `vm/VM.boot`; every arm exact incl. all five null-concat arms and
+    `churnMB=625 live=32 intact=32`. `metal junit: ran 44, failures 0` / `ALL PASSED`. Host tests unchanged
+    incl. `compiler: 37 checks` and `overlay-check: 0 new`.
+  - **A GATE THAT FAILED FOR A REASON THAT WAS NOT THE CHANGE.** `metal junit` first reported 2 failures --
+    both the WALL-CLOCK timing tests, at `Duration 938771ms, expected <= 20000ms`, with the host at load
+    average 7.6 from my own concurrent QEMU runs. Re-run on an idle machine: 44/0. **Confirmed by re-running
+    rather than waved away** -- and running an image BUILD concurrently with `make test` is what created that
+    load, and also broke one build outright (`class not registered: demo/Philosopher`), since both share
+    `out/`.
+
 - **THE PER-CLASS CLINIT ALLOWLIST *CAN* FINISH -- the population is FOURTEEN, measured (2026-09-11).**
   Two more entries (`TimeoutExtension`, `ColorPalette`) and a correction to what this file recorded one
   increment ago.

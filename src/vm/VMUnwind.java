@@ -28,6 +28,21 @@ final class VMUnwind
     /** Print the throw site of every implicit NullPointerException (debug; off by default). */
     static final boolean NPE_TRACE = false;
 
+    /**
+     * Where {@link #captureTrace}'s walk STOPPED, and the word the stopped frame's SP pointed at.
+     *
+     * The walk ends when {@code frameSizeAt} answers 0, and that has TWO meanings which produce an identical
+     * looking trace: the genuine top of the stack, or a pc no frame table claims -- in which case the trace
+     * is INCOMPLETE and the frames that would name the real caller are simply missing. A launcher failure
+     * was reported here as three frames with no caller for exactly that reason, and the silence is what made
+     * it undiagnosable.
+     *
+     * These record the MEASURED state rather than a guess: if the stopped frame's saved word looks like a
+     * return address into code, there WAS more stack and the trace was truncated.
+     */
+    static long traceStopPc;
+    static long traceStopWord;
+
     static void captureTrace(long exc, long pc, long sp)
     {
         if (exc <= 0x1000L || Magic.load64(exc + 16L) != 0L)   // boot force-compile passes 0; already captured -> keep
@@ -52,6 +67,8 @@ final class VMUnwind
         long cpc = pc;
         long csp = sp;
         int n = 0;
+        traceStopPc = 0L;
+        traceStopWord = 0L;
         while (n < 8 && cpc > 0x1000L)
         {
             Magic.store64(exc + 16L + n * 8L, cpc);
@@ -59,7 +76,11 @@ final class VMUnwind
             long cfs = frameSizeAt(cpc);
             if (cfs == 0L)
             {
-                break;                                         // top of the JIT/image stack
+                // Top of the JIT/image stack -- OR a pc no frame table claims. Record both so the printer can
+                // tell those apart instead of ending the trace identically for each.
+                traceStopPc = cpc;
+                traceStopWord = Magic.load64(csp);
+                break;
             }
             cpc = Magic.load64(csp) - 4L;                      // caller's return address (the call site)
             csp += cfs;
@@ -276,6 +297,18 @@ final class VMUnwind
                     Loader.printFrameAt(fpc);
                     Uart.putc(0x0A);
                     fi += 1;
+                }
+                // A trace that ran out of frame entries looks EXACTLY like one that reached the top, so say
+                // which happened -- and say it only when the evidence is there. A code-looking word under the
+                // stopped frame means there WAS a caller and these frames are INCOMPLETE; at the true top
+                // (frameless VM.boot) that word is not a return address, so a healthy trace stays silent.
+                if (fi > 0 && traceStopPc != 0L && Loader.plausibleCode(traceStopWord))
+                {
+                    Uart.write(Magic.bytes("  ... TRACE TRUNCATED -- no frame-table entry for pc="));
+                    printHex(traceStopPc);
+                    Uart.write(Magic.bytes("; the caller below it is:\n      at "));
+                    Loader.printFrameAt(traceStopWord - 4L);
+                    Uart.putc(0x0A);
                 }
                 if (fi == 0)
                 {
