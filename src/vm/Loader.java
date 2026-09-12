@@ -742,6 +742,19 @@ public final class Loader
         {
             return true;
         }
+        // OpenTest4JAndJUnit4AwareThrowableCollector is a VARIANT worth naming: its <clinit> BEGINS with the
+        // logger idiom (ldc Own.class -> getLogger -> putstatic logger), which the self-class-literal rule
+        // below DOES allow -- and then ldc's TestAbortedException.class as well, which trips the gate. So a
+        // self literal plus ONE other literal is still a rejection.
+        //
+        // Skipped, `abortedExecutionPredicate` stays null and Jupiter's ThrowableCollector.<init> rejects it
+        // through its own Preconditions.notNull -- which is how the launcher reported it, naming the
+        // parameter: "abortedExecutionPredicate must not be null".
+        if (utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/jupiter/engine/support/OpenTest4JAndJUnit4AwareThrowableCollector")))
+        {
+            return true;
+        }
         // org/junit/platform/commons/util/ReflectionUtils.<clinit> ldc's its own class (for getLogger) and
         // the array class literals "[Z".."[Ljava/lang/String;" for classNameToTypeMap -- tag-7 literals, which
         // the gate below rejects. It MUST run: `tryToLoadClass` reads classNameToTypeMap UNGUARDED, so a
