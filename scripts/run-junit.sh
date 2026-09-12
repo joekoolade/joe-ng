@@ -42,7 +42,10 @@ qemu-system-aarch64 -M raspi4b -kernel /tmp/junit.img -serial null -serial stdio
 PID=$!
 i=0
 while [ "$i" -lt "$SECS" ]; do
-    grep -qE "^(ALL PASSED|FAILURES)$" "$OUT" && break
+    # -a IS REQUIRED: a UART log carries stray control bytes, so grep treats it as BINARY and silently
+    # matches NOTHING. Without it this loop never breaks and every run sits out the full timeout -- which is
+    # exactly what it did, long after the tests had printed ALL PASSED.
+    grep -qaE "^(ALL PASSED|FAILURES)$" "$OUT" && break
     sleep 1
     i=$((i + 1))
 done

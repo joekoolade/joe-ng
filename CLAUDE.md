@@ -76,6 +76,47 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE PER-CLASS CLINIT ALLOWLIST *CAN* FINISH -- the population is FOURTEEN, measured (2026-09-11).**
+  Two more entries (`TimeoutExtension`, `ColorPalette`) and a correction to what this file recorded one
+  increment ago.
+  - **THE BLOCKER: `TimeoutExtension.<clinit>` is three instructions** -- `ldc Timeout.class;
+    Namespace.create(...); putstatic NAMESPACE` -- so it names ANOTHER class and the self-class-literal rule
+    cannot reach it. Every store access goes through `LauncherStoreFacade.getStoreAdapter`, whose FIRST act is
+    `Preconditions.notNull` on the namespace, so a skipped initializer is **"Namespace must not be null" the
+    moment Jupiter sets up EXECUTION**. That is where the launcher stopped on current main -- past discovery
+    entirely, deeper than any previous run.
+  - **"A PER-CLASS ALLOWLIST CANNOT FINISH" WAS WRONG, and the number is what says so.** That claim came from
+    "44 of 74 classes in the FIRST 400". Scanning the WHOLE jar in one `javap` pass -- **1484 classes, 293 with
+    a `<clinit>`, of which exactly 14 `ldc` a class other than themselves** -- gives the real population. Six
+    were already allowlisted; this increment takes it to eight.
+  - **AND THE SAME SCAN EXPLAINS WHY THE BROAD RULE KEEPS FAILING, precisely rather than anecdotally.** Five of
+    the remaining six must STAY rejected because they pull a subsystem this VM does not carry:
+    `StringToNumberConverter` (BigInteger/BigDecimal -- the ForkJoinPool landmine), `StringToJavaTimeConverter`
+    and `JavaTimeArgumentConverter` (`java/time/*`), `StringToCommonJavaTypesConverter` (`java/io/File`,
+    `java/nio/file/Path`, `java/net/URL` -- denylisted), and `UniqueId` (serialization). **The broad rule runs
+    exactly these five.** Their statics are read only by `@ParameterizedTest` string conversion, which nothing
+    reached calls, so leaving them null is CORRECT rather than merely tolerable.
+  - **`ColorPalette` was batched in rather than waited for**, because it is the same shape one phase later:
+    `--disable-ansi-colors` selects `ColorPalette.NONE`, and a skipped initializer makes that null at the first
+    line of test output. Fixing one class per ten-minute boot is what made this family expensive.
+  - **STILL OPEN, AND IT IS A DIFFERENT MECHANISM: the namespace is STILL null.** With both entries in, the
+    ONLY JUnit `CLINIT REJECTED` left is `UniqueId` (deliberate) -- and the launcher stops at the SAME
+    `getStoreAdapter` line. There is no `UNRESOLVED STATIC`, `UNRESOLVED FIELD`, `LINK FAILED` or
+    `NULL CLASS LITERAL` in that run beyond the four known denylisted ones, so **a rejected initializer is no
+    longer the cause**. The trace is three frames and prints no caller, which is the next thing to get.
+  - **I TRUNCATED MY OWN EVIDENCE AND LOST A BOOT TO IT.** The wait loop matched `Exception in thread` and
+    killed QEMU while the stack was still being written a frame at a time over a 115200 baud UART -- chopping
+    off the frame that names the faulting class. `scripts/run-launcher.sh` now waits 25 s after the marker,
+    with the reason recorded beside it.
+  - **`scripts/run-launcher.sh` EXISTS NOW.** Every previous launcher run in this arc was ad-hoc; the script
+    codifies the manifest save/restore trap (a generated `ramfs/etc/init` left behind is how the tracked one
+    gets committed by accident), the live-truncated log, and `--disable-ansi-colors` -- the launcher's own
+    condition, since ansi AUTO takes a different picocli wrap path that proved nothing about this one.
+  - **TWO STALE LAUNCHER BOOTS I NAMED AS BLOCKERS WERE ALREADY FIXED.** `findRepeatableAnnotations` was
+    `annotationType()` returning null (PR #262) and the `BigDecimal.<init>` NPE behind it was
+    `JUnit4VersionCheck` (the vintage-engine denial) -- both closed hours before the logs I read them from
+    were superseded. **Check a log's COMMIT before naming its failure as current.**
+
 - **THE BROAD CLINIT RULE WAS RE-TESTED AND REJECTED AGAIN -- this time with the boundary MEASURED
   (2026-09-11).** Five Jupiter initializers had been allowlisted one at a time; the scan that ended that
   approach: **of the 74 classes with a `<clinit>` in the first 400 JUnit classes, 44 `ldc` a class OTHER than
