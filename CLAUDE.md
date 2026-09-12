@@ -16,6 +16,37 @@ the standing rules and current state so we don't re-litigate them each session.
   (e.g. not `p += 1; i += 1;`). One variable declaration per line (no
   `int a = 0, b = 0;`). Every control-flow body is braced, even one-liners.
 
+## Standing rules (2026-09-12) -- THESE SUPERSEDE EARLIER CONCLUSIONS
+
+1. **THE GOAL IS A FULLY FUNCTIONAL VM.** Not a minimal one that runs the demos. Where a subsystem is
+   currently absent by denial (java/nio/file, java/lang/invoke, sun/security, parts of java.math), the
+   direction of travel is to IMPLEMENT or STUB it, not to prune further.
+
+2. **ALL `<clinit>`s RUN.** The `clinitCompilable` gate, its per-class allowlist and the
+   `CLINIT REJECTED (statics stay null)` outcome are being retired. A skipped initializer is a SILENT WRONG
+   ANSWER -- the class loads, gets static cells, and answers null for ever -- which is the single most
+   expensive failure mode in this project's history.
+   - **This reverses two recorded rejections, and the reason they no longer apply is rule 3.** Both earlier
+     attempts were measured against a VM that DENIES natives: Form 1 died in 3 minutes at
+     `java/io/UnixFileSystem.<clinit>` -> the denylisted native `UnixFileSystem.initIDs`, and Form 2 died in
+     `ObjectStreamClass$Caches.<clinit>` for want of serialization. With natives STUBBED instead of denied,
+     that objection is gone. The old measurements were correct about the VM as it was, not about this one.
+
+3. **A `guestsrc/` OVERLAY STARTS FROM THE JDK 26 SOURCE CLASS**, not from a hand-written minimum.
+   - Source: `/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home/lib/src.zip` (JDK 26.0.1,
+     3395 `java.base` files). **The seed JDK on PATH IS 26.0.1** (`jenv`; note `/usr/libexec/java_home` does
+     not list Homebrew JDKs), so an overlay taken from this zip matches the java.base the writer bakes --
+     field layouts, signatures and `jdk.internal.*` all agree by construction.
+   - **Natives that are not implemented are STUBBED, and a stub THROWS rather than answering.** A stub that
+     returns a plausible value is indistinguishable from a working one; a throw names the class and method
+     the moment it is reached, which turns "implement everything" into a worklist the program itself writes.
+   - **A void native may be EMPTY only where doing nothing is the CORRECT semantics here** (`registerNatives`,
+     `initIDs` on a VM with no OS beneath it), and that judgement is recorded at the stub. Empty-by-default is
+     the same silence rule 2 exists to remove.
+   - **This supersedes "guestsrc is only for classes that need natives."** That rule existed to stop overlays
+     accumulating as minimal hand-written shells that silently drop stock members -- the trap that has cost
+     ELEVEN debugging sessions. Starting from the real source removes the cause rather than the symptom.
+
 ## Hard constraints (do not violate)
 
 - **Everything is Java.** Assembler, compiler, boot-image writer, runtime, and
