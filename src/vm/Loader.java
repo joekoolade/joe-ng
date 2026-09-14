@@ -8277,13 +8277,96 @@ public final class Loader
         mBuf[i] = Heap.allocCode(sz0);
     }
 
+    /**
+     * Name every method the VM COMPILES or DEFERS for one class, and say WHICH of the two happened.
+     *
+     * <p>THIS ANSWERS A QUESTION NO OTHER LINE CAN, and the launcher arc is currently stuck on exactly it.
+     * The remaining failure is an NPE on a captured value that {@code javap} traces to one instance field,
+     * assigned in one place -- {@code TestMethodTestDescriptor.<init>}'s {@code getstatic} + {@code putfield}.
+     * With {@link #STATIC_ADDR_LOG} on, that class's {@code <clinit>} logs {@code ownstatic} for its
+     * {@code putstatic} and the constructor's {@code getstatic} OF THE SAME FIELD IN THE SAME CLASS logs
+     * nothing on any of the three resolution paths. From that I INFERRED the constructor was never compiled.
+     *
+     * <p>**That inference is exactly the move this file's own rules forbid** -- three reports have already
+     * lied in this arc by stating a cause they never checked, and "the line is absent" has twice meant
+     * "the logging does not cover this path" rather than "the code did not run". So: measure it. If the
+     * constructor appears here, the silence is somewhere in {@code staticAddr} and the search moves there;
+     * if it does not, the body genuinely never compiled and the bug is upstream of the constructor entirely.
+     *
+     * <p>**PREFIX-FILTERED, and that is not tidiness.** Every method of every class passes through here, and
+     * an unfiltered dump over a ~1,700-blob closure floods the UART at 115200 baud and starves the run it is
+     * meant to diagnose -- already paid for once, when the verbose patch-time dump was turned on to chase a
+     * trap-wire index. One class's methods are a handful of lines.
+     *
+     * <p>Reports the PATH too: {@code late=1} is a lazy/on-demand/deferred-init compile ({@code compileReuseTib}
+     * is set only by those), {@code late=0} a batch phase-B one. "Never compiled" and "compiled on a path
+     * whose statics resolve differently" are different bugs, and the distinction costs one character here.
+     */
+    static final boolean COMPILE_WATCH = false;
+
+    /** The class COMPILE_WATCH reports on, matched as a PREFIX so nested classes are included. */
+    private static byte[] compileWatchClass()
+    {
+        return Magic.bytes("org/junit/jupiter/engine/descriptor/TestMethodTestDescriptor");
+    }
+
+    /** One COMPILE_WATCH line for method {@code i}: who it is, and whether it was emitted or deferred. */
+    private static void reportCompile(int i, boolean deferred)
+    {
+        if (gbase == 0L || gThisNameOff == 0)
+        {
+            return;                                     // no context to name it with; say nothing rather than guess
+        }
+        if (!utf8HasPrefix(gbase, gThisNameOff, compileWatchClass()))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  compilewatch "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x2E);
+        // The work set records a method by its BYTECODE ADDRESS and its descriptor, never its name -- so the
+        // name is recovered the same way LAZY_TRACE recovers it for a deferral entry. A 0 means the walk
+        // found no method_info at that address (a cross-class callee), and a 0 offset must NOT be printed:
+        // printNameAt would read whatever sits at the start of the blob and name it confidently.
+        int nameOff = findNameByCode(mCode[i]);
+        if (nameOff == 0)
+        {
+            Uart.write(Magic.bytes("<name not in this blob>"));
+        }
+        else
+        {
+            printNameAt(gbase, nameOff);
+        }
+        printNameAt(gbase, mDescOff[i]);
+        if (deferred)
+        {
+            Uart.write(Magic.bytes(" -- DEFERRED (stub; the body compiles on first call)"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" -- emitted buf="));
+            VM.printHex(mBuf[i]);
+        }
+        Uart.write(Magic.bytes(" late="));
+        VM.printDec(compileReuseTib ? 1 : 0);
+        Uart.putc(0x0A);
+    }
+
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
     private static void emitMethod(int i)
     {
         if (mDefer[i] != 0)                             // deferred: install a stub; the body compiles on first call
         {
+            if (COMPILE_WATCH)
+            {
+                reportCompile(i, true);
+            }
             emitDeferredStub(i);
             return;
+        }
+        if (COMPILE_WATCH)
+        {
+            reportCompile(i, false);
         }
         codeRootOwner = mBuf[i];                        // roots baked by this compile belong to this buffer
         relocRecording = 1;                             // record unresolved cross-class sites at their real address
