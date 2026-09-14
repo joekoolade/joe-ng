@@ -158,6 +158,18 @@ public final class Loader
      * repairing.
      */
     private static boolean[] instImapDone;
+
+    /**
+     * WHY refillImaps costs what it does, counted rather than inferred. The lazy-closure change measured as a
+     * no-op on hardware (imap 462,948ms -> 460,288ms at batch 165), and there are two candidate reasons that
+     * look identical from a timing line alone: the skip never fires, or the run never carried the change.
+     * These separate them -- {@code rfSkip} is the memo working, {@code rfClos} is the cost it was meant to
+     * avoid. Cumulative over the boot, printed with the per-batch cost line.
+     */
+    private static int rfSkip;
+    private static int rfVisit;
+    private static int rfClos;
+    private static int rfHoleEnd;
     // GC ROOTS for synthesised lambda classes. A lambda's TIB/Type/itableDir/imap are built by finishLambdaClass
     // in the GC heap [BASE,PTR) and are referenced ONLY by (a) baked immediates in JIT code (not scanned) and
     // (b) its runtime instances' object headers (word 0, which the collector does not trace). Unlike loaded
@@ -11556,6 +11568,16 @@ public final class Loader
         VM.printDec(lambdaTibRootN);
         Uart.write(Magic.bytes(" clinits="));
         VM.printDec(clinitN);
+        // The refill memo, MEASURED: skip = the memo firing, clos = the closure walks it was meant to avoid,
+        // holeEnd = imaps still short after a repair (those can never be memoised and pay in full every batch).
+        Uart.write(Magic.bytes(" rf:skip="));
+        VM.printDec(rfSkip);
+        Uart.write(Magic.bytes(" visit="));
+        VM.printDec(rfVisit);
+        Uart.write(Magic.bytes(" clos="));
+        VM.printDec(rfClos);
+        Uart.write(Magic.bytes(" holeEnd="));
+        VM.printDec(rfHoleEnd);
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
@@ -13347,9 +13369,11 @@ public final class Loader
         {
             if (instImapDone[m])                        // no holes last time -> a no-op now; see instImapDone
             {
+                rfSkip += 1;
                 m += 1;
                 continue;
             }
+            rfVisit += 1;
             long dir = instImaps[m];                    // the class's itable DIRECTORY (per-interface tables)
             int reg = instImapReg[m];
             if (reg < 0 || dir == 0L)
@@ -13375,6 +13399,7 @@ public final class Loader
                     {
                         if (n < 0)
                         {
+                            rfClos += 1;
                             n = ifaceClosureOf(reg);    // the class's full interface set (persistent registries)
                         }
                         refillItable(n, ir, it);
@@ -13386,6 +13411,10 @@ public final class Loader
                 }
                 k += 1;
                 t = Magic.load64(dir + k * 16);
+            }
+            if (holes)
+            {
+                rfHoleEnd += 1;
             }
             instImapDone[m] = !holes;
             m += 1;
@@ -13473,12 +13502,27 @@ public final class Loader
      *  {@code tryAdvance(Consumer)} for the abstract {@code Spliterator.tryAdvance(Consumer)}. */
     private static long defaultBySig(int n, long base, int nameOff, int descOff)
     {
+        // THE REGISTRY IS PROBED BY NAME HASH, NOT SCANNED. This was a linear walk of all rgCount entries per
+        // closure interface, and refillImaps calls it for EVERY PERMANENTLY-EMPTY itable slot on EVERY batch --
+        // slots that can never be filled, because nothing in the closure declares a body for them (an abstract
+        // method the class declares itself, or a native with no VM helper). Measured on the launcher it was
+        // 97.9% of the whole imap refill (fillT=19,427ms of imap=19,852ms at batch 10) and grew with rgCount,
+        // which is why per-batch cost climbed 1.3s -> 3.6s across a boot. Same defect and same remedy as the
+        // demand-load arc's `pull` pass, where a per-item linear registry scan went 6,664ms -> 1,539ms on a
+        // name hash index.
+        //
+        // THE CLOSURE ORDER IS PRESERVED EXACTLY: this returns the first match in CLOSURE order, so the chain
+        // is walked once per closure interface rather than taking the first entry the bucket happens to yield.
+        // Two interfaces in one closure may both declare the same name+descriptor, and picking the other one
+        // would change which default body runs -- silently.
+        buildRegIndex();
+        int h = utf8Hash(base, nameOff) & (RGTAB - 1);   // the wanted NAME alone keys the index, so hoist it
         int i = 0;
         while (i < n)
         {
             long ibase = clTab[ifClosureBuf[i]].base;       // a closure interface's blob; its own methods registered under it
-            int k = 0;
-            while (k < rgCount)
+            int k = rgBucket[h];
+            while (k >= 0)
             {
                 if (rgTab[k].base == ibase && rgTab[k].buf != 0L
                         && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
@@ -13486,7 +13530,7 @@ public final class Loader
                 {
                     return rgTab[k].buf;
                 }
-                k += 1;
+                k = rgNext[k];
             }
             i += 1;
         }
