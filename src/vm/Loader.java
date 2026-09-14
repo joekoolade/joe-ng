@@ -4864,8 +4864,15 @@ public final class Loader
                 // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray in its <clinit>; a
                 // literal split never matches graphemes, so this whole subtree is cold.
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/util/regex/Grapheme"))
-                // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
-                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/lang/CaseFolding"))
+                // jdk/internal/lang/CaseFolding WAS denied here, on the premise its own comment stated:
+                // "case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them".
+                // THAT PREMISE EXPIRED: JUnit's TimeoutDurationParser.<clinit> compiles
+                // `([1-9]\d*) ?((?:[nμm]?s)|m|h|d)?` with flags 66 = CASE_INSENSITIVE | UNICODE_CASE, so
+                // Pattern.CIRangeU asks this class which characters fold INTO the range [1-9]. It is
+                // OVERLAID now (guestsrc), which is what the denial had to be narrowed for: a denied class
+                // is trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
+                // The stock class cannot simply be un-denied -- it builds its tables with multianewarray,
+                // which this JIT records metadata for but has no lowering for.
                 // The charset ENCODER/DECODER fallback: stock String's byte[]-ctor/getBytes take the pure-Java
                 // UTF-8 fast path (identity vs the overlay sun/nio/cs singletons); the decode/encodeWithEncoder
                 // branches that would pull CharsetDecoder/nio buffers are statically present but never taken.

@@ -52,8 +52,9 @@ public final class ReachScan
         "jdk/internal/icu/", "java/text/", "sun/text/",
         // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
         "jdk/internal/util/regex/Grapheme",
-        // case-folding tables ([[I via multianewarray): only CASE_INSENSITIVE regex needs them.
-        "jdk/internal/lang/CaseFolding",
+        // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
+        // needs them", and JUnit's TimeoutDurationParser compiles exactly such a pattern. It is overlaid in
+        // guestsrc instead -- see Loader.isDenylisted. (Keep in sync with that list.)
         // charset encoder/decoder fallback (never taken: the overlay singletons pin the UTF-8 fast path).
         "java/nio/charset/CharsetDecoder", "java/nio/charset/CharsetEncoder",
         "java/nio/charset/Coder", "java/nio/charset/Coding", "java/nio/charset/CharacterCoding",
