@@ -1271,15 +1271,7 @@ public final class Loader
         if (!clTab[reg].superInited)
         {
             clTab[reg].superInited = true;              // set BEFORE recursing: a cycle must not re-enter
-            int sup = clTab[reg].superReg;
-            if (sup < 0 && clTab[reg].superNameOff != 0)
-            {
-                // superReg is resolved ONCE at registration and is -1 for ever if the superclass was not yet
-                // registered then -- the common case for a demand-loaded pair. Re-resolve by NAME (the blob
-                // does not move, so the offset is still valid) and cache it.
-                sup = classRegByNameAt(clTab[reg].base, clTab[reg].superNameOff);
-                clTab[reg].superReg = sup;
-            }
+            int sup = superRegOf(reg);
             if (sup >= 0 && sup != reg)
             {
                 ensureClinit(sup);
@@ -1488,7 +1480,7 @@ public final class Loader
                 }
                 i += 1;
             }
-            c = clTab[c].superReg;
+            c = superRegOf(c);
         }
     }
 
@@ -10015,7 +10007,7 @@ public final class Loader
                 }
                 i += 1;
             }
-            chain = clTab[chain].superReg;
+            chain = superRegOf(chain);
         }
         // NO name+descriptor fallback over unrelated classes. A slot number is an index into ONE class's
         // flattened vtable, so matching some other class's method and returning ITS slot indexes whatever
@@ -10237,7 +10229,7 @@ public final class Loader
             {
                 buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, vsName[idx], vsDesc[idx]);
             }
-            c = clTab[c] == null ? -1 : clTab[c].superReg;
+            c = superRegOf(c);
             hops += 1;
         }
         if (buf == 0L)
@@ -10315,7 +10307,7 @@ public final class Loader
         while (c >= 0 && hops < MAXIFACECHAIN)
         {
             n = collectIfaceNames(c, names, n);
-            c = clTab != null && c < clCount && clTab[c] != null ? clTab[c].superReg : -1;
+            c = superRegOf(c);
             hops += 1;
         }
         int direct = n;
@@ -10474,7 +10466,7 @@ public final class Loader
                 }
                 j += 1;
             }
-            chain = clTab[chain].superReg;
+            chain = superRegOf(chain);
         }
         return -1L;
     }
@@ -13101,6 +13093,40 @@ public final class Loader
         return 0L;
     }
 
+    /**
+     * The superclass registry index of {@code reg}, RE-RESOLVED BY NAME when registration left it -1.
+     *
+     * <p>{@code superReg} is resolved ONCE, at registration, and is -1 for ever if the superclass was not
+     * registered yet -- the ordinary case for a demand-loaded pair, where the subclass arrives first. Every
+     * walker that read the field raw therefore STOPPED AT THE FIRST SUCH LINK, and a chain walk that stops
+     * early fails exactly like one that was never written: it reports the member missing.
+     *
+     * <p>THIS HAD BEEN FIXED IN ONE PLACE AND LEFT EVERYWHERE ELSE. `ensureClinit` grew the by-name
+     * re-resolution when a skipped superclass initializer was traced to it; the other seven chain walks --
+     * vtable slot numbering, the late-virtual walk, the interface collection, field offsets, the clinit-dep
+     * drain and both interface-closure walks -- kept the raw read. It surfaced as
+     * `LINK FAILED MethodBasedTestDescriptor.cleanUp`: the interface walk collected that class's OWN
+     * interfaces, stopped at a stale -1, and never reached `Node` on its superclass, where the default body
+     * lives. A lookup that does not walk the whole chain has now been the bug FOUR times in this file.
+     *
+     * <p>The blob does not move, so the stored name offset stays valid; the result is cached, so a chain is
+     * re-resolved at most once per class. Self-reference answers -1 rather than looping.
+     */
+    static int superRegOf(int reg)
+    {
+        if (clTab == null || reg < 0 || reg >= clCount || clTab[reg] == null)
+        {
+            return -1;
+        }
+        int sup = clTab[reg].superReg;
+        if (sup < 0 && clTab[reg].superNameOff != 0)
+        {
+            sup = classRegByNameAt(clTab[reg].base, clTab[reg].superNameOff);
+            clTab[reg].superReg = sup;
+        }
+        return sup == reg ? -1 : sup;
+    }
+
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
     private static int regBySigU(long clsU)
     {
@@ -13735,7 +13761,7 @@ public final class Loader
             n = addIfaceUnique(n, clIfaceReg[reg * MAX_DIRECT_IF + j]);
             j += 1;
         }
-        int sr = clTab[reg].superReg;                       // the whole superclass chain's direct interfaces
+        int sr = superRegOf(reg);                           // the whole superclass chain's direct interfaces
         int guard = 0;
         while (sr >= 0 && guard < 64)
         {
@@ -13745,7 +13771,7 @@ public final class Loader
                 n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
                 j += 1;
             }
-            sr = clTab[sr].superReg;
+            sr = superRegOf(sr);
             guard += 1;
         }
         int i = 0;
@@ -13865,7 +13891,7 @@ public final class Loader
                 n = addIfaceUnique(n, clIfaceReg[sr * MAX_DIRECT_IF + j]);
                 j += 1;
             }
-            sr = clTab[sr].superReg;
+            sr = superRegOf(sr);
             guard += 1;
         }
         int i = 0;
