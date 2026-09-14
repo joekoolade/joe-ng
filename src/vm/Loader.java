@@ -3515,25 +3515,60 @@ public final class Loader
     {
         resetMethodTables();
         reachN = 0;
-        reachTab = new long[REACHTAB];                   // the set is rebuilt from the entry each batch
-        collectedTab = new long[REACHTAB];               // ... and so is "whose refs are already pended"
-        pdPendTo = new int[MAXBLOB];                     // Heap.alloc zeroes its payload, so every watermark
-        pdVirtTo = new int[MAXBLOB];                     //   starts at 0 and a blob added later starts there
-        pdDfltTo = new int[MAXBLOB];                     //   too -- it must consider every pend once
-        pdSeeded = new int[MAXBLOB];
-        pdSeedC = new int[MAXBLOB];
+        // ALLOCATED ONCE, NOT PER BATCH. These are fixed-size scratch, and rebuilding them every batch cost
+        // `MAXPEND * 36` bytes a batch by this method's own accounting below -- ~9.4MB, which Heap.alloc then
+        // ZEROES, on every one of a launcher boot's 165 batches. That was ~50% of `mark` and invisible: the
+        // nine sub-timers all live inside the round loop, and this runs before it. Raising MAXPEND
+        // 49,152 -> 262,144 for the RTA closure fix multiplied it 5.3x.
+        //
+        // WHICH TABLES NEED CLEARING IS NOT UNIFORM, and getting it wrong is silent: `pend*` and `inst*` are
+        // bounded by `pendN`/`instN`, which reset to 0 here, so nothing ever reads a stale slot and they need
+        // no clearing at all -- that is the whole 9.4MB. The rest DO need it: `reachTab`/`collectedTab` are
+        // open-addressed and probe until they hit a 0, and the `pd*` watermarks must start at 0 so a blob
+        // added later still considers every pend once (the comment those lines carried). ~348KB cleared
+        // against ~9.4MB allocated and zeroed.
+        if (pendBase == null)                            // resetLoader nulls these per LAUNCH to free them
+        {
+            cumBytes += (long) MAXPEND * 36L + 16384L * 16L + (long) MAXBLOB * 21L;   // see loadCostReport
+            reachTab = new long[REACHTAB];
+            collectedTab = new long[REACHTAB];
+            pdPendTo = new int[MAXBLOB];
+            pdVirtTo = new int[MAXBLOB];
+            pdDfltTo = new int[MAXBLOB];
+            pdSeeded = new int[MAXBLOB];
+            pdSeedC = new int[MAXBLOB];
+            pendBase = new long[MAXPEND];
+            pendClass = new int[MAXPEND];
+            pendName = new int[MAXPEND];
+            pendDesc = new int[MAXPEND];
+            pendKind = new int[MAXPEND];
+            pdInstantiated = new boolean[MAXBLOB];
+            instBase = new long[MAXPEND];
+            instOff = new int[MAXPEND];
+        }
+        else
+        {
+            int z = 0;
+            while (z < REACHTAB)                         // open-addressed: a probe walks until it finds a 0
+            {
+                reachTab[z] = 0L;
+                collectedTab[z] = 0L;
+                z += 1;
+            }
+            z = 0;
+            while (z < MAXBLOB)                          // watermarks: 0 = "has considered no pend yet"
+            {
+                pdPendTo[z] = 0;
+                pdVirtTo[z] = 0;
+                pdDfltTo[z] = 0;
+                pdSeeded[z] = 0;
+                pdSeedC[z] = 0;
+                pdInstantiated[z] = false;
+                z += 1;
+            }
+        }
         pendPullTo = 0;
         pendN = 0;
-
-        cumBytes += (long) MAXPEND * 36L + 16384L * 16L + (long) MAXBLOB * 21L;   // see loadCostReport
-        pendBase = new long[MAXPEND];
-        pendClass = new int[MAXPEND];
-        pendName = new int[MAXPEND];
-        pendDesc = new int[MAXPEND];
-        pendKind = new int[MAXPEND];
-        pdInstantiated = new boolean[MAXBLOB];
-        instBase = new long[MAXPEND];
-        instOff = new int[MAXPEND];
         instN = 0;
         parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
         addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
@@ -11633,6 +11668,15 @@ public final class Loader
         printDur(ticksUs(mrProbe));
         Uart.write(Magic.bytes(" dflt="));
         printDur(ticksUs(mrDflt));
+        // struct/inst/static WERE ALREADY MEASURED AND SIMPLY NOT PRINTED, and that hid where `mark` went:
+        // the six above sum to ~294ms of a 711ms mark at batch 165 of a launcher boot, so ~59% of it was
+        // unattributed. A sub-split that does not add up to its total is not a split; print every term.
+        Uart.write(Magic.bytes(" struct="));
+        printDur(ticksUs(mrStruct));
+        Uart.write(Magic.bytes(" inst="));
+        printDur(ticksUs(mrInst));
+        Uart.write(Magic.bytes(" static="));
+        printDur(ticksUs(mrStatic));
         Uart.write(Magic.bytes("] {imap="));
         printDur(ticksUs(cumRfImap));
         Uart.write(Magic.bytes(" synth="));
