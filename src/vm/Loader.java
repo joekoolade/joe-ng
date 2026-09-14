@@ -8980,6 +8980,20 @@ public final class Loader
                 reportZeroCellBind(rsBase[j], rsClass[j], rsName[j]);
                 addr = unresolvedStaticCell();
             }
+            if (STATIC_ADDR_LOG)
+            {
+                // THE PATCH PATH LOGGED NOTHING, success or failure, and that ambiguity cost a boot: the
+                // absence of a line for a field was read as "bound to the zero cell" when it only ever meant
+                // "resolved here, where nothing prints". A site's cell is only comparable against the one its
+                // <clinit> stored through if BOTH paths say which address they chose.
+                Uart.write(Magic.bytes("  patchstatic "));
+                printNameAt(rsBase[j], rsClass[j]);
+                Uart.putc(0x2E);
+                printNameAt(rsBase[j], rsName[j]);
+                Uart.write(Magic.bytes(" -> "));
+                VM.printHex(addr);
+                Uart.putc(0x0A);
+            }
             Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
             Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
             j += 1;
