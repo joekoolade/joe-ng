@@ -6440,6 +6440,43 @@ public final class Loader
         return unresStaticCell;
     }
 
+    /**
+     * A {@code putstatic} that landed in the unresolved-static cell SILENTLY LOST ITS VALUE -- say so.
+     *
+     * <p>{@code patchRelocs} binds an unresolved static site to a shared permanently-zero cell so the access
+     * reads null instead of ADDRESS 0 (the firmware shim, whose instruction words come back as a plausible
+     * value). That is the right answer for a READ and the WRONG one for a WRITE: the store goes to a cell
+     * nothing ever reads, the field stays null for the life of the VM, and nothing says a word. The site is
+     * re-patched correctly at a later batch, so the READ that follows finds the real cell -- holding null.
+     *
+     * <p>THE CELL IS SUPPOSED TO STAY ZERO FOR EVER, which is what makes this detector sound rather than
+     * heuristic: it exists only so reads answer null, so a NON-ZERO value in it is proof that a store
+     * executed and was discarded. It cannot cry wolf on a passing boot.
+     *
+     * <p>Chased here because a JUnit {@code <clinit>} performs two stores -- {@code putstatic
+     * executableInvoker} (which demonstrably took effect) and {@code putstatic defaultInterceptorCall} (which
+     * read back null) -- and a lost store is the only mechanism that explains one working and the next not.
+     * Re-zeroed after reporting so a second loss is a second report rather than a latch.
+     */
+    private static void reportLostStaticStore()
+    {
+        if (unresStaticCell == 0L)
+        {
+            return;
+        }
+        long v = Magic.load64(unresStaticCell);
+        if (v == 0L)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("\n  STATIC STORE LOST: a putstatic bound to the unresolved-static cell discarded "));
+        VM.printHex(v);
+        Uart.write(Magic.bytes(" -- that field reads null for ever; batch "));
+        VM.printDec(cumBatches);
+        Uart.putc(0x0A);
+        Magic.store64(unresStaticCell, 0L);             // re-arm: a second loss is a second report
+    }
+
     private static long unresStaticCell;
 
     private static long[] unresStaticSeen;
@@ -7036,6 +7073,7 @@ public final class Loader
         {
             profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
         }
+        reportLostStaticStore();                        // a putstatic that landed in the unresolved-static cell
         // 4-phase lifecycle: batch initialization just completed -- every INSTANTIATED class's queued
         // <clinit> has run (or was deliberately skipped with seeded statics), so the whole batch
         // reaches INITIALIZED. The boot invariant flags any class stuck short of phase B (a hole in

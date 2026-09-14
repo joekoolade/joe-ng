@@ -65,6 +65,12 @@ public class Lambda4Probe
         };
     }
 
+    /** ofVoidMethod's shape: capture the kind-9 reference, invoke it from inside the capturing lambda. */
+    static Sam2 wrap(Unbound2 ref)
+    {
+        return (a, b) -> ref.apply(new Hi(), a);
+    }
+
     /** A capture that is itself reached by interface dispatch, as JUnit's `call` is. */
     static Call4 viaRef()
     {
@@ -107,6 +113,60 @@ public class Lambda4Probe
                 call.apply(a, b, c1, c2);
                 return null;
             };
+        }
+    }
+
+    /**
+     * THE LAUNCHER'S ACTUAL FAILING VALUE: a kind-9 UNBOUND INTERFACE method reference, nc=0, stored by a
+     * {@code <clinit>} into a static field.
+     *
+     * <p>TestMethodTestDescriptor's static initializer is two stores. The first
+     * ({@code new InterceptingExecutableInvoker(); putstatic executableInvoker}) demonstrably WORKS -- that
+     * object's invoke/chainAndInvoke frames appear in the failing trace. The second
+     * ({@code invokedynamic; putstatic defaultInterceptorCall}) reads back NULL. So the initializer ran and
+     * one store took effect while the next did not, and the only difference is that the failing one stores an
+     * INDY RESULT.
+     *
+     * <p>{@code InvocationInterceptor::interceptTestMethod} is an unbound reference to an INSTANCE method of
+     * an INTERFACE: implementation kind 9, zero captures, and the receiver arrives as SAM argument 0. Every
+     * other arm here is kind 6 (a static method reference or a lambda body), which is why none of them
+     * reproduced. The log confirms the kind: `LAMBDA idx=384 nc=0 samArgc=4 size=16 kind=9`.
+     */
+    interface Greeter
+    {
+        String greet(String x);
+    }
+
+    interface Unbound2
+    {
+        String apply(Greeter g, String x);
+    }
+
+    interface Unbound4
+    {
+        String apply(Greeter g, String a, String b, String c);
+    }
+
+    static class Holder
+    {
+        /** Set by <clinit> from an indy, exactly as defaultInterceptorCall is. */
+        static Unbound2 REF;
+        static Unbound4 REF4;
+        static String MARKER;
+
+        static
+        {
+            MARKER = "set";                          // a NON-indy store, the control: this one must survive
+            REF = Greeter::greet;                    // kind 9, nc=0, samArgc=2
+            REF4 = (g, a, b, c) -> g.greet(a + b + c);
+        }
+    }
+
+    static class Hi implements Greeter
+    {
+        public String greet(String x)
+        {
+            return "hi:" + x;
         }
     }
 
@@ -158,6 +218,26 @@ public class Lambda4Probe
         Sam2 hi = Factory.chainOnIface(sink, "C1", "C2");
         hi.invoke("A0", "A1");
         System.out.println("iface-static 3cap2arg = " + seen + " (want A0,A1,C1,C2)");
+
+        // A <clinit>-stored INDY RESULT, which is the launcher's failing store. The non-indy MARKER is the
+        // control: if it survives and REF does not, the initializer ran and the indy store was lost.
+        System.out.println("clinit marker = " + Holder.MARKER + " (want set)");
+        System.out.println("clinit indy ref nonNull = " + (Holder.REF != null) + " (want true)");
+        System.out.println("clinit indy ref4 nonNull = " + (Holder.REF4 != null) + " (want true)");
+        if (Holder.REF != null)
+        {
+            System.out.println("unbound kind9 = " + Holder.REF.apply(new Hi(), "x") + " (want hi:x)");
+        }
+        if (Holder.REF4 != null)
+        {
+            System.out.println("unbound 4arg = " + Holder.REF4.apply(new Hi(), "a", "b", "c") + " (want hi:abc)");
+        }
+
+        // And the launcher's full chain: the <clinit>-stored kind-9 reference CAPTURED by a second lambda,
+        // then invoked through it -- which is where the NPE actually surfaces.
+        Unbound2 captured = Holder.REF;
+        Sam2 viaCapture = wrap(captured);
+        System.out.println("captured via lambda = " + viaCapture.invoke("A0", "A1") + " (want hi:A0)");
 
         System.out.println("Lambda4Probe done");
     }
