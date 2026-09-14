@@ -7078,11 +7078,18 @@ public final class Loader
         gEntryBlob = 0L;
         gRootBlob = 0L;
         gStubBlob = 0L;
-        pendBase = null;                                // free the mark's large scratch arrays for the GC
-        pendClass = null;
-        pendName = null;
-        pendDesc = null;
-        pendKind = null;
+        // THE MARK'S SCRATCH IS KEPT, NOT FREED. Nulling these ran EVERY BATCH (loadAll is per batch), so
+        // markReachable reallocated them every batch -- ~9.4MB by its own accounting, which Heap.alloc then
+        // ZEROES. MEASURED at 414ms/batch of a 710ms mark at batch 165 of a launcher boot, ~58% of it, and
+        // invisible to all nine of markReachable's sub-timers because they live inside the round loop while
+        // this runs before it.
+        //
+        // The trade is ~9MB of steady-state heap against ~1.5GB of allocate-and-zero across a boot. It was
+        // already transiently allocated every batch, so PEAK heap is unchanged; only the between-batch
+        // trough rises. Clearing the tables that need zero semantics costs ~350KB of stores instead --
+        // microseconds, which is why epoch-stamping them would buy nothing and would put the closure's
+        // correctness at risk for it (an unreset watermark under-marks SILENTLY: reach 1040 -> 449 once,
+        // and standalone runs still built the right closure -- only the suite caught it).
     }
 
     /** Record each blob's own name and every class it names (its {@code Class} entries). */
