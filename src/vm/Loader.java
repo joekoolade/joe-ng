@@ -3007,6 +3007,7 @@ public final class Loader
                 // keeps its still-valid cells: the philosophers' surviving tasks dispatch through them.
                 dlTab = null;
                 dlN = 0;
+                dlBucket = null;                        // the name index goes with the table it indexes
                 lzTab = null;
                 lzN = 0;
             }
@@ -8530,6 +8531,7 @@ public final class Loader
      * unmemoisable remainder is exactly where the time hides.
      */
     static long pcCallT, pcStatT, pcPubT;
+    static long pcLookT, pcUnresT, pcTailT;
     private static int pcMemo;
     private static int pcResolve;
     private static int pcUnres;
@@ -8690,6 +8692,7 @@ public final class Loader
             // lazily compiled since (rememberLazyBody) is picked up exactly as a fresh lookup would -- this
             // skips the LOOKUP, never the patch.
             long target;
+            long tL0 = Magic.readCNTPCT_EL0();
             if (rcReg[i] >= 0)
             {
                 pcMemo += 1;
@@ -8704,6 +8707,8 @@ public final class Loader
                     rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
                 }
             }
+            pcLookT += Magic.readCNTPCT_EL0() - tL0;
+            long tU0 = Magic.readCNTPCT_EL0();
             if (target == 0L)
             {
                 pcUnres += 1;
@@ -8752,6 +8757,8 @@ public final class Loader
                     reportTrapWired(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
                 }
             }
+            pcUnresT += Magic.readCNTPCT_EL0() - tU0;
+            long tT0 = Magic.readCNTPCT_EL0();
             if (target != 0L)
             {
                 if (target >= Heap.BASE)                       // DIAGNOSTIC: a call "resolved" into the DATA heap
@@ -8786,6 +8793,7 @@ public final class Loader
                     Magic.store32(rcAddr[i], A64Enc.bl(off));  // rewrite bl 0 -> bl target
                 }
             }
+            pcTailT += Magic.readCNTPCT_EL0() - tT0;
             i += 1;
         }
         long tB0 = Magic.readCNTPCT_EL0();
@@ -8820,7 +8828,8 @@ public final class Loader
     {
         buildRegIndex();                                 // incremental: only entries added since last time
         rgHitIdx = -1;
-        int i = rgBucket[utf8Hash(refBase, nameOff) & (RGTAB - 1)];
+        int h = utf8Hash(refBase, nameOff) & (RGTAB - 1);   // the wanted NAME keys the index; BOTH tiers want it
+        int i = rgBucket[h];
         while (i >= 0)
         {
             // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
@@ -8858,8 +8867,14 @@ public final class Loader
             {
                 break;
             }
-            int j = 0;
-            while (j < rgCount)
+            // PROBE, NOT SCAN -- and this tier, not tier 1, is where the time went. Tier 1 was indexed in
+            // an earlier increment and this was left scanning ALL rgCount entries PER SUPERCLASS LEVEL, for
+            // every site that misses tier 1. Those sites never memoise (see rcReg), so they re-resolve on
+            // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
+            // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
+            // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
+            int j = rgBucket[h];
+            while (j >= 0)
             {
                 if (utf8EqAt(pdBase[spd], pdNameOff[spd], rgTab[j].base, rgTab[j].classOff)
                         && utf8EqAt(refBase, nameOff, rgTab[j].base, rgTab[j].nameOff)
@@ -8867,7 +8882,7 @@ public final class Loader
                 {
                     return rgTab[j].buf;
                 }
-                j += 1;
+                j = rgNext[j];
             }
             pd = spd;
         }
@@ -8886,10 +8901,57 @@ public final class Loader
      * all funnel through here. Returns the CELL address; callers read it for callable code (the lazy stub,
      * or the body once first-called) or hand it to an emitter to indirect through.
      */
+    /**
+     * Name-keyed hash index over the phase-A cell table, so {@link #dlCellOf} is a PROBE rather than a linear
+     * scan comparing THREE Utf8 strings against every cell.
+     *
+     * <p>MEASURED, and this is where `patch` actually went. {@code dlStubByRef} is the LAST tier of
+     * {@link #globalBufByRef}, so it catches every site that misses the direct and super-chain tiers -- AND
+     * every {@code <init>}, which short-circuits straight to it because a constructor is never inherited.
+     * Constructor call sites are everywhere. Those sites never memoise (see {@code rcReg}), so they
+     * re-resolve on EVERY batch, and {@code dlN} grows with every class loaded: the scan is quadratic in the
+     * load. Splitting the call-site loop three ways put 98% of it in the LOOKUP (lookT 11,949ms of callT
+     * 12,169ms), which is itself ~95% of `patch` -- 1,542ms/batch at batch 165 on hardware.
+     *
+     * <p>Incremental like {@code rgBucket}: the table only ever grows within a batch and a cell's name never
+     * changes, so entries already indexed stay valid. {@code resetLoader} nulls {@code dlTab} and zeroes
+     * {@code dlN} together, and the index is rebuilt from scratch when it sees the count go backwards.
+     */
+    private static final int DLTAB = 32768;              // power of two > MAXLAZY; chained
+    private static int[] dlBucket;                       // name hash -> first cell index, -1 when empty
+    private static int[] dlNext;                         // cell index -> next entry with the same name hash
+    private static int dlIndexed;
+
+    private static void buildDlIndex()
+    {
+        if (dlBucket == null || dlIndexed > dlN)         // rebuilt when resetLoader zeroes the table
+        {
+            dlBucket = new int[DLTAB];
+            dlNext = new int[MAXLAZY];
+            int b = 0;
+            while (b < DLTAB)
+            {
+                dlBucket[b] = -1;
+                b += 1;
+            }
+            dlIndexed = 0;
+        }
+        while (dlIndexed < dlN)
+        {
+            int hh = utf8Hash(dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
+            dlNext[dlIndexed] = dlBucket[hh];
+            dlBucket[hh] = dlIndexed;
+            dlIndexed += 1;
+        }
+    }
+
     private static long dlCellOf(long clsBase, int clsOff, long nameBase, int nameOff, long descBase, int descOff)
     {
-        int k = 0;
-        while (k < dlN)
+        buildDlIndex();
+        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
+        // same cell the scan would have found and a miss still answers 0.
+        int k = dlBucket[utf8Hash(nameBase, nameOff) & (DLTAB - 1)];
+        while (k >= 0)
         {
             if (utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
                     && utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
@@ -8897,7 +8959,7 @@ public final class Loader
             {
                 return dlTab[k].cell;
             }
-            k += 1;
+            k = dlNext[k];
         }
         return 0L;
     }
@@ -11615,6 +11677,12 @@ public final class Loader
         printDur(ticksUs(pcStatT));
         Uart.write(Magic.bytes(" pubT="));
         printDur(ticksUs(pcPubT));
+        Uart.write(Magic.bytes(" lookT="));
+        printDur(ticksUs(pcLookT));
+        Uart.write(Magic.bytes(" unresT="));
+        printDur(ticksUs(pcUnresT));
+        Uart.write(Magic.bytes(" tailT="));
+        printDur(ticksUs(pcTailT));
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
