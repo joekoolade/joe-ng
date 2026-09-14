@@ -6477,6 +6477,46 @@ public final class Loader
         Magic.store64(unresStaticCell, 0L);             // re-arm: a second loss is a second report
     }
 
+    /**
+     * Name a static site bound to the zero cell WHEN ITS CLASS IS ALREADY LOADED -- a registration gap that no
+     * later batch will repair, so the access reads null for ever. Once per class+field, through the same
+     * dedupe table the other static reports use: a hot site would otherwise repeat it per batch.
+     *
+     * <p>Silent when the class is merely not loaded yet, which is the ordinary and self-correcting case.
+     */
+    private static void reportZeroCellBind(long refBase, int classOff, int nameOff)
+    {
+        if (regBySigU(refBase + classOff) < 0)
+        {
+            return;                                     // class not loaded yet: a later batch resolves it
+        }
+        long key = refBase + (long) classOff + (long) nameOff;
+        if (unresStaticSeen == null)
+        {
+            unresStaticSeen = new long[64];
+            unresStaticSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresStaticSeenN)
+        {
+            if (unresStaticSeen[k] == key)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (unresStaticSeenN < unresStaticSeen.length)
+        {
+            unresStaticSeen[unresStaticSeenN] = key;
+            unresStaticSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  STATIC BOUND TO THE ZERO CELL (reads null for ever; class IS loaded): "));
+        printNameAt(refBase, classOff);
+        Uart.putc(0x2E);
+        printNameAt(refBase, nameOff);
+        Uart.putc(0x0A);
+    }
+
     private static long unresStaticCell;
 
     private static long[] unresStaticSeen;
@@ -8926,6 +8966,18 @@ public final class Loader
                 // Not a final verdict and deliberately silent: patchRelocs() revisits every site from 0 at each
                 // batch end, so a class loaded LATER still patches this site properly. The cell only decides
                 // what happens if it never is -- a null read and an ordinary NPE, instead of a wild branch.
+                // NAME IT WHEN THE CLASS IS ALREADY LOADED. Binding to the zero cell is legitimate while the
+                // class simply has not arrived yet -- patchRelocs revisits every site at each batch end, so a
+                // later batch resolves it properly, and reporting then would cry wolf on a healthy boot. But
+                // if the class IS REGISTERED and the field still has no cell, no later batch will fix it: the
+                // access reads null for the life of the VM, and nothing says a word.
+                //
+                // That silence is what hid the launcher's failure. TestMethodTestDescriptor.<clinit> stores
+                // defaultInterceptorCall correctly (both putstatics resolve, and the boot log shows their
+                // cells), but the CONSTRUCTOR's getstatic of the same field appears in no resolver log at
+                // all -- it came through here, bound to the zero cell, and read null. Three hops later that
+                // null is a lambda capture, and the NPE names a JUnit lambda rather than this.
+                reportZeroCellBind(rsBase[j], rsClass[j], rsName[j]);
                 addr = unresolvedStaticCell();
             }
             Magic.store32(rsAddr[j], A64Enc.movz(rsReg[j], (int) addr, 0));   // rewrite the movz+movk
