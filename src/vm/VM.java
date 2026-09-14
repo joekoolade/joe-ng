@@ -1029,6 +1029,22 @@ public final class VM
         return Loader.resolveUnresolvedNew(site, lr - 4L);
     }
 
+    /**
+     * A CONSTRUCTOR REFERENCE is about to instantiate a class: run its {@code <clinit>} first (JVMS 5.5).
+     *
+     * <p>Called from the hand-emitted kind-8 lambda thunk, the one instantiation route that does not go
+     * through {@link #newUnresolved} -- it allocates and calls {@code <init>} itself, so the rule that helper
+     * already enforces had no effect here.
+     */
+    static void ctorRefInit(long reg)
+    {
+        if (reg < 0L)
+        {
+            return;                                    // boot force-compile probe: make the helper reachable only
+        }
+        Loader.ctorRefInit((int) reg);
+    }
+
     static int arrayStoreOk(long array, long value)
     {
         if (value == 0L)
@@ -1243,6 +1259,7 @@ public final class VM
         if (newCceAddr == 0L) { long u = newCce(); }                  // ClassCastException (failed checkcast)
         if (castOkAddr == 0L) { int u = castOk(0L, 0L); }             // checkcast predicate
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
+        if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
@@ -2550,6 +2567,7 @@ public final class VM
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
     static long newUnresolvedAddr;     // VM.newUnresolved(J)J — an executed `new` the loader resolves late
+    static long ctorRefInit0;          // VM.ctorRefInit(J)V — a constructor reference initializes its target (JVMS 5.5)
     static long printStackTraceAddr;   // VM.printStackTrace(J)V — Throwable.printStackTrace0() native (self in x0)
     static long fileOpenAddr;          // VM.fileOpen(J)J — FileInputStream.open0(String) native (M3 RAMFS)
     static long dnsResolveAddr;        // VM.dnsResolve(J)I — java.net.InetAddress.resolve0(byte[]) native (M3)

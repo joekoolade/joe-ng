@@ -17289,6 +17289,41 @@ public final class Loader
         return w;
     }
 
+    /**
+     * Initialize the class a CONSTRUCTOR REFERENCE is about to instantiate (JVMS 5.5).
+     *
+     * <p>Called from the hand-emitted kind-8 thunk, which allocates and runs {@code <init>} itself rather
+     * than going through {@code resolveUnresolvedNew} -- the helper where this rule already lives.
+     *
+     * <p>{@code reg} is baked into the thunk as an immediate at build time. That is sound for the same
+     * reason the TIB beside it is: {@code resetLoader} rebuilds {@code clTab} per LAUNCH, and a thunk built
+     * in one launch has already had its baked TIB invalidated by the next -- so a stale index here is not a
+     * new exposure, and {@code ensureClinit} bounds-checks the index besides.
+     */
+    static void ctorRefInit(int reg)
+    {
+        ensureClinit(reg);
+    }
+
+    /**
+     * The constructor-reference initialization helper is not in this image, so the thunk cannot run the
+     * target's {@code <clinit>} before its {@code <init>}. Says which class is affected: the consequence is
+     * a constructor reading its own class's statics as null, which surfaces arbitrarily far away.
+     */
+    private static void reportCtorRefNoInitHelper(int cr)
+    {
+        Uart.write(Magic.bytes("\n  CTOR-REF CANNOT INITIALIZE (its <init> may read null statics): "));
+        if (clTab != null && cr >= 0 && cr < clCount && clTab[cr] != null)
+        {
+            printNameAt(clTab[cr].base, clTab[cr].nameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<unregistered>"));
+        }
+        Uart.write(Magic.bytes(" -- vm/VM.ctorRefInit0 was not stashed\n"));
+    }
+
     /** Names a constructor-reference target whose TIB is not built yet -- see the call site for why. */
     private static void reportLambdaCtorNoTib(int cr)
     {
@@ -17347,7 +17382,13 @@ public final class Loader
             reportUnboxableRef(idx, retKind);
             boxRet = false;                 // an un-adapted result is wrong, but a `bl 0` re-enters the image
         }
-        long thunk = Heap.allocCode(160);   // 128 + the boxing epilogue's 7 words
+        // 128 + the boxing epilogue's 7 words, PLUS two words per SAM argument: the kind-8 constructor-ref
+        // arm saves every ctor argument to the frame across Heap.alloc and reloads it before <init>, so its
+        // length grows with the arity while every other arm is fixed. At 160 flat a constructor reference
+        // with more than ~13 SAM arguments would have written PAST the allocation into whatever code the
+        // arena handed out next -- silent, and the worst failure mode this VM has. Nothing reached had that
+        // arity, so it never fired; sizing from `ia` removes the cliff rather than moving it.
+        long thunk = Heap.allocCode(160 + ia * 16);
         int w = 0;
         if (boxRet)
         {
@@ -17490,6 +17531,50 @@ public final class Loader
             {
                 Magic.store32(thunk + w * 4L, A64Enc.strx(1 + k, 31, 16 + k * 8));       w += 1;  // save ctor arg k
                 k += 1;
+            }
+            // JVMS 5.5: CREATING AN INSTANCE IS AN ACTIVE USE, so the class initializes BEFORE the object
+            // exists and certainly before the <init> called below. This arm never did it -- a constructor
+            // reference was the one instantiation route in the VM with no ensureClinit anywhere on it.
+            //
+            // THE IDENTICAL DEFECT WAS FIXED ONCE ALREADY, for a deferred `new`: resolveUnresolvedNew calls
+            // ensureClinit for exactly this reason, and its comment records the symptom -- `java/util/
+            // ArrayList.<init>` reads DEFAULTCAPACITY_EMPTY_ELEMENTDATA, so an uninitialized class produced a
+            // list whose elementData was null and whose first add() threw NPE, far from the cause. A
+            // constructor reference reaches <init> without going through that helper at all.
+            //
+            // MEASURED, not assumed: COMPILE_WATCH on a launcher boot shows
+            // TestMethodTestDescriptor.<init> emitted at BATCH time (late=0) while its <clinit> is DEFERRED
+            // and compiles only on first active use (late=1) -- so the constructor's body exists before the
+            // initializer has run, and that constructor's whole job is `getstatic defaultInterceptorCall;
+            // putfield interceptorCall`.
+            //
+            // HERE, not at thunk-build time, and that half is load-bearing: building the thunk is LINKING,
+            // and JVMS 5.4 forbids linking from running an initializer -- the ordering inversion this VM
+            // already paid four failed fixes for. The call sits after the SAM arguments are saved to the
+            // frame and after LR is saved, so an initializer that allocates, compiles or throws is safe:
+            // the frame is established and is registered with the unwinder (addJitFrame, below) across
+            // exactly this range. It is NOT under the loader lock, deliberately -- clinitEntryOf takes that
+            // around the COMPILE only, because an initializer may block on a monitor or spawn threads.
+            long initAddr = VM.ctorRefInit0;
+            if (initAddr == 0L)
+            {
+                // The writer stashes this helper on every image (VM.forceCompile keeps it reachable), so 0
+                // means the stash is gone -- and emitting `bl 0` would re-enter the image entry rather than
+                // fail. Say so; skipping leaves today's behaviour, which is the bug this fixes.
+                reportCtorRefNoInitHelper(cr);
+            }
+            else if (cr > 0xFFFF)
+            {
+                // A movz carries 16 bits. MAXCLASS is far below that, so this cannot happen -- but a silent
+                // truncation here would initialize a DIFFERENT class, which is the shape of wrong answer
+                // this VM is least able to diagnose.
+                capHalt(Magic.bytes("ctorref-reg"), cr);
+            }
+            else
+            {
+                Magic.store32(thunk + w * 4L, A64Enc.movz(0, cr, 0));                    w += 1;  // x0 = class registry index
+                long h0 = thunk + w * 4L;
+                Magic.store32(h0, A64Enc.bl((int) ((initAddr - h0) / 4L)));              w += 1;  // run <clinit> if it has not run
             }
             Magic.store32(thunk + w * 4L, A64Enc.movz(0, size, 0));                      w += 1;  // x0 = instance size
             long h1 = thunk + w * 4L;

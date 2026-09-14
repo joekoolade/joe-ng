@@ -1328,6 +1328,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newCce()J",          "vm/VM.newCceAddr");     // ClassCastException
         stashHelper(image, staticWord, wordOffset, "vm/VM.castOk(JJ)I",        "vm/VM.castOkAddr");     // checkcast predicate
         stashHelper(image, staticWord, wordOffset, "vm/VM.newUnresolved(J)J", "vm/VM.newUnresolvedAddr"); // late-resolved `new`
+        stashHelper(image, staticWord, wordOffset, "vm/VM.ctorRefInit(J)V", "vm/VM.ctorRefInit0");         // ctor-ref <clinit> (JVMS 5.5)
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.printStackTrace(J)V", "vm/VM.printStackTraceAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fileOpen(J)J",       "vm/VM.fileOpenAddr");   // M3: FileInputStream.open0
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.dnsResolve(J)I",     "vm/VM.dnsResolveAddr"); // M3: InetAddress.resolve0
