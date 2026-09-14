@@ -361,6 +361,37 @@ public final class Class<T> implements java.lang.reflect.Type
      * class at all; without it that constructor resolved nowhere and surfaced as a trap with an EMPTY callee
      * and {@code TRAPWIRE index=-1} -- the signature of a LATE-RESOLUTION failure rather than a denial.
      */
+    /**
+     * This class's field descriptor: {@code "I"}, {@code "[I"}, {@code "Ljava/lang/String;"}.
+     *
+     * <p>Derived from {@link #getName()}, whose three shapes are exactly the three cases here -- a primitive
+     * spells its own name, an array is already in descriptor form bar the separators, and everything else
+     * wraps. Reached from {@code java/io/ObjectStreamField.<init>}, i.e. from describing ANY class for
+     * serialization.
+     */
+    public String descriptorString()
+    {
+        if (isPrimitive())
+        {
+            String n = getName();
+            if (n.equals("int"))     { return "I"; }
+            if (n.equals("long"))    { return "J"; }
+            if (n.equals("boolean")) { return "Z"; }
+            if (n.equals("byte"))    { return "B"; }
+            if (n.equals("char"))    { return "C"; }
+            if (n.equals("short"))   { return "S"; }
+            if (n.equals("float"))   { return "F"; }
+            if (n.equals("double"))  { return "D"; }
+            return "V";                             // void
+        }
+        // An array's name is ALREADY a descriptor apart from the package separator ("[Ljava.lang.String;").
+        if (isArray())
+        {
+            return getName().replace('.', '/');
+        }
+        return "L" + getName().replace('.', '/') + ";";
+    }
+
     public boolean isRecord()
     {
         Class<?> sup = getSuperclass();
@@ -1016,6 +1047,94 @@ public final class Class<T> implements java.lang.reflect.Type
     {
         return java.lang.reflect.Constructor.resolve(this, parameterTypes == null ? 0 : parameterTypes.length);
     }
+
+    /**
+     * Every constructor DECLARED by this class.
+     *
+     * <p>Built from the SAME method enumeration {@link #getDeclaredMethods} uses, keeping what that one
+     * filters out: {@code <init>} is in the VM's method registry like any other method. No new native is
+     * needed -- the descriptor is already available, and the arity {@code Constructor.resolve} wants is read
+     * from it rather than guessed.
+     *
+     * <p>Reached from {@code ReflectionUtils.getDeclaredConstructor}, which streams this array, filters out
+     * synthetic entries and requires EXACTLY ONE -- so it must be a real enumeration rather than a one-element
+     * array built from {@code getDeclaredConstructor()}: a class with two constructors must answer two, or
+     * JUnit's "exactly one" check passes when it should fail.
+     */
+    public java.lang.reflect.Constructor<?>[] getDeclaredConstructors()
+    {
+        // A SEPARATE enumeration, because declaredMethodCount0/declaredMethodAt0 FILTER OUT <init> and
+        // <clinit> at the VM (getDeclaredMethods must not report them). Built on those, this loop matched
+        // nothing and answered an EMPTY array -- and JUnit's getDeclaredConstructor requires exactly one, so
+        // "zero" failed the test class rather than the VM, which is how it surfaced.
+        int n = (int) declaredCtorCount0(this);
+        java.lang.reflect.Constructor<?>[] out = new java.lang.reflect.Constructor<?>[n];
+        int i = 0;
+        int k = 0;
+        while (i < n)
+        {
+            try
+            {
+                out[k] = java.lang.reflect.Constructor.resolve(this, arityOf(declaredCtorDescAt0(this, i)));
+                k += 1;
+            }
+            catch (NoSuchMethodException e)
+            {
+                // declared but unresolvable here -- skip it rather than return a null element
+            }
+            i += 1;
+        }
+        java.lang.reflect.Constructor<?>[] trimmed = new java.lang.reflect.Constructor<?>[k];
+        int j = 0;
+        while (j < k)
+        {
+            trimmed[j] = out[j];
+            j += 1;
+        }
+        return trimmed;
+    }
+
+    /**
+     * Parameter COUNT of a method descriptor -- {@code (Ljava/lang/String;I)V} -> 2.
+     *
+     * <p>Counts parameters, not characters: an object type runs to its {@code ;} and an array's {@code [}s
+     * belong to the type that follows them, so a naive scan would report {@code ([[I)V} as three.
+     */
+    private static int arityOf(String desc)
+    {
+        if (desc == null)
+        {
+            return 0;
+        }
+        int n = 0;
+        int i = desc.indexOf('(') + 1;
+        int end = desc.indexOf(')');
+        while (i < end && i > 0)
+        {
+            char c = desc.charAt(i);
+            while (c == '[')                            // array dimensions belong to the type after them
+            {
+                i += 1;
+                c = desc.charAt(i);
+            }
+            if (c == 'L')
+            {
+                i = desc.indexOf(';', i) + 1;           // an object type runs to its ';'
+            }
+            else
+            {
+                i += 1;                                 // a primitive is one character
+            }
+            n += 1;
+        }
+        return n;
+    }
+
+    /** VM native: how many CONSTRUCTORS this class declares (declaredMethodCount0 excludes them). */
+    private static native long declaredCtorCount0(Class<?> c);
+
+    /** VM native: the n-th declared constructor's DESCRIPTOR, for its arity. */
+    private static native String declaredCtorDescAt0(Class<?> c, int want);
 
     /** Access flags of the named own instance field, or -1 if absent (reflection helper for the field updaters). */
     public int fieldModifiers(String name)

@@ -1225,6 +1225,9 @@ public final class VM
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
+        if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
+        if (fieldAnnoAllAddr == 0L) { long u = VMNatives.fieldAnnoAll(0L, 0L); }
+        if (unsafeStaticAddrAddr == 0L) { long u = VMNatives.unsafeStaticFieldAddr(0L, 0L); }
         if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(0L, 0L); }
         if (noopNativeAddr == 0L) { VMNatives.noopNative(0L); }
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
@@ -1257,6 +1260,8 @@ public final class VM
         if (returnTypeAddr == 0L) { long u = VMNatives.methodReturnType(-1L); }     // Method.returnType0
         if (declMethodAddr == 0L) { long u = VMNatives.declaredMethodAt(0L, -1L); }   // Class.declaredMethodAt0
         if (declMethodDescAddr == 0L) { long u = VMNatives.declaredMethodDescAt(0L, -1L); } // Class.declaredMethodDescAt0
+        if (declCtorCountAddr == 0L) { long u = VMNatives.declaredCtorCount(0L); }
+        if (declCtorDescAddr == 0L) { long u = VMNatives.declaredCtorDescAt(0L, 0L); }
         if (declMethodCountAddr == 0L) { long u = VMNatives.declaredMethodCount(0L); } // Class.declaredMethodCount0
         if (declFieldAddr == 0L) { long u = VMNatives.declaredFieldAt(0L, -1L); }    // Class.declaredFieldAt0
         if (declFieldDescAddr == 0L) { long u = VMNatives.declaredFieldDescAt(0L, -1L); }
@@ -2526,6 +2531,9 @@ public final class VM
     static long nanoTimeAddr;          // VM.nanoTime()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
+    static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()
+    static long fieldAnnoAllAddr;      // VMNatives.fieldAnnoAll(JJ)J — Field.getDeclaredAnnotations()
+    static long unsafeStaticAddrAddr;  // VMNatives.unsafeStaticFieldAddr(JJ)J — Unsafe.staticFieldOffset(Field)
     static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(JJ)J — Unsafe.objectFieldOffset(Class,String)
     static long noopNativeAddr;        // VMNatives.noopNative(J)V — a native whose C body does nothing observable here
     static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
@@ -2600,6 +2608,8 @@ public final class VM
     static long returnTypeAddr;        // VMNatives.methodReturnType(J)J — Method.returnType0
     static long declMethodAddr;        // VM.declaredMethodAt(JJ)J — Class.declaredMethodAt0 (enumeration)
     static long declMethodDescAddr;    // VM.declaredMethodDescAt(JJ)J — Class.declaredMethodDescAt0
+    static long declCtorCountAddr;     // VMNatives.declaredCtorCount(J)J — Class.declaredCtorCount0
+    static long declCtorDescAddr;      // VMNatives.declaredCtorDescAt(JJ)J — Class.declaredCtorDescAt0
     static long declMethodCountAddr;   // VM.declaredMethodCount(J)J — Class.declaredMethodCount0
     static long declFieldAddr;         // VMNatives.declaredFieldAt(JJ)J — Class.declaredFieldAt0
     static long declFieldDescAddr;     // VMNatives.declaredFieldDescAt(JJ)J — Class.declaredFieldDescAt0

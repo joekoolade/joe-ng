@@ -304,6 +304,18 @@ final class VMNatives
         return Loader.declaredFieldName(mirror, -1);
     }
 
+    /** {@code Class.declaredCtorCount0(Class)}: how many CONSTRUCTORS the class declares. */
+    static long declaredCtorCount(long mirror)
+    {
+        return Loader.declaredCtorPart(mirror, -1, 0);
+    }
+
+    /** {@code Class.declaredCtorDescAt0(Class,int)}: the n-th constructor's DESCRIPTOR. */
+    static long declaredCtorDescAt(long mirror, long want)
+    {
+        return Loader.declaredCtorPart(mirror, (int) want, 1);
+    }
+
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
     static long declaredMethodCount(long mirror)
     {
@@ -340,6 +352,29 @@ final class VMNatives
     }
 
     /** {@code Field.annoGet0(Class, byte[] fieldName, byte[] desc)} native: an annotation on a FIELD. */
+    /**
+     * {@code Runtime.availableProcessors()} -> 4.
+     *
+     * <p>A native on stock ({@code Runtime.java:620}), so rule 3 puts it here rather than in an overlay. The
+     * answer is a HARDWARE FACT rather than a guess: the BCM2711 is a quad Cortex-A72 and this VM brings all
+     * four up ("SMP: 4 of 4 cores up").
+     *
+     * <p>Deliberately NOT the count of cores currently on the run queue, which is what {@code coreSched}
+     * tracks. Callers size thread pools with this and expect a CONSTANT -- ForkJoinPool's initializer reads
+     * it once to fix its common-pool parallelism for the life of the VM, so an answer that moved as cores
+     * joined or drained would make that value depend on when the initializer happened to run.
+     */
+    static int availableProcessors()
+    {
+        return 4;
+    }
+
+    /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
+    static long fieldAnnoAll(long mirror, long nameArr)
+    {
+        return Loader.fieldAnnotationsAll(mirror, nameArr);
+    }
+
     static long fieldAnnoGet(long mirror, long nameArr, long descArr)
     {
         if (descArr <= 0x1000L || mirror <= 0x1000L || nameArr <= 0x1000L)
@@ -689,6 +724,26 @@ final class VMNatives
         int fnLen = (int) Magic.load64(nameArrRef + 16L);    // guest byte[] length
         long fnBase = nameArrRef + 24L;                      // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
+    }
+
+    /**
+     * {@code Unsafe.staticFieldOffset(Field)} -> the ABSOLUTE address of a static's slot.
+     *
+     * <p>Stock splits a static access into a base and an offset and only ever uses the two TOGETHER, so any
+     * pair addressing the right word is correct. joe-ng keeps statics in a per-class block at an absolute
+     * address, so the whole address goes here and {@code staticFieldBase} answers null -- which is the stock
+     * contract for an absolute offset. Reached from ForkJoinPool's initializer (its {@code poolIds} counter).
+     */
+    static long unsafeStaticFieldAddr(long mirrorRef, long nameArrRef)
+    {
+        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)   // boot-time force-compile passes 0
+        {
+            return 0L;
+        }
+        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
+        int fnLen = (int) Magic.load64(nameArrRef + 16L);
+        long fnBase = nameArrRef + 24L;
+        return Loader.staticSlotOfType(typeAddr, fnBase, fnLen);
     }
 
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */

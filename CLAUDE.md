@@ -115,6 +115,58 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE IMAP REFILL WAS A LINEAR REGISTRY SCAN PER EMPTY ITABLE SLOT -- 267x ON HARDWARE (2026-09-14,
+  PI-VALIDATED).** `refillImaps` was **460,288ms** of a 165-batch launcher boot, against `seeds` 565ms and
+  `synth` 142ms. It is **1,720ms** now: ~458 seconds, 7.6 minutes, removed from the boot.
+
+  | batch 165 | before | after | |
+  |---|---|---|---|
+  | `imap` (cumulative) | 460,288ms | **1,720ms** | **267x** |
+  | `clinit` (per batch) | 3,656ms | **27.5ms** | 133x |
+  | `tot` (per batch) | 6,174ms | **2,515ms** | 2.45x |
+
+  - **ROOT CAUSE: `defaultBySig` SCANNED THE WHOLE METHOD REGISTRY**, once per closure interface, for every
+    itable slot that was 0. `rgCount` grows with every method compiled all boot, so the cost grew with it --
+    which is exactly what the per-batch line had been saying all along: 1.3s/batch at batch 6 rising to
+    3.6s/batch at batch 165. It probes the registry NAME-HASH INDEX now. Same defect and same remedy as the
+    demand-load arc's `pull` pass (6,664ms -> 1,539ms on a name hash index).
+  - **THE FIX BEFORE IT WAS A NO-OP, AND MEASURING IS THE ONLY REASON THAT WAS FOUND.** Computing the
+    interface closure lazily measured **462,948ms -> 460,288ms (0.6%)** on hardware. The memo it added WORKS
+    -- counters say ~482 of 665 imaps are skipped per batch -- but `refillItable` only does real work on slots
+    that are 0, and those live ENTIRELY in the ~182 imaps still short after a repair. **The number of
+    `defaultBySig` calls was therefore unchanged BY CONSTRUCTION.** I had optimised an assumption I never
+    measured; splitting the timer three ways said so in one run: `fillT` was **97.9%** of the refill and the
+    closure I had made lazy was **0.035%**.
+  - **TWO CALL SITES, AND I ONLY REASONED ABOUT ONE.** `buildItableFor` also calls `defaultBySig`, on the
+    demand-load/`<clinit>` path -- which is why `clinit` fell 133x as a side effect. Worth checking every
+    caller before predicting the blast radius of a fix.
+  - **THE ~182 CAN NEVER BE MEMOISED, and that is correct rather than a gap:** a slot stays 0 when nothing in
+    the closure declares a body -- an abstract method the class declares itself, or a native with no VM helper
+    (both recorded when `mintPrunedStub` landed). They are searched, fail, and are searched again next batch.
+    Making the search cheap is the fix; pretending the slot might not be 0 is not.
+  - **CLOSURE ORDER IS PRESERVED EXACTLY.** The original returns the first match in CLOSURE order, so the
+    bucket chain is walked once per closure interface rather than taking the first entry the bucket yields.
+    Two interfaces in one closure may both declare the same name+descriptor, and silently picking the other
+    would change which default body runs.
+  - **A WRONG CLAIM I MADE AND RETRACTED, recorded because the reasoning was the problem, not the data.** When
+    the lazy-closure build measured flat I said the card could not have been reflashed, and gave two lines of
+    "evidence" -- both were downstream of my wrong model predicting a 3.6x cut, so neither was evidence at all.
+    The card HAD carried that build. **A prediction derived from an unmeasured assumption cannot be used to
+    date a log.**
+  - **PER-ITERATION TIMERS WERE REMOVED, NOT GATED:** two `readCNTPCT_EL0` per itable entry was noise against
+    19s and is a visible share of 613ms. The four counters stay -- plain int increments, and `skip`/`holeEnd`
+    are what separate "the memo is not firing" from "the memo fires and the rest is unmemoisable".
+  - **PI-VALIDATED (`core 166MHz`, SMP on, launcher):** counters on silicon match QEMU almost exactly (~593
+    skip, ~235 visit/clos/holeEnd per batch); no FAULT, no parity DIFF, no `BOOT RE-ENTERED`, no
+    `unclaimed pc`, and only the known denylisted `UNRESOLVED STATIC`/`TRAP-WIRED`/`NULL CLASS LITERAL` lines.
+    QEMU: demo suite clean on NINE markers with `ifacedflt`/`ifacedfltch` both `late-default` -- the late
+    interface defaults this path resolves, and the arms that break if the index probe disagrees with the scan.
+    `metal junit: ran 44, failures 0`; host tests unchanged incl. `compiler: 37 checks`.
+  - **WHAT IS THE BOTTLENECK NOW:** `patch` (1,622ms/batch at batch 165) and `mark` (711ms/batch), neither
+    moved by this change. The launcher still stops at `VIRTUALRESOLVE FAILED
+    java/lang/reflect/Constructor.getParameters()` from `ExtensionUtils.registerExtensionsFromExecutableParameters`
+    -- an ordinary overlay gap, untouched here.
+
 - **EVERY `<clinit>` RUNS, AND THREE SILENT-CORRUPTION BUGS FELL OUT OF IT (2026-09-12).** Rule 2 is in: the
   `clinitCompilable` gate short-circuits and `CLINIT REJECTED` is gone from every boot. Each blocker it
   exposed was named by the VM and decided by READING THE JDK 26 SOURCE, not guessed.

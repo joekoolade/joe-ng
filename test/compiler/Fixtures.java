@@ -23,6 +23,19 @@ public final class Fixtures
         Magic.writeHCR_EL2(0x80000000L);
     }
 
+    /**
+     * A compare-and-swap, so {@code CompilerTest} can pin the whole LOWERING rather than its pieces.
+     *
+     * <p>The individual encodings are pinned in {@code A64Test}; what this catches is their COMPOSITION --
+     * the three branch offsets. A wrong offset assembles perfectly and corrupts memory at run time: jump
+     * short of the CLREX and the exclusive monitor stays armed for an unrelated later store; jump past the
+     * retry and a lost monitor silently reports success.
+     */
+    public static boolean casFixture(long addr, long expect, long update)
+    {
+        return Magic.cas64(addr, expect, update);
+    }
+
     /** A leaf method with a parameter and a return value — exercises the frame. */
     public static int addOne(int x)
     {

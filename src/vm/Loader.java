@@ -145,6 +145,31 @@ public final class Loader
     private static long[] instImaps;
     private static int[] instImapReg;    // the class registry index each imap belongs to (for its iface closure)
     private static int instImapN;
+    /**
+     * Per-imap "nothing left to repair" flag, and it is EXACT rather than approximate.
+     *
+     * <p>{@link #refillItable} only ever writes a slot that is 0 -- it never overwrites a filled one. So an
+     * imap whose slots are all non-zero is a guaranteed NO-OP on every future pass, and skipping it loses
+     * nothing. An imap that still has a hole stays hot, because the hole may become fillable once the class
+     * declaring the default is compiled by a later batch, which is the whole reason this pass exists.
+     *
+     * <p>MEASURED: without it, {@code refillImaps} was 463 SECONDS of a 900-second launcher load -- it walked
+     * all ~830 imaps every batch and called {@code ifaceClosureOf} on each, whether or not anything needed
+     * repairing.
+     */
+    private static boolean[] instImapDone;
+
+    /**
+     * WHY refillImaps costs what it does, counted rather than inferred. The lazy-closure change measured as a
+     * no-op on hardware (imap 462,948ms -> 460,288ms at batch 165), and there are two candidate reasons that
+     * look identical from a timing line alone: the skip never fires, or the run never carried the change.
+     * These separate them -- {@code rfSkip} is the memo working, {@code rfClos} is the cost it was meant to
+     * avoid. Cumulative over the boot, printed with the per-batch cost line.
+     */
+    private static int rfSkip;
+    private static int rfVisit;
+    private static int rfClos;
+    private static int rfHoleEnd;
     // GC ROOTS for synthesised lambda classes. A lambda's TIB/Type/itableDir/imap are built by finishLambdaClass
     // in the GC heap [BASE,PTR) and are referenced ONLY by (a) baked immediates in JIT code (not scanned) and
     // (b) its runtime instances' object headers (word 0, which the collector does not trace). Unlike loaded
@@ -2991,11 +3016,25 @@ public final class Loader
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
         rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
+        rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
+        rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
         sgTab = new RVMField[MAXREG];
         sgCount = 0;
         relocRecording = 0;
         lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
         linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
+        // FILLED WITH -1, because the zero default is a VALID REGISTRY INDEX. recordTailReloc (lambda and
+        // method-reference thunks) did not set this field, so every such site memoised to rgTab[0] and
+        // dispatched into an unrelated method -- the suite caught it as `reflective lambda thread = 0
+        // (want 7)`. Both recorders set it explicitly now; this makes a third one that forgets fail safe
+        // (re-resolve) rather than silently wrong.
+        rcReg = new int[MAXRELOC];
+        int rr = 0;
+        while (rr < MAXRELOC)
+        {
+            rcReg[rr] = -1;
+            rr += 1;
+        }
         rcAddr = new long[MAXRELOC];
         rcBase = new long[MAXRELOC];
         rcTail = new int[MAXRELOC];
@@ -3054,6 +3093,7 @@ public final class Loader
         ifClosureBuf = new int[MAXIFM];
         instImaps = new long[MAXIMAP];
         instImapReg = new int[MAXIMAP];
+        instImapDone = new boolean[MAXIMAP];
         instImapN = 0;
         lambdaTibRoots = new long[MAXLAMBDATIB];
         lambdaTibVtCap = new int[MAXLAMBDATIB];
@@ -3413,6 +3453,26 @@ public final class Loader
     private static int[] instOff;
     private static int instN;
 
+    /**
+     * CUMULATIVE load cost across every batch, for answering "what is slowing this boot down".
+     *
+     * <p>Separate from the per-pass accumulators below, which {@link #markReachable} RESETS each batch: a
+     * launcher boot runs dozens of batches, so per-batch numbers say nothing about where the whole boot
+     * went. Printed as ONE line rather than per batch, because {@code LOAD_PROFILE}'s per-batch output is
+     * itself seconds of UART traffic at 115200 baud -- the profiler would be measuring its own printing,
+     * which is exactly how the per-class `load` lines hid ~3.5s of the demand-load arc.
+     */
+    /**
+     * The "clinit" span split into its parts, because the LABEL WAS MISLEADING: {@code runClinits} does
+     * almost nothing now (every initializer defers to the lazy barrier), and the time is in the three REFILL
+     * passes ahead of it -- each of which walks everything accumulated so far, every batch.
+     */
+    static long cumRfImap, cumRfSynth, cumRfArr, cumSeeds, cumRunCl;
+
+    static int cumBatches;
+    static long cumMark, cumProbe, cumA, cumB, cumPatch, cumClinit, cumAll;
+    static long cumBytes;                                // bytes markReachable allocates, summed over batches
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -3464,6 +3524,7 @@ public final class Loader
         pendPullTo = 0;
         pendN = 0;
 
+        cumBytes += (long) MAXPEND * 36L + 16384L * 16L + (long) MAXBLOB * 21L;   // see loadCostReport
         pendBase = new long[MAXPEND];
         pendClass = new int[MAXPEND];
         pendName = new int[MAXPEND];
@@ -4636,6 +4697,11 @@ public final class Loader
                 // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
                 // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
                 // stays denied below.
+                // Serialization's DESCRIBE path: ObjectStreamClass.<init> calls
+                // ReflectionFactory.newConstructorForSerialization for every serializable class it describes,
+                // and describing is all ObjectStreamClass.lookup does. Overlaid (see guestsrc); the rest of
+                // jdk/internal/reflect/ stays denied below.
+                || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/reflect/ReflectionFactory"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Modifier"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Field"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Method"))
@@ -6854,9 +6920,15 @@ public final class Loader
                                                         // CALLs left unresolved while their target compiled later
         long tRest = Magic.readCNTPCT_EL0();
         refillImaps();                                  // repair default-method imap slots left 0 by phase-B ordering
+        long tRf1 = Magic.readCNTPCT_EL0();
         refillSynthTibVtables();                        // ... and every synthesised lambda/annotation TIB
+        long tRf2 = Magic.readCNTPCT_EL0();
         refillArrayTibVtables();                        // Object's vtable is filled now -> repair any array TIB that
                                                         // was created (e.g. by an early string-literal byte[]) before it
+        long tRf3 = Magic.readCNTPCT_EL0();
+        cumRfImap += tRf1 - tRest;
+        cumRfSynth += tRf2 - tRf1;
+        cumRfArr += tRf3 - tRf2;
         // Seed BEFORE runClinits: a <clinit> can call these (StreamOpFlag.<clinit> builds an EnumMap -- needs the
         // JLA -- and boxes flag values via Integer.valueOf -- needs the IntegerCache). The seeds are independent
         // of any <clinit> (they build the JLA object / boxed caches directly), so running them first is sound.
@@ -6868,7 +6940,25 @@ public final class Loader
                                                         //   Integer isn't in this batch
         seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
+        long tSeed = Magic.readCNTPCT_EL0();
+        cumSeeds += tSeed - tRf3;
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
+        cumRunCl += Magic.readCNTPCT_EL0() - tSeed;
+        // CUMULATIVE totals, always accumulated (a few adds per batch) and printed only on request. This is
+        // what says where a whole boot went, as opposed to one batch of it.
+        cumBatches += 1;
+        // PER BATCH, not every 25: the FIRST batch of a launcher boot is ~25 SECONDS on hardware, so a
+        // report that waits for 25 batches says nothing about the part that dominates. One compact line is
+        // ~13ms at 115200 baud, which is noise next to a multi-second batch -- and unlike LOAD_PROFILE's
+        // per-batch block, it is one line rather than three.
+        batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+        cumMark += tProbe - tMark;
+        cumProbe += tA - tProbe;
+        cumA += tB - tA;
+        cumB += tPatch - tB;
+        cumPatch += tRest - tPatch;
+        cumClinit += Magic.readCNTPCT_EL0() - tRest;
+        cumAll += Magic.readCNTPCT_EL0() - tAll;
         if (LOAD_PROFILE)
         {
             profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
@@ -7410,6 +7500,34 @@ public final class Loader
     }
 
     /** Slot address of a static field {@code cls.name} from the global registry (any loaded class), or 0. */
+    /**
+     * Absolute address of the static {@code fnBase/fnLen} declared by the class whose Type is
+     * {@code typeAddr}, or 0. The Type-keyed sibling of {@link #staticSlotOf} (which keys on a name pair),
+     * for {@code Unsafe.staticFieldOffset(Field)}, whose caller holds a Class rather than a name.
+     */
+    static long staticSlotOfType(long typeAddr, long fnBase, int fnLen)
+    {
+        int ci = 0;
+        while (ci < clCount)
+        {
+            if (clTab[ci].type == typeAddr)
+            {
+                int i = 0;
+                while (i < sgCount)
+                {
+                    if (utf8EqAt(sgTab[i].base, sgTab[i].classOff, clTab[ci].base, clTab[ci].nameOff)
+                            && rawEqUtf8(fnBase, fnLen, sgTab[i].base, sgTab[i].nameOff))
+                    {
+                        return sgTab[i].addr;
+                    }
+                    i += 1;
+                }
+            }
+            ci += 1;
+        }
+        return 0L;
+    }
+
     private static long staticSlotOf(byte[] cls, byte[] name)
     {
         int i = 0;
@@ -8235,6 +8353,57 @@ public final class Loader
         return best;
     }
 
+    // ----- method-registry hash index ---------------------------------------
+    /**
+     * Name-keyed hash index over the method registry, so {@link #globalBufByRef} is a PROBE rather than a
+     * linear scan of every registered method.
+     *
+     * <p>MEASURED, not guessed: {@code patchRelocs} re-walks every reloc site at the end of every batch, and
+     * each site called {@code globalBufByRef}, which compared three Utf8 strings against all {@code rgCount}
+     * entries. Both factors grow with every class loaded, so the cost is quadratic in the load -- on a
+     * launcher boot it went 0.49s -> 2.10s per batch between batches 25 and 100, by which point `patch` was
+     * 130s of a 445s load for 1595 classes.
+     *
+     * <p>Keyed on the method NAME alone, and chained: names repeat ({@code <init>}, {@code run}, {@code get}),
+     * so a chain walk still compares class+name+descriptor exactly as the scan did. The predicate is
+     * UNCHANGED -- this only narrows what it is applied to, so a hit is the same entry the scan would have
+     * found and a miss still falls through to the super-chain and stub tiers below.
+     *
+     * <p>Same fix, and the same reasoning, as the name index that took {@code pull} from 6,664ms to 1,539ms
+     * in the demand-load arc.
+     */
+    private static final int RGTAB = 32768;              // power of two > MAXREG; chained, so a full table only lengthens chains
+    private static int[] rgBucket;                       // name hash -> first registry index, -1 when empty
+    private static int[] rgNext;                         // registry index -> next entry with the same name hash
+    private static int rgIndexed;                        // entries already linked in (the registry only grows)
+
+    /** Link every registry entry added since the last call into the name index. */
+    private static void buildRegIndex()
+    {
+        if (rgBucket == null)
+        {
+            rgBucket = new int[RGTAB];
+            rgNext = new int[MAXREG];
+            int i = 0;
+            while (i < RGTAB)
+            {
+                rgBucket[i] = -1;
+                i += 1;
+            }
+            rgIndexed = 0;
+        }
+        // INCREMENTAL: the registry only ever grows and an entry's name never changes, so already-indexed
+        // entries stay valid. Rebuilding from 0 each batch would re-introduce the linear pass this exists to
+        // remove. resetLoader zeroes rgCount and rgIndexed together (see there).
+        while (rgIndexed < rgCount)
+        {
+            int h = utf8Hash(rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
+            rgNext[rgIndexed] = rgBucket[h];
+            rgBucket[h] = rgIndexed;
+            rgIndexed += 1;
+        }
+    }
+
     // ----- cross-class linking (global method registry) --------------------
     /** Register a compiled method so other classes can link to it by class+name+descriptor. */
     private static void register(long base, int classOff, int nameOff, int descOff, long buf, long lineTab, long srcAddr, int access)
@@ -8336,6 +8505,23 @@ public final class Loader
     private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
     private static int[] rcTail;                        //   1 = a tail branch (b), not a call (bl) -- lambda thunks
     private static int rcCount;
+    /**
+     * Per-site memo: the method-registry index that resolved this site last time, or -1.
+     *
+     * <p>{@code patchRelocs} re-walks EVERY site at the end of EVERY batch, and it genuinely has to: a site
+     * unresolved in one batch may resolve in the next, and {@link #rememberLazyBody} MUTATES
+     * {@code rgTab[i].buf} when a method is lazily compiled -- so a site's correct target really does change
+     * over time and cannot simply be left alone once patched.
+     *
+     * <p>What it does NOT have to do is repeat the LOOKUP. Recording which registry entry answered lets a
+     * later pass re-read {@code rgTab[idx].buf} directly, which is one array read instead of a hashed probe
+     * plus three Utf8 comparisons -- and it still writes the CURRENT buffer, so a body that moved is picked
+     * up exactly as before. Only the direct registry tier memoises; the super-chain and stub tiers set -1 and
+     * re-resolve, since their answer is not a single registry entry.
+     */
+    private static int[] rcReg;
+    /** Registry index {@link #globalBufByRef} resolved through, or -1 when it did not use the direct tier. */
+    private static int rgHitIdx;
     private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
     private static int[] rsReg, rsClass, rsName;        //   destination reg, class/name Utf8 offsets
     private static int rsCount;
@@ -8400,6 +8586,7 @@ public final class Loader
         rcName[rcCount] = mrefNameOff(idx);
         rcDesc[rcCount] = mrefDescOff(idx);
         rcTail[rcCount] = 0;
+        rcReg[rcCount] = -1;                            // not yet resolved through the direct registry tier
         rcCount += 1;
     }
 
@@ -8417,7 +8604,8 @@ public final class Loader
         rcName[rcCount] = mrefNameOff(idx);
         rcDesc[rcCount] = mrefDescOff(idx);
         rcTail[rcCount] = 1;
-        rcCount += 1;
+        rcReg[rcCount] = -1;                            // see rcReg: 0 is a VALID registry index, so an unset
+        rcCount += 1;                                   //   entry would memoise the site to rgTab[0]
     }
 
     /** Record an unresolved cross-class static-field address load at {@code loadAddr} (2 words, into {@code reg}). */
@@ -8484,7 +8672,22 @@ public final class Loader
         int i = rcStart;
         while (i < rcCount)
         {
-            long target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+            // MEMOISED: re-read the entry that answered last time. rgTab[].buf is live, so a body that was
+            // lazily compiled since (rememberLazyBody) is picked up exactly as a fresh lookup would -- this
+            // skips the LOOKUP, never the patch.
+            long target;
+            if (rcReg[i] >= 0)
+            {
+                target = rgTab[rcReg[i]].buf;
+            }
+            else
+            {
+                target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
+                if (target != 0L)
+                {
+                    rcReg[i] = rgHitIdx;                 // -1 for the super-chain/stub tiers: re-resolve those
+                }
+            }
             if (target == 0L)
             {
                 // Unresolved. Two very different causes, and they want opposite treatment:
@@ -8593,16 +8796,22 @@ public final class Loader
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
     private static long globalBufByRef(long refBase, int classOff, int nameOff, int descOff)
     {
-        int i = 0;
-        while (i < rgCount)
+        buildRegIndex();                                 // incremental: only entries added since last time
+        rgHitIdx = -1;
+        int i = rgBucket[utf8Hash(refBase, nameOff) & (RGTAB - 1)];
+        while (i >= 0)
         {
+            // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
+            // to. Name-keyed, so the chain still has to check class and descriptor: `<init>`/`run`/`get`
+            // repeat across the registry constantly.
             if (utf8EqAt(refBase, classOff, rgTab[i].base, rgTab[i].classOff)
                     && utf8EqAt(refBase, nameOff, rgTab[i].base, rgTab[i].nameOff)
                     && utf8EqAt(refBase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
+                rgHitIdx = i;                            // memoisable: a single registry entry answered
                 return rgTab[i].buf;
             }
-            i += 1;
+            i = rgNext[i];
         }
         // Class-qualified miss: an INHERITED static/special method (invokestatic/invokespecial to a method the ref
         // names via a subclass but that is declared in a SUPERclass, e.g. `ArrayList.subListRangeCheck` really
@@ -8736,6 +8945,10 @@ public final class Loader
             // Unsafe.objectFieldOffset(Class,String) -> the field registry, keyed on the CLASS (no instance
             // exists at initializer time, so the TIB-keyed VarHandle path cannot serve it).
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffsetOfClass0"))) { return VM.unsafeFieldOffsetAddr; } // (Class,byte[])J
+            // Every ordered mode shares ONE full barrier: there is no one-way form to emit here, and
+            // stronger than required is always correct where weaker could only be wrong invisibly.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; }  // ()V
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticFieldAddr0")))  { return VM.unsafeStaticAddrAddr; } // (Class,byte[])J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
@@ -8795,6 +9008,7 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoGet0")))    { return VM.fieldAnnoGetAddr; }     // (Class,byte[],byte[])
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldAnnoAll0")))    { return VM.fieldAnnoAllAddr; }     // (Class,byte[])[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldType0")))       { return VM.fieldTypeAddr; }        // (Class,byte[])Class
         }
         // Reflective Method.invoke: resolve a method-registry index by name, then its buffer/access/descriptor.
@@ -8912,6 +9126,8 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodAt0")))  { return VM.declMethodAddr; }      // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodDescAt0"))) { return VM.declMethodDescAddr; } // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredMethodCount0"))) { return VM.declMethodCountAddr; } // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorCount0")))  { return VM.declCtorCountAddr; }  // (Class)J
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredCtorDescAt0"))) { return VM.declCtorDescAddr; }   // (Class,int)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldAt0")))   { return VM.declFieldAddr; }       // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldDescAt0"))) { return VM.declFieldDescAddr; }  // (Class,I)String
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("declaredFieldCount0"))) { return VM.declFieldCountAddr; }  // (Class)J
@@ -8945,6 +9161,12 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Thread")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("currentThread0")))    { return VM.currentThreadAddr; } // ()Thread
+        }
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Runtime")))
+        {
+            // Four A72s on a BCM2711, and this VM brings all four up. Read by ForkJoinPool's initializer to
+            // fix the common pool's parallelism.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("availableProcessors"))) { return VM.availProcsAddr; } // ()I
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/Float")))
         {
@@ -11282,6 +11504,121 @@ public final class Loader
     private static final boolean VT_TRACE = false;
 
     /** One line per batch: classes, relocs, registry size, and microseconds per {@link #loadAll} phase. */
+    /**
+     * ONE LINE per batch: which phase this batch spent its time in, and how big it was.
+     *
+     * <p>Deliberately compact. The question "why is this boot slow" is answered by seeing WHICH batch is
+     * expensive and which PHASE dominates it, and that needs a line per batch -- but the per-batch block
+     * LOAD_PROFILE prints is three lines of detail, which at 115200 baud starts to measure its own output.
+     */
+    private static void batchCostLine(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
+    {
+        Uart.write(Magic.bytes("  batch "));
+        VM.printDec(cumBatches);
+        Uart.write(Magic.bytes(": +"));
+        VM.printDec(pdCount);                            // blobs in this batch
+        Uart.write(Magic.bytes("blob mark="));
+        printDur(spanUs(tMark, tProbe));
+        Uart.write(Magic.bytes(" probe="));
+        printDur(spanUs(tProbe, tA));
+        Uart.write(Magic.bytes(" A="));
+        printDur(spanUs(tA, tB));
+        Uart.write(Magic.bytes(" B="));
+        printDur(spanUs(tB, tPatch));
+        Uart.write(Magic.bytes(" patch="));
+        printDur(spanUs(tPatch, tRest));
+        Uart.write(Magic.bytes(" clinit="));
+        printDur(elapsedUs(tRest));
+        Uart.write(Magic.bytes(" tot="));
+        printDur(elapsedUs(tAll));
+        Uart.write(Magic.bytes(" rounds="));
+        VM.printDec(mrRounds);
+        Uart.write(Magic.bytes(" pend="));
+        VM.printDec(pendN);
+        // The mark's SUB-phases on the same line. `virt` (resolveVirtuals) is the named remaining bottleneck
+        // from the demand-load arc -- "65% of the mark, 40% of the first batch", left unfixed because the
+        // sound invalidation rule was never found -- so it is the first thing this has to be able to confirm
+        // or rule out.
+        Uart.write(Magic.bytes(" [virt="));
+        printDur(ticksUs(mrVirt));
+        Uart.write(Magic.bytes(" pull="));
+        printDur(ticksUs(mrPull));
+        Uart.write(Magic.bytes(" coll="));
+        printDur(ticksUs(mrCollect));
+        Uart.write(Magic.bytes(" seed="));
+        printDur(ticksUs(mrSeed));
+        Uart.write(Magic.bytes(" probe="));
+        printDur(ticksUs(mrProbe));
+        Uart.write(Magic.bytes(" dflt="));
+        printDur(ticksUs(mrDflt));
+        Uart.write(Magic.bytes("] {imap="));
+        printDur(ticksUs(cumRfImap));
+        Uart.write(Magic.bytes(" synth="));
+        printDur(ticksUs(cumRfSynth));
+        Uart.write(Magic.bytes(" arr="));
+        printDur(ticksUs(cumRfArr));
+        Uart.write(Magic.bytes(" seeds="));
+        printDur(ticksUs(cumSeeds));
+        Uart.write(Magic.bytes(" runcl="));
+        printDur(ticksUs(cumRunCl));
+        // The COUNTS these walk, so the growth is visible alongside the time rather than inferred from it.
+        Uart.write(Magic.bytes(" n:imap="));
+        VM.printDec(instImapN);
+        Uart.write(Magic.bytes(" synth="));
+        VM.printDec(lambdaTibRootN);
+        Uart.write(Magic.bytes(" clinits="));
+        VM.printDec(clinitN);
+        // The refill memo, MEASURED: skip = the memo firing, clos = the closure walks it was meant to avoid,
+        // holeEnd = imaps still short after a repair (those can never be memoised and pay in full every batch).
+        Uart.write(Magic.bytes(" rf:skip="));
+        VM.printDec(rfSkip);
+        Uart.write(Magic.bytes(" visit="));
+        VM.printDec(rfVisit);
+        Uart.write(Magic.bytes(" clos="));
+        VM.printDec(rfClos);
+        Uart.write(Magic.bytes(" holeEnd="));
+        VM.printDec(rfHoleEnd);
+        Uart.write(Magic.bytes("}"));
+        Uart.putc(0x0A);
+    }
+
+    /**
+     * Where the WHOLE boot's load time went, in one line. Call it from anywhere (a demo, a probe, the end of
+     * a launch); it costs nothing until called.
+     *
+     * <p>Prints the per-phase totals AND the bytes {@link #markReachable} allocated across every batch,
+     * because those are two different kinds of cost and the fix differs: time in `mark` is the closure walk,
+     * while bytes are GC pressure from the per-batch tables being rebuilt. A boot can be slow for either.
+     */
+    static void loadCostReport()
+    {
+        Uart.write(Magic.bytes("\nload cost: batches="));
+        VM.printDec(cumBatches);
+        Uart.write(Magic.bytes(" mark="));
+        printDur(ticksUs(cumMark));
+        Uart.write(Magic.bytes(" probe="));
+        printDur(ticksUs(cumProbe));
+        Uart.write(Magic.bytes(" phaseA="));
+        printDur(ticksUs(cumA));
+        Uart.write(Magic.bytes(" phaseB="));
+        printDur(ticksUs(cumB));
+        Uart.write(Magic.bytes(" patch="));
+        printDur(ticksUs(cumPatch));
+        Uart.write(Magic.bytes(" clinit="));
+        printDur(ticksUs(cumClinit));
+        Uart.write(Magic.bytes(" total="));
+        printDur(ticksUs(cumAll));
+        Uart.write(Magic.bytes("\n           classes="));
+        VM.printDec(clCount);
+        Uart.write(Magic.bytes(" blobs="));
+        VM.printDec(pdCount);
+        Uart.write(Magic.bytes(" markTables="));
+        VM.printDec((int) (cumBytes >> 20));
+        Uart.write(Magic.bytes("MB allocated over those batches (MAXPEND="));
+        VM.printDec(MAXPEND);
+        Uart.write(Magic.bytes(")\n"));
+    }
+
     private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
     {
         Uart.write(Magic.bytes("  loadall pd="));
@@ -13030,26 +13367,73 @@ public final class Loader
         int m = 0;
         while (m < instImapN)
         {
+            if (instImapDone[m])                        // no holes last time -> a no-op now; see instImapDone
+            {
+                rfSkip += 1;
+                m += 1;
+                continue;
+            }
+            rfVisit += 1;
             long dir = instImaps[m];                    // the class's itable DIRECTORY (per-interface tables)
             int reg = instImapReg[m];
-            if (reg >= 0 && dir != 0L)
+            if (reg < 0 || dir == 0L)
             {
-                int n = ifaceClosureOf(reg);            // the class's full interface set (persistent registries)
-                int k = 0;
-                long t = Magic.load64(dir);
-                while (t != 0L)                         // walk entries by their TYPE key (order-independent)
-                {
-                    int ir = regOfType(t);
-                    if (ir >= 0)
-                    {
-                        refillItable(n, ir, Magic.load64(dir + k * 16 + 8));
-                    }
-                    k += 1;
-                    t = Magic.load64(dir + k * 16);
-                }
+                instImapDone[m] = true;                 // nothing to repair, ever
+                m += 1;
+                continue;
             }
+            // The CLOSURE IS COMPUTED LAZILY, and that is most of the win on its own: it was derived for every
+            // imap on every batch, while refillItable needs it only when a slot is actually 0 -- which, once
+            // the first pass has run, is rare.
+            int n = -1;
+            boolean holes = false;
+            int k = 0;
+            long t = Magic.load64(dir);
+            while (t != 0L)                             // walk entries by their TYPE key (order-independent)
+            {
+                int ir = regOfType(t);
+                if (ir >= 0)
+                {
+                    long it = Magic.load64(dir + k * 16 + 8);
+                    if (itableHasHole(ir, it))
+                    {
+                        if (n < 0)
+                        {
+                            rfClos += 1;
+                            n = ifaceClosureOf(reg);    // the class's full interface set (persistent registries)
+                        }
+                        refillItable(n, ir, it);
+                        if (itableHasHole(ir, it))      // still short after the repair: a later batch may
+                        {                               //   compile the class that declares the default
+                            holes = true;
+                        }
+                    }
+                }
+                k += 1;
+                t = Magic.load64(dir + k * 16);
+            }
+            if (holes)
+            {
+                rfHoleEnd += 1;
+            }
+            instImapDone[m] = !holes;
             m += 1;
         }
+    }
+
+    /** Does this itable still have an unfilled slot? The only thing {@link #refillItable} can act on. */
+    private static boolean itableHasHole(int ir, long it)
+    {
+        int s = 0;
+        while (s < clTab[ir].ifmCount)
+        {
+            if (Magic.load64(it + s * 8L) == 0L)
+            {
+                return true;
+            }
+            s += 1;
+        }
+        return false;
     }
 
     /** Refill still-0 slots of interface {@code ir}'s itable {@code it} with late-compiled defaults. */
@@ -13118,12 +13502,27 @@ public final class Loader
      *  {@code tryAdvance(Consumer)} for the abstract {@code Spliterator.tryAdvance(Consumer)}. */
     private static long defaultBySig(int n, long base, int nameOff, int descOff)
     {
+        // THE REGISTRY IS PROBED BY NAME HASH, NOT SCANNED. This was a linear walk of all rgCount entries per
+        // closure interface, and refillImaps calls it for EVERY PERMANENTLY-EMPTY itable slot on EVERY batch --
+        // slots that can never be filled, because nothing in the closure declares a body for them (an abstract
+        // method the class declares itself, or a native with no VM helper). Measured on the launcher it was
+        // 97.9% of the whole imap refill (fillT=19,427ms of imap=19,852ms at batch 10) and grew with rgCount,
+        // which is why per-batch cost climbed 1.3s -> 3.6s across a boot. Same defect and same remedy as the
+        // demand-load arc's `pull` pass, where a per-item linear registry scan went 6,664ms -> 1,539ms on a
+        // name hash index.
+        //
+        // THE CLOSURE ORDER IS PRESERVED EXACTLY: this returns the first match in CLOSURE order, so the chain
+        // is walked once per closure interface rather than taking the first entry the bucket happens to yield.
+        // Two interfaces in one closure may both declare the same name+descriptor, and picking the other one
+        // would change which default body runs -- silently.
+        buildRegIndex();
+        int h = utf8Hash(base, nameOff) & (RGTAB - 1);   // the wanted NAME alone keys the index, so hoist it
         int i = 0;
         while (i < n)
         {
             long ibase = clTab[ifClosureBuf[i]].base;       // a closure interface's blob; its own methods registered under it
-            int k = 0;
-            while (k < rgCount)
+            int k = rgBucket[h];
+            while (k >= 0)
             {
                 if (rgTab[k].base == ibase && rgTab[k].buf != 0L
                         && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
@@ -13131,7 +13530,7 @@ public final class Loader
                 {
                     return rgTab[k].buf;
                 }
-                k += 1;
+                k = rgNext[k];
             }
             i += 1;
         }
@@ -13271,6 +13670,51 @@ public final class Loader
     }
 
     /** Shared classfile walk: {@code part} 0 = the method's name Utf8, 1 = its descriptor Utf8. */
+    /**
+     * As {@link #declaredMethodPart}, but enumerating the CONSTRUCTORS -- exactly what that one filters out.
+     *
+     * <p>{@code declaredMethodPart} skips {@code <init>}/{@code <clinit>} because {@code getDeclaredMethods}
+     * must not report them; {@code Class.getDeclaredConstructors} needs the complement. Written as its own
+     * walk rather than a flag on that one so neither enumeration can quietly change the other's answer.
+     *
+     * <p>{@code part} 0 = name ({@code <init>}), 1 = descriptor. {@code want < 0} answers the COUNT.
+     */
+    static long declaredCtorPart(long mirror, int want, int part)
+    {
+        if (mirror <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseForMethods(base, blobLenOf(base));
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int seen = 0;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            int nameOff = gcp[u2(p + 2)];
+            if (utf8IsAtBase(base, nameOff, Magic.bytes("<init>")))   // constructors ONLY; <clinit> is not one
+            {
+                if (want >= 0 && seen == want)
+                {
+                    return utf8ToString(base, part == 0 ? nameOff : gcp[u2(p + 4)]);
+                }
+                seen += 1;
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return want < 0 ? (long) seen : 0L;
+    }
+
     private static long declaredMethodPart(long mirror, int want, int part)
     {
         if (mirror <= 0x1000L)
@@ -13477,6 +13921,107 @@ public final class Loader
      * fields, and without this its command spec has no options at all -- the launcher printed
      * "Unknown options" for every argument and a usage block listing none.
      */
+    /**
+     * Every annotation DECLARED on one instance field -> {@code Annotation[]}, or 0 for a bad argument.
+     *
+     * <p>The field-level twin of {@link #methodAnnotationsAll}, and it keeps that method's TWO PASSES OVER
+     * ABSOLUTE ADDRESSES for the reason recorded there: pass 2 RESOLVES, a resolve may demand-load, and a
+     * load re-parses a blob and moves the {@code gcp} cursor pass 1 reads. Blob addresses survive that; parse
+     * state does not.
+     *
+     * <p>The field WALK is {@link #fieldAnnotation}'s (past access_flags/this/super/interfaces, then the
+     * field_info list), so the two agree on where a field's attributes live by construction rather than by
+     * two copies of the same arithmetic.
+     *
+     * <p>ALLOCATION-FREE for a bad argument, because {@code VM.forceCompile} probes this native with zeros on
+     * every image during loader init -- every sibling probe there returns before allocating.
+     *
+     * <p>JUnit's {@code AnnotationUtils.findAnnotation} walks this to reach META-ANNOTATIONS, and walks it
+     * UNGUARDED, so an un-annotated field must answer an EMPTY array rather than null.
+     */
+    static long fieldAnnotationsAll(long mirror, long nameArr)
+    {
+        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        {
+            return 0L;
+        }
+        int ci = classRegByType(Magic.load64(mirror + 16L));
+        if (ci < 0)
+        {
+            return 0L;
+        }
+        long base = clTab[ci].base;
+        parseConstPool(base, blobLenOf(base));
+        long p = gp + 6L;                               // past access_flags, this_class, super_class
+        p += 2L + u2(p) * 2L;                           // past the interfaces list
+        int fcount = u2(p);
+        p += 2;
+        int nlen = (int) Magic.load64(nameArr + 16L);
+        long nbase = nameArr + 24L;
+        long lp = 0L;
+        int f = 0;
+        while (f < fcount)
+        {
+            int attrs = u2(p + 6);
+            if (rawEqUtf8(nbase, nlen, base, gcp[u2(p + 2)]))
+            {
+                lp = annoListPos(base, p + 8L, attrs);
+                f = fcount;                             // found it; stop walking
+            }
+            else
+            {
+                p = skipAttributes(p + 8, attrs);
+                f += 1;
+            }
+        }
+        if (lp == 0L)
+        {
+            return emptyAnnoArray();                    // no such field, or none declared on it
+        }
+        long[] descAbs = new long[MAXDECLANNO];
+        long[] pairsAbs = new long[MAXDECLANNO];
+        int n = u2(lp);
+        long q = lp + 2L;
+        int found = 0;
+        int i = 0;
+        while (i < n && found < MAXDECLANNO)             // PASS 1: addresses only, nothing resolved or built
+        {
+            int typeIdx = u2(q);
+            q += 2;
+            descAbs[found] = base + gcp[typeIdx];
+            pairsAbs[found] = q;
+            found += 1;
+            q = skipElementPairs(q);
+            i += 1;
+        }
+        long[] objs = new long[found];                   // PASS 2: resolve + build
+        int built = 0;
+        int k = 0;
+        while (k < found)
+        {
+            int ifaceReg = regOfAnnoDescAbs(descAbs[k]);
+            if (ifaceReg >= 0)
+            {
+                long obj = buildAnnoObject(base, pairsAbs[k], ifaceReg);
+                if (obj != 0L)
+                {
+                    objs[built] = obj;
+                    built += 1;
+                }
+            }
+            k += 1;
+        }
+        long arr = Heap.allocArray(built, 8);
+        Magic.store64(arr + ObjectModel.TIB_OFFSET, refArrayTib(annotationTypeAddr()));
+        int j = 0;
+        while (j < built)
+        {
+            Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + j * 8L, objs[j]);
+            j += 1;
+        }
+        return arr;
+    }
+
     static long fieldAnnotation(long mirror, long nameArr, long descArr, int descLen)
     {
         if (mirror <= 0x1000L || nameArr <= 0x1000L)
@@ -17853,6 +18398,7 @@ public final class Loader
         if (isName(gbase, n, 0x73746F726538L, 6))  { return Intrinsics.STORE8; }   // "store8"
         if (isName(gbase, n, 0x73746F72653332L, 7)) { return Intrinsics.STORE32; } // "store32"
         if (isName(gbase, n, 0x73746F72653634L, 7)) { return Intrinsics.STORE64; } // "store64"
+        if (isName(gbase, n, 0x6361733634L, 5))      { return Intrinsics.CAS64; }    // "cas64"
         if (isName(gbase, n, 0x737061776EL, 5))      { return Intrinsics.SPAWN; }    // "spawn"
         if (isName(gbase, n, 0x73656D57616974L, 7))  { return Intrinsics.SEM_WAIT; } // "semWait"
         if (isName(gbase, n, 0x73656D506F7374L, 7))  { return Intrinsics.SEM_POST; } // "semPost"

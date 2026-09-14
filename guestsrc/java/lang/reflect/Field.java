@@ -205,6 +205,59 @@ public final class Field extends AccessibleObject
         return (T) fieldAnnoGet0(clazz, nameBytes, descriptorOf(anno));
     }
 
+    /**
+     * The annotation of type {@code anno} DECLARED on this field, or null.
+     *
+     * <p>For a FIELD "declared" and "present" coincide exactly, so this is exact rather than approximate:
+     * {@code @Inherited} has effect on CLASS declarations alone (JLS 9.6.4.3), and a field is not inherited
+     * in a way that carries annotations. So this shares {@link #getAnnotation}'s path and diverges from stock
+     * nowhere -- the same argument recorded for {@code Method}, checked rather than assumed from symmetry.
+     *
+     * <p>The BOUND is load-bearing for the same reason as on {@link #getAnnotation}: it erases the return to
+     * {@code Ljava/lang/annotation/Annotation;}, which is the descriptor JUnit's
+     * {@code AnnotationUtils.findAnnotation} references. Reached by LATE dispatch, since {@code Field} does
+     * not declare {@code AnnotatedElement}.
+     *
+     * <p>NOT ADDED HERE, and stated rather than left to be discovered: the PLURAL pair
+     * {@code getDeclaredAnnotations()}/{@code getAnnotations()}, which {@code findAnnotation} uses to walk
+     * META-annotations. Those need a field-level enumeration native ({@code classAnnotationsAll} and
+     * {@code methodAnnotationsAll} exist; the field twin does not), which is its own increment. If the
+     * launcher stops on one of them next, that is why.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends java.lang.annotation.Annotation> T getDeclaredAnnotation(Class<T> anno)
+    {
+        return getAnnotation(anno);
+    }
+
+    /**
+     * Every annotation DECLARED on this field. Never null; empty when there are none.
+     *
+     * <p>{@code AnnotationUtils.findAnnotation} walks this to reach META-ANNOTATIONS -- an annotation carried
+     * by another annotation -- and walks it UNGUARDED, so answering null would NPE inside JUnit while
+     * answering empty silently reports "not annotated". It enumerates.
+     *
+     * <p>A fresh array each call, because stock specifies the caller may modify the returned one.
+     */
+    public java.lang.annotation.Annotation[] getDeclaredAnnotations()
+    {
+        java.lang.annotation.Annotation[] a = fieldAnnoAll0(clazz, nameBytes);
+        return a == null ? new java.lang.annotation.Annotation[0] : a;
+    }
+
+    /**
+     * As {@link #getDeclaredAnnotations}. For a FIELD the two coincide exactly -- {@code @Inherited} has
+     * effect on class declarations alone (JLS 9.6.4.3) -- so this shares the declared path and diverges from
+     * stock nowhere.
+     */
+    public java.lang.annotation.Annotation[] getAnnotations()
+    {
+        return getDeclaredAnnotations();
+    }
+
+    /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.fieldAnnoAll}). */
+    private static native java.lang.annotation.Annotation[] fieldAnnoAll0(Class<?> c, byte[] fieldName);
+
     @Override
     public boolean isAnnotationPresent(Class<?> anno)
     {

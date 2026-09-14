@@ -270,6 +270,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "writeTCR_EL1(J)V" -> Intrinsics.WRITE_TCR_EL1;
         case "writeTTBR0_EL1(J)V" -> Intrinsics.WRITE_TTBR0_EL1;
         case "tlbiAll()V" -> Intrinsics.TLBI_ALL;
+        case "cas64(JJJ)Z" -> Intrinsics.CAS64;
         case "spinLock(J)V" -> Intrinsics.SPIN_LOCK;
         case "spinUnlock(J)V" -> Intrinsics.SPIN_UNLOCK;
         case "dsb()V" -> Intrinsics.DSB;
