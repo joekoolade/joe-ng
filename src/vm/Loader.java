@@ -4754,6 +4754,14 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Constructor"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Array"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // Executable is the shared supertype of Method and Constructor, and Parameter is what its
+                // getParameters() answers. Both are OVERLAID (see guestsrc) rather than allowed through to
+                // stock, whose versions are built on the denied sun/reflect/generics + sun/reflect/annotation
+                // machinery. An overlay cannot rescue a DENIED class -- a denied class is trap-wired at PATCH
+                // TIME, so no link stub runs and the overlay is never consulted -- so the denial is narrowed
+                // here first, exactly as java/text/BreakIterator needed.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Executable"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Parameter"))
                 // M3: java/lang/ClassLoader is overlaid (JDK-free) -- loadClass -> forName, defineClass(byte[]).
                 // Allowed here; jdk/internal/loader + java/security stay denied below (no delegation/unloading).
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/ClassLoader"))
@@ -9296,6 +9304,14 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("annoAll0")))          { return VM.methodAnnoAllAddr; } // (I)[Annotation
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("returnType0")))       { return VM.returnTypeAddr; }    // (I)Class
+        }
+        // Executable.getParameterTypes serves a CONSTRUCTOR as well as a Method -- the registry holds `<init>`
+        // like any other method -- so the same native is registered under both declaring classes. A native is
+        // keyed by DECLARING CLASS here, and registering it under only one of them is the LINK FAILED already
+        // paid for once (ClassLoader.resourceExists0 under java/lang/Class).
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Executable")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {

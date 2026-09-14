@@ -115,6 +115,97 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`java/lang/reflect/Executable` EXISTS NOW, and a `Constructor` can answer its own parameter types
+  (2026-09-14).** The launcher's blocker was
+  `VIRTUALRESOLVE FAILED java/lang/reflect/Constructor.getParameters()` -- which reads like a missing method on
+  `Constructor` and is not.
+  - **ROOT CAUSE: THE CLASS WAS ABSENT ENTIRELY.** Stock is
+    `Constructor extends Executable extends AccessibleObject`; joe-ng had both `Method` and `Constructor`
+    extending `AccessibleObject` DIRECTLY, with no `Executable` at all. JUnit's
+    `ExtensionUtils.registerExtensionsFromExecutableParameters` holds an `Executable`, so javac emits
+    `invokevirtual java/lang/reflect/Executable.getParameters` -- the receiver's chain does not contain that
+    class, the call falls to the late-virtual tier, and **that tier resolves against the RECEIVER, which is why
+    the report named `Constructor`**. The report was accurate about what it searched and misleading about the
+    cause; this is the third time a late-tier failure has been read as an overlay gap on the class it names.
+  - **THE SURFACE CAME FROM `javap` ON THE JAR, not from guessing which method trapped first.**
+    `registerExtensionsFromExecutableParameters` and `AnnotationUtils.getEffectiveAnnotatedParameter` between
+    them call exactly `getParameters`, `getDeclaringExecutable`, `getDeclaringClass`, `getParameterAnnotations`,
+    `getParameterCount`, and `instanceof Constructor` on the result. Fixing one member per ten-minute launcher
+    boot is what has made this family expensive.
+  - **`Constructor` WAS THROWING AWAY THE REGISTRY INDEX IT HAD JUST LOOKED UP.** `resolve()` called
+    `ctorResolve0`, used `idx` for `methodInfo0`, and stored only the buffer/access/arity -- so a constructor
+    could never answer its parameter TYPES (the cached `paramChars` keeps one character each, which cannot name
+    a reference type). `Executable` hoists an abstract `registryIndex()` and implements `getParameterTypes()`
+    and `toGenericString()` on it ONCE, which is what makes the constructor half work at all rather than being
+    a second copy of Method's.
+  - **NOT TAKEN FROM THE JDK 26 SOURCE, and that is a STATED exception to rule 3.** Stock `Executable` is 833
+    lines over `sun.reflect.generics.*` (a generic-signature parser and type factory) and
+    `sun.reflect.annotation.*` (the annotation parser and proxy runtime) -- both denied here. The
+    `ServiceLoader` precedent applies exactly: when the stock implementation is built on subsystems this VM
+    deliberately does not carry, no faithful copy can work whatever its shape.
+  - **THE OVERLAY CHECKER REFUSED MY FIRST CUT, and it was right four times over.** `getParameterTypes`,
+    `toGenericString`, `Parameter.getType` and `Parameter.getParameterizedType` were all REFERENCED and
+    silently dropped -- `Parameter.getType` by **eleven** JUnit classes, because deciding whether a resolver
+    can supply a parameter is the whole job of a parameter resolver. Backlog 36 -> 28 gaps.
+  - **THE HOST CONTROL REFUSED THE PROBE TWICE, and one of those was a member I INVENTED.**
+    `getDeclaredMethod` honours its parameter types on a real JVM where joe-ng's resolves by name; and
+    **stock `Parameter` declares no `getIndex()` at all** -- mine was an ADDED member, which `overlaycheck`
+    cannot see because it only diffs DROPPED ones. Removed. An added member is still a divergence from the
+    JDK-26-source rule, and the ten-second host run is what said so.
+  - **`paramTypes0` IS REGISTERED UNDER `Executable` AS WELL AS `Method`:** `nativeBuf` keys on the DECLARING
+    CLASS, and registering under one of two is the `LINK FAILED` already paid for once
+    (`ClassLoader.resourceExists0` filed under `java/lang/Class`).
+  - **STATED LIMIT, not a silent one: `getParameterAnnotations()` returns one EMPTY row per parameter.** The
+    VM does not yet read `RuntimeVisibleParameterAnnotations` -- the class- and method-level walks exist and
+    the parameter-level one is their unwritten sibling. What it costs precisely: `@ExtendWith` on a PARAMETER
+    is not registered. An empty ROW per parameter rather than a null or short array is required, because
+    `getEffectiveAnnotatedParameter` indexes the result unguarded.
+  - **Three supertypes are BASELINED rather than declared** (`Member`, `AnnotatedElement`,
+    `GenericDeclaration`), following what the baseline already records for `Method`, `Constructor` and
+    `Field`: that whole interface family sits inside the denied `java/lang/reflect/` implementation tree,
+    `GenericDeclaration.getTypeParameters` would drag in `TypeVariable`, and an interface-typed call resolves
+    against the receiver through the late tier regardless.
+  - **`test/jdk/junit/ParameterProbe` -- EVERY ARM GOES THROUGH AN `Executable`-TYPED VARIABLE.** Calling
+    `ctor.getParameters()` on a `Constructor`-typed reference compiles to an invokevirtual on CONSTRUCTOR and
+    would pass with the hierarchy unchanged: the shape without the condition, the trap recorded repeatedly
+    here. The two-parameter arms are what separate a walk that reads index 0 for everything from one that
+    indexes, and `getType` is pinned BY NAME because a Parameter answering the wrong type is non-null and
+    silently wrong.
+  - **QEMU:** every probe arm byte-identical to the HOST CONTROL, including `ctor p1 type = long` and
+    `ctor declaring instanceof Constructor = 1` -- the two a Constructor could not answer before. Demo suite
+    clean on THIRTEEN markers (no `DIFF`/`FAULT`/`LINK FAILED`/`BOOT RE-ENTERED`/`CAP EXCEEDED`/`unclaimed pc`/
+    `VIRTUALRESOLVE`/`DENYLIST TRAP`), 33 programs, every arm exact -- `finish HML` 20/20/20, inversion 62ms,
+    `churnMB=625 live=32 intact=32`, and the REFLECTIVE arms that matter most for a Method/Constructor
+    reparent (`overloads named pick = 3`, `invoked = none int:7 two:42`, `reflective = unseen`,
+    `reflective lambda thread = 7`, `mirror identity=1`). **No `vtparity`/`itparity` DIFF is the assertion for
+    this change**, since inserting a hierarchy level renumbers both worlds' tables and a disagreement prints
+    ungated. `metal junit: ran 44, failures 0`; host tests unchanged incl. `compiler: 37 checks`.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, launcher): THE BLOCKER IS CLEARED AND THE ENGINE RAN.** There is no
+    `VIRTUALRESOLVE FAILED` anywhere in the boot, and `registerExtensionsFromExecutableParameters` appears in
+    a STACK TRACE -- i.e. it EXECUTED, which is the proof this change was after, and a stronger one than its
+    absence would have been. The launcher went from stopping at that call to
+    `Test run finished after 103689 ms` with `[3 containers found]` / `[3 containers started]` /
+    `[2 containers successful]` / `[2 tests found]`, past `%% JUnit Platform Suite` and `%% JUnit Jupiter`.
+    No FAULT, no parity DIFF, no `BOOT RE-ENTERED`, no `unclaimed pc`, no `LINK FAILED`; only the known
+    denylisted `UNRESOLVED STATIC`/`TRAP-WIRED`/`NULL CLASS LITERAL`/`UNREGISTERED SUPER` lines.
+  - **NEXT BLOCKER, AND IT IS A DIFFERENT FAMILY REACHED *THROUGH* THIS FIX:**
+    `ClassCastException: class <synthesised, implements nothing> cannot be cast to class <synthesised,
+    implements nothing>`, from `registerExtensionsFromExecutableParameters` -> `stream` -> `spliterator`.
+    **BOTH sides are synthesised LAMBDA TIBs with an EMPTY itable directory** -- the `LAMBDA IFACE UNRESOLVED`
+    shape already recorded here: a lambda's functional interface is named only inside the indy's own
+    descriptor, so a lambda whose CONSUMER is not in the batch satisfies no interface and every cast against
+    that interface fails. It is reached by `Arrays.stream(getParameters())`, i.e. by code that could not run
+    at all before this increment.
+    - **THE MESSAGE ITSELF IS THE NEXT INSTRUMENT TO FIX.** "synthesised, implements nothing" is honestly
+      MEASURED -- it is what the TIB says -- but it names neither the interface that was WANTED nor the
+      lambda's implementation method, so it cannot distinguish which of the two casts failed. The
+      cast-names-both-sides work (2026-09-11) solved this for registered classes and left the synthesised
+      case with one undifferentiated string.
+  - **`LOADER LOCK stuck >10s: owner task 0 state 4` FIRED ONCE AT BATCH 21 AND IS NOT A DEADLOCK**, for the
+    reason already recorded twice: **state 4 is `TASK_RUNNING`**, so the owner was WORKING, not blocked. A
+    10-second WALL-CLOCK threshold is exceeded by legitimate work in a 1,700-blob closure on a 166MHz core.
+    Read the state field before calling it a deadlock.
+
 - **THE LOAD PATH IS ~10 MINUTES FASTER: four O(everything-loaded) defects, all one shape (2026-09-14,
   ALL PI-VALIDATED).** A 165-batch launcher boot, measured at batch 165:
 

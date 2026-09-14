@@ -12,7 +12,7 @@ import magic.Magic;
  * ({@code setAccessible} + member-access rules) lands in reflection arc M2; virtual override dispatch is direct
  * (the resolved method's buffer) for now.
  */
-public final class Method extends AccessibleObject
+public final class Method extends Executable
 {
     private final Class<?> clazz;
     private final String name;
@@ -193,6 +193,12 @@ public final class Method extends AccessibleObject
 
     private static native int methodResolve0(Class c, byte[] name);
     private static native int methodInfo0(int rgIndex, byte[] paramChars, long[] out);
+
+    /** {@inheritDoc} -- the registry slot every annotation and descriptor native here already keys on. */
+    int registryIndex()
+    {
+        return rgIndex;
+    }
 
     public String getName()
     {

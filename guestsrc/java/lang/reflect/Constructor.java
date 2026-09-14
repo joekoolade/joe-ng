@@ -12,16 +12,18 @@ import magic.Magic;
  * their address), runs {@code <init>} via {@link Magic#callN}, and returns the object. Overload resolution is by
  * arity only for now (no parameter-type matching). Access enforcement mirrors {@link Method}.
  */
-public final class Constructor<T> extends AccessibleObject
+public final class Constructor<T> extends Executable
 {
     private final Class<T> clazz;
     private final int access;
     private final long buf;
     private final int paramCount;
     private final byte[] paramChars;   // first descriptor char of each parameter ('I'/'J'/'Z'/.../'L'/'[')
+    private final int rgIndex;         // this <init>'s slot in the VM's method registry (descriptor lookup key)
 
-    private Constructor(Class<T> clazz, int access, long buf, int paramCount, byte[] paramChars)
+    private Constructor(Class<T> clazz, int access, long buf, int paramCount, byte[] paramChars, int rgIndex)
     {
+        this.rgIndex = rgIndex;
         this.clazz = clazz;
         this.access = access;
         this.buf = buf;
@@ -42,7 +44,7 @@ public final class Constructor<T> extends AccessibleObject
         byte[] pchars = new byte[8];
         long[] out = new long[3];                          // {buffer, access, returnChar} — returnChar is 'V'
         int n = methodInfo0(idx, pchars, out);
-        return new Constructor<T>(c, (int) out[1], out[0], n, pchars);
+        return new Constructor<T>(c, (int) out[1], out[0], n, pchars, idx);
     }
 
     private static native int ctorResolve0(Class c, int paramCount);
@@ -57,6 +59,20 @@ public final class Constructor<T> extends AccessibleObject
     public Class<T> getDeclaringClass()
     {
         return clazz;
+    }
+
+    /** The binary name of the declaring class, which is what stock {@code Constructor.getName()} answers --
+     *  a constructor has no name of its own. Declared here because {@link Executable} makes it abstract. */
+    public String getName()
+    {
+        return clazz.getName();
+    }
+
+    /** {@inheritDoc} -- the registry slot resolved by {@link #ctorResolve0}, which is what
+     *  {@link Executable#getParameterTypes} reads the descriptor through. */
+    int registryIndex()
+    {
+        return rgIndex;
     }
 
     public int getParameterCount()
