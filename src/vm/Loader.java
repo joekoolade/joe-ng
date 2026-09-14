@@ -10288,6 +10288,11 @@ public final class Loader
      * whatever class it is handed, which clobbers {@code gcp}/{@code gbase}, so an offset read afterwards
      * would be against the wrong blob. Absolute addresses survive that; offsets do not.
      */
+    /** What the LAST {@link #resolveViaInterfaces} walk saw -- printed only on a terminal failure. */
+    private static int viHops;
+    private static int viIfaceN;
+    private static long[] viNames;
+
     private static long resolveViaInterfaces(int ci, long nameU, long descU)
     {
         long[] names = new long[MAXIFACEFALLBACK];
@@ -10321,6 +10326,9 @@ public final class Loader
             }
             i += 1;
         }
+        viHops = hops;
+        viIfaceN = n;
+        viNames = names;
         int k = 0;
         while (k < n)
         {
@@ -12255,7 +12263,35 @@ public final class Loader
             // repeatedly. It cannot be called from INSIDE resolveLinkTarget -- it calls resolveLinkTarget per
             // interface, so that would recurse -- which is why it belongs here, at the terminal caller.
             int ireg = regBySigU(lkClsU[idx]);
-            if (ireg >= 0)
+            viHops = 0;
+            viIfaceN = -1;                              // -1 distinguishes "tier skipped" from "walk found none"
+            // STEP 2 OF JVMS 5.4.3.3: C's SUPERCLASSES, most-derived first. This is where the body usually is,
+            // and it was the step missing here -- I added step 3 (superinterfaces) first on a reading that
+            // `javap -s` then disproved. JUnit's `super.cleanUp(context)` is an invokespecial naming
+            // MethodBasedTestDescriptor, which declares no cleanUp; JupiterTestDescriptor, its SUPERCLASS,
+            // declares `cleanUp(JupiterEngineExecutionContext)V` with exactly the call site's descriptor.
+            // Node.cleanUp is a red herring: being generic it erases to (EngineExecutionContext)V, a
+            // DIFFERENT descriptor, so no interface search could ever have matched.
+            //
+            // resolveLinkTarget answers for ONE class -- bufBySigU, nativeBufAt and compileSigOnDemand all
+            // work off that class's own blob and registry rows -- so an inherited method resolves nowhere.
+            // virtualResolve already walks the chain this way for the late-VIRTUAL path; the link stub, which
+            // is what an invokespecial/invokestatic site gets, never had one. Walking most-derived-first IS
+            // what inheritance means.
+            int c = ireg >= 0 ? superRegOf(ireg) : -1;
+            int hops = 0;
+            while (buf == 0L && c >= 0 && hops < MAXIFACECHAIN)
+            {
+                int why = lnkFailWhy;
+                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, lkNameU[idx], lkDescU[idx]);
+                if (buf == 0L)
+                {
+                    lnkFailWhy = why;                   // a miss at one level is "try the super", not a verdict
+                }
+                c = superRegOf(c);
+                hops += 1;
+            }
+            if (buf == 0L && ireg >= 0)
             {
                 int why = lnkFailWhy;                   // the CLASS's reason; the walk below overwrites it
                 buf = resolveViaInterfaces(ireg, lkNameU[idx], lkDescU[idx]);
@@ -12263,6 +12299,16 @@ public final class Loader
                 {
                     lnkFailWhy = why;                   // report why the CLASS failed, not the last interface
                 }
+            }
+            if (buf == 0L)
+            {
+                // WHAT THE WALK ACTUALLY SAW. Two fixes for this failure were shipped on plausible readings
+                // and neither moved it, which is this project's recorded way of saying the reading was never
+                // checked. `ireg < 0` means the tier never ran (the callee class is not in the registry under
+                // that name); `ifaces=0` means the chain walk collected nothing; a list that omits the
+                // expected interface means the chain stopped before reaching the class that declares it.
+                // Off-cost: this runs only where the call is already about to trap.
+                reportIfaceWalk(ireg);
             }
         }
         if (buf == 0L)
@@ -12310,6 +12356,25 @@ public final class Loader
      * is over, so only the caller prints.
      */
     private static int lnkFailWhy;
+
+    /** Name what the interface tier saw for a link stub that is about to trap -- see its call site. */
+    private static void reportIfaceWalk(int ireg)
+    {
+        Uart.write(Magic.bytes("\n  iface tier: ireg="));
+        VM.printDec(ireg);
+        Uart.write(Magic.bytes(" chainHops="));
+        VM.printDec(viHops);
+        Uart.write(Magic.bytes(" ifaces="));
+        VM.printDec(viIfaceN);
+        int k = 0;
+        while (k < viIfaceN && k < 12 && viNames != null)
+        {
+            Uart.write(Magic.bytes("\n    tried "));
+            printNameAt(viNames[k], 0);
+            k += 1;
+        }
+        Uart.putc(0x0A);
+    }
 
     private static void reportLinkFail(long clsU, long nameU, long descU, byte[] why)
     {
