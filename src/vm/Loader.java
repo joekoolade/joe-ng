@@ -5362,7 +5362,12 @@ public final class Loader
             long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
             if (el == 0L)
             {
-                Magic.store8(dst + pos, (byte) primElemCharOf(type));
+                // A PRIMITIVE array names itself by descriptor char. An element of 0 that matches no
+                // primitive TIB is an array whose element class never resolved -- write '?' rather than the
+                // NUL that `primElemCharOf` returns, which rendered as `class [` in a ClassCastException and
+                // told the reader nothing. A message with an embedded NUL is worse than a short one.
+                int pc = primElemCharOf(type);
+                Magic.store8(dst + pos, (byte) (pc != 0 ? pc : 0x3F));   // '?'
                 return pos + 1;
             }
             if (isArrayType(el))
@@ -17903,10 +17908,92 @@ public final class Loader
         return tib;
     }
 
-    /** Array TIB for an {@code anewarray} whose element class is Class-entry {@code classCp}. */
+    /**
+     * Array TIB for an {@code anewarray} whose element class is Class-entry {@code classCp}.
+     *
+     * <p>THE ELEMENT CLASS MAY NOT BE REGISTERED YET, and answering that with a typed array Type whose
+     * element is 0 is the silent-wrong-answer shape. `tagArray` bakes this TIB as an IMMEDIATE, so -- exactly
+     * as for a class literal -- there is no reloc for a later batch to patch: the array carries an element of
+     * 0 for the rest of the boot. Nothing then proves `Parameter[] <: Object[]`, and the covariance check
+     * fails far from here. The launcher hit it as
+     * `ClassCastException: class [ cannot be cast to class [Ljava.lang.Object;` inside
+     * `Arrays.stream(getParameters())` -- an array whose element could not even be NAMED.
+     *
+     * <p>Two responses, in order, and neither invents an element type:
+     * <ol>
+     *   <li>PULL AND RECOMPILE, the route a class literal and an unresolved static already take. A late
+     *       compile can note the class and be retried once with it loaded, which gives the array its real
+     *       element Type rather than a substitute.</li>
+     *   <li>Failing that (a batch compile, or the retry is spent), type it as {@code Object[]}, which is TRUE
+     *       of every reference array (JLS 10.1) even when the exact element class is unknown. That restores
+     *       the covariance this bug broke and keeps the elements TRACED.</li>
+     * </ol>
+     *
+     * <p>LEAVING IT RAW WAS TRIED AND IS WRONG, and the reason is recorded elsewhere in this file: a raw
+     * array carries no Type, and <b>a raw 8-byte-element array is not traced as references</b> -- the
+     * elements would be reachable from nothing the collector follows and swept out from under the caller.
+     * {@code castOk} does trust the verifier for a raw array, so the cast would have passed; trading a failed
+     * cast for a swept object is a far worse bargain, and the failure it produces is a wild reference rather
+     * than a named exception.
+     *
+     * <p>The residual divergence is stated rather than hidden: an {@code Object[]}-typed array answers FALSE
+     * to {@code instanceof Parameter[]}, where stock answers true. That is visible at the caller and only
+     * arises on the fallback, which the report below names every time it is taken.
+     * <ol>
+     * </ol>
+     */
     static long refArrayTibForClass(int classCp)
     {
-        return refArrayTib(typeOfClass(classCp));
+        long type = typeOfClass(classCp);
+        if (type == 0L)
+        {
+            int nameOff = gcp[u2(gbase + gcp[classCp])];
+            if (u1(gbase + nameOff + 2) != 0x5B                     // an array-of-array builds its own Type
+                    && lzCompiling && !lzRetried && notePullNeeded(gbase + nameOff))
+            {
+                return 0L;                                          // discarded compile: retried with it loaded
+            }
+            reportUntypedArray(gbase + nameOff);
+            long obj = objectTypeAddr();
+            return obj == 0L ? 0L : refArrayTib(obj);               // Object[]: covariance holds, elements traced
+        }
+        return refArrayTib(type);
+    }
+
+    /**
+     * Name an {@code anewarray} whose element class could not be resolved, ONCE per element class.
+     *
+     * <p>Reported rather than left silent for the reason this file keeps relearning: the consequence shows up
+     * as a failed cast in unrelated library code, and an array that cannot name its own element is not
+     * something any caller can diagnose from there. Deduped through the same table the unresolved-static and
+     * null-class-literal reports use, because a hot path would otherwise repeat it per compile.
+     */
+    private static void reportUntypedArray(long clsU)
+    {
+        if (unresStaticSeen == null)
+        {
+            unresStaticSeen = new long[64];
+            unresStaticSeenN = 0;
+        }
+        int k = 0;
+        while (k < unresStaticSeenN)
+        {
+            if (unresStaticSeen[k] == clsU)
+            {
+                return;
+            }
+            k += 1;
+        }
+        if (unresStaticSeenN < unresStaticSeen.length)
+        {
+            unresStaticSeen[unresStaticSeenN] = clsU;
+            unresStaticSeenN += 1;
+        }
+        Uart.write(Magic.bytes("\n  ARRAY ELEMENT UNRESOLVED (typed Object[] -- `instanceof X[]` answers false): "));
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(" -- "));
+        printWhyUnpulled(clsU);
+        Uart.putc(0x0A);
     }
 
     // ----- java.lang.Class mirrors -----------------------------------------
