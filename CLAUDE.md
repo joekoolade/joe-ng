@@ -115,6 +115,58 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LOAD PATH IS ~10 MINUTES FASTER: four O(everything-loaded) defects, all one shape (2026-09-14,
+  ALL PI-VALIDATED).** A 165-batch launcher boot, measured at batch 165:
+
+  | cumulative | before | after | |
+  |---|---|---|---|
+  | `imap` (refill) | 460,288ms | **1,626ms** | **283x** |
+  | `callT` (patch re-walk) | 161,942ms | **11,092ms** | 14.7x |
+  | `alloc` (mark scratch) | 27,585ms | **104ms** | **266x** |
+  | per batch: `mark` | 710ms | **296ms** | 2.4x |
+  | per batch: `patch` | 1,622ms | **108ms** | 15x |
+  | per batch: `tot` | 6,174ms | **584ms** | 10.6x |
+
+  **~637 SECONDS -- over ten minutes -- off one boot.**
+
+  - **EVERY ONE WAS THE SAME DEFECT: a per-item linear scan of a table that grows all boot.** `defaultBySig`
+    scanning the method registry for every empty itable slot (and every `<init>`, which short-circuits into
+    the last tier); `dlCellOf` scanning the phase-A cell table per reloc site; `CodeEdges.findSite` scanning
+    the edge census per site; `printFrameAt` scanning the registry AND calling `codeBlockEndAt`, itself a scan
+    of every code block, per candidate. Plus `globalBufByRef` tier 2, left behind when tier 1 was indexed.
+    **When something here is O(everything loaded), look for this first.**
+  - **THE REMEDY IS NOT ALWAYS AN INDEX, and measuring said which:** `defaultBySig`/`dlCellOf`/tier 2 wanted a
+    hash probe; `printFrameAt` wanted the inner lookup HOISTED out of the loop; the mark's scratch wanted the
+    per-batch FREE removed (loadAll nulled it every batch, so an "allocate once" guard was true every time and
+    did nothing). `linkStubFor` was indexed, measured NO gain, and was REVERTED -- **a real O(n^2) is not
+    automatically worth fixing.**
+  - **THREE WRONG GUESSES ON `patch`, ended by splitting the timer rather than reading code.** linkStubFor,
+    publishCode and CodeEdges each looked plausible and were 0%, ~2% and 5%. Splitting three ways
+    (callT 95%) then splitting INSIDE the call loop (**lookT 98%**) named the tier in one run. Three
+    plausible linear scans lived in that one function; only measurement said which ran hot.
+  - **A SUB-SPLIT THAT DOES NOT ADD UP IS NOT A SPLIT.** `mark`'s nine sub-timers summed to ~295ms of 712ms
+    because three of them were computed and never printed, and all nine live INSIDE the round loop while the
+    cost was in the setup before it. Printing every term, then timing the setup, found it.
+  - **THE USER FOUND ONE THE TIMERS COULD NOT:** "the delay between each stacktrace line was longer and
+    longer". That is work proportional to something growing as the walk proceeds -- a nested scan -- and it
+    was `printFrameAt`. **It only runs on a failure path, which is exactly why it matters:** this VM diagnoses
+    almost everything through printed traces, and this session already lost evidence when a wait loop killed
+    QEMU mid-trace.
+  - **CORRECTNESS WAS GATED ON IDENTITY, NOT ON "IT LOOKS CLEAN".** The closure is byte-identical
+    (`rounds=26 pend=67905`, and `memo`/`res`/`unres`/`rf:*` all unchanged); the trace is byte-identical
+    (ExcDemo's seven frames, same line numbers and offsets, `unclaimed pc` = 0). That matters because an
+    unreset watermark under-marks SILENTLY -- reach 1040 -> 449 once, and standalone runs still built the
+    right closure; only the suite caught it.
+  - **CROSS-RUN QEMU TIMINGS ARE NOT COMPARABLE HERE**, and three comparisons were confounded by machine load
+    from my own concurrent builds (`pubT` differed 8.7x between runs that could not have affected it). Only
+    load-INDEPENDENT ratios stayed trustworthy. A controlled A/B produced two BYTE-IDENTICAL images (`make
+    out` is not a target); `cmp` caught it. **An A/B whose arms are the same binary looks exactly like a
+    change that does nothing.** The Pi, with no competing load and a known baseline, is the honest harness.
+  - **WHAT IS LEFT:** `probe` is now essentially all of `mark` (292ms of 296ms) -- that is `probeAll` +
+    `buildNameIndex` inside the round loop -- plus the top-level `probe` at 143ms and `patch` at 108ms. The
+    launcher still stops at `VIRTUALRESOLVE FAILED java/lang/reflect/Constructor.getParameters()`, an ordinary
+    overlay gap on `Constructor`, untouched by any of this.
+
 - **THE PATCH RE-WALK: 15x ON HARDWARE, and it took THREE WRONG GUESSES to find (2026-09-14,
   PI-VALIDATED).** `patch` was 1,622ms/batch at batch 165 of a launcher boot, the largest item left after
   the imap refill. It is **108ms** now.
