@@ -97,6 +97,29 @@ public final class Heap
      * DIFFERENT block cannot belong to the method registered at {@code addr}, however close the two are.
      * Linear over the registry, which is fine: the only callers are fault reporting and stack traces.
      */
+    /**
+     * The START of the code block containing {@code addr}, or 0. Companion to {@link #codeBlockEndAt}, so a
+     * caller that needs the whole extent pays ONE scan for each end rather than one per candidate -- see
+     * {@code Loader.printFrameAt}, where calling the end-lookup per registry entry made a stack trace
+     * O(rgCount * codeBlockN) and each printed frame visibly slower than the last.
+     */
+    public static long codeBlockStartAt(long addr)
+    {
+        long i = 0;
+        while (i < codeBlockN)
+        {
+            long e = CODE_BLOCKS + i * 16L;
+            long start = Magic.load64(e);
+            long usable = Magic.load64(e + 8L) & -8L;
+            if (start != 0L && addr >= start && addr < start + usable)
+            {
+                return start;
+            }
+            i += 1;
+        }
+        return 0L;
+    }
+
     public static long codeBlockEndAt(long addr)
     {
         long i = 0;

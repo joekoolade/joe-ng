@@ -3477,6 +3477,8 @@ public final class Loader
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
+    /** The SETUP before the round loop, which no sub-timer covered -- ~417ms of a 712ms mark. */
+    static long mrReset, mrAlloc, mrEntry, mrRoot, mrExc;
 
     /**
      * True if blob {@code b} was compiled by an EARLIER batch, so the mark can skip it. Phase B is guarded by
@@ -3513,7 +3515,10 @@ public final class Loader
 
     private static void markReachable()
     {
+        long ts0 = Magic.readCNTPCT_EL0();
         resetMethodTables();
+        mrReset += Magic.readCNTPCT_EL0() - ts0;
+        long ts1 = Magic.readCNTPCT_EL0();
         reachN = 0;
         // ALLOCATED ONCE, NOT PER BATCH. These are fixed-size scratch, and rebuilding them every batch cost
         // `MAXPEND * 36` bytes a batch by this method's own accounting below -- ~9.4MB, which Heap.alloc then
@@ -3570,10 +3575,15 @@ public final class Loader
         pendPullTo = 0;
         pendN = 0;
         instN = 0;
+        mrAlloc += Magic.readCNTPCT_EL0() - ts1;
+        long ts2 = Magic.readCNTPCT_EL0();
         parseForMethods(gEntryBlob, blobLenOf(gEntryBlob));
         addReach(findMethodByBytes(gbase, gEntryName, gEntryDesc));
+        mrEntry += Magic.readCNTPCT_EL0() - ts2;
+        long ts3 = Magic.readCNTPCT_EL0();
         seedRootBlob();                                 // a defineClass'd class: all of it is a root
         seedAllNamed(Magic.bytes("run"), Magic.bytes("()V"));   // trampoline entry (Runnable.run)
+        mrRoot += Magic.readCNTPCT_EL0() - ts3;
         // Each round is two bounded passes over the blobs (so the const pool is parsed O(blobs) times, not
         // per-ref): collect the call-site refs of every reachable method, then mark each ref's target(s).
         // Reachability-gated closure: each round (a) collects the class/method refs of every reachable
@@ -5567,21 +5577,38 @@ public final class Loader
 
     static void printFrameAt(long addr)
     {
+        // THE BLOCK LOOKUP IS HOISTED, and that is the whole cost of a stack trace. `inSameCodeBlock` calls
+        // `Heap.codeBlockEndAt`, which LINEARLY SCANS EVERY CODE BLOCK -- and it was called once per registry
+        // entry that beat the running best, so naming ONE frame was O(rgCount * codeBlockN) with both tables
+        // growing all boot. The user's report is the signature: each printed frame took longer than the last.
+        //
+        // addr's block is the same for every candidate, so it is computed ONCE. With it known, "buf is in
+        // addr's block" is a RANGE TEST: the scan already requires buf <= addr, so buf >= aStart settles it
+        // exactly, with no inner scan at all.
+        //
+        // When addr is in NO block -- image/baked code, where codeBlockEndAt answers 0 -- the original
+        // predicate degenerates to "buf is in no block either", which cannot be answered by a range test. That
+        // path keeps the per-candidate call: it is exact, it is rare, and such a frame is about to be named by
+        // printImageFrameAt anyway.
+        long aEnd = Heap.codeBlockEndAt(addr);
+        long aStart = aEnd == 0L ? 0L : Heap.codeBlockStartAt(addr);
         long bestBuf = 0L;
         int bestReg = -1;
         int bestClin = -1;
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= addr && rgTab[i].buf > bestBuf
-                    && inSameCodeBlock(rgTab[i].buf, addr)) { bestBuf = rgTab[i].buf; bestReg = i; bestClin = -1; }
+            long b = rgTab[i].buf;
+            if (b != 0L && b <= addr && b > bestBuf
+                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(b, addr))) { bestBuf = b; bestReg = i; bestClin = -1; }
             i += 1;
         }
         int c = 0;
         while (c < clinitN)
         {
-            if (clinitEntry[c] != 0L && clinitEntry[c] <= addr && clinitEntry[c] > bestBuf
-                    && inSameCodeBlock(clinitEntry[c], addr)) { bestBuf = clinitEntry[c]; bestClin = c; bestReg = -1; }
+            long b = clinitEntry[c];
+            if (b != 0L && b <= addr && b > bestBuf
+                    && (aEnd != 0L ? b >= aStart : inSameCodeBlock(b, addr))) { bestBuf = b; bestClin = c; bestReg = -1; }
             c += 1;
         }
         if (bestReg < 0 && bestClin < 0)
@@ -6866,9 +6893,11 @@ public final class Loader
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
             markReachable();
         }
+        long tex = Magic.readCNTPCT_EL0();
         ensureImplicitExcBlobs();                        // AFTER the closure is pulled -- the gate asks whether
                                                          //   this batch has Throwable, which markReachable is what
                                                          //   brings in; before it, the answer is always no
+        mrExc += Magic.readCNTPCT_EL0() - tex;
         long tProbe = Magic.readCNTPCT_EL0();
         probeAll();                                      // this_class + super + interfaces + dep list over the final set
         long tA = Magic.readCNTPCT_EL0();
@@ -11677,6 +11706,16 @@ public final class Loader
         printDur(ticksUs(mrInst));
         Uart.write(Magic.bytes(" static="));
         printDur(ticksUs(mrStatic));
+        Uart.write(Magic.bytes(" reset="));
+        printDur(ticksUs(mrReset));
+        Uart.write(Magic.bytes(" alloc="));
+        printDur(ticksUs(mrAlloc));
+        Uart.write(Magic.bytes(" entry="));
+        printDur(ticksUs(mrEntry));
+        Uart.write(Magic.bytes(" root="));
+        printDur(ticksUs(mrRoot));
+        Uart.write(Magic.bytes(" exc="));
+        printDur(ticksUs(mrExc));
         Uart.write(Magic.bytes("] {imap="));
         printDur(ticksUs(cumRfImap));
         Uart.write(Magic.bytes(" synth="));
