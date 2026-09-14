@@ -115,6 +115,60 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE PATCH RE-WALK: 15x ON HARDWARE, and it took THREE WRONG GUESSES to find (2026-09-14,
+  PI-VALIDATED).** `patch` was 1,622ms/batch at batch 165 of a launcher boot, the largest item left after
+  the imap refill. It is **108ms** now.
+
+  | batch 165 | before | after | |
+  |---|---|---|---|
+  | `patch` | 1,542ms | **108ms** | **14.3x** |
+  | `callT` (cumulative) | 161,942ms | **11,040ms** | 14.7x -- **151 seconds** off the boot |
+  | `tot` (per batch) | 2,437ms | **1,002ms** | 2.4x |
+
+  - **ROOT CAUSE: `dlCellOf` SCANNED THE WHOLE PHASE-A CELL TABLE**, three Utf8 compares per entry.
+    `dlStubByRef` is the LAST tier of `globalBufByRef`, so it catches every site that misses the direct and
+    super-chain tiers -- **AND every `<init>`, which short-circuits straight to it** because a constructor is
+    never inherited. Constructor call sites are everywhere, none of those sites memoise (`rcReg` only records
+    the DIRECT tier), and `dlN` grows with every class loaded. `globalBufByRef` tier 2 -- the super-chain walk,
+    scanning all `rgCount` PER SUPERCLASS LEVEL -- was indexed in the same pass.
+  - **SIXTH INSTANCE OF ONE DEFECT IN A SINGLE SESSION**, a per-item linear scan of a table that grows all
+    boot: `pull` in the demand-load arc (6,664 -> 1,539ms), `defaultBySig` in the imap refill (460,288 ->
+    1,720ms, **267x**), `CodeEdges.findSite` (1,622 -> 1,542ms, **5%**), `linkStubFor` (**no measurable
+    gain**), `globalBufByRef` tier 2, and `dlCellOf` (**15x**). **When something here is O(everything loaded),
+    this is the shape to look for first.**
+  - **THREE WRONG GUESSES, and what ended them.** `linkStubFor`, `Heap.publishCode`'s I-cache walk, and
+    `CodeEdges` were each read as plausible and each was wrong -- the first bought nothing, the third 5%.
+    What worked was SPLITTING THE TIMER rather than reading code: first three ways (callT 95% vs statT 0.2%,
+    pubT 2%), then INSIDE the call loop (**lookT 98%**, unresT 0.9%, tailT 0.5%). The second split named the
+    tier in one run. **Three plausible-looking linear scans existed in that function; only measurement said
+    which one ran hot.**
+  - **DELIBERATELY NOT MEMOISED, for correctness not oversight.** Filling `rcReg` from the non-direct tiers
+    would turn ~491 re-resolving sites per batch into single array reads -- larger than indexing. But if a
+    subclass later registers its OWN override, the direct tier would find it while a memo kept answering the
+    ancestor's body: a silent wrong-method dispatch. The scan is made cheap instead.
+  - **CROSS-RUN QEMU TIMINGS ARE NOT COMPARABLE HERE, and that cost several rounds.** Three comparisons were
+    confounded by machine load from my own concurrent builds: `pubT` differed **8.7x** between two runs that
+    could not have affected it, and `imap` read 2,889ms against 577ms at the same batch while untouched by the
+    change under test. Only the load-INDEPENDENT reading (lookT as a FRACTION of callT) stayed trustworthy.
+    A controlled A/B was attempted and produced two **BYTE-IDENTICAL images** -- `make out` is not a target, so
+    both arms came from stale classes; `cmp` caught it. **An A/B whose arms are the same binary looks exactly
+    like a change that does nothing.** The Pi, with no competing load and a known baseline, is the honest
+    harness for this kind of measurement.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, launcher):** no FAULT, no parity DIFF, no `BOOT RE-ENTERED`, no
+    `unclaimed pc`, no `BADPATCH`; only the known denylisted `UNRESOLVED STATIC`/`TRAP-WIRED`/`NULL CLASS
+    LITERAL` lines. QEMU: suite clean on ELEVEN markers incl. DANGLING/STALE with `churnMB=625 live=32
+    intact=32` and **`newarm = demo.RtaMade`** -- the DEFERRED-CONSTRUCTOR arm, precisely the path `<init>`
+    takes through this table. `metal junit: ran 44, failures 0`; host tests unchanged incl.
+    `compiler: 37 checks`.
+  - **WHAT IS THE BOTTLENECK NOW:** `mark` (711ms/batch at batch 165) and `probe` (144ms); `patch` is 108ms
+    and `imap` 1,626ms cumulative. The launcher still stops at `VIRTUALRESOLVE FAILED
+    java/lang/reflect/Constructor.getParameters()` -- an ordinary overlay gap on `Constructor`, untouched by
+    any of this.
+  - **HONEST LEDGER on the two minor changes kept alongside:** `CodeEdges.findSite` measured 5% and is worth
+    its keep; **`linkStubFor`'s index measured NOTHING** and lives on the `unres` path, which is now 541ms
+    cumulative of an 11s callT. It is sound and it removes a real O(n^2), but it is unjustified by measurement
+    and should be reverted unless a future boot implicates that path.
+
 - **THE IMAP REFILL WAS A LINEAR REGISTRY SCAN PER EMPTY ITABLE SLOT -- 267x ON HARDWARE (2026-09-14,
   PI-VALIDATED).** `refillImaps` was **460,288ms** of a 165-batch launcher boot, against `seeds` 565ms and
   `synth` 142ms. It is **1,720ms** now: ~458 seconds, 7.6 minutes, removed from the boot.
