@@ -1302,6 +1302,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorCount(J)J", "vm/VM.declCtorCountAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorDescAt(JJ)J", "vm/VM.declCtorDescAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.availableProcessors()I", "vm/VM.availProcsAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.fieldAnnoAll(JJ)J", "vm/VM.fieldAnnoAllAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeStaticFieldAddr(JJ)J", "vm/VM.unsafeStaticAddrAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFieldOffset(JJ)J", "vm/VM.unsafeFieldOffsetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.noopNative(J)V", "vm/VM.noopNativeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFence(J)V", "vm/VM.unsafeFenceAddr");

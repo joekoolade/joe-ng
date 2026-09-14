@@ -402,6 +402,20 @@ public final class A64Enc
     {
         return 0xC800_FC00 | (rs << 16) | (rn << 5) | rt;
     }
+    /**
+     * {@code CLREX} — clear the local exclusive monitor.
+     *
+     * <p>REQUIRED on the FAILURE path of a compare-and-swap, and its absence is not a performance question.
+     * An {@code LDAXR} arms the monitor; if the CAS then bails out on the comparison without storing, the
+     * monitor stays armed, and a LATER, UNRELATED {@code STLXR} on this core can succeed against it. The
+     * corruption is then a store that should have failed silently taking effect somewhere else entirely.
+     *
+     * <p>C6.2.51: {@code CLREX #imm4}, imm4 in bits 11:8, defaulting to 15.
+     */
+    public static int clrex()
+    {
+        return 0xD503_3F5F;
+    }
     /** {@code STLR Wt, [Xn]} — store-release (32-bit); releases a spinlock. */
     public static int stlrw(int rt, int rn)
     {

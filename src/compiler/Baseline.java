@@ -2518,6 +2518,30 @@ public final class Baseline
             cb.emit(A64Enc.stlxrw(17, 16, a));              // try to store 1; w17 = status
             cb.emit(A64Enc.cbnz(17, -3));                   // store failed -> retry (back to ldaxr)
         }
+        else if (id == Intrinsics.CAS64)
+        {
+            // cas64(addr, expect, update) -> boolean. Operands were pushed left to right, so they pop in
+            // reverse. x16/x17 are the scratch pair the other exclusive lowerings already use.
+            int upd = popReg();
+            int exp = popReg();
+            int a = popReg();
+            int r = pushReg();
+            //                                              retry:
+            cb.emit(A64Enc.ldaxr(17, a));                // x17 = *addr                     (load-acquire excl)
+            cb.emit(A64Enc.cmpReg(17, exp));             // *addr == expect ?
+            cb.emit(A64Enc.bcond(A64Enc.NE, 5));         // no  -> fail (skip 4 insns to CLREX)
+            cb.emit(A64Enc.stlxr(16, upd, a));           // try store; w16 = 0 on success   (store-release excl)
+            cb.emit(A64Enc.cbnz(16, -4));                // store lost the monitor -> retry (back to ldaxr)
+            cb.emit(A64Enc.movz(r, 1, 0));               // r = true
+            cb.emit(A64Enc.b(3));                        // -> end
+            //                                              fail:
+            // CLREX IS NOT OPTIONAL. The LDAXR above armed the exclusive monitor and this path stores
+            // nothing, so leaving it armed lets a LATER, UNRELATED STLXR on this core succeed against it --
+            // a store that should have failed silently taking effect somewhere else entirely.
+            cb.emit(A64Enc.clrex());
+            cb.emit(A64Enc.movz(r, 0, 0));               // r = false
+            //                                              end:
+        }
         else if (id == Intrinsics.SPIN_UNLOCK)
         {
             cb.emit(A64Enc.stlrw(31, popReg()));            // STLR wzr, [lock]  (release)

@@ -60,6 +60,25 @@ public final class Magic
     {
         throw intrinsic();
     }
+    /**
+     * 64-bit compare-and-swap: if {@code *addr == expect}, store {@code update} and answer true; otherwise
+     * leave memory alone and answer false. Lowered to an {@code LDAXR}/{@code STLXR} retry loop, with a
+     * {@code CLREX} on the comparison-failure path.
+     *
+     * <p>This is the primitive every {@code jdk.internal.misc.Unsafe} atomic rests on, and through it
+     * ForkJoinPool and CompletableFuture, which drive their whole structure through Unsafe rather than
+     * VarHandles. 64-bit because a joe-ng reference IS an 8-byte pointer: the 32-bit pair that serves
+     * {@link #spinLock} cannot carry one.
+     *
+     * <p>SPURIOUS FAILURE IS PERMITTED, as on any LL/SC machine -- an interrupt or a competing store can clear
+     * the monitor between the load and the store. Callers must loop, which is what {@code Unsafe}'s own
+     * {@code getAndAdd}/{@code getAndSet} do; a caller treating one false as "the value differs" would be
+     * wrong on hardware in a way it never is under emulation.
+     */
+    public static boolean cas64(long addr, long expect, long update)
+    {
+        throw intrinsic();
+    }
     /** Acquire the spinlock at {@code addr} (a shared 32-bit word); spins until held. */
     public static void spinLock(long addr)
     {
