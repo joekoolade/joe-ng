@@ -12245,6 +12245,36 @@ public final class Loader
         long buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
         if (buf == 0L)
         {
+            // JVMS 5.4.3.3 searches C, then C's SUPERCLASSES, then its maximally-specific SUPERINTERFACES.
+            // The tiers inside resolveLinkTarget cover the first two -- bufBySigU's third tier resolves
+            // through the class's FLATTENED vtable, which carries inherited methods -- but they cannot cover
+            // the third, because a DEFAULT method has no vtable slot in any class: a class-typed receiver
+            // reaches a default THROUGH THE ITABLE precisely because there is no slot for it.
+            //
+            // `super.cleanUp(context)` in JUnit's TestMethodTestDescriptor is exactly that shape. It is an
+            // invokespecial naming MethodBasedTestDescriptor, which does NOT declare cleanUp; the method is a
+            // `public default` on Node, implemented two classes up by JupiterTestDescriptor. Every tier
+            // answered 0 and the call trapped as `LINK FAILED ... class OK but no body for that
+            // name+descriptor` -- accurate about the CLASS and silent about where the body really lives.
+            //
+            // resolveViaInterfaces already performs this search for the late-VIRTUAL path (it walks the
+            // superclass chain collecting interfaces, then their super-interfaces). Reusing it is what keeps
+            // the two paths agreeing; a second walk over the same relation is the trap this file has paid for
+            // repeatedly. It cannot be called from INSIDE resolveLinkTarget -- it calls resolveLinkTarget per
+            // interface, so that would recurse -- which is why it belongs here, at the terminal caller.
+            int ireg = regBySigU(lkClsU[idx]);
+            if (ireg >= 0)
+            {
+                int why = lnkFailWhy;                   // the CLASS's reason; the walk below overwrites it
+                buf = resolveViaInterfaces(ireg, lkNameU[idx], lkDescU[idx]);
+                if (buf == 0L)
+                {
+                    lnkFailWhy = why;                   // report why the CLASS failed, not the last interface
+                }
+            }
+        }
+        if (buf == 0L)
+        {
             // TERMINAL: this stub has no other tier to try, so the call really is about to trap. (The chain
             // walkers that also call resolveLinkTarget report through VIRTUALRESOLVE FAILED when THEIR whole
             // walk is over -- not per level.)
