@@ -164,10 +164,12 @@ defines the minimum the assembler must encode.
     and `imap` 1,626ms cumulative. The launcher still stops at `VIRTUALRESOLVE FAILED
     java/lang/reflect/Constructor.getParameters()` -- an ordinary overlay gap on `Constructor`, untouched by
     any of this.
-  - **HONEST LEDGER on the two minor changes kept alongside:** `CodeEdges.findSite` measured 5% and is worth
-    its keep; **`linkStubFor`'s index measured NOTHING** and lives on the `unres` path, which is now 541ms
-    cumulative of an 11s callT. It is sound and it removes a real O(n^2), but it is unjustified by measurement
-    and should be reverted unless a future boot implicates that path.
+  - **`linkStubFor`'s INDEX WAS BUILT AND THEN REMOVED, on measurement.** It is the same linear-scan shape
+    and the fix was sound, but it measured NO gain and the `unres` path it sits on is 541ms cumulative of an
+    11s callT. **A real O(n^2) is not automatically worth fixing** -- shipping an index for a path that is not
+    hot is unmeasured complexity, which is the rule this file already applies to instruments. The scan is back,
+    with a comment recording that it was measured and left alone. `CodeEdges.findSite` was KEPT: 5% is small
+    but it is real.
 
 - **THE IMAP REFILL WAS A LINEAR REGISTRY SCAN PER EMPTY ITABLE SLOT -- 267x ON HARDWARE (2026-09-14,
   PI-VALIDATED).** `refillImaps` was **460,288ms** of a 165-batch launcher boot, against `seeds` 565ms and

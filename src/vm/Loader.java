@@ -3023,8 +3023,6 @@ public final class Loader
         sgCount = 0;
         relocRecording = 0;
         lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
-        lkBucket = null;                                //   ...so the name index must go with them: a stale
-                                                        //   chain would hand out a stub over dead blobs
         linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
         // FILLED WITH -1, because the zero default is a VALID REGISTRY INDEX. recordTailReloc (lambda and
         // method-reference thunks) did not set this field, so every such site memoised to rgTab[0] and
@@ -11960,26 +11958,6 @@ public final class Loader
     // 256 was enough for every closure until the console launcher, whose picocli+JUnit graph exhausts it --
     // and running out is NOT a cap that merely limits an optimisation: the caller leaves the site pointing at
     // denylistTrap, so the program dies blaming a denylist the class is not on.
-    /**
-     * Name-keyed hash index over the link-stub table, so {@link #linkStubFor} is a PROBE rather than a linear
-     * scan comparing THREE Utf8 strings against every entry.
-     *
-     * <p>MEASURED, not guessed: `patchRelocsFrom` re-walks every reloc site at the end of every batch, and
-     * each UNRESOLVED site called this. Both the unresolved-site count and {@code lkCount} grow with the
-     * load, so the cost is quadratic in it -- `patch` was 1,622ms/batch at batch 165 of a launcher boot with
-     * the rest of the per-site work already O(1) (a memo read and a bitmap set).
-     *
-     * <p>THIRD INSTANCE OF THIS EXACT DEFECT, and the third time the same remedy applies: the demand-load
-     * arc's {@code pull} pass (6,664ms -> 1,539ms) and {@code defaultBySig} in the imap refill (460,288ms ->
-     * 1,720ms). A per-item linear scan of a table that grows all boot.
-     *
-     * <p>Entries are only ever APPENDED and never rewritten, so the bucket is filled at insert time and needs
-     * no incremental catch-up pass. {@code resetLoader} zeroes {@code lkCount}, so the buckets are cleared
-     * there too -- a stale chain would hand out a stub built over a previous batch's blobs.
-     */
-    private static final int LKTAB = 8192;               // power of two > MAXLINKSTUB; chained
-    private static int[] lkBucket;                       // name hash -> first link-stub index, -1 when empty
-    private static int[] lkNext;                         // link-stub index -> next entry with the same name hash
     private static final int MAXLINKSTUB = 4096;
     private static long[] lkClsU  = new long[MAXLINKSTUB];   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
     private static long[] lkNameU = new long[MAXLINKSTUB];
@@ -11996,22 +11974,13 @@ public final class Loader
      */
     private static long linkStubFor(long clsU, long nameU, long descU)
     {
-        if (lkBucket == null)
-        {
-            lkBucket = new int[LKTAB];
-            lkNext = new int[MAXLINKSTUB];
-            int b = 0;
-            while (b < LKTAB)
-            {
-                lkBucket[b] = -1;
-                b += 1;
-            }
-        }
-        // The PREDICATE IS UNCHANGED -- this only narrows what it is applied to, so a hit is the same entry
-        // the scan would have found and a miss still falls through to minting a stub below.
-        int h = utf8Hash(nameU, 0) & (LKTAB - 1);
-        int k = lkBucket[h];
-        while (k >= 0)
+        // A LINEAR SCAN, and deliberately left one. It was indexed during the `patch` arc on the theory that
+        // this was hot; MEASURED, the index bought NOTHING, and the cost turned out to be `dlCellOf` two
+        // tiers away. This path is the `unres` arm, 541ms cumulative of an 11s callT on a launcher boot --
+        // so the scan is not worth the table it would take to avoid. Revisit only if a measurement puts time
+        // here.
+        int k = 0;
+        while (k < lkCount)
         {
             if (utf8EqAt(lkClsU[k], 0, clsU, 0)
                     && utf8EqAt(lkNameU[k], 0, nameU, 0)
@@ -12019,7 +11988,7 @@ public final class Loader
             {
                 return lkStub[k];
             }
-            k = lkNext[k];
+            k += 1;
         }
         if (lkCount >= MAXLINKSTUB)
         {
@@ -12039,8 +12008,6 @@ public final class Loader
         lkDescU[lkCount] = descU;
         lkMemo[lkCount] = 0L;
         lkStub[lkCount] = buildLinkStub(lkCount);
-        lkNext[lkCount] = lkBucket[h];                  // append-only table, so index at insert: no catch-up pass
-        lkBucket[h] = lkCount;
         lkCount += 1;
         return lkStub[lkCount - 1];
     }
