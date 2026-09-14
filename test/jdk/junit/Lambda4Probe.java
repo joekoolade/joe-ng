@@ -76,6 +76,40 @@ public class Lambda4Probe
         seen = a + "," + b + "," + c + "," + d;
     }
 
+    /**
+     * THE LAUNCHER'S ACTUAL CONDITION: a lambda whose factory -- and therefore whose synthetic body -- is a
+     * STATIC METHOD ON AN INTERFACE.
+     *
+     * <p>javap on the jar shows ReflectiveInterceptorCall is a nested INTERFACE, so its bootstrap
+     * MethodHandle is `REF_invokeStatic` over a **CONSTANT_InterfaceMethodref (tag 11)**, where a static
+     * method on a CLASS gives CONSTANT_Methodref (tag 10). Every arm above uses the tag-10 form and passes,
+     * which is why they could not reproduce: the SHAPE was right and the CONDITION was not.
+     *
+     * <p>This VM has been bitten by static-interface-methods before -- registerInterface walks only virtual
+     * methods, so a static interface method is registered nowhere, which is what forced compileSigOnDemand's
+     * fourth tier. A lambda BODY that is one is the same gap reached from a new direction.
+     */
+    interface Factory
+    {
+        static Sam4 ofVoidOnIface(Call4 call)
+        {
+            return (a, b, c, d) ->
+            {
+                call.apply(a, b, c, d);
+                return null;
+            };
+        }
+
+        static Sam2 chainOnIface(Call4 call, String c1, String c2)
+        {
+            return (a, b) ->
+            {
+                call.apply(a, b, c1, c2);
+                return null;
+            };
+        }
+    }
+
     public static void main(String[] args)
     {
         Call4 sink = (a, b, c, d) -> seen = a + "," + b + "," + c + "," + d;
@@ -111,6 +145,19 @@ public class Lambda4Probe
         Sam2 nested = chain(viaRef(), "C1", "C2");
         nested.invoke("A0", "A1");
         System.out.println("nested capture = " + seen + " (want A0,A1,C1,C2)");
+
+        // The condition, not just the shape: the factory is a static method on an INTERFACE, so the lambda's
+        // implementation method is referenced by InterfaceMethodref rather than Methodref.
+        seen = "<never called>";
+        Sam4 fi = Factory.ofVoidOnIface(sink);
+        Object ri = fi.invoke("p", "q", "r", "s");
+        System.out.println("iface-static 1cap4arg = " + seen + " (want p,q,r,s)");
+        System.out.println("iface-static ret null = " + (ri == null) + " (want true)");
+
+        seen = "<never called>";
+        Sam2 hi = Factory.chainOnIface(sink, "C1", "C2");
+        hi.invoke("A0", "A1");
+        System.out.println("iface-static 3cap2arg = " + seen + " (want A0,A1,C1,C2)");
 
         System.out.println("Lambda4Probe done");
     }

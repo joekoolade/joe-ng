@@ -281,6 +281,8 @@ final class MetalSymbols implements Symbols
             VM.printDec(Loader.lambdaSize(idx));
             Uart.write(Magic.bytes(" kind="));
             VM.printDec(Loader.lambdaImplKindOf(idx));
+            Uart.write(Magic.bytes(" impl="));
+            Loader.printLambdaImplName(idx);            // WHICH lambda -- idx alone cannot say, see the helper
             Uart.putc(0x0A);
         }
         emitAddr(cb, reg, tib);

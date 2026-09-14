@@ -16865,6 +16865,21 @@ public final class Loader
         printWhyUnpulled(indyNameBuf + off);
     }
 
+    /**
+     * Name the lambda's IMPLEMENTATION method, {@code class.name}, for the compile-time lambda trace.
+     *
+     * <p>Without it that trace prints {@code idx=}, which is an indy index WITHIN the class being compiled --
+     * useless for finding one lambda in a launcher boot that synthesises thousands. The failure being chased
+     * is named exactly ({@code lambda$ofVoidMethod$0}), so the log has to be greppable by that name.
+     */
+    static void printLambdaImplName(int idx)
+    {
+        int mref = lambdaImplMref(idx);
+        printNameAt(gbase, refClassNameOff(mref));
+        Uart.putc(0x2E);
+        printNameAt(gbase, mrefNameOff(mref));
+    }
+
     private static void printLambdaIfaceName(int idx)
     {
         long p = gbase + mrefDescOff(idx) + 2;
