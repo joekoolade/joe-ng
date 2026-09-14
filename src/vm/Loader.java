@@ -3022,6 +3022,8 @@ public final class Loader
         sgCount = 0;
         relocRecording = 0;
         lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
+        lkBucket = null;                                //   ...so the name index must go with them: a stale
+                                                        //   chain would hand out a stub over dead blobs
         linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
         // FILLED WITH -1, because the zero default is a VALID REGISTRY INDEX. recordTailReloc (lambda and
         // method-reference thunks) did not set this field, so every such site memoised to rgTab[0] and
@@ -8520,6 +8522,17 @@ public final class Loader
      * re-resolve, since their answer is not a single registry entry.
      */
     private static int[] rcReg;
+
+    /**
+     * WHICH PATH each reloc site takes on the batch-end re-walk, counted rather than inferred. `patch` is
+     * 1,622ms/batch at batch 165 with the per-site work already O(1) (a memo read plus a bitmap set), so the
+     * cost has to be in the sites that DO NOT take the memo -- and the refill taught this session that the
+     * unmemoisable remainder is exactly where the time hides.
+     */
+    static long pcCallT, pcStatT, pcPubT;
+    private static int pcMemo;
+    private static int pcResolve;
+    private static int pcUnres;
     /** Registry index {@link #globalBufByRef} resolved through, or -1 when it did not use the direct tier. */
     private static int rgHitIdx;
     private static long[] rsAddr, rsBase;               // static sites: address-load site, ref blob base,
@@ -8669,6 +8682,7 @@ public final class Loader
      */
     private static void patchRelocsFrom(int rcStart, int rsStart)
     {
+        long tA0 = Magic.readCNTPCT_EL0();
         int i = rcStart;
         while (i < rcCount)
         {
@@ -8678,10 +8692,12 @@ public final class Loader
             long target;
             if (rcReg[i] >= 0)
             {
+                pcMemo += 1;
                 target = rgTab[rcReg[i]].buf;
             }
             else
             {
+                pcResolve += 1;
                 target = globalBufByRef(rcBase[i], rcClass[i], rcName[i], rcDesc[i]);
                 if (target != 0L)
                 {
@@ -8690,6 +8706,7 @@ public final class Loader
             }
             if (target == 0L)
             {
+                pcUnres += 1;
                 // Unresolved. Two very different causes, and they want opposite treatment:
                 //   - the callee's class is DENYLISTED (a metal-absent subtree on a cold branch) -> trap, as
                 //     before; resolving it would demand-load exactly what the denylist exists to keep out.
@@ -8771,6 +8788,8 @@ public final class Loader
             }
             i += 1;
         }
+        long tB0 = Magic.readCNTPCT_EL0();
+        pcCallT += tB0 - tA0;
         int j = rsStart;
         while (j < rsCount)
         {
@@ -8790,7 +8809,10 @@ public final class Loader
             Magic.store32(rsAddr[j] + 4L, A64Enc.movk(rsReg[j], (int) (addr >> 16), 1));
             j += 1;
         }
+        long tC0 = Magic.readCNTPCT_EL0();
+        pcStatT += tC0 - tB0;
         Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the patched code
+        pcPubT += Magic.readCNTPCT_EL0() - tC0;
     }
 
     /** Method buffer for a call ref given as blob base + Utf8 offsets (patchRelocs re-resolution), or 0. */
@@ -11578,6 +11600,21 @@ public final class Loader
         VM.printDec(rfClos);
         Uart.write(Magic.bytes(" holeEnd="));
         VM.printDec(rfHoleEnd);
+        // patch re-walk: sites taking the memo vs re-resolving vs unresolved (cumulative), plus the site count
+        Uart.write(Magic.bytes(" pc:n="));
+        VM.printDec(rcCount);
+        Uart.write(Magic.bytes(" memo="));
+        VM.printDec(pcMemo);
+        Uart.write(Magic.bytes(" res="));
+        VM.printDec(pcResolve);
+        Uart.write(Magic.bytes(" unres="));
+        VM.printDec(pcUnres);
+        Uart.write(Magic.bytes(" callT="));
+        printDur(ticksUs(pcCallT));
+        Uart.write(Magic.bytes(" statT="));
+        printDur(ticksUs(pcStatT));
+        Uart.write(Magic.bytes(" pubT="));
+        printDur(ticksUs(pcPubT));
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
@@ -11855,6 +11892,26 @@ public final class Loader
     // 256 was enough for every closure until the console launcher, whose picocli+JUnit graph exhausts it --
     // and running out is NOT a cap that merely limits an optimisation: the caller leaves the site pointing at
     // denylistTrap, so the program dies blaming a denylist the class is not on.
+    /**
+     * Name-keyed hash index over the link-stub table, so {@link #linkStubFor} is a PROBE rather than a linear
+     * scan comparing THREE Utf8 strings against every entry.
+     *
+     * <p>MEASURED, not guessed: `patchRelocsFrom` re-walks every reloc site at the end of every batch, and
+     * each UNRESOLVED site called this. Both the unresolved-site count and {@code lkCount} grow with the
+     * load, so the cost is quadratic in it -- `patch` was 1,622ms/batch at batch 165 of a launcher boot with
+     * the rest of the per-site work already O(1) (a memo read and a bitmap set).
+     *
+     * <p>THIRD INSTANCE OF THIS EXACT DEFECT, and the third time the same remedy applies: the demand-load
+     * arc's {@code pull} pass (6,664ms -> 1,539ms) and {@code defaultBySig} in the imap refill (460,288ms ->
+     * 1,720ms). A per-item linear scan of a table that grows all boot.
+     *
+     * <p>Entries are only ever APPENDED and never rewritten, so the bucket is filled at insert time and needs
+     * no incremental catch-up pass. {@code resetLoader} zeroes {@code lkCount}, so the buckets are cleared
+     * there too -- a stale chain would hand out a stub built over a previous batch's blobs.
+     */
+    private static final int LKTAB = 8192;               // power of two > MAXLINKSTUB; chained
+    private static int[] lkBucket;                       // name hash -> first link-stub index, -1 when empty
+    private static int[] lkNext;                         // link-stub index -> next entry with the same name hash
     private static final int MAXLINKSTUB = 4096;
     private static long[] lkClsU  = new long[MAXLINKSTUB];   // absolute {u2 len}{bytes} runs, as resolveBakeStub takes
     private static long[] lkNameU = new long[MAXLINKSTUB];
@@ -11871,8 +11928,22 @@ public final class Loader
      */
     private static long linkStubFor(long clsU, long nameU, long descU)
     {
-        int k = 0;
-        while (k < lkCount)
+        if (lkBucket == null)
+        {
+            lkBucket = new int[LKTAB];
+            lkNext = new int[MAXLINKSTUB];
+            int b = 0;
+            while (b < LKTAB)
+            {
+                lkBucket[b] = -1;
+                b += 1;
+            }
+        }
+        // The PREDICATE IS UNCHANGED -- this only narrows what it is applied to, so a hit is the same entry
+        // the scan would have found and a miss still falls through to minting a stub below.
+        int h = utf8Hash(nameU, 0) & (LKTAB - 1);
+        int k = lkBucket[h];
+        while (k >= 0)
         {
             if (utf8EqAt(lkClsU[k], 0, clsU, 0)
                     && utf8EqAt(lkNameU[k], 0, nameU, 0)
@@ -11880,7 +11951,7 @@ public final class Loader
             {
                 return lkStub[k];
             }
-            k += 1;
+            k = lkNext[k];
         }
         if (lkCount >= MAXLINKSTUB)
         {
@@ -11900,6 +11971,8 @@ public final class Loader
         lkDescU[lkCount] = descU;
         lkMemo[lkCount] = 0L;
         lkStub[lkCount] = buildLinkStub(lkCount);
+        lkNext[lkCount] = lkBucket[h];                  // append-only table, so index at insert: no catch-up pass
+        lkBucket[h] = lkCount;
         lkCount += 1;
         return lkStub[lkCount - 1];
     }

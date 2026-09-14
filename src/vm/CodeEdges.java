@@ -132,6 +132,13 @@ final class CodeEdges
         }
         Magic.store64(TAB + n * 16L, site);
         Magic.store64(TAB + n * 16L + 8L, t);
+        if (edgBucket == null)                           // findSite above always builds it, but note() can be
+        {                                                //   reached with site == 0 short-circuited
+            buildIndex();
+        }
+        int hb = bucketOf(site);
+        edgNext[(int) n] = edgBucket[hb];
+        edgBucket[hb] = (int) n;
         n += 1;
     }
 
@@ -166,17 +173,87 @@ final class CodeEdges
     }
 
     /** Address of the entry for {@code site}, or -1. Linear; n stays in the low thousands. */
+    /**
+     * Site-keyed hash index over the edge census, so {@link #findSite} is a PROBE rather than a linear scan of
+     * every recorded edge.
+     *
+     * <p>MEASURED, not guessed: {@code patchRelocsFrom} calls {@link #note} for EVERY reloc site, and
+     * {@code patchRelocs} re-walks every site at the end of EVERY batch. Both the site count and {@code n}
+     * grow with the load, so the scan is quadratic in it -- on a launcher boot `patch` was 1,622ms/batch at
+     * batch 165, and splitting that timer three ways put ~95% of it in the call-site loop (callT 645ms/batch
+     * against statT 3ms and pubT 34ms) while the per-site work there is otherwise O(1).
+     *
+     * <p>FOURTH INSTANCE OF THIS EXACT DEFECT, same remedy each time: the demand-load arc's {@code pull}
+     * (6,664ms -> 1,539ms), {@code Loader.defaultBySig} in the imap refill (460,288ms -> 1,720ms), and this.
+     * A per-item linear scan of a table that grows all boot.
+     *
+     * <p>SAFE BECAUSE SLOTS ARE STABLE: {@link #pruneRange} RETIRES a slot in place (site = 0) rather than
+     * removing or reordering it, and {@code n} only ever grows and is never reset -- so a recorded index
+     * stays valid for the life of the VM. A retired slot leaves a stale chain link, which costs one wasted
+     * hop and cannot produce a wrong answer: the probe still compares the site word, which is now 0.
+     */
+    private static final int EDGTAB = 16384;             // power of two > the 8,192-entry capacity; chained
+    private static int[] edgBucket;                      // site hash -> first edge index, -1 when empty
+    private static int[] edgNext;                        // edge index -> next entry with the same site hash
+
+    /**
+     * Bucket for a site address. Sites are 4-byte-aligned code addresses, so the low two bits carry nothing
+     * and consecutive call sites would otherwise cluster into adjacent buckets; the multiply spreads them.
+     */
+    private static int bucketOf(long site)
+    {
+        long h = (site >> 2) * 0x9E3779B1L;
+        return (int) ((h >> 15) & (EDGTAB - 1));
+    }
+
+    /**
+     * Build the index, folding in whatever the table already holds. Lazy rather than at class init because
+     * this runs on the loader's compile path (under the loader lock), which is where the allocation is safe
+     * -- the same placement {@code Loader.buildRegIndex} uses.
+     */
+    private static void buildIndex()
+    {
+        edgBucket = new int[EDGTAB];
+        edgNext = new int[(int) ((TAB_END - TAB) / 16L)];
+        int b = 0;
+        while (b < EDGTAB)
+        {
+            edgBucket[b] = -1;
+            b += 1;
+        }
+        long i = 0;
+        while (i < n)                                    // fold in entries recorded before the index existed
+        {
+            long site = Magic.load64(TAB + i * 16L);
+            if (site != 0L)
+            {
+                int h = bucketOf(site);
+                edgNext[(int) i] = edgBucket[h];
+                edgBucket[h] = (int) i;
+            }
+            i += 1;
+        }
+    }
+
     private static long findSite(long site)
     {
-        long i = 0;
-        while (i < n)
+        if (site == 0L)
         {
-            long e = TAB + i * 16L;
-            if (Magic.load64(e) == site && site != 0L)
+            return -1L;                                  // 0 is the RETIRED marker, never a real site
+        }
+        if (edgBucket == null)
+        {
+            buildIndex();
+        }
+        int k = edgBucket[bucketOf(site)];
+        while (k >= 0)
+        {
+            long e = TAB + k * 16L;
+            if (Magic.load64(e) == site)                 // a retired slot reads 0 here and simply misses
             {
                 return e;
             }
-            i += 1;
+            k = edgNext[k];
         }
         return -1L;
     }
