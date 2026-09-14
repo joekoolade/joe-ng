@@ -7024,7 +7024,10 @@ public final class Loader
         // report that waits for 25 batches says nothing about the part that dominates. One compact line is
         // ~13ms at 115200 baud, which is noise next to a multi-second batch -- and unlike LOAD_PROFILE's
         // per-batch block, it is one line rather than three.
-        batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+        if (BATCH_COST)
+        {
+            batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+        }
         cumMark += tProbe - tMark;
         cumProbe += tA - tProbe;
         cumA += tB - tA;
@@ -11641,6 +11644,22 @@ public final class Loader
      * the {@code load} lines -- those time only {@link #addBlob}, i.e. putting the blob on the pending list.
      * All the real work happens afterwards in one batch, so this is what says WHERE it goes.
      */
+    /**
+     * The one-line-per-batch cost report (see {@link #batchCostLine}). OFF by default.
+     *
+     * <p>A FLAG RATHER THAN A DELETION: this line is what found all four O(everything-loaded) defects in the
+     * load-path arc -- it is the only instrument that says WHICH batch is expensive and which PHASE dominates
+     * it, and reconstructing that from a quiet boot is not possible. But a launcher boot is ~170 batches, so
+     * left on it is ~170 lines of arithmetic nobody is reading, in exactly the logs where the program's own
+     * output is what matters.
+     *
+     * <p>It is kept SEPARATE from {@link #LOAD_PROFILE} deliberately: that one prints a three-line block per
+     * batch, which at 115200 baud starts to measure its own output, so a perf boot usually wants this alone.
+     * The cumulative totals are accumulated either way -- a few adds per batch -- so turning this on does not
+     * change what the numbers mean.
+     */
+    private static final boolean BATCH_COST = false;
+
     private static final boolean LOAD_PROFILE = false;
 
     /**
@@ -16431,6 +16450,18 @@ public final class Loader
             p = putHex(out, p, cceFromTib);
             return putUtf8Bytes(out, p, Magic.bytes(">"));
         }
+        // AN ARRAY TYPE IS NOT SYNTHESISED, AND SAYING SO WAS COSTING A DIAGNOSIS. Array Types carry no
+        // class-registry entry and no itable directory, so the synthesised arm below rendered EVERY array as
+        // `<synthesised, implements nothing>` -- identical to a lambda whose interface failed to resolve.
+        // That is two unrelated bugs sharing one string: a launcher failure at
+        // `Arrays.stream(getParameters())` read as a lambda-interface problem when both sides were arrays.
+        // `writeClassName` already renders arrays (nested and primitive elements included), so this reuses it
+        // rather than adding a second walk over the same relation -- two walks disagreeing is a trap this
+        // file has paid for more than once.
+        if (isArrayType(type))
+        {
+            return writeClassName(type, Magic.addrOf(out) + 24L, p);   // elements at +24; descriptor form
+        }
         int r = regOfType(type);
         if (r >= 0 && clTab != null && clTab[r] != null)
         {
@@ -16439,8 +16470,18 @@ public final class Loader
         // No binary name, so say what it SATISFIES instead: the itable directory lists the interfaces, and
         // for a lambda that is its functional interface -- which is what distinguishes "the factory object
         // came back unchanged" from "some other synthesised object was returned".
+        //
+        // A MISSING DIRECTORY AND AN EMPTY ONE ARE DIFFERENT FAULTS and must not share a word. dir == 0 means
+        // the Type has no directory AT ALL (an interface Type is a chain dead end, so this is what a cast
+        // TARGET looks like); a directory whose first entry is the 0 sentinel means the object IS a lambda
+        // and `buildLambdaTib` could not resolve its functional interface. Reporting both as "nothing" is
+        // what made the two indistinguishable in the log.
         p = putUtf8Bytes(out, p, Magic.bytes("<synthesised, implements"));
         long dir = Magic.load64(type + 16L);
+        if (dir == 0L)
+        {
+            return putUtf8Bytes(out, p, Magic.bytes(" -- NO itable directory (not a lambda; an interface or bare Type)>"));
+        }
         int n = 0;
         while (dir != 0L && n < 8)
         {
@@ -16463,7 +16504,9 @@ public final class Loader
         }
         if (n == 0)
         {
-            p = putUtf8Bytes(out, p, Magic.bytes(" nothing"));
+            // An EMPTY directory on a Type that has one: a lambda built with ifaceType 0. Say which, because
+            // the fix is `LAMBDA IFACE UNRESOLVED`'s and nothing else's.
+            p = putUtf8Bytes(out, p, Magic.bytes(" nothing (lambda: functional interface UNRESOLVED)"));
         }
         return putUtf8Bytes(out, p, Magic.bytes(">"));
     }

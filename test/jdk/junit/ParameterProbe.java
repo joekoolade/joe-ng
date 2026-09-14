@@ -102,6 +102,32 @@ public class ParameterProbe
         System.out.println("ex paramTypes len = " + ex.getParameterTypes().length + " (want 2)");
         System.out.println("ctor paramTypes len = " + cex.getParameterTypes().length + " (want 2)");
 
+        // THE LAUNCHER'S EXACT SHAPE, and the one that failed on hardware:
+        // ExtensionUtils.registerExtensionsFromExecutableParameters does Arrays.stream(getParameters()).
+        // The Pi reported `ClassCastException: class <synthesised, implements nothing> cannot be cast to
+        // class <synthesised, implements nothing>` with `stream`/`spliterator` frames -- and BOTH sides
+        // rendering identically is what made it unreadable, since that string covered arrays as well as
+        // lambdas. A stream over a REFERENCE array built by getParameters() is the condition, so it is
+        // reproduced here rather than inferred.
+        Parameter[] sp = ex.getParameters();
+        long counted = java.util.Arrays.stream(sp).count();
+        System.out.println("stream count = " + counted + " (want 2)");
+        Object[] back = java.util.Arrays.stream(sp).toArray();
+        System.out.println("stream toArray len = " + back.length + " (want 2)");
+
+        // The CAST the pipeline makes on the way back: a typed toArray, which is a checkcast on an array
+        // type. An array Type carries no registry entry and no itable directory, so a failure here used to
+        // print exactly like an unresolved lambda interface.
+        Parameter[] typed = java.util.Arrays.stream(sp).toArray(Parameter[]::new);
+        System.out.println("typed toArray len = " + typed.length + " (want 2)");
+        System.out.println("typed instanceof Parameter[] = " + (typed instanceof Parameter[]) + " (want true)");
+        System.out.println("typed[0] type = " + nameOf(typed[0].getType()) + " (want int)");
+
+        // A plain cast of the array itself, the simplest form of the same question.
+        Object asObj = sp;
+        Parameter[] recast = (Parameter[]) asObj;
+        System.out.println("recast len = " + recast.length + " (want 2)");
+
         System.out.println("ParameterProbe done");
     }
 
