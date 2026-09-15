@@ -336,8 +336,15 @@ public final class Heap
     public static long allocCode(int size)
     {
         VM.loaderLock(VM.LOCK_ALLOC_CODE);                               // SMP: one bump pointer, and no atomic behind it
-        long buf = allocCodeLocked(size);
-        VM.loaderUnlock();
+        long buf;
+        try
+        {
+            buf = allocCodeLocked(size);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in Loader.lazyCompile: a throw here used to strand the lock
+        }
         return buf;
     }
 

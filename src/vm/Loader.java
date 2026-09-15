@@ -443,8 +443,15 @@ public final class Loader
     private static long clinitEntryOf(int i)
     {
         VM.loaderLock(VM.LOCK_CLINIT);
-        long r = clinitEntryOfLocked(i);
-        VM.loaderUnlock();
+        long r;
+        try
+        {
+            r = clinitEntryOfLocked(i);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         return r;
     }
 
@@ -10968,8 +10975,15 @@ public final class Loader
     private static int compileMethodOnDemand(long type, long nameArr, long descArr)
     {
         VM.loaderLock(VM.LOCK_ON_DEMAND);
-        int r = compileMethodOnDemandLocked(type, nameArr, descArr);
-        VM.loaderUnlock();
+        int r;
+        try
+        {
+            r = compileMethodOnDemandLocked(type, nameArr, descArr);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         return r;
     }
 
@@ -11136,8 +11150,15 @@ public final class Loader
     static int constructorResolve(long type, int paramCount)
     {
         VM.loaderLock(VM.LOCK_DEFERRED_CT);
-        int r = constructorResolveLocked(type, paramCount);
-        VM.loaderUnlock();
+        int r;
+        try
+        {
+            r = constructorResolveLocked(type, paramCount);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         return r;
     }
 
@@ -12435,8 +12456,11 @@ public final class Loader
             return lkMemo[idx];
         }
         VM.loaderLock(VM.LOCK_DEMAND_LOAD);                                // demand-loads a class: one compiler at a time
+        long buf;
+        try
+        {
         lnkFailWhy = 0;
-        long buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
+        buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
         if (buf == 0L)
         {
             // JVMS 5.4.3.3 searches C, then C's SUPERCLASSES, then its maximally-specific SUPERINTERFACES.
@@ -12528,7 +12552,11 @@ public final class Loader
             buf = VM.denylistTrapAddr;
         }
         lkMemo[idx] = buf;
-        VM.loaderUnlock();
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         return buf;
     }
 
@@ -12765,8 +12793,15 @@ public final class Loader
     private static long compileSigOnDemand(long clsU, long nameU, long descU)
     {
         VM.loaderLock(VM.LOCK_SIG_DEMAND);
-        long r = compileSigOnDemandLocked(clsU, nameU, descU);
-        VM.loaderUnlock();
+        long r;
+        try
+        {
+            r = compileSigOnDemandLocked(clsU, nameU, descU);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         return r;
     }
 
@@ -12956,8 +12991,28 @@ public final class Loader
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
         VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
-        long done = lazyCompileLocked(idx);
-        VM.loaderUnlock();
+        long done;
+        try
+        {
+            done = lazyCompileLocked(idx);
+        }
+        finally
+        {
+            // A THROW INSIDE THE LOCKED REGION MUST NOT STRAND THE LOCK, and it did. Neither call was
+            // inside a try/finally and VM.unwind touches none of loaderOwner/loaderDepth/loaderUnlock, so
+            // an exception exiting non-locally skipped the unlock and the lock was never handed back --
+            // every other thread then blocked on it for the rest of the boot. MEASURED on the launcher:
+            // three waiters, `held` growing 29,282ms -> 229,224ms -> 299,053ms while the completed-release
+            // counter sat at `rel 12865` for ALL THREE -- not one outermost release in 270 seconds -- and
+            // `depth` stuck at 3/3/2 rather than unwinding to 0. Deterministic: QEMU stops at the same
+            // `rel 12865`.
+            //
+            // This path genuinely can throw: lazyCompile -> drainPendingPulls -> loadClassIncremental ->
+            // loadAll, whose tail RUNS QUEUED <clinit>s through Magic.call0 -- guest code, and JUnit throws
+            // as ordinary control flow. (That the lock is held across guest code at all violates the
+            // invariant clinitEntryOf states and observes; this fixes the leak, not that.)
+            VM.loaderUnlock();
+        }
         if (done != 0L && !plausibleCode(done))
         {
             // The third and last tail-branching path (with the link stub and the late-virtual resolve). Its
@@ -18858,6 +18913,11 @@ public final class Loader
             k += 1;
         }
         VM.loaderLock(VM.LOCK_NEW_RESOLVE);                                // demand-loads a class: one compiler at a time
+        long tib;
+        int fields;
+        int reg;
+        try
+        {
         if (classIndexByName(slash) < 0)
         {
             if (LOAD_LOG)
@@ -18868,15 +18928,19 @@ public final class Loader
             }
             long pulled = loadClassIncremental(slash);
         }
-        int reg = classIndexByName(slash);
-        long tib = 0L;
-        int fields = 0;
+        reg = classIndexByName(slash);
+        tib = 0L;
+        fields = 0;
         if (reg >= 0 && clTab[reg].state >= RVMClass.ST_INSTANTIATED)
         {
             tib = clTab[reg].tib;                       // a half-lifecycle class has no filled TIB: do not use it
             fields = clTab[reg].fieldCount;
         }
-        VM.loaderUnlock();
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
         if (tib == 0L)
         {
             reportUnresolvedNew(site, pc);              // does not return

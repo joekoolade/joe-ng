@@ -1877,9 +1877,16 @@ public final class VM
             return memo;
         }
         loaderLock(LOCK_BAKE_RESOLVE);                  // demand-loads a class: one compiler at a time
-        long buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
-        Magic.store64(e + 24L, buf);
-        loaderUnlock();
+        long buf;
+        try
+        {
+            buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
+            Magic.store64(e + 24L, buf);
+        }
+        finally
+        {
+            loaderUnlock();          // see the note in Loader.lazyCompile: a throw here used to strand the lock
+        }
         return buf;
     }
     static int  faultDepth;            // 1 while a hardware fault is being turned into a Java exception + unwound
