@@ -627,6 +627,38 @@ public final class VM
         }
     }
 
+    /**
+     * Drop THIS task's ENTIRE hold on the loader lock, however deep, because it is about to stop for ever.
+     *
+     * <p>A halting trap does not throw, so neither {@code try/finally} nor {@link #unwind} can reach it: the
+     * task spins in {@code Magic.wfe()} holding the lock, and every other task that needs to compile hangs
+     * behind it. MEASURED: with the lock leak fixed, picocli's terminal-width thread got far enough to call
+     * {@code ProcessBuilder.start} -> {@code ProcessImpl.<clinit>} -> the DENYLISTED {@code ProcessImpl.init},
+     * halted inside the trap while holding the lock, and the whole launcher wedged -- the log stopped dead
+     * with the VM otherwise alive.
+     *
+     * <p>Releasing is strictly better than holding, and the cost is understood rather than ignored: the
+     * halted task leaves the STATIC COMPILE CONTEXT mid-update, but every compile entry point re-establishes
+     * it ({@code restoreCtxForCompile} exists for exactly that), and the reloc sites it appended are never
+     * patched -- which is harmless, because the buffer they belong to can never run: its task is stopped.
+     * Against that, holding is a guaranteed VM-wide hang in which nothing can even report.
+     *
+     * <p>It counts as a release so the {@code rel} counter stays honest -- a reader comparing `held` against
+     * `rel` must not see this as a hold that never ended.
+     */
+    static void loaderForceRelease()
+    {
+        if (smpSched == 0 || loaderOwner != curTask())
+        {
+            return;                                     // not ours to drop
+        }
+        long daif = VMScheduler.schedLock();
+        loaderDepth = 0;
+        loaderOwner = -1;
+        loaderReleases = loaderReleases + 1;
+        VMScheduler.schedUnlock(daif);
+    }
+
     /** Release one level of the loader lock. */
     static void loaderUnlock()
     {
@@ -1961,6 +1993,12 @@ public final class VM
             depth += 1;
         }
         Uart.putc(0x0A);
+        // THE TASK STOPS HERE FOR EVER, so it must not stop holding the loader lock: a halt does not throw,
+        // so the try/finally that makes every ordinary path exception-safe cannot reach this one, and every
+        // other task that needs to compile would hang behind a spinner. That is not hypothetical -- it is
+        // what wedged the launcher the moment the lock leak was fixed and picocli's width thread got far
+        // enough to reach a denied class.
+        loaderForceRelease();
         while (true)
         {
             Magic.wfe();

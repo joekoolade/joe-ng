@@ -6875,6 +6875,9 @@ public final class Loader
         Uart.write(Magic.bytes(" count="));
         VM.printDec(count);
         Uart.putc(0x0A);
+        // Same reason as denylistTrap: this is always reached mid-load or mid-compile, so the loader lock is
+        // ours, and spinning while holding it hangs every other task behind a report they can no longer read.
+        VM.loaderForceRelease();
         while (true) { }
     }
 
