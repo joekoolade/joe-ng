@@ -3473,6 +3473,33 @@ public final class Loader
     static long cumMark, cumProbe, cumA, cumB, cumPatch, cumClinit, cumAll;
     static long cumBytes;                                // bytes markReachable allocates, summed over batches
 
+    /**
+     * PHASE B's SPLIT. `B` is the largest item in the dominant batch -- 23,346ms of batch 1's 47,566ms
+     * (49%), and batch 1 is 86% of ALL load time -- and it had never been sub-split, so every reading of it
+     * was a guess. The earlier perf arc settled three wrong guesses about `patch` by splitting the timer
+     * rather than reading the code; this is the same move on the one phase that pass never opened.
+     *
+     * <p>The split asks the SHAPE question. The loop rescans all pdCount blobs on every pass
+     * (`while (remainingB > 0) { for each blob: if (!done && superReadyB(i)) ... }`), which is the
+     * O(everything-loaded) pattern this file says to suspect first. `bWorkT` is time INSIDE loadBodies, so
+     * B minus that is the scan; `bPasses` and `bChecks` say whether the rescan is really quadratic or
+     * whether the dependency order settles it in a pass or two.
+     */
+    private static long bWorkT;                          // cumulative ticks inside loadBodies, this batch
+    private static int bPasses;                          // outer repeats of the phase-B loop
+    private static int bChecks;                          // superReadyB probes (the rescan's real cost)
+
+    /**
+     * ...AND THE SPLIT INSIDE loadBodies, because the first split refuted the obvious answer. Phase B's
+     * rescan -- the O(everything-loaded) shape this file says to suspect first, and which the loop plainly
+     * has -- measured 493ms of 35,536ms: FOUR passes, 5,368 checks, 1.4%. The other 98.6% is real per-blob
+     * work, ~26ms x 1342 blobs, so the question moves inside.
+     */
+    private static long lbParseT;                        // parseConstPool + parseFields + parseVtable
+    private static long lbClinitT;                       // runClinit (captures the initializer body)
+    private static long lbCompileT;                      // compileClass (bodies + deferral stubs + fillTib)
+    private static long lbRegT;                          // registerAll + fillClassVtBuf
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -7044,15 +7071,26 @@ public final class Loader
         // buffers are already filled). All new/field/vtable/itable/cast targets are structure-registered now, so
         // order is irrelevant except for the super-before-subclass buffer inheritance; method CALLs are patched.
         int remainingB = pdCount;
+        bWorkT = 0L;
+        bPasses = 0;
+        bChecks = 0;
+        lbParseT = 0L;
+        lbClinitT = 0L;
+        lbCompileT = 0L;
+        lbRegT = 0L;
         while (remainingB > 0)
         {
+            bPasses += 1;
             int progress = 0;
             int i = 0;
             while (i < pdCount)
             {
+                bChecks += 1;
                 if (pdDoneB[i] == 0 && superReadyB(i))
                 {
+                    long bw0 = Magic.readCNTPCT_EL0();
                     loadBodies(pdBase[i], pdLen[i]);
+                    bWorkT += Magic.readCNTPCT_EL0() - bw0;
                     pdDoneB[i] = 1;
                     remainingB -= 1;
                     progress = 1;
@@ -7068,7 +7106,9 @@ public final class Loader
                 }
                 if (j < pdCount)
                 {
-                    loadBodies(pdBase[j], pdLen[j]);
+                    long bw1 = Magic.readCNTPCT_EL0();   // counted too: otherwise `work` under-reports and
+                    loadBodies(pdBase[j], pdLen[j]);     //   the scan looks worse than it actually is
+                    bWorkT += Magic.readCNTPCT_EL0() - bw1;
                     pdDoneB[j] = 1;
                     remainingB -= 1;
                 }
@@ -7572,8 +7612,10 @@ public final class Loader
      */
     private static void loadBodies(long bytes, int len)
     {
+        long lb0 = Magic.readCNTPCT_EL0();
         parseConstPool(bytes, len);
         parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
+        lbParseT += Magic.readCNTPCT_EL0() - lb0;
         int reg = classRegByName(gThisNameOff);
         gStatics = clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
         findBootstrapMethods();
@@ -7595,18 +7637,26 @@ public final class Loader
             clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies done
             return;
         }
+        long lb1 = Magic.readCNTPCT_EL0();
         parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
+        lbParseT += Magic.readCNTPCT_EL0() - lb1;
         gType = clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
         gTib = clTab[reg].tib;
         compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
+        long lb2 = Magic.readCNTPCT_EL0();
         runClinit(bytes);                               //   leave compileClass filling a throwaway TIB, not clTab[reg].tib)
+        lbClinitT += Magic.readCNTPCT_EL0() - lb2;
         compileReuseTib = false;
         gType = clTab[reg].type;                            // (runClinit's compile leaves gType/gTib alone now, but be safe)
         gTib = clTab[reg].tib;
         provideKnownStatics();                          // seed static tables a skipped <clinit> would have built
+        long lb3 = Magic.readCNTPCT_EL0();
         compileClass(bytes);                            // compile all methods; fillTib fills the (phase-A-allocated) TIB
+        long lb4 = Magic.readCNTPCT_EL0();
+        lbCompileT += lb4 - lb3;
         registerAll();                                  // methods -> globalBuf
         fillClassVtBuf(reg);                            // fill this class's registered vtable buffers (for subclasses)
+        lbRegT += Magic.readCNTPCT_EL0() - lb4;
         clTab[reg].state = RVMClass.ST_INSTANTIATED;    // lifecycle: bodies + TIB + itables done
     }
 
@@ -11936,6 +11986,24 @@ public final class Loader
         printDur(spanUs(tA, tB));
         Uart.write(Magic.bytes(" B="));
         printDur(spanUs(tB, tPatch));
+        Uart.write(Magic.bytes("[work="));
+        long bWorkUs = bWorkT * 1000000L / Magic.readCNTFRQ_EL0();
+        printDur(bWorkUs);
+        Uart.write(Magic.bytes(" scan="));
+        printDur(spanUs(tB, tPatch) - bWorkUs);          // B is tB..tPatch; tA..tB is phase A
+        Uart.write(Magic.bytes(" passes="));
+        VM.printDec(bPasses);
+        Uart.write(Magic.bytes(" checks="));
+        VM.printDec(bChecks);
+        Uart.write(Magic.bytes(" | parse="));
+        printDur(bWorkT == 0L ? 0L : lbParseT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" clinit="));
+        printDur(lbClinitT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" compile="));
+        printDur(lbCompileT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" reg="));
+        printDur(lbRegT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.putc(0x5D);
         Uart.write(Magic.bytes(" patch="));
         printDur(spanUs(tPatch, tRest));
         Uart.write(Magic.bytes(" clinit="));
