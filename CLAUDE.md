@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE BLOB PROBE RE-DERIVED IMMUTABLE FACTS EVERY ROUND -- MEMOED, AND THE CLOSURE IS PROVEN IDENTICAL
-  (2026-09-15, NOT YET PI-VALIDATED).** `probeAll` re-parsed EVERY blob's constant pool on every call --
+- **THE BLOB PROBE RE-DERIVED IMMUTABLE FACTS EVERY ROUND -- MEMOED, PI-VALIDATED, AND THE CLOSURE IS
+  PROVEN IDENTICAL (2026-09-15).** `probeAll` re-parsed EVERY blob's constant pool on every call --
   once per `markReachable` round plus once more per batch -- while `pdCount` grows all boot. It was the
   item the previous entry named as next, and the measurement that named it was the launcher at batch 209
   (1782 blobs): **309.7ms of a 320.0ms `mark`, 97% of it**, plus 151.1ms at the top level -- 471ms of a
@@ -136,6 +136,35 @@ defines the minimum the assembler must encode.
     FLAT where it had climbed 4.1 -> 12.4ms; `mark` 15.1 -> 3.4ms.** Removing the GROWTH term is the point,
     not the ratio: the suite peaks at ~190 blobs against the launcher's 1782, so this is the small end.
     `pb:probed=1 of=189` is the instrument -- a batch adding one class probes one blob.
+  - **PI-VALIDATED ON THE LAUNCHER (`core 166MHz`, SMP on): `[2 tests successful]` / `[0 tests failed]` /
+    exit 0, and `Test run finished after 122470 ms` against 161,556ms -- 39 SECONDS OFF, 24%.** That is the
+    same total which went UP on the previous increment and could not be attributed; this change targeted the
+    thing that had been measured as 70% of a batch, and the total moved.
+
+    | at batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `probe` (top level) | 151.110ms | **0us** | gone |
+    | `probe` (inside `mark`) | 309.699ms | **7.210ms** | 43x |
+    | `mark` | 320.010ms | **17.394ms** | **18.4x** |
+    | `tot` | 676.081ms | **221.280ms** | 3.1x |
+
+    And it stops growing: `mark` had gone 68.2 -> 320.0ms across the boot (4.7x) and now goes 5.8 -> 17.4ms.
+    `pb:probed=1 of=1782` on a batch adding one class -- the watermark firing at full scale.
+  - **THE CLOSURE IS IDENTICAL ON HARDWARE TOO, at 1782 blobs rather than the suite's 190.** Batch for batch
+    against the previous boot: `rounds`, `v:walks`, `levels`, `grew`, `cached`, `meth` all unchanged (b22
+    `rounds=4 pend=48 walks=12 levels=36 grew=3`; b58 `rounds=9 walks=23 levels=52 grew=9`; b86
+    `rounds=12 walks=228 levels=626 grew=36 meth=8k`), and the END STATE is byte-identical --
+    `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370 n:imap=855 synth=2276 clinits=388 pc:n=1243
+    memo=128548 res=82350 unres=27419`, every one matching. **Only `pend` falls** (b86 1477 -> 1068, b68
+    268 -> 200), which is the duplicate indy-interface pends and nothing else -- the QEMU finding reproduced
+    at nine times the scale.
+  - **The expected `ProcessImpl` trap still fires and is still survived** (picocli's terminal-width probe, at
+    batch 25, holding the loader lock), and the boot ran on through batch 209 to exit 0. Its ABSENCE would
+    have been as suspicious as a new failure.
+  - **WHAT THE BOTTLENECK IS NOW, from the same log: `patch` is 132.077ms of a 221.280ms batch -- 60%** --
+    with `callT` 15,142ms cumulative of which **`lookT` is 14,271ms (94%)**, and `pubT` 12,830ms. `mark` is
+    down to 8%. The dispatch-tier lookup is next, and it is the item this file already records as "measured
+    cold once and dismissed".
   - **`pend` AND `grew` CANNOT GATE THIS, AND `reach` CAN -- which is why `reach=` is now on the batch line.**
     The closure counters were NOT byte-identical: `pend` fell 1565 -> 1039 at batch 2 and the virt walks with
     it, because `pendIndyIface` no longer re-pends an interface once per round. That is waste the code's own
