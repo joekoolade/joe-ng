@@ -3519,6 +3519,24 @@ public final class Loader
     private static long ccEmitT;                         // emitMethod per method (real compile or stub)
     private static long ccPubT;                          // Heap.publishCode over the whole arena, per class
 
+    /**
+     * ...AND THE SPLIT INSIDE `parse`, the second item in phase B (9,614ms, 24%). Three passes run per blob
+     * -- parseConstPool, parseFields, parseVtable -- so the first question is which.
+     *
+     * <p>The second is whether the CONSTANT-POOL CACHE is working. It exists (RTA, phase A and phase B all
+     * re-parse the same blob, so the copy+parse is memoised) but its lookup is a LINEAR SCAN over pcBase,
+     * and pcN grows to the blob count -- 1342 in batch 1. That is the per-item scan over a table that grows
+     * all boot, the shape this file says to suspect first and which has been the answer six times. It is
+     * MEASURED here rather than assumed, because the last two things suspected on shape alone (phase B's
+     * rescan, publishCode) came in at 1.4% and 2.4%.
+     */
+    private static long pParseCpT;                       // parseConstPool
+    private static long pFieldsT;                        // parseFields
+    private static long pVtableT;                        // parseVtable
+    private static int pcCalls;                          // parseConstPool invocations this batch
+    private static long pcSteps;                         // total linear-scan steps across those calls
+    private static int pcHits;                           // ... of which found a cached parse
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -6066,13 +6084,16 @@ public final class Loader
     private static void parseConstPool(long base, int len)
     {
         gbase = base;
+        pcCalls += 1;
         int ci = 0;
         while (ci < pcN && pcBase[ci] != base)
         {
             ci += 1;
         }
+        pcSteps += ci;                                  // what the scan actually costs, not what its shape suggests
         if (ci < pcN)                                   // cache HIT: reuse the one-time copy + parse for this blob
         {
+            pcHits += 1;
             gbytes = pcBytes[ci];
             gcp = pcCp[ci];
             gcpTag = pcCpTag[ci];
@@ -6235,11 +6256,75 @@ public final class Loader
     }
 
     /** Copy the registered flattened vtable of the class named {@code superOff} into gv[]. */
+    /**
+     * Name-keyed index over the vtable registry, so {@link #inheritVtable} is a PROBE rather than a scan of
+     * every entry ever registered.
+     *
+     * <p>MEASURED, and this is where `parse` actually went. Splitting phase B's parse three ways gave
+     * {@code cp=9.9ms fields=313ms vtab=4773ms} -- `parseVtable` is 94% of it -- and inside parseVtable the
+     * only thing whose cost grows is this: {@code vtCount} is cleared by {@code resetLoader} (per LAUNCH,
+     * not per class), so it holds every vtable entry of every class loaded so far. At ~1342 classes with
+     * ~20 virtuals each that is ~27,000 entries, string-compared once PER CLASS -- tens of millions of
+     * utf8EqAt calls. Seventh instance of this file's most common defect: a per-item linear scan of a table
+     * that grows all boot.
+     *
+     * <p>ASCENDING ORDER IS PRESERVED, and that is not caution for its own sake: the scan applies matching
+     * entries in index order and a later entry writes the same {@code gvTab[slot]} as an earlier one, so
+     * reversing the walk could silently install a different implementation in a slot. A bucket chain built
+     * by the usual head-insertion yields NEWEST FIRST, so this one appends at the TAIL and keeps the walk
+     * ascending -- the same care {@code defaultBySig}'s index needed for closure order.
+     *
+     * <p>Incremental like {@code rgBucket}/{@code dlBucket}: the registry only grows within a launch and an
+     * entry's class name never changes, so entries already indexed stay valid; it is rebuilt from scratch
+     * when the count is seen to go backwards (a {@code resetLoader}).
+     */
+    private static final int VTTAB = 8192;               // power of two; chained
+    private static int[] vtBucket;                       // class-name hash -> FIRST entry, -1 when empty
+    private static int[] vtBucketTail;                   // ... and the last, so appends keep the chain ascending
+    private static int[] vtNextIdx;                      // entry -> next entry with the same class-name hash
+    private static int vtIndexed;
+
+    private static void buildVtIndex()
+    {
+        if (vtBucket == null || vtIndexed > vtCount)      // resetLoader zeroed the registry: rebuild
+        {
+            vtBucket = new int[VTTAB];
+            vtBucketTail = new int[VTTAB];
+            vtNextIdx = new int[MAXVT];
+            int b = 0;
+            while (b < VTTAB)
+            {
+                vtBucket[b] = -1;
+                vtBucketTail[b] = -1;
+                b += 1;
+            }
+            vtIndexed = 0;
+        }
+        while (vtIndexed < vtCount)
+        {
+            int h = utf8Hash(vtClassBase[vtIndexed], vtClassOff[vtIndexed]) & (VTTAB - 1);
+            vtNextIdx[vtIndexed] = -1;
+            if (vtBucketTail[h] < 0)
+            {
+                vtBucket[h] = vtIndexed;
+            }
+            else
+            {
+                vtNextIdx[vtBucketTail[h]] = vtIndexed;   // APPEND: keeps the chain in ascending index order
+            }
+            vtBucketTail[h] = vtIndexed;
+            vtIndexed += 1;
+        }
+    }
+
     private static void inheritVtable(int superOff)
     {
-        int i = 0;
-        while (i < vtCount)
+        buildVtIndex();                                  // incremental: only entries added since last time
+        int i = vtBucket[utf8Hash(gbase, superOff) & (VTTAB - 1)];
+        while (i >= 0)
         {
+            // The SAME predicate the scan used -- the index only narrows which entries it is applied to, so
+            // a hit is the entry the scan would have found and a miss still applies nothing.
             if (utf8EqAt(gbase, superOff, vtClassBase[i], vtClassOff[i]))
             {
                 int slot = vtSlot[i];
@@ -6253,7 +6338,7 @@ public final class Loader
                     gvCount = slot + 1;
                 }
             }
-            i += 1;
+            i = vtNextIdx[i];
         }
     }
 
@@ -7107,6 +7192,12 @@ public final class Loader
         lbClinitT = 0L;
         lbCompileT = 0L;
         lbRegT = 0L;
+        pParseCpT = 0L;
+        pFieldsT = 0L;
+        pVtableT = 0L;
+        pcCalls = 0;
+        pcSteps = 0L;
+        pcHits = 0;
         ccSeedT = 0L;
         ccPlaceT = 0L;
         ccTibT = 0L;
@@ -7648,7 +7739,10 @@ public final class Loader
     {
         long lb0 = Magic.readCNTPCT_EL0();
         parseConstPool(bytes, len);
+        long lbA = Magic.readCNTPCT_EL0();
+        pParseCpT += lbA - lb0;
         parseFields();                                  // re-derive layout (gImplIf*, gMethodsStart); gStatics is throwaway
+        pFieldsT += Magic.readCNTPCT_EL0() - lbA;
         lbParseT += Magic.readCNTPCT_EL0() - lb0;
         int reg = classRegByName(gThisNameOff);
         gStatics = clTab[reg].statics;                      // REUSE the phase-A static block (cross-class getstatic keys on it)
@@ -7673,7 +7767,9 @@ public final class Loader
         }
         long lb1 = Magic.readCNTPCT_EL0();
         parseVtable(bytes);                             // NOW the super's vtBuf is filled -> inherited slot bufs are real
-        lbParseT += Magic.readCNTPCT_EL0() - lb1;
+        long lbB = Magic.readCNTPCT_EL0();
+        pVtableT += lbB - lb1;
+        lbParseT += lbB - lb1;
         gType = clTab[reg].type;                            // restore this class's Type + TIB (allocated in phase A)
         gTib = clTab[reg].tib;
         compileReuseTib = true;                         // keep runClinit's compile() from reallocating gTib (would
@@ -12047,6 +12143,19 @@ public final class Loader
         printDur(ccEmitT * 1000000L / Magic.readCNTFRQ_EL0());
         Uart.write(Magic.bytes(" pub="));
         printDur(ccPubT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" | cp="));
+        printDur(pParseCpT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" fields="));
+        printDur(pFieldsT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" vtab="));
+        printDur(pVtableT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" pcCalls="));
+        VM.printDec(pcCalls);
+        Uart.write(Magic.bytes(" pcHits="));
+        VM.printDec(pcHits);
+        Uart.write(Magic.bytes(" pcSteps="));
+        VM.printDec((int) (pcSteps / 1000L));
+        Uart.write(Magic.bytes("k"));
         Uart.putc(0x5D);
         Uart.write(Magic.bytes(" patch="));
         printDur(spanUs(tPatch, tRest));
