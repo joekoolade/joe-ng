@@ -115,6 +115,51 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE BLOB PROBE RE-DERIVED IMMUTABLE FACTS EVERY ROUND -- MEMOED, AND THE CLOSURE IS PROVEN IDENTICAL
+  (2026-09-15, NOT YET PI-VALIDATED).** `probeAll` re-parsed EVERY blob's constant pool on every call --
+  once per `markReachable` round plus once more per batch -- while `pdCount` grows all boot. It was the
+  item the previous entry named as next, and the measurement that named it was the launcher at batch 209
+  (1782 blobs): **309.7ms of a 320.0ms `mark`, 97% of it**, plus 151.1ms at the top level -- 471ms of a
+  676ms batch, **70%**, and 4.9x what it cost at batch 15 for 31% more blobs.
+  - **EACH BLOB IS PROBED ONCE NOW, and that is sound BY CONSTRUCTION rather than by a claim about when work
+    may be skipped** -- the distinction that separates this from the `virt` attempt that silently under-marked
+    half a closure. Everything the pass writes is read straight out of the classfile bytes (this_class, super,
+    the direct interfaces, every `CONSTANT_Class` name, whether the pool holds a `CONSTANT_String`), and
+    **`addBlob` dedups by ADDRESS and only ever writes `pdBase[pdCount]`** -- no index is re-pointed at
+    different bytes for the life of a launch. A second probe could only reproduce the first one's answers.
+  - **The dep list became APPEND-ONLY for the same reason** (a dep is a `{base, offset}` pair into immutable
+    bytes), so `dpCount` is no longer cleared in `probeAll`. It and `stringPdIndex` move to `resetLoader`
+    beside the watermark: **a watermark that outlives the table it indexes under-marks SILENTLY**, and a
+    fresh `dpOwner`/`dpOff`/`dpBase` left beside a stale `dpCount` would have `ready()` reading zeroed deps
+    as real ones. Same trap the virt hit lists nearly shipped.
+  - **QEMU A/B, two `cmp`-confirmed-different binaries, demo suite: `probe` 12.39 -> 1.06ms at batch 64 and
+    FLAT where it had climbed 4.1 -> 12.4ms; `mark` 15.1 -> 3.4ms.** Removing the GROWTH term is the point,
+    not the ratio: the suite peaks at ~190 blobs against the launcher's 1782, so this is the small end.
+    `pb:probed=1 of=189` is the instrument -- a batch adding one class probes one blob.
+  - **`pend` AND `grew` CANNOT GATE THIS, AND `reach` CAN -- which is why `reach=` is now on the batch line.**
+    The closure counters were NOT byte-identical: `pend` fell 1565 -> 1039 at batch 2 and the virt walks with
+    it, because `pendIndyIface` no longer re-pends an interface once per round. That is waste the code's own
+    comments had already named ("re-pending it every round would grow the pend list for nothing"; "neither
+    answer changes by being asked again") -- but **`pend` is a QUEUE LENGTH and `grew` counts level-VISITS,
+    so neither can tell removed waste from lost marking**, and under-marking here is silent. `reachN` is the
+    marked set, reset per batch by `markReachable`, and it is **IDENTICAL in all 65 batches**. That settled
+    in one run what no amount of reading could.
+  - **Everything else held:** 549 lines of program output byte-identical but for ONE stack-trace line number
+    (`Loader.java:2052` -> `2059`, exactly the 7 lines this change adds above it, same pc offset `+0x1DC`);
+    GC collections identical (2/3/45/54) across all four runs; 33 programs; 19 failure markers zero; host
+    tests unchanged incl. `compiler: 37 checks` and `overlay-check 0 new`.
+  - **THE CODE ARENA HIGH-WATER IS NOT A CLOSURE SIGNAL, and checking that took one grep rather than a
+    theory:** `cur`/`peak` differed between the arms -- and differed MORE between the two BASELINE runs
+    (0x2563408 vs 0x25645C0, +4536 bytes) than between baseline and change (-2360). It tracks demand between
+    collections and moves with any layout shift.
+  - **A NEAR-MISS WORTH KEEPING: an `assert count == 1` refused a non-unique edit anchor, and `make image`
+    then ran anyway** and produced a "baseline" arm carrying no instrument -- an A/B whose arms could not be
+    compared at all, which looks exactly like a clean result. Caught by checking the file, not the exit code.
+    Third cousin of "an A/B whose arms are the same binary looks exactly like a change that does nothing".
+  - **STILL OPEN, and now the largest items by the same log:** `lookT` is 14,753ms of a 15,665ms `callT`
+    (94%) and `pubT` 13,544ms cumulative with per-batch `pub` up 6.6x -- both the same grows-with-load shape,
+    both previously measured cold and dismissed.
+
 - **THE `virt` HIT-LIST MEMO IS PI-VALIDATED -- AND THE SAME BOOT SAYS THE BOTTLENECK HAS MOVED
   (2026-09-15).** `[2 tests successful]` / `[0 tests failed]` / exit 0, with no FAULT, no parity DIFF, no
   `BOOT RE-ENTERED`, no `VIRTUALRESOLVE FAILED`, no `CAP EXCEEDED` and no bare AIOOBE -- the under-marked
@@ -167,7 +212,7 @@ defines the minimum the assembler must encode.
     nine lock sites had only ever been validated by the stuck-lock report NOT appearing; this is the real
     thing happening and being survived.
   - **NEXT, and it is worth more than everything cut so far:** `probeAll`/`buildNameIndex` inside the round
-    loop. 70% of a batch and rising, over ~195 batches of a launcher boot.
+    loop. 70% of a batch and rising, over ~195 batches of a launcher boot. **DONE -- see the entry above.**
 
 - **THE LOAD PATH WAS PROFILED TO THE FUNCTION, AND `inheritVtable` IS 15.9x FASTER (2026-09-15,
   PI-VALIDATED).** `vtab` 4,773ms -> 299.8ms; `parse` falls from 24% of phase B to 3.3%; the launcher boot
