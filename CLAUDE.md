@@ -115,6 +115,69 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `clinit` PHASE WAS MEASURING ITS OWN UART TRAFFIC, AND THE REGISTRY LOOKUP UNDER IT WAS A LINEAR SCAN
+  (2026-09-15, NOT YET PI-VALIDATED).** Two changes: the number that named this target was half artifact, and
+  the real work under it was the tenth instance of this file's most common defect.
+
+  - **(1) `clinit` AND `tot` READ THE CLOCK PARTWAY THROUGH PRINTING THEMSELVES.** They were
+    `elapsedUs(tRest)` / `elapsedUs(tAll)`, evaluated mid-line -- and **`Uart.putRaw` SPINS on the TX holding
+    register**, so at 115200 baud each character costs ~87us and the ~300 characters already emitted on that
+    line were charged to whichever phase happened to be printing. Every span is measured against ONE clock
+    read now, taken before anything is printed.
+    - **MEASURED, NOT ARGUED, AND AT BOTH ENDS OF A BOOT:** real sub-timer work + prefix length x 87us
+      predicts **33.4ms against 32.067ms at batch 15** and **51.2ms against 50.429ms at batch 209** -- within
+      1.5% across a 3x spread in the real work.
+    - **THE SUB-SPLIT ADDED UP ALL ALONG; THE PHASE TOTAL WAS THE NUMBER THAT LIED.** I had applied this
+      file's own rule ("a sub-split that does not add up is not a split") to the wrong half. `imap + synth +
+      arr + seeds + runcl` PARTITION `tRest..end` by construction -- there was no missing term to print. Real
+      clinit is **7.5ms at batch 15 and 23.8ms at batch 209**, not 32 and 50.
+    - **QEMU STRUCTURALLY CANNOT SHOW THIS, which is why it survived:** its serial is not baud-paced, so the
+      emulator reported the honest number and the board did not. The same defect inflates `cumClinit`/`cumAll`
+      (read after the WHOLE line) and the `LOAD_PROFILE` block (worse -- it prints after the batch line).
+    - **IT ALSO MEANS THIS ARC'S HEADLINE WAS UNDERSTATED.** Both arms of the 102.8s -> 19.4s comparison carry
+      ~24-26ms per batch of their own serial traffic; net of it the range is roughly **98s -> 14.3s (~7x)**
+      rather than 5.3x. The exact figures want a re-measured Pi boot, and this is stated as an estimate.
+
+  - **(2) `regOfType`/`classRegByType` -- ONE QUERY SPELLED TWICE, BOTH WALKING ALL `clCount`.** `refillImaps`
+    asks it once per itable-directory ENTRY, per visited imap, per batch, and `clCount` grows with every class
+    loaded all boot. **Steps 264k -> 4k, 66x.**
+    - **RANKED BY COUNTERS BEFORE BEING BELIEVED, and that is the reusable part.** Three candidates live
+      inside a refill visit and reading cannot order them, so four plain int counters went in FIRST. Over a
+      65-batch suite: **`type=264k` against `fill=39k`, `hole=23k`, `clos=4k`** -- the registry walk is 81% of
+      the refill and the only one of the four that GROWS with the registry; the other two are bounded by the
+      class's own hierarchy. The previous arc got exactly this ordering wrong by reading.
+    - **SOUND BY CONSTRUCTION, not by a claim about when work may be skipped** -- the distinction that
+      separates this from the `virt` attempt that silently under-marked half a closure. `clTab[i].type` is
+      written ONCE, at index `clCount`, immediately BEFORE `clCount` is incremented (checked at BOTH
+      registration sites). No entry is ever re-pointed, so an append-only index cannot go stale.
+    - **The LOWEST matching index still wins** -- head-insertion makes the chain descending, so it is searched
+      for the minimum rather than stopped at the first hit (the care `findPdByName`'s index needed). The
+      watermark resets BESIDE the table it indexes, because one that outlives its table under-marks silently.
+      The bucket array is filled explicitly: **`allocArray` does not zero its elements on this VM.**
+    - **IDENTITY:** `rf:skip=1631 visit=1173 clos=1077 holeEnd=1074`, `n:imap=52 synth=18 clinits=25`,
+      `memo=1418 res=2510 unres=2253` -- all byte-identical, and `hole`/`clos`/`fill` unchanged to the step,
+      so the index moved ONLY what it targeted. 19 failure markers zero in both arms; host tests unchanged
+      incl. `compiler: 37 checks` and `overlay-check 0 new`.
+
+  - **THE QEMU WALL CLOCK LOOKED LIKE A 1.6x REGRESSION AND WAS MACHINE LOAD -- caught by the check this file
+    prescribes rather than by waving it away.** `imap` read 48.8 -> 76.6ms. But EVERY timer the change cannot
+    touch moved with it -- `callT` 1.60x, `alloc` 1.66x, `lookT` 1.54x, `statT` 1.35x -- and imap's 1.57x sits
+    inside that band. Confounded by my own concurrent builds, exactly as recorded before. **The step count is
+    the load-independent reading; the Pi is the honest harness.**
+  - **THREE OUTPUT DIFFS, ALL SETTLED BY CONTROL RATHER THAN ASSUMPTION.** The suite's SMP job distribution
+    differs run-to-run on the **SAME binary** (`c0=24 c1=0 c2=0 c3=0` vs `c0=1 c1=9 c2=3 c3=11`, `smp sched:
+    4 of 4` throughout) -- one re-run settled what would otherwise have read as a regression. GC `roots` +3 is
+    exactly the three new statics. The one stack-trace line shift (2060 -> 2050) is exactly the lines this
+    removes above it, **at the same pc offset `+0x1DC`**; the code-arena delta (5232 B) is inside the
+    baseline variance this file already measured between two IDENTICAL arms (4536 B).
+  - **WHAT THE BATCH ACTUALLY LOOKS LIKE NOW, net of the artifact:** real `tot` at batch 209 is ~80ms, of
+    which `B` 22.7ms, `mark` 16.8ms (`probe` 7.2ms of it, and that is `buildNameIndex`, not `probeAll`),
+    `patch` 14.2ms, and `clinit` ~24ms falling to ~4ms once the index lands. **`B` is the largest item left**
+    and has been sub-split only once. Also standing: `unresT` 684.8ms cumulative against `lookT`'s 726.4ms --
+    `linkStubFor`, indexed once, measured cold, and REVERTED.
+  - **NOT YET PI-VALIDATED.** QEMU cannot judge either half of this: it cannot show the UART inflation at all,
+    and its wall clock was confounded on the run that mattered.
+
 - **`publishCode` WALKED THE WHOLE CODE ARENA PER PATCH PASS -- `pubT` 259x, AND THE LOAD PATH IS NO LONGER
   THE BOTTLENECK (2026-09-15, PI-VALIDATED).** `patchRelocsFrom` ended with
   `publishCode(CODE_BASE, CODE_PTR)` -- a `DC CVAU` + `IC IVAU` per 64-byte line over **every byte of code
@@ -157,8 +220,12 @@ defines the minimum the assembler must encode.
     the name alone, the same defect one tier below `lookT`. Correct, and worth ~0.1%: the suite's `dl` steps
     went 8k -> 5k. **Measured before being believed in, and shipped because it was already right rather than
     because it paid.**
-  - **WHAT IS NEXT, AND THE SHAPE HAS CHANGED: `clinit` IS 50.4ms OF A 106.2ms BATCH (47%) AND IT COSTS THAT
-    ON A BATCH THAT COMPILES NOTHING.** Batch 201 has `compile=0us` and `clinit=52.345ms`; batch 199 the
+  - **CORRECTED BY THE ENTRY ABOVE -- `clinit` WAS NEVER 47% OF A BATCH, AND `tot` IS OVERSTATED TOO.** Both
+    were read partway through printing the line that reports them, so ~26ms of the figures below is the
+    report's own UART traffic. Real clinit at batch 209 is 23.8ms, and the sub-split DID add up. The reading
+    that follows was wrong about the size and right about the target (`imap`), which is the only reason it
+    pointed anywhere useful. **WHAT IS NEXT, AND THE SHAPE HAS CHANGED: `clinit` IS 50.4ms OF A 106.2ms BATCH
+    (47%) AND IT COSTS THAT ON A BATCH THAT COMPILES NOTHING.** Batch 201 has `compile=0us` and `clinit=52.345ms`; batch 199 the
     same. `runcl` -- actually RUNNING initializers -- is **7.041ms cumulative over the entire boot**, so
     essentially none of this phase is the work it is named for.
     - **AND ITS SUB-SPLIT DOES NOT ADD UP, WHICH BY THIS FILE'S OWN RULE MEANS IT IS NOT A SPLIT.**
