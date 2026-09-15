@@ -4139,11 +4139,72 @@ public final class Loader
     }
 
     /** pd index of the loaded blob whose this-class name equals the Utf8 at {@code base+off}, or -1. */
+    private static long fpCalls;                         // findPdByName calls this batch
+    private static long fpSteps;                         // ... and blob entries compared across them
+    // The OTHER growing terms inside the same lookup, counted so the split is measured rather than argued:
+    // both registry tiers walk a NAME-keyed bucket, and a hot name (`<init>`, `run`, `get`) chains one entry
+    // per class that declares it -- so the chain grows with the registry all boot, exactly like the scans
+    // this file has already had to index seven times.
+    private static long t1Steps, t2Steps, dlSteps;
+
+    /**
+     * The pd index of the blob named at {@code (base, off)}, or -1.
+     *
+     * <p>PROBED, not scanned. This was a linear walk of all {@code pdCount} blobs, and
+     * {@link #globalBufByRef}'s super-chain tier calls it once for the ref class plus once per superclass
+     * LEVEL, for every site that misses the direct tier -- and those sites never memoise, so they re-resolve
+     * on every batch while {@code pdCount} grows all boot. Eighth instance of this file's most common defect.
+     *
+     * <p>It was the SECOND of two growing terms in the same lookup, and only measurement got the order right:
+     * keyed on the method name alone, the registry bucket was ~60 entries per resolve and 156k steps against
+     * this one's 704k -- but the registry chain cost ~650ns a step and this ~67ns, so the registry was the
+     * bigger half and was fixed first. With it gone this became essentially all of what remained.
+     *
+     * <p>Reuses {@code pnBucket}, the index {@link #buildNameIndex} already builds for
+     * {@code nameRegistered} -- same key, same table, nothing new to invalidate.
+     *
+     * <p>THE LOWEST MATCHING INDEX STILL WINS, which the scan gave for free and a bucket chain does not:
+     * {@code buildNameIndex} head-inserts in ascending order, so the chain runs DESCENDING. The chain is
+     * therefore searched for the MINIMUM rather than stopped at the first hit. (Blobs added since the index
+     * was built all have indices above {@code pnIndexed}, so they can only win when the indexed half misses
+     * -- which is why the tail scan runs second rather than being folded in.)
+     */
     private static int findPdByName(long base, int off)
     {
-        int i = 0;
+        fpCalls += 1;
+        if (pnBucket == null)                            // no index yet (fresh resetLoader): scan, as before
+        {
+            int j = 0;
+            while (j < pdCount)
+            {
+                fpSteps += 1;
+                if (utf8EqAt(base, off, pdBase[j], pdNameOff[j]))
+                {
+                    return j;
+                }
+                j += 1;
+            }
+            return -1;
+        }
+        int best = -1;
+        int k = pnBucket[utf8Hash(base, off) & (PVTAB - 1)];
+        while (k >= 0)
+        {
+            fpSteps += 1;
+            if ((best < 0 || k < best) && utf8EqAt(base, off, pdBase[k], pdNameOff[k]))
+            {
+                best = k;
+            }
+            k = pnNext[k];
+        }
+        if (best >= 0)
+        {
+            return best;
+        }
+        int i = pnIndexed;                               // added since the index was built; not hashable yet
         while (i < pdCount)
         {
+            fpSteps += 1;
             if (utf8EqAt(base, off, pdBase[i], pdNameOff[i]))
             {
                 return i;
@@ -4700,6 +4761,36 @@ public final class Loader
     }
 
     /** FNV-1a over the bytes of the length-prefixed Utf8 at {@code base + off}. */
+    /**
+     * Hash of TWO Utf8 runs, for an index keyed on class+name rather than name alone. Folding the class in
+     * is what makes the registry bucket narrow: keyed on the NAME only, a hot name chains one entry per
+     * class that declares it, so `<init>`/`run`/`get` grow a chain as long as the registry -- MEASURED at
+     * ~60 entries per resolve on a 192-blob suite, and the dominant term in `lookT` (t1 steps 17k -> 156k
+     * tracked lookT 12.1 -> 96.0ms across batches 40-65, while the blob scan I first suspected grew 1.6x).
+     * Continuing the FNV chain across both runs costs one extra pass over a class name and removes the walk.
+     */
+    private static int utf8Hash2(long b1, int o1, long b2, int o2)
+    {
+        int len = u2(b1 + o1);
+        long q = b1 + o1 + 2L;
+        int h = 0x811C9DC5;
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        len = u2(b2 + o2);
+        q = b2 + o2 + 2L;
+        i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        return h;
+    }
+
     private static int utf8Hash(long base, int off)
     {
         int len = u2(base + off);
@@ -9055,7 +9146,8 @@ public final class Loader
         // remove. resetLoader zeroes rgCount and rgIndexed together (see there).
         while (rgIndexed < rgCount)
         {
-            int h = utf8Hash(rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
+            int h = utf8Hash2(rgTab[rgIndexed].base, rgTab[rgIndexed].classOff,
+                              rgTab[rgIndexed].base, rgTab[rgIndexed].nameOff) & (RGTAB - 1);
             rgNext[rgIndexed] = rgBucket[h];
             rgBucket[h] = rgIndexed;
             rgIndexed += 1;
@@ -9509,10 +9601,14 @@ public final class Loader
     {
         buildRegIndex();                                 // incremental: only entries added since last time
         rgHitIdx = -1;
-        int h = utf8Hash(refBase, nameOff) & (RGTAB - 1);   // the wanted NAME keys the index; BOTH tiers want it
+        // CLASS+NAME keys the index. Tier 2 wants the SAME name under an ANCESTOR class, so it re-hashes per
+        // level rather than sharing this bucket -- which is the point: sharing a name-only bucket is what made
+        // both tiers walk a chain one entry long per class declaring that name.
+        int h = utf8Hash2(refBase, classOff, refBase, nameOff) & (RGTAB - 1);
         int i = rgBucket[h];
         while (i >= 0)
         {
+            t1Steps += 1;
             // The SAME predicate the linear scan used -- the index only narrows which entries it is applied
             // to. Name-keyed, so the chain still has to check class and descriptor: `<init>`/`run`/`get`
             // repeat across the registry constantly.
@@ -9554,9 +9650,10 @@ public final class Loader
             // every batch: MEASURED at 98% of the whole call-site loop (lookT 11,949ms of callT 12,169ms),
             // which is itself ~95% of `patch`. The wanted name is the same one tier 1 hashed, so the bucket
             // is reused and only the CLASS comparison differs -- the predicate is otherwise identical.
-            int j = rgBucket[h];
+            int j = rgBucket[utf8Hash2(pdBase[spd], pdNameOff[spd], refBase, nameOff) & (RGTAB - 1)];
             while (j >= 0)
             {
+                t2Steps += 1;
                 if (utf8EqAt(pdBase[spd], pdNameOff[spd], rgTab[j].base, rgTab[j].classOff)
                         && utf8EqAt(refBase, nameOff, rgTab[j].base, rgTab[j].nameOff)
                         && utf8EqAt(refBase, descOff, rgTab[j].base, rgTab[j].descOff))
@@ -9634,6 +9731,7 @@ public final class Loader
         int k = dlBucket[utf8Hash(nameBase, nameOff) & (DLTAB - 1)];
         while (k >= 0)
         {
+            dlSteps += 1;
             if (utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
                     && utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
                     && utf8EqAt(descBase, descOff, dlTab[k].blob, dlTab[k].descOff))
@@ -12495,6 +12593,20 @@ public final class Loader
         printDur(ticksUs(pcPubT));
         Uart.write(Magic.bytes(" lookT="));
         printDur(ticksUs(pcLookT));
+        // findPdByName: a LINEAR scan over pdCount, called by globalBufByRef tier 2 once for the ref class
+        // plus once per superclass LEVEL. Counts, not timers -- two readCNTPCT per call would be a visible
+        // share of what is being measured (already paid for once, in the imap refill).
+        Uart.write(Magic.bytes(" fp:n="));
+        VM.printDec((int) fpCalls);
+        Uart.write(Magic.bytes(" steps="));
+        VM.printDec((int) (fpSteps / 1000));
+        Uart.write(Magic.bytes("k t1="));
+        VM.printDec((int) (t1Steps / 1000));
+        Uart.write(Magic.bytes("k t2="));
+        VM.printDec((int) (t2Steps / 1000));
+        Uart.write(Magic.bytes("k dl="));
+        VM.printDec((int) (dlSteps / 1000));
+        Uart.write(Magic.bytes("k"));
         Uart.write(Magic.bytes(" unresT="));
         printDur(ticksUs(pcUnresT));
         Uart.write(Magic.bytes(" tailT="));
@@ -14597,12 +14709,15 @@ public final class Loader
         // Two interfaces in one closure may both declare the same name+descriptor, and picking the other one
         // would change which default body runs -- silently.
         buildRegIndex();
-        int h = utf8Hash(base, nameOff) & (RGTAB - 1);   // the wanted NAME alone keys the index, so hoist it
         int i = 0;
         while (i < n)
         {
-            long ibase = clTab[ifClosureBuf[i]].base;       // a closure interface's blob; its own methods registered under it
-            int k = rgBucket[h];
+            int ir = ifClosureBuf[i];
+            long ibase = clTab[ir].base;                   // a closure interface's blob; its own methods registered under it
+            // Hashed PER INTERFACE now that the index is keyed on class+name -- the interface supplies the
+            // class half. CLOSURE ORDER IS STILL EXACT: one probe per closure interface, walked in order, so
+            // the first match is the same entry the name-only chain would have yielded.
+            int k = rgBucket[utf8Hash2(clTab[ir].base, clTab[ir].nameOff, base, nameOff) & (RGTAB - 1)];
             while (k >= 0)
             {
                 if (rgTab[k].base == ibase && rgTab[k].buf != 0L
