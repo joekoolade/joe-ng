@@ -505,7 +505,58 @@ public final class VM
     static int    loaderDepth;              // ... and how many nested acquisitions deep it is
 
     /** Take the loader lock (recursively, if this task already holds it), yielding while another task has it. */
+    /**
+     * WHAT THE LOCK OWNER IS DOING, for the stuck-lock watchdog below.
+     *
+     * <p>The watchdog used to print the owner's task id and state and NOTHING ELSE -- which answers "somebody
+     * is busy" and not the question that decides what to do about it: whether a >10s hold is ONE demand-load
+     * batch (expected to be slow; the fix is latency), a single pathological compile (the fix is that
+     * method), or a path holding the lock that should not (the fix is the lock). That is the same shape as
+     * the diagnostics this VM has been misled by four times in this arc: a report that names a symptom and
+     * not the state it was in.
+     *
+     * <p>A SITE ID rather than a string, and set only on the OUTERMOST acquisition: the lock is recursive, so
+     * an inner re-entry must not overwrite what the outer one is doing. An int is also the only thing a
+     * WAITER can read without the lock and be sure it is not torn.
+     *
+     * <p>Site 0 is UNSPECIFIED and is what a caller that forgets gets -- fail-safe, like {@code rcReg}'s -1:
+     * it reports "I do not know" instead of confidently naming the wrong phase.
+     */
+    static final int LOCK_UNSPECIFIED = 0;
+    static final int LOCK_CLINIT      = 1;   // clinitEntryOf: compiling a <clinit> body
+    static final int LOCK_ON_DEMAND   = 2;   // compileMethodOnDemand: a reflectively reached method
+    static final int LOCK_DEFERRED_CT = 3;   // a deferred <init>
+    static final int LOCK_DEMAND_LOAD = 4;   // loadClassIncremental: a whole demand-load BATCH
+    static final int LOCK_SIG_DEMAND  = 5;   // compileSigOnDemand: a static interface method
+    static final int LOCK_LAZY        = 6;   // lazyCompileLocked: an ordinary first-call body compile
+    static final int LOCK_NEW_RESOLVE = 7;   // resolveUnresolvedNew: a deferred `new`
+    static final int LOCK_ALLOC_CODE  = 8;   // Heap.allocCode: the code arena bump
+    static final int LOCK_BAKE_RESOLVE = 9;  // VM.bakeResolve: linking a baked body, may demand-load
+
+    static int loaderLockSite;                          // what the OUTERMOST holder is doing (a LOCK_* id)
+    static long loaderLockAt;                           // CNTPCT when it took the lock, for the held-for time
+
+    /** Name a LOCK_* site. Kept beside the constants so a new site cannot be added without a name. */
+    private static void printLockSite(int site)
+    {
+        if (site == LOCK_CLINIT)      { Uart.write(Magic.bytes("clinit-compile")); return; }
+        if (site == LOCK_ON_DEMAND)   { Uart.write(Magic.bytes("compileMethodOnDemand")); return; }
+        if (site == LOCK_DEFERRED_CT) { Uart.write(Magic.bytes("deferred-<init>")); return; }
+        if (site == LOCK_DEMAND_LOAD) { Uart.write(Magic.bytes("DEMAND-LOAD BATCH")); return; }
+        if (site == LOCK_SIG_DEMAND)  { Uart.write(Magic.bytes("compileSigOnDemand")); return; }
+        if (site == LOCK_LAZY)        { Uart.write(Magic.bytes("lazy first-call compile")); return; }
+        if (site == LOCK_NEW_RESOLVE) { Uart.write(Magic.bytes("deferred-new resolve")); return; }
+        if (site == LOCK_ALLOC_CODE)  { Uart.write(Magic.bytes("Heap.allocCode")); return; }
+        if (site == LOCK_BAKE_RESOLVE) { Uart.write(Magic.bytes("bakeResolve")); return; }
+        Uart.write(Magic.bytes("<unspecified: a caller did not say>"));
+    }
+
     static void loaderLock()
+    {
+        loaderLock(LOCK_UNSPECIFIED);
+    }
+
+    static void loaderLock(int site)
     {
         if (smpSched == 0)
         {
@@ -526,6 +577,8 @@ public final class VM
             {
                 loaderOwner = me;
                 loaderDepth = 1;
+                loaderLockSite = site;                  // OUTERMOST only: a re-entry must not overwrite it
+                loaderLockAt = Magic.readCNTPCT_EL0();
                 VMScheduler.schedUnlock(daif);
                 return;
             }
@@ -542,6 +595,22 @@ public final class VM
                 printDec(loaderOwner >= 0 && taskState != null ? taskState[loaderOwner] : -1);
                 Uart.write(Magic.bytes(" waiter "));
                 printDec(me);
+                // WHAT the owner is doing, and FOR HOW LONG -- the two things that separate "a slow but
+                // healthy demand-load batch" from "a hold that should not be happening". state 4 is
+                // TASK_RUNNING, i.e. the owner is WORKING, not blocked: that has been misread as a deadlock
+                // three times, so the distinction had better be printable.
+                Uart.write(Magic.bytes(" doing "));
+                printLockSite(loaderLockSite);
+                Uart.write(Magic.bytes(" held "));
+                long hz = Magic.readCNTFRQ_EL0();
+                long heldMs = hz > 0L ? (Magic.readCNTPCT_EL0() - loaderLockAt) * 1000L / hz : -1L;
+                printDec((int) heldMs);
+                Uart.write(Magic.bytes("ms"));
+                // The owner's compile context, READ WITHOUT THE LOCK: the owner may be mid-update, so this
+                // is a hint and not a measurement, and is labelled as one. gbase is always a blob base or 0
+                // and printCurrentClass guards both, so a torn read misnames a class rather than faulting.
+                Uart.write(Magic.bytes(" ctx~"));
+                Loader.printCurrentClass();
                 Uart.putc(0x0A);
             }
             VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
@@ -1796,7 +1865,7 @@ public final class VM
         {
             return memo;
         }
-        loaderLock();                                   // demand-loads a class: one compiler at a time
+        loaderLock(LOCK_BAKE_RESOLVE);                  // demand-loads a class: one compiler at a time
         long buf = Loader.resolveBakeStub(Magic.load64(e), Magic.load64(e + 8L), Magic.load64(e + 16L));
         Magic.store64(e + 24L, buf);
         loaderUnlock();

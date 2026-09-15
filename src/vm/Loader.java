@@ -442,7 +442,7 @@ public final class Loader
      */
     private static long clinitEntryOf(int i)
     {
-        VM.loaderLock();
+        VM.loaderLock(VM.LOCK_CLINIT);
         long r = clinitEntryOfLocked(i);
         VM.loaderUnlock();
         return r;
@@ -10967,7 +10967,7 @@ public final class Loader
      */
     private static int compileMethodOnDemand(long type, long nameArr, long descArr)
     {
-        VM.loaderLock();
+        VM.loaderLock(VM.LOCK_ON_DEMAND);
         int r = compileMethodOnDemandLocked(type, nameArr, descArr);
         VM.loaderUnlock();
         return r;
@@ -11135,7 +11135,7 @@ public final class Loader
      */
     static int constructorResolve(long type, int paramCount)
     {
-        VM.loaderLock();
+        VM.loaderLock(VM.LOCK_DEFERRED_CT);
         int r = constructorResolveLocked(type, paramCount);
         VM.loaderUnlock();
         return r;
@@ -12434,7 +12434,7 @@ public final class Loader
         {
             return lkMemo[idx];
         }
-        VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        VM.loaderLock(VM.LOCK_DEMAND_LOAD);                                // demand-loads a class: one compiler at a time
         lnkFailWhy = 0;
         long buf = resolveLinkTarget(lkClsU[idx], lkNameU[idx], lkDescU[idx]);
         if (buf == 0L)
@@ -12764,7 +12764,7 @@ public final class Loader
      */
     private static long compileSigOnDemand(long clsU, long nameU, long descU)
     {
-        VM.loaderLock();
+        VM.loaderLock(VM.LOCK_SIG_DEMAND);
         long r = compileSigOnDemandLocked(clsU, nameU, descU);
         VM.loaderUnlock();
         return r;
@@ -12955,7 +12955,7 @@ public final class Loader
         {
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
-        VM.loaderLock();                                // SMP: the compile context is static -- one compiler at a time
+        VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
         long done = lazyCompileLocked(idx);
         VM.loaderUnlock();
         if (done != 0L && !plausibleCode(done))
@@ -18857,7 +18857,7 @@ public final class Loader
             slash[k] = (byte) u1(clsU + 2 + k);
             k += 1;
         }
-        VM.loaderLock();                                // demand-loads a class: one compiler at a time
+        VM.loaderLock(VM.LOCK_NEW_RESOLVE);                                // demand-loads a class: one compiler at a time
         if (classIndexByName(slash) < 0)
         {
             if (LOAD_LOG)
