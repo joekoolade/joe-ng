@@ -9592,7 +9592,47 @@ public final class Loader
         }
         long tC0 = Magic.readCNTPCT_EL0();
         pcStatT += tC0 - tB0;
-        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the patched code
+        // PUBLISH THE WORDS THIS ACTUALLY WROTE, not the whole arena.
+        //
+        // It was `publishCode(CODE_BASE, <arena pointer>)` -- cache maintenance over EVERY line of the code
+        // arena, on every patch, while the arena grows all boot and the number of patched words does not.
+        // Ninth instance of this file's most common defect, and the last one left in `patch`: MEASURED at
+        // 12,680ms cumulative on a launcher boot, larger than everything else remaining there put together.
+        //
+        // The writes are exactly one instruction per call site (the `bl`/`b` above) and two per static site
+        // (the movz+movk), so the lines that need maintenance are known precisely. Two passes over the same
+        // reloc arrays -- no new table -- keep the range version's ordering exactly: every clean reaches
+        // unified memory BEFORE any invalidate is issued, and the barriers are paid ONCE rather than per
+        // site. Per-site publishCode would have been thousands of full barriers to avoid one arena walk.
+        //
+        // linkStubFor and the deferral/thunk minters publish their own buffers, so nothing else written
+        // between two of these calls depends on the wide sweep this replaces.
+        int p = rcStart;
+        while (p < rcCount)
+        {
+            Heap.publishClean(rcAddr[p], rcAddr[p] + 4L);
+            p += 1;
+        }
+        int q = rsStart;
+        while (q < rsCount)
+        {
+            Heap.publishClean(rsAddr[q], rsAddr[q] + 8L);
+            q += 1;
+        }
+        Heap.publishMid();
+        p = rcStart;
+        while (p < rcCount)
+        {
+            Heap.publishInval(rcAddr[p], rcAddr[p] + 4L);
+            p += 1;
+        }
+        q = rsStart;
+        while (q < rsCount)
+        {
+            Heap.publishInval(rsAddr[q], rsAddr[q] + 8L);
+            q += 1;
+        }
+        Heap.publishEnd();
         pcPubT += Magic.readCNTPCT_EL0() - tC0;
     }
 

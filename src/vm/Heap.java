@@ -1144,20 +1144,58 @@ public final class Heap
         // I-cache genuinely holds stale (or zeroed) lines for that exact address, and it faults with
         // ESR EC=0 -- an undefined instruction -- at the entry of a method that looks perfectly good in
         // memory. Found on the first Pi boot that scheduled guest threads across all four cores.
+        publishClean(start, end);
+        publishMid();
+        publishInval(start, end);
+        publishEnd();
+    }
+
+    // ----- the same publish, SPLIT, for a set of scattered words rather than one range ---------------
+    //
+    // patchRelocsFrom rewrites one instruction per call site and two per static site, then has to make those
+    // words visible. Publishing the WHOLE arena to cover a few thousand scattered words is the
+    // O(everything-allocated) shape -- the arena grows all boot, so the cost grew with it while the number of
+    // patched words did not. Doing a full publishCode PER SITE is the obvious alternative and is WRONG for a
+    // different reason: the two DSBs and the ISB are the expensive part, and paying them per site is
+    // thousands of full barriers where one pass needs two.
+    //
+    // So the ops are exposed without their barriers, and the caller runs the same discipline over a scattered
+    // set: clean every line, ONE dsb, invalidate every line, ONE dsb + isb. Identical ordering to the range
+    // version -- every clean reaches unified memory before any invalidate is issued -- just applied to the
+    // lines that were actually written.
+
+    /** Clean the D-cache lines covering {@code [start, end)} to PoU. NO barrier: see {@link #publishMid}. */
+    public static void publishClean(long start, long end)
+    {
         long a = start & ~63L;                 // Cortex-A72 cache line = 64 bytes
         while (a < end)
         {
             Magic.dcCVAU(a);                   // clean the D-cache line to PoU (broadcast)
             a += 64L;
         }
-        Magic.dsb();                           // the cleans reach unified memory, everywhere
-        a = start & ~63L;
+    }
+
+    /** Drop the I-cache lines covering {@code [start, end)} on EVERY core. NO barrier. */
+    public static void publishInval(long start, long end)
+    {
+        long a = start & ~63L;
         while (a < end)
         {
             Magic.icIVAU(a);                   // drop that line from EVERY core's I-cache
             a += 64L;
         }
-        Magic.dsb();                           // the invalidates complete
+    }
+
+    /** Between the clean pass and the invalidate pass: the cleans reach unified memory, everywhere. */
+    public static void publishMid()
+    {
+        Magic.dsb();
+    }
+
+    /** After the invalidate pass: the invalidates complete, and this core refetches past here. */
+    public static void publishEnd()
+    {
+        Magic.dsb();
         Magic.isb();                           // this core refetches past this point (others: their ERET)
     }
 
