@@ -115,6 +115,62 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE JUnit CONSOLE LAUNCHER RUNS STOCK jtreg TESTS ON BARE METAL AND THEY PASS -- `[2 tests successful]`,
+  `[0 tests failed]`, exit status 0 (2026-09-14, PI-VALIDATED).** The real
+  `org.junit.platform.console.ConsoleLauncher`, demand-loaded from the stock jar, discovers and executes
+  unmodified OpenJDK `SleepSanity` on a 166MHz Pi: `testMillis() 17228 ms`, `testMillisNanos() 61869 ms`,
+  both green. Four defects, each hidden by the one before it.
+  - **(1) A CONSTRUCTOR REFERENCE DID NOT INITIALIZE ITS CLASS (JVMS 5.5).** Three of the four instantiation
+    routes enforced it -- compiled `new`, deferred `new` (`resolveUnresolvedNew`), reflective
+    `Constructor.newInstance` (`allocInstance`) -- and the hand-emitted kind-8 thunk had `ensureClinit`
+    NOWHERE. JUnit builds descriptors through `TestMethodTestDescriptor::new`, whose constructor is
+    `getstatic defaultInterceptorCall; putfield interceptorCall`, so the field was null and surfaced as a
+    lost lambda CAPTURE a dozen frames away.
+  - **(2) `jdk/internal/lang/CaseFolding` WAS DENIED on a premise that expired.** Its own comment said "only
+    CASE_INSENSITIVE regex needs them"; JUnit's `TimeoutDurationParser` compiles one. Overlaid (36-entry
+    table, exact) rather than un-denied, because the stock class builds its tables with `multianewarray`,
+    which this JIT has metadata for and NO LOWERING for.
+  - **(3) THE LOADER LOCK LEAKED ON EXCEPTION -- and this was the timing failure, not latency.** Three
+    waiters, `held` growing 29,282ms -> 229,224ms -> 299,053ms against a 218-second run, `depth` 3/3/2 never
+    reaching 0, and the completed-release counter FROZEN at `rel 12865` for all three: not one outermost
+    release in 270 seconds. Every thread that needed to compile blocked for the rest of the boot, so the
+    watcher thread could not reach `interrupt()` and main's 10s sleep ran to completion.
+    - **MECHANISM, checked not inferred:** no lock/unlock pair has an early return, and `VM.unwind`
+      references none of `loaderOwner`/`loaderDepth`/`loaderUnlock`. Neither call was inside a `try/finally`,
+      so an exception in the locked region exits non-locally and strands the lock. The path runs GUEST CODE:
+      `lazyCompile -> drainPendingPulls -> loadClassIncremental -> loadAll`, whose tail runs queued
+      `<clinit>`s through `Magic.call0` -- and JUnit throws as ordinary control flow.
+    - Same shape as the recorded `clinitDepth` leak, whose decrement also sat on the success path.
+  - **(4) A HALTING TRAP KEPT THE LOCK, and `try/finally` cannot reach it** -- a denylist trap spins in
+    `Magic.wfe()` rather than throwing, so nothing unwinds. Fixing (3) let picocli's terminal-width thread
+    reach `ProcessBuilder.start -> ProcessImpl.<clinit> -> the DENYLISTED ProcessImpl.init`; it halted
+    holding the lock and the launcher WEDGED at 73 lines with the VM otherwise alive. `loaderForceRelease`
+    drops the whole hold before the spin.
+  - **THE INSTRUMENT IS WHAT MADE (3) FINDABLE, AND IT REFUTED MY OWN READING TWICE.** The watchdog printed
+    `owner task N state S waiter M` and nothing else -- "somebody is busy". Adding WHAT the owner is doing
+    (a tagged site id per acquisition, recorded on the OUTERMOST hold only), HOW LONG, the compile context,
+    the DEPTH and a COMPLETED-RELEASE counter turned it into a diagnosis. My first reading was "a demand-load
+    batch under the lock" -- the profile refuted it (execution-time batches are ~0.5s). My second was "leaked
+    from boot" -- `rel 12865` on a QEMU run that was otherwise healthy refuted that too. `rel` frozen ACROSS
+    three reports is what finally named it.
+  - **`depth` ALONE WOULD NOT HAVE DONE IT:** a legitimately deep hold shows a depth above 1 and is fine.
+    What separates a leak from a long hold is whether releases happen at all, which is why `rel` counts
+    OUTERMOST releases only -- counting re-entries would have hidden exactly the case being looked for.
+  - **THE LOAD PATH WAS PROFILED and is NOT the blocker, which is worth recording because it was the
+    plausible answer:** 21 batches, 55,506ms total, and **batch 1 alone is 47,566ms -- 86% of it**
+    (`B` 49%, `mark` 42% of which `virt` is 28% of the batch, `A` 9%). Every later batch is ~0.5s, far too
+    cheap to eat a 5s window. Phase B is the largest item and has NEVER been sub-split; `virt` is the known
+    open item this file already records.
+  - **PI-VALIDATED:** `[3 containers successful]`, `[2 tests successful]`, `[0 tests failed]`, exit 0, ZERO
+    `LOADER LOCK stuck` lines, and the run 29% faster (218,172ms -> 155,816ms) because threads no longer
+    queue behind a stranded lock. The `ProcessImpl` denylist trap DOES fire on the Pi -- an earlier commit
+    message of mine says it does not, which was wrong -- but it no longer wedges anything.
+  - **STILL OPEN, and it is the next layer of the same root cause:** a task that halts for ever is a
+    permanent obstruction. Having stopped it blocking the loader lock, on QEMU it then blocks
+    STOP-THE-WORLD (`GC: STW TIMEOUT -- unparked core 1 (collection SKIPPED)` then `heap OOM`), because a
+    task spinning in `wfe()` never reaches a yield point. The general fix is for a halting trap on a
+    non-main task to TERMINATE the task rather than spin. Not seen on the Pi.
+
 - **A CONSTRUCTOR REFERENCE NOW INITIALIZES ITS CLASS, AND THE LAUNCHER'S TESTS EXECUTE THEIR BODIES
   (2026-09-14, PI-VALIDATED).** The two `SleepSanity` tests had been failing with a `NullPointerException`
   whose innermost frame was `ReflectiveInterceptorCall.lambda$ofVoidMethod$0`. That NPE is GONE: the trace is
