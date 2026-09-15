@@ -1558,16 +1558,7 @@ public final class Loader
         {
             return -1;
         }
-        int r = 0;
-        while (r < clCount)
-        {
-            if (clTab[r] != null && clTab[r].type == type)
-            {
-                return r;
-            }
-            r += 1;
-        }
-        return -1;
+        return ctProbe(type);
     }
 
     /** Class-registry index of the class loaded from blob {@code base}, or -1. */
@@ -3095,6 +3086,10 @@ public final class Loader
         classTibCache = 0L;
         clTab = new RVMClass[MAXCLASS];
         clCount = 0;
+        // BESIDE the table it indexes, deliberately: a watermark that outlives its table under-marks
+        // SILENTLY, and a fresh clTab left beside a stale ctIndexed would answer registry indices for a
+        // previous launch's classes. Nulling the bucket array is what forces the rebuild.
+        ctBucket = null;
         clIfaceReg = new int[MAXCLASS * MAX_DIRECT_IF];
         clIfaceRegN = new int[MAXCLASS];
         ifClosureBuf = new int[MAXIFM];
@@ -3491,6 +3486,15 @@ public final class Loader
      * passes ahead of it -- each of which walks everything accumulated so far, every batch.
      */
     static long cumRfImap, cumRfSynth, cumRfArr, cumSeeds, cumRunCl;
+    // WHERE the refill's time goes, as plain int counters rather than timers -- two readCNTPCT_EL0 per
+    // itable entry was measured as noise against 19s and a visible share of 613ms, the lesson this file
+    // already paid for once. These rank the three candidates inside a visit: the registry scan
+    // (grows with everything loaded), the closure walk (bounded by the class's own hierarchy), and the
+    // per-slot refill.
+    static int rfTypeSteps;                             // regOfType/classRegByType registry comparisons
+    static int rfHoleSteps;                             // itableHasHole slot reads
+    static int rfClosSteps;                             // ifaceClosureOf interface visits
+    static int rfFillSteps;                             // refillItable slot reads
 
     static int cumBatches;
     static long cumMark, cumProbe, cumA, cumB, cumPatch, cumClinit, cumAll;
@@ -12625,6 +12629,16 @@ public final class Loader
         VM.printDec(rfClos);
         Uart.write(Magic.bytes(" holeEnd="));
         VM.printDec(rfHoleEnd);
+        // WHICH of the three is the growing one. `type` is the only walk that is O(everything loaded).
+        Uart.write(Magic.bytes(" rfs:type="));
+        VM.printDec(rfTypeSteps / 1000);
+        Uart.write(Magic.bytes("k hole="));
+        VM.printDec(rfHoleSteps / 1000);
+        Uart.write(Magic.bytes("k clos="));
+        VM.printDec(rfClosSteps / 1000);
+        Uart.write(Magic.bytes("k fill="));
+        VM.printDec(rfFillSteps / 1000);
+        Uart.putc(0x6B);
         // The probe watermark: blobs actually probed THIS batch against the table it walks. A batch that adds
         // one class should read pb:1 -- if it reads pdCount the memo is not firing, which a falling `probe`
         // timer alone could not distinguish from a batch that happened to be cheap.
@@ -14676,6 +14690,7 @@ public final class Loader
         int s = 0;
         while (s < clTab[ir].ifmCount)
         {
+            rfHoleSteps += 1;
             if (Magic.load64(it + s * 8L) == 0L)
             {
                 return true;
@@ -14691,6 +14706,7 @@ public final class Loader
         int s = 0;
         while (s < clTab[ir].ifmCount)
         {
+            rfFillSteps += 1;
             if (Magic.load64(it + s * 8L) == 0L)
             {
                 int i = clTab[ir].ifmStart + s;
@@ -14870,6 +14886,7 @@ public final class Loader
     /** Append registry index {@code r} to {@link #ifClosureBuf} if absent; return the new count. */
     private static int addIfaceUnique(int n, int r)
     {
+        rfClosSteps += 1;
         int i = 0;
         while (i < n)
         {
@@ -18392,16 +18409,84 @@ public final class Loader
     /** Registry index of the loaded class/interface whose Type node is {@code type}, or -1. */
     private static int regOfType(long type)
     {
-        int i = 0;
-        while (i < clCount)
+        return ctProbe(type);
+    }
+
+    // ---- Type -> class-registry index ---------------------------------------------------------------
+    // Both spellings of this query (`regOfType` and `classRegByType`) walked all `clCount` entries, and
+    // `clCount` grows with every class loaded all boot. `refillImaps` asks it once per itable-directory
+    // ENTRY, per visited imap, per batch -- so it was O(everything loaded) on a path that runs every batch.
+    // TENTH instance of this file's most common defect, and the FIRST one ranked by counters before being
+    // believed: over a 65-batch suite the refill's four step counters read **type=264k against fill=39k,
+    // hole=23k and clos=4k**, so this walk is 81% of the refill and the only one of the four that grows
+    // with the registry.
+    //
+    // SOUND BY CONSTRUCTION, not by a claim about when work may be skipped -- the distinction that separates
+    // this from the `virt` attempt that silently under-marked half a closure. `clTab[i].type` is written
+    // exactly ONCE, at index `clCount`, immediately BEFORE `clCount` is incremented (checked at both
+    // registration sites, the interface arm and the class arm). No entry is ever re-pointed at a different
+    // Type, so an append-only index can never answer for bytes that have changed underneath it.
+    private static final int CTTAB = 8192;              // power of two, > MAXCLASS so chains stay short
+    private static int[] ctBucket;                      // hash -> newest entry with that hash, -1 = empty
+    private static int[] ctNext;                        // chain link, parallel to clTab
+    private static int ctIndexed;                       // clTab[0, ctIndexed) is in the index
+
+    /** Hash a Type NODE ADDRESS. Types come from {@code allocData}, so the low bits are always 0 -- hashing
+     *  the raw address would drop every entry into a handful of buckets. */
+    private static int typeHashOf(long type)
+    {
+        int h = (int) (type >> 3);
+        h = h * 0x9E3779B1;
+        h = h ^ (h >>> 15);
+        return h & (CTTAB - 1);
+    }
+
+    /** Bring the index up to {@code clCount}. Append-only: a class is indexed once, when it is first seen. */
+    private static void ctIndexTo()
+    {
+        if (ctBucket == null)
         {
-            if (clTab[i].type == type)
+            ctBucket = new int[CTTAB];
+            ctNext = new int[MAXCLASS];
+            // allocArray does NOT zero its elements on this VM (QEMU hands out zeroed DRAM and a Pi at cold
+            // power-on does not), so the empty marker is written explicitly -- garbage here would send a
+            // probe down a chain of arbitrary indices rather than reporting an empty bucket.
+            int b = 0;
+            while (b < CTTAB)
             {
-                return i;
+                ctBucket[b] = -1;
+                b += 1;
             }
-            i += 1;
+            ctIndexed = 0;
         }
-        return -1;
+        while (ctIndexed < clCount)
+        {
+            int h = typeHashOf(clTab[ctIndexed] != null ? clTab[ctIndexed].type : 0L);
+            ctNext[ctIndexed] = ctBucket[h];
+            ctBucket[h] = ctIndexed;
+            ctIndexed += 1;
+        }
+    }
+
+    /** The registry index the linear scan would have returned for {@code type}, or -1. */
+    private static int ctProbe(long type)
+    {
+        ctIndexTo();
+        int best = -1;
+        int i = ctBucket[typeHashOf(type)];
+        while (i >= 0)
+        {
+            rfTypeSteps += 1;
+            // The LOWEST matching index still wins, which the scan gave for free and a chain does not:
+            // head-insertion makes the chain DESCENDING, so it is searched for the minimum rather than
+            // stopped at the first hit. Same care `findPdByName`'s index needed.
+            if (clTab[i] != null && clTab[i].type == type && (best < 0 || i < best))
+            {
+                best = i;
+            }
+            i = ctNext[i];
+        }
+        return best;
     }
 
     /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
