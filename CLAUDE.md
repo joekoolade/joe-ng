@@ -115,6 +115,115 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A CONSTRUCTOR REFERENCE NOW INITIALIZES ITS CLASS, AND THE LAUNCHER'S TESTS EXECUTE THEIR BODIES
+  (2026-09-14, PI-VALIDATED).** The two `SleepSanity` tests had been failing with a `NullPointerException`
+  whose innermost frame was `ReflectiveInterceptorCall.lambda$ofVoidMethod$0`. That NPE is GONE: the trace is
+  now three frames of the TEST'S OWN CODE (`fail` / `testTimeout` / `testMillis`), i.e. the test method ran
+  and reached a real assertion.
+  - **ROOT CAUSE: JVMS 5.5 WAS ENFORCED ON THREE OF THE FOUR INSTANTIATION ROUTES AND NOT THE FOURTH.**
+    Creating an instance is an active use, so `<clinit>` must precede `<init>`. Taking inventory:
+    compiled `new` (compile-time note + drain), deferred `new` (`resolveUnresolvedNew` -> `ensureClinit`),
+    reflective `Constructor.newInstance` (`allocInstance` -> `ensureClinit`, commented "an active use, like
+    `new`") -- and **a CONSTRUCTOR REFERENCE, whose hand-emitted kind-8 thunk allocates and calls `<init>`
+    itself and had `ensureClinit` NOWHERE on it.** JUnit builds its descriptors through
+    `TestMethodTestDescriptor::new`, whose constructor is `getstatic defaultInterceptorCall; putfield
+    interceptorCall` -- so the field was null, and the null surfaced as a lost lambda CAPTURE a dozen frames
+    away.
+  - **THE SAME DEFECT, FIXED ONCE BEFORE, WITH ITS SYMPTOM ALREADY RECORDED.** `resolveUnresolvedNew`'s own
+    comment describes this exactly: `ArrayList.<init>` reads `DEFAULTCAPACITY_EMPTY_ELEMENTDATA`, so an
+    uninitialized class produced a list whose `elementData` was null and whose first `add()` threw NPE.
+  - **THE CALL GOES AT RUN TIME IN THE THUNK, NOT AT THUNK-BUILD TIME, and that half is load-bearing:**
+    building a thunk is LINKING, and JVMS 5.4 forbids linking from running an initializer -- the ordering
+    inversion this VM already paid four failed fixes for. It sits after the SAM arguments are stored to the
+    frame and LR is saved, inside the range `addJitFrame` registers, so an initializer that allocates,
+    compiles or throws unwinds correctly. NOT under the loader lock, deliberately: `clinitEntryOf` takes that
+    around the COMPILE only, because an initializer may block on a monitor or spawn threads.
+  - **EIGHT HYPOTHESES HAD ALREADY DIED TO EVIDENCE; THE NINTH THROUGH TWELFTH DIED HERE, AND TWO OF THEM
+    WERE MINE.** "reloc recording is gated to batch compiles" (refuted by reading -- every late path reaches
+    `emitMethod`, which sets it); "the constructor was never compiled" (refuted by MEASUREMENT, below);
+    "the wrong same-arity overload was picked" (refuted -- it is the ONLY constructor compiled, the others
+    pruned by RTA); "a kind-8 thunk skips `<clinit>`" as tested by the first probe (refuted, and the probe
+    was wrong -- see below).
+  - **`COMPILE_WATCH` IS WHAT ENDED IT, and it refuted MY OWN leading reading in one boot.** I had inferred
+    "the constructor was never compiled" from the ABSENCE of an `ownstatic` line -- the exact move this file
+    forbids, and the fourth lying diagnosis of the arc. The instrument names every method COMPILED or
+    DEFERRED for one class (prefix-filtered: an unfiltered dump over a ~1,700-blob closure floods the UART and
+    starves the run it is meant to diagnose, already paid for once). It reported the constructor **emitted at
+    BATCH time (`late=0`)** while `<clinit>` was **DEFERRED and compiled late (`late=1`)** -- the body exists
+    before the initializer runs, which named the ordering and killed the inference together.
+  - **THE INSTRUMENT'S SELF-TEST FOUND A PROBLEM IN MY BUILD, NOT IN ITSELF.** Armed and pointed at a probe
+    class it printed NOTHING -- indistinguishable from an instrument that cannot fire. Cause: **`make out` is
+    not a target** and silently does nothing, so the image came from the previous `Loader.class`. This file
+    already records that trap (it once produced two byte-identical A/B images). `make build` is the target.
+  - **A LATENT BUFFER OVERFLOW FIXED ON THE WAY:** the lambda thunk buffer was a flat `allocCode(160)` while
+    the kind-8 arm emits TWO WORDS PER SAM ARGUMENT (save across `Heap.alloc`, reload before `<init>`). Past
+    ~13 SAM arguments it wrote PAST the allocation into whatever code the arena handed out next. Nothing
+    reached had that arity, so it never fired; the buffer is sized from `ia` now, which removes the cliff
+    rather than moving it one argument further out.
+  - **NEGATIVE CONTROL, and it took THREE attempts to build a probe that could serve as one.** With only the
+    `ensureClinit` call disabled: `untouched hasMark = 0`, `untouched mark = <null: clinit did not run before
+    <init>>`; restored, it passes -- while every other arm passes in BOTH states, so the control is specific
+    to the condition. **The two earlier arms reproduced the SHAPE and not the CONDITION**, the trap this file
+    names repeatedly: the first printed the class's static marker on its opening line (a `getstatic` is a 5.5
+    active use, so it initialized the class before the reference fired), and the second still read a marker
+    afterwards -- and compiling a CROSS-CLASS `getstatic` calls `noteInitNeeded`, so the drain initialized it
+    before `main` executed an instruction. **The probe initialized its own target as a side effect of
+    checking it.** The working arm reads NO static of the target anywhere and asserts only through instance
+    methods.
+  - **PI-VALIDATED:** no `lambda$ofVoidMethod$0` anywhere; `[3 containers successful]`, `[2 tests started]`,
+    both executing. QEMU: demo suite clean on THIRTEEN markers, 33 programs, `newarm = demo.RtaMade` (the
+    deferred-constructor arm), `finish HML` 20/20/20, inversion 61ms, `churnMB=625 live=32 intact=32`; host
+    tests unchanged incl. `compiler: 37 checks` (the writer emits no thunk, so the self-hosting fixpoint
+    cannot move) and `overlay-check 0 new`.
+  - **STILL FAILING, AND IT IS A DIFFERENT AND MUCH SMALLER CLASS: WALL CLOCK.** `testTimeout` starts a
+    watcher that sleeps 5s then interrupts main, while main sleeps 10s expecting the interrupt;
+    `fail("Exited before timeout")` means it arrived too late. The log says why, twice, around the test
+    output: **`LOADER LOCK stuck >10s ... waiter 5` / `waiter 6`** -- the watcher threads blocked while their
+    bodies compile. Durations agree: `testMillis` reports 55,680ms for a test that aborts at its first ~10s
+    sleep. **And there is a real control: the same unmodified `SleepSanity` PASSES on this Pi under
+    `MetalJUnit`** (one of the six classes in `ran 44, failures 0`) -- same VM, same test, small closure. So
+    `Thread.sleep`/`interrupt` are fine and what differs is first-call compilation latency. Stated as the
+    leading reading, NOT as fact: proving it means timing the watcher's start-to-interrupt gap, or warming
+    the closure before the test runs.
+  - **`LOADER LOCK stuck >10s ... state 4` IS NOT A DEADLOCK, for the fourth recorded time:** state 4 is
+    `TASK_RUNNING`, so the owner was working. Read the state field before calling it one.
+
+- **`jdk/internal/lang/CaseFolding` OVERLAID -- a CASE_INSENSITIVE Unicode regex compiles (2026-09-14,
+  PI-VALIDATED).** Exposed by the fix above: with constructor references initializing their classes,
+  `TimeoutDurationParser.<clinit>` ran for the first time and halted the launcher in a named denylist trap.
+  - **THE DENIAL'S PREMISE EXPIRED, AND ITS OWN COMMENT STATED IT:** "case-folding tables ([[I via
+    multianewarray): only CASE_INSENSITIVE regex needs them". JUnit compiles
+    `([1-9]\d*) ?((?:[nμm]?s)|m|h|d)?` with **flags 66 = CASE_INSENSITIVE | UNICODE_CASE**, so a RANGE takes
+    `Pattern.CIRangeU`, which asks which characters fold INTO it.
+  - **UN-DENYING THE STOCK CLASS DOES NOT WORK, checked rather than assumed:** it builds its tables with
+    `multianewarray`, an opcode this JIT carries metadata for (stack delta, operand count, length) and has
+    **no lowering** for. So: overlay, and narrow the denial -- a denied class is trap-wired at PATCH TIME, so
+    no link stub runs and an overlay is never consulted.
+  - **THE DEEP SCAN CAUGHT WHAT MY GUESS MISSED.** Checking `Pattern`/`Matcher`/`String`/`Character` by hand
+    said one method was referenced. Scanning ALL of java.base -- the population `make overlaycheck` does not
+    see, the blind spot that cost `Character.getType` -- found `StringLatin1`/`StringUTF16` also call `fold`
+    and `isSingleCodePoint`. Tracing those: they back `compareToFC`, which serves ONLY JDK 26's NEW
+    `String.equalsFoldCase`/`compareToFoldCase`/`UNICODE_CASEFOLD_ORDER`; `equalsIgnoreCase` and
+    `regionMatches(true, ...)` go through `regionMatchesCI` and never reach here.
+  - So `getClassRangeClosingCharacters` is EXACT and the other three THROW -- and they throw an **Error, not
+    a RuntimeException, deliberately**: narrowing the denial turns those sites from a halting denylist trap
+    into an ordinary call, so a CATCHABLE exception would convert a loud failure into a silent wrong answer.
+  - **EXACT, WITH NO STATED LIMIT:** the "expanded" case map is **36 entries**, dumped from the seed JVM
+    rather than transcribed from a guess, held as parallel `int[]` rather than stock's `Map.ofEntries` +
+    stream (36 boxed Integers and a stream pipeline inside a `<clinit>` is the shape that has cost whole
+    sessions here).
+  - **A 20,780-RANGE SWEEP FIRST REPORTED 2,715 MISMATCHES -- every one the same SET in a different ORDER.**
+    Stock derives its key array from `Map.ofEntries(...).keySet().stream()`, and `ImmutableCollections` salts
+    iteration order **per JVM run**: five runs of the stock method return the same four code points in four
+    different orders, so `Pattern` cannot depend on order without being nondeterministic itself. Compared as
+    SETS: **ZERO mismatches over 2,929 non-empty answers.** "The diff is only ordering" is exactly the
+    reasoning that should not be taken on faith.
+  - **THE PROBE'S FIRST ARMS WOULD PASS OVER AN EMPTY TABLE**, which is why the closure arms exist: JUnit's
+    own range is `[1-9]`, and digits have no case, so its closure is legitimately EMPTY and a do-nothing stub
+    answers it perfectly while being wrong for everything else. `[\u017E-\u0180]` contains U+017F (folds to
+    `s`) and `[\u2129-\u212B]` contains U+212A (folds to `k`), **each with its own NEGATIVE**, so an
+    implementation answering "everything folds in" fails too. All nine arms byte-identical to the host.
+
 - **`java/lang/reflect/Executable` EXISTS NOW, and a `Constructor` can answer its own parameter types
   (2026-09-14).** The launcher's blocker was
   `VIRTUALRESOLVE FAILED java/lang/reflect/Constructor.getParameters()` -- which reads like a missing method on
