@@ -3537,6 +3537,22 @@ public final class Loader
     private static long pcSteps;                         // total linear-scan steps across those calls
     private static int pcHits;                           // ... of which found a cached parse
 
+    /**
+     * HOW MUCH OF `virt` IS RE-WALKING A LEVEL SOMEONE ELSE ALREADY MATCHED? resolveVirtuals walks each
+     * INSTANTIATED class's superclass chain and matches every level's methods against the pend list, so a
+     * level shared by many subclasses is matched once per DESCENDANT -- java/lang/Object's table by every
+     * class that reaches it.
+     *
+     * <p>Whether that is worth fixing depends on how often a visit marks anything, and this file is explicit
+     * about not guessing here: the ONE previous attempt at `virt` claimed work could be SKIPPED, measured
+     * 2.76x, and silently UNDER-MARKED HALF THE CLOSURE (reach 1040 -> 449) with the cause never identified.
+     * The attempt that worked cached facts immutable by construction and made no skipping claim. So: count
+     * first, and let the ratio say whether a level memo is worth the soundness argument it would need.
+     */
+    private static int vWalks;                           // outer classes whose chain was walked
+    private static long vLevels;                         // level visits across those walks
+    private static long vLevelsGrew;                     // ... that actually marked something new
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -3663,6 +3679,9 @@ public final class Loader
         mrInst = 0L;
         mrStatic = 0L;
         mrVirt = 0L;
+        vWalks = 0;
+        vLevels = 0L;
+        vLevelsGrew = 0L;
         mrDflt = 0L;
         while (grew)
         {
@@ -4231,17 +4250,25 @@ public final class Loader
                 pdVirtEpoch[c] = pdCount;
                 int cur = c;
                 int guard = 0;
+                vWalks += 1;
                 while (cur >= 0 && guard < 64)           // walk C's superclass chain, parsing each level once
                 {
+                    vLevels += 1;
+                    boolean lvlGrew;
                     if (ensureMethodTable(cur))
                     {
-                        grew = matchLevelCached(cur) || grew;
+                        lvlGrew = matchLevelCached(cur);
                     }
                     else
                     {
                         parseForMethods(pdBase[cur], pdLen[cur]);
-                        grew = matchLevel() || grew;
+                        lvlGrew = matchLevel();
                     }
+                    if (lvlGrew)
+                    {
+                        vLevelsGrew += 1;
+                    }
+                    grew = lvlGrew || grew;
                     cur = cachedSuperOf(cur);
                     guard += 1;
                 }
@@ -12171,6 +12198,12 @@ public final class Loader
         // from the demand-load arc -- "65% of the mark, 40% of the first batch", left unfixed because the
         // sound invalidation rule was never found -- so it is the first thing this has to be able to confirm
         // or rule out.
+        Uart.write(Magic.bytes(" v:walks="));
+        VM.printDec(vWalks);
+        Uart.write(Magic.bytes(" levels="));
+        VM.printDec((int) vLevels);
+        Uart.write(Magic.bytes(" grew="));
+        VM.printDec((int) vLevelsGrew);
         Uart.write(Magic.bytes(" [virt="));
         printDur(ticksUs(mrVirt));
         Uart.write(Magic.bytes(" pull="));
