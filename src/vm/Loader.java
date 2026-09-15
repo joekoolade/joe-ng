@@ -3537,6 +3537,24 @@ public final class Loader
     private static long pcSteps;                         // total linear-scan steps across those calls
     private static int pcHits;                           // ... of which found a cached parse
 
+    /**
+     * IS THE SECOND COMPILE AVOIDABLE? place+emit is 75% of compileClass, and they are the same method
+     * compiled twice: sizeMethod at a dummy base 0 purely to learn the length, then emitMethod at the real
+     * base. The comment that justifies the dummy-base trick says the WORD COUNT is placement-independent --
+     * it says nothing about the WORDS.
+     *
+     * <p>So before designing anything, count how many words actually differ. If the answer is "none", the
+     * second compile is pure waste and the dry run's output can simply be stored. If it is "a few per
+     * method", they will be the pc-relative `bl`s to callees, and reuse needs those identified and patched --
+     * a real change to the shared core, which would perturb the self-hosting fixpoint. Either way the fix
+     * follows from the number rather than from my reading of the compiler.
+     */
+    private static int dcMethods;                        // methods compiled twice (not deferred)
+    private static int dcIdentical;                      // ... whose two compiles produced identical words
+    private static long dcWords;                         // total words emitted across them
+    private static long dcDiffWords;                     // ... of which differed between the two passes
+    private static int[] dcDry;                          // the dry run's words, kept for the comparison
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -6961,8 +6979,25 @@ public final class Loader
                     // for the body (statics went the cell way above). Only <init> is still compiled here --
                     // <clinit> now defers too, since lazy initialization means loading a class no longer runs
                     // it (see notInit).
-                    boolean defer = stubOnly                    // a stub-blob virtual: NEVER compile the body here
-                            || (stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]));
+                    // <init> DEFERS TOO NOW. It was the only method kind still compiled at load time, and
+                    // notInit -- literally "the name is not <init>" -- carried no reason for that. It costs
+                    // the most of anything in the load: a non-deferred method is compiled TWICE (sizeMethod
+                    // at a dummy base to learn the length, then emitMethod at the real one), and measured on
+                    // a launcher batch that is 853 methods, place+emit = 75% of compileClass.
+                    //
+                    // Reusing the dry run's output instead was measured and REFUTED: only 102 of those 853
+                    // produced identical words, and 20,649 of 118,876 words differ (17.4%, ~24 per method),
+                    // so it is not "patch a few bl displacements".
+                    //
+                    // Deferring is safe by the same argument the stub already rests on: the buffer IS the
+                    // method's registered address AND its TIB vtable slot, so every caller -- an
+                    // invokespecial's direct BL, a kind-8 constructor-reference thunk, resolveUnresolvedNew
+                    // -- reaches the stub and the body compiles once, on first use.
+                    boolean defer = stubOnly;                   // a stub-blob virtual: NEVER compile the body here
+                    if (stage2Gated(gbase, gThisNameOff))
+                    {
+                        defer = true;
+                    }
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -7192,6 +7227,10 @@ public final class Loader
         lbClinitT = 0L;
         lbCompileT = 0L;
         lbRegT = 0L;
+        dcMethods = 0;
+        dcIdentical = 0;
+        dcWords = 0L;
+        dcDiffWords = 0L;
         pParseCpT = 0L;
         pFieldsT = 0L;
         pVtableT = 0L;
@@ -8462,7 +8501,12 @@ public final class Loader
             mBuf[i] = Heap.allocCode(32);               // just the stub -> no dry-run compile at load (genuine defer)
             return;
         }
-        int sz0 = compileMethod(i, 0L).length * 4;
+        int[] dry0 = compileMethod(i, 0L);
+        if (BATCH_COST)
+        {
+            dcDry = dry0;                                // kept only for the double-compile comparison
+        }
+        int sz0 = dry0.length * 4;
         if (sz0 >= 0x80000)
         {
             Uart.write(Magic.bytes("  HUGE body bytes="));
@@ -8569,6 +8613,27 @@ public final class Loader
         relocRecording = 1;                             // record unresolved cross-class sites at their real address
         int[] words = compileMethod(i, mBuf[i]);        // real base -> resolved addresses
         relocRecording = 0;
+        if (BATCH_COST && dcDry != null && dcDry.length == words.length)
+        {
+            dcMethods += 1;
+            dcWords += words.length;
+            int d = 0;
+            int q = 0;
+            while (q < words.length)
+            {
+                if (dcDry[q] != words[q])
+                {
+                    d += 1;
+                }
+                q += 1;
+            }
+            dcDiffWords += d;
+            if (d == 0)
+            {
+                dcIdentical += 1;
+            }
+            dcDry = null;
+        }
         codeRootOwner = 0L;
         mLine[i] = buildLineTable(i);                   // stack-trace debug info (PC-offset -> source line)
         mSrc[i] = sourceFileAddr();
@@ -12153,6 +12218,14 @@ public final class Loader
         VM.printDec(pcCalls);
         Uart.write(Magic.bytes(" pcHits="));
         VM.printDec(pcHits);
+        Uart.write(Magic.bytes(" dc:n="));
+        VM.printDec(dcMethods);
+        Uart.write(Magic.bytes(" same="));
+        VM.printDec(dcIdentical);
+        Uart.write(Magic.bytes(" words="));
+        VM.printDec((int) dcWords);
+        Uart.write(Magic.bytes(" diff="));
+        VM.printDec((int) dcDiffWords);
         Uart.write(Magic.bytes(" pcSteps="));
         VM.printDec((int) (pcSteps / 1000L));
         Uart.write(Magic.bytes("k"));
