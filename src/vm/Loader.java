@@ -240,6 +240,13 @@ public final class Loader
     private static int[] pdIfOff;        // pdIfOff[i*MAX_DIRECT_IF+k] = direct-interface name Utf8 offset
     private static int[] pdIfN;          // number of direct interfaces recorded for blob i
     private static int pdCount;
+    // Blobs [0, pdProbedTo) have been through probeAll: their name/super/interfaces/needsString are set and
+    // their CONSTANT_Class deps are already on the dep list. The blob table is append-only and deduped by
+    // ADDRESS, so those answers are fixed by the classfile bytes and re-deriving them can only reproduce
+    // them. Reset in resetLoader WITH dpCount and stringPdIndex -- the three are one piece of state.
+    private static int pdProbedTo;
+    private static int pbProbed;         // blobs probed this batch (instrument: separates "the watermark
+                                         //   fires" from "it fires and the rest is genuinely new work")
     private static final int MAXDEP = 49152;
     private static int[] dpOwner;        // index into pd* of the blob that has this dependency
     private static int[] dpOff;          // dependency's name Utf8 offset (in dpBase[d])
@@ -3155,6 +3162,14 @@ public final class Loader
         pendPullTo = 0;
         pnIndexed = 0;
         pnBucket = null;                                 // rebuilt by the next probeAll; blobs are all new
+        // THE PROBE WATERMARK AND THE DEP LIST IT APPENDS TO ARE ONE PIECE OF STATE, reset together. probeAll
+        // no longer clears dpCount itself (it probes only [pdProbedTo, pdCount) and appends), so a fresh
+        // dpOwner/dpOff/dpBase left beside a stale dpCount would have ready() reading zeroed deps as real
+        // ones -- and a stale pdProbedTo above the new pdCount would skip every blob of the next program,
+        // silently, which is exactly the shape that cost the virt memo half a closure.
+        pdProbedTo = 0;
+        dpCount = 0;
+        stringPdIndex = -1;
         dpOwner = new int[MAXDEP];
         dpOff = new int[MAXDEP];
         dpBase = new long[MAXDEP];
@@ -7306,6 +7321,9 @@ public final class Loader
     {
         long tAll = Magic.readCNTPCT_EL0();
         long tMark = tAll;
+        pbProbed = 0;                                    // per BATCH: probeAll runs once per mark round plus
+                                                         //   once more below, and the count is only readable
+                                                         //   as a batch total
         ensureObjectBlob();                              // every vtable starts with Object's 9 slots
         if (gEntryBlob != 0L)                            // reachability requested: mark + PULL the reachable
         {                                                // closure on demand (no pre-pull-all resolveClosureFromDir)
@@ -7538,12 +7556,35 @@ public final class Loader
         // and standalone runs still built the right closure -- only the suite caught it).
     }
 
-    /** Record each blob's own name and every class it names (its {@code Class} entries). */
+    /**
+     * Record each blob's own name and every class it names (its {@code Class} entries).
+     *
+     * <p>EACH BLOB IS PROBED EXACTLY ONCE, and that is sound BY CONSTRUCTION rather than by any claim about
+     * when work may be skipped. Everything this pass writes is read straight out of the classfile bytes --
+     * this_class, super, the direct interfaces, every {@code CONSTANT_Class} name, whether the pool holds a
+     * {@code CONSTANT_String} -- and the blob table is strictly APPEND-ONLY: {@link #addBlob} dedups by
+     * ADDRESS and only ever writes {@code pdBase[pdCount]}, so no index is re-pointed at different bytes for
+     * the life of a launch. A second probe of blob {@code i} could only reproduce the first one's answers.
+     * (That is the same argument the {@code virt} hit lists rest on, and the reason neither needs a rule for
+     * invalidating anything.)
+     *
+     * <p>It had been re-probing EVERY blob on EVERY call -- once per {@link #markReachable} round plus once
+     * more at the top of {@link #loadAll} -- while {@code pdCount} grows all boot. Measured on a launcher
+     * boot at batch 209 (1782 blobs): {@code probe} was 309.7ms of a 320.0ms {@code mark}, i.e. 97% of it,
+     * plus 151.1ms at the top level -- together 471ms of a 676ms batch, 70%, and 4.9x what it cost at batch
+     * 15 for 31% more blobs. Seventh instance of this file's most common defect, a per-item pass over a
+     * table that grows all boot; the first one whose remedy is a WATERMARK rather than a hash index,
+     * because the work is not a lookup.
+     *
+     * <p>The dep list is append-only for the same reason -- a dep is a {@code {base, offset}} pair into
+     * immutable bytes -- so {@code dpCount} is NOT reset here any more. It and {@code stringPdIndex} are
+     * reset in {@link #resetLoader} beside {@code pdProbedTo}: a watermark that outlives the table it
+     * indexes under-marks SILENTLY, which is how the virt hit lists nearly shipped a half closure.
+     */
     private static void probeAll()
     {
-        dpCount = 0;
-        stringPdIndex = -1;
-        int i = 0;
+        int i = pdProbedTo;
+        pbProbed += pdCount - i;
         while (i < pdCount)
         {
             parseConstPool(pdBase[i], pdLen[i]);
@@ -7589,6 +7630,7 @@ public final class Loader
             }
             i += 1;
         }
+        pdProbedTo = pdCount;
     }
 
     /**
@@ -12345,6 +12387,12 @@ public final class Loader
         VM.printDec(mrRounds);
         Uart.write(Magic.bytes(" pend="));
         VM.printDec(pendN);
+        // THE MARKED SET ITSELF, which is the only number that says the closure is the same. `pend` is a
+        // QUEUE LENGTH and `grew` a count of level-visits, so both move when redundant work is removed while
+        // the answer stays put -- neither can tell that apart from under-marking, and under-marking here is
+        // SILENT (reach 1040 -> 449 once, with standalone runs still building the right closure).
+        Uart.write(Magic.bytes(" reach="));
+        VM.printDec(reachN);
         // The mark's SUB-phases on the same line. `virt` (resolveVirtuals) is the named remaining bottleneck
         // from the demand-load arc -- "65% of the mark, 40% of the first batch", left unfixed because the
         // sound invalidation rule was never found -- so it is the first thing this has to be able to confirm
@@ -12423,6 +12471,13 @@ public final class Loader
         VM.printDec(rfClos);
         Uart.write(Magic.bytes(" holeEnd="));
         VM.printDec(rfHoleEnd);
+        // The probe watermark: blobs actually probed THIS batch against the table it walks. A batch that adds
+        // one class should read pb:1 -- if it reads pdCount the memo is not firing, which a falling `probe`
+        // timer alone could not distinguish from a batch that happened to be cheap.
+        Uart.write(Magic.bytes(" pb:probed="));
+        VM.printDec(pbProbed);
+        Uart.write(Magic.bytes(" of="));
+        VM.printDec(pdCount);
         // patch re-walk: sites taking the memo vs re-resolving vs unresolved (cumulative), plus the site count
         Uart.write(Magic.bytes(" pc:n="));
         VM.printDec(rcCount);
