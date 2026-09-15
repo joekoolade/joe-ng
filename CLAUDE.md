@@ -180,11 +180,25 @@ defines the minimum the assembler must encode.
     `fail("Exited before timeout")` means it arrived too late. The log says why, twice, around the test
     output: **`LOADER LOCK stuck >10s ... waiter 5` / `waiter 6`** -- the watcher threads blocked while their
     bodies compile. Durations agree: `testMillis` reports 55,680ms for a test that aborts at its first ~10s
-    sleep. **And there is a real control: the same unmodified `SleepSanity` PASSES on this Pi under
-    `MetalJUnit`** (one of the six classes in `ran 44, failures 0`) -- same VM, same test, small closure. So
-    `Thread.sleep`/`interrupt` are fine and what differs is first-call compilation latency. Stated as the
-    leading reading, NOT as fact: proving it means timing the watcher's start-to-interrupt gap, or warming
-    the closure before the test runs.
+    sleep. **THE CONTROL IS REAL, AND IT HAD TO BE RUN RATHER THAN CITED.** I first wrote this
+    entry claiming "the same SleepSanity passes on this Pi under MetalJUnit, one of the six classes in
+    `ran 44, failures 0`" -- and that was an UNEARNED citation: this file names the passing timing tests as
+    `testSleep`/`testInterruptSleep`/`testJoinOnTerminatingThread`/`testInterruptJoin`, and **SleepSanity
+    declares NEITHER** (it has `testMillis`/`testMillisNanos`), so those four belong to
+    `SleepWithDuration`/`JoinWithDuration`. "The class is in the passing set" and "THESE METHODS pass" are
+    different claims. Measured instead (`scripts/run-junit.sh 900 SleepSanity`, QEMU, 2026-09-14):
+    **`ok testMillis` / `ok testMillisNanos` / `metal junit: ran 2, failures 0` / `ALL PASSED`.** Same VM,
+    same unmodified test, SMALL closure. (QEMU, not the Pi -- the Pi's 44-test figure includes the class but
+    was never broken out per method, which is exactly the gap that made the original citation wrong.)
+  - **THAT RUN ALSO REFUTES THE PRIORITY READING**, which was the obvious suspect given this file's own
+    record that a coordinator outranking the threads it waits for starves them (the `Thread.join` yield-poll
+    trap: the boot flow sits at `PRIO_NORM` 512 while a spawned `java.lang.Thread` defaults to 455).
+    MetalJUnit launches on the same boot-flow task with the same priorities and the watcher is interrupted
+    correctly, so priority is not what differs.
+  - So `Thread.sleep`/`interrupt` are sound and what differs is closure size -- first-call compilation and
+    demand-load latency eating the watcher's 5s window. Stated as the leading reading, NOT as fact: proving
+    it means timing the watcher's start-to-interrupt gap, or naming what holds the loader lock (the watchdog
+    currently prints the owner's task id and state and NOT what it is doing, which is the next instrument).
   - **`LOADER LOCK stuck >10s ... state 4` IS NOT A DEADLOCK, for the fourth recorded time:** state 4 is
     `TASK_RUNNING`, so the owner was working. Read the state field before calling it one.
 
@@ -4191,6 +4205,13 @@ defines the minimum the assembler must encode.
   INHERITED field, two classes with same-named statics, a mutually-referencing `<clinit>` pair. Each is ~30
   lines, and every one of them would have failed on a shipping image before the launcher ever ran. **The
   probes written to diagnose an arc ARE its regression suite -- run them, do not just keep them.**
+- **A CITED RESULT IS NOT A MEASURED ONE, and "the class is in the passing set" is not "these methods pass".**
+  I supported a conclusion in this file with "the same SleepSanity passes under MetalJUnit, one of the six
+  classes in `ran 44, failures 0`" -- true about the CLASS, and silent about whether the two methods at issue
+  were among the passes. They were (`scripts/run-junit.sh 900 SleepSanity` -> `ran 2, failures 0`), so the
+  conclusion survived; it did not have to. Re-running the control cost four minutes on QEMU, which is always
+  cheaper than a conclusion resting on a citation nobody re-read. This is the sibling of the recorded
+  "check a log's COMMIT before naming its failure as current".
 - **A diagnostic must print the state it MEASURED, never one it assumed.** Three separate reports lied during
   the launcher arc (the unwinder decoding a Throwable layout it never checked; `UNRESOLVED STATIC` asserting
   "class never pulled"; a `CLINIT LOST` report that could not tell "never ran" from "already ran"), and each
