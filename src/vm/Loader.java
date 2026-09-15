@@ -3136,6 +3136,14 @@ public final class Loader
         pdIfOff = new int[MAXBLOB * MAX_DIRECT_IF];
         pdIfN = new int[MAXBLOB];
         pdCount = 0;
+        // THE HIT LISTS ARE KEYED BY BLOB INDEX, and this is a per-LAUNCH reset: blob 7 of the next program
+        // is a different class, and pendN restarts at 0 so a stale hvTo would be HIGHER than pendN and
+        // extendHits would never run again -- silently marking nothing. Dropped here, with the arrays
+        // rebuilt lazily.
+        hvQ = null;
+        hvCodeIdx = null;
+        hvLen = null;
+        hvTo = null;
         collectedTab = new long[REACHTAB];
         pdPendTo = new int[MAXBLOB];
         pdVirtTo = new int[MAXBLOB];
@@ -3552,6 +3560,11 @@ public final class Loader
     private static int vWalks;                           // outer classes whose chain was walked
     private static long vLevels;                         // level visits across those walks
     private static long vLevelsGrew;                     // ... that actually marked something new
+    private static int vCached;                          // level visits served by the method-table cache
+    private static int vParsed;                          // ... that had to parseForMethods instead
+    private static long vMethods;                        // methods examined across cached visits
+    private static long vCacheT;                         // time in the cached arm
+    private static long vParseT;                         // time in the parsing arm
 
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
@@ -3682,6 +3695,11 @@ public final class Loader
         vWalks = 0;
         vLevels = 0L;
         vLevelsGrew = 0L;
+        vCached = 0;
+        vParsed = 0;
+        vMethods = 0L;
+        vCacheT = 0L;
+        vParseT = 0L;
         mrDflt = 0L;
         while (grew)
         {
@@ -4255,14 +4273,20 @@ public final class Loader
                 {
                     vLevels += 1;
                     boolean lvlGrew;
+                    long vt0 = Magic.readCNTPCT_EL0();
                     if (ensureMethodTable(cur))
                     {
+                        vCached += 1;
+                        vMethods += mtLen[cur];
                         lvlGrew = matchLevelCached(cur);
+                        vCacheT += Magic.readCNTPCT_EL0() - vt0;
                     }
                     else
                     {
+                        vParsed += 1;
                         parseForMethods(pdBase[cur], pdLen[cur]);
                         lvlGrew = matchLevel();
+                        vParseT += Magic.readCNTPCT_EL0() - vt0;
                     }
                     if (lvlGrew)
                     {
@@ -4351,9 +4375,120 @@ public final class Loader
      * what the parsing form does: it probes the bucket but only consumes the pend ({@code virtResolved}) when
      * {@code findCode} answers non-zero, so an abstract declaration never shadows a superclass's real body.
      */
+    /**
+     * PER-LEVEL HIT LISTS: which pend entries a level's methods MATCH, cached for ever.
+     *
+     * <p>resolveVirtuals walks every instantiated class's superclass chain, so a level shared by many
+     * subclasses is re-matched once per DESCENDANT. Measured on a launcher batch: 25,129 level visits, only
+     * 1,624 of which (6.5%) mark anything, and 325,000 method examinations costing 13.4s -- essentially all
+     * of `virt`. The per-method probe is already cheap (~68 cycles of real time); what is expensive is doing
+     * it 325,000 times.
+     *
+     * <p>WHY A NAIVE LEVEL MEMO IS UNSOUND, and this is the trap the ONE previous attempt at `virt` fell
+     * into (it claimed work could be SKIPPED, and silently UNDER-MARKED HALF THE CLOSURE, reach 1040 -> 449,
+     * cause never identified). matchLevelCached is NOT a pure function of (level, pend range): it sets
+     * {@code virtResolved[q] = virtStamp} -- "nearest def; don't also mark a super's shadowed one" -- keyed
+     * on the STARTING CLASS. If C extends B extends A and B overrides m, walking from C marks B.m and skips
+     * A.m as shadowed; walking from D extends A must still mark A.m. Skipping the level because "someone
+     * matched it at this pend range" loses that.
+     *
+     * <p>SO SPLIT THE WORK BY WHAT IS ACTUALLY INVARIANT. Whether method i of level b matches pend entry q
+     * by name+descriptor is IMMUTABLE BY CONSTRUCTION: mtName/mtDesc are fixed by the classfile and a pend
+     * entry's name/descriptor never change once added. That half is cached here, permanently, and extended
+     * only over pend entries added since (the chains are descending, so the walk stops at the watermark).
+     * The path-dependent half -- the virtResolved shadow check -- still runs on EVERY visit, against every
+     * cached hit. No marking is skipped; only the searching is.
+     */
+    private static int[][] hvQ;                          // per blob: pend indices its methods match
+    private static int[][] hvCodeIdx;                    // ... and which method-table slot matched
+    private static int[] hvLen;                          // used length per blob
+    private static int[] hvTo;                           // pend count this blob's hits are complete to
+
+    private static void ensureHitTables()
+    {
+        if (hvQ == null || hvQ.length < pdCount)
+        {
+            int[][] nq = new int[pdCount + 64][];
+            int[][] nc = new int[pdCount + 64][];
+            int[] nl = new int[pdCount + 64];
+            int[] nt = new int[pdCount + 64];
+            if (hvQ != null)
+            {
+                int k = 0;
+                while (k < hvQ.length)
+                {
+                    nq[k] = hvQ[k];
+                    nc[k] = hvCodeIdx[k];
+                    nl[k] = hvLen[k];
+                    nt[k] = hvTo[k];
+                    k += 1;
+                }
+            }
+            hvQ = nq;
+            hvCodeIdx = nc;
+            hvLen = nl;
+            hvTo = nt;
+        }
+    }
+
+    /** Record one (method-slot, pend) match for blob {@code b}, growing its hit list as needed. */
+    private static void addHit(int b, int methIdx, int q)
+    {
+        if (hvQ[b] == null)
+        {
+            hvQ[b] = new int[8];
+            hvCodeIdx[b] = new int[8];
+            hvLen[b] = 0;
+        }
+        if (hvLen[b] >= hvQ[b].length)
+        {
+            int[] gq = new int[hvQ[b].length * 2];
+            int[] gc = new int[hvQ[b].length * 2];
+            int k = 0;
+            while (k < hvLen[b])
+            {
+                gq[k] = hvQ[b][k];
+                gc[k] = hvCodeIdx[b][k];
+                k += 1;
+            }
+            hvQ[b] = gq;
+            hvCodeIdx[b] = gc;
+        }
+        hvQ[b][hvLen[b]] = q;
+        hvCodeIdx[b][hvLen[b]] = methIdx;
+        hvLen[b] += 1;
+    }
+
     private static boolean matchLevelCached(int b)
     {
+        ensureHitTables();
+        if (hvTo[b] < pendN)                             // extend over pend entries added since last time
+        {
+            extendHits(b);
+            hvTo[b] = pendN;
+        }
         boolean grew = false;
+        int h = 0;
+        int n = hvLen[b];
+        while (h < n)
+        {
+            int q = hvQ[b][h];
+            // The path-dependent half, unchanged and still per VISIT: a nearer definition already claimed
+            // this signature for this walk, or it is below this walk's watermark.
+            if (q >= virtFrom && virtResolved[q] != virtStamp)
+            {
+                virtResolved[q] = virtStamp;             // nearest def; don't also mark a super's shadowed one
+                grew = addReach(mtCode[hvCodeIdx[b][h]]) || grew;
+            }
+            h += 1;
+        }
+        return grew;
+    }
+
+    /** The old search, run ONCE per blob per pend growth, recording matches instead of applying them. */
+    private static void extendHits(int b)
+    {
+        int from = hvTo[b];
         long base = pdBase[b];
         int i = mtStart[b];
         int end = i + mtLen[b];
@@ -4365,19 +4500,23 @@ public final class Loader
                 int q = pvBucket[mtHash[i] & (PVTAB - 1)];
                 while (q >= 0)
                 {
-                    if (q >= virtFrom && virtResolved[q] != virtStamp
-                            && utf8EqAt(pendBase[q], pendName[q], base, mtName[i])
+                    // Early termination on a SORTED list: buildPendIndex head-inserts while iterating p
+                    // ascending, so every chain is in DESCENDING q order. Once one entry is below the
+                    // range already covered, every remaining entry in this chain is too.
+                    if (q < from)
+                    {
+                        break;
+                    }
+                    if (utf8EqAt(pendBase[q], pendName[q], base, mtName[i])
                             && utf8EqAt(pendBase[q], pendDesc[q], base, mtDesc[i]))
                     {
-                        virtResolved[q] = virtStamp;     // nearest def; don't also mark a super's shadowed one
-                        grew = addReach(code) || grew;
+                        addHit(b, i, q);                 // a PERMANENT fact: names and descriptors never change
                     }
                     q = pvNext[q];
                 }
             }
             i += 1;
         }
-        return grew;
     }
 
     private static boolean matchLevel()
@@ -4453,7 +4592,19 @@ public final class Loader
         return grew;
     }
 
-    private static final int PVTAB = 2048;               // power of two; chained, so a full table only lengthens chains
+    /**
+     * Power of two; chained, so an undersized table only lengthens chains -- and it WAS undersized by a
+     * factor of 33. A launcher batch pends 67,889 signatures against 2048 buckets, so every bucket held ~33
+     * entries and matchLevelCached walked all of them PER METHOD PER LEVEL VISIT, running two utf8EqAt string
+     * compares on each one that is in range. 25,129 level visits x ~20 methods x ~33 entries is tens of
+     * millions of string compares, which is where `virt` went.
+     *
+     * <p>Sized for the pend counts actually seen (MAXPEND is 262,144) so chains are ~1: 64K ints is 256KB,
+     * in line with pvNext, which is already an int per pend entry. A hash table's SIZE cannot change which
+     * entries match -- only how many are examined -- so unlike the previous attempt at `virt` this makes no
+     * claim about work being skippable.
+     */
+    private static final int PVTAB = 65536;
     private static int[] pvBucket;                       // bucket head -> pend index, -1 empty
     private static int[] pvNext;                         // chain link, per pend
     private static int[] psBucket;                       // ... and the same for STATIC/special pends, keyed on the
@@ -12088,7 +12239,7 @@ public final class Loader
      * The cumulative totals are accumulated either way -- a few adds per batch -- so turning this on does not
      * change what the numbers mean.
      */
-    private static final boolean BATCH_COST = false;
+    private static final boolean BATCH_COST = true;
 
     private static final boolean LOAD_PROFILE = false;
 
@@ -12204,6 +12355,16 @@ public final class Loader
         VM.printDec((int) vLevels);
         Uart.write(Magic.bytes(" grew="));
         VM.printDec((int) vLevelsGrew);
+        Uart.write(Magic.bytes(" cached="));
+        VM.printDec(vCached);
+        Uart.write(Magic.bytes(" parsed="));
+        VM.printDec(vParsed);
+        Uart.write(Magic.bytes(" meth="));
+        VM.printDec((int) (vMethods / 1000L));
+        Uart.write(Magic.bytes("k cacheT="));
+        printDur(ticksUs(vCacheT));
+        Uart.write(Magic.bytes(" parseT="));
+        printDur(ticksUs(vParseT));
         Uart.write(Magic.bytes(" [virt="));
         printDur(ticksUs(mrVirt));
         Uart.write(Magic.bytes(" pull="));
