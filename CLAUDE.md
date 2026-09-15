@@ -115,6 +115,60 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `virt` HIT-LIST MEMO IS PI-VALIDATED -- AND THE SAME BOOT SAYS THE BOTTLENECK HAS MOVED
+  (2026-09-15).** `[2 tests successful]` / `[0 tests failed]` / exit 0, with no FAULT, no parity DIFF, no
+  `BOOT RE-ENTERED`, no `VIRTUALRESOLVE FAILED`, no `CAP EXCEEDED` and no bare AIOOBE -- the under-marked
+  closure this area produced once before.
+  - **THE SOUNDNESS SPLIT IS THE REUSABLE PART.** `virt`'s per-level work is TWO things with different
+    lifetimes. The **name+descriptor match is immutable by construction** (`mtName`/`mtDesc` are fixed by
+    the classfile and pend entries never change), so it is cached permanently in per-blob hit lists. The
+    **shadow check is PATH-DEPENDENT** -- `virtResolved[q] = virtStamp` means "nearest definition wins, do
+    not also mark a super's shadowed one", which depends on the class the walk STARTED from -- so it still
+    runs on every visit. Nothing is skipped; only SEARCHING is. **A naive level memo is unsound here, and
+    that is exactly what the one earlier attempt got wrong** (reach 1040 -> 449, half the closure, silently,
+    with standalone runs still building the right one).
+  - **QEMU: `virt` 13,742 -> 1,464ms (9.4x), `mark` 18,552 -> 7,561ms (2.5x), batch-1 `tot` 40.5 -> 32.0s.**
+    Gated on IDENTITY rather than on "it looks clean": `rounds=26 pend=67889` unchanged and
+    `walks=8457 levels=25129 grew=1624 cached=25129 parsed=0 meth=325k` **all identical**.
+  - **THE PI TOTAL WENT UP -- 149,856ms -> 161,556ms -- AND THAT IS NOT A MEASUREMENT OF THIS CHANGE.**
+    `virt` lives in batch 1; **every batch after it reports `v:walks=0`** and does no virt work whatever. A
+    whole-boot total cannot judge a change confined to one batch when two thirds of the boot is something
+    else that grows. The batch-1 line is what would settle it and it is above the captured window.
+  - **WHAT THE LOG DOES MEASURE: ~103 SECONDS OF THE 161.6s RUN IS THE PER-BATCH LOAD PATH, AND IT GROWS
+    WITH WHAT IS ALREADY LOADED.** Summing `tot` over batches 15-209 (the range captured) gives **102.8s**.
+    Per batch, across a 31% growth in blobs (1356 -> 1782):
+
+    | batch 15 -> 209 | at 15 | at 209 | |
+    |---|---|---|---|
+    | `mark` | 68.2ms | 320.0ms | 4.7x |
+    | `probe` (top level) | 30.9ms | 151.1ms | 4.9x |
+    | `patch` | 8.6ms | 132.0ms | **15.4x** |
+    | `tot` | 154.6ms | 676.1ms | 4.4x |
+
+    **31% more blobs for 4.4x the cost is the per-item-scan-of-a-growing-table shape this file has now named
+    seven times.** It is also why the launcher's two tests report 65,727ms and 17,090ms: those are not sleeps,
+    they are demand-loading.
+  - **AND THE LOG NAMES THE FUNCTION: `probe` IS 97% OF `mark`.** At batch 209 `mark=320.0ms` with the
+    bracketed `probe=309.7ms` INSIDE it -- `probeAll` + `buildNameIndex` in the round loop -- plus the
+    top-level `probe` at 151.1ms. Together **471ms of a 676ms batch, 70%**. That is the same reading recorded
+    at the end of the imap arc ("probe is now essentially all of mark", 292ms of 296ms) and it has grown 5x
+    since while everything around it was cut. **Two more instances sit beside it:** `callT` is 15,665ms
+    cumulative of which `lookT` is **14,753ms (94%)** -- the dispatch-tier lookup again, bigger now than
+    before it was last indexed -- and `pubT` is 13,544ms cumulative, with per-batch `pub` growing
+    1.08 -> 7.07ms (6.6x) for publishing no more code than before. `publishCode` measured 2.4% once and was
+    dismissed; it is not 2.4% any more. **A function that measured cold is a statement about that closure,
+    not about the code.**
+  - **A HALTING TRAP FIRED MID-BOOT AND THE VM FINISHED THE RUN -- hardware proof of the lock fixes, by
+    PRESENCE rather than absence.** picocli's terminal-width probe calls `ProcessBuilder.start` on its own
+    thread; that lazily compiles, which runs `ProcessImpl.<clinit>`, which calls the denied native
+    `ProcessImpl.init` -- **inside `lazyCompileLocked`, holding the loader lock**. Before
+    `loaderForceRelease()` + the plain yield loop, that froze every subsequent load for the rest of the boot.
+    Here it trapped at batch 25 and the boot ran on through batch 209 to exit 0. The `try`/`finally` at the
+    nine lock sites had only ever been validated by the stuck-lock report NOT appearing; this is the real
+    thing happening and being survived.
+  - **NEXT, and it is worth more than everything cut so far:** `probeAll`/`buildNameIndex` inside the round
+    loop. 70% of a batch and rising, over ~195 batches of a launcher boot.
+
 - **THE LOAD PATH WAS PROFILED TO THE FUNCTION, AND `inheritVtable` IS 15.9x FASTER (2026-09-15,
   PI-VALIDATED).** `vtab` 4,773ms -> 299.8ms; `parse` falls from 24% of phase B to 3.3%; the launcher boot
   goes 155,816ms -> **149,856ms** with `[2 tests successful]` and exit 0.
