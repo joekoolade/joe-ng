@@ -3500,6 +3500,25 @@ public final class Loader
     private static long lbCompileT;                      // compileClass (bodies + deferral stubs + fillTib)
     private static long lbRegT;                          // registerAll + fillClassVtBuf
 
+    /**
+     * ...AND THE SPLIT INSIDE compileClass, which the loadBodies split named at 70% of phase B (27,853ms).
+     * Five terms, because there are five candidates and guessing between them is what this arc keeps paying
+     * for: the method WALK; PLACE ({@code sizeMethod}, which DRY-RUN COMPILES anything not deferred -- and
+     * {@code <init>} is never deferred, so every constructor is compiled TWICE); {@code fillTib}; EMIT (the
+     * real compile, or a deferral stub); and PUBLISH.
+     *
+     * <p>Publish gets its own term for a specific reason: {@code compileClass} ends with
+     * {@code Heap.publishCode(Heap.CODE_BASE, <arena pointer>)} -- I-cache maintenance over the WHOLE code
+     * arena, once PER CLASS. 1342 calls over a region that grows all batch is the O(everything-loaded) shape,
+     * and `pubT` was already the largest CUMULATIVE item late in the earlier profile (2,616ms by batch 26).
+     * That makes it a suspect, which is exactly why it is measured here rather than acted on.
+     */
+    private static long ccSeedT;                         // the method walk (findCode / addMethod / defer)
+    private static long ccPlaceT;                        // sizeMethod per method (dry-run compile when not deferred)
+    private static long ccTibT;                          // fillTib
+    private static long ccEmitT;                         // emitMethod per method (real compile or stub)
+    private static long ccPubT;                          // Heap.publishCode over the whole arena, per class
+
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
@@ -6825,6 +6844,7 @@ public final class Loader
      */
     private static void compileClass(long bytes)
     {
+        long cc0 = Magic.readCNTPCT_EL0();
         allocMethodTables();
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -6867,23 +6887,32 @@ public final class Loader
             p = skipAttributes(p + 8, attrs);
             m += 1;
         }
+        long cc1 = Magic.readCNTPCT_EL0();
+        ccSeedT += cc1 - cc0;
         int i = 0;
         while (i < mCount)                              // place
         {
             sizeMethod(i);
             i += 1;
         }
+        long cc2 = Magic.readCNTPCT_EL0();
+        ccPlaceT += cc2 - cc1;
         if (!gIsInterface)                              // an interface has no instances -> no vtable/TIB to fill; its
         {                                               // concrete static/default methods are still compiled above
             fillTib();                                  // TIB was allocated by loadOne (before <clinit>); fill slots now
         }
+        long cc3 = Magic.readCNTPCT_EL0();
+        ccTibT += cc3 - cc2;
         i = 0;
         while (i < mCount)                              // emit
         {
             emitMethod(i);
             i += 1;
         }
+        long cc4 = Magic.readCNTPCT_EL0();
+        ccEmitT += cc4 - cc3;
         Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the JIT buffers
+        ccPubT += Magic.readCNTPCT_EL0() - cc4;
     }
 
     /**
@@ -7078,6 +7107,11 @@ public final class Loader
         lbClinitT = 0L;
         lbCompileT = 0L;
         lbRegT = 0L;
+        ccSeedT = 0L;
+        ccPlaceT = 0L;
+        ccTibT = 0L;
+        ccEmitT = 0L;
+        ccPubT = 0L;
         while (remainingB > 0)
         {
             bPasses += 1;
@@ -12003,6 +12037,16 @@ public final class Loader
         printDur(lbCompileT * 1000000L / Magic.readCNTFRQ_EL0());
         Uart.write(Magic.bytes(" reg="));
         printDur(lbRegT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" | seed="));
+        printDur(ccSeedT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" place="));
+        printDur(ccPlaceT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" tib="));
+        printDur(ccTibT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" emit="));
+        printDur(ccEmitT * 1000000L / Magic.readCNTFRQ_EL0());
+        Uart.write(Magic.bytes(" pub="));
+        printDur(ccPubT * 1000000L / Magic.readCNTFRQ_EL0());
         Uart.putc(0x5D);
         Uart.write(Magic.bytes(" patch="));
         printDur(spanUs(tPatch, tRest));
