@@ -535,6 +535,7 @@ public final class VM
 
     static int loaderLockSite;                          // what the OUTERMOST holder is doing (a LOCK_* id)
     static long loaderLockAt;                           // CNTPCT when it took the lock, for the held-for time
+    static int loaderReleases;                          // completed OUTERMOST releases, monotonic
 
     /** Name a LOCK_* site. Kept beside the constants so a new site cannot be added without a name. */
     private static void printLockSite(int site)
@@ -605,7 +606,16 @@ public final class VM
                 long hz = Magic.readCNTFRQ_EL0();
                 long heldMs = hz > 0L ? (Magic.readCNTPCT_EL0() - loaderLockAt) * 1000L / hz : -1L;
                 printDec((int) heldMs);
-                Uart.write(Magic.bytes("ms"));
+                Uart.write(Magic.bytes("ms depth "));
+                // DEPTH ALONE IS NOT THE DISCRIMINATOR, and that is why `rel` is here too. A legitimately
+                // deep hold shows a depth above 1 and is fine; what separates a LEAK from a long hold is
+                // whether releases are still happening at all. If `held` grows across successive reports
+                // while `rel` does NOT advance, the lock was taken and never given back -- which is what a
+                // non-local exit between loaderLock() and loaderUnlock() does, since neither is inside a
+                // try/finally and VM.unwind never touches this lock.
+                printDec(loaderDepth);
+                Uart.write(Magic.bytes(" rel "));
+                printDec(loaderReleases);
                 // The owner's compile context, READ WITHOUT THE LOCK: the owner may be mid-update, so this
                 // is a hint and not a measurement, and is labelled as one. gbase is always a blob base or 0
                 // and printCurrentClass guards both, so a torn read misnames a class rather than faulting.
@@ -630,6 +640,7 @@ public final class VM
             long daif = VMScheduler.schedLock();
             loaderDepth = 0;
             loaderOwner = -1;
+            loaderReleases = loaderReleases + 1;        // only here: a re-entry's decrement is not a release
             VMScheduler.schedUnlock(daif);
         }
     }
