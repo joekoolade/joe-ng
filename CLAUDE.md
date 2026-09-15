@@ -115,6 +115,52 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE REGISTRY INDEX WAS KEYED ON THE METHOD NAME ALONE -- `lookT` 20.9x, PI-VALIDATED (2026-09-15).**
+  `patch` was 60% of a batch with `lookT` 94% of `callT`. Two growing terms in the same lookup, and
+  **MEASUREMENT got their ORDER right where reading did not** -- I had the second one as the hypothesis and
+  was about to ship it alone.
+
+  | launcher, batch 209 (1782 blobs) | before | after | |
+  |---|---|---|---|
+  | `lookT` (cumulative) | 14,270.8ms | **682.3ms** | **20.9x** |
+  | `callT` (cumulative) | 15,142.1ms | **1,516.1ms** | 10.0x |
+  | `patch` (per batch) | 132.077ms | **20.100ms** | 6.6x |
+  | `tot` (per batch) | 221.280ms | **112.076ms** | 2.0x |
+  | whole boot | 122,470ms | **114,533ms** | -7.9s |
+
+  - **(1) THE REGISTRY BUCKET IS KEYED ON CLASS+NAME NOW.** Keyed on the name alone, a hot name (`<init>`,
+    `run`, `get`) chained ONE ENTRY PER CLASS DECLARING IT, so the chain grew with the registry all boot --
+    ~60 entries per resolve on a 192-blob suite. **Every `<init>` site walks it in full**, because the
+    `<init>` short-circuit sits AFTER tier 1. Tier 2 re-hashes per superclass level rather than sharing the
+    bucket, which is the whole point -- sharing a name-only bucket is what made both tiers walk it.
+    `defaultBySig` hashes per closure interface (`clTab` supplies the class half) and **closure ORDER is
+    still exact**: one probe per interface, walked in order.
+  - **(2) `findPdByName` IS A PROBE.** A linear walk of all `pdCount` blobs, called by tier 2 once for the
+    ref class plus once per superclass LEVEL. It reuses `pnBucket`, the index `buildNameIndex` already
+    maintains for `nameRegistered` -- same key, same table, nothing new to invalidate. **The LOWEST matching
+    index still wins**, which the scan gave for free and a chain does not: head-insertion makes the chain
+    DESCENDING, so it is searched for the minimum rather than stopped at the first hit. On hardware:
+    187,994 calls over **231k steps -- 1.23 per call**, against ~66 before.
+  - **THE COUNTERS PUT THEM IN THE OPPOSITE ORDER TO THE ONE I EXPECTED, and that is the finding.** Across
+    suite batches 40-65 `lookT` grew 7.9x; `t1Steps` grew **9.2x** (17k -> 156k) and tracked it, while
+    `fpSteps` grew **1.6x** (452k -> 704k) and did not. The blob scan had 4.5x the STEP COUNT and ~67ns a
+    step against the registry chain's ~650ns, so the smaller count was the bigger half. **`t2Steps` reads 0k
+    on the suite** -- the super-chain walk barely runs there -- so (2) alone would have bought almost
+    nothing. Fixing (1) first then exposed (2) as the entire remainder (47.2ms of 47.2ms).
+  - **Cheap counters, not timers.** Two `readCNTPCT_EL0` per lookup would have been a visible share of what
+    was being measured -- the lesson already paid for in the imap refill. Plain int increments, and they are
+    what separate "the index fires" from "it fires and the rest is irreducible".
+  - **IDENTITY, at 1782 blobs and not just the suite's 192:** the batch-209 line is byte-identical to the
+    previous boot on EVERY counter -- `rounds=2 pend=4 reach=8 v:walks=2 levels=4 grew=1 cached=4`,
+    `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370`, and critically **`memo=128548 res=82350
+    unres=27419`**: the same sites resolved through the same tiers to the same answers. Batches 22, 58 and 86
+    likewise. On QEMU: 547 lines of program output byte-identical, 13 markers zero, 33 programs, host tests
+    unchanged incl. `compiler: 37 checks`.
+  - **WHAT IS NEXT, and it is the SAME defect one tier down: `dl` is 259k steps at batch 209** -- the largest
+    remaining, against `fp` 231k, `t1` 31k, `t2` 15k. `dlCellOf` keys `dlBucket` on `utf8Hash(nameBase,
+    nameOff)` -- the name ALONE -- and `dlStubByRef` is the tier **every `<init>` short-circuits into**.
+    Exactly the chain that was just removed from tier 1, still in place below it.
+
 - **THE BLOB PROBE RE-DERIVED IMMUTABLE FACTS EVERY ROUND -- MEMOED, PI-VALIDATED, AND THE CLOSURE IS
   PROVEN IDENTICAL (2026-09-15).** `probeAll` re-parsed EVERY blob's constant pool on every call --
   once per `markReachable` round plus once more per batch -- while `pdCount` grows all boot. It was the
@@ -164,7 +210,7 @@ defines the minimum the assembler must encode.
   - **WHAT THE BOTTLENECK IS NOW, from the same log: `patch` is 132.077ms of a 221.280ms batch -- 60%** --
     with `callT` 15,142ms cumulative of which **`lookT` is 14,271ms (94%)**, and `pubT` 12,830ms. `mark` is
     down to 8%. The dispatch-tier lookup is next, and it is the item this file already records as "measured
-    cold once and dismissed".
+    cold once and dismissed". **DONE -- see the entry above.**
   - **`pend` AND `grew` CANNOT GATE THIS, AND `reach` CAN -- which is why `reach=` is now on the batch line.**
     The closure counters were NOT byte-identical: `pend` fell 1565 -> 1039 at batch 2 and the virt walks with
     it, because `pendIndyIface` no longer re-pends an interface once per round. That is waste the code's own
