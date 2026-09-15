@@ -9716,7 +9716,8 @@ public final class Loader
         }
         while (dlIndexed < dlN)
         {
-            int hh = utf8Hash(dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
+            int hh = utf8Hash2(dlTab[dlIndexed].blob, dlTab[dlIndexed].classOff,
+                               dlTab[dlIndexed].blob, dlTab[dlIndexed].nameOff) & (DLTAB - 1);
             dlNext[dlIndexed] = dlBucket[hh];
             dlBucket[hh] = dlIndexed;
             dlIndexed += 1;
@@ -9728,7 +9729,15 @@ public final class Loader
         buildDlIndex();
         // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
         // same cell the scan would have found and a miss still answers 0.
-        int k = dlBucket[utf8Hash(nameBase, nameOff) & (DLTAB - 1)];
+        //
+        // CLASS+NAME, not name alone. This is the tier every `<init>` short-circuits into (a constructor is
+        // never inherited, so it skips the super-chain walk and lands here), and keyed on the name a bucket
+        // held one cell per class declaring that name -- so the `<init>` chain was as long as the loaded
+        // world. The identical defect the registry index had one tier up, still in place below it:
+        // MEASURED at 259k chain steps on a launcher boot, the largest term left in `lookT` once that was
+        // fixed. Any two cells matching this predicate share a class AND a name, so they stay in the same
+        // bucket under either key and head-insertion order is unchanged -- the same cell still wins.
+        int k = dlBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1)];
         while (k >= 0)
         {
             dlSteps += 1;
