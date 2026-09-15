@@ -7559,7 +7559,14 @@ public final class Loader
         long tSeed = Magic.readCNTPCT_EL0();
         cumSeeds += tSeed - tRf3;
         runClinits();                                   // NOW run each compiled <clinit>: its cross-class calls are patched
-        cumRunCl += Magic.readCNTPCT_EL0() - tSeed;
+        // THE BATCH'S WORK ENDS HERE, and this is the ONLY clock read that may stand for that. Every span
+        // below is measured against it rather than against "now", because `Uart.putRaw` SPINS on the TX
+        // holding register: at 115200 baud a character costs ~87us, so a report that reads the clock partway
+        // through printing itself charges its own serial traffic to whatever phase it happens to be printing.
+        // That is exactly what `clinit` and `tot` used to do -- ~300 characters, ~26ms, added to a phase whose
+        // real cost was 7.5ms at batch 15 and 23.8ms at batch 209.
+        long tEnd = Magic.readCNTPCT_EL0();
+        cumRunCl += tEnd - tSeed;
         // CUMULATIVE totals, always accumulated (a few adds per batch) and printed only on request. This is
         // what says where a whole boot went, as opposed to one batch of it.
         cumBatches += 1;
@@ -7569,18 +7576,18 @@ public final class Loader
         // per-batch block, it is one line rather than three.
         if (BATCH_COST)
         {
-            batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+            batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest, tEnd);
         }
         cumMark += tProbe - tMark;
         cumProbe += tA - tProbe;
         cumA += tB - tA;
         cumB += tPatch - tB;
         cumPatch += tRest - tPatch;
-        cumClinit += Magic.readCNTPCT_EL0() - tRest;
-        cumAll += Magic.readCNTPCT_EL0() - tAll;
+        cumClinit += tEnd - tRest;
+        cumAll += tEnd - tAll;
         if (LOAD_PROFILE)
         {
-            profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest);
+            profileLoadAll(tAll, tMark, tProbe, tA, tB, tPatch, tRest, tEnd);
         }
         reportLostStaticStore();                        // a putstatic that landed in the unresolved-static cell
         // 4-phase lifecycle: batch initialization just completed -- every INSTANTIATED class's queued
@@ -12469,7 +12476,7 @@ public final class Loader
      * expensive and which PHASE dominates it, and that needs a line per batch -- but the per-batch block
      * LOAD_PROFILE prints is three lines of detail, which at 115200 baud starts to measure its own output.
      */
-    private static void batchCostLine(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
+    private static void batchCostLine(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest, long tEnd)
     {
         Uart.write(Magic.bytes("  batch "));
         VM.printDec(cumBatches);
@@ -12527,9 +12534,9 @@ public final class Loader
         Uart.write(Magic.bytes(" patch="));
         printDur(spanUs(tPatch, tRest));
         Uart.write(Magic.bytes(" clinit="));
-        printDur(elapsedUs(tRest));
+        printDur(spanUs(tRest, tEnd));
         Uart.write(Magic.bytes(" tot="));
-        printDur(elapsedUs(tAll));
+        printDur(spanUs(tAll, tEnd));
         Uart.write(Magic.bytes(" rounds="));
         VM.printDec(mrRounds);
         Uart.write(Magic.bytes(" pend="));
@@ -12701,7 +12708,7 @@ public final class Loader
         Uart.write(Magic.bytes(")\n"));
     }
 
-    private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest)
+    private static void profileLoadAll(long tAll, long tMark, long tProbe, long tA, long tB, long tPatch, long tRest, long tEnd)
     {
         Uart.write(Magic.bytes("  loadall pd="));
         VM.printDec(pdCount);
@@ -12720,9 +12727,9 @@ public final class Loader
         Uart.write(Magic.bytes(" patch="));
         printDur(spanUs(tPatch, tRest));
         Uart.write(Magic.bytes(" clinit="));
-        printDur(elapsedUs(tRest));
+        printDur(spanUs(tRest, tEnd));
         Uart.write(Magic.bytes(" total="));
-        printDur(elapsedUs(tAll));
+        printDur(spanUs(tAll, tEnd));
         Uart.putc(0x0A);
         Uart.write(Magic.bytes("    mark rounds="));
         VM.printDec(mrRounds);
