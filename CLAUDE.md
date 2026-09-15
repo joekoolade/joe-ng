@@ -115,6 +115,54 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LOAD PATH WAS PROFILED TO THE FUNCTION, AND `inheritVtable` IS 15.9x FASTER (2026-09-15,
+  PI-VALIDATED).** `vtab` 4,773ms -> 299.8ms; `parse` falls from 24% of phase B to 3.3%; the launcher boot
+  goes 155,816ms -> **149,856ms** with `[2 tests successful]` and exit 0.
+  - **THE MEASUREMENT CHAIN, each step splitting the previous winner:** all class-loading -> batch 1 (47,566ms
+    of 55,506ms, **86%**) -> phase B (49%) -> `compileClass` (70%) -> place+emit (75%). Every split was a
+    timer, never a reading of the code -- the method this file already credits for ending three wrong guesses
+    about `patch`.
+  - **THREE OF MY OWN GUESSES DIED TO IT, all of them the "obvious" shape.** Phase B's loop rescans all
+    pdCount blobs per pass -- the O(everything-loaded) pattern this file says to suspect FIRST and which has
+    been the answer six times -- and it measured **1.4%** (4 passes, 5,368 checks). `publishCode` walks the
+    WHOLE code arena once per class, 1342 times over a growing region: **2.4%**. `parseConstPool`'s cache
+    lookup is a linear scan over a table that grows to 1342: **9.9ms at a 100% hit rate**. Shape is a
+    hypothesis generator, not evidence.
+  - **THE REAL ONE CAME FROM READING A LOOP BOUND:** `inheritVtable` does `while (i < vtCount)` with a
+    utf8EqAt per entry, and `vtCount` is cleared by `resetLoader` -- per LAUNCH, not per class -- so it holds
+    every vtable entry of every class loaded so far (~27,000 at 1342 classes), walked once PER CLASS. Seventh
+    instance of this file's most common defect; seventh time the remedy is a name-hash probe.
+  - **ASCENDING ORDER IS LOAD-BEARING, not caution.** The scan applies matches in index order and a later
+    entry overwrites the same `gvTab[slot]`, so a head-inserted bucket chain (newest first) could silently
+    install a DIFFERENT implementation in a slot -- a wrong-method dispatch, not a crash. The index keeps a
+    per-bucket TAIL and appends. Same care `defaultBySig`'s index needed for closure order.
+  - **Correctness gated on IDENTITY:** `rounds=26 pend=67889` byte-identical to every pre-change run,
+    `DIFF` = 0, the sub-split adds up exactly (10 + 339 + 300 = 649 vs parse=650), and the suite's
+    slot-sensitive arms exact (`overloads named pick = 3`, `ifacedflt`/`ifacedfltch = late-default`).
+    **`vtparity 0` in a quiet sweep is NOT evidence of parity passing** -- those OK lines are gated behind
+    `LOAD_LOG`; `DIFF` is ungated and is the real check.
+
+- **DEFERRING `<init>` WAS MEASURED, BUILT, AND REVERTED -- it wild-branches on hardware (2026-09-15).**
+  `<init>` was the only method kind still compiled at load time (`notInit` is literally "the name is not
+  `<init>`", with no reason recorded), and a non-deferred method is compiled TWICE: `sizeMethod` at a dummy
+  base to learn the length, then `emitMethod` at the real one. 853 methods per launcher batch.
+  - **REUSING THE DRY RUN IS NOT THE FIX, and that was measured before anything was built.** The comment
+    justifying the dummy-base trick says the word COUNT is placement-independent; it says nothing about the
+    WORDS. Counted: only **102 of 853** produced identical output, and **20,649 of 118,876 words differ**
+    (17.4%, ~24 per method). Not "patch a few bl displacements".
+  - **Deferring removed the redundancy (`dc:n` 853 -> 1) and broke the launcher:** an undefined instruction
+    at a pc in the HEAP (`elr=0x04A8F678`, heap starts 0x0400_0000, code ends below 0x0300_0000), from
+    picocli's `getCommandMethods`.
+  - **THREE GATES PASSED ON IT, and that is the finding worth keeping.** The demo suite ran 33 programs clean
+    -- including `newarm = demo.RtaMade`, the deferred-CONSTRUCTOR arm chosen for exactly this path -- QEMU
+    reported no parity DIFF, and the closure was byte-identical. None of them sees a constructor reached
+    through a stub inside a 1342-class closure. **A suite that exercises the SHAPE is still not the
+    launcher.**
+  - **IT TOOK A BISECT because two unvalidated changes shipped on one card**, and a wrong vtable slot is also
+    exactly a wild branch, so neither could be blamed from the failing boot. One boot with only this reverted
+    settled it. **Do not put two unvalidated changes on the same card.**
+  - The redundancy is real and still open; deferring `<init>` is not the way to remove it.
+
 - **THE JUnit CONSOLE LAUNCHER RUNS STOCK jtreg TESTS ON BARE METAL AND THEY PASS -- `[2 tests successful]`,
   `[0 tests failed]`, exit status 0 (2026-09-14, PI-VALIDATED).** The real
   `org.junit.platform.console.ConsoleLauncher`, demand-loaded from the stock jar, discovers and executes
