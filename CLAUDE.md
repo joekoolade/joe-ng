@@ -115,6 +115,68 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`publishCode` WALKED THE WHOLE CODE ARENA PER PATCH PASS -- `pubT` 259x, AND THE LOAD PATH IS NO LONGER
+  THE BOTTLENECK (2026-09-15, PI-VALIDATED).** `patchRelocsFrom` ended with
+  `publishCode(CODE_BASE, CODE_PTR)` -- a `DC CVAU` + `IC IVAU` per 64-byte line over **every byte of code
+  ever emitted**, once per batch, to publish the handful of words that pass had just written. It now
+  publishes exactly the reloc sites it patched: two passes over `rcAddr`/`rsAddr`, cleans then invalidates,
+  with the barriers hoisted out (`publishClean`/`publishMid`/`publishInval`/`publishEnd` in `Heap`, so the
+  discipline lives in ONE place and the split cannot drift from the combined form).
+
+  | launcher, batch 209 (1782 blobs) | before | after | |
+  |---|---|---|---|
+  | `pubT` (cumulative) | 12,679.541ms | **48.874ms** | **259x** |
+  | `patch` (per batch) | 20.100ms | **14.162ms** | 1.4x |
+  | whole boot | 114,533ms | **108,786ms** | -5.7s |
+
+  - **THE ARC'S REAL RESULT IS THE SUM, and it is measured rather than extrapolated: `tot` over batches
+    15-209 is 19.4s, against 102.8s for the IDENTICAL range before this arc -- 5.3x, ~83 seconds.** Per
+    batch at 209: `tot` 676.1 -> **106.2ms**. The per-batch load path was 64% of that boot; it is **18% of
+    this one**. Three fixes (probe memo, the two `lookT` keys, this) and the whole-boot total went
+    161,556 -> 122,470 -> 114,533 -> **108,786ms**.
+  - **QEMU COULD NOT JUDGE THIS ONE AND SAID SO IN THE COMMIT MESSAGE.** It measured 225x there and that
+    number was never the question: **QEMU does not model an incoherent I-cache**, so it cannot show a MISSED
+    maintenance op. This file already records that exact bug -- JIT'd code published to one I-cache out of
+    four -- as found ONLY on hardware, with SMP on, as an undefined instruction at the entry of a method
+    that reads back perfectly in memory. A narrowing that publishes too little is invisible on the emulator
+    and fatal on the board. **The gate was the Pi, and it is the whole reason this shipped alone.**
+  - **CLEAN, and the specific absences are the assertion:** no `FAULT`, no `ESR EC=0`, no `BOOT RE-ENTERED`
+    (a stale `bl 0` in some core's I-cache branching to address 0), no `BADPATCH`, no wild branch --
+    across ~200 batches of patching followed by executing what was patched, on four cores.
+    `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]` / exit 0.
+  - **IDENTITY IS EXACT AT 1782 BLOBS: the batch-209 line is byte-identical to the previous boot on EVERY
+    counter but the timers** -- `rounds=2 pend=4 reach=8 v:walks=2 levels=4 grew=1 cached=4`,
+    `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, and
+    critically **`memo=128548 res=82350 unres=27419`**: the same sites resolved through the same tiers to
+    the same answers, with the same words written. Only WHICH LINES got maintenance changed.
+  - **THE HALTING `ProcessImpl` TRAP FIRED AGAIN AT BATCH 25 AND THE BOOT RAN ON TO 209.** picocli's
+    terminal-width probe reaching a denied native inside `lazyCompileLocked` is now a routine survivable
+    event rather than a boot-ender -- hardware proof of the lock fixes by PRESENCE, for the second
+    consecutive boot.
+  - **THE `dl` RE-KEY RODE ALONG (`7b4b6af`)** -- `dlCellOf`'s bucket is keyed on class+name now instead of
+    the name alone, the same defect one tier below `lookT`. Correct, and worth ~0.1%: the suite's `dl` steps
+    went 8k -> 5k. **Measured before being believed in, and shipped because it was already right rather than
+    because it paid.**
+  - **WHAT IS NEXT, AND THE SHAPE HAS CHANGED: `clinit` IS 50.4ms OF A 106.2ms BATCH (47%) AND IT COSTS THAT
+    ON A BATCH THAT COMPILES NOTHING.** Batch 201 has `compile=0us` and `clinit=52.345ms`; batch 199 the
+    same. `runcl` -- actually RUNNING initializers -- is **7.041ms cumulative over the entire boot**, so
+    essentially none of this phase is the work it is named for.
+    - **AND ITS SUB-SPLIT DOES NOT ADD UP, WHICH BY THIS FILE'S OWN RULE MEANS IT IS NOT A SPLIT.**
+      `imap` 20.063 + `synth` 2.050 + `seeds` 1.555 + `arr` 0.061 + `runcl` 0.017 = **23.7ms of 50.4ms**.
+      Over half the phase is unnamed. Print the missing terms BEFORE guessing -- the `mark` sub-split made
+      exactly this mistake (nine sub-timers summing to 295ms of 712ms, three computed and never printed).
+    - **`imap` IS THE NAMED HALF AND IT IS THE SAME FUNCTION ALREADY FIXED ONCE (267x, 2026-09-14).**
+      2,925.9ms cumulative, 20.1ms/batch. The counters say the regrowth is per-VISIT, not more visits:
+      visits per batch grew 183 -> 239 (1.3x) while the time grew 6.11 -> 20.06ms (3.3x), so the cost per
+      imap visit went **33us -> 84us**. Something inside a visit scans a table that grows all boot -- the
+      instance this file has now named nine times.
+    - Also standing: `B` is 22.7ms (second largest), `mark` 16.8ms of which `probe` is 7.2ms -- and that
+      7.2ms is `buildNameIndex`, NOT `probeAll` (`pb:probed=1 of 1782`, so the memo is doing its job and the
+      residue is the index rebuild). And **`unresT` is 684.8ms cumulative against `lookT`'s 726.4ms** --
+      that is `linkStubFor`, indexed once, measured cold, and REVERTED on the grounds that its path was not
+      hot. It is now within 6% of the tier that was just cut 21x. **A function that measured cold is a
+      statement about that closure, not about the code.**
+
 - **THE REGISTRY INDEX WAS KEYED ON THE METHOD NAME ALONE -- `lookT` 20.9x, PI-VALIDATED (2026-09-15).**
   `patch` was 60% of a batch with `lookT` 94% of `callT`. Two growing terms in the same lookup, and
   **MEASUREMENT got their ORDER right where reading did not** -- I had the second one as the hypothesis and
@@ -160,6 +222,7 @@ defines the minimum the assembler must encode.
     remaining, against `fp` 231k, `t1` 31k, `t2` 15k. `dlCellOf` keys `dlBucket` on `utf8Hash(nameBase,
     nameOff)` -- the name ALONE -- and `dlStubByRef` is the tier **every `<init>` short-circuits into**.
     Exactly the chain that was just removed from tier 1, still in place below it.
+    **DONE -- see the entry above.**
 
 - **THE BLOB PROBE RE-DERIVED IMMUTABLE FACTS EVERY ROUND -- MEMOED, PI-VALIDATED, AND THE CLOSURE IS
   PROVEN IDENTICAL (2026-09-15).** `probeAll` re-parsed EVERY blob's constant pool on every call --
