@@ -1999,9 +1999,27 @@ public final class VM
         // what wedged the launcher the moment the lock leak was fixed and picocli's width thread got far
         // enough to reach a denied class.
         loaderForceRelease();
+        // AND A SPINNER OBSTRUCTS MORE THAN THE LOCK. `Magic.wfe()` never reaches a yield point, so the task
+        // can never park for stop-the-world: the collector waits ~1s, counts a timeout, SKIPS the collection
+        // and the allocator eventually halts with `heap OOM`. Measured on QEMU the moment the lock stopped
+        // being the obstruction -- `GC: STW TIMEOUT -- unparked core 1 (collection SKIPPED)` then `heap OOM`.
+        //
+        // SO IT YIELDS RATHER THAN SPINNING, and deliberately does NOT call taskExit. taskExit would also
+        // clear the obstruction -- it parks BLOCKED and yields -- but it sets taskDone, so a Thread.join()
+        // waiter would observe this thread as FINISHED and carry on with whatever half-built state it left.
+        // That converts a loud hang into a silent wrong answer, which is the one trade this VM refuses. A
+        // yield loop keeps the thread visibly stuck -- a joiner still hangs, as it should, because the thread
+        // really did not finish -- while letting the collector stop the world around it.
+        //
+        // STATED PLAINLY: THIS FIXES NO FAILURE YET OBSERVED. The QEMU launcher's `STW TIMEOUT` count is
+        // SEVEN both before and after, so the halted task was never what caused it; that looks instead like
+        // the ~1s stop-the-world wait being exceeded by legitimate work under QEMU's ~100x slowdown (the demo
+        // suite shows 0, a 166MHz Pi shows 0, only the QEMU launcher shows any). What it removes is a real
+        // obstruction CLASS -- a task that never reaches a yield point can never park -- which is the same
+        // root cause as the lock this trap was made to stop holding one commit earlier.
         while (true)
         {
-            Magic.wfe();
+            VMScheduler.taskYield();                    // a yield point, so stop-the-world can park this task
         }
     }
 
