@@ -210,6 +210,59 @@ public class CtorRefFieldProbe
         Lonely make(String id, String name, String cls, String method, String config);
     }
 
+
+    /**
+     * THE CONDITION THE {@code Lonely} ARM STILL MISSED -- and why it passed before the fix that made it
+     * necessary.
+     *
+     * <p>{@code Lonely} looked right: touched only through a constructor reference, its {@code <clinit>}
+     * DEFERRED at batch time and compiled late (COMPILE_WATCH confirms both). It passed anyway, because
+     * {@code main} goes on to read {@code Lonely.LONELY_MARKER} -- and compiling a CROSS-CLASS
+     * {@code getstatic} calls {@code noteInitNeeded}, so the drain initialized the class before main executed
+     * a single instruction. The probe initialized its own target as a side effect of checking it.
+     *
+     * <p>That is exactly the launcher's difference: {@code MethodSelectorResolver$MethodType} holds a
+     * {@code TestMethodTestDescriptor::new} and reads NONE of its statics, so nothing notes its
+     * initialization and the constructor reference is genuinely the first active use.
+     *
+     * <p>So this class's statics are read NOWHERE in this program. Every assertion goes through an INSTANCE
+     * method, which cannot note anything. Without {@code ensureClinit} on the kind-8 path, {@code MARK} is
+     * still null when {@code <init>} copies it, and {@code hasMark()} answers false.
+     */
+    static class Untouched
+    {
+        private static final String MARK;
+
+        static
+        {
+            MARK = "clinit-ran";
+        }
+
+        private final String mark;
+        final int id;
+
+        Untouched(int id)
+        {
+            this.id = id;
+            this.mark = MARK;
+        }
+
+        boolean hasMark()
+        {
+            return mark != null;
+        }
+
+        String mark()
+        {
+            return mark == null ? "<null: clinit did not run before <init>>" : mark;
+        }
+    }
+
+    interface UntouchedFactory
+    {
+        Untouched make(int id);
+    }
+
     static class Upper implements Interceptor
     {
         public String intercept(String a, String b, String c)
@@ -269,6 +322,15 @@ public class CtorRefFieldProbe
         System.out.println("lonely id = " + lonely.id + " (want k/E/q/cfg2)");
         System.out.println("lonely hasCall = " + lonely.hasCall() + " (want true)");
         System.out.println("lonely clinit ran = " + Lonely.LONELY_MARKER + " (want ran)");
+
+        // THE NEGATIVE-CONTROL ARM: Untouched's statics are read nowhere, so the constructor reference is
+        // the first active use and nothing else can have initialized it. This is the arm that fails with the
+        // kind-8 ensureClinit removed.
+        UntouchedFactory uf = Untouched::new;
+        Untouched u = uf.make(7);
+        System.out.println("untouched id = " + u.id + " (want 7)");
+        System.out.println("untouched hasMark = " + u.hasMark() + " (want true)");
+        System.out.println("untouched mark = " + u.mark() + " (want clinit-ran)");
 
         System.out.println("CtorRefFieldProbe done");
     }
