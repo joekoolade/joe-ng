@@ -115,6 +115,61 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE CLASS REGISTRY HAD NO NAME INDEX -- THREE COPIES OF ONE SCAN, AND IT IS WHAT WAS LEFT IN `statT`
+  (2026-09-16, NOT YET PI-VALIDATED).** The previous increment indexed the STATIC registry and then could not
+  account for its own residue: `statT` 189.764ms across 580 sites is **327us a site**, absurd for a hash
+  probe. The arithmetic named the culprit exactly -- every one of those 580 misses calls
+  `reportZeroCellBind`, whose FIRST act is `regBySigU`, a linear walk of all `clCount` classes run purely to
+  decide whether the miss is worth PRINTING. 580 x 1782 = ~1,034k `utf8EqAt` calls, which at that boot's own
+  measured ~0.18us a call is **~186ms against a measured 189.764ms**.
+
+  | demo suite, batch 64 (cumulative) | before | after | |
+  |---|---|---|---|
+  | `rb:steps` | **117k** | **9k** | and the AFTER counts 8.7x MORE calls |
+  | `rb:n` (calls counted) | 1224 | 10,696 | before: regBySigU only; after: all three |
+  | steps PER CALL | **95.6** | **0.84** | **114x** -- most probes reach an empty bucket |
+  | `statT` | 21.389ms | **933us** | **23x** |
+  | `memo/res/unres`, `rf:*`, `n:*`, `ps:*` | -- | **identical** | |
+
+  - **`rb` IS NOT LIKE-FOR-LIKE ACROSS THE ARMS, AND SAYING SO IS THE POINT.** Before, it counted
+    `regBySigU` alone; after, it counts the shared body that `classRegByName` and `classRegByNameAt` also
+    route through -- so the AFTER figure covers 8.7x more calls and is still 13x smaller in total. The
+    honest comparison is steps PER CALL, and that is 95.6 -> 0.84.
+  - **THREE SPELLINGS OF ONE QUERY, each carrying its own copy of the scan.** `regBySigU` (an absolute
+    `{u2 len}{bytes}` run), `classRegByName` (an offset into `gbase`) and `classRegByNameAt` (base + offset)
+    differ only in how the key bytes are addressed; the predicate and the answer are identical. All three are
+    one body now -- the "one call site's fix, several timers" shape the phase-B publish and the static index
+    both had. `classRegByNameBytes` is deliberately LEFT ALONE: a different key shape (a VM-side `byte[]`),
+    and its callers are the seeds, which latch.
+  - **THE KEY COSTS NOTHING TO BUILD, because a previous increment already paid for it.**
+    `RVMClass.nameHash` is folded once at registration -- it exists because the imap refill was re-folding it
+    per probe -- so the index is built from a field rather than by re-walking any name. Only the PROBE folds,
+    once, where the scan folded nothing and compared everything.
+  - **Sound by construction:** `clTab[clCount]` is written and `clCount` incremented immediately after, at
+    BOTH registration sites (the interface path and `registerClassStructure` -- checked, not assumed), and no
+    entry is ever re-pointed. **THE LOWEST MATCHING INDEX STILL WINS** -- head-insertion makes the chain
+    descending, so it is searched for the MINIMUM rather than stopped at the first hit. Two entries share a
+    name only when a class is registered twice (the `lifecycle DIFF` shape this file records), and silently
+    preferring the later one would change which class EVERY caller of this resolves to. The watermark resets
+    BESIDE the table in `resetLoader`, not only through the "went backwards" check.
+  - **ONE DEFENSIVE NULL CHECK WAS DROPPED, AND THAT IS DELIBERATE RATHER THAN OVERSIGHT.**
+    `classRegByNameAt` alone tested `clTab[i] != null`; the other two did not, and the registration sites
+    show entries below `clCount` are never null. The index builder walks every entry, so if that invariant is
+    ever broken it now NPEs loudly at boot instead of one caller in three quietly skipping a class.
+  - **A CHECKABLE PREDICTION, stated because it is falsifiable.** If the account above is right --
+    `statT`'s residue being almost entirely this gate -- the Pi should read `statT` **near 4ms**, not near
+    190. Anything close to 190 means the 327us-a-site arithmetic was wrong and the residue is something I
+    have not named. (The suite's 23x is consistent but cannot settle it: 189.764ms is a launcher figure at
+    1782 classes against the suite's 189.)
+  - **IDENTITY:** `memo=1379 res=2446 unres=2193`, `rf:skip=1596 visit=1156 clos=1156 holeEnd=1057`,
+    `n:imap=52 synth=18 clinits=25`, and `ps:n=136 steps=0k miss=136 tab=280` -- the static index untouched.
+    32 programs, TWENTY-THREE failure markers zero, `finish HML` 20/20/20, inversion 60ms, `smp sched: 4 of
+    4`, `sum20=210`, `YNW`/`RP`, `ifacedflt`/`ifacedfltch` late-default, `churnMB=625 live=32 intact=32`.
+    Program output byte-identical but for the SMP task interleaving and the philosophers' ordering, which
+    this file already records as differing run-to-run on the SAME binary. Host tests unchanged: A64 105,
+    object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`, crypto 17, zip 91,
+    `overlay-check 0 new`.
+
 - **`statT` HAD NEVER BEEN SPLIT -- 2.45x, AND THE COUNTERS FOUND A 100% MISS RATE PLUS A SECOND SCAN I HAD
   NOT COUNTED (2026-09-16, PI-VALIDATED).** With `unres` fixed, the batch-209 ranking is `lookT`
   682.398ms, `imap` 605.936ms, then **`statT` 463.914ms** -- one of `patch`'s three top-level splits and the

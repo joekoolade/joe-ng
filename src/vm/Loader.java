@@ -3103,6 +3103,8 @@ public final class Loader
         classTibCache = 0L;
         clTab = new RVMClass[MAXCLASS];
         clCount = 0;
+        clIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
+        clBucket = null;                                //   outlives its table under-marks SILENTLY
         // BESIDE the table it indexes, deliberately: a watermark that outlives its table under-marks
         // SILENTLY, and a fresh clTab left beside a stale ctIndexed would answer registry indices for a
         // previous launch's classes. Nulling the bucket array is what forces the rebuild.
@@ -10974,22 +10976,104 @@ public final class Loader
     /** Class-registry index of the class whose name Utf8 is at {@code nameOff} in gbase, or -1. */
     /** {@link #classRegByName} for a name in an ARBITRARY blob, not the one the parse cursor happens to be on.
      *  A clinit dependency is named in the DEPENDENT's constant pool, so its offset is against that blob. */
+    /**
+     * Name hash index over the CLASS registry, so "which registry entry is this class" is a PROBE rather
+     * than a linear walk of all {@code clCount} entries with a Utf8 compare against each.
+     *
+     * <p>MEASURED, and by the increment that could not finish without it. `statT`'s residue after the static
+     * registry was indexed is 189.764ms across 580 sites -- 327us a site, absurd for a hash probe -- because
+     * every one of those misses calls {@link #reportZeroCellBind}, whose FIRST act is this scan, run purely
+     * to decide whether the miss is worth PRINTING. 580 sites x 1782 classes is ~1,034k utf8EqAt calls,
+     * which at this boot's own measured ~0.18us a call is ~186ms against that 189.764ms. **The whole of
+     * what is left in `statT` is a diagnostic gate.** Over all eight callers: `rb:n=5316 steps=3926k`.
+     *
+     * <p>THREE SPELLINGS OF ONE QUERY, and they each carried their own copy of the scan: {@code regBySigU}
+     * (an absolute {@code {u2 len}{bytes}} run), {@code classRegByName} (an offset into {@code gbase}) and
+     * this one (base + offset). They differ only in how the key bytes are addressed, so all three are now
+     * this body -- the same "one call site's fix, several timers" shape the phase-B publish and the static
+     * index both had. ({@code classRegByNameBytes}, keyed on a VM-side {@code byte[]}, is left alone: a
+     * different key shape, and its callers are the seeds, which latch.)
+     *
+     * <p>THE KEY IS ALREADY IN HAND AND COSTS NOTHING TO BUILD: {@code RVMClass.nameHash} is folded once at
+     * registration -- it exists because the imap refill was re-folding it per probe -- so the index is built
+     * from a field rather than by re-walking any name. The PROBE still folds its key, once, where the scan
+     * folded nothing and compared everything.
+     *
+     * <p>Sound by construction rather than by a claim about when work may be skipped: {@code clTab[clCount]}
+     * is written and {@code clCount} incremented immediately after, at BOTH registration sites (checked --
+     * the interface path and {@code registerClassStructure}), and no entry is ever re-pointed. **THE LOWEST
+     * MATCHING INDEX STILL WINS**: the scan returned the first match, head-insertion makes the chain
+     * descending, so it is searched for the MINIMUM. Two entries can share a name only when a class is
+     * registered twice -- the `lifecycle DIFF` shape this file already records -- and silently preferring
+     * the later one would change which class every caller of this resolves to.
+     *
+     * <p>The watermark resets BESIDE the table in {@code resetLoader}, not only via the "went backwards"
+     * check here: a watermark that outlives the table it indexes under-marks SILENTLY, and {@code clCount}
+     * returning to the same value after a reset would slip past that check alone.
+     */
+    private static final int CLTAB = 8192;               // power of two > MAXCLASS; chained
+    private static int[] clBucket;                       // name hash -> first entry index, -1 when empty
+    private static int[] clNext;                         // entry index -> next entry with the same hash
+    static int clIndexed;
+
+    private static void buildClIndex()
+    {
+        if (clBucket == null || clIndexed > clCount)     // rebuilt when resetLoader zeroes the table
+        {
+            clBucket = new int[CLTAB];
+            clNext = new int[MAXCLASS];
+            int b = 0;
+            while (b < CLTAB)
+            {
+                clBucket[b] = -1;                        // allocArray does NOT zero its elements on this VM,
+                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
+            }
+            clIndexed = 0;
+        }
+        while (clIndexed < clCount)
+        {
+            int hh = clTab[clIndexed].nameHash & (CLTAB - 1);   // folded once at registration; see RVMClass
+            clNext[clIndexed] = clBucket[hh];
+            clBucket[hh] = clIndexed;
+            clIndexed += 1;
+        }
+    }
+
+    /** Registry index of the class named at {@code base + nameOff}, or -1. The one body behind all three. */
+    private static int classRegAt(long base, int nameOff)
+    {
+        if (nameOff == 0 && base == 0L)
+        {
+            return -1;
+        }
+        rbCalls += 1;
+        buildClIndex();
+        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
+        // same entry the scan would have found and a miss still answers -1.
+        int best = -1;
+        int k = clBucket[utf8Hash(base, nameOff) & (CLTAB - 1)];
+        while (k >= 0)
+        {
+            rbSteps += 1;
+            if (utf8EqAt(base, nameOff, clTab[k].base, clTab[k].nameOff))
+            {
+                if (best < 0 || k < best)
+                {
+                    best = k;                            // lowest index wins, as the scan's first match did
+                }
+            }
+            k = clNext[k];
+        }
+        return best;
+    }
+
     private static int classRegByNameAt(long base, int nameOff)
     {
         if (nameOff == 0)
         {
             return -1;
         }
-        int i = 0;
-        while (i < clCount)
-        {
-            if (clTab[i] != null && utf8EqAt(base, nameOff, clTab[i].base, clTab[i].nameOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
+        return classRegAt(base, nameOff);
     }
 
     private static int classRegByName(int nameOff)
@@ -10998,16 +11082,7 @@ public final class Loader
         {
             return -1;
         }
-        int i = 0;
-        while (i < clCount)
-        {
-            if (utf8EqAt(gbase, nameOff, clTab[i].base, clTab[i].nameOff))
-            {
-                return i;
-            }
-            i += 1;
-        }
-        return -1;
+        return classRegAt(gbase, nameOff);               // gbase + offset: the same query, one spelling of three
     }
 
     /**
@@ -14544,18 +14619,7 @@ public final class Loader
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
     private static int regBySigU(long clsU)
     {
-        rbCalls += 1;
-        int r = 0;
-        while (r < clCount)
-        {
-            rbSteps += 1;
-            if (utf8EqAt(clTab[r].base, clTab[r].nameOff, clsU, 0))
-            {
-                return r;
-            }
-            r += 1;
-        }
-        return -1;
+        return classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
     }
 
     /**
