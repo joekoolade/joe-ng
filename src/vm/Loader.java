@@ -12688,6 +12688,16 @@ public final class Loader
         Uart.write(Magic.bytes("k fill="));
         VM.printDec(rfFillSteps / 1000);
         Uart.putc(0x6B);
+        // allocCode, the difference between `place` and `emit`: calls, and the free-list scan under them.
+        Uart.write(Magic.bytes(" ac:n="));
+        VM.printDec((int) (Heap.codeAllocCalls / 1000L));
+        Uart.write(Magic.bytes("k scan="));
+        VM.printDec((int) (Heap.codeScanSteps / 1000L));
+        Uart.write(Magic.bytes("k reuse="));
+        VM.printDec((int) (Heap.codeReuseCount / 1000L));
+        Uart.write(Magic.bytes("k bump="));
+        VM.printDec((int) (Heap.codeBumpCount / 1000L));
+        Uart.putc(0x6B);
         // The probe watermark: blobs actually probed THIS batch against the table it walks. A batch that adds
         // one class should read pb:1 -- if it reads pdCount the memo is not firing, which a falling `probe`
         // timer alone could not distinguish from a batch that happened to be cheap.

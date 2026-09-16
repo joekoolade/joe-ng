@@ -352,6 +352,7 @@ public final class Heap
     private static long allocCodeLocked(int size)
     {
         int aligned = (size + 7) & -8;
+        codeAllocCalls = codeAllocCalls + 1L;
         codeAllocSinceSweep = codeAllocSinceSweep + (long) aligned;
         long cp = Magic.load64(CODE_PTR_CELL);
         if (cp > codePeak)
@@ -362,7 +363,15 @@ public final class Heap
         long bb = CODE_BYTES + bucketOf((long) aligned) * 8L;
         Magic.store64(bb, Magic.load64(bb) + (long) aligned);   // ... and how many BYTES each class costs
 
-        long reused = takeFreeCode(aligned);           // a swept method's buffer, before growing the arena
+        long reused = 0L;
+        if ((long) aligned <= codeFitBound)            // else no free block can fit: skip the walk entirely
+        {
+            reused = takeFreeCode(aligned);            // a swept method's buffer, before growing the arena
+            if (reused == 0L)
+            {
+                codeFitBound = scanFreeMax;            // ran to the end, so this is the EXACT maximum
+            }
+        }
         if (reused != 0L)
         {
             codeReuseCount = codeReuseCount + 1L;
@@ -444,6 +453,7 @@ public final class Heap
         long i = 0;
         while (i < codeBlockN)
         {
+            codeScanSteps = codeScanSteps + 1L;
             long e = CODE_BLOCKS + i * 16L;
             long sz = Magic.load64(e + 8L);
             if ((sz & CODE_FREE) != 0L)
@@ -876,6 +886,45 @@ public final class Heap
      *  because nothing fit. A high bump count against a large free total is fragmentation, not demand. */
     public static long codeReuseCount;
     public static long codeBumpCount;
+    // WHERE allocCode's time goes, as plain int counters rather than timers -- the lesson this project has
+    // paid for twice. `place` measures 6.981ms against `emit`'s 3.875ms at batch 209 though BOTH run the
+    // same compileMethod, so the difference is allocCode; these say which half of it.
+    public static long codeAllocCalls;                  // allocCodeLocked entries
+    public static long codeScanSteps;                   // takeFreeCode iterations -- walks ALL codeBlockN
+
+    /**
+     * An UPPER BOUND on the largest usable free code block. When a request exceeds it, NO free block can
+     * satisfy it and the walk is skipped outright.
+     *
+     * <p>`takeFreeCode` walks all `codeBlockN` entries -- allocated ones included, testing the free bit --
+     * and `codeBlockN` grows with every method compiled all boot, shrinking only when a sweep coalesces.
+     * TWELFTH instance of this file's most common defect, and the worst by count: MEASURED at **29.4 MILLION
+     * scan steps against 7k allocations, ~4,200 steps per call**, on a 190-blob suite. It is O(n^2) over a
+     * closure -- every allocation walks every block allocated before it.
+     *
+     * <p>The counters also say WHICH calls pay it: **5k of the 7k found nothing and bumped**, and a bump
+     * happens exactly when no free block is big enough -- i.e. when the largest free block is smaller than
+     * the request. So every one of those 5k walked the list to the END to learn something this bound
+     * answers in one compare.
+     *
+     * <p>A BOUND rather than the exact maximum, because only a bound can be maintained cheaply:
+     * <ul>
+     *   <li>A full scan that returns 0 has surveyed every entry, so `scanFreeMax` is then EXACT -- that is
+     *       the one place it is tightened.</li>
+     *   <li>A successful take only SHRINKS the free set: the block is consumed and any remainder is smaller
+     *       than it was, so the old bound still bounds. No update, which is what keeps the fast path free.</li>
+     *   <li>Freeing (the sweep) and coalescing can RAISE the maximum, so both reset it to UNKNOWN and the
+     *       next allocation re-derives it by scanning once.</li>
+     * </ul>
+     * Starting at 0 is correct rather than merely safe: at boot there are no free blocks at all.
+     *
+     * <p>DELIBERATELY NOT the survey's {@code codeFreeMax}, which is a diagnostic recomputed on demand by a
+     * separate walk. That field is exact when it is written and says nothing about when it was written;
+     * this one is a bound whose validity rests on being invalidated at every site that frees. Sharing them
+     * would make a change to the report a silent change to allocation.
+     */
+    private static long codeFitBound;
+    private static final long CODE_FIT_UNKNOWN = 0x7FFFFFFFFFFFFFFFL;
     /** Bytes requested by the allocations that had to bump — what fragmentation actually cost in arena. */
     public static long codeBumpBytes;
 
@@ -1055,6 +1104,7 @@ public final class Heap
     {
         long e = CODE_BLOCKS + head * 16L;
         Magic.store64(e + 8L, ((Magic.load64(e + 8L) & -8L) + usable) | CODE_FREE);
+        codeFitBound = CODE_FIT_UNKNOWN;               // coalescing makes a BIGGER free block than either
         Magic.store64(CODE_BLOCKS + i * 16L, 0L);          // dead entry: compaction drops it
         Magic.store64(CODE_BLOCKS + i * 16L + 8L, 0L);
         codeMergedBlocks = codeMergedBlocks + 1L;
@@ -1112,6 +1162,7 @@ public final class Heap
         long e = CODE_BLOCKS + i * 16L;
         long sz = Magic.load64(e + 8L);
         Magic.store64(e + 8L, sz | CODE_FREE);
+        codeFitBound = CODE_FIT_UNKNOWN;               // freeing can RAISE the maximum: re-derive on next alloc
         CodeEdges.pruneRange(Magic.load64(e), Magic.load64(e) + (sz & -8L));   // edges FROM this block die here:
     }                                                                          //   the one moment the range is exact
 
