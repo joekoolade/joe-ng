@@ -185,6 +185,23 @@ public final class Loader
     // been registered yet (objectVtableCount answers 0 then) -- refilling blind would then overflow an 8-byte
     // allocation once Object arrives with nine virtuals.
     private static int[] lambdaTibVtCap;
+    // FILLED TO CAPACITY ALREADY -- one bit per synthesised TIB, and the whole of the `synth` fix.
+    //
+    // MEASURED before it was believed: `refillSynthTibVtables` walked every synthesised TIB on EVERY batch
+    // and re-copied Object's vtable into each, and the counters said **`chg=0`** -- across a whole suite
+    // boot, not ONE of those writes stored a value different from the one already in the slot. The pass was
+    // re-deriving an answer it already had, which is the `seeds` shape exactly (there: 148x).
+    //
+    // Sound by construction as well as by that measurement: `java/lang/Object` is THE ONE EAGERLY-COMPILED
+    // CLASS (its nine virtuals are the prefix of every vtable in both worlds), so its slots hold real bodies
+    // from registration and are never re-pointed by a lazy compile the way a deferred class's are. `chg=0`
+    // is the empirical half of that argument and is kept on the batch line so a future boot can refute it.
+    //
+    // LATCHED ONLY ON A COMPLETE FILL (`n >= cap`), not merely on having run -- the rule the seeds fix had
+    // to be corrected for. A TIB built while Object had fewer virtuals than the TIB has room for is filled
+    // PARTIALLY; latching there would leave the rest zero for ever, and a 0 slot reached from baked code is
+    // a wild branch rather than a named trap.
+    private static boolean[] lambdaTibFilled;
     private static int lambdaTibRootN;
 
     // Field registry: per instance field of each class, its class/name (base+offset)
@@ -3118,6 +3135,8 @@ public final class Loader
         instImapN = 0;
         lambdaTibRoots = new long[MAXLAMBDATIB];
         lambdaTibVtCap = new int[MAXLAMBDATIB];
+        lambdaTibFilled = new boolean[MAXLAMBDATIB];    // beside the table it tracks: a latch that outlives
+                                                        //   its array would skip a TIB that needs filling
         lambdaTibRootN = 0;
         pcBase = new long[MAXPARSECACHE];
         pcBytes = new byte[MAXPARSECACHE][];
@@ -3575,6 +3594,28 @@ public final class Loader
     // Counted for ALL callers (there are nine); this loop is the one that runs per site per batch.
     static long rbCalls;                                // regBySigU calls (all callers)
     static long rbSteps;                                // ... class-registry entries compared inside them
+    // `synth` -- `refillSynthTibVtables`, 191.718ms at batch 209 and the largest item left outside `callT`
+    // and `imap`. It has never been split, which is the same starting position `seeds` (148x) and `statT`
+    // (42.5x) were in. It walks every synthesised lambda/annotation TIB on EVERY batch and re-copies
+    // Object's vtable into each, and `n:synth` grows all boot (511 at batch 59, 2276 at batch 209).
+    //
+    // READING NAMES TWO CANDIDATES AND CANNOT ORDER THEM, which is why they are counted first:
+    //   (1) `fillObjectVtableUpTo` calls `objectClassIndex()` -- a linear walk of all `clCount` classes --
+    //       ONCE PER TIB, so 2276 scans a batch. The remedy would be hoisting the lookup out of the loop,
+    //       which is what `printFrameAt` needed in the demand-load arc.
+    //   (2) The whole pass may be IDEMPOTENT. It exists to repair a TIB built before Object's body was
+    //       compiled; once repaired, re-copying the same nine words changes nothing. That is the `seeds`
+    //       shape exactly, and there a one-shot flag was worth 148x.
+    // `syChanged` is what decides between them: it counts only the writes whose value actually DIFFERED
+    // from what the slot already held. Near zero means the pass is re-deriving an answer it already has and
+    // a watermark makes it free; large means the writes are real and only the hoist is available.
+    //
+    // The changed-check costs one extra load per slot, so this instrument slightly inflates the thing it
+    // measures -- stated rather than glossed, and it is removed or kept per whichever fix lands.
+    static long syTibs;                                 // synthesised TIBs visited (cumulative, all batches)
+    static long sySlots;                                // ... vtable slots written
+    static long syChanged;                              // ... of which actually CHANGED the stored word
+    static long syObjSteps;                             // objectClassIndex scan steps (all three callers)
     static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
     static int rfProbeSteps;                            // ... closure interfaces probed inside them
     static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
@@ -13168,6 +13209,18 @@ public final class Loader
         VM.printDec((int) (rbSteps / 1000L));
         Uart.write(Magic.bytes("k cl="));
         VM.printDec(clCount);
+        // WHAT IS INSIDE `synth`, which nothing has ever split. `chg` is the decisive one: writes whose
+        // value actually differed from what the slot held. Near zero and the pass is re-deriving an answer
+        // it already has; large and only the objectClassIndex hoist (`obj`) is available.
+        Uart.write(Magic.bytes(" sy:n="));
+        VM.printDec((int) syTibs);                       // RAW: this is the counter that must FREEZE once
+        Uart.write(Magic.bytes(" slots="));              //   every TIB has latched, the way sd:n does
+        VM.printDec((int) (sySlots / 1000L));
+        Uart.write(Magic.bytes("k chg="));
+        VM.printDec((int) syChanged);
+        Uart.write(Magic.bytes(" obj="));
+        VM.printDec((int) (syObjSteps / 1000L));
+        Uart.putc(0x6B);
         Uart.write(Magic.bytes(" pubT="));
         printDur(ticksUs(pcPubT));
         Uart.write(Magic.bytes(" lookT="));
@@ -17096,6 +17149,11 @@ public final class Loader
         {
             lambdaTibRoots[lambdaTibRootN] = tib;       // same GC root as a lambda TIB, for the same reason:
             lambdaTibVtCap[lambdaTibRootN] = onv2;      //   nothing scanned would otherwise reference it
+            lambdaTibFilled[lambdaTibRootN] = false;    // EXPLICIT: allocArray does not zero its elements on
+                                                        //   this VM, so a garbage `true` here would skip a TIB
+                                                        //   that still needs filling -- a 0 vtable slot, i.e.
+                                                        //   a wild branch from baked code. Same trap the SMP
+                                                        //   arc hit with taskIdle/coreSched/gcParked.
             lambdaTibRootN += 1;
         }
         return tib;
@@ -19068,6 +19126,8 @@ public final class Loader
         {
             lambdaTibRoots[lambdaTibRootN] = tib;   // keep this TIB (and, via its trace, Type/dir/itables) a GC root
             lambdaTibVtCap[lambdaTibRootN] = onv;   // ... and how many vtable slots it has room for
+            lambdaTibFilled[lambdaTibRootN] = false;// ... and NOT yet filled (explicit: see the field's note --
+                                                    //   allocArray leaves elements undefined on this VM)
             lambdaTibRootN += 1;
         }
         return tib;
@@ -19245,21 +19305,34 @@ public final class Loader
      *  created (e.g. a string literal interns a byte[] before Object compiles) -- so a freshly-made array TIB may
      *  copy zeros. {@link #refillArrayTibVtables} re-runs this over every cached array TIB once Object is done. */
     /** {@link #fillObjectVtable} bounded by the TIB's own slot capacity (see {@code lambdaTibVtCap}). */
-    private static void fillObjectVtableUpTo(long tib, int cap)
+    /**
+     * {@link #fillObjectVtable} bounded by the TIB's own slot capacity. Answers whether the TIB is now FULL
+     * -- filled to every slot it has room for -- which is the only condition under which the caller may
+     * latch it and stop revisiting.
+     */
+    private static boolean fillObjectVtableUpTo(long tib, int cap)
     {
         int oi = objectClassIndex();
         if (oi < 0)
         {
-            return;
+            return false;                                // Object not registered yet: nothing filled, no latch
         }
+        syTibs += 1;
         int nv = clTab[oi].vtCount;
         int n = nv < cap ? nv : cap;
         int k = 0;
         while (k < n)
         {
-            Magic.store64(tib + 8L + (long) k * 8L, Magic.load64(clTab[oi].tib + 8L + (long) k * 8L));
+            long want = Magic.load64(clTab[oi].tib + 8L + (long) k * 8L);
+            sySlots += 1;
+            if (Magic.load64(tib + 8L + (long) k * 8L) != want)
+            {
+                syChanged += 1;                          // the write that was actually NECESSARY. This read
+            }                                            //   is the evidence the latch below rests on: it
+            Magic.store64(tib + 8L + (long) k * 8L, want);//   must stay ~= the first-fill count, never grow
             k += 1;
         }
+        return n >= cap;                                 // COMPLETE, not merely attempted -- see lambdaTibFilled
     }
 
     /** Re-copy Object's (now-filled) vtable into every synthesised lambda/annotation TIB, bounded by the
@@ -19275,9 +19348,12 @@ public final class Loader
         int i = 0;
         while (i < lambdaTibRootN)
         {
-            if (lambdaTibRoots[i] != 0L)
+            if (lambdaTibRoots[i] != 0L && !lambdaTibFilled[i])
             {
-                fillObjectVtableUpTo(lambdaTibRoots[i], lambdaTibVtCap[i]);
+                if (fillObjectVtableUpTo(lambdaTibRoots[i], lambdaTibVtCap[i]))
+                {
+                    lambdaTibFilled[i] = true;           // complete: nothing more can ever be written here
+                }
             }
             i += 1;
         }
@@ -19333,6 +19409,7 @@ public final class Loader
         int i = 0;
         while (i < clCount)
         {
+            syObjSteps += 1;
             if (utf8IsAtBase(clTab[i].base, clTab[i].nameOff, Magic.bytes("java/lang/Object")))
             {
                 return i;

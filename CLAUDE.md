@@ -115,6 +115,63 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`synth` RE-WROTE NINE WORDS PER SYNTHESISED TIB PER BATCH, AND NOT ONE OF THEM EVER CHANGED ANYTHING
+  (2026-09-16, NOT YET PI-VALIDATED).** `synth` was 191.718ms at batch 209 -- the largest item left outside
+  `callT` and `imap`, and the third top-level split in a row that had never been looked inside. It is
+  `refillSynthTibVtables`, which walks every synthesised lambda/annotation TIB on EVERY batch and re-copies
+  `java/lang/Object`'s vtable into each; `n:synth` grows all boot (511 at batch 59, **2276** at batch 209).
+
+  | demo suite, batch 64 (cumulative) | before | after | |
+  |---|---|---|---|
+  | `sy:chg` -- writes that CHANGED the stored word | **0** | **0** | not one, ever |
+  | `sy:slots` -- vtable words written | 3k | **0k** | |
+  | `sy:obj` -- objectClassIndex scan steps | **0k** | 0k | the other candidate, killed |
+  | `synth` | 594us | **295us** | 2.0x (and the suite understates by ~126x) |
+  | `memo/res/unres`, `rf:*`, `n:*`, `ps:*`, `rb:*` | -- | **identical** | |
+
+  - **READING NAMED TWO CANDIDATES AND RANKED THE WRONG ONE FIRST, for the fifth time in this arc.**
+    `fillObjectVtableUpTo` calls `objectClassIndex()` -- a linear walk of all `clCount` classes -- ONCE PER
+    TIB, so 2276 scans a batch, and hoisting that out of the loop is the remedy `printFrameAt` needed in the
+    demand-load arc. **`obj=0k` says it is worth nothing**: `java/lang/Object` is registered early, so the
+    scan returns in a handful of steps and never grows. The plausible O(n) was not the cost. Again.
+  - **`chg=0` IS THE WHOLE FINDING, and it is a counter that says "not here".** Every write stored the value
+    the slot already held, across an entire boot. The pass was re-deriving an answer it already had -- the
+    `seeds` shape exactly, where a one-shot flag was worth 148x. **A counter designed to decide between two
+    fixes instead invalidated one of them and sized the other.**
+  - **LATCHED ONLY ON A COMPLETE FILL (`n >= cap`), which is the correction the seeds fix had to make.** A
+    TIB built while Object had fewer virtuals than the TIB has room for is filled PARTIALLY; latching there
+    would leave the rest zero for ever, and a 0 vtable slot reached from BAKED code -- which carries no
+    dispatch guard -- is a wild branch, not a named trap. `fillObjectVtableUpTo` answers whether it filled to
+    capacity and only that latches.
+  - **SOUND BY CONSTRUCTION AS WELL AS BY MEASUREMENT.** `java/lang/Object` is THE ONE EAGERLY-COMPILED CLASS
+    (its nine virtuals are the prefix of every vtable in both worlds), so its slots hold real bodies from
+    registration and are never re-pointed by a lazy compile the way a deferred class's are. `chg=0` is the
+    empirical half of that argument, and the counter STAYS on the batch line so a future boot can refute it.
+  - **A BUG I ALMOST SHIPPED, caught by this file's own record rather than by a test.** The latch array is
+    read at every appended index, and **`allocArray` does not zero its elements on this VM** -- so a garbage
+    `true` would have skipped a TIB that still needed filling, i.e. a 0 vtable slot and a wild branch from
+    baked code. It is now cleared explicitly at BOTH append sites. Same trap the SMP arc hit with
+    `taskIdle`/`coreSched`/`gcParked`, and the reason that entry exists.
+  - **`lambdaTibRoots` IS APPEND-ONLY -- checked, not assumed.** Three writes exist: the `resetLoader`
+    allocation and two appends at `lambdaTibRootN`. No entry is ever cleared or re-pointed, so a latch cannot
+    carry over to a different TIB.
+  - **THE SUITE UNDERSTATES THIS BY CONSTRUCTION AND THE FACTOR IS KNOWN: 18 synthesised TIBs against the
+    launcher's 2276, ~126x.** Same asymmetry as the seeds (which the suite understated 17x) and `statT`.
+  - **WHAT THE INSTRUMENT SHOWS THE FIX DOING, which is the part a timer cannot:** `sy:n` -- TIBs filled,
+    cumulative -- now holds FLAT across batches that create no new TIB (24, 24, 24) and steps only when they
+    appear (30). Each TIB is filled exactly once, where before every one was refilled every batch.
+  - **A PREDICTION, and deliberately a range rather than a point.** The redundant writes are gone, but the
+    pass still WALKS the root array every batch to check the flag: 2276 entries x 209 batches is ~476k
+    iterations that no longer do anything. If the copying was the cost, `synth` lands in the low tens of
+    milliseconds; if that surviving walk dominates, it lands nearer 50ms and **the next fix is a watermark
+    rather than a per-entry flag** -- sound here because the array is append-only. Either way, near 190
+    would mean the walk was never the cost and the reading above is wrong.
+  - **IDENTITY:** `memo=1379 res=2446 unres=2193`, `rf:skip=1596 visit=1156 clos=1156`, `n:imap=52 synth=18
+    clinits=25`, plus `ps:*` and `rb:*` untouched. 32 programs, EIGHTEEN failure markers zero, program output
+    byte-identical but for the SMP task interleaving and the philosophers' ordering. Host tests unchanged:
+    A64 105, object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`, crypto 17, zip 91,
+    `overlay-check 0 new`.
+
 - **THE CLASS REGISTRY HAD NO NAME INDEX -- THREE COPIES OF ONE SCAN, `statT` 42.5x, AND THE PREDICTED
   FIGURE LANDED (2026-09-16, PI-VALIDATED).** The previous increment indexed the STATIC registry and then could not
   account for its own residue: `statT` 189.764ms across 580 sites is **327us a site**, absurd for a hash
