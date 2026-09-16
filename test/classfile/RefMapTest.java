@@ -19,15 +19,24 @@ public final class RefMapTest
         Path dir = Path.of(args.length > 0 ? args[0] : "out");
         ClassFile.Resolver r = new DirResolver(dir);
 
-        // vm/RVMClass declares, in order: base(J) nameOff(I) tib(J) type(J) statics(J) fieldCount(I)
-        // vtCount(I) vtStart(I) superReg(I) modifiers(I) isIface(Z) ifmStart(I) ifmCount(I) state(I).
-        // Its super is Object (no instance fields), so slot i is field i. Bit 0 is the marker; a slot's
-        // bit is 1+slot. Pointer-bearing = the four longs: slots 0, 2, 3, 4.
+        // vm/RVMClass declares, in order: base(J) nameOff(I) nameHash(I) tib(J) type(J) statics(J)
+        // fieldCount(I) vtCount(I) vtStart(I) superReg(I) superNameOff(I) modifiers(I) isIface(Z)
+        // ifmStart(I) ifmCount(I) superInited(Z) state(I). Its super is Object (no instance fields), so
+        // slot i is field i. Bit 0 is the marker; a slot's bit is 1+slot. Pointer-bearing = the four longs:
+        // slots 0, 3, 4, 5.
+        //
+        // THE TWO INT SLOTS AHEAD OF THE LONGS ARE WHY THIS IS PINNED. `nameHash` was inserted beside
+        // `nameOff` and pushed tib/type/statics down one slot each; the collector traces this object THROUGH
+        // this map, so a map left describing the old layout would follow an int as a pointer and skip a real
+        // one -- silent heap corruption, found by nothing until it swept a live TIB. This test failing is the
+        // intended outcome of adding a field here, and the expected value below is DERIVED from the field
+        // list above rather than copied from what the tool printed.
         long[] rvmClass = ClassFile.refMap("vm/RVMClass", r);
         T.eq("RVMClass map computed", 1L, rvmClass[0] & 1L);
-        T.eq("RVMClass word0", (1L | 1L << 1 | 1L << 3 | 1L << 4 | 1L << 5), rvmClass[0]);
+        T.eq("RVMClass word0", (1L | 1L << 1 | 1L << 4 | 1L << 5 | 1L << 6), rvmClass[0]);
         T.eq("RVMClass word1", 0L, rvmClass[1]);
         T.eq("RVMClass int slot skipped", 0L, rvmClass[0] & 1L << 2);   // nameOff is an int: not scanned
+        T.eq("RVMClass nameHash slot skipped", 0L, rvmClass[0] & 1L << 3);   // ... and so is nameHash
 
         // vm/Cell holds a single int field: nothing for the collector to follow, but the map still says
         // "computed" — an all-zero payload map is the point, not a fallback.

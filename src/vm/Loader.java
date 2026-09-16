@@ -3493,9 +3493,26 @@ public final class Loader
     // (grows with everything loaded), the closure walk (bounded by the class's own hierarchy), and the
     // per-slot refill.
     static int rfTypeSteps;                             // regOfType/classRegByType registry comparisons
-    static int rfHoleSteps;                             // itableHasHole slot reads
     static int rfClosSteps;                             // ifaceClosureOf interface visits
     static int rfFillSteps;                             // refillItable slot reads
+    // AND THE WORK THE THREE ABOVE CANNOT SEE, which is why these exist: those tally SLOT READS, and 3.3M of
+    // them over a launcher boot cannot account for `imap`'s 1,366ms (~68 cycles a read on a 166MHz core,
+    // against the handful a load-compare-increment costs). What they miss is what happens INSIDE a still-0
+    // slot: `defaultBySig` probes the registry once per CLOSURE INTERFACE, and each probe FNV-folded the
+    // interface's class name AND the method name, byte by byte, to compute a bucket index.
+    //
+    // THEY RANKED IT IN ONE RUN, and against the four candidates already counted: over a demo-suite boot the
+    // class-name bytes were 916k, the method-name bytes 415k, and every slot read put together 61k. `chain`
+    // read 0k -- the bucket those probes reach is EMPTY, because a permanently-unfillable slot is exactly a
+    // search that must fail -- so computing the key WAS the search. The class half is cached now
+    // ({@link RVMClass#nameHash}), which is why `hcls` should read 0: a counter that stays zero is the
+    // assertion that the cache fires, not noise.
+    static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
+    static int rfProbeSteps;                            // ... closure interfaces probed inside them
+    static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
+    static int rfHashNameSteps;                         // ... METHOD-name bytes folded -- the irreducible half,
+                                                        //   since an FNV fold can only cache its PREFIX
+    static int rfChainSteps;                            // ... bucket-chain entries compared
 
     static int cumBatches;
     static long cumMark, cumProbe, cumA, cumB, cumPatch, cumClinit, cumAll;
@@ -4809,6 +4826,27 @@ public final class Loader
         int len = u2(base + off);
         long q = base + off + 2L;
         int h = 0x811C9DC5;
+        int i = 0;
+        while (i < len)
+        {
+            h = (h ^ u1(q + i)) * 0x01000193;
+            i += 1;
+        }
+        return h;
+    }
+
+    /**
+     * Continue an FNV-1a fold over one more Utf8 run. FNV IS A FOLD, so
+     * {@code utf8HashFrom(utf8Hash(b1, o1), b2, o2)} is BIT-IDENTICAL to {@code utf8Hash2(b1, o1, b2, o2)} --
+     * which is the whole point: the class half of a class+name key can be cached ({@link RVMClass#nameHash})
+     * without changing the key, so every existing probe of the same index still lands in the same bucket.
+     * Changing the key function instead would have meant changing all four sites that probe {@code rgBucket}
+     * at once, and a site left behind would silently find nothing.
+     */
+    private static int utf8HashFrom(int h, long base, int off)
+    {
+        int len = u2(base + off);
+        long q = base + off + 2L;
         int i = 0;
         while (i < len)
         {
@@ -8034,6 +8072,7 @@ public final class Loader
             clTab[clCount].state = RVMClass.ST_LOADED;
             clTab[clCount].base = gbase;
             clTab[clCount].nameOff = gThisNameOff;
+            clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);   // folded once; see RVMClass.nameHash
             clTab[clCount].tib = 0L;
             clTab[clCount].type = gType;
             clTab[clCount].fieldCount = 0;
@@ -10409,6 +10448,7 @@ public final class Loader
         clTab[clCount].state = RVMClass.ST_LOADED;
         clTab[clCount].base = gbase;
         clTab[clCount].nameOff = gThisNameOff;
+        clTab[clCount].nameHash = utf8Hash(gbase, gThisNameOff);       // folded once; see RVMClass.nameHash
         clTab[clCount].tib = gTib;
         clTab[clCount].type = gType;
         clTab[clCount].fieldCount = gifCount;
@@ -12718,12 +12758,23 @@ public final class Loader
         // WHICH of the three is the growing one. `type` is the only walk that is O(everything loaded).
         Uart.write(Magic.bytes(" rfs:type="));
         VM.printDec(rfTypeSteps / 1000);
-        Uart.write(Magic.bytes("k hole="));
-        VM.printDec(rfHoleSteps / 1000);
         Uart.write(Magic.bytes("k clos="));
         VM.printDec(rfClosSteps / 1000);
         Uart.write(Magic.bytes("k fill="));
         VM.printDec(rfFillSteps / 1000);
+        // INSIDE a still-0 slot, which the three above cannot see. `hcls`/`hnam` are name BYTES folded per
+        // probe -- they dwarfed the slot reads 22:1, so the refill's cost was re-deriving an immutable hash
+        // rather than scanning anything. `hcls=0k` is the cached class-name prefix doing its job.
+        Uart.write(Magic.bytes("k dbs="));
+        VM.printDec(rfDbsCalls / 1000);
+        Uart.write(Magic.bytes("k probe="));
+        VM.printDec(rfProbeSteps / 1000);
+        Uart.write(Magic.bytes("k hcls="));
+        VM.printDec(rfHashSteps / 1000);
+        Uart.write(Magic.bytes("k hnam="));
+        VM.printDec(rfHashNameSteps / 1000);
+        Uart.write(Magic.bytes("k chain="));
+        VM.printDec(rfChainSteps / 1000);
         Uart.putc(0x6B);
         // allocCode, the difference between `place` and `emit`: calls, and the free-list scan under them.
         Uart.write(Magic.bytes(" ac:n="));
@@ -14741,10 +14792,13 @@ public final class Loader
                 m += 1;
                 continue;
             }
-            // The CLOSURE IS COMPUTED LAZILY, and that is most of the win on its own: it was derived for every
-            // imap on every batch, while refillItable needs it only when a slot is actually 0 -- which, once
-            // the first pass has run, is rare.
-            int n = -1;
+            // ONE PASS OVER THE SLOTS, not three. This used to pre-scan with itableHasHole (to decide whether
+            // to compute the closure), then scan again to refill, then scan a THIRD time to ask whether a hole
+            // survived. The pre-scan bought almost nothing and the counters said so: `clos` was 1060 against
+            // 1156 visits, i.e. 92% of visited imaps had a hole somewhere anyway, so the closure was being
+            // computed regardless. refillItable already tests every slot for 0, so it can report what it saw.
+            rfClos += 1;
+            int n = ifaceClosureOf(reg);                // the class's full interface set (persistent registries)
             boolean holes = false;
             int k = 0;
             long t = Magic.load64(dir);
@@ -14754,18 +14808,9 @@ public final class Loader
                 if (ir >= 0)
                 {
                     long it = Magic.load64(dir + k * 16 + 8);
-                    if (itableHasHole(ir, it))
-                    {
-                        if (n < 0)
-                        {
-                            rfClos += 1;
-                            n = ifaceClosureOf(reg);    // the class's full interface set (persistent registries)
-                        }
-                        refillItable(n, ir, it);
-                        if (itableHasHole(ir, it))      // still short after the repair: a later batch may
-                        {                               //   compile the class that declares the default
-                            holes = true;
-                        }
+                    if (refillItable(n, ir, it))        // still short after the repair: a later batch may
+                    {                                   //   compile the class that declares the default
+                        holes = true;
                     }
                 }
                 k += 1;
@@ -14780,25 +14825,18 @@ public final class Loader
         }
     }
 
-    /** Does this itable still have an unfilled slot? The only thing {@link #refillItable} can act on. */
-    private static boolean itableHasHole(int ir, long it)
+    /**
+     * Refill still-0 slots of interface {@code ir}'s itable {@code it} with late-compiled defaults, and report
+     * whether any slot is STILL 0 afterwards -- which is what tells {@link #refillImaps} it cannot memoise
+     * this imap yet, because a later batch may compile the class that declares the default.
+     *
+     * <p>Answering that here rather than re-scanning is the point: the caller used to walk these same slots
+     * twice more (once to decide whether to call at all, once to ask the question this now answers), and the
+     * loop already reads every slot.
+     */
+    private static boolean refillItable(int n, int ir, long it)
     {
-        int s = 0;
-        while (s < clTab[ir].ifmCount)
-        {
-            rfHoleSteps += 1;
-            if (Magic.load64(it + s * 8L) == 0L)
-            {
-                return true;
-            }
-            s += 1;
-        }
-        return false;
-    }
-
-    /** Refill still-0 slots of interface {@code ir}'s itable {@code it} with late-compiled defaults. */
-    private static void refillItable(int n, int ir, long it)
-    {
+        boolean hole = false;
         int s = 0;
         while (s < clTab[ir].ifmCount)
         {
@@ -14811,9 +14849,14 @@ public final class Loader
                 {
                     Magic.store64(it + s * 8L, b);
                 }
+                else
+                {
+                    hole = true;
+                }
             }
             s += 1;
         }
+        return hole;
     }
 
     /** {@link #ifaceClosure} but for an already-registered class {@code reg}, from the PERSISTENT registries
@@ -14877,17 +14920,29 @@ public final class Loader
         // Two interfaces in one closure may both declare the same name+descriptor, and picking the other one
         // would change which default body runs -- silently.
         buildRegIndex();
+        rfDbsCalls += 1;
         int i = 0;
         while (i < n)
         {
             int ir = ifClosureBuf[i];
             long ibase = clTab[ir].base;                   // a closure interface's blob; its own methods registered under it
+            rfProbeSteps += 1;
+            rfHashNameSteps += u2(base + nameOff);
             // Hashed PER INTERFACE now that the index is keyed on class+name -- the interface supplies the
             // class half. CLOSURE ORDER IS STILL EXACT: one probe per closure interface, walked in order, so
             // the first match is the same entry the name-only chain would have yielded.
-            int k = rgBucket[utf8Hash2(clTab[ir].base, clTab[ir].nameOff, base, nameOff) & (RGTAB - 1)];
+            //
+            // THE CLASS HALF IS NOT RE-FOLDED. It is the PREFIX of the FNV key and depends only on the closure
+            // interface, so it is cached at registration; this continues the fold over the method name and
+            // lands in exactly the bucket utf8Hash2 would have. MEASURED before it was written, because the
+            // four step counters above rank only slot READS and could not see this at all: over a demo-suite
+            // boot the class-name bytes were 916k of the refill's 1,420k steps, the method-name bytes 415k,
+            // and the slot reads 61k -- while `chain` read 0k, i.e. these probes reach an EMPTY bucket and
+            // computing the key was the entire cost of a search that is expected to fail.
+            int k = rgBucket[utf8HashFrom(clTab[ir].nameHash, base, nameOff) & (RGTAB - 1)];
             while (k >= 0)
             {
+                rfChainSteps += 1;
                 if (rgTab[k].base == ibase && rgTab[k].buf != 0L
                         && utf8EqAt(base, nameOff, rgTab[k].base, rgTab[k].nameOff)
                         && utf8EqAt(base, descOff, rgTab[k].base, rgTab[k].descOff))

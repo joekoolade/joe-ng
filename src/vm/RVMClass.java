@@ -11,6 +11,12 @@ final class RVMClass
 {
     long    base;        // class blob base (holds Utf8 strings)
     int     nameOff;     // this class's own name Utf8 offset (in base)
+    int     nameHash;    // FNV-1a of that name, folded ONCE at registration. Immutable by construction: `base`
+                         //   and `nameOff` are written here and never re-pointed. It exists because the method
+                         //   registry's index is keyed on class+name and FNV is a fold, so the CLASS half is a
+                         //   cacheable PREFIX -- and `refillImaps` re-folded it per closure interface, per
+                         //   still-empty itable slot, on every batch. MEASURED on the demo suite: 916k of the
+                         //   1,420k steps inside the refill were exactly this, against 38k of actual slot reads.
     long    tib;         // its TIB { Type, vtable... }
     long    type;        // its Type node (for instanceof/checkcast)
     long    statics;     // its static block base (gStatics), reused across load phases

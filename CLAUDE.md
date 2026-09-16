@@ -115,6 +115,64 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE IMAP REFILL WAS RE-COMPUTING AN IMMUTABLE HASH, AND THE FOUR COUNTERS ALREADY THERE COULD NOT SEE IT
+  (2026-09-15, NOT YET PI-VALIDATED).** `imap` was 1,366ms cumulative and the grows-with-load shape this file
+  has named more than any other. The four `rfs:` counters tally SLOT READS -- and 3.3M of those over a
+  launcher boot cannot account for 1,366ms at ~68 cycles a read on a 166MHz core. **So the instrument was the
+  first thing to fix, not the code.**
+
+  | demo suite, batch 64 (cumulative) | before | after | |
+  |---|---|---|---|
+  | `hcls` -- CLASS-name bytes FNV-folded | **916k** | **0k** | gone |
+  | `hnam` -- METHOD-name bytes folded | 415k | 415k | irreducible (see below) |
+  | `hole` + `fill` -- itable slot reads | 23k + 38k | **42k** | -31% |
+  | `dbs` / `probe` / `chain` | 12k / 46k / 0k | identical | |
+  | **total counted refill steps** | **1,420k** | **457k** | **3.1x** |
+
+  - **THE COUNTERS RANKED IT IN ONE QEMU RUN, AND AGAINST THE FOUR THAT WERE ALREADY THERE.** Adding
+    `dbs`/`probe`/`hash`/`chain` said the refill's cost is not scanning at all: `defaultBySig` probes the
+    method registry once per CLOSURE INTERFACE per still-0 slot, and each probe FNV-folded the interface's
+    class name AND the method name, byte by byte, to compute a bucket index. **`chain` read 0k** -- the
+    bucket those probes reach is EMPTY, which is exactly right for a slot nothing in the closure declares a
+    body for. **Computing the key WAS the search.** Splitting `hash` into its two halves then said which half
+    to attack: 916k class-name bytes against 415k method-name bytes.
+  - **FNV IS A FOLD, SO THE CLASS HALF IS A CACHEABLE PREFIX -- and caching it changes NO key.**
+    `utf8HashFrom(utf8Hash(b1,o1), b2, o2)` is bit-identical to `utf8Hash2(b1,o1,b2,o2)`, so the probe lands
+    in the same bucket and the other THREE sites that probe `rgBucket` are untouched. `RVMClass.nameHash` is
+    folded once at registration and is immutable by construction: `base`/`nameOff` are written there and
+    never re-pointed. **Changing the index's key function instead would have been the larger fix and the
+    larger risk** -- four sites, and one left behind silently finds nothing.
+  - **AND THE THREE SCANS BECAME ONE.** The refill pre-scanned with `itableHasHole` to decide whether to
+    compute the closure, scanned again to refill, then scanned a THIRD time to ask whether a hole survived.
+    **The counters said the pre-scan bought nothing**: `clos=1060` against `visit=1156`, i.e. 92% of visited
+    imaps had a hole somewhere and the closure was computed regardless. `refillItable` already tests every
+    slot for 0, so it reports what it saw; `itableHasHole` is gone. `clos` now reads exactly `visit` by
+    construction -- an EXPECTED counter change, not an identity break.
+  - **IDENTITY IS EXACT ON EVERY COUNTER THAT SAYS WHAT WAS RESOLVED:** `rf:skip=1596 visit=1156
+    holeEnd=1057`, `memo=1379 res=2446 unres=2193`, `rounds=2 pend=12 reach=1`, `n:imap=52 synth=18
+    clinits=25`, and `dbs`/`probe`/`chain` unchanged to the step -- so the same slots were searched, through
+    the same tiers, to the same answers. All 32 programs' output byte-identical; twenty failure markers zero.
+    Host tests unchanged: A64 105, object-model 22, class-reader 171, refmap **14**, `compiler: 37 checks`,
+    crypto 17, zip 91, `overlay-check 0 new`.
+  - **THE REFMAP TEST FAILED, WHICH IS IT DOING ITS JOB.** `nameHash` sits beside `nameOff` and pushed
+    `tib`/`type`/`statics` down one slot each; the collector traces an RVMClass THROUGH that map, so a map
+    left describing the old layout would follow an int as a pointer and skip a real one -- silent heap
+    corruption, found by nothing until it swept a live TIB. **The new expected value was DERIVED from the
+    field list, not copied from what the tool printed**, and a fourteenth check pins the new int slot.
+  - **THE SMP AND ARENA DIFFS WERE SETTLED BY A CONTROL RATHER THAN BY CITING THIS FILE.** Every one of the
+    74 diff lines is `smp jobs`/`jobs/core`/`per-core tasks`/`steps/core`, `lastReclaimed`, or the code
+    arena's `cur`/`peak`. The two BASELINE runs differ from EACH OTHER more than baseline differs from the
+    change (`c0=6 c1=1 c2=15 c3=2` vs `c0=21 c1=1 c2=1 c3=1`), `smp sched: 4 of 4` throughout. The arena is
+    352 bytes SMALLER and that is explained rather than tolerated: one method fewer (`itableHasHole`).
+  - **NO FIGURE IS PREDICTED.** The step count is the load-independent reading; how many milliseconds a step
+    is worth on a 166MHz core is exactly what this boot has to say, and I under-predicted the phase-B publish
+    by 4x in this same arc by extrapolating instead.
+  - **WHAT IS LEFT, AND THE DECISION IT GATES: `hnam` is now 415k of the remaining 457k -- 91%.** Removing it
+    means keying the registry index on `combine(hash(class), hash(name))` instead of an FNV fold over the
+    concatenation, so BOTH halves cache -- and that touches all four `rgBucket` sites, two of them on the
+    `patch` hot path where a mistake is a silent wrong dispatch. **Whether that is worth doing is a question
+    for the Pi's milliseconds, not for this ratio**, which is why it is not in this increment.
+
 - **BATCH 188 IS A GARBAGE COLLECTION. `struct` WAS NEVER A DEFECT, AND FOUR BOOTS SAY SO (2026-09-15,
   PI-VALIDATED).** The `gc=` counter settled it on the first try:
 
