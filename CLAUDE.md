@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE `clinit` PHASE WAS MEASURING ITS OWN UART TRAFFIC, AND THE REGISTRY LOOKUP UNDER IT WAS A LINEAR SCAN
-  (2026-09-15, NOT YET PI-VALIDATED).** Two changes: the number that named this target was half artifact, and
+  (2026-09-15, PI-VALIDATED).** Two changes: the number that named this target was half artifact, and
   the real work under it was the tenth instance of this file's most common defect.
 
   - **(1) `clinit` AND `tot` READ THE CLOCK PARTWAY THROUGH PRINTING THEMSELVES.** They were
@@ -175,8 +175,38 @@ defines the minimum the assembler must encode.
     `patch` 14.2ms, and `clinit` ~24ms falling to ~4ms once the index lands. **`B` is the largest item left**
     and has been sub-split only once. Also standing: `unresT` 684.8ms cumulative against `lookT`'s 726.4ms --
     `linkStubFor`, indexed once, measured cold, and REVERTED.
-  - **NOT YET PI-VALIDATED.** QEMU cannot judge either half of this: it cannot show the UART inflation at all,
-    and its wall clock was confounded on the run that mattered.
+  - **PI-VALIDATED, AND THE SUB-SPLIT NOW SUMS TO THE PHASE EXACTLY.** `[3 containers successful]` /
+    `[2 tests successful]` / `[0 tests failed]` / exit 0; no FAULT, no `BOOT RE-ENTERED`, no `BADPATCH`, no
+    `VIRTUALRESOLVE FAILED`, no `LAMBDA IFACE UNRESOLVED`, no `ClassCastException` -- the silent-wrong-answer
+    shapes a bad registry index would produce. Only the known `ProcessImpl` trap at batch 25, survived again.
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `clinit` (per batch) | 50.429ms | **13.286ms** | of which ~26ms was the artifact |
+    | `imap` (per batch) | 20.063ms | **9.594ms** | 2.1x |
+    | `imap` (cumulative) | 2,925.903ms | **1,494.709ms** | -1.43s |
+    | `tot` (per batch) | 106.156ms | **68.026ms** | |
+    | whole boot | 108,786ms | **108,268ms** | -518ms |
+
+    - **`imap 9.594 + synth 2.052 + arr 0.060 + seeds 1.561 + runcl 0.019 = 13.286`, against a printed
+      `clinit=13.286ms`.** The partition is exact, which is the structural proof that the split was always a
+      split and the PHASE TOTAL was the number that lied.
+    - **IDENTITY IS EXACT AT 1782 BLOBS:** `rounds=2 pend=4 reach=8 v:walks=2 levels=4 grew=1 cached=4`,
+      `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, and
+      `memo=128548 res=82350 unres=27419` -- every one matching the previous boot.
+    - **THE INDEX TURNED THE DOMINANT COUNTER INTO THE SMALLEST.** Per batch at 209 the refill's four steps
+      now read **`type=1k` against `hole=9k`, `fill=7k`, `clos=1k`**. On the suite `type` had been 6.8x the
+      next largest; it is now tied for last.
+    - **THE WHOLE BOOT MOVED LESS THAN THE COUNTER SAYS WAS REMOVED, AND THAT IS STATED RATHER THAN ROUNDED
+      AWAY.** `imap` gives back 1.43s cumulative; the boot moved 518ms. The difference is inside this
+      harness's batch-to-batch variance -- batch 204 alone is 28ms SLOWER on this boot (`reg` 8.6 -> 24.3ms,
+      JIT compile variance) and batch 197 35ms faster. The cumulative counter is the trustworthy reading;
+      a whole-boot delta of a few hundred ms is not resolvable here.
+  - **WHAT IS NEXT: `B` IS THE LARGEST PHASE NOW.** At batch 209, `tot` 68.0ms = `B` 22.8 + `mark` 16.8 +
+    `patch` 14.1 + `clinit` 13.3 + `A` 1.0. **`B` has been sub-split once and never since.** Inside `clinit`
+    the residue is `imap`'s 9.6ms, and its counters say what that is: `hole=9k` and `fill=7k` steps per batch
+    -- `itableHasHole` and `refillItable` over the ~239 imaps that can never be memoised (a slot stays 0 when
+    nothing in the closure declares a body). Those are searched, fail, and are searched again next batch.
 
 - **`publishCode` WALKED THE WHOLE CODE ARENA PER PATCH PASS -- `pubT` 259x, AND THE LOAD PATH IS NO LONGER
   THE BOTTLENECK (2026-09-15, PI-VALIDATED).** `patchRelocsFrom` ended with
