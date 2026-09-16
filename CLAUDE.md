@@ -115,6 +115,75 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LOAD PATH IS NO LONGER THE BOTTLENECK, AND THE THING THAT IS HAS NEVER BEEN MEASURED -- `betw`,
+  `lzT`, `gcT` (2026-09-16, NOT YET PI-VALIDATED).** Nine increments took a launcher boot 161,556 ->
+  96,983ms and the per-batch load path to 32.9ms. But every cumulative figure in this file measures time
+  INSIDE `loadAll`, and the same log says **65,644ms of that 96,983ms is TEST EXECUTION** -- so what this
+  arc has been cutting is now a few percent of the boot and roughly two thirds of it is covered by no timer
+  at all. Before hunting a tenth target, measure the part nobody has looked at.
+
+  | demo suite, last batch (QEMU) | | |
+  |---|---|---|
+  | `betw` -- wall clock OUTSIDE `loadAll` | **14,309.707ms** | the boot, essentially |
+  | `gcT` / `gcB` -- collector, total / inside a batch | **7,458.403ms** / 132.930ms | **51% of `betw`** |
+  | `lzT` / `lzB` -- first-call compiles, total / in-batch | 2,516.363ms / **0us** | 488 calls, 5.2ms each |
+  | `rpt` -- this report's own serial traffic | 195.941ms | see the prediction below |
+  | `tot` (one batch) | 12.248ms | what nine increments have been cutting |
+
+  - **THE COLLECTOR IS THE LARGEST SINGLE ITEM IN THE BOOT OUTSIDE THE BATCHES, and it appears on no line
+    today.** 7.3s of `betw` after subtracting the 133ms that fired inside a batch. `gc=` has been on the
+    batch line since the batch-188 chase and says only that a collection HAPPENED -- never what it cost, so
+    the one figure this file carries (~565ms at 1750 blobs) came from a single batch where a collection
+    happened to land inside an unrelated timer, after FOUR boots.
+  - **`betw` COSTS NOTHING TO COLLECT, which is why it should have existed years ago:** `tAll` and `tEnd`
+    are already read at both ends of every batch, so the gap between them is a subtraction. `gcT` is two
+    clock reads per COLLECTION (45 on the suite, ~10 on the launcher) and `lzT` two per lazy compile, which
+    runs the whole compiler -- the opposite of the per-item loops this project has had to strip twice.
+  - **THE INSTRUMENT CAUGHT ITS OWN FLAW ON ITS FIRST RUN, before anything shipped.** I wrote `lz` and `gc`
+    as pieces INSIDE `betw`. Batch 1 came back `betw=0us gcT=7.081ms` -- a collection with no gap yet to
+    hold it, i.e. inside `loadAll`. A batch allocates, so it can collect; it runs `<clinit>`s through
+    `Magic.call0`, which is guest code, so it can lazily compile. **Both terms CUT ACROSS the split**, which
+    is exactly the "a sub-split that does not add up is not a split" defect this file records against the
+    `mark` split -- committed this time against my own. Each now prints its total beside the part that fired
+    inside a batch, so `gcT - gcB` and `lzT - lzB` are what decompose `betw` and nothing double-counts `tot`.
+  - **`lzB=0us` IS A REAL ANSWER, not an empty counter:** not one of the 488 first-call compiles happened
+    inside a batch. The `<clinit>`s a batch runs reach already-compiled code, so lazy compilation is
+    entirely an execution-time cost -- which is where it should be looked for.
+  - **WHAT `betw` STILL DOES NOT NAME: ~4.5s, 31% of it.** GC and lazy compile account for 9,841 of
+    14,310ms; the rest is the program actually running, plus real `Thread.sleep`. That remainder is the
+    floor, and it is worth having as a number rather than an assumption.
+  - **`lzT` IS NET OF ANY BATCH IT TRIGGERS, because it genuinely triggers them:** `lazyCompile ->
+    drainPendingPulls -> loadClassIncremental -> loadAll`. `cumAll` grows by exactly that batch's bracket,
+    so subtracting its delta leaves compile time alone. It is timed INSIDE the loader lock (waiting for it
+    is another core's compile, and charging it here would bill one compile to two cores), and only the
+    OUTERMOST compile accumulates -- counting re-entries would hide the nesting this exists to measure,
+    which is the `rel`-counter lesson from the loader-lock arc.
+  - **IDENTITY EXACT AGAINST A CONTROL BUILT FROM HEAD -- AND THE RECORDED FIGURE WOULD HAVE READ AS A
+    REGRESSION.** `memo=1418 res=2510 unres=2253` on this change, against `memo=1379 res=2446 unres=2193`
+    written in this file for the suite two increments ago. That looked like a broken closure. Building HEAD
+    and booting it gives **1418/2510/2253 as well** -- the recorded figure is simply from a different tree
+    state. Also identical: `rounds=4 pend=180 reach=16`, `rf:skip=1631 clos=1173 holeEnd=1074`, `n:imap=52
+    synth=18`, `sd:n=283`, `ps:n=140`, `rb:n=10743`, `sy:n=32`, `hcls=0k`, `pc:n=103`, `gc=45`, 33 programs,
+    TWELVE failure markers zero in both arms. **A cited number is not a measured one** -- this file's own
+    rule, and one boot of the control is what kept it from being broken here.
+  - **The only output diffs are the recorded run-to-run ones:** `smp jobs`/`jobs/core`/`per-core tasks`/
+    `steps/core` (which this file already records as differing on the SAME binary), and `gc: roots` +15
+    words with **`heap=` byte-identical** -- the statics region grew by nine new statics plus slots this
+    does not separately account for, and the TRACE side is untouched, so nothing about reachability moved.
+    Host tests unchanged: A64 105, object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`,
+    crypto 17, zip 91, `overlay-check 0 new`.
+  - **A PREDICTION, and it is about the instrument rather than a fix.** `rpt` reads 196ms on QEMU because
+    **QEMU's serial is not baud-paced** -- the same structural blindness that hid the `clinit` UART artifact
+    for the life of this project. On a Pi at 115200 baud one batch line is ~300 characters at ~87us each,
+    so ~200 batches should put `rpt` in the **seconds**, and if it does not, the batch line is shorter than
+    I think or `printDur` is cheaper than the character count implies. Either way it is now a term rather
+    than a contaminant in somebody else's number.
+  - **WHAT THE BOOT DECIDES:** whether the launcher's ten collections really are ~565ms each (~5.6s, the
+    figure this file carries from one accidental measurement), and what share of its 65,644ms of test
+    execution is GC, first-call compilation, and genuine sleeping. **No fix is proposed here on purpose** --
+    the previous nine increments each targeted something a counter had already ranked, and nothing has
+    ranked this yet.
+
 - **`synth` RE-WROTE NINE WORDS PER SYNTHESISED TIB PER BATCH -- 24.3x, AND NOT ONE OF THEM EVER CHANGED
   ANYTHING (2026-09-16, PI-VALIDATED).** `synth` was 191.718ms at batch 209 -- the largest item left outside
   `callT` and `imap`, and the third top-level split in a row that had never been looked inside. It is
