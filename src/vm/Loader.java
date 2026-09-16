@@ -3048,6 +3048,7 @@ public final class Loader
         rcAddr = new long[MAXRELOC];
         rcBase = new long[MAXRELOC];
         rcTail = new int[MAXRELOC];
+        rcStub = new long[MAXRELOC];                    // per-site unres memo; dies with the sites it indexes
         rcClass = new int[MAXRELOC];
         rcName = new int[MAXRELOC];
         rcDesc = new int[MAXRELOC];
@@ -3524,6 +3525,17 @@ public final class Loader
     // registry entries with two Utf8 compares an entry, and sgCount grows with every class loaded all boot.
     // THIRTEENTH instance of this file's most common defect, and the first one found sitting inside a
     // function that had never been split.
+    // THE `unres` ARM, now the second-largest item in a batch (507.742ms of callT's 1,300.917ms, 39%). It
+    // re-derives two immutable facts per still-unresolved site per batch: `isDenylisted` (SIXTY non-inlined
+    // utf8HasPrefix calls -- this VM's baseline compiler does not inline) and `linkStubFor`'s linear scan of
+    // every stub minted so far. Which of the two dominates is a question for counters: indexing the SCAN was
+    // tried once in the patch arc and MEASURED to buy nothing, which is evidence the prefix chain is the
+    // half that costs -- but that measurement was taken against a different closure, so it is checked here
+    // rather than trusted.
+    static int pcUnresMemo;                             // sites answered from rcStub (the arm skipped entirely)
+    static int pcUnresDeny;                             // ... and sites that still ran the full arm
+    static int pcDenySteps;                             // utf8HasPrefix calls (ALL callers; isDenylisted dominates)
+    static int pcStubSteps;                             // linkStubFor scan entries compared
     static int sgScanCalls;                             // staticSlotOf calls (ALL callers, not just the seeds)
     static int sgScanSteps;                             // ... registry entries compared inside them
     static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
@@ -5124,6 +5136,7 @@ public final class Loader
     /** True if the class name at {@code off} in {@code base} starts with {@code prefix}. */
     private static boolean utf8HasPrefix(long base, int off, byte[] prefix)
     {
+        pcDenySteps += 1;
         int len = u2(base + off);
         if (len < prefix.length)
         {
@@ -9459,6 +9472,24 @@ public final class Loader
     private static long[] rcAddr, rcBase;               // call sites: bl address, ref blob base,
     private static int[] rcClass, rcName, rcDesc;       //   class/name/descriptor Utf8 offsets
     private static int[] rcTail;                        //   1 = a tail branch (b), not a call (bl) -- lambda thunks
+    /**
+     * PER-SITE MEMO FOR THE UNRESOLVED ARM, and the reason it is sound is that the arm's answer cannot change.
+     * {@code patchRelocs} revisits every reloc site from 0 at each batch end -- deliberately, so a callee
+     * that loads later resolves for real -- but a site that is STILL unresolved re-derives two things that
+     * are fixed: whether its callee's class is denylisted (a pure function of the name bytes) and which link
+     * stub serves that callee ({@link #linkStubFor} already dedups by callee identity, so it can only return
+     * the same stub). Recording the stub turns both into one array read.
+     *
+     * <p>{@link #linkStubFor}'s own comment asked for exactly this and named the condition: "indexed during
+     * the patch arc on the theory that this was hot; MEASURED, the index bought NOTHING ... Revisit only if a
+     * measurement puts time here." A measurement does now -- `unresT` is 507.742ms of a 1,300.917ms `callT`,
+     * 39% -- which is the third time this file has recorded that a function measuring cold is a statement
+     * about that closure rather than about the code.
+     *
+     * <p>It also stops the TRAPWIRE table growing without bound: that arm re-recorded the same site on every
+     * batch, and the table filling is what makes a fired trap report an EMPTY callee.
+     */
+    private static long[] rcStub;                       //   the link stub this site settled on, 0 = not yet
     private static int rcCount;
     /**
      * Per-site memo: the method-registry index that resolved this site last time, or -1.
@@ -9661,6 +9692,21 @@ public final class Loader
             }
             pcLookT += Magic.readCNTPCT_EL0() - tL0;
             long tU0 = Magic.readCNTPCT_EL0();
+            if (target == 0L && rcStub[i] != 0L)
+            {
+                // SETTLED ALREADY: this site was unresolved on an earlier batch and took a link stub, and
+                // neither half of that decision can change (see rcStub). One array read instead of sixty
+                // prefix compares plus a scan of every stub minted so far.
+                //
+                // `pcUnres` COUNTS THIS SITE TOO, and that is not bookkeeping pedantry: `memo/res/unres` is
+                // the triple every entry in this file gates identity on -- "the same sites resolved through
+                // the same tiers to the same answers". Incrementing only the new counter made `unres` read
+                // 463 against 2193 for the same work, which looks exactly like a closure that changed. A
+                // counter used as an invariant must keep meaning the same thing.
+                pcUnres += 1;
+                pcUnresMemo += 1;
+                target = rcStub[i];
+            }
             if (target == 0L)
             {
                 pcUnres += 1;
@@ -9689,12 +9735,14 @@ public final class Loader
                     trapWireMth[trapWireCount] = rcBase[i] + rcName[i];    //   even when quiet -- and now it
                     trapWireCount += 1;                                    //   carries the NAME as well
                 }
+                pcUnresDeny += 1;
                 if (!isDenylisted(rcBase[i], rcClass[i]))
                 {
                     long stub = linkStubFor(rcBase[i] + rcClass[i], rcBase[i] + rcName[i], rcBase[i] + rcDesc[i]);
                     if (stub != 0L)
                     {
                         target = stub;
+                        rcStub[i] = stub;               // settled: the arm above answers from here on
                     }
                 }
                 if (target == VM.denylistTrapAddr)
@@ -12922,7 +12970,17 @@ public final class Loader
         Uart.write(Magic.bytes("k dl="));
         VM.printDec((int) (dlSteps / 1000));
         Uart.write(Magic.bytes("k"));
-        Uart.write(Magic.bytes(" unresT="));
+        // WHY the unres arm costs what it does: sites it answered from the memo against sites that ran the
+        // full arm, and the two growing scans inside that arm.
+        Uart.write(Magic.bytes(" un:memo="));
+        VM.printDec(pcUnresMemo / 1000);
+        Uart.write(Magic.bytes("k full="));
+        VM.printDec(pcUnresDeny / 1000);
+        Uart.write(Magic.bytes("k deny="));
+        VM.printDec(pcDenySteps / 1000);
+        Uart.write(Magic.bytes("k stub="));
+        VM.printDec(pcStubSteps / 1000);
+        Uart.write(Magic.bytes("k unresT="));
         printDur(ticksUs(pcUnresT));
         Uart.write(Magic.bytes(" tailT="));
         printDur(ticksUs(pcTailT));
@@ -13227,6 +13285,7 @@ public final class Loader
         int k = 0;
         while (k < lkCount)
         {
+            pcStubSteps += 1;
             if (utf8EqAt(lkClsU[k], 0, clsU, 0)
                     && utf8EqAt(lkNameU[k], 0, nameU, 0)
                     && utf8EqAt(lkDescU[k], 0, descU, 0))

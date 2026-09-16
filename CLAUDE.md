@@ -115,6 +115,55 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE UNRESOLVED ARM RE-DECIDED TWO IMMUTABLE FACTS PER SITE PER BATCH, AND THE COUNTERS SAY THE OLD NOTE
+  BLAMED THE WRONG HALF (2026-09-16, NOT YET PI-VALIDATED).** With `seeds` gone, `callT` is the largest item
+  in a batch (1,300.917ms) and splits exactly: `lookT` 682.775 + **`unresT` 507.742** + `tailT` 101.653 =
+  1,292ms of 1,301ms. `unresT` is the arm that runs when a call site's callee cannot be resolved.
+
+  | demo suite, batch 64 (cumulative) | control | fix | |
+  |---|---|---|---|
+  | `un:deny` -- `utf8HasPrefix` calls | **220k** | 116k | 1.9x |
+  | `un:stub` -- `linkStubFor` scan entries | **39k** | **2k** | 19x |
+  | `un:memo` / `full` | 0k / 2k | 1k / 0k | the arm skipped outright |
+  | `memo/res/unres` | 1379/2446/2193 | **identical** | |
+
+  - **`patchRelocs` REVISITS EVERY RELOC SITE FROM 0 AT EACH BATCH END, deliberately** -- a callee that loads
+    later must resolve for real. But a site that is STILL unresolved re-derives two things that cannot
+    change: whether its callee's class is DENYLISTED (a pure function of the name bytes, decided by SIXTY
+    non-inlined `utf8HasPrefix` calls -- this VM's baseline compiler does not inline), and which link stub
+    serves that callee (`linkStubFor` already dedups by callee identity, so it can only ever return the same
+    stub). `rcStub[i]` records the answer; the arm becomes one array read.
+  - **THE OLD NOTE ASKED FOR THIS AND NAMED THE CONDITION, WHICH IS WHY IT GOT DONE.** `linkStubFor` carried:
+    "indexed during the patch arc on the theory that this was hot; MEASURED, the index bought NOTHING ...
+    Revisit only if a measurement puts time here." A measurement does now -- 39% of `callT`. **A comment that
+    records what would justify revisiting is worth more than one that records a conclusion.**
+  - **AND THE COUNTERS EXPLAIN WHY THAT OLD INDEX BOUGHT NOTHING: the scan was never the cost.** `deny=220k`
+    against `stub=39k` -- the prefix chain is **5.6x** the scan it was indexing. The earlier arc reached the
+    right decision (do not index it) from the wrong model, and nothing recorded at the time could tell the
+    two apart. This is the fourth time in this arc that counters have reordered two candidates that reading
+    had ranked.
+  - **A COUNTER USED AS AN INVARIANT MUST KEEP MEANING THE SAME THING, and I broke that and caught it.**
+    First cut incremented only the new `pcUnresMemo` on the memo path, so `unres` read **463 against 2193**
+    for identical work -- which looks exactly like a closure that changed, and `memo/res/unres` is the triple
+    every entry in this file gates identity on. `pcUnres` counts both paths now and the triple matches the
+    control exactly. **A split added to an invariant must leave the invariant alone.**
+  - **IT ALSO STOPS THE TRAPWIRE TABLE GROWING WITHOUT BOUND:** that arm re-recorded the same site on every
+    batch, and the table filling is precisely what makes a fired trap report an EMPTY callee -- the
+    misattribution this file records as having cost several sessions.
+  - **THE QEMU MILLISECONDS ARE WORTHLESS HERE AND THE RUNS PROVE IT, so only the counters are quoted above.**
+    Two boots of functionally identical code (the fix, before and after the counter correction, which cannot
+    affect timing) read `unresT` **49.222ms and 21.889ms** -- a factor of 2.2 apart, from my own concurrent
+    builds. The control read 74.657ms. This file already records that confound three times; here it is
+    larger than the effect being measured.
+  - **IDENTITY:** `memo=1379 res=2446 unres=2193`, `rf:skip=1596 visit=1156`, 32 programs, and nineteen
+    failure markers zero including `LINK STUB TABLE FULL` -- the one a broken memo would trip by re-minting.
+    The only output diffs are the philosophers' interleaving, the inversion latency (61ms vs 84ms; both
+    report the correct ORDER, which is what that arm asserts), and the known SMP/arena variance. Host tests
+    unchanged incl. `compiler: 37 checks` and `overlay-check 0 new`.
+  - **NO FIGURE PREDICTED.** The suite resets `rcStub` per PROGRAM (`launchMain` runs 30 of them), so a site
+    settles and is immediately thrown away; the launcher is ONE launch over 209 batches, which is where a
+    per-site memo can actually pay. Same asymmetry as the seeds, and the seeds understated by 17x.
+
 - **THE SEED BLOCK RE-RAN ON EVERY BATCH -- `seeds` 148x ON HARDWARE, AND A NEGATIVE CONTROL KILLED HALF MY
   READING OF WHY (2026-09-16, PI-VALIDATED).** The `imap` boot's own log named the next target: at
   batch 209 **`seeds` was 1,369.531ms, the largest item in the clinit phase** -- more than double `imap`'s
