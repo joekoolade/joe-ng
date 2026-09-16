@@ -3018,6 +3018,10 @@ public final class Loader
         rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
         rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
         sgTab = new RVMField[MAXREG];
+        sgIndexed = 0;                                  // BESIDE the table it indexes: a watermark that
+        sgBucket = null;                                //   outlives its table under-marks SILENTLY, and
+                                                        //   sgCount returning to the same value would slip
+                                                        //   past the "went backwards" check in buildSgIndex
         sgCount = 0;
         // THE SEED FLAGS RESET WITH THE REGISTRY THEY GUARD. A fresh statics block reads 0 everywhere, so a
         // flag left set here would skip the seed for the whole launch and leave System.out / the Integer
@@ -3538,6 +3542,37 @@ public final class Loader
     static int pcStubSteps;                             // linkStubFor scan entries compared
     static int sgScanCalls;                             // staticSlotOf calls (ALL callers, not just the seeds)
     static int sgScanSteps;                             // ... registry entries compared inside them
+    // `statT` -- the static-reloc half of `patch`, 463.914ms cumulative at batch 209 and the one top-level
+    // split that had NEVER been looked inside. The loop is short enough to read: for every static site from
+    // rsStart, `globalStaticByRef` walks ALL `sgCount` registry entries with TWO utf8EqAt an entry, and
+    // `patchRelocs` calls it with rsStart 0 at every batch end -- so every site pays a full-table walk again
+    // on every batch, while sgCount grows with each class loaded.
+    //
+    // COUNTED BEFORE BEING BELIEVED, because the unres arm one increment ago ranked the same way by reading
+    // -- index the scan -- and the counters put the prefix chain 5.6x ahead of it. Reading names a shape; it
+    // cannot say whether the cost is the walk's DEPTH (an index fixes it) or the number of SITES (an index
+    // does nothing). WHAT THE SUITE ANSWERED, at batch 64: `ps:n=136 steps=37k miss=136 tab=280` --
+    // **every single site MISSES**, 136 of 136, each walking all 280 entries to say so, and `patchRelocs`
+    // asks again next batch because a class loaded later must still resolve. So the depth IS the cost, the
+    // unres arm's memo does NOT transfer (the negative answer is not immutable), and the remedy is to make
+    // the negative cheap rather than to cache it.
+    //
+    // AND THE COUNTERS CLOSED THE ACCOUNT, which is the check that says nothing else is hiding in there:
+    // 37k sgTab steps (two utf8EqAt each) plus ~26k regBySigU steps (one each) is ~100k compares against a
+    // measured 46.9ms, i.e. ~0.47us a compare -- the same per-compare cost the unres arm's `deny=116k`
+    // showed. `statT` is these two scans and essentially nothing else.
+    static long psSites;                                // static reloc sites resolved (cumulative, all batches)
+    static long psSteps;                                // ... entries compared inside sgCellOf (0k = the probe
+                                                        //   lands on an EMPTY bucket, as the imap fix's chain does)
+    static long psMiss;                                 // ... sites that found NOTHING (a full-table walk each)
+    // AND THE SECOND SCAN IN THE SAME LOOP, which the first cut of this instrument did not count -- exactly
+    // the mistake the unres arm made one increment ago. Every MISS falls into `reportZeroCellBind`, whose
+    // first act is `regBySigU`: a linear walk of all `clCount` classes with a utf8EqAt an entry, to decide
+    // whether the miss is worth reporting. The suite says 100% of sites miss, so that walk runs on every
+    // site of every batch -- a second growing table beside the first, and `psSteps` is blind to it.
+    // Counted for ALL callers (there are nine); this loop is the one that runs per site per batch.
+    static long rbCalls;                                // regBySigU calls (all callers)
+    static long rbSteps;                                // ... class-registry entries compared inside them
     static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
     static int rfProbeSteps;                            // ... closure interfaces probed inside them
     static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
@@ -6847,25 +6882,23 @@ public final class Loader
     {
         int classOff = refClassNameOff(idx);
         int nameOff = mrefNameOff(idx);
-        int i = 0;
-        while (i < sgCount)
+        // The COMPILE-TIME twin of globalStaticByRef: identical key, identical predicate, identical answer,
+        // and it carried its own copy of the same linear scan. One index serves both -- the same "one call
+        // site's fix, two timers" shape the phase-B publish had.
+        long hit = sgCellOf(gbase, classOff, nameOff);
+        if (hit != 0L)
         {
-            if (utf8EqAt(gbase, classOff, sgTab[i].base, sgTab[i].classOff)
-                    && utf8EqAt(gbase, nameOff, sgTab[i].base, sgTab[i].nameOff))
+            if (STATIC_ADDR_LOG)
             {
-                if (STATIC_ADDR_LOG)
-                {
-                    Uart.write(Magic.bytes("  staticaddr "));
-                    printNameAt(gbase, classOff);
-                    Uart.putc(0x2E);
-                    printNameAt(gbase, nameOff);
-                    Uart.write(Magic.bytes(" -> "));
-                    VM.printHex(sgTab[i].addr);
-                    Uart.putc(0x0A);
-                }
-                return sgTab[i].addr;
+                Uart.write(Magic.bytes("  staticaddr "));
+                printNameAt(gbase, classOff);
+                Uart.putc(0x2E);
+                printNameAt(gbase, nameOff);
+                Uart.write(Magic.bytes(" -> "));
+                VM.printHex(hit);
+                Uart.putc(0x0A);
             }
-            i += 1;
+            return hit;
         }
         if (lzCompiling && !lzRetried && notePullNeeded(gbase + refClassNameOff(idx)))
         {
@@ -10056,20 +10089,110 @@ public final class Loader
         return cell == 0L ? 0L : Magic.load64(cell);
     }
 
+    /**
+     * Class+name hash index over the static registry, so a static-field lookup is a PROBE rather than a
+     * linear walk of all {@code sgCount} entries comparing TWO Utf8 strings against each.
+     *
+     * <p>MEASURED FIRST, and the counters said two things reading had not. `statT` was 463.914ms cumulative
+     * at batch 209 -- the third-largest item in a launcher boot and the one top-level split never looked
+     * inside -- and on the demo suite it is **136 sites, every one of them a MISS**: `ps:n=136 miss=136
+     * tab=280`, i.e. every call walks the whole table to answer "not here", and {@code patchRelocs} asks
+     * again on the next batch because a class loaded later must still resolve. That is why the unres arm's
+     * memo does not transfer here: the negative answer is NOT immutable. What an index does instead is make
+     * the negative CHEAP -- a probe that lands on an empty bucket, the shape the imap refill already took
+     * ({@code chain=0k}).
+     *
+     * <p>Sound by construction rather than by a claim about when work may be skipped: {@code sgTab[sgCount]}
+     * is written and {@code sgCount} incremented immediately after, at the ONE site that appends
+     * ({@link #registerStaticFields}) -- no entry is ever re-pointed, so an append-only index cannot go
+     * stale. Incremental like {@code dlBucket}.
+     *
+     * <p>THE LOWEST MATCHING INDEX STILL WINS. The scan returned the first match, head-insertion makes the
+     * chain descending, so the chain is searched for the MINIMUM rather than stopped at the first hit -- the
+     * same care the Type index and {@code findPdByName}'s index needed. Two entries can share a class+name
+     * only if a class reached {@code registerStaticFields} twice, and silently preferring the later cell
+     * would be a static read binding to different memory than the {@code <clinit>} wrote through.
+     *
+     * <p>The watermark resets BESIDE the table in {@code resetLoader} as well as being checked here: a
+     * watermark that outlives the table it indexes under-marks SILENTLY, and {@code sgCount} returning to
+     * the same value after a reset would make the "went backwards" check alone miss it.
+     */
+    // 8192, NOT a power of two above MAXREG. The bucket array is refilled with -1 on every rebuild, and
+    // `resetLoader` triggers one per LAUNCH -- so an oversized table is 30 x SGTAB stores across the demo
+    // suite's 30 programs, paid to hold chains that are already short. sgCount reaches ~280 on the suite and
+    // a few thousand on the launcher, so 8192 keeps the average chain under one there and bounds it at 3
+    // even at the MAXREG ceiling; `psSteps` reports the truth if that estimate is ever wrong.
+    private static final int SGTAB = 8192;               // power of two; chained
+    private static int[] sgBucket;                       // class+name hash -> first entry index, -1 when empty
+    private static int[] sgNext;                         // entry index -> next entry with the same hash
+    static int sgIndexed;
+
+    private static void buildSgIndex()
+    {
+        if (sgBucket == null || sgIndexed > sgCount)      // rebuilt when resetLoader zeroes the table
+        {
+            sgBucket = new int[SGTAB];
+            sgNext = new int[MAXREG];
+            int b = 0;
+            while (b < SGTAB)
+            {
+                sgBucket[b] = -1;                        // allocArray does NOT zero its elements on this VM,
+                b += 1;                                  //   and 0 is a valid entry index -- fill explicitly
+            }
+            sgIndexed = 0;
+        }
+        while (sgIndexed < sgCount)
+        {
+            int hh = utf8Hash2(sgTab[sgIndexed].base, sgTab[sgIndexed].classOff,
+                               sgTab[sgIndexed].base, sgTab[sgIndexed].nameOff) & (SGTAB - 1);
+            sgNext[sgIndexed] = sgBucket[hh];
+            sgBucket[hh] = sgIndexed;
+            sgIndexed += 1;
+        }
+    }
+
+    /**
+     * Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. The shared body of the
+     * compile-time path ({@link #globalStaticAddr}) and the patch-time one ({@link #globalStaticByRef}),
+     * which carried the identical scan over the identical key.
+     *
+     * <p>Counted rather than timed, for the reason this arc has now paid for three times: the loop body is
+     * two Utf8 compares, so two {@code readCNTPCT_EL0} around it would be a visible share of what they
+     * measure.
+     */
+    private static long sgCellOf(long refBase, int classOff, int nameOff)
+    {
+        buildSgIndex();
+        // The SAME predicate the scan used -- the index only narrows what it is applied to, so a hit is the
+        // same entry the scan would have found and a miss still answers 0.
+        int best = -1;
+        int k = sgBucket[utf8Hash2(refBase, classOff, refBase, nameOff) & (SGTAB - 1)];
+        while (k >= 0)
+        {
+            psSteps += 1;
+            if (utf8EqAt(refBase, classOff, sgTab[k].base, sgTab[k].classOff)
+                    && utf8EqAt(refBase, nameOff, sgTab[k].base, sgTab[k].nameOff))
+            {
+                if (best < 0 || k < best)
+                {
+                    best = k;                            // lowest index wins, as the scan's first match did
+                }
+            }
+            k = sgNext[k];
+        }
+        return best < 0 ? 0L : sgTab[best].addr;
+    }
+
     /** Static-slot address for a field ref given as blob base + Utf8 offsets, or 0. */
     private static long globalStaticByRef(long refBase, int classOff, int nameOff)
     {
-        int i = 0;
-        while (i < sgCount)
+        psSites += 1;
+        long addr = sgCellOf(refBase, classOff, nameOff);
+        if (addr == 0L)
         {
-            if (utf8EqAt(refBase, classOff, sgTab[i].base, sgTab[i].classOff)
-                    && utf8EqAt(refBase, nameOff, sgTab[i].base, sgTab[i].nameOff))
-            {
-                return sgTab[i].addr;
-            }
-            i += 1;
+            psMiss += 1;
         }
-        return 0L;
+        return addr;
     }
 
     /**
@@ -12952,6 +13075,24 @@ public final class Loader
         printDur(ticksUs(pcCallT));
         Uart.write(Magic.bytes(" statT="));
         printDur(ticksUs(pcStatT));
+        // WHAT IS INSIDE `statT`, which nothing has ever split. `n` is sites resolved across all batches,
+        // `steps` the registry entries compared, `miss` the sites that found nothing and walked the whole
+        // table to say so. steps/n is the walk's depth: if it tracks sgCount the scan is the cost and an
+        // index pays; if it stays small the cost is per-SITE and an index buys nothing.
+        Uart.write(Magic.bytes(" ps:n="));
+        VM.printDec((int) psSites);                      // RAW: the first cut printed these in thousands and
+        Uart.write(Magic.bytes(" steps="));              //   both read 0k, which says nothing at all
+        VM.printDec((int) (psSteps / 1000L));
+        Uart.write(Magic.bytes("k miss="));
+        VM.printDec((int) psMiss);
+        Uart.write(Magic.bytes(" tab="));                // ... and the table they walk, so steps/n can be
+        VM.printDec(sgCount);                            //   read against the depth a full walk would cost
+        Uart.write(Magic.bytes(" rb:n="));               // the OTHER scan in the same loop: regBySigU, run on
+        VM.printDec((int) rbCalls);                      //   every miss, over a SECOND table that also grows
+        Uart.write(Magic.bytes(" steps="));
+        VM.printDec((int) (rbSteps / 1000L));
+        Uart.write(Magic.bytes("k cl="));
+        VM.printDec(clCount);
         Uart.write(Magic.bytes(" pubT="));
         printDur(ticksUs(pcPubT));
         Uart.write(Magic.bytes(" lookT="));
@@ -14403,9 +14544,11 @@ public final class Loader
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
     private static int regBySigU(long clsU)
     {
+        rbCalls += 1;
         int r = 0;
         while (r < clCount)
         {
+            rbSteps += 1;
             if (utf8EqAt(clTab[r].base, clTab[r].nameOff, clsU, 0))
             {
                 return r;

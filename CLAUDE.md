@@ -115,6 +115,82 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`statT` HAD NEVER BEEN SPLIT, AND THE COUNTERS FOUND A 100% MISS RATE PLUS A SECOND SCAN I HAD NOT
+  COUNTED (2026-09-16, NOT YET PI-VALIDATED).** With `unres` fixed, the batch-209 ranking is `lookT`
+  682.398ms, `imap` 605.936ms, then **`statT` 463.914ms** -- one of `patch`'s three top-level splits and the
+  only one nothing had ever looked inside. Its loop is short enough to read: for every static reloc site,
+  `globalStaticByRef` walks ALL `sgCount` registry entries with TWO `utf8EqAt` an entry, and `patchRelocs`
+  calls it with `rsStart` 0 at every batch end. Fourteenth instance of this file's most common defect.
+
+  | demo suite, batch 64 (cumulative) | before | after | |
+  |---|---|---|---|
+  | `ps:steps` -- sgTab entries compared | **37k** | **0k** | the probe reaches an EMPTY bucket |
+  | `ps:n` / `miss` | 136 / **136** | 136 / 136 | identical -- same sites, same answers |
+  | `rb:n` / `steps` (regBySigU) | 1224 / 117k | identical | untouched, and now the whole residue |
+  | `memo/res/unres` | 1379/2446/2193 | **identical** | |
+
+  - **COUNTED BEFORE BEING BELIEVED, AND THE COUNTERS SAID TWO THINGS READING HAD NOT.** The reading was
+    unambiguous and would have shipped an index on its own; the unres arm one increment ago ranked the same
+    way by reading and the counters put a different half 5.6x ahead. Here they said:
+    - **EVERY SITE MISSES -- 136 of 136**, each walking all 280 entries to answer "not here". So the depth IS
+      the cost. And **the unres arm's memo does NOT transfer**: a site that cannot resolve today MUST be
+      re-asked, because a class loaded later has to resolve -- the code's own comment already said so. The
+      remedy is to make the NEGATIVE cheap, not to cache it, which is the shape the imap refill took
+      (`chain=0k`, the probe reaching an empty bucket).
+    - **A SECOND GROWING SCAN SITS IN THE SAME LOOP AND MY FIRST INSTRUMENT WAS BLIND TO IT.** Every miss
+      falls into `reportZeroCellBind`, whose first act is `regBySigU` -- a linear walk of all `clCount`
+      classes, run to decide whether the miss is worth PRINTING. At 100% miss that is a second growing table
+      walked per site per batch: `rb:n=1224 steps=117k cl=189`, of which this loop's 136 misses are ~26k.
+      **That is exactly the mistake the unres arm made, caught this time before any fix shipped** -- by
+      adding the second counter rather than trusting that the first one covered the loop.
+  - **AND THE ACCOUNT CLOSES, which is the check that says nothing else is hiding in there.** 37k sgTab steps
+    (two compares each) plus ~26k regBySigU steps (one each) is ~100k Utf8 compares against a measured
+    46.9ms -- **~0.47us a compare, the same per-compare cost the unres arm's `deny=116k` showed.** `statT`
+    is these two scans and essentially nothing else.
+  - **ONE INDEX, TWO CALL SITES.** `globalStaticAddr` -- the COMPILE-TIME twin -- carried its own copy of the
+    identical scan over the identical key, so both now share `sgCellOf`. Same shape as the phase-B publish's
+    "one call site's fix, two timers".
+  - **SOUND BY CONSTRUCTION, not by a claim about when work may be skipped:** `sgTab[sgCount]` is written and
+    `sgCount` incremented immediately after, at the ONE site that appends (`registerStaticFields`) -- no
+    entry is ever re-pointed, so an append-only index cannot go stale. **THE LOWEST MATCHING INDEX STILL
+    WINS**: head-insertion makes the chain descending, so it is searched for the MINIMUM rather than stopped
+    at the first hit (the care the Type index and `findPdByName`'s index both needed). Two entries share a
+    class+name only if a class reached `registerStaticFields` twice, and silently preferring the later cell
+    would bind a read to different memory than the `<clinit>` wrote through. **The watermark resets BESIDE
+    the table** in `resetLoader` as well as being checked in the builder -- `sgCount` returning to the same
+    value after a reset would slip past the "went backwards" check alone.
+  - **THE BUCKET ARRAY IS 8192, NOT a power of two above MAXREG, and that is measured rather than tidy:** it
+    is refilled with -1 on every rebuild and `resetLoader` triggers one per LAUNCH, so 65536 would be 30 x
+    65536 stores across the suite's 30 programs to hold chains that are already empty. `psSteps` reports the
+    truth if that sizing is ever wrong.
+  - **NO QEMU MILLISECOND FIGURE IS QUOTED, AND FOUR RUNS SAY WHY.** `statT` read **46.945 / 29.173 / 21.389
+    / 12.948ms** across four boots of only TWO distinct binaries -- the last two are the SAME code, 1.65x
+    apart. Every untouched timer moved with them (`imap` 1.69x, `alloc` 1.52x, `unresT` 2.94x, `lookT`
+    0.61x), so the 0.62x `statT` "improvement" sits inside a band the change cannot have caused. Machine load
+    from my own concurrent builds -- the confound this file records three times, here LARGER than the effect
+    being measured. **`ps:steps` 37k -> 0k is the load-independent reading and the only one claimed.**
+  - **NOT PREDICTING A FIGURE**, for the reason already paid for twice: the suite understated the seeds by
+    17x and got the unres ratio right by accident. What makes this one especially unguessable is that the
+    suite's miss rate is **100%** -- the launcher's split between resolving and unresolved sites is unknown,
+    and an index is the one fix whose value does not depend on it.
+  - **IDENTITY:** `ps:n=136 miss=136` unchanged -- the index found exactly what the scan found, site for
+    site and answer for answer -- plus `rb:n=1224 steps=117k`, `memo=1379 res=2446 unres=2193`,
+    `rf:skip=1596 visit=1156 clos=1156 holeEnd=1057`, `n:imap=52 synth=18 clinits=25`. 32 programs, TWENTY-ONE
+    failure markers zero, `finish HML` 20/20/20, inversion 79ms, `smp sched: 4 of 4`, `sum20=210`, `YNW`/`RP`,
+    `churnMB=625 live=32 intact=32`. Host tests unchanged: A64 105, object-model 22, class-reader 171,
+    refmap 14, `compiler: 37 checks`, crypto 17, zip 91, `overlay-check 0 new`. The only output diffs are the
+    SMP task interleaving and the philosophers' ordering, which this file already records as differing
+    run-to-run on the SAME binary.
+  - **A COMMENT-ONLY EDIT CHANGED THE IMAGE, and it was re-run rather than waved through.** Same size, 7744
+    differing bytes -- LineNumberTable entries shifted by the comment lines added above them (`6216 -> 6223`,
+    +7, is visible in the diff). Benign, and the reason to check rather than assume is that some of those
+    bytes sit inside the code region: the committed binary was booted again and reproduces every counter and
+    marker above exactly.
+  - **WHAT IS NEXT, and it is already counted: `regBySigU`.** It is now the entire residue of this loop, and
+    117k steps over all nine of its callers -- a linear walk of `clCount` with no index anywhere, where
+    `classRegByName`/`classRegByNameAt`/`classRegByNameBytes` are three more copies of the same scan. The
+    counters are in the tree; the decision wants a boot, not a reading.
+
 - **THE UNRESOLVED ARM RE-DECIDED TWO IMMUTABLE FACTS PER SITE PER BATCH -- `unresT` 3.67x, AND THE COUNTERS
   SAY THE OLD NOTE BLAMED THE WRONG HALF (2026-09-16, PI-VALIDATED).** With `seeds` gone, `callT` is the largest item
   in a batch (1,300.917ms) and splits exactly: `lookT` 682.775 + **`unresT` 507.742** + `tailT` 101.653 =
