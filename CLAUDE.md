@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE CLASS REGISTRY HAD NO NAME INDEX -- THREE COPIES OF ONE SCAN, AND IT IS WHAT WAS LEFT IN `statT`
-  (2026-09-16, NOT YET PI-VALIDATED).** The previous increment indexed the STATIC registry and then could not
+- **THE CLASS REGISTRY HAD NO NAME INDEX -- THREE COPIES OF ONE SCAN, `statT` 42.5x, AND THE PREDICTED
+  FIGURE LANDED (2026-09-16, PI-VALIDATED).** The previous increment indexed the STATIC registry and then could not
   account for its own residue: `statT` 189.764ms across 580 sites is **327us a site**, absurd for a hash
   probe. The arithmetic named the culprit exactly -- every one of those 580 misses calls
   `reportZeroCellBind`, whose FIRST act is `regBySigU`, a linear walk of all `clCount` classes run purely to
@@ -169,6 +169,48 @@ defines the minimum the assembler must encode.
     this file already records as differing run-to-run on the SAME binary. Host tests unchanged: A64 105,
     object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`, crypto 17, zip 91,
     `overlay-check 0 new`.
+  - **PI-VALIDATED, AND THE PREDICTION LANDED: I said `statT` would read "near 4ms, not near 190". IT READS
+    4.460ms.**
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `statT` (cumulative) | 189.764ms | **4.460ms** | **42.5x, -185ms** |
+    | `rb:steps` | 3,926k | **63k** | 62x, while counting 9.4x MORE calls |
+    | `rb:n` (calls counted) | 5,316 | 50,071 | before: regBySigU only; after: all three |
+    | steps PER CALL | **738** | **1.26** | **585x** |
+    | whole boot | 98,464ms | **96,750ms** | **-1,714ms** |
+
+  - **THE PREDICTION IS THE RESULT HERE, more than the ratio.** The previous increment could not account for
+    its own residue and I turned the gap into a falsifiable number: 580 sites x 1782 classes x ~0.18us =
+    ~186ms of a measured 189.764ms, so removing it had to leave ~4ms. **It left 4.460ms.** That is the
+    arithmetic, the cost-per-`utf8EqAt` estimate AND the identification of `reportZeroCellBind`'s gate as the
+    whole residue, all confirmed at once -- and it would have been visibly wrong had any of the three been.
+  - **AND THE MACHINE WAS PINNED AGAIN, so the figure is honest:** every untouched cumulative timer moved
+    under 0.5% -- `callT` 931.371 -> 927.087, `lookT` 683.009 -> 681.174, `unresT` 138.691 -> 138.399,
+    `imap` 605.914 -> 604.744, `synth` 191.697 -> 191.718. Two Pi boots in a row with a clean control, after
+    an arc where QEMU could not separate a 2x change from machine load.
+  - **THE BOOT MOVED 1,714ms AND MOST OF IT IS WHERE NOTHING WAS MEASURING.** `statT` accounts for 185ms of
+    it. The rest belongs to the other seven callers of `regBySigU` and to `classRegByName`/
+    `classRegByNameAt`, which sit in the compile and clinit paths that no cumulative timer covers -- the
+    boot total is the only instrument that can see them. **Stated as consistent-with rather than proven:**
+    the seven launcher boots now read 99,433 / 99,299 / 99,151 / 97,817 / 97,914 / 98,464 / **96,750**, and
+    that ~1.6s spread is the same order as the move. What makes this reading better than the usual one is
+    the pinned control above, not the delta itself.
+  - **IDENTITY EXACT ON EVERY GATE:** `memo=128548 res=82350 unres=27419`, `rf:skip=114380 visit=44987
+    clos=44987 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `sd:n=2802 steps=2590k` still frozen,
+    `hcls=0k`, `pc:n=1243`, `pb:probed=1 of=1782`, and `ps:n=580 steps=3k miss=580 tab=3051` -- the static
+    index untouched, still 100% miss. **The assertion for THIS change is a set of absences**, because an
+    index that answered the wrong class would not crash, it would resolve eight callers to a different class
+    for ever: no `CANNOT LOAD`, no `UNREGISTERED SUPER`, no `VIRTUALRESOLVE FAILED`, no `ClassCastException`,
+    no `lifecycle DIFF`, no `STATIC BOUND TO THE ZERO CELL`. `[3 containers successful]` / `[2 tests
+    successful]` / `[0 tests failed]` / exit 0, with only the two known denylisted lines.
+  - **THE ARC: 161,556 -> 96,750ms -- 64.8 SECONDS, 40% OFF A LAUNCHER BOOT.**
+  - **WHAT IS NEXT: `synth` at 191.718ms, and it has never been split.** The ranking at batch 209 is now
+    `callT` 927.087 (of which `lookT` 681.174, `unresT` 138.399, `tailT` 99.573), `imap` 604.744,
+    **`synth` 191.718**, `alloc` 105.120 -- and `statT` has dropped off the list entirely at 4.460ms.
+    `synth` is `n:synth=2276` synthesised lambda/annotation TIBs, and it grows steadily (187.255ms three
+    increments ago). Same starting position `seeds` and `statT` were in: nobody has looked inside it.
+
 
 - **`statT` HAD NEVER BEEN SPLIT -- 2.45x, AND THE COUNTERS FOUND A 100% MISS RATE PLUS A SECOND SCAN I HAD
   NOT COUNTED (2026-09-16, PI-VALIDATED).** With `unres` fixed, the batch-209 ranking is `lookT`
