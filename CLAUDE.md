@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE UNRESOLVED ARM RE-DECIDED TWO IMMUTABLE FACTS PER SITE PER BATCH, AND THE COUNTERS SAY THE OLD NOTE
-  BLAMED THE WRONG HALF (2026-09-16, NOT YET PI-VALIDATED).** With `seeds` gone, `callT` is the largest item
+- **THE UNRESOLVED ARM RE-DECIDED TWO IMMUTABLE FACTS PER SITE PER BATCH -- `unresT` 3.67x, AND THE COUNTERS
+  SAY THE OLD NOTE BLAMED THE WRONG HALF (2026-09-16, PI-VALIDATED).** With `seeds` gone, `callT` is the largest item
   in a batch (1,300.917ms) and splits exactly: `lookT` 682.775 + **`unresT` 507.742** + `tailT` 101.653 =
   1,292ms of 1,301ms. `unresT` is the arm that runs when a call site's callee cannot be resolved.
 
@@ -163,6 +163,45 @@ defines the minimum the assembler must encode.
   - **NO FIGURE PREDICTED.** The suite resets `rcStub` per PROGRAM (`launchMain` runs 30 of them), so a site
     settles and is immediately thrown away; the launcher is ONE launch over 209 batches, which is where a
     per-site memo can actually pay. Same asymmetry as the seeds, and the seeds understated by 17x.
+  - **PI-VALIDATED: `unresT` 507.742ms -> 138.367ms (3.67x), AND THE GROWTH TERM IS WHAT WENT.**
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `unresT` (cumulative) | 507.742ms | **138.367ms** | **3.67x, -369ms** |
+    | `callT` (cumulative) | 1,300.917ms | **929.908ms** | -371ms |
+    | `unresT` GROWTH per batch (b43->209) | **2.4ms** | **0.32ms** | **7.5x** |
+    | `un:memo` / `full` | -- | 23k / 4k | 85% answered from the memo |
+    | `lookT` / `tailT` | 682.775 / 101.653 | 682.398 / 101.076 | untouched, as they must be |
+
+    `callT` still splits exactly (682.4 + 138.4 + 101.1 = 921.8 of 929.9), and the -371ms of `callT` is the
+    -369ms of `unresT` and nothing else. **The per-batch GROWTH is the reading that matters**: the arm was
+    adding 2.4ms a batch and now adds 0.32ms, which is what removing a per-item re-derivation over a table
+    that grows all boot looks like.
+  - **IDENTITY EXACT, AND THE COUNTER I BROKE IS PART OF THE PROOF:** `memo=128548 res=82350 unres=27419` --
+    byte-identical to the previous boot, with `unres` now summing the memo path and the full arm. Also
+    `rf:skip=114380 visit=44987 clos=44987 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `sd:n=2802
+    steps=2590k` still frozen, `hcls=0k`, `seeds=9.300ms`, `imap=605.936ms` (604.547 before -- untouched).
+    `[3 containers successful]` / `[2 tests successful]` / exit 0, and **no `LINK STUB TABLE FULL`** -- the
+    marker a memo that re-minted instead of reusing would trip.
+  - **THE WHOLE BOOT WENT UP 97ms AND THAT IS STATED RATHER THAN BURIED:** 97,817 -> 97,914ms against a
+    369ms cumulative cut, with the tests 17ms slower. The five most recent launcher boots read 99,433 /
+    99,299 / 99,151 / 97,817 / 97,914 -- a ~1.6s spread on binaries whose load paths differ by far less than
+    that. **The cumulative counter is the trustworthy reading and a whole-boot delta of a few hundred ms is
+    not resolvable in this harness**, which this file has now had to say three times.
+  - **THE QEMU PREDICTION WAS THE WRONG SHAPE AND THE PI CORRECTED IT.** The suite measured `un:deny`
+    220k -> 116k and `un:stub` 39k -> 2k and I declined to convert either into milliseconds, because two
+    boots of identical code had read `unresT` 49.222 and 21.889ms. That caution was right: on the launcher
+    the effect is 3.67x where the suite's own `unresT` ratio suggested ~3.4x by accident -- the suite throws
+    `rcStub` away every program, so it was measuring first-settle cost, not the memo.
+  - **THE ARC: 161,556 -> 97,914ms.**
+  - **WHAT IS NEXT, and `unres` is off the list.** At batch 209: **`lookT` 682.398ms** is now the largest
+    single item, then `imap` 605.936ms, then **`statT` 463.914ms -- which has never been split at all**.
+    `lookT` is `globalBufByRef`, already indexed twice, and its per-batch re-resolve is DELIBERATE: memoising
+    the super-chain and stub tiers would answer with an ancestor's body after a subclass registered its own
+    override, which is a silent wrong-method dispatch. So the next honest target is `statT`, for the reason
+    `seeds` turned out to be worth 148x: nobody has looked inside it.
+
+
 
 - **THE SEED BLOCK RE-RAN ON EVERY BATCH -- `seeds` 148x ON HARDWARE, AND A NEGATIVE CONTROL KILLED HALF MY
   READING OF WHY (2026-09-16, PI-VALIDATED).** The `imap` boot's own log named the next target: at
