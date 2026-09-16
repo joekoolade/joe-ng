@@ -115,6 +115,68 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE SEED BLOCK RE-RAN ON EVERY BATCH -- `seeds` 8.5x ON THE SUITE, AND A NEGATIVE CONTROL KILLED HALF MY
+  READING OF WHY (2026-09-16, NOT YET PI-VALIDATED).** The `imap` boot's own log named the next target: at
+  batch 209 **`seeds` was 1,369.531ms, the largest item in the clinit phase** -- more than double `imap`'s
+  603ms -- and it had never been split. It is six functions run unconditionally at the end of EVERY batch.
+
+  | demo suite, batch 64 (cumulative) | before | after | |
+  |---|---|---|---|
+  | `seeds` | **106.296ms** | **12.544ms** | **8.5x** |
+  | `sd:n` (staticSlotOf calls) | 1,055 | 276 | 3.8x |
+  | `sd:steps` (registry entries compared) | 123k | 43k | 2.9x |
+
+  - **EVERY SEED IS IDEMPOTENT AND ITS RESULT IMMUTABLE** -- a boxed Integer for -128..127, a field-free
+    access object, a bare monitor, a primitive mirror -- so re-running cannot change an answer. What it cost
+    is THREE growing scans per batch, all of them this file's most common defect (thirteenth instance) and
+    all inside a function that had never been looked at: **fifteen `staticSlotOf` calls** (a linear walk of
+    all `sgCount` static-registry entries, two Utf8 compares an entry), **five `classIndexByName`** (a walk
+    of all `clCount`, and clCount is 1782 at batch 209), and **nine `classMirror`** (a walk of `mirN`).
+    Plus 512 allocations from the two box caches.
+  - **THE COUNTERS ONLY EXPLAIN A THIRD OF IT, AND THAT IS SAID RATHER THAN GLOSSED.** `sd:steps` falls
+    2.9x while `seeds` falls 8.5x, so most of the saving is the two scans the counters do NOT cover
+    (`classIndexByName` and `classMirror`) and the allocations. The instrument was added for `staticSlotOf`
+    and it is honest about covering only that.
+  - **A FLAG IS SET ONLY ON SUCCESS, because a seed legitimately cannot run yet.** `seedIntegerCache`
+    returns early while `java/lang/Integer` is unregistered, and must be retried. **And the wrapper TYPEs
+    latch PER WRAPPER rather than all-or-nine:** an all-or-nothing flag was written first and MEASURED not
+    to latch at all on a small closure (`sd:n` still +15 a batch), because one wrapper a closure never
+    carries holds the flag down for the whole launch and preserves the entire cost.
+  - **THE FLAGS RESET IN `resetLoader` BESIDE `sgCount = 0`** -- the table they guard. A flag outliving the
+    static registry would skip the seed for a whole launch and leave `System.out` / the Integer cache /
+    `int.class` null, silently. Same rule as every other watermark here, and the third time this file has
+    had to state it.
+  - **I ALSO CLAIMED THIS BROKE SMALL-INTEGER BOX IDENTITY, AND THE NEGATIVE CONTROL REFUTED IT.** Four
+    seeds allocate, so re-running looked like it must REPLACE the object the static already holds, making
+    `Integer.valueOf(5) == Integer.valueOf(5)` false across a batch boundary -- exactly the silent-wrong-
+    answer shape this file exists to remove. I wrote `demo/BoxIdentityDemo` to pin it (a demand-load forced
+    BETWEEN the two calls, because calling `valueOf` twice in a row passes either way) and **with the guards
+    REMOVED it still reports `int=1 long=1 TYPE=1`.** So the re-seed does not in fact replace the cache the
+    running program reads. **Why it does not is NOT established.** The demo was DELETED rather than kept:
+    an arm that passes in both states is not a control, and left in the suite it would read as evidence.
+  - **Running the control is the whole reason that claim did not ship**, and it cost one QEMU boot against a
+    postmortem that already records ten silent wrong answers. The reading was plausible, the mechanism was
+    plausible, and it was wrong.
+  - **IDENTITY EXACT:** `rf:skip=1596 visit=1194`, `memo=1369 res=2346 unres=2099` -- byte-identical between
+    the arms, so the change moved only what it targeted. 33 programs, `finish HML` 20/20/20, inversion 61ms,
+    `smp sched: 4 of 4`, `churnMB=625 live=32 intact=32`, and NINETEEN failure markers zero including
+    `SYSTEM PROPERTIES NOT SEEDED` -- the one a broken seed guard would trip. Host tests unchanged: A64 105,
+    object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`, crypto 17, zip 91,
+    `overlay-check 0 new`.
+  - **`imap` READ 41.8ms IN ONE ARM AND 45.7ms IN THE OTHER AND THAT IS MACHINE LOAD, not a regression** --
+    an image build ran concurrently with one of the two QEMU boots, the confound this file has recorded
+    three times. Its COUNTERS are identical between the arms, which is the load-independent reading.
+  - **NO FIGURE IS PREDICTED FOR THE PI.** The suite peaks at ~190 blobs against the launcher's 1782, and
+    two of the three scans removed are O(clCount) -- so the suite is the small end of this by construction.
+    What the boot answers: whether `seeds` 1,369ms follows the 8.5x, and whether the twelve-batch burst
+    below survives.
+  - **STILL UNEXPLAINED, AND IT IS THE REASON THIS TARGET WAS PICKED: `seeds` SPENT 850ms IN TWELVE BATCHES.**
+    On the launcher it grew ~1.6ms a batch, then batches 174-185 cost **~70.8ms EACH**, then it went back to
+    ~1.6ms. `exc` inside `mark` did the same thing in the same window (+1.1ms a batch, frozen at 28.9ms from
+    batch 186). Two independent timers switching on and off at the same batch boundaries is one event, not a
+    scan that grew -- and a growing scan cannot produce a burst that STOPS. If the guards remove it, it was
+    the seeds; if it survives, it is something else in that window and the guards did not touch it.
+
 - **THE IMAP REFILL WAS RE-COMPUTING AN IMMUTABLE HASH, AND THE FOUR COUNTERS ALREADY THERE COULD NOT SEE IT
   (2026-09-16, PI-VALIDATED -- `imap` 2.26x, -763ms).** `imap` was 1,366ms cumulative and the grows-with-load shape this file
   has named more than any other. The four `rfs:` counters tally SLOT READS -- and 3.3M of those over a

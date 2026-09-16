@@ -3019,6 +3019,17 @@ public final class Loader
         rgBucket = null;                                 //   be rebuilt whenever the registry is cleared
         sgTab = new RVMField[MAXREG];
         sgCount = 0;
+        // THE SEED FLAGS RESET WITH THE REGISTRY THEY GUARD. A fresh statics block reads 0 everywhere, so a
+        // flag left set here would skip the seed for the whole launch and leave System.out / the Integer
+        // cache / int.class null -- silently. Same rule as every other watermark in this file: it resets
+        // beside the table it indexes.
+        sdVmLock = false;
+        sdJio = false;
+        sdJla = false;
+        sdIntCache = false;
+        sdLongCache = false;
+        sdPrim = false;
+        sdPrimMask = 0;
         relocRecording = 0;
         lkCount = 0;                                    // link stubs name utf8 inside THIS batch's blobs
         linkTrampAddr = 0L;                             //   (and the trampoline lives in reclaimable code)
@@ -3507,6 +3518,14 @@ public final class Loader
     // search that must fail -- so computing the key WAS the search. The class half is cached now
     // ({@link RVMClass#nameHash}), which is why `hcls` should read 0: a counter that stays zero is the
     // assertion that the cache fires, not noise.
+    // THE SEED BLOCK, which the same reading says is now the LARGEST item in this phase -- 1,369ms
+    // cumulative at batch 209, against imap's 603ms. It is SIX functions run unconditionally on EVERY batch,
+    // and between them they call `staticSlotOf` FIFTEEN times; that is a linear walk of all `sgCount` static
+    // registry entries with two Utf8 compares an entry, and sgCount grows with every class loaded all boot.
+    // THIRTEENTH instance of this file's most common defect, and the first one found sitting inside a
+    // function that had never been split.
+    static int sgScanCalls;                             // staticSlotOf calls (ALL callers, not just the seeds)
+    static int sgScanSteps;                             // ... registry entries compared inside them
     static int rfDbsCalls;                              // defaultBySig calls (one per still-0 slot per batch)
     static int rfProbeSteps;                            // ... closure interfaces probed inside them
     static int rfHashSteps;                             // ... CLASS-name bytes still folded (0 = cache firing)
@@ -5633,23 +5652,44 @@ public final class Loader
      */
     static void seedPrimitiveTypes()
     {
-        seedPrimType(Magic.bytes("java/lang/Integer"), 0x49);      // 'I'
-        seedPrimType(Magic.bytes("java/lang/Long"), 0x4A);         // 'J'
-        seedPrimType(Magic.bytes("java/lang/Double"), 0x44);       // 'D'
-        seedPrimType(Magic.bytes("java/lang/Float"), 0x46);        // 'F'
-        seedPrimType(Magic.bytes("java/lang/Short"), 0x53);        // 'S'
-        seedPrimType(Magic.bytes("java/lang/Byte"), 0x42);         // 'B'
-        seedPrimType(Magic.bytes("java/lang/Character"), 0x43);    // 'C'
-        seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A);      // 'Z'
-        seedPrimType(Magic.bytes("java/lang/Void"), 0x56);         // 'V'
+        if (sdPrim)
+        {
+            return;
+        }
+        // LATCHED PER WRAPPER, not all-or-nine. A wrapper not yet registered has no TYPE slot to write and
+        // must be retried -- but an all-or-nothing flag would then keep re-scanning for the EIGHT that are
+        // already seeded, and a wrapper a closure never carries (java/lang/Void is the likely one) would
+        // hold the flag down for the whole launch and preserve most of the cost this fix exists to remove.
+        seedPrimType(Magic.bytes("java/lang/Integer"), 0x49, 0);      // 'I'
+        seedPrimType(Magic.bytes("java/lang/Long"), 0x4A, 1);         // 'J'
+        seedPrimType(Magic.bytes("java/lang/Double"), 0x44, 2);       // 'D'
+        seedPrimType(Magic.bytes("java/lang/Float"), 0x46, 3);        // 'F'
+        seedPrimType(Magic.bytes("java/lang/Short"), 0x53, 4);        // 'S'
+        seedPrimType(Magic.bytes("java/lang/Byte"), 0x42, 5);         // 'B'
+        seedPrimType(Magic.bytes("java/lang/Character"), 0x43, 6);    // 'C'
+        seedPrimType(Magic.bytes("java/lang/Boolean"), 0x5A, 7);      // 'Z'
+        seedPrimType(Magic.bytes("java/lang/Void"), 0x56, 8);         // 'V'
+        sdPrim = sdPrimMask == 0x1FF;                                 // all nine landed: skip the block outright
     }
 
-    private static void seedPrimType(byte[] cls, int descChar)
+    /** Seed one wrapper's {@code TYPE} unless {@code bit} says it already landed; records it in
+     *  {@link #sdPrimMask} when it does. */
+    private static void seedPrimType(byte[] cls, int descChar, int bit)
     {
-        long slot = staticSlotOf(cls, Magic.bytes("TYPE"));
-        if (slot != 0L)
+        if ((sdPrimMask & (1 << bit)) != 0)
         {
-            Magic.store64(slot, primitiveMirror(descChar));
+            return;
+        }
+        long slot = staticSlotOf(cls, Magic.bytes("TYPE"));
+        if (slot == 0L)
+        {
+            return;                                     // the wrapper is not registered yet -- retry next batch
+        }
+        long m = primitiveMirror(descChar);
+        Magic.store64(slot, m);
+        if (m != 0L)                                    // ... and so is a mirror the Type table cannot yet build
+        {
+            sdPrimMask |= 1 << bit;
         }
     }
 
@@ -8262,9 +8302,11 @@ public final class Loader
 
     private static long staticSlotOf(byte[] cls, byte[] name)
     {
+        sgScanCalls += 1;
         int i = 0;
         while (i < sgCount)
         {
+            sgScanSteps += 1;
             if (utf8IsAtBase(sgTab[i].base, sgTab[i].classOff, cls) && utf8IsAtBase(sgTab[i].base, sgTab[i].nameOff, name))
             {
                 return sgTab[i].addr;
@@ -8282,6 +8324,10 @@ public final class Loader
      */
     static void seedIntegerCache()
     {
+        if (sdIntCache)
+        {
+            return;
+        }
         long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("cache"));
         long highSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("high"));
         int ii = classIndexByName(Magic.bytes("java/lang/Integer"));
@@ -8303,6 +8349,7 @@ public final class Loader
         }
         Magic.store64(cacheSlot, arr);
         Magic.store64(highSlot, 127L);
+        sdIntCache = true;
     }
 
     /**
@@ -8313,6 +8360,10 @@ public final class Loader
      */
     static void seedLongCache()
     {
+        if (sdLongCache)
+        {
+            return;
+        }
         long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Long$LongCache"), Magic.bytes("cache"));
         int li = classIndexByName(Magic.bytes("java/lang/Long"));
         if (cacheSlot == 0L || li < 0)
@@ -8332,6 +8383,7 @@ public final class Loader
             k += 1;
         }
         Magic.store64(cacheSlot, arr);
+        sdLongCache = true;
     }
 
 
@@ -8648,8 +8700,37 @@ public final class Loader
      * <p>A bare Object is the whole requirement -- the field is only ever a monitor, never read for content --
      * so this seeds exactly what the blocked initializer would have provided and nothing more.
      */
+    /**
+     * ONE-SHOT FLAGS FOR THE SEEDS, and they are the whole fix for the largest item in the clinit phase.
+     *
+     * <p>Every seed below is IDEMPOTENT and its result IMMUTABLE -- a boxed Integer for -128..127, a
+     * field-free access object, a bare monitor, a primitive mirror. Re-running them per batch therefore
+     * cannot change an answer, and it cost fifteen linear walks of the static registry per batch plus 512
+     * allocations, over ~209 batches of a launcher boot.
+     *
+     * <p>I ALSO CLAIMED RE-RUNNING BROKE SMALL-INTEGER BOX IDENTITY, AND A NEGATIVE CONTROL REFUTED IT. Four
+     * of these allocate, so re-running looked like it must REPLACE the object the static already held, making
+     * `Integer.valueOf(5) == Integer.valueOf(5)` false across a batch boundary. A probe that forces a
+     * demand-load BETWEEN the two calls reports `int=1 long=1 TYPE=1` with these guards REMOVED, so the
+     * re-seed does not in fact replace the cache the running program reads. WHY it does not is not
+     * established, and the probe was deleted rather than kept: an arm that passes in both states is not a
+     * control, and leaving it in the suite would read as evidence to the next person.
+     *
+     * <p>A flag is set only on SUCCESS, because a seed legitimately cannot run until its class is registered
+     * (`seedIntegerCache` returns early while `java/lang/Integer` is absent), and it must be retried until
+     * then. THEY RESET IN `resetLoader` BESIDE `sgCount = 0` -- a flag that outlived the static registry it
+     * guards would skip the seed for a whole launch and leave the statics null, which is the same
+     * watermark-outliving-its-table trap already recorded twice here.
+     */
+    private static boolean sdVmLock, sdJio, sdJla, sdIntCache, sdLongCache, sdPrim;
+    private static int sdPrimMask;                      // one bit per wrapper TYPE already seeded (see seedPrimType)
+
     static void seedVmInitLock()
     {
+        if (sdVmLock)
+        {
+            return;
+        }
         int oi = classIndexByName(Magic.bytes("java/lang/Object"));
         if (oi < 0)
         {
@@ -8661,11 +8742,16 @@ public final class Loader
             long inst = Heap.alloc(16);                          // header only: a monitor needs no fields
             Magic.store64(inst + 0L, clTab[oi].tib);
             Magic.store64(slot, inst);
+            sdVmLock = true;
         }
     }
 
     static void seedJavaIOAccess()
     {
+        if (sdJio)
+        {
+            return;
+        }
         int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
         if (mi < 0)
         {
@@ -8677,11 +8763,16 @@ public final class Loader
             long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
             Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for the console() dispatch)
             Magic.store64(slot, inst);
+            sdJio = true;
         }
     }
 
     static void seedJavaLangAccess()
     {
+        if (sdJla)
+        {
+            return;
+        }
         int mi = classIndexByName(Magic.bytes("jdk/internal/access/MetalJavaLangAccess"));
         if (mi < 0)
         {
@@ -8693,6 +8784,7 @@ public final class Loader
             long inst = Heap.alloc(16 + clTab[mi].fieldCount * 8);   // field-free -> header only
             Magic.store64(inst + 0L, clTab[mi].tib);                 // TIB (itable dir for getEnumConstantsShared dispatch)
             Magic.store64(slot, inst);
+            sdJla = true;
         }
     }
 
@@ -12775,6 +12867,12 @@ public final class Loader
         VM.printDec(rfHashNameSteps / 1000);
         Uart.write(Magic.bytes("k chain="));
         VM.printDec(rfChainSteps / 1000);
+        // THE SEED BLOCK's registry walks. `seeds` is the largest item in this phase and had never been
+        // split; these say how much of it is `staticSlotOf` scanning a table that grows all boot.
+        Uart.write(Magic.bytes("k sd:n="));
+        VM.printDec(sgScanCalls);
+        Uart.write(Magic.bytes(" steps="));
+        VM.printDec(sgScanSteps / 1000);
         Uart.putc(0x6B);
         // allocCode, the difference between `place` and `emit`: calls, and the free-list scan under them.
         Uart.write(Magic.bytes(" ac:n="));
