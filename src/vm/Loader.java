@@ -3544,7 +3544,7 @@ public final class Loader
     private static long ccPlaceT;                        // sizeMethod per method (dry-run compile when not deferred)
     private static long ccTibT;                          // fillTib
     private static long ccEmitT;                         // emitMethod per method (real compile or stub)
-    private static long ccPubT;                          // Heap.publishCode over the whole arena, per class
+    private static long ccPubT;                          // publishEmitted: the bodies this compile wrote
 
     /**
      * ...AND THE SPLIT INSIDE `parse`, the second item in phase B (9,614ms, 24%). Three passes run per blob
@@ -7143,6 +7143,8 @@ public final class Loader
     private static long[] mCode;      // each reachable method's bytecode address
     private static int[] mLen;        // ... and its length
     private static long[] mBuf;       // ... and the buffer assigned to it
+    private static long[] mEnd;       // ... and the END of what emitMethod actually wrote there (0 = nothing,
+                                      //     either deferred -- the stub publishes itself -- or not emitted)
     private static long[] mLine;      // ... its line table addr (built in emitMethod; registerAll copies -> rgLine)
     private static long[] mSrc;       // ... its class's SourceFile filename Utf8 addr (-> rgSrc)
     private static int[] mLocals;     // ... its max_locals
@@ -7202,7 +7204,7 @@ public final class Loader
             emitMethod(i);
             i += 1;
         }
-        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the JIT buffers
+        publishEmitted();                               // the bodies this wrote, NOT the whole arena
         return mBuf[0];
     }
     // When set, compile() reuses the caller's already-allocated gTib (two-phase clinit) instead of rebuilding it.
@@ -7284,7 +7286,7 @@ public final class Loader
         }
         long cc4 = Magic.readCNTPCT_EL0();
         ccEmitT += cc4 - cc3;
-        Heap.publishCode(Heap.CODE_BASE, Magic.load64(Heap.CODE_PTR_CELL));   // I-cache maintenance over the JIT buffers
+        publishEmitted();                               // the bodies this wrote, NOT the whole arena
         ccPubT += Magic.readCNTPCT_EL0() - cc4;
     }
 
@@ -8684,6 +8686,7 @@ public final class Loader
         mCode = new long[MAXM];
         mLen = new int[MAXM];
         mBuf = new long[MAXM];
+        mEnd = new long[MAXM];
         mLine = new long[MAXM];
         mSrc = new long[MAXM];
         mLocals = new int[MAXM];
@@ -8872,6 +8875,50 @@ public final class Loader
     }
 
     /** Emit method {@code i}'s A64 (from the shared core) into its assigned buffer. */
+    /**
+     * I-cache maintenance over the bodies this compile actually WROTE, not the whole arena.
+     *
+     * It was `publishCode(CODE_BASE, <arena pointer>)` -- a clean+invalidate per 64-byte line over EVERY line
+     * of the code arena, once per class compiled, while the arena grows all boot and the bytes a class emits
+     * do not. ELEVENTH instance of this file's most common defect, and the SECOND call site of the same
+     * function: the patch-side twin was fixed one increment earlier (`patchRelocsFrom`, 12,680 -> 48.9ms).
+     * MEASURED before being touched: `pub` was 7.074ms of a 21.486ms `compile` at batch 209 -- the largest
+     * item in phase B -- and it had grown 1.080 -> 7.074ms (6.5x) across the boot while the work it publishes
+     * did not. **It cost 6.9ms on a batch that compiled NOTHING**, which is the shape stated outright.
+     *
+     * The extent is MEASURED, not recomputed: `emitMethod` records where its store loop stopped. A deferred
+     * method records 0 because `emitDeferredStub` publishes its own buffer, and the buffers are NOT
+     * contiguous (`allocCode` serves swept blocks from a free list), so an arena-mark range would be unsound.
+     *
+     * The barriers are paid ONCE for the class rather than per method, keeping the wide version's ordering
+     * exactly: every clean reaches unified memory BEFORE any invalidate is issued. Per-method publishCode
+     * would have been hundreds of full barriers to avoid one arena walk -- the trade the patch-side fix
+     * already rejected for the same reason.
+     */
+    private static void publishEmitted()
+    {
+        int i = 0;
+        while (i < mCount)
+        {
+            if (mEnd[i] != 0L)
+            {
+                Heap.publishClean(mBuf[i], mEnd[i]);
+            }
+            i += 1;
+        }
+        Heap.publishMid();
+        i = 0;
+        while (i < mCount)
+        {
+            if (mEnd[i] != 0L)
+            {
+                Heap.publishInval(mBuf[i], mEnd[i]);
+            }
+            i += 1;
+        }
+        Heap.publishEnd();
+    }
+
     private static void emitMethod(int i)
     {
         if (mDefer[i] != 0)                             // deferred: install a stub; the body compiles on first call
@@ -8880,6 +8927,7 @@ public final class Loader
             {
                 reportCompile(i, true);
             }
+            mEnd[i] = 0L;                               // emitDeferredStub publishes its own buffer
             emitDeferredStub(i);
             return;
         }
@@ -8902,6 +8950,7 @@ public final class Loader
             out += 4;
             k += 1;
         }
+        mEnd[i] = out;                                  // the MEASURED extent of this body, for publishEmitted
         if (gFrameSize > 0)                             // let VM.unwind pop this JIT'd frame
         {
             VM.addJitFrame(mBuf[i], out, gFrameSize, gRegLocals);
