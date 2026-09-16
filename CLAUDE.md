@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE IMAP REFILL WAS RE-COMPUTING AN IMMUTABLE HASH, AND THE FOUR COUNTERS ALREADY THERE COULD NOT SEE IT
-  (2026-09-15, NOT YET PI-VALIDATED).** `imap` was 1,366ms cumulative and the grows-with-load shape this file
+  (2026-09-16, PI-VALIDATED -- `imap` 2.26x, -763ms).** `imap` was 1,366ms cumulative and the grows-with-load shape this file
   has named more than any other. The four `rfs:` counters tally SLOT READS -- and 3.3M of those over a
   launcher boot cannot account for 1,366ms at ~68 cycles a read on a 166MHz core. **So the instrument was the
   first thing to fix, not the code.**
@@ -164,14 +164,32 @@ defines the minimum the assembler must encode.
     arena's `cur`/`peak`. The two BASELINE runs differ from EACH OTHER more than baseline differs from the
     change (`c0=6 c1=1 c2=15 c3=2` vs `c0=21 c1=1 c2=1 c3=1`), `smp sched: 4 of 4` throughout. The arena is
     352 bytes SMALLER and that is explained rather than tolerated: one method fewer (`itableHasHole`).
-  - **NO FIGURE IS PREDICTED.** The step count is the load-independent reading; how many milliseconds a step
-    is worth on a 166MHz core is exactly what this boot has to say, and I under-predicted the phase-B publish
-    by 4x in this same arc by extrapolating instead.
-  - **WHAT IS LEFT, AND THE DECISION IT GATES: `hnam` is now 415k of the remaining 457k -- 91%.** Removing it
-    means keying the registry index on `combine(hash(class), hash(name))` instead of an FNV fold over the
-    concatenation, so BOTH halves cache -- and that touches all four `rgBucket` sites, two of them on the
-    `patch` hot path where a mistake is a silent wrong dispatch. **Whether that is worth doing is a question
-    for the Pi's milliseconds, not for this ratio**, which is why it is not in this increment.
+  - **PI-VALIDATED, AND THE STEP MODEL WAS RIGHT BUT OVERSTATED.**
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `imap` (cumulative) | 1,365.986ms | **603.215ms** | **2.26x, -763ms** |
+    | `hcls` (class-name bytes folded) | ~25,900k (by the suite's ratio) | **0k** | gone |
+    | `hnam` (method-name bytes) | 11,704k | 11,704k | the irreducible half |
+    | whole boot | 99,433ms | 99,151ms | |
+
+    **Counted steps predicted ~2.8x and silicon gave 2.26x**, so there is per-call overhead the byte counts
+    cannot see -- 273k `defaultBySig` calls and 1,188k probe iterations carry loop cost of their own. Worth
+    knowing before trusting a step ratio again. **IDENTITY EXACT:** `rf:skip=114380 visit=44987
+    holeEnd=44370`, `memo=128548 res=82350 unres=27419`, `n:imap=855 synth=2276 clinits=388`, `rounds=2
+    pend=4 reach=8` -- every one matching, with `clos` 44390 -> 44987 (= `visit`) the one expected change.
+    `[3 containers successful]` / `[2 tests successful]` / exit 0.
+  - **THE WHOLE BOOT MOVED 282ms AGAINST A 763ms CUMULATIVE CUT, AND THAT IS STATED RATHER THAN ROUNDED
+    AWAY** -- the same gap this file already recorded for the Type index (1.43s cumulative, 518ms on the
+    boot). The cumulative counter is the trustworthy reading; a few hundred ms of whole-boot delta is not
+    resolvable in this harness.
+  - **NO FIGURE WAS PREDICTED, deliberately.** The step count is the load-independent reading; how many
+    milliseconds a step is worth on a 166MHz core is what the boot had to say, and I under-predicted the
+    phase-B publish by 4x in this same arc by extrapolating instead.
+  - **THE DECISION IT GATED, ANSWERED: NO.** `hnam` is 78% of the 15,096k steps left, but at the measured
+    ~40ns a step that is ~400ms -- 0.4% of a 99-second boot -- against re-keying `rgBucket` on
+    `combine(hash(class), hash(name))` at all four probe sites, two of them on the `patch` hot path where a
+    mistake is a silent wrong dispatch. **Not worth it, and the same log says why: `seeds` is 1,369ms.**
 
 - **BATCH 188 IS A GARBAGE COLLECTION. `struct` WAS NEVER A DEFECT, AND FOUR BOOTS SAY SO (2026-09-15,
   PI-VALIDATED).** The `gc=` counter settled it on the first try:
