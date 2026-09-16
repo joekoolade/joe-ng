@@ -3588,6 +3588,13 @@ public final class Loader
     // Per-pass accumulators for LOAD_PROFILE, in raw CNTPCT ticks (converted only when printed).
     static int mrRounds;
     static long mrProbe, mrSeed, mrCollect, mrPull, mrStruct, mrInst, mrStatic, mrVirt, mrDflt;
+    // The classpath-jar FETCH -- locating a class in the archive and INFLATING it -- measured where it
+    // happens instead of being charged to whichever mark pass triggered it. It is a SUBSET of `pull` and
+    // `struct`, not a sibling of them: both of those end in registerNameFromDir, so a single large class
+    // arriving as somebody's superclass puts its whole inflate inside `struct`. That is how batch 188 of a
+    // launcher boot reads `struct=565ms` against ~140us for its neighbours while adding two blobs, with
+    // `pull=0us` -- and reading `struct` as structural work is exactly the mis-attribution this removes.
+    static long mrFetch;
     /** The SETUP before the round loop, which no sub-timer covered -- ~417ms of a 712ms mark. */
     static long mrReset, mrAlloc, mrEntry, mrRoot, mrExc;
 
@@ -3708,6 +3715,7 @@ public final class Loader
         mrCollect = 0L;
         mrPull = 0L;
         mrStruct = 0L;
+        mrFetch = 0L;
         mrInst = 0L;
         mrStatic = 0L;
         mrVirt = 0L;
@@ -5361,14 +5369,19 @@ public final class Loader
         {
             return 0L;
         }
+        long tf = Magic.readCNTPCT_EL0();              // the FETCH: a jar miss inflates the whole classfile here
         long bytes = VM.dirBytes(namePtr, len);
+        mrFetch += Magic.readCNTPCT_EL0() - tf;
         if (bytes == 0L || alreadyBlob(bytes))
         {
             return 0L;                                 // unembedded root (Object/Magic), or already pulled this pass
         }
         if (!LOAD_TRACE)
         {
-            addBlob(bytes, (int) VM.dirLen(namePtr, len));
+            tf = Magic.readCNTPCT_EL0();
+            int dlen = (int) VM.dirLen(namePtr, len);
+            mrFetch += Magic.readCNTPCT_EL0() - tf;
+            addBlob(bytes, dlen);
             return bytes;
         }
         long t0 = Magic.readCNTPCT_EL0();
@@ -12637,6 +12650,8 @@ public final class Loader
         // unattributed. A sub-split that does not add up to its total is not a split; print every term.
         Uart.write(Magic.bytes(" struct="));
         printDur(ticksUs(mrStruct));
+        Uart.write(Magic.bytes(" fetch="));            // INSIDE pull+struct, not beside them -- see mrFetch
+        printDur(ticksUs(mrFetch));
         Uart.write(Magic.bytes(" inst="));
         printDur(ticksUs(mrInst));
         Uart.write(Magic.bytes(" static="));

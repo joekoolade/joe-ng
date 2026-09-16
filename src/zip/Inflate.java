@@ -298,7 +298,19 @@ public final class Inflate
         return v;
     }
 
-    /** Walk one canonical Huffman code bit by bit; the symbol, or -1 on a malformed code (or starvation). */
+    /**
+     * Walk one canonical Huffman code; the symbol, or -1 on a malformed code (or starvation).
+     *
+     * <p>THE BIT SOURCE IS INLINED RATHER THAN CALLED, and that is the whole point of this method's shape.
+     * A canonical walk reads one bit per code length and DEFLATE's average code is ~9 bits, so the obvious
+     * form pays ~9 calls to {@link #bits} PER SYMBOL -- and every literal byte of every class demand-loaded
+     * out of the classpath jar is one symbol. This VM's baseline compiler does not inline, so each of those
+     * was a real frame: prologue, callee-saved spill, epilogue, around four lines of work.
+     *
+     * <p>The bit state ({@code inPos}/{@code bitBuf}/{@code bitCnt}) and the STARVATION CONTRACT are
+     * unchanged -- the refill below is exactly what {@code bits(1)} does, and starving still consumes
+     * nothing and leaves the caller's {@link #mark}/{@link #rewind} able to put every bit back.
+     */
     private int decodeSym(Huff h)
     {
         int code = 0;
@@ -307,11 +319,20 @@ public final class Inflate
         int len = 1;
         while (len <= Huff.MAXBITS)
         {
-            code = code | bits(1);
-            if (starved)
+            if (bitCnt == 0)                           // refill, exactly as bits(1) does: one byte at bitCnt
             {
-                return -1;
+                if (inPos >= inEnd)
+                {
+                    starved = true;
+                    return -1;
+                }
+                bitBuf = bitBuf | (in[inPos] & 0xFF);
+                inPos += 1;
+                bitCnt = 8;
             }
+            code = code | (bitBuf & 1);
+            bitBuf = bitBuf >>> 1;
+            bitCnt = bitCnt - 1;
             int count = h.count[len];
             if (code - first < count)
             {
@@ -562,7 +583,11 @@ public final class Inflate
             }
             if (sym < 256)
             {
-                at = emit(out, at, sym);
+                out[at] = (byte) sym;                  // emit(), inlined -- a call per OUTPUT BYTE, and this
+                win[wpos] = (byte) sym;                //   VM's baseline compiler does not inline it
+                wpos = (wpos + 1) & 32767;
+                produced += 1;
+                at += 1;
                 continue;
             }
             if (sym == 256)
@@ -616,8 +641,12 @@ public final class Inflate
     {
         while (copyRem > 0 && at < end)
         {
-            int b = win[(wpos - copyDist) & 32767] & 0xFF;
-            at = emit(out, at, b);
+            byte b = win[(wpos - copyDist) & 32767];
+            out[at] = b;                               // emit(), inlined: same reason as the literal path
+            win[wpos] = b;
+            wpos = (wpos + 1) & 32767;
+            produced += 1;
+            at += 1;
             copyRem -= 1;
         }
         return at;

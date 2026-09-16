@@ -115,6 +115,64 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE INFLATER PAID A NON-INLINED CALL PER BIT AND PER BYTE, AND `struct` HAD BEEN CHARGED WITH ITS OWN JAR
+  FETCHES (2026-09-15, NOT YET PI-VALIDATED).** The open item from the entry below -- batch 188's
+  `mark=581.760ms` with `struct=565.170ms`, reproduced to 0.13% -- is a **classpath-jar FETCH**, not
+  structural work: `pullStructural` ends in `registerNameFromDir`, so a class arriving as somebody's
+  SUPERCLASS has its whole inflate charged to `struct`. The same batch reads `pull=0us`, which is what says
+  nothing pended it.
+
+  - **`decodeSym` WALKED THE HUFFMAN CODE ONE `bits(1)` CALL PER BIT.** A canonical walk reads one bit per
+    code length and DEFLATE's average code is ~9 bits, so that is **~9 calls per SYMBOL** -- and every
+    literal byte of every demand-loaded class is one symbol. `emit` was a second call **per output byte**,
+    from both the literal path and the match copy. **This VM's baseline compiler does not inline**, so each
+    was a real frame: prologue, callee-saved spill, epilogue, around four lines of work.
+  - **MEASURED LOAD-INDEPENDENTLY ON THE REAL JAR, because wall clock here would have proved nothing.**
+    Inflating all of `ramfs/lib/junit.jar` (1999 entries, 6,921,734 bytes): **`bits()` calls 17,827,492 ->
+    1,099,726, 16.2x**, plus ~6.9M `emit` calls gone. **The HOST run moved only 112 -> 94ms and that is the
+    expected result, not a disappointing one:** HotSpot inlines both callees, so the seed JVM structurally
+    cannot see this change. The call COUNT is the evidence; the Pi is where a call is a frame.
+  - **THE STARVATION CONTRACT IS THE PART THAT HAD TO BE PRESERVED, and it was checked rather than assumed.**
+    The refill is exactly what `bits(1)` does (one byte OR'd in at `bitCnt`, which is 0 there), and starving
+    still consumes nothing, so a caller's `mark`/`rewind` puts every bit back. The pre-emptive `if (starved)`
+    the old loop ran per bit is dropped because **`decodeSym` can never be entered with it already set**:
+    every caller returns the moment it is, and the driving loop breaks out until `input()` clears it --
+    read at all four call sites, not inferred from one.
+  - **THE GATE IS EXACTLY TARGETED AND IT IS THE HOST'S, not a boot:** `zip: 91 checks` builds with the
+    JDK's own `Deflater` and reads back with ours, byte-for-byte, over fixed AND dynamic blocks, stored
+    blocks, `HUFFMAN_ONLY` (pure literal path, no matches), incompressible data, matches past the 32K
+    window, and a 70KB mixed stream -- **and feeds the decoder in CHUNKS**, which is the `mark`/`rewind`
+    starvation path this change touches. All 91 pass; A64 105, object-model 22, class-reader 171, refmap 13,
+    compiler 37, crypto 17, overlay-check 0 new.
+  - **AND THE METAL DECODER IS GATED BY THE ARCHIVE'S OWN CRC, which is a check nothing can fake.** QEMU,
+    `demo/ZipDemo` against `/lib/app.jar`: an unmodified `ZipInputStream` walks it, our engine inflates
+    every entry, and a stock `CRC32` over the INFLATED bytes prints beside each name --
+    `MANIFEST.MF 78 294d779e`, `Greeting.class 1101 86caf830`, `Main.class 1233 da5812a8`, `entries=5`,
+    manifest text correct, `[main returned normally]`. **Every size and CRC identical to `unzip -v`**, so the
+    JIT-compiled decoder produced byte-identical output. Demo suite alongside it: 33 programs,
+    `lisp evals=600 result=610 stable=1`, `gc: collections=54`, `SMP: 4 of 4`, `finish HML` 20/20/20,
+    inversion 60ms, `steps/core 60/60/60/60`, `sum20=210 weighted20=2870 wide=7000000155`, `YNW`/`RP`, and
+    FOURTEEN failure markers zero. **The suite carries no jar-backed program**, so that boot claims NO
+    REGRESSION and ZipDemo is what proves the feature -- a different claim, kept straight.
+  - **`fetch=` IS ON THE MARK LINE NOW, and it is a SUBSET of `pull` and `struct` rather than a sibling** --
+    stated at both the field and the print, because a term that does not partition its total is exactly how
+    the `mark` sub-split lied once before. Two clock reads per DIR LOOKUP, which happens only for a name not
+    yet registered -- not per item, which is the rule this arc has now paid for three times.
+  - **TWO MORE DEFECTS ON THIS PATH, FOUND BY READING AND DELIBERATELY NOT FIXED HERE** (one unvalidated
+    change per card, and neither is ranked yet):
+    - **`JarFs.entry` LINEAR-SCANS THE WHOLE NAME CACHE, and its own doc claims the opposite** -- "the next
+      ask costs one name compare instead of a directory scan", where the code walks up to `cacheCount`
+      entries. The cache holds hits AND misses (its comment notes almost every name asked about is a
+      java.base class the jar does not hold), so it grows all boot to `MAXCACHE` 2048. **And it is walked
+      TWICE per pull**: `registerNameFromDir` asks `VM.dirBytes` then `VM.dirLen`, one `entry()` each.
+    - **THE `struct` PASS HAS NO ROUND WATERMARK.** Every other pass in the round loop got one in the
+      demand-load arc (`addCollected`, `pendPullTo`, `pdPendTo`/`pdPendEpoch`, `pdDfltTo`, the probe memo) --
+      this one still re-derives, every round, facts that are immutable by construction: a blob's superclass
+      and direct-interface names come straight out of its classfile bytes.
+  - **NOT PREDICTING A FIGURE.** I under-predicted the phase-B publish by 4x in this same arc and recorded
+    that I would rather say "unknown" than put a number on it. What the next boot answers: whether batch
+    188's 565ms is `fetch`, and what the inflater costs once the calls are gone.
+
 - **`allocCode` SCANNED EVERY BLOCK EVER ALLOCATED, AND ON THE LAUNCHER THE WALK IS NOW GONE ENTIRELY
   (2026-09-15, PI-VALIDATED).** `place` was 6.981ms at batch 209 against `emit`'s 3.875ms though both run
   the same `compileMethod`; the difference was `allocCode`, whose `takeFreeCode` walks **all `codeBlockN`
