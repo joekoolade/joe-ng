@@ -115,6 +115,59 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `fetch` TIMER SETTLED `struct` IN ONE BOOT, AND REFUTED MY OWN READING OF WHAT THE FETCH IS
+  (2026-09-15, PI-VALIDATED).** The split worked exactly as intended and the answer is unambiguous:
+  **batch 188 reads `struct=564.695ms` with `fetch=564.363ms` -- 99.94% of it** -- and `struct` net of the
+  fetch is 332us against its neighbours' ~150us. `struct` was never structural work; `pullStructural` ends in
+  `registerNameFromDir`, so a class arriving as somebody's SUPERCLASS has its whole classpath-jar fetch
+  charged there, and that batch's `pull=0us` is what says nothing pended it.
+
+  - **THE INFLATER INLINING IS REAL AND IT IS NOT THE ANSWER TO 188, WHICH IS THE FINDING.** Where a fetch
+    really is decoding, it paid:
+
+    | `pull` | before | after | |
+    |---|---|---|---|
+    | batch 86 | 88.040ms | **74.290ms** | -15.6% |
+    | batch 158 | 23.511ms | **19.160ms** | -18.5% |
+    | batch 68 | 20.260ms | **16.612ms** | -18.0% |
+    | batch 83 | 10.977ms | **9.447ms** | -13.9% |
+
+    **Batch 188 moved 0.14%** (565.170 -> 564.363ms). A 16.2x cut in `bits()` calls that changes a timer by
+    nothing means that timer contains no Huffman decoding. **So inflate is ~15-18% of an ordinary fetch and
+    ~0% of this one**, and my reading that 188 was one large class being decompressed is REFUTED by the
+    change I made to test it. Whole boot 98,694 -> 98,691ms: inside the noise, because the fetches this helps
+    are a couple of hundred ms of a 98-second run and the bulk of the jar is inflated in batch 1, above the
+    captured window.
+  - **THE SAME SHAPE SHOWS ON A TINY JAR, which is what says it is not about size at all.** QEMU, ZipDemo
+    against the 5-entry `app.jar`: `fetch=4.846ms jf:n=41 scan=0k finds=7 fsteps=0k infl=0k` -- **41 lookups,
+    nothing inflated, and still ~118us per lookup.** Whatever the fetch is spending, it is per-LOOKUP and not
+    per-byte.
+  - **SO THE NEXT BOOT IS INSTRUMENTED RATHER THAN GUESSED AT, and that is deliberate after two wrong
+    readings in a row.** `jf:n=… scan=…k finds=… fsteps=…k infl=…k` on the batch line: entry() calls, cache
+    name comparisons, central-directory searches, directory entries compared, bytes actually decoded. **Plain
+    counters, not timers** -- every one sits inside a per-item loop where two clock reads would be a visible
+    share of what they measure, the lesson this arc has now paid for three times. Both scans are the shape
+    this file names most often: `JarFs.entry` walks the whole name cache (hits AND misses, to `MAXCACHE`) and
+    `ZipDir.find` walks all 2135 central-directory entries, **and `registerNameFromDir` asks TWICE** --
+    `VM.dirBytes` then `VM.dirLen`, one `entry()` each.
+  - **A SILENT WRONG ANSWER FOUND BY READING THAT PATH, AND IT NOW SAYS SO.** `JarFs.remember` returns -1
+    when the cache is full, and its comment claimed "full: keep answering, just without memory". **It does
+    not keep answering:** -1 makes `classBytes` return 0, so a class the jar DOES hold is reported ABSENT and
+    never loads -- in the one place this VM can least afford it. Whether it fires today is unknown, which is
+    exactly why it reports ONCE by name (`JAR NAME CACHE FULL at 2048 ... first overflow is <name>`) rather
+    than being left to surface as a missing class somewhere else. **The cap is not raised and the answer path
+    is not restructured here** -- that is a semantic change, and it waits for the counters to say whether the
+    cap is even reached.
+  - **IDENTITY IS EXACT AT 1782 BLOBS, as it must be for a change that touches no closure decision:**
+    `rounds=2 pend=4 reach=8`, `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370`, `n:imap=855 synth=2276
+    clinits=388`, `memo=128548 res=82350 unres=27419` -- every one matching. `[3 containers successful]` /
+    `[2 tests successful]` / `[0 tests failed]` / exit 0, and none of the corruption shapes a wrong decoder
+    would produce (no `CANNOT LOAD`, no `BADPATCH`, no wild branch) across a boot that inflates most of a
+    3MB jar.
+  - **WHAT IS STILL OPEN, unchanged:** the `struct` pass has no round watermark, while every other pass in
+    that loop got one in the demand-load arc. And `imap` is 1,377ms cumulative, still the grows-with-load
+    shape.
+
 - **THE INFLATER PAID A NON-INLINED CALL PER BIT AND PER BYTE, AND `struct` HAD BEEN CHARGED WITH ITS OWN JAR
   FETCHES (2026-09-15, NOT YET PI-VALIDATED).** The open item from the entry below -- batch 188's
   `mark=581.760ms` with `struct=565.170ms`, reproduced to 0.13% -- is a **classpath-jar FETCH**, not
@@ -172,6 +225,9 @@ defines the minimum the assembler must encode.
   - **NOT PREDICTING A FIGURE.** I under-predicted the phase-B publish by 4x in this same arc and recorded
     that I would rather say "unknown" than put a number on it. What the next boot answers: whether batch
     188's 565ms is `fetch`, and what the inflater costs once the calls are gone.
+    **BOTH ANSWERED, AND ONE OF THEM AGAINST ME -- see the entry above.** 188 is `fetch` (564.363 of
+    564.695ms) and the inflater is 15-18% of an ORDINARY fetch and ~0% of that one. Declining to predict was
+    right; the reading behind the fix was still half wrong, and only shipping it said so.
 
 - **`allocCode` SCANNED EVERY BLOCK EVER ALLOCATED, AND ON THE LAUNCHER THE WALK IS NOW GONE ENTIRELY
   (2026-09-15, PI-VALIDATED).** `place` was 6.981ms at batch 209 against `emit`'s 3.875ms though both run

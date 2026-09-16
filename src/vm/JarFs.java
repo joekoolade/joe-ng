@@ -1,5 +1,6 @@
 package vm;
 
+import board.bcm2711.Uart;
 import magic.Magic;
 import zip.ZipDir;
 
@@ -34,8 +35,21 @@ public final class JarFs
     private static long[] cacheBlob;                   // the inflated classfile blob, 0 for a known miss
     private static int[] cacheBlobLen;
     private static int cacheCount;
+    private static boolean cacheFullSaid;              // the overflow report fires once, not per lookup
 
     private static byte[] key;                         // scratch: "<internal name>.class"
+
+    // ---- fetch counters ---------------------------------------------------------------------------------
+    // The jar FETCH is the unnamed term in the mark: a launcher boot charges it to whichever pass triggered
+    // it (`pull` or `struct`), and batch 188 of a launcher boot is 564ms of it. Inlining the inflater's inner
+    // loops cut `pull` 15-18% on the inflate-heavy batches and moved batch 188 by 0.14%, so THAT batch is not
+    // decoding -- it is something else on this path. These rank the candidates. Plain counters, not timers:
+    // every one of them sits inside a per-item loop, where two clock reads would be a visible share of what
+    // is being measured -- the lesson this arc has now paid for three times.
+    public static long jfLookups;                      // entry() calls
+    public static long jfScanSteps;                    // cache-name comparisons -- grows with cacheCount
+    public static long jfFinds;                        // central-directory searches (a cache MISS)
+    public static long jfInflated;                     // bytes handed back by dir.read, i.e. actually decoded
 
     private JarFs()
     {
@@ -90,6 +104,7 @@ public final class JarFs
         cacheBlob = new long[MAXCACHE];
         cacheBlobLen = new int[MAXCACHE];
         cacheCount = 0;
+        cacheFullSaid = false;
         key = new byte[MAXNAME + 8];
         return true;
     }
@@ -163,9 +178,11 @@ public final class JarFs
 
     private static int entry(long namePtr, int len)
     {
+        jfLookups += 1;
         int i = 0;
         while (i < cacheCount)
         {
+            jfScanSteps += 1;
             if (cacheNameLen[i] == len && sameName(cacheName[i], namePtr, len))
             {
                 return cacheBlob[i] == 0L ? -1 : i;
@@ -188,8 +205,13 @@ public final class JarFs
         key[len + 3] = (byte) 'a';
         key[len + 4] = (byte) 's';
         key[len + 5] = (byte) 's';
+        jfFinds += 1;
         int idx = dir.find(key, len + 6);
         byte[] data = idx < 0 ? null : dir.read(idx);
+        if (data != null)
+        {
+            jfInflated += data.length;
+        }
         return remember(namePtr, len, data);
     }
 
@@ -198,7 +220,25 @@ public final class JarFs
     {
         if (cacheCount >= MAXCACHE)
         {
-            return -1;                                 // full: keep answering, just without memory
+            // "keep answering, just without memory" is what the comment here USED TO SAY, and it is not what
+            // this does: returning -1 makes classBytes answer 0, so a class the jar DOES hold is reported
+            // ABSENT and never loads. That is the silent-wrong-answer shape, in the one place this VM can
+            // least afford it, so it is reported ONCE by name rather than left to surface somewhere else.
+            if (!cacheFullSaid)
+            {
+                cacheFullSaid = true;
+                Uart.write(Magic.bytes("\n  JAR NAME CACHE FULL at "));
+                VM.printDec(MAXCACHE);
+                Uart.write(Magic.bytes(" -- a class the jar HOLDS now reads as absent; first overflow is "));
+                int w = 0;
+                while (w < len)
+                {
+                    Uart.putc((int) Magic.load8(namePtr + w));
+                    w += 1;
+                }
+                Uart.putc(0x0A);
+            }
+            return -1;
         }
         long nameBlob = Heap.allocData(len);
         int k = 0;

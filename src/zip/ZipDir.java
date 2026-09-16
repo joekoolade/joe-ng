@@ -173,6 +173,10 @@ public final class ZipDir
     }
 
     /** The index of the entry named {@code name}, or -1. */
+    /** Central-directory entries compared by {@link #find}. A plain counter, not a timer: this is per-ENTRY
+     *  work inside a linear scan, and two clock reads around it would be a visible share of what it measures. */
+    public static long findSteps;
+
     public int find(byte[] name)
     {
         return find(name, name.length);
@@ -185,6 +189,7 @@ public final class ZipDir
         int i = 0;
         while (i < count)
         {
+            findSteps += 1;
             if (nameLen(i) == len && nameMatches(i, name, len))
             {
                 return i;

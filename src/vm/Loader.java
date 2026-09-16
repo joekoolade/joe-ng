@@ -7,6 +7,7 @@ import compiler.Baseline;
 import compiler.Intrinsics;
 import compiler.Symbols;
 import objectmodel.ObjectModel;
+import zip.ZipDir;
 import magic.Magic;
 
 /**
@@ -12652,6 +12653,20 @@ public final class Loader
         printDur(ticksUs(mrStruct));
         Uart.write(Magic.bytes(" fetch="));            // INSIDE pull+struct, not beside them -- see mrFetch
         printDur(ticksUs(mrFetch));
+        // ... and what the fetch is DOING, since the timer alone cannot say. Cumulative over the launch, not
+        // per batch: the question these answer is which term GROWS, and both scans grow with what has already
+        // been asked (the name cache) or with the archive (the central directory).
+        Uart.write(Magic.bytes(" jf:n="));
+        VM.printDec((int) JarFs.jfLookups);
+        Uart.write(Magic.bytes(" scan="));
+        VM.printDec((int) (JarFs.jfScanSteps / 1000L));
+        Uart.write(Magic.bytes("k finds="));
+        VM.printDec((int) JarFs.jfFinds);
+        Uart.write(Magic.bytes(" fsteps="));
+        VM.printDec((int) (ZipDir.findSteps / 1000L));
+        Uart.write(Magic.bytes("k infl="));
+        VM.printDec((int) (JarFs.jfInflated / 1024L));
+        Uart.write(Magic.bytes("k"));
         Uart.write(Magic.bytes(" inst="));
         printDur(ticksUs(mrInst));
         Uart.write(Magic.bytes(" static="));
