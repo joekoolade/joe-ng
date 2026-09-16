@@ -115,6 +115,53 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`allocCode` SCANNED EVERY BLOCK EVER ALLOCATED, AND ON THE LAUNCHER THE WALK IS NOW GONE ENTIRELY
+  (2026-09-15, PI-VALIDATED).** `place` was 6.981ms at batch 209 against `emit`'s 3.875ms though both run
+  the same `compileMethod`; the difference was `allocCode`, whose `takeFreeCode` walks **all `codeBlockN`
+  blocks** looking for a free one big enough. TWELFTH instance of this file's most common defect.
+
+  | launcher, batch 209 (1782 blobs) | before | after | |
+  |---|---|---|---|
+  | `place` | 6.981ms | **140us** | **50x** |
+  | `emit` | 3.875ms | **2.746ms** | 1.4x |
+  | `compile` | 14.868ms | **6.955ms** | 2.1x |
+  | `B` | 16.189ms | **8.271ms** | 2.0x |
+  | `tot` (per batch) | 62.962ms | **55.098ms** | |
+  | whole boot | 101,901ms | **98,694ms** | **-3.2s** |
+
+  - **THE FIX IS A BOUND, NOT AN INDEX, and the bound is EXACT rather than conservative.** `codeFitBound`
+    holds the largest free block there can be; a request above it cannot be satisfied, so the walk is skipped
+    outright. When a walk does run to the end it has just measured the true maximum, so the bound is set from
+    what it SAW (`scanFreeMax`), not from a guess. `freeCodeBlock` and `mergeInto` reset it to UNKNOWN --
+    those are the only two ways a block can get bigger.
+  - **`emit` FELL TOO, AND THAT IS THE SAME FUNCTION**: `emitDeferredStub` allocates its own buffer, so
+    every deferred method was paying the walk as well. One call site's fix, two timers.
+  - **THE LAUNCHER GETS THE WHOLE WIN AND THE SUITE DOES NOT, for a reason worth keeping.** On the suite the
+    bound took scan steps 29,413k -> 13,080k (2.25x) and stopped there; on the launcher `ac:n=29k scan=0k
+    reuse=0k bump=29k` -- **not one successful reuse in the entire boot, and under a thousand scan steps**.
+    A launcher boot never frees code, so the bound is learned once and every later walk is skipped; the
+    suite's `launchMain` frees between its 30 programs, resetting the bound each time. **The ratio a
+    small harness reports is a statement about that harness's free-list churn, not about the code.**
+  - **THE FAILURE SHAPE HERE IS MEMORY, NOT A CRASH, which is why the arena was the thing to watch.** A bound
+    ever too LOW skips a usable block and bumps instead, so the arena grows and the loud end of that is
+    `code arena OOM`. None on this boot, and `reuse=0` says the skipped walks were finding nothing anyway --
+    the bound removed scans that could not have succeeded, which is exactly its claim.
+  - **QEMU'S WALL CLOCK COULD NOT JUDGE THIS ONE AND THE COMMIT SAID SO.** Every untouched timer moved
+    1.56-1.99x between the arms from machine load, so the only load-independent evidence before the flash was
+    the step count with `reuse`/`bump` unchanged. The Pi is the first honest timing this change got.
+  - **IDENTITY IS EXACT AT 1782 BLOBS:** `rounds=2 pend=4 reach=8`, `rf:skip=114380 visit=44987 clos=44390
+    holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `memo=128548 res=82350 unres=27419` -- every one
+    matching the previous boot. `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]` /
+    exit 0.
+  - **THE ARC: 161,556 -> 98,694ms -- 62.9 SECONDS, 39% OFF A LAUNCHER BOOT**, over the probe memo, both
+    `lookT` keys, the patch-side publish, the `clinit` instrument, the Type index, the phase-B publish, and
+    this.
+  - **WHAT IS NEXT, AND IT IS NOT WHAT I SAID LAST TIME: BATCH 188 REPRODUCED TO 0.13%.** See the correction
+    below -- a 565ms `struct` at one named batch is now the largest per-batch item in the boot outside batch
+    1, and it is deterministic. Behind it, **`imap` is 1,364ms cumulative and still the grows-with-load
+    shape**: per batch it went 3.4 -> 9.6ms (2.8x) across batches 27-209 while blobs grew only 1.29x. That
+    is the function this file has now named twice, at a third tier.
+
 - **PHASE B PUBLISHED THE WHOLE CODE ARENA PER CLASS -- 6.4 SECONDS OFF THE BOOT, AND I UNDER-PREDICTED IT
   BY 4x (2026-09-15, PI-VALIDATED).** `compileClass` and `compile` both ended with
   `publishCode(CODE_BASE, <arena pointer>)` -- a clean+invalidate per 64-byte line over EVERY line of the
@@ -156,10 +203,14 @@ defines the minimum the assembler must encode.
   - **QEMU COULD NOT JUDGE THE HALF THAT MATTERED and said so before the flash:** it does not model an
     incoherent I-cache, so publishing too LITTLE is invisible there and fatal on the board. The A/B proved
     the change publishes the right NUMBER of bytes; only the Pi could say they were the right LINES.
-  - **ONE UNEXPLAINED ONE-OFF, recorded rather than passed over:** batch 188 shows `mark=580.990ms` with
-    `struct=564.437ms`, against ~16ms for its neighbours and ~18ms at the same batch on the previous boot.
-    A single batch, on a boot that is otherwise 6.4s faster and identical on every counter. Most plausibly a
-    collection landing inside that timer. Not chased; noted so a second sighting is not read as new.
+  - **ONE UNEXPLAINED OUTLIER, recorded rather than passed over -- AND "most plausibly a collection" WAS
+    WRONG, as the very next boot said.** Batch 188 shows `mark=580.990ms` with `struct=564.437ms`, against
+    ~16ms for its neighbours and ~18ms at the same batch on the previous boot. I read that as a collection
+    landing inside the timer. **The allocCode boot reproduced it at the SAME batch to 0.13%** --
+    `mark=581.760ms` / `struct=565.170ms`, same `+1750blob`, neighbours still ~16ms. A collection is not
+    that repeatable. It is deterministic work, and noting it was what let one more boot settle it for free.
+    Whether the ~18ms reading two boots back is the same batch composition is not established; the two
+    sightings that agree are what the next look should start from.
   - **THE ARC SO FAR: 161,556 -> 101,901ms, 59.7 SECONDS AND 37% OFF A LAUNCHER BOOT** across the probe memo,
     both `lookT` keys, the patch-side publish, the `clinit` instrument, the Type index, and this.
   - **WHAT IS NEXT: `place` IS 6.981ms AGAINST `emit`'s 3.875ms at batch 209, though both run the same
