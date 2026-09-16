@@ -115,6 +115,46 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE FETCH COUNTERS PRODUCED A DECISIVE NEGATIVE AND KILLED BOTH OF MY FIX CANDIDATES (2026-09-15,
+  PI-VALIDATED).** Batch 188's 564ms of `fetch` is **SIX LOOKUPS**:
+
+  | across batch 188 | delta |
+  |---|---|
+  | `jf:n` 2657 -> 2663 | **+6 entry() calls** |
+  | `scan` 890k -> 895k | +5k cache-name comparisons |
+  | `finds` 762 -> 764 | **+2 central-directory searches** |
+  | `fsteps` 941k -> 945k | +4k directory comparisons |
+  | `infl` 3181k -> 3184k | **+3 KB inflated** |
+
+  ~94ms per lookup for microseconds of work. **The cost is not in `JarFs` at all.**
+
+  - **BOTH DEFECTS I HAD NAMED AS NEXT ARE NOW MEASURED AND NEITHER MATTERS.** Over the WHOLE boot the name
+    cache walks 949k steps and the central directory 963k -- real linear scans over growing tables, and
+    together a small fraction of one batch. `JarFs.entry`'s scan and `ZipDir.find`'s scan are both *correct
+    diagnoses of shape and wrong about cost*. **That is the fourth time in this arc that reading named a
+    plausible O(n) and measurement refused it**, and it is exactly why the counters went in instead of a fix.
+  - **THE CACHE-FULL CLIFF IS NOT FIRING TODAY:** no `JAR NAME CACHE FULL` anywhere in the boot. The report
+    stays -- it guards a silent wrong answer whose cost is a class that never loads -- but the cap does not
+    need raising yet, which is what the counter was there to say.
+  - **WHAT IS LEFT INSIDE THAT BRACKET AND COUNTED BY NOTHING: an allocation.** `JarFs.remember` calls
+    `Heap.allocData` twice per cached lookup, and an allocation that happens to cross the threshold pays for
+    a whole collection. That would be **deterministic batch-for-batch** (the same allocation sequence reaches
+    the same threshold at the same point, which is why 188 reproduced to 0.13% across three boots) and it
+    would be **completely untouched by making the inflater 16.2x cheaper** -- which is precisely what the
+    last two boots showed. So the batch line carries `gc=` now: one number, `Heap.gcPressure`, and a batch
+    where it increments while `fetch` is huge settles it.
+  - **THE SHAPE IS ALREADY VISIBLE ON QEMU:** ZipDemo against the 5-entry `app.jar` reads
+    `fetch=4.732ms jf:n=41 scan=0k finds=7 fsteps=0k infl=0k gc=1` -- 41 lookups, nothing inflated, and a
+    collection inside batch 1.
+  - **IDENTITY EXACT AT 1782 BLOBS** across a third consecutive boot: `rf:skip=114380 visit=44987 clos=44390
+    holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `memo=128548 res=82350 unres=27419`.
+    `[3 containers successful]` / `[2 tests successful]` / exit 0. Whole boot 99,299ms against 98,691 --
+    run-to-run variance, with the tests themselves accounting for most of it (65,757 vs 65,656ms).
+  - **THE METHOD NOTE WORTH KEEPING: a counter that says "not here" is worth as much as one that says "here",
+    and costs the same boot.** Two fixes were queued on reading alone -- an index for the name cache and a
+    watermark for the struct pass. The first is now measured as worthless. Shipping it would have been
+    unmeasured complexity in exactly the way this file already forbids for instruments.
+
 - **THE `fetch` TIMER SETTLED `struct` IN ONE BOOT, AND REFUTED MY OWN READING OF WHAT THE FETCH IS
   (2026-09-15, PI-VALIDATED).** The split worked exactly as intended and the answer is unambiguous:
   **batch 188 reads `struct=564.695ms` with `fetch=564.363ms` -- 99.94% of it** -- and `struct` net of the
@@ -213,7 +253,8 @@ defines the minimum the assembler must encode.
     yet registered -- not per item, which is the rule this arc has now paid for three times.
   - **TWO MORE DEFECTS ON THIS PATH, FOUND BY READING AND DELIBERATELY NOT FIXED HERE** (one unvalidated
     change per card, and neither is ranked yet):
-    - **`JarFs.entry` LINEAR-SCANS THE WHOLE NAME CACHE, and its own doc claims the opposite** -- "the next
+    - **MEASURED AND REFUTED BY THE ENTRY ABOVE -- 949k steps over the whole boot, not worth an index.**
+      **`JarFs.entry` LINEAR-SCANS THE WHOLE NAME CACHE, and its own doc claims the opposite** -- "the next
       ask costs one name compare instead of a directory scan", where the code walks up to `cacheCount`
       entries. The cache holds hits AND misses (its comment notes almost every name asked about is a
       java.base class the jar does not hold), so it grows all boot to `MAXCACHE` 2048. **And it is walked

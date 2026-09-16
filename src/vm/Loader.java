@@ -12666,7 +12666,14 @@ public final class Loader
         VM.printDec((int) (ZipDir.findSteps / 1000L));
         Uart.write(Magic.bytes("k infl="));
         VM.printDec((int) (JarFs.jfInflated / 1024L));
-        Uart.write(Magic.bytes("k"));
+        // COLLECTIONS, because the counters above ruled everything else out. Batch 188 of a launcher boot is
+        // 564ms of `fetch` for SIX lookups, two directory searches and 3 KB inflated -- microseconds of work.
+        // What sits inside that bracket and none of those counters is `Heap.allocData` in JarFs.remember, and
+        // an allocation that happens to cross the threshold pays for a whole collection. That would be
+        // deterministic batch-for-batch (same allocation sequence), and it would be untouched by making the
+        // inflater 16x cheaper -- which is exactly what the last two boots showed.
+        Uart.write(Magic.bytes("k gc="));
+        VM.printDec(Heap.gcPressure);
         Uart.write(Magic.bytes(" inst="));
         printDur(ticksUs(mrInst));
         Uart.write(Magic.bytes(" static="));
