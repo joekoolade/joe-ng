@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE SEED BLOCK RE-RAN ON EVERY BATCH -- `seeds` 8.5x ON THE SUITE, AND A NEGATIVE CONTROL KILLED HALF MY
-  READING OF WHY (2026-09-16, NOT YET PI-VALIDATED).** The `imap` boot's own log named the next target: at
+- **THE SEED BLOCK RE-RAN ON EVERY BATCH -- `seeds` 148x ON HARDWARE, AND A NEGATIVE CONTROL KILLED HALF MY
+  READING OF WHY (2026-09-16, PI-VALIDATED).** The `imap` boot's own log named the next target: at
   batch 209 **`seeds` was 1,369.531ms, the largest item in the clinit phase** -- more than double `imap`'s
   603ms -- and it had never been split. It is six functions run unconditionally at the end of EVERY batch.
 
@@ -170,6 +170,47 @@ defines the minimum the assembler must encode.
     two of the three scans removed are O(clCount) -- so the suite is the small end of this by construction.
     What the boot answers: whether `seeds` 1,369ms follows the 8.5x, and whether the twelve-batch burst
     below survives.
+  - **PI-VALIDATED, AND IT IS 148x -- `seeds` 1,369.531ms -> 9.262ms, WITH THE BURST GONE.**
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `seeds` (cumulative) | 1,369.531ms | **9.262ms** | **148x, -1,360ms** |
+    | `sd:n` / `sd:steps` | -- | **2,802 / 2,590k, FROZEN from batch 42** | |
+    | `clinit` per batch, b174-185 | ~77ms | **~6.2ms** | |
+    | whole boot | 99,151ms | **97,817ms** | **-1,334ms** |
+
+    **THE FLAGS LATCH COMPLETELY AND THE COUNTER PROVES IT: `sd:n=2802 steps=2590k` at batch 42 and the
+    IDENTICAL pair at batch 209.** Not one static-registry walk in 167 batches. The suite's 8.5x understated
+    this by 17x, exactly as predicted and for the stated reason -- two of the three removed scans are
+    O(`clCount`), and the suite peaks at ~190 blobs against the launcher's 1782.
+  - **THE 850ms BURST WAS THE SEED BLOCK, and that is what the boot was for.** Batches 174-185 cost ~70.8ms
+    each before; they now add **27 MICROSECONDS between them** (`seeds` 9.179 -> 9.206ms over the twelve),
+    with `clinit` per batch 77ms -> 6.2ms across the same window. A growing scan cannot produce a burst that
+    stops, and this was not one: it was the seeds hitting a window where `clCount`, `sgCount` and `mirN`
+    together made fifteen-plus walks briefly enormous.
+  - **THE SECOND SIGNAL DID NOT SURVIVE, AND I RECORD THAT AGAINST MYSELF.** I read `exc`'s +1.1ms/batch over
+    the SAME window as the same event -- "two independent timers switching on and off at the same batch
+    boundaries is one event". It is not: `exc` still grows ~1ms a batch, its own step just moved later
+    (frozen at 28.951ms from b186 before, still climbing to 30.187ms at b209 now). Two timers coinciding
+    once is a coincidence until something makes one of them move; the seeds half was right and the joint
+    reading was not. `exc` is 30ms, so it does not matter -- what matters is that I stated it as one event.
+  - **THE BOOT MOVED ALMOST EXACTLY WHAT THE COUNTER SAYS, which is unusual here and worth noting:** -1,334ms
+    of boot against a -1,360ms cumulative cut. The `imap` increment gave 763ms cumulative and 282ms of boot;
+    this one lands on the nose. And the tests were 1,008ms SLOWER on this boot (66,354 vs 65,346), so net of
+    them the load path gave back ~2.3s -- stated as arithmetic on a noisy quantity, not as the headline.
+  - **IDENTITY EXACT AT 1782 BLOBS:** `rf:skip=114380 visit=44987 clos=44987 holeEnd=44370`, `memo=128548
+    res=82350 unres=27419`, `n:imap=855 synth=2276 clinits=388`, `hcls=0k`, and `imap=604.547ms` against the
+    previous boot's 603.215ms -- untouched, as it must be. `[3 containers successful]` / `[2 tests
+    successful]` / `[0 tests failed]` / exit 0, with **no `SYSTEM PROPERTIES NOT SEEDED`** -- the marker a
+    flag that latched in the wrong place would trip, and the one real risk in this change.
+  - **THE ARC: 161,556 -> 97,817ms -- 63.7 SECONDS, 39% OFF A LAUNCHER BOOT.**
+  - **WHAT IS NEXT, AND `seeds` HAS FALLEN OUT OF THE LIST ENTIRELY.** At batch 209: **`callT` 1,300.917ms**
+    is now the largest item by a factor of two, and it SPLITS EXACTLY -- `lookT` 682.775 + `unresT` 507.742 +
+    `tailT` 101.653 = 1,292ms of 1,301ms. Then `imap` 604.547ms, `statT` 459.351ms, `synth` 187.255ms.
+    **`unresT` is the interesting one: 508ms, 39% of `callT`, and this file records it as `linkStubFor`,
+    "indexed once, measured cold, and REVERTED" on the grounds its path was not hot.** It was 541ms of an
+    11s `callT` then; it is 39% of a 1.3s one now. A function that measured cold is a statement about that
+    closure, not about the code -- for the third time.
   - **STILL UNEXPLAINED, AND IT IS THE REASON THIS TARGET WAS PICKED: `seeds` SPENT 850ms IN TWELVE BATCHES.**
     On the launcher it grew ~1.6ms a batch, then batches 174-185 cost **~70.8ms EACH**, then it went back to
     ~1.6ms. `exc` inside `mark` did the same thing in the same window (+1.1ms a batch, frozen at 28.9ms from
