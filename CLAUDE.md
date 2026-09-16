@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **`synth` RE-WROTE NINE WORDS PER SYNTHESISED TIB PER BATCH, AND NOT ONE OF THEM EVER CHANGED ANYTHING
-  (2026-09-16, NOT YET PI-VALIDATED).** `synth` was 191.718ms at batch 209 -- the largest item left outside
+- **`synth` RE-WROTE NINE WORDS PER SYNTHESISED TIB PER BATCH -- 24.3x, AND NOT ONE OF THEM EVER CHANGED
+  ANYTHING (2026-09-16, PI-VALIDATED).** `synth` was 191.718ms at batch 209 -- the largest item left outside
   `callT` and `imap`, and the third top-level split in a row that had never been looked inside. It is
   `refillSynthTibVtables`, which walks every synthesised lambda/annotation TIB on EVERY batch and re-copies
   `java/lang/Object`'s vtable into each; `n:synth` grows all boot (511 at batch 59, **2276** at batch 209).
@@ -171,6 +171,56 @@ defines the minimum the assembler must encode.
     byte-identical but for the SMP task interleaving and the philosophers' ordering. Host tests unchanged:
     A64 105, object-model 22, class-reader 171, refmap 14, `compiler: 37 checks`, crypto 17, zip 91,
     `overlay-check 0 new`.
+  - **PI-VALIDATED: `synth` 191.718ms -> 7.903ms (24.3x, -184ms), AND MY PREDICTED RANGE WAS TOO
+    CONSERVATIVE AT ITS LOW END.** I said "low tens of milliseconds if the copying was the cost; nearer 50ms
+    if the surviving walk dominates". **It reads 7.903ms -- BELOW the range I gave.** The direction was
+    right and the lower bound was wrong: the per-batch walk of the root array, which I estimated at ~0.1us an
+    iteration, costs far less than that. I am not inventing a mechanism for the exact figure; what the number
+    settles is that the walk is NOT worth a watermark, which is the decision the range existed to make.
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `synth` (cumulative) | 191.718ms | **7.903ms** | **24.3x, -184ms** |
+    | `sy:n` (TIBs filled, cumulative) | -- | **2276** | **= `n:synth` EXACTLY: each filled ONCE** |
+    | `sy:slots` | -- | 20k | = 2276 x 9, one fill each |
+    | `sy:chg` | -- | **0** | at 2276 TIBs and 1782 classes |
+    | `sy:obj` | -- | 20k | ~9 steps a call: Object sits at clTab[~9] |
+
+  - **`sy:n=2276` AGAINST `n:synth=2276` IS THE PROOF, and it is the `sd:n` shape.** Every synthesised TIB
+    was filled exactly once across the whole boot, where before every one was refilled on every batch --
+    ~476k TIB-visits and ~4.3M vtable words collapsed to 2276 and 20k.
+  - **`chg=0` HELD AT FULL SCALE, which is the claim that mattered.** Not one write was ever necessary, at
+    1782 classes and 2276 TIBs. That is the empirical half of "Object is the one eagerly-compiled class, so
+    its vtable slots are never re-pointed", and the counter stays on the batch line so a future boot can
+    still refute it.
+  - **AND `obj=20k` CONFIRMS THE CANDIDATE THE COUNTERS KILLED.** `objectClassIndex` finds `java/lang/Object`
+    in ~9 steps because it is registered early; hoisting it out of the loop -- the fix reading ranked first
+    -- would have removed 4.3M steps of a scan that was never the cost, and left the 4.3M redundant WRITES
+    in place. **Fifth time in this arc that reading named a plausible O(n) and measurement refused it.**
+  - **THIRD CLEAN TIMING CONTROL IN A ROW:** every untouched cumulative timer within 0.7% -- `callT` 927.087
+    -> 928.946, `lookT` 681.174 -> 679.382, `unresT` 138.399 -> 138.918, `imap` 604.744 -> 608.677, `statT`
+    4.460 -> 4.417, and `ps:n=580 miss=580 tab=3051` / `rb:n=50071 steps=63k` byte-identical.
+  - **IDENTITY EXACT:** `memo=128548 res=82350 unres=27419`, `rf:skip=114380 visit=44987 clos=44987
+    holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `sd:n=2802 steps=2590k` frozen, `hcls=0k`,
+    `pc:n=1243`, `pb:probed=1 of=1782`. **The failure shape here is a wild branch rather than a wrong
+    answer** -- a TIB latched before it was full leaves a 0 vtable slot and baked code carries no dispatch
+    guard -- so the assertion is the absence of `BOOT RE-ENTERED`, `FAULT`, `unclaimed pc` and `ESR EC=0`,
+    all zero. `[3 containers successful]` / `[2 tests successful]` / exit 0, only the two known denylisted
+    lines. Boot 96,750 -> 96,983ms with the tests within 43ms: flat, inside the noise.
+  - **THE ARC: 161,556 -> 96,983ms -- 64.6 SECONDS, 40% OFF A LAUNCHER BOOT.** Per batch at 209, `tot` is
+    **32.9ms** against the 676.1ms this arc started from.
+  - **AND THE CHEAP WINS ARE DONE, which is worth saying plainly rather than hunting for a tenth.** The
+    ranking at batch 209 is `callT` 928.946 (of which `lookT` 679.382, `unresT` 138.918, `tailT` 102.811),
+    `imap` 608.677, then `alloc` 106.035 -- and `synth` 7.903 and `statT` 4.417 have both left the list.
+    **Every one of the three ahead already has a recorded reason not to touch it:**
+    - `lookT` -- memoising the super-chain and stub tiers would answer with an ancestor's body after a
+      subclass registered its own override. A silent wrong-method dispatch, and 0.7% of a boot.
+    - `imap` -- the `hnam` residue was MEASURED at ~400ms and the fix is re-keying `rgBucket` at four sites,
+      two on the patch hot path. Declined once on those grounds; the grounds have not changed.
+    - `alloc` -- already cut 266x in the demand-load arc (27,585ms -> 104ms) and sitting at 106ms since.
+    What is left is a load path where the largest items are correct-by-design rather than defective. A tenth
+    increment would be looking for one, which is how the batch-188 chase cost four boots for "not a defect".
+
 
 - **THE CLASS REGISTRY HAD NO NAME INDEX -- THREE COPIES OF ONE SCAN, `statT` 42.5x, AND THE PREDICTED
   FIGURE LANDED (2026-09-16, PI-VALIDATED).** The previous increment indexed the STATIC registry and then could not
