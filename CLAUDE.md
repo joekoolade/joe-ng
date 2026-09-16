@@ -115,6 +115,46 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **BATCH 188 IS A GARBAGE COLLECTION. `struct` WAS NEVER A DEFECT, AND FOUR BOOTS SAY SO (2026-09-15,
+  PI-VALIDATED).** The `gc=` counter settled it on the first try:
+
+  | batch | 187 | **188** | 189 |
+  |---|---|---|---|
+  | `gc` (collections so far) | 9 | **10** | 10 |
+  | `fetch` | 0us | **565.168ms** | 0us |
+
+  **Only TWO collections increment anywhere in the captured window** (at batch 88 and batch 188), and one of
+  them lands on the single batch that is 10x slower than any of its ~170 neighbours. `JarFs.remember`'s
+  `Heap.allocData` was simply the allocation that crossed the threshold, and the fetch timer was holding the
+  stopwatch when it did.
+
+  - **IT ACCOUNTS FOR EVERY OBSERVATION, which is what a real answer has to do.** Deterministic
+    batch-for-batch -- 188 reproduced to 0.13% across FOUR boots, because the same allocation sequence
+    reaches the same threshold at the same point. Immune to a 16.2x cheaper inflater, because a collection
+    costs what it costs. Six lookups and 3 KB inflated, because the allocation that tripped it was tiny.
+  - **SO THE CHASE IS OVER AND THE HONEST ACCOUNTING IS: four boots on 0.57% of a boot, and the answer is
+    "not a defect".** That is still a result -- it stops this being re-found and re-chased, which is exactly
+    what the previous entry's "unexplained one-off" invited -- but it is a poor return, and the reason it ran
+    long is worth keeping: **each wrong reading was cheap to test, so none of them felt like a decision.**
+    The `fetch` timer, the `jf:` counters and `gc=` were one boot each and each killed a hypothesis; what was
+    missing was asking, before boot two, whether the TARGET was worth four.
+  - **WHAT THE ARC ACTUALLY BOUGHT, and it is not nothing:** the inflater is 16.2x fewer `bits()` calls and
+    15-18% off every inflate-heavy `pull`; `struct`/`pull` no longer absorb the jar fetch; `JarFs.entry`'s and
+    `ZipDir.find`'s linear scans are MEASURED (949k and 963k steps over a whole boot -- not worth indexing,
+    which is the fix I would otherwise have shipped on reading alone); and the `JAR NAME CACHE FULL` cliff is
+    now reported rather than silent, though it does not fire today.
+  - **THE ONE NUMBER WORTH CARRYING FORWARD: a collection costs ~565ms at 1750 blobs.** That is larger than
+    anything else this arc cut, and it belongs to the GC arc rather than the load path. Ten collections over
+    the boot, most of them during test execution where no timer sees them.
+  - **IDENTITY EXACT AT 1782 BLOBS for a fourth consecutive boot:** `rf:skip=114380 visit=44987 clos=44390
+    holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `memo=128548 res=82350 unres=27419`.
+    `[3 containers successful]` / `[2 tests successful]` / exit 0. Whole boot 99,433ms; the three
+    instrument-only boots sit at 98,691 / 99,299 / 99,433 with the tests accounting for most of the spread.
+  - **NEXT, and it is measured rather than guessed:** `imap` is **1,366ms cumulative** and still the
+    grows-with-load shape this file has named more than any other -- per batch 3.4 -> 9.6ms across batches
+    27-209 while blobs grew 1.29x. After that, `callT` 1,302ms and `lookT` 683ms. The `struct` pass still has
+    no round watermark; it is sound to add and worth ~150us a batch, which is to say nearly nothing.
+
 - **THE FETCH COUNTERS PRODUCED A DECISIVE NEGATIVE AND KILLED BOTH OF MY FIX CANDIDATES (2026-09-15,
   PI-VALIDATED).** Batch 188's 564ms of `fetch` is **SIX LOOKUPS**:
 
@@ -358,8 +398,11 @@ defines the minimum the assembler must encode.
   - **QEMU COULD NOT JUDGE THE HALF THAT MATTERED and said so before the flash:** it does not model an
     incoherent I-cache, so publishing too LITTLE is invisible there and fatal on the board. The A/B proved
     the change publishes the right NUMBER of bytes; only the Pi could say they were the right LINES.
-  - **ONE UNEXPLAINED OUTLIER, recorded rather than passed over -- AND "most plausibly a collection" WAS
-    WRONG, as the very next boot said.** Batch 188 shows `mark=580.990ms` with `struct=564.437ms`, against
+  - **ONE UNEXPLAINED OUTLIER -- AND THE FIRST READING WAS RIGHT AFTER ALL, THREE BOOTS LATER.** It IS a
+    collection (`gc` 9 -> 10 at exactly batch 188); what was wrong was the REASON for believing it, and
+    "a collection is not that repeatable" below is the sentence that sent this three boots sideways. A
+    collection triggered by a DETERMINISTIC allocation sequence is exactly that repeatable. See the entry
+    above. The text as written at the time:** Batch 188 shows `mark=580.990ms` with `struct=564.437ms`, against
     ~16ms for its neighbours and ~18ms at the same batch on the previous boot. I read that as a collection
     landing inside the timer. **The allocCode boot reproduced it at the SAME batch to 0.13%** --
     `mark=581.760ms` / `struct=565.170ms`, same `+1750blob`, neighbours still ~16ms. A collection is not
