@@ -115,6 +115,59 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **PHASE B PUBLISHED THE WHOLE CODE ARENA PER CLASS -- 6.4 SECONDS OFF THE BOOT, AND I UNDER-PREDICTED IT
+  BY 4x (2026-09-15, PI-VALIDATED).** `compileClass` and `compile` both ended with
+  `publishCode(CODE_BASE, <arena pointer>)` -- a clean+invalidate per 64-byte line over EVERY line of the
+  code arena, once per class compiled. ELEVENTH instance of this file's most common defect, and the SECOND
+  call site of the same function: the patch-side twin was fixed one increment earlier.
+
+  | launcher, batch 209 (1782 blobs) | before | after | |
+  |---|---|---|---|
+  | `pub` (inside `compile`) | 7.074ms | **1us** | gone |
+  | `compile` | 21.486ms | **14.868ms** | |
+  | `B` | 22.849ms | **16.189ms** | |
+  | `tot` (per batch) | 68.026ms | **62.962ms** | |
+  | whole boot | 108,268ms | **101,901ms** | **-6.4s** |
+
+  - **I PREDICTED ~1.5s AND IT WAS 6.4s, AND THE REASON IS THE INTERESTING PART: `pub` IS PER CLASS, NOT PER
+    BATCH.** I extrapolated 7ms x 209 batches from the CAPTURED WINDOW, which starts at batch 16 and by then
+    is adding ONE class per batch. **Batch 1 compiles the whole initial closure -- ~1340 classes -- and each
+    one walked an arena already grown by every class before it.** That is QUADRATIC in the closure, it is
+    where nearly all of this lived, and it is above the window every one of these measurements is taken
+    from. Net of the tests (which moved 67,944 -> 66,593ms, real sleeps), **5.0s came out of the load path**
+    against the ~1.2s the captured batches can account for.
+  - **THE CLINCHING READING BEFORE THE FIX WAS A BATCH THAT COMPILED NOTHING:** batch 201 had `compile=0us`
+    and `pub=6.895ms`. It now reads `pub=0us`. Cost proportional to the arena, not to the work.
+  - **THE EXTENT IS MEASURED, NOT RECOMPUTED:** `emitMethod` records where its store loop stopped. An
+    arena-mark range would be UNSOUND -- `allocCode` serves swept blocks from a free list, so the buffers are
+    not contiguous. A deferred method records 0 because `emitDeferredStub` publishes its own buffer.
+  - **WHAT ELSE THE WIDE SWEEP WAS COVERING, checked rather than assumed**, because that is where a publish
+    narrowing goes SILENTLY wrong: every other `allocCode` caller publishes its own buffer. The two that do
+    not are the deferred stub (covered) and `buildLineTable`, which puts a bci->line table in the code arena
+    but is only ever READ by the stack-trace walker, never executed -- so it needs no I-cache maintenance.
+  - **Barriers are paid ONCE per class rather than per method**, keeping the wide version's ordering exactly:
+    every clean reaches unified memory BEFORE any invalidate is issued. Per-method `publishCode` would have
+    been hundreds of full barriers to avoid one arena walk -- the trade the patch-side fix already rejected.
+  - **IDENTITY IS EXACT AT 1782 BLOBS:** `rounds=2 pend=4 reach=8 v:walks=2 levels=4 grew=1 cached=4`,
+    `rf:skip=114380 visit=44987 clos=44390 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`,
+    `memo=128548 res=82350 unres=27419`, and `rfs:type=201k hole=1550k clos=169k fill=1383k` -- every one
+    matching the previous boot. No `FAULT`, no `ESR EC=0`, no `BOOT RE-ENTERED`, no `BADPATCH`, and none of
+    the silent-wrong-answer shapes a bad publish would produce. `[2 tests successful]`, exit 0.
+  - **QEMU COULD NOT JUDGE THE HALF THAT MATTERED and said so before the flash:** it does not model an
+    incoherent I-cache, so publishing too LITTLE is invisible there and fatal on the board. The A/B proved
+    the change publishes the right NUMBER of bytes; only the Pi could say they were the right LINES.
+  - **ONE UNEXPLAINED ONE-OFF, recorded rather than passed over:** batch 188 shows `mark=580.990ms` with
+    `struct=564.437ms`, against ~16ms for its neighbours and ~18ms at the same batch on the previous boot.
+    A single batch, on a boot that is otherwise 6.4s faster and identical on every counter. Most plausibly a
+    collection landing inside that timer. Not chased; noted so a second sighting is not read as new.
+  - **THE ARC SO FAR: 161,556 -> 101,901ms, 59.7 SECONDS AND 37% OFF A LAUNCHER BOOT** across the probe memo,
+    both `lookT` keys, the patch-side publish, the `clinit` instrument, the Type index, and this.
+  - **WHAT IS NEXT: `place` IS 6.981ms AGAINST `emit`'s 3.875ms at batch 209, though both run the same
+    `compileMethod`.** The difference is `allocCode`, whose `takeFreeCode` is a free-list scan and
+    `noteCodeBlock` an append. **Which of the two is a question for counters, not for reading** -- the rule
+    this arc has now been right about twice. The batch is `mark` 16.8 + `B` 16.2 + `patch` 14.1 +
+    `clinit` 14.8 + `A` 1.1, so nothing dominates any more.
+
 - **THE `clinit` PHASE WAS MEASURING ITS OWN UART TRAFFIC, AND THE REGISTRY LOOKUP UNDER IT WAS A LINEAR SCAN
   (2026-09-15, PI-VALIDATED).** Two changes: the number that named this target was half artifact, and
   the real work under it was the tenth instance of this file's most common defect.
