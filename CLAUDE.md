@@ -115,8 +115,8 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **`statT` HAD NEVER BEEN SPLIT, AND THE COUNTERS FOUND A 100% MISS RATE PLUS A SECOND SCAN I HAD NOT
-  COUNTED (2026-09-16, NOT YET PI-VALIDATED).** With `unres` fixed, the batch-209 ranking is `lookT`
+- **`statT` HAD NEVER BEEN SPLIT -- 2.45x, AND THE COUNTERS FOUND A 100% MISS RATE PLUS A SECOND SCAN I HAD
+  NOT COUNTED (2026-09-16, PI-VALIDATED).** With `unres` fixed, the batch-209 ranking is `lookT`
   682.398ms, `imap` 605.936ms, then **`statT` 463.914ms** -- one of `patch`'s three top-level splits and the
   only one nothing had ever looked inside. Its loop is short enough to read: for every static reloc site,
   `globalStaticByRef` walks ALL `sgCount` registry entries with TWO `utf8EqAt` an entry, and `patchRelocs`
@@ -190,6 +190,54 @@ defines the minimum the assembler must encode.
     117k steps over all nine of its callers -- a linear walk of `clCount` with no index anywhere, where
     `classRegByName`/`classRegByNameAt`/`classRegByNameBytes` are three more copies of the same scan. The
     counters are in the tree; the decision wants a boot, not a reading.
+  - **PI-VALIDATED: `statT` 463.914ms -> 189.764ms (2.45x, -274ms), AND THE 100% MISS RATE HOLDS AT
+    LAUNCHER SCALE.**
+
+    | launcher, batch 209 (1782 blobs) | before | after | |
+    |---|---|---|---|
+    | `statT` (cumulative) | 463.914ms | **189.764ms** | **2.45x, -274ms** |
+    | `ps:steps` | ~1,740k (580 x tab 3051) | **3k** | ~580x |
+    | `ps:n` / `miss` | -- | **580 / 580** | 100% miss, exactly as the suite predicted |
+    | `tab` / `cl` | -- | 3051 / 1782 | the two growing tables |
+    | `callT` / `lookT` / `unresT` / `tailT` | 929.908 / 682.398 / 138.367 / 101.076 | 931.371 / 683.009 / 138.691 / 101.856 | untouched, to 0.1% |
+    | `imap` | 605.936ms | 605.914ms | untouched |
+
+  - **THIS IS THE FIRST TIME THIS ARC HAS HAD A CLEAN TIMING CONTROL, and it is worth saying why.** Every
+    untouched cumulative timer reads within **0.1%** of the previous boot -- `callT` +0.16%, `lookT` +0.09%,
+    `unresT` +0.23%, `imap` -0.004% -- so the machine is pinned and the 2.45x on the one timer targeted is
+    real. Contrast the QEMU arms for the same change, where `statT` read 46.9 / 29.2 / 21.4 / 12.9ms across
+    only TWO binaries. **The Pi is the honest harness; four QEMU boots could not have told this from noise.**
+  - **THE SUITE'S 100% MISS RATE WAS NOT AN ARTIFACT OF ITS SIZE: `ps:n=580 miss=580` at 1782 blobs.** Every
+    static reloc site that reaches this loop resolves to nothing, at both scales. That is what made the index
+    the right fix rather than a memo -- the negative answer must be re-derivable, so it had to be made cheap.
+  - **AND THE RESIDUE IS FULLY ACCOUNTED FOR, WHICH NAMES THE NEXT INCREMENT EXACTLY.** 190ms across 580
+    sites is 327us a site, which is absurd for a hash probe -- so the remaining `statT` is NOT the loop I
+    fixed. It is the OTHER scan, the one the first cut of the instrument was blind to: every miss calls
+    `reportZeroCellBind`, whose `regBySigU` walks all `clCount` classes, so 580 x 1782 = **~1,034k utf8EqAt
+    calls**. At the ~0.18us a call this boot's own `deny=508k`/`unresT=138ms` implies, that is **~186ms
+    against a measured 189.764ms.** `statT` is now essentially ALL diagnostic gate: a linear scan of the
+    class registry, run per site, to decide whether a miss is worth PRINTING.
+  - **IDENTITY EXACT ON EVERY GATE:** `memo=128548 res=82350 unres=27419`, `rf:skip=114380 visit=44987
+    clos=44987 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `sd:n=2802 steps=2590k` still frozen,
+    `hcls=0k`, `pb:probed=1 of=1782`, `pc:n=1243`. `rb:n=5316` unchanged in shape. **And the marker that
+    matters for a STATIC index is an absence: no `STATIC BOUND TO THE ZERO CELL` and no new `UNRESOLVED
+    STATIC`** -- a wrong cell would not crash, it would read a different field's memory for ever, and
+    `ps:n`/`miss` matching site-for-site is the numeric form of that check. `[3 containers successful]` /
+    `[2 tests successful]` / `[0 tests failed]` / exit 0, with only the two known denylisted lines
+    (`java/nio/file/OpenOption`, `Files.newBufferedWriter`), both correctly labelled DENYLISTED.
+  - **THE BOOT WENT UP 550ms AND THAT IS STATED RATHER THAN BURIED:** 97,914 -> 98,464ms against a 274ms
+    cumulative cut, with the tests within 20ms of the previous run. Six launcher boots now read 99,433 /
+    99,299 / 99,151 / 97,817 / 97,914 / 98,464 -- the same ~1.6s spread this file has recorded three times.
+    The cumulative counters are the trustworthy reading, and here they are unusually trustworthy: every
+    untouched one is within 0.1%.
+  - **THE ARC: 161,556 -> 98,464ms.**
+  - **WHAT IS NEXT, AND IT IS ALREADY COUNTED AND NOW QUANTIFIED: `regBySigU`.** `rb:n=5316 steps=3926k` over
+    all nine callers, of which ~1,034k is this one gate. It is a linear walk of `clCount` with a utf8EqAt an
+    entry and **no index anywhere**, with three more copies of the same scan beside it
+    (`classRegByName`/`classRegByNameAt`/`classRegByNameBytes`). The ranking at batch 209 is now `callT`
+    931.371 (of which `lookT` 683.009), `imap` 605.914, **`synth` 191.697 -- which has quietly overtaken
+    `statT` and has also never been split** -- then `statT` 189.764 and `alloc` 106.513.
+
 
 - **THE UNRESOLVED ARM RE-DECIDED TWO IMMUTABLE FACTS PER SITE PER BATCH -- `unresT` 3.67x, AND THE COUNTERS
   SAY THE OLD NOTE BLAMED THE WRONG HALF (2026-09-16, PI-VALIDATED).** With `seeds` gone, `callT` is the largest item
