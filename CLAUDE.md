@@ -232,10 +232,33 @@ defines the minimum the assembler must encode.
     `VIRTUALRESOLVE`, `SCRATCH MAP`, `JIT unsupported`, `heap OOM`, `BADPATCH`, `STW TIMEOUT`, `ESR EC=0`.
     Host tests unchanged: `compiler: 39 checks`, `overlay-check 0 new`. **`CAP EXCEEDED` is the one that
     matters for THIS change** -- every demand-loaded class now arms extra cells.
+  - **THE MAXLAZY CAP WAS SILENT AND IS NOT ANY MORE (fixed, gated separately).** `armPhaseACells` folded
+    `lzN < MAXLAZY && dlN < MAXLAZY` INTO the "does this method want a cell" condition, so a full table read
+    as "this method does not want one" -- the silent `if (room) { record it }` with no else that `MAXREACH`
+    and `MAXPEND` each had to be taught to report, at a third site and with a worse consequence. The cap is
+    an `else` now, and **the two kinds of method are answered differently because they cost different
+    things:**
+    - **A CONSTRUCTOR HALTS**, because it loses its ONLY tier -- the short-circuit above -- so continuing
+      rebuilds this very defect, silently. It names the class and descriptor, then `capHalt`s exactly like
+      the `MAXLAZY-defer` guard ten lines away in `emitDeferredStub`.
+    - **A STATIC IS REPORTED ONCE, BY NAME, AND THE LOAD CONTINUES**, because tiers 1 and 2 can still
+      answer it once the body is compiled and registered. First overflow only -- the `JAR NAME CACHE FULL`
+      shape, since a per-method line buries the one name worth having.
+    - `mintPrunedStub`'s sibling `return 0L` is deliberately LEFT ALONE: it is documented ("0 if the lazy
+      table is full, leaving the old behaviour") and has a real fallback -- a 0 vtable slot meets the
+      null-vtable-slot guard and resolves late. Not every silent skip is the same defect, and the
+      difference is whether another tier answers.
+    - **THE FLAG RESETS BESIDE THE TABLES IT GUARDS** (`cellCapReported`, in `resetLoader`'s reclaim, with
+      `lzN`/`dlN`). A flag that outlives its table silences the NEXT launch's first overflow -- the one
+      worth naming -- which is the watermark lesson this file has now had to state four times.
+    - **VERIFIED BOTH DIRECTIONS, which is what makes it evidence.** At `MAXLAZY=200` it fires and reads
+      `PHASE-A CELL TABLE FULL at 200 -- no cell for jdk/internal/util/ArraysSupport.mismatch([S[SI)I`
+      (static, one line, load continues), then
+      `... no cell for java/nio/charset/Charset.<init>(Ljava/lang/String;[Ljava/lang/String;)V` followed by
+      `CAP EXCEEDED: MAXLAZY-init count=200` -- **exactly one static line among the two reports**, so the
+      dedup holds. At 32768 it is **SILENT** across the whole suite. A report that cries wolf on a passing
+      boot is worse than none, and this file has had to say that five times.
   - **STILL OPEN, and deliberately not rounded away:**
-    - **THE MAXLAZY CAP IS SILENT.** `armPhaseACells` skips arming when `lzN >= MAXLAZY` with no report,
-      while the two `capHalt` sites beside it are loud -- and a skipped `<init>` cell is now exactly this
-      bug again, silently. The `MAXREACH`/`MAXPEND` lesson, unlearned at a third site. Its own increment.
     - **WHY THE LINK STUB NEVER FIRES.** The site is not trap-wired, so `linkStubFor` minted a stub and
       `patchRelocs` installed it -- and `LINKWATCH` shows `resolveLinkTarget` never runs for it. A stub that
       exists and is never invoked is a second, smaller question, independent of this fix.

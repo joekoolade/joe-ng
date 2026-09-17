@@ -3025,6 +3025,10 @@ public final class Loader
                 dlBucket = null;                        // the name index goes with the table it indexes
                 lzTab = null;
                 lzN = 0;
+                cellCapReported = false;                // the "named the first overflow" flag guards THESE
+                                                        //   tables, so it dies with them -- a flag that
+                                                        //   outlives its table silences the next launch's
+                                                        //   first overflow, which is the one worth naming.
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
@@ -15137,6 +15141,58 @@ public final class Loader
         return dlCellOf(clsBase, classOff, gbase, nameOff, gbase, descOff);
     }
 
+    /** True once a STATIC has been refused a phase-A cell, so the overflow is named once rather than per
+     *  method -- the {@code JAR NAME CACHE FULL} shape, for the same reason: the first name is the useful
+     *  one and a per-method line buries it. */
+    private static boolean cellCapReported = false;
+
+    /**
+     * The phase-A cell tables are full, so this method gets NO cell -- and the two kinds of method differ in
+     * what that costs, which is why they are answered differently.
+     *
+     * <p>A CONSTRUCTOR loses its only tier. {@code globalBufByRef} short-circuits every {@code <init>}
+     * straight to the cell tier (a constructor is never inherited, so it must not walk a super chain), so
+     * with no cell that tier returns 0: the call site binds to nothing and CALLS nothing, the deferred-`new`
+     * path still allocates a correctly sized object with the right TIB, and every field stays 0. The first
+     * symptom is an NPE on one of those fields, in another class, arbitrarily far from here. That is the
+     * defect this table's `<init>` cells were added to fix, and letting the cap reintroduce it SILENTLY is
+     * the shape this file calls the most expensive failure mode in the project's history -- so it HALTS,
+     * like the {@code MAXLAZY-defer} guard ten lines away in {@code emitDeferredStub}.
+     *
+     * <p>A STATIC degrades instead of lying: tiers 1 and 2 can still answer for it once the body is compiled
+     * and registered. So it is REPORTED, once, by name, and the load continues.
+     *
+     * <p>Either way the remedy is the same and the report says so: raise {@code MAXLAZY}.
+     */
+    private static void reportCellCapExceeded(int nameOff, int descOff, boolean ctor)
+    {
+        if (!ctor && cellCapReported)
+        {
+            return;                                     // named the first one already; the rest would bury it
+        }
+        Uart.write(Magic.bytes("\nPHASE-A CELL TABLE FULL at "));
+        VM.printDec(MAXLAZY);
+        Uart.write(Magic.bytes(" -- no cell for "));
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x2E);                                // '.'
+        printNameAt(gbase, nameOff);
+        printNameAt(gbase, descOff);
+        Uart.write(Magic.bytes("\n  lzN="));
+        VM.printDec(lzN);
+        Uart.write(Magic.bytes(" dlN="));
+        VM.printDec(dlN);
+        Uart.write(Magic.bytes(" -- raise MAXLAZY.\n"));
+        if (ctor)
+        {
+            // No other tier answers an `<init>`. Continuing binds the site to nothing and returns a raw
+            // object, which is a SILENT wrong answer; halting names the class that could not be armed.
+            capHalt(Magic.bytes("MAXLAZY-init"), lzN);
+        }
+        Uart.write(Magic.bytes("  (a STATIC: tiers 1-2 can still answer it, so the load continues;"));
+        Uart.write(Magic.bytes(" later overflows are not named.)\n"));
+        cellCapReported = true;
+    }
+
     /** M8 phase-A: at structure registration of the gated class, allocate an offset cell + lazy stub for each
      *  of its (static) methods, captured straight from the classfile method table (available at phase A via
      *  gMethodsStart). The cells live in the {@code dl*} table so a later caller finds them regardless of load
@@ -15181,8 +15237,17 @@ public final class Loader
             // that passed -- the whole difference. Same "mint what the site will need" the null-vtable-slot
             // guard and mintPrunedStub already do for virtuals and itable entries; never done for `<init>`.
             boolean ctor = utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
-            if (code != 0L && (statics || ctor)
-                    && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
+            // THE CAP IS AN `else`, NOT PART OF THE CONDITION, and that is the whole point of the split.
+            // Folded in, a full table read as "this method does not want a cell" -- the silent
+            // `if (room) { record it }` with no else that MAXREACH and MAXPEND each had to be taught to
+            // report, here at a third site and with a worse consequence for a constructor.
+            boolean wantsCell = code != 0L && (statics || ctor)
+                    && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>"));
+            if (wantsCell && (lzN >= MAXLAZY || dlN >= MAXLAZY))
+            {
+                reportCellCapExceeded(nameOff, descOff, ctor);
+            }
+            else if (wantsCell)
             {
                 int idx = lzN;
                 lzTab[idx] = new LazyMethod();
