@@ -2458,11 +2458,24 @@ public final class VM
      */
     static long jitRegLocalsAt(long pc)
     {
-        long rl = frameSizeIn(localTable, localCount, pc);           // image methods (3rd word = regLocals)
-        if (rl != 0L)
-        {
-            return rl;
-        }
+        // THE IMAGE LOOKUP IS DELIBERATELY NOT ENABLED, and the table above exists so the next attempt starts
+        // from evidence rather than from scratch. Enabling it --
+        //
+        //     long rl = frameSizeIn(localTable, localCount, pc);
+        //     if (rl != 0L) { return rl; }
+        //
+        // -- DOES fix the picocli `factory` NPE (Pi-validated: X21 CLOBBERED 2 -> 0, the NPE gone) and at the
+        // same time makes the launcher stop EARLIER, on a Map.put dispatched against a receiver whose Type
+        // carries ARRAY_TYPE_TAG. Measured A/B, same image layout in both arms, so the table's presence is
+        // NOT the cause -- consulting it is:
+        //
+        //     lookup JIT-only        factory NPE 1, DISPATCH 0, batches 1-4
+        //     lookup image-then-JIT  factory NPE 0, DISPATCH 1, batch 1 only
+        //
+        // So a baked frame's saved x19..x28 are genuinely being lost today (that diagnosis stands), and
+        // propagating them as-is is not yet a correct fix: something about an image frame's save area is not
+        // what this reconstruction assumes. Trading a known blocker for an unknown one is what this file
+        // already records as a landmine, so it stays off until that is understood.
         return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // runtime JIT'd methods
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each

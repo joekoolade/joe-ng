@@ -3576,6 +3576,13 @@ public final class Baseline
 
     /** Number of locals held in callee-saved x19.. (so unwind can restore a handler's pre-try locals). */
     public int regLocals() { return regLocals; }
+
+    /** Whether this frame saved LR at [sp+0] -- which is also what puts its saved locals at [sp+8+k*8]. The
+     *  unwinder reads them at that fixed offset, so a frame WITHOUT it must not be described as having any:
+     *  image code has implicitChecks() off, so a leaf java.base method is saveLR=false with localSaveBase=0,
+     *  and reading its locals at +8 hands back the next slot. Such a frame can never be an intermediate
+     *  popped frame anyway -- it makes no calls, and athrow makes a method non-leaf. */
+    public boolean savesLR() { return saveLR; }
     public int handlerCount() { return exCount; }
     public int handlerStartWord(int i) { return hStartW[i]; }
     public int handlerEndWord(int i) { return hEndW[i]; }

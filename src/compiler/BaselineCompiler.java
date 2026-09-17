@@ -114,8 +114,10 @@ public final class BaselineCompiler
             handlers.add(new HandlerRange(core.handlerStartWord(i), core.handlerEndWord(i),
                                           core.handlerWord(i), catchClass));
         }
-        return new CompiledMethod(words, syms.relocations(), core.frameSize(), core.regLocals(), handlers,
-                core.bcToWord());
+        // regLocals is reported ONLY for a frame that saved LR: the unwinder reads saved locals at
+        // [sp+8+k*8], which is where they are exactly when LR occupies [sp+0]. See Baseline.savesLR().
+        return new CompiledMethod(words, syms.relocations(), core.frameSize(),
+                core.savesLR() ? core.regLocals() : 0, handlers, core.bcToWord());
     }
 
     /** Back-compat single-method compile with no real calls (spin/fixtures). */
