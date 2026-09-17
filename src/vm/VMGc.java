@@ -625,12 +625,20 @@ final class VMGc
     }
 
     /** Trace worklist: one 8-byte entry per marked block, in the scratch window above the JIT unwind tables
-     *  ({@code JIT_TABLES} + 0x50000) and below the heap cells at {@code 0x03FF0000}. Outside the managed
-     *  heap on purpose — the collector must not allocate while collecting. */
-    static final long MARK_STACK     = 0x03E5_0000L;
+     *  and below the heap cells at {@code 0x03FF0000}. Outside the managed heap on purpose — the collector
+     *  must not allocate while collecting.
+     *
+     *  <p>WAS 0x03E5_0000, i.e. {@code JIT_TABLES + 0x50000} -- correct when the JIT caps were 4096 and the
+     *  three tables came to exactly 0x50000. Raising them to 16384 took the tables to 0x140000, so the mark
+     *  stack sat 0xF0000 INSIDE them and every deep collection wrote heap pointers over the local and
+     *  handler tables. Measured: a local entry reading {lo=0x060A3758, hi=0x060A37C0} where its frame twin
+     *  held a valid code range. Now placed above {@code JIT_TABLES + VM.JIT_TABLES_BYTES}, and ScratchMap
+     *  registers the tables by their DERIVED size so a future cap change trips the check instead. */
+    static final long MARK_STACK     = 0x03F4_0000L;
     static final long MARK_STACK_END = 0x03FF_0000L;
-    /** Capacity in entries (~213k): three orders of magnitude above the few thousand blocks a real
-     *  collection marks, so the overflow path is a safety net rather than a regime. */
+    /** Capacity in entries (~90k after the move above): still more than an order of magnitude above the few
+     *  thousand blocks a real collection marks, and {@code markOverflow}'s fixpoint fallback finishes the
+     *  trace correctly if it ever fills -- a safety net rather than a regime. */
     static final long MARK_STACK_SLOTS = (MARK_STACK_END - MARK_STACK) / 8L;
 
     private static long markSp;        // next free worklist slot

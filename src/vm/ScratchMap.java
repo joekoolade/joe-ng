@@ -75,7 +75,11 @@ final class ScratchMap
         add(0x037C_0000L, 0x0380_0000L);                    // VMGc.SWEPT_LOG
         add(0x0380_0000L, VMGc.MARK_BITMAP);                // cores 1-3 stacks (VM.SEC_STACK_HI, grow DOWN)
         add(VMGc.MARK_BITMAP, Heap.JIT_TABLES);             // heap block-start bitmap (3 MiB)
-        add(Heap.JIT_TABLES, VMGc.MARK_STACK);              // JIT frame/handler/local tables
+        // BY DERIVED SIZE, not "up to the next region". Written as add(JIT_TABLES, MARK_STACK) this claimed
+        // whatever was left below the mark stack, so the tables outgrowing it could never be detected -- the
+        // reservation shrank to fit the neighbour instead of describing the tables. That is the one shape
+        // this check cannot see, and it cost the local and handler tables to a 0xF0000 overrun.
+        add(Heap.JIT_TABLES, Heap.JIT_TABLES + VM.JIT_TABLES_BYTES);   // JIT frame/local/handler tables
         add(VMGc.MARK_STACK, Heap.PTR_CELL);                // GC mark stack
         add(Heap.PTR_CELL, 0x0400_0000L);                   // bump-pointer / free-list cells
     }

@@ -203,6 +203,13 @@ final class VMUnwind
                 printHex(jitRegLocalsAt(pc));
                 Uart.write(Magic.bytes(" buf0="));
                 printHex(Magic.load64(unwindLocBuf));
+                // addJitFrame writes the frame and local tables in LOCKSTEP and both compaction sites treat
+                // them together, so these counts must be equal. If they are not, the tables have desynced and
+                // a pc can be in one and absent from the other -- which is exactly what the -1s above show.
+                Uart.write(Magic.bytes(" jitFrameCount="));
+                printHex(jitFrameCount);
+                Uart.write(Magic.bytes(" jitLocalCount="));
+                printHex(jitLocalCount);
                 Uart.putc((byte) 0x0A);
             }
             if (h != 0L)
@@ -355,6 +362,46 @@ final class VMUnwind
             // 0 = the frame genuinely saved no callee-saved register. Both mean "copy nothing", but they are
             // no longer the same answer, so a future gap can be reported instead of silently skipped.
             long nrl = jitRegLocalsAt(pc);
+            if (Loader.UNWIND_DUMP && nrl < 0L && pc >= Heap.CODE_BASE)
+            {
+                // A JIT pc the FRAME table covers but the LOCAL table does not, though addJitFrame writes
+                // both at the same index with the same range. Find the frame entry's index and print the
+                // LOCAL entry sitting at that same index: identical ranges would mean the lookup is at
+                // fault, different ones that the local table's memory has been written by something else.
+                long i = 0L;
+                while (i < jitFrameCount)
+                {
+                    long fe = jitFrameTable + i * 24L;
+                    if (pc >= Magic.load64(fe) && pc < Magic.load64(fe + 8L))
+                    {
+                        long le = jitLocalTable + i * 24L;
+                        Uart.write(Magic.bytes("  UNW MISS idx="));
+                        printHex(i);
+                        Uart.write(Magic.bytes(" frame[lo="));
+                        printHex(Magic.load64(fe));
+                        Uart.write(Magic.bytes(" hi="));
+                        printHex(Magic.load64(fe + 8L));
+                        Uart.write(Magic.bytes("] local[lo="));
+                        printHex(Magic.load64(le));
+                        Uart.write(Magic.bytes(" hi="));
+                        printHex(Magic.load64(le + 8L));
+                        Uart.write(Magic.bytes(" val="));
+                        printHex(Magic.load64(le + 16L));
+                        Uart.write(Magic.bytes("] tabs[frame="));
+                        printHex(jitFrameTable);
+                        Uart.write(Magic.bytes(" local="));
+                        printHex(jitLocalTable);
+                        Uart.write(Magic.bytes(" expect_local="));
+                        printHex(Heap.JIT_TABLES + VM.JIT_FRAME_MAX * 24L);
+                        Uart.write(Magic.bytes("]\n"));
+                        i = jitFrameCount;
+                    }
+                    else
+                    {
+                        i = i + 1L;
+                    }
+                }
+            }
             if (Loader.UNWIND_DUMP)
             {
                 // What a popped frame's save area ACTUALLY holds, for the frames the image lookup changes.

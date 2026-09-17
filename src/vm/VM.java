@@ -2377,9 +2377,12 @@ public final class VM
         {
             // Fixed scratch addresses OUTSIDE the managed heap -- see Heap.JIT_TABLES for why these can't be
             // Heap.allocData'd (GC free-list / per-batch rewind would reuse the memory under the live pointer).
-            jitFrameTable = Heap.JIT_TABLES;                        // JIT_FRAME_MAX*24 = 0x18000
-            jitLocalTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 24L;  // +0x18000
-            jitHandlerTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 48L; // +0x30000 ; handler = JIT_HANDLER_MAX*32 = 0x20000
+            // Offsets are DERIVED from the caps; the sizes in the old comments here (0x18000/0x30000/0x20000)
+            // were the 4096-cap figures and stayed after the caps were raised, which is half the reason the
+            // overrun into the mark stack went unnoticed. See VM.JIT_TABLES_BYTES and ScratchMap.
+            jitFrameTable = Heap.JIT_TABLES;                         // frame:   JIT_FRAME_MAX * 24
+            jitLocalTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 24L;   // local:   JIT_FRAME_MAX * 24
+            jitHandlerTable = Heap.JIT_TABLES + JIT_FRAME_MAX * 48L; // handler: JIT_HANDLER_MAX * 32
         }
     }
 
@@ -2460,24 +2463,24 @@ public final class VM
     // caller must not copy saved registers in either case, but only the -1 case is a gap worth reporting.
     static long jitRegLocalsAt(long pc)
     {
-        // THE IMAGE LOOKUP IS DELIBERATELY NOT ENABLED, and the table above exists so the next attempt starts
-        // from evidence rather than from scratch. Enabling it --
+        // IMAGE FIRST, THEN JIT -- and the first attempt at this was REVERTED, for a reason that turned out
+        // to be a different bug entirely. Enabling it fixed the picocli `factory` NPE (X21 CLOBBERED 2 -> 0)
+        // and made the launcher stop EARLIER, on a Map.put against a receiver whose Type carried
+        // ARRAY_TYPE_TAG -- a measured A/B, same image layout in both arms, so the table's PRESENCE was not
+        // the cause and consulting it was. That looked like "an image frame's save area is not what this
+        // reconstruction assumes", and it was not: the JIT local table's MEMORY was being overwritten by the
+        // GC mark stack (VMGc.MARK_STACK overlapped Heap.JIT_TABLES by 0xF0000), so the JIT half of this
+        // lookup was answering with heap pointers. With that fixed the launcher runs to completion.
         //
-        //     long rl = tableValueIn(localTable, localCount, pc);
-        //     if (rl != 0L) { return rl; }
-        //
-        // -- DOES fix the picocli `factory` NPE (Pi-validated: X21 CLOBBERED 2 -> 0, the NPE gone) and at the
-        // same time makes the launcher stop EARLIER, on a Map.put dispatched against a receiver whose Type
-        // carries ARRAY_TYPE_TAG. Measured A/B, same image layout in both arms, so the table's presence is
-        // NOT the cause -- consulting it is:
-        //
-        //     lookup JIT-only        factory NPE 1, DISPATCH 0, batches 1-4
-        //     lookup image-then-JIT  factory NPE 0, DISPATCH 1, batch 1 only
-        //
-        // So a baked frame's saved x19..x28 are genuinely being lost today (that diagnosis stands), and
-        // propagating them as-is is not yet a correct fix: something about an image frame's save area is not
-        // what this reconstruction assumes. Trading a known blocker for an unknown one is what this file
-        // already records as a landmine, so it stays off until that is understood.
+        // The other half of the repair is `tableValueIn` returning -1 rather than 0 for "no entry". Asking
+        // the image table first is only sound if a MISS is distinguishable from an entry whose value is 0 --
+        // a leaf image method that saved nothing is exactly that -- or the JIT table would be consulted for
+        // pcs the image table had already answered.
+        long rl = tableValueIn(localTable, localCount, pc);          // image methods; -1 = no entry here
+        if (rl >= 0L)
+        {
+            return rl;
+        }
         return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
@@ -2579,6 +2582,12 @@ public final class VM
     // catchType} (32 bytes), same layout as handlerTable; findHandler consults both.
     static long jitHandlerTable, jitHandlerCount;
     static final int JIT_HANDLER_MAX = 16384;  // same sizing rule as JIT_FRAME_MAX
+
+    /** Total bytes the three JIT unwind tables occupy: frame + local (24 each) + handler (32).
+     *  DERIVED, not hand-written, and registered with ScratchMap -- the previous reservation was written as
+     *  "up to wherever the mark stack starts", so raising the caps 4096 -> 16384 grew the tables 0x50000 ->
+     *  0x140000 and ran 0xF0000 into VMGc.MARK_STACK without the overlap check ever noticing. */
+    static final long JIT_TABLES_BYTES = JIT_FRAME_MAX * 48L + JIT_HANDLER_MAX * 32L;
 
     /** Record a JIT'd method's try/catch range so a cross-method unwind can resume into it. */
     static void addJitHandler(long machStart, long machEnd, long handler, long catchType)
