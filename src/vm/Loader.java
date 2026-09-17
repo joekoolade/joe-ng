@@ -10040,6 +10040,7 @@ public final class Loader
                     && utf8EqAt(refBase, descOff, rgTab[i].base, rgTab[i].descOff))
             {
                 rgHitIdx = i;                            // memoisable: a single registry entry answered
+                bufResolveLog(refBase, classOff, nameOff, descOff, rgTab[i].buf, 1);
                 return rgTab[i].buf;
             }
             i = rgNext[i];
@@ -10057,7 +10058,9 @@ public final class Loader
         // which resolves the actual constructor on first call.
         if (utf8IsAtBase(refBase, nameOff, Magic.bytes("<init>")))
         {
-            return dlStubByRef(refBase, classOff, nameOff, descOff);
+            long ib = dlStubByRef(refBase, classOff, nameOff, descOff);
+            bufResolveLog(refBase, classOff, nameOff, descOff, ib, 3);
+            return ib;
         }
         int pd = findPdByName(refBase, classOff);
         while (pd >= 0 && pdSuperOff[pd] != 0)
@@ -10081,6 +10084,7 @@ public final class Loader
                         && utf8EqAt(refBase, nameOff, rgTab[j].base, rgTab[j].nameOff)
                         && utf8EqAt(refBase, descOff, rgTab[j].base, rgTab[j].descOff))
                 {
+                    bufResolveLog(refBase, classOff, nameOff, descOff, rgTab[j].buf, 2);
                     return rgTab[j].buf;
                 }
                 j = rgNext[j];
@@ -10092,7 +10096,9 @@ public final class Loader
         // once first-called -- so a `bl` may target that directly (the same tier bufBySigU uses for bake
         // stubs). Without this a reloc into a celled method traps: NioSocketImpl's `lambda$closerFor$0` is
         // the one that bites, since the lambda IS the Cleaner action run by close().
-        return dlStubByRef(refBase, classOff, nameOff, descOff);
+        long fb = dlStubByRef(refBase, classOff, nameOff, descOff);
+        bufResolveLog(refBase, classOff, nameOff, descOff, fb, 4);
+        return fb;
     }
 
     /**
@@ -20222,6 +20228,49 @@ public final class Loader
         Uart.write(Magic.bytes(" slot1(+24)="));
         VM.printHex(Magic.load64(ref + 24L));
         Uart.putc((byte) 0x0A);
+    }
+
+    /**
+     * Watch how ONE class's method REFERENCES resolve: which tier answered, and to what.
+     *
+     * <p>Unlike every other watch here this one EMITS NOTHING -- it prints from inside the resolver, so it
+     * cannot perturb codegen. That matters: the receiver watch had to be validated against a passing image
+     * precisely because it does emit, and a watch that changes the code it measures is worse than none.
+     *
+     * <p>The open layout-sensitivity defect has been narrowed to "the constructor runs and its putfield does
+     * not take effect on this object": `<init>` is emitted as a real call, the field offset is +24 on both
+     * the store and the load, and the receiver is a genuine LinkedEntrySet whose this$0 is 0. What is left
+     * is WHICH BODY the `<init>` reference resolved to -- and a constructor that resolved to some other
+     * class's body, or to a cell that was never filled, stores nothing and says nothing.
+     */
+    private static final byte[] BUF_WATCH_CLASS = Magic.bytes("java/util/LinkedHashMap$LinkedEntrySet");
+    private static final boolean BUF_WATCH_ON = false;
+
+    /** Tier that answered a {@link #globalBufByRef}: 1 class-qualified, 2 super-chain, 3 `<init>` cell
+     *  (constructors short-circuit here, never walking a chain), 4 final cell tier. A 0 buffer is the
+     *  interesting answer and is labelled, because "resolved to nothing" and "resolved to something wrong"
+     *  are different bugs and an address alone cannot tell them apart. */
+    private static void bufResolveLog(long refBase, int classOff, int nameOff, int descOff, long buf, int tier)
+    {
+        if (!BUF_WATCH_ON || !utf8IsAtBase(refBase, classOff, BUF_WATCH_CLASS))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  BUFWATCH "));
+        printNameAt(refBase, classOff);
+        Uart.putc(0x2E);
+        printNameAt(refBase, nameOff);
+        Uart.putc(0x20);
+        printNameAt(refBase, descOff);
+        Uart.write(Magic.bytes(" -> buf="));
+        VM.printHex(buf);
+        Uart.write(Magic.bytes(" tier"));
+        VM.printDec(tier);
+        if (buf == 0L)
+        {
+            Uart.write(Magic.bytes("  -- RESOLVED TO NOTHING"));
+        }
+        Uart.putc(0x0A);
     }
 
     /** Watch ONE method name's call sites: the compiler emits a WATCH_RET print of whatever each returns. */
