@@ -213,7 +213,8 @@ final class VMUnwind
                 faultDepth = 0;                                            // fault resolved by a handler: a later fault
                                                                            //   (incl. one inside the handler) is FRESH,
                                                                            //   not a nested unwind fault
-                Magic.resume(h, sp, exc, jitRegLocalsAt(pc), unwindLocBuf);   // never returns
+                long hrl = jitRegLocalsAt(pc);                             // -1 = unknown; resume ignores it,
+                Magic.resume(h, sp, exc, hrl < 0L ? 0L : hrl, unwindLocBuf);  //   but never pass it a negative
             }
             long fs = frameSizeAt(pc);
             if (fs == 0L)
@@ -350,6 +351,9 @@ final class VMUnwind
             // Overwrite ONLY the slots this frame saved (its caller's x19.. at [sp+8+k*8]); leave higher slots to
             // the seed / deeper frames. When the caller turns out to be the handler, these ARE its pre-try locals;
             // the frame the handler called into is popped last, so it wins for the slots it saved.
+            // -1 = no local entry covers this pc (today: every IMAGE frame, since the image lookup is off);
+            // 0 = the frame genuinely saved no callee-saved register. Both mean "copy nothing", but they are
+            // no longer the same answer, so a future gap can be reported instead of silently skipped.
             long nrl = jitRegLocalsAt(pc);
             if (Loader.UNWIND_DUMP)
             {

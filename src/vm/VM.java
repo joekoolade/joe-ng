@@ -2436,7 +2436,7 @@ public final class VM
         Magic.store64(e, codeStart);
         Magic.store64(e + 8L, codeEnd);
         Magic.store64(e + 16L, frameSize);
-        long le = jitLocalTable + jitLocalCount * 24L;               // same pc-range, parallel table (frameSizeIn reads it)
+        long le = jitLocalTable + jitLocalCount * 24L;               // same pc-range, parallel table (tableValueIn reads it)
         Magic.store64(le, codeStart);
         Magic.store64(le + 8L, codeEnd);
         Magic.store64(le + 16L, regLocals);
@@ -2456,12 +2456,14 @@ public final class VM
      * arbitrarily far from the throw. Guest-only unwinds never showed it because every guest frame IS in the
      * JIT table; it needs a throw that crosses baked java.base, which is what class loading does.
      */
+    // Returns -1 when NO entry covers the pc, which is different from 0 ("this frame saved nothing"): the
+    // caller must not copy saved registers in either case, but only the -1 case is a gap worth reporting.
     static long jitRegLocalsAt(long pc)
     {
         // THE IMAGE LOOKUP IS DELIBERATELY NOT ENABLED, and the table above exists so the next attempt starts
         // from evidence rather than from scratch. Enabling it --
         //
-        //     long rl = frameSizeIn(localTable, localCount, pc);
+        //     long rl = tableValueIn(localTable, localCount, pc);
         //     if (rl != 0L) { return rl; }
         //
         // -- DOES fix the picocli `factory` NPE (Pi-validated: X21 CLOBBERED 2 -> 0, the NPE gone) and at the
@@ -2476,7 +2478,7 @@ public final class VM
         // propagating them as-is is not yet a correct fix: something about an image frame's save area is not
         // what this reconstruction assumes. Trading a known blocker for an unknown one is what this file
         // already records as a landmine, so it stays off until that is understood.
-        return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // runtime JIT'd methods
+        return tableValueIn(jitLocalTable, jitLocalCount, pc);       // runtime JIT'd methods; -1 = UNKNOWN
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
@@ -2610,16 +2612,32 @@ public final class VM
     /** Frame size covering machine PC {@code pc}, from either table (0 = none). Package-visible for the self-check. */
     static long frameSizeAt(long pc)
     {
-        long fs = frameSizeIn(frameTable, frameCount, pc);        // image methods
-        if (fs != 0L)
+        long fs = tableValueIn(frameTable, frameCount, pc);       // image methods
+        if (fs >= 0L)
         {
             return fs;
         }
-        return frameSizeIn(jitFrameTable, jitFrameCount, pc);     // runtime JIT'd methods
+        fs = tableValueIn(jitFrameTable, jitFrameCount, pc);      // runtime JIT'd methods
+        // 0 = NO FRAME is this method's long-standing contract -- VMUnwind reads it as "the exception reached
+        // the top uncaught". Preserved deliberately: a frame entry is only ever added with frameSize > 0, so
+        // for THIS table absent and zero cannot be confused anyway.
+        return fs >= 0L ? fs : 0L;
     }
 
-    /** Frame size of the {codeStart,codeEnd,frameSize} entry covering {@code pc}, or 0. */
-    private static long frameSizeIn(long table, long count, long pc)
+    /**
+     * Third word of the {codeStart, codeEnd, value} entry covering {@code pc}, or **-1 when no entry covers
+     * it**. Both unwind tables share this shape: for the frame tables the value is a frame size, for the
+     * local tables a callee-saved count.
+     *
+     * <p>IT RETURNED 0 FOR BOTH "no entry" AND "the entry says 0", and those mean opposite things. A frame
+     * size of 0 cannot occur (an entry is only added above zero), so the frame tables never noticed -- but a
+     * regLocals of 0 is ORDINARY (a static with no locals, and every hand-emitted stub, which saves x0..x15
+     * and no callee-saved registers at all). So a MISSING local entry was indistinguishable from a frame
+     * that genuinely saved nothing, and the unwinder's reconstruction silently skipped that frame either
+     * way -- letting a DEEPER frame's saved register win for the handler. A caller that cannot tell those
+     * apart cannot report the gap, which is how it stayed invisible.
+     */
+    private static long tableValueIn(long table, long count, long pc)
     {
         long i = 0L;
         while (i < count)
@@ -2631,7 +2649,7 @@ public final class VM
             }
             i = i + 1L;
         }
-        return 0L;
+        return -1L;                                               // no entry -- NOT "the value is zero"
     }
 
     // ----- garbage collection (conservative mark-sweep) --------------------
