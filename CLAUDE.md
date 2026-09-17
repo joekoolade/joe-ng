@@ -115,6 +115,42 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LAUNCHER IS RESTORED, AND A SAME-BUILD-PATH A/B CLOSES THE ONE CONFOUND I HAD LEFT OPEN
+  (2026-09-16, PI-VALIDATED).** With the instrument reverted, the Pi runs to batch 209, `[2 tests
+  successful]`, exit 0, **`Test run finished after 96983 ms` -- identical to the millisecond** to the
+  original `f7b3eec` validation. Identity exact: `memo=128548 res=82350 unres=27419`, `rf:skip=114380
+  visit=44987 clos=44987 holeEnd=44370`, `n:imap=855 synth=2276 clinits=388`, `sd:n=2802 steps=2590k`,
+  `ps:n=580 miss=580 tab=3051`, `rb:n=50071 cl=1782`, `sy:n=2276 chg=0`, `hcls=0k`, `pc:n=1243`.
+
+  | build path | code | result |
+  |---|---|---|
+  | direct `BuildRuntimeImage` | `f7b3eec` | PASS |
+  | **`make image`** | `af291ca` (instrument) | **FAIL at batch 2** |
+  | **`make image`** | `b6c0c31` (instrument + OP_MAX fix) | **FAIL at batch 2** |
+  | **`make image`** | `9ca5680` (instrument REVERTED) | **PASS** |
+
+  - **I HAD FLAGGED A REAL FLAW IN MY OWN EXPERIMENT AND IT TURNED OUT NOT TO MATTER -- BOTH HALVES WORTH
+    RECORDING.** `make image` depends on `build jdktests plugins appjar junitjar`, so it regenerates the
+    RAMFS; both failures were `make image` builds and the first passing control was a DIRECT build ~28KB
+    smaller. That is two variables, not one, and saying so was right. Rebuilding the reverted source through
+    `make image` -- the failures' own path -- removes it: **the build path is not the variable, the
+    instrument is.** The original control was right for the right reason after all.
+  - **(The 28KB was itself explained rather than waved at:** ten adjacent byte-pairs around `/lib/app.jar`'s
+    `META-INF/`, i.e. DOS timestamps in zip local headers. `ramfs/lib/app.jar` is gitignored and regenerated
+    by the build, and the launcher reads `junit.jar`, never `app.jar`. Two builds from identical sources are
+    byte-identical, so the build IS deterministic.)
+  - **SO THE CAUSE IS THE INSTRUMENT AND THE MECHANISM IS THE TRUNCATED CLOSURE, which is the only
+    explanation left standing that fits every observation:** it is hardware-only (QEMU ran all three to 209
+    with identical counters), it was NOT fixed by the `OP_MAX` correction, and it IS fixed by restoring the
+    exact prior layout. Adding ~11 statics and a few hundred bytes of code to `Loader` moves which 8,192 of
+    14,554 methods survive `MAXREACH`, and `getAndBitwiseOrInt` -- a signature-polymorphic VarHandle op this
+    file already records as invisible to RTA -- lands on the wrong side of the cut.
+  - **THE INSTRUMENT'S READING STANDS AND IT CANNOT SHIP YET.** `betw`/`gcT`/`lzT` measured the boot's
+    unmeasured two thirds and named the collector as its largest item; none of that is retracted. But no
+    instrument can be trusted while adding a static can change the closure, so the order of work is fixed:
+    **fix the truncation first, then re-land the measurement on top of a closure that is not
+    layout-sensitive.**
+
 - **THE RTA CLOSURE HAS BEEN SILENTLY TRUNCATED AT 44% ON EVERY LAUNCHER BOOT -- AND MY DEEP-STACK
   DIAGNOSIS ONE COMMIT AGO WAS WRONG (2026-09-16).** The fix below -- `lazyCompile` back to `stack=4`,
   identical to the control -- **did not change the outcome**: the Pi wedged at batch 2 again, at the same
