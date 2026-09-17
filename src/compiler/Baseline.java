@@ -1739,6 +1739,31 @@ public final class Baseline
      * interface's Type, index the itable by the method's slot, and {@code blr}.
      * Uses x16 (target/code), x17 (walker), x9 (temp) — args in x0..x7 untouched.
      */
+    /**
+     * DEBUG (off unless Loader.RECV_WATCH_ON): describe the RECEIVER this dispatch is about to use.
+     *
+     * <p>Read IN PLACE from the receiver's operand slot, never duped. `computeDepths` is a BYTECODE
+     * pre-pass and cannot see a transient the lowering introduces, so a push here would raise the real peak
+     * above the depth the frame was sized for -- the recorded trap that surfaced as
+     * `JIT unsupported: reason=8 a=0x7` when the argument watch first pushed.
+     *
+     * <p>Called BEFORE marshalling rather than after: afterwards the receiver is in x0 with the arguments
+     * behind it, and a helper call there would clobber the marshalled set. The receiver is the DEEPEST of
+     * the {@code paramCount + 1} entries, so it sits at {@code sp - 1 - paramCount}.
+     */
+    private void watchReceiver(int cpIndex, CodeBuffer cb)
+    {
+        if (!symbols.isWatchedRecv(cpIndex))
+        {
+            return;
+        }
+        cb.emit(A64Enc.movReg(0, opSlot(sp - 1 - paramCount(cpIndex))));   // x0 = receiver, left on the stack
+        cb.emit(A64Enc.movz(1, cpIndex & 0xFFFF, 0));                      // x1 = SITE, matched to its ARMED line
+        spillLive(cb);
+        symbols.callHelper(cb, Symbols.WATCH_RECV);
+        reloadLive(cb);
+    }
+
     private void lowerInvokeInterface(int cpIndex, CodeBuffer cb, int pos)
     {
         if (symbols.isObjectPublicMethod(cpIndex))
@@ -1752,6 +1777,7 @@ public final class Baseline
             lowerInvokeVirtual(cpIndex, cb, pos);
             return;
         }
+        watchReceiver(cpIndex, cb);
         marshalReceiverAndArgs(cb, pos, paramCount(cpIndex) + 1);
         symbols.interfaceType(cb, 16, cpIndex);                       // x16 = &interfaceType
         itableDispatch(cb, pos, symbols.interfaceSlot(cpIndex), cpIndex);

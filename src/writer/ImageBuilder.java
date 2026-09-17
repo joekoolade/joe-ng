@@ -1405,6 +1405,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchRet(JJ)V",   "vm/VM.watchRetAddr");   // DEBUG call-site watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchArg(JJ)V",   "vm/VM.watchArgAddr");   // DEBUG argument watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchX21(JJ)V",   "vm/VM.watchX21Addr");   // DEBUG callee-save check
+        stashHelper(image, staticWord, wordOffset, "vm/VM.watchRecv(JJ)V",  "vm/VM.watchRecvAddr");  // DEBUG receiver watch
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {
             stashHelper(image, staticWord, wordOffset, BAKE_ROOTS[br][0], BAKE_ROOTS[br][1]);

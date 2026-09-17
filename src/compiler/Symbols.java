@@ -60,6 +60,10 @@ public interface Symbols
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
     int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
+    int WATCH_RECV = 52;        // vm/VM.watchRecv(JJ)V — DEBUG: describe a watched call's RECEIVER — its
+                                // TIB, Type, class NAME and first field slots. WATCH_ARG prints a VALUE;
+                                // when the question is "is this object the class we think it is", a value
+                                // cannot answer it and a wrongly-typed receiver prints as a plausible number.
     int WATCH_X21 = 51;         // vm/VM.watchX21(JJ)V — DEBUG: a callee-saved register left changed
     int WATCH_ARG = 50;         // vm/VM.watchArg(J)V — DEBUG: print an ARGUMENT a watched call is passing.
                                 // A SEPARATE id from WATCH_RET on purpose: with both watches armed the two
@@ -133,6 +137,9 @@ public interface Symbols
      *  false. Watching an argument, not a return, is what names WHICH frame in a hand-off chain lost a
      *  reference -- a return watch cannot see a value that never arrived. */
     boolean isWatchedCallArgs(int methodCp);
+
+    /** True to describe the RECEIVER of this dispatch site (see {@link #WATCH_RECV}). */
+    boolean isWatchedRecv(int methodCp);
 
     /** Report a method whose body uses a local slot its {@code max_locals} does not cover. The prologue saves
      *  exactly {@code min(max_locals, LOC_MAX)} callee-saved registers, so a body that writes past that

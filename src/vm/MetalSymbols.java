@@ -91,6 +91,11 @@ final class MetalSymbols implements Symbols
         return Loader.isWatchedField(fieldCp);
     }
 
+    public boolean isWatchedRecv(int methodCp)
+    {
+        return Loader.isWatchedRecv(methodCp);
+    }
+
     public boolean isWatchedCallArgs(int methodCp)
     {
         return Loader.isWatchedCallArgs(methodCp);
@@ -538,6 +543,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.WATCH_ARG)
         {
             return VM.watchArgAddr;
+        }
+        if (helper == Symbols.WATCH_RECV)
+        {
+            return VM.watchRecvAddr;
         }
         if (helper == Symbols.WATCH_X21)
         {

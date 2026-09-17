@@ -1075,6 +1075,24 @@ public final class VM
     }
 
     /**
+     * DEBUG: describe the RECEIVER a watched dispatch is about to use -- not its value, its IDENTITY.
+     *
+     * <p>{@link #watchArg} prints a number, which answers "is this null" and cannot answer "is this object
+     * the class we think it is". A receiver carrying the WRONG TIB dispatches to a plausible method and
+     * reads plausible fields; it prints as an ordinary address. So this follows the object to its TIB, its
+     * Type and its class NAME, and shows the first two field slots beside the size -- enough to say whether
+     * the thing being iterated is the object that was constructed.
+     *
+     * <p>Delegated to the loader because the NAME is only recoverable from the class registry, which is
+     * loader state. Same shape as the receiver dump the DISPATCH ON UNREGISTERED TYPE report already does,
+     * except that this one runs when the dispatch SUCCEEDS -- which is the case that has no report at all.
+     */
+    static void watchRecv(long ref, long site)
+    {
+        Loader.describeRecv(ref, site);
+    }
+
+    /**
      * A method left a callee-saved register it does not own holding a different value than it found.
      *
      * <p>That is silent corruption of a CALLER'S local, and nothing else can see it: the damage surfaces
@@ -1401,6 +1419,7 @@ public final class VM
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (watchRetAddr == 0L) { watchRet(0L, 0L); }                     // force-compile the debug watch helper
         if (watchArgAddr == 0L) { watchArg(0L, 0L); }
+        if (watchRecvAddr == 0L) { watchRecv(0L, 0L); }
         if (watchX21Addr == 0L) { watchX21(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
@@ -2849,6 +2868,7 @@ public final class VM
     static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site
     static long watchX21Addr;          // VM.watchX21(JJ)V — DEBUG: callee-saved discipline check
     static long watchArgAddr;          // VM.watchArg(J)V — DEBUG: value an argument-watched call site passes
+    static long watchRecvAddr;         // VM.watchRecv(JJ)V — DEBUG: the RECEIVER a watched dispatch is about to use
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)

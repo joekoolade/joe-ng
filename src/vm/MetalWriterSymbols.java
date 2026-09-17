@@ -156,6 +156,13 @@ final class MetalWriterSymbols implements Symbols
     {
     }
 
+    /** The writer never watches a receiver: baked codegen must stay byte-for-byte identical
+     *  or the self-hosting fixpoint (compiler: 39 checks) moves. */
+    public boolean isWatchedRecv(int methodCp)
+    {
+        return false;
+    }
+
     public boolean isWatchedCallArgs(int methodCp)
     {
         return false;

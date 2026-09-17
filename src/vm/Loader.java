@@ -20140,6 +20140,90 @@ public final class Loader
         return classMirror(Magic.load64(tib));              // TIB[0] = Type (class Type or array Type)
     }
 
+    /**
+     * Watch the RECEIVER of one method name's dispatch sites.
+     *
+     * <p>Set {@code RECV_WATCH_ON} and point {@code RECV_WATCH} at a method name to have every dispatch on
+     * that name describe the object it is about to dispatch ON. The open layout-sensitivity defect needs
+     * exactly this and nothing else answers it: the constructor is called, the field offset is right and
+     * consistent, and the value still reads null -- so the remaining question is whether the object
+     * {@code iterator()} runs against is the one that was constructed, and that is a question about
+     * IDENTITY, which no value watch can answer.
+     */
+    private static final byte[] RECV_WATCH = Magic.bytes("iterator");
+    private static final boolean RECV_WATCH_ON = false;
+
+    static boolean isWatchedRecv(int idx)
+    {
+        if (!RECV_WATCH_ON)
+        {
+            return false;
+        }
+        int n = mrefNameOff(idx);
+        if (!utf8IsAtBase(gbase, n, RECV_WATCH))
+        {
+            return false;
+        }
+        // NARROWED TO THE CALLER, not just the callee: `iterator` is dispatched all over the suite, and an
+        // unfiltered watch floods the UART and starves the run it is meant to diagnose -- already paid for
+        // once by the COMPILE_WATCH arc. The failing dispatch is Map.forEach's, so that is the only one armed.
+        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Map")))
+        {
+            return false;
+        }
+        reportArmed(n, idx);
+        return true;
+    }
+
+    /**
+     * Print what a receiver IS: its TIB, its Type, its class NAME, its size, and its first field slots.
+     *
+     * <p>The name is the part a raw address cannot give and is why this lives in the loader -- it comes from
+     * the class registry. A receiver whose Type is not registered says so rather than printing nothing,
+     * because "unregistered" and "I could not look it up" are different answers and this project has been
+     * misled by conflating them before.
+     */
+    static void describeRecv(long ref, long site)
+    {
+        Uart.write(Magic.bytes("  RECVWATCH site="));
+        VM.printDec((int) site);
+        Uart.write(Magic.bytes(" recv="));
+        VM.printHex(ref);
+        if (ref < Heap.BASE || ref >= Heap.managedTop() || (ref & 7L) != 0L)
+        {
+            Uart.write(Magic.bytes(" -- NOT a managed heap reference\n"));
+            return;
+        }
+        long tib = Magic.load64(ref);
+        Uart.write(Magic.bytes(" tib="));
+        VM.printHex(tib);
+        if (tib == 0L)
+        {
+            Uart.write(Magic.bytes(" -- NULL TIB (object never got one)\n"));
+            return;
+        }
+        long type = Magic.load64(tib);
+        Uart.write(Magic.bytes(" type="));
+        VM.printHex(type);
+        Uart.write(Magic.bytes(" class="));
+        int reg = classRegByType(type);
+        if (reg >= 0)
+        {
+            printNameAt(clTab[reg].base, clTab[reg].nameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<unregistered Type>"));
+        }
+        Uart.write(Magic.bytes("\n    status="));
+        VM.printHex(Magic.load64(ref + 8L));
+        Uart.write(Magic.bytes(" slot0(+16)="));
+        VM.printHex(Magic.load64(ref + 16L));
+        Uart.write(Magic.bytes(" slot1(+24)="));
+        VM.printHex(Magic.load64(ref + 24L));
+        Uart.putc((byte) 0x0A);
+    }
+
     /** Watch ONE method name's call sites: the compiler emits a WATCH_RET print of whatever each returns. */
     private static final boolean CALL_WATCH_ON = false;
 
