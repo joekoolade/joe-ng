@@ -92,6 +92,53 @@ overlaycheck-update: build junitjar
 overlaycheck-deep: build junitjar
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --deep --baseline test/overlay/known-gaps.txt || true
 
+# PLACEMENT IS LOAD-BEARING: this section must sit ABOVE `jdktests` and `junitjar`. Make expands a rule's
+# PREREQUISITES when it READS the rule, so with JUNIT_JAR defined further down the file those two targets
+# read `$(JUNIT_JAR)` as EMPTY and end up with no jar prerequisite at all -- the download rule never fires,
+# and junitjar's recipe then cp's a file nothing built (`cp: ... No such file or directory`) on a fresh
+# clone. It did exactly that. Recipes are fine wherever they sit (they expand at run time); prerequisites
+# are not. Check with `make -pn junitjar | grep '^junitjar:'` -- it must name the jar.
+# ----- JUnit (HOST-side test tooling) -------------------------------------------------------------
+# The console-standalone jar bundles the Jupiter API + engine + a runner in one file, so host tests
+# need no build tool. Downloaded on demand into jars/ (gitignored) rather than vendored: it is a 3 MB
+# binary and this repo deliberately carries no third-party jars.
+#
+# It is now BOTH the host test tool and the guest's JUnit API: the hand-written guestsrc/org/junit/jupiter/*
+# stubs are gone, so tests compile against the real annotations and Assertions and the classes are loaded at
+# RUNTIME out of a RAMFS copy of this jar (vm/JarFs via /etc/init's `classpath=`), never baked into the image.
+# The stubs had to go precisely because they carried the same fully-qualified names and would shadow the real
+# ones. (What the engine itself needs beyond this -- annotation element values, ServiceLoader, java.nio.file --
+# is still open; `java.lang.invoke` turned out NOT to be a blocker: every invoke reference in the jar is an
+# ordinary lambda/string-concat bootstrap, which joe-ng's JIT compiles itself.)
+#
+# Overriding JUNIT_VERSION requires overriding JUNIT_SHA256 to match -- the pin is per-version. Set
+# JUNIT_SHA256= (empty) to skip verification entirely.
+JUNIT_VERSION ?= 6.1.3
+JUNIT_SHA256  ?= e62b96ac475dbcde8599ea905d088f65d90778f86e259b856a49fa5c4ea256ec
+JUNIT_JAR     := jars/junit-platform-console-standalone-$(JUNIT_VERSION).jar
+JUNIT_URL     := https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/$(JUNIT_VERSION)/junit-platform-console-standalone-$(JUNIT_VERSION).jar
+
+.PHONY: junit
+junit: $(JUNIT_JAR)
+
+# Download to a .tmp and only rename after the checksum matches, so an interrupted or tampered
+# fetch never leaves a jar make would treat as up to date on the next run.
+$(JUNIT_JAR):
+	@mkdir -p jars
+	curl -fsSL -o $@.tmp $(JUNIT_URL)
+	@if [ -n "$(JUNIT_SHA256)" ]; then \
+	  if command -v shasum >/dev/null 2>&1; then a=`shasum -a 256 $@.tmp | cut -d' ' -f1`; \
+	  else a=`sha256sum $@.tmp | cut -d' ' -f1`; fi; \
+	  if [ "$$a" != "$(JUNIT_SHA256)" ]; then \
+	    rm -f $@.tmp; \
+	    echo "junit: SHA-256 mismatch"; echo "  expected $(JUNIT_SHA256)"; echo "  actual   $$a"; \
+	    exit 1; \
+	  fi; \
+	  echo "junit: SHA-256 verified"; \
+	fi
+	@mv $@.tmp $@
+	@ls -l $@
+
 # Unmodified JDK tests run as manifest mains: compiled against the guest java.base overlay into the classDir.
 # They are unnamed-package, so they can't join the guestsrc --patch-module set -- compile them separately.
 # Add files to JDKTESTS to embed more. (Demand-loaded: only pulled when named as the manifest main.)
@@ -135,47 +182,6 @@ image: build jdktests plugins appjar junitjar
 
 qemu: image
 	sh scripts/qemu-check.sh $(IMG)
-
-# ----- JUnit (HOST-side test tooling) -------------------------------------------------------------
-# The console-standalone jar bundles the Jupiter API + engine + a runner in one file, so host tests
-# need no build tool. Downloaded on demand into jars/ (gitignored) rather than vendored: it is a 3 MB
-# binary and this repo deliberately carries no third-party jars.
-#
-# It is now BOTH the host test tool and the guest's JUnit API: the hand-written guestsrc/org/junit/jupiter/*
-# stubs are gone, so tests compile against the real annotations and Assertions and the classes are loaded at
-# RUNTIME out of a RAMFS copy of this jar (vm/JarFs via /etc/init's `classpath=`), never baked into the image.
-# The stubs had to go precisely because they carried the same fully-qualified names and would shadow the real
-# ones. (What the engine itself needs beyond this -- annotation element values, ServiceLoader, java.nio.file --
-# is still open; `java.lang.invoke` turned out NOT to be a blocker: every invoke reference in the jar is an
-# ordinary lambda/string-concat bootstrap, which joe-ng's JIT compiles itself.)
-#
-# Overriding JUNIT_VERSION requires overriding JUNIT_SHA256 to match -- the pin is per-version. Set
-# JUNIT_SHA256= (empty) to skip verification entirely.
-JUNIT_VERSION ?= 6.1.3
-JUNIT_SHA256  ?= e62b96ac475dbcde8599ea905d088f65d90778f86e259b856a49fa5c4ea256ec
-JUNIT_JAR     := jars/junit-platform-console-standalone-$(JUNIT_VERSION).jar
-JUNIT_URL     := https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/$(JUNIT_VERSION)/junit-platform-console-standalone-$(JUNIT_VERSION).jar
-
-.PHONY: junit
-junit: $(JUNIT_JAR)
-
-# Download to a .tmp and only rename after the checksum matches, so an interrupted or tampered
-# fetch never leaves a jar make would treat as up to date on the next run.
-$(JUNIT_JAR):
-	@mkdir -p jars
-	curl -fsSL -o $@.tmp $(JUNIT_URL)
-	@if [ -n "$(JUNIT_SHA256)" ]; then \
-	  if command -v shasum >/dev/null 2>&1; then a=`shasum -a 256 $@.tmp | cut -d' ' -f1`; \
-	  else a=`sha256sum $@.tmp | cut -d' ' -f1`; fi; \
-	  if [ "$$a" != "$(JUNIT_SHA256)" ]; then \
-	    rm -f $@.tmp; \
-	    echo "junit: SHA-256 mismatch"; echo "  expected $(JUNIT_SHA256)"; echo "  actual   $$a"; \
-	    exit 1; \
-	  fi; \
-	  echo "junit: SHA-256 verified"; \
-	fi
-	@mv $@.tmp $@
-	@ls -l $@
 
 clean:
 	rm -rf $(OUT) $(IMG) $(JARCLASSES)
