@@ -154,11 +154,30 @@ defines the minimum the assembler must encode.
   - **AND THE WATCH THAT ANSWERED IT COULD NOT ANSWER AT FIRST, which is its own lesson.** `fieldOffsetLog`
     was called from two of five tiers, so an armed watch on `this$0` printed NOTHING -- a silence that reads
     as "the resolver is not involved" and means "this path cannot report". Every tier logs now.
-  - **WHAT IS LEFT, stated rather than guessed:** the offset is right, the constructor is called, so either
-    the store does not execute or the object `iterator()` runs against is not the one that was constructed
-    (a wrong TIB would dispatch `LinkedEntrySet.iterator()` against a different object whose slot 1 is
-    null). The next instrument should print the RECEIVER -- its Type and status word -- at the failing
-    dispatch, not another offset.
+  - **A FOURTH HYPOTHESIS IS DEAD, AND IT WAS THE LEADING ONE: the receiver is NOT mis-typed.** New
+    `RECVWATCH` (Loader.RECV_WATCH, off by default) describes a dispatch's receiver -- TIB, Type, class NAME
+    from the registry, status word, first field slots. At the same site in both arms:
+
+    | | class | status | slot0 (+16) `reversed` | slot1 (+24) `this$0` |
+    |---|---|---|---|---|
+    | passing | `LinkedHashMap$LinkedEntrySet` | `0x20` | `0x0` | **`0x04F32450`** |
+    | failing | `LinkedHashMap$LinkedEntrySet` | `0x20` | `0x0` | **`0x0`** |
+
+    Right class, right TIB, right SIZE (`0x20` = header + two fields). It is a genuine `LinkedEntrySet`, so
+    "a wrong TIB dispatched `iterator()` against something else" is out.
+  - **SO THE CONSTRUCTOR RUNS AND ITS `putfield` DOES NOT TAKE EFFECT ON THIS OBJECT.** That is what the
+    three surviving facts force: `<init>` is emitted as a real call (`CTOR SKIPPED` clean), the offset is
+    `+24` on BOTH the store and the load (`tier0`, twice), and the field is still 0. **NEXT:** a wrongly
+    RESOLVED `<init>` body (the recorded `globalBufByRef` super-chain-on-`<init>` shape, or the link stub /
+    `resolveUnresolvedNew` pair for a deferred `new`), or a store to a different object than the one
+    returned. Instrument the `<init>` call itself -- which body it resolved to, and the receiver it got.
+  - **THE RECEIVER WATCH SHIPPED BROKEN AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
+    `ImageBuilder` stashes `watchRet`/`watchArg`/`watchX21` by name; `watchRecv` was not added, so
+    `watchRecvAddr` stayed 0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware
+    shim turns into a wild branch reported inside the itable dispatch. Armed on the FAILING image that reads
+    exactly like the defect changing shape. Arming it on the PASSING image broke that too, which is what
+    named it as mine. **A new helper needs a writer stash, and an instrument is not evidence until it has
+    run on a boot that passes** -- this file's own rule, now paid for a fourth time.
   - **A SEPARATE SILENT WRONG ANSWER, found on the way and NOT fixed:** a boolean CONCATENATES AS 1/0 rather
     than `true`/`false`. `Baseline.appendArg` routes a `'Z'` concat argument to `SC_INT`, which renders a
     decimal integer, where JLS 15.18.1 requires the words. Measured (metal printed `1` where the host
