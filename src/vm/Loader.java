@@ -3216,6 +3216,8 @@ public final class Loader
         reachCode = new long[MAXREACH];
         reachTab = new long[REACHTAB];
         reachN = 0;
+        reachRefused = 0;                               // resets BESIDE the table it counts, like every
+                                                        //   other watermark here
         VM.jitFrameCount = 0L;                           // a demo's JIT'd frames/handlers are dead once it returns;
         VM.jitLocalCount = 0L;                           // reset the local table IN LOCKSTEP with the frame table (parallel
                                                          // {codeStart,codeEnd,regLocals}); addJitFrame guards only on
@@ -3342,19 +3344,38 @@ public final class Loader
     // closure over the loaded blobs) instead of every method of every class. This lets a big real java.base
     // class load through the normal closure path without choking on its unreachable methods (toString,
     // parseInt's String.format paths, ...). Without an entry set, everything compiles (unchanged behaviour).
-    private static final int MAXREACH = 8192;
+    /**
+     * RTA's reachable-method cap. **It was 8192, and batch 1 of every launcher boot reported `reach=8192` --
+     * the cap hit EXACTLY.** Raised, the same closure completes at **14,554**, so ~6,362 reachable methods
+     * (44%) were being discarded on every boot, including every one that passed and exited 0.
+     *
+     * <p>{@link #addReach} dropped them SILENTLY -- no report, no counter -- which is the defect, not the
+     * size. `MAXPEND` learned this exact lesson and the report it grew sits at the end of
+     * {@link #markReachable}; this one never got it.
+     *
+     * <p>Two things make the silence worse than a normal cap. Marking is a FIXPOINT: an unmarked method
+     * never contributes its refs, so a drop loses that method's whole transitive subtree -- which is why
+     * raising this took `rounds` 26 -> 54 and `pend` 56,383 -> 96,158 rather than adding a few leaves. And
+     * membership becomes LAYOUT-SENSITIVE: which 8,192 survive is insertion order, so any change to the
+     * image moves the cut. Two statics were enough to move it, and the boot then failed on a path that had
+     * simply never been reachable before.
+     */
+    private static final int MAXREACH = 65536;
     private static long gEntryBlob;                      // entry method's blob (0 => mark disabled)
     private static long gRootBlob;                       // a defineClass'd blob: EVERY method is a root (see rootBlob)
     private static long gStubBlob;                       // an incrementally loaded blob: STUB its virtuals (see stubBlob)
     private static byte[] gEntryName, gEntryDesc;        // entry method name/descriptor
     private static int markActive;                       // 1 once markReachable has run (compileClass then filters)
     private static long[] reachCode;                     // bytecode addresses of the reachable methods
-    private static final int REACHTAB = 16384;           // power of two > 2*MAXREACH: the set never fills
+    private static final int REACHTAB = 262144;          // power of two > 2*MAXREACH: the set never fills
     private static long[] reachTab;                      // ... and the same addresses as an open-addressed set,
                                                          //   because collectBlob asks isReach once per method of
                                                          //   every blob, every round -- a linear scan makes that
                                                          //   blobs x methods x reachN
     private static int reachN;
+    static int reachRefused;                             // refusals of an UNMARKED method past MAXREACH.
+                                                         //   Not a distinct-method count (see addReach), so
+                                                         //   it bounds the shortfall rather than naming it
 
     /** Declare the method loadAll should treat as the reachability root (call before addBlob/loadAll). */
     static void entryPoint(long blobBytes, byte[] name, byte[] desc)
@@ -3464,8 +3485,22 @@ public final class Loader
     /** Add {@code code} to the reachable set if new; returns true if it was newly added. */
     private static boolean addReach(long code)
     {
-        if (code == 0L || reachN >= MAXREACH)
+        if (code == 0L)
         {
+            return false;
+        }
+        if (reachN >= MAXREACH)
+        {
+            // PROBE BEFORE COUNTING. Marking is a fixpoint, so addReach is called for the same method in
+            // every round; a method ALREADY in the set is an ordinary no-op, not a loss. Counting those too
+            // made the first cut of this report say "2,384,018 methods dropped" on a closure short by ~6,000
+            // and advise a cap of 2.4 million -- a diagnostic asserting something it had not measured, which
+            // is the failure mode this file records three times. This counts REFUSALS OF UNMARKED METHODS,
+            // still over-counting a genuinely-new method once per round, and the wording says so.
+            if (reachTab[reachSlot(code)] != code)
+            {
+                reachRefused += 1;
+            }
             return false;
         }
         int i = reachSlot(code);
@@ -3940,6 +3975,25 @@ public final class Loader
             Uart.write(Magic.bytes(" -- those classes are NEVER PULLED; raise MAXPEND above "));
             VM.printDec(MAXPEND + pendDropped);
             Uart.putc(0x0A);
+        }
+        // THE SAME REPORT FOR THE METHOD SET, which never had one. A dropped METHOD is worse than a dropped
+        // ref: marking is a fixpoint, so the method never contributes its own refs and its whole transitive
+        // subtree is lost with it. It is also silent at the failure site -- the method simply gets no
+        // dispatch stub, and the first sign is a `VIRTUALRESOLVE FAILED` in a class that looks unrelated.
+        // Ungated, for the reason stated above: a truncated closure is a failure.
+        if (reachRefused != 0)
+        {
+            Uart.write(Magic.bytes("  RTA CLOSURE INCOMPLETE: MAXREACH="));
+            VM.printDec(MAXREACH);
+            Uart.write(Magic.bytes(" FULL, "));
+            VM.printDec(reachRefused);
+            Uart.write(Magic.bytes(" refusals -- those methods get NO dispatch stub, and marking is a\n"));
+            Uart.write(Magic.bytes("  FIXPOINT so their callees are lost with them. Closure membership is now\n"));
+            Uart.write(Magic.bytes("  ORDER-DEPENDENT: any change to the image moves which methods survive.\n"));
+            // DELIBERATELY NO SUGGESTED SIZE. The refusal count is not a distinct-method count, and the true
+            // closure size is UNKNOWABLE from a run that truncated it -- the only way to learn it is to raise
+            // the cap and re-read `reach`. Printing a target here would be inventing one.
+            Uart.write(Magic.bytes("  Raise MAXREACH and re-read `reach=` to learn the true size.\n"));
         }
     }
 

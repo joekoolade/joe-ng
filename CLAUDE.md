@@ -115,6 +115,60 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE SILENT CLOSURE TRUNCATION IS FIXED, AND FIXING IT REMOVED THE FAILURE THAT COST THIS ARC FOUR BOOTS
+  (2026-09-16, NOT YET PI-VALIDATED).** `MAXREACH` 8192 -> 65536 plus the report `addReach` never had.
+
+  | | before | after |
+  |---|---|---|
+  | batch 1 `reach` | **8192 == the cap** | **14554** (complete) |
+  | `rounds` / `pend` | 26 / 56,383 | 54 / 96,158 |
+  | `VIRTUALRESOLVE FAILED` on the launcher | 1 (`Unsafe.getAndBitwiseOrInt`) | **0** |
+
+  - **44% OF THE CLOSURE WAS BEING DISCARDED IN SILENCE ON EVERY LAUNCHER BOOT**, including every one that
+    passed and exited 0. `addReach` was `if (code == 0L || reachN >= MAXREACH) { return false; }` -- no
+    report, no counter. **`MAXPEND` learned this exact lesson and its report sits at the END OF THE SAME
+    METHOD**, ten lines away; the method set never got it. The new report is modelled on it deliberately.
+  - **A DROPPED METHOD IS WORSE THAN A DROPPED REF, and the wording says why.** Marking is a FIXPOINT, so an
+    unmarked method never contributes its own refs and its entire transitive subtree is lost with it --
+    which is why raising the cap moved `rounds` 26 -> 54 rather than adding a few leaves. And the method
+    simply gets no dispatch stub, so the first symptom is a `VIRTUALRESOLVE FAILED` in a class that looks
+    unrelated to anything anyone touched.
+  - **IT ALSO MADE CLOSURE MEMBERSHIP ORDER-DEPENDENT, which is the property that cost the boots.** Which
+    8,192 of 14,554 survive is insertion order, so ANY change to the image moves the cut. Two statics were
+    enough. The report says this outright, because a reader who sees it needs to know that every other
+    result from that boot is suspect.
+  - **THE REPORT'S FIRST CUT LIED AND THE NEGATIVE CONTROL CAUGHT IT.** It read **"2,384,018 methods dropped
+    ... raise MAXREACH above 2392210"** on a closure short by ~6,000. `addReach` is called for the same
+    method in every round, and once full it was counting every call -- including ones for methods ALREADY
+    marked, which are ordinary no-ops rather than losses. Probing the set before counting takes it to
+    **33,107 refusals**, 72x smaller and honestly named: refusals of UNMARKED methods, still over-counting a
+    new method once per round. **A diagnostic asserting a number it has not measured is the failure this
+    file records three times, and it nearly shipped a fourth.**
+  - **AND IT SUGGESTS NO SIZE, deliberately.** The true closure size is UNKNOWABLE from a run that truncated
+    it; the only way to learn it is to raise the cap and re-read `reach=`. The MAXPEND report can print a
+    target because its count is distinct; this one cannot, so it says what to do instead of inventing a
+    number.
+  - **VERIFIED BOTH DIRECTIONS, which is what makes it evidence:** at `MAXREACH=8192` it fires with the
+    count above; at 65536 it is **SILENT** and `reach=14554`. A report that cries wolf on a passing boot is
+    worse than none, and this file has had to say that four times.
+  - **WHAT THE COMPLETE CLOSURE THEN EXPOSED, and it is a REAL pre-existing bug the truncation was masking:**
+    QEMU now reaches batch 4 with **no `VIRTUALRESOLVE FAILED`, no denylist trap, no fault** and stops at
+    `NullPointerException: factory` -- `CommandLine$Model$CommandUserObject.create` ->
+    `CommandLine$Assert.notNull`, under `extractCommandSpec` -> `forAnnotatedObject`. Batch 2 pulls **+2164
+    blobs against 1344**, 78% more classes, so this is a materially bigger VM than any boot before it.
+  - **AND IT NAMES THE SECOND LATENT DEFECT THE COIN FLIP HAD BEEN CHOOSING BETWEEN.** `make
+    overlaycheck-deep` reports `jdk/internal/misc/Unsafe getAndBitwiseOrInt(Ljava/lang/Object;JI)I` as
+    referenced-but-dropped: the overlay declares `getAndBitwiseOrLong` and NOT the `Int` form, so the method
+    CEASED TO EXIST -- the overlay-drops-stock-members trap for the eleventh time. The shallow check cannot
+    see it because the only caller is STOCK java.base (`ForkJoinTask.setDone`), which is exactly the blind
+    spot `overlaycheck-deep` exists for. **Correction to the entry below: I wrote that `getAndBitwiseOrInt`
+    "lands on the wrong side of the cut". It does not -- it is absent outright. What the cut moved was
+    whether `BigDecimal.<clinit>` became reachable and ran that path at all.**
+  - **NOT FLASHED, and that is a judgement worth stating.** Committed but not on hardware: main now has a
+    correct closure and a launcher that stops at batch 4 on QEMU, where before it had a 44%-truncated
+    closure and a launcher that completed. The second state looks better and is worse -- it worked by luck,
+    and any edit re-rolled the dice. **NEXT: the picocli `factory` NPE**, which is now the honest blocker.
+
 - **THE LAUNCHER IS RESTORED, AND A SAME-BUILD-PATH A/B CLOSES THE ONE CONFOUND I HAD LEFT OPEN
   (2026-09-16, PI-VALIDATED).** With the instrument reverted, the Pi runs to batch 209, `[2 tests
   successful]`, exit 0, **`Test run finished after 96983 ms` -- identical to the millisecond** to the
