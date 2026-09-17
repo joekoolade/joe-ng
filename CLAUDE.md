@@ -199,12 +199,24 @@ defines the minimum the assembler must encode.
     Every instrument here is loader-side, so "the failing code runs in the writer-BAKED world where none of
     them can see" fits perfectly -- and `JOENG_SYMMAP` shows **zero** baked `java/util/LinkedHashMap`,
     `HashMap` or `Map` methods. No boot needed to refute it.
-  - **SO THE REMAINING QUESTION IS NARROW: an emitted `invokespecial` that does not execute, beside a `new`
-    that does.** Resolution is now measured at BOTH ends and is not the fault. That points at the
-    deferred-`new` lowering (`NEW_UNRESOLVED` / `resolveUnresolvedNew`) and at how the following
-    `dup`/`invokespecial` is lowered around it. **NEXT:** instrument the `new` lowering -- whether
-    `sequencedEntrySet`'s `new LinkedEntrySet` took the unresolved path, and what the operand stack looks
-    like across it.
+  - **AND THE `new` LOWERING IS NOT THE VARIABLE EITHER -- BOTH ARMS DEFER.** New `NEWWATCH` (print-only)
+    names which of the two lowerings `objectSizeOf` chose: INLINE (allocate at the registered size, store
+    that class's TIB) or DEFERRED (record a site, let `VM.newUnresolved` demand-load on first reach). Both
+    push exactly one reference, so nothing downstream can tell them apart. Measured: **`DEFERRED site=15`
+    failing, `DEFERRED site=14` passing** -- identical. The deferred-`new` path was the leading suspect and
+    it is not the difference. Fifth hypothesis dead to an instrument.
+  - **WHICH LEAVES EXACTLY ONE VARIABLE, the one BUFWATCH already had:** whether `LinkedEntrySet.<init>` is
+    compiled and REGISTERED in time for `patchRelocs` to bind the site to it. Passing: `tier1 ->
+    0x024AD1A8`, and the constructor runs. Failing: never, the site keeps a link stub, the constructor never
+    runs, the object is returned raw.
+  - **THE DEFECT, as precisely as the evidence allows: a DEFERRED `new` demand-loads its CLASS but nothing
+    ensures its CONSTRUCTOR is compiled and registered.** The object half works -- correct TIB, correct size
+    -- and the `<init>` site beside it is left bound to something that does not construct. That is the same
+    "mint what the site will need" the null-vtable-slot and `mintPrunedStub` fixes did for virtuals and
+    itable entries, and it was never done for CONSTRUCTORS.
+  - **STILL OPEN, and deliberately not rounded away: why the link stub does not FIRE.** It is minted (the
+    site is not trap-wired) and `LINKWATCH` shows `resolveLinkTarget` never runs for it. A stub that exists
+    and is never invoked is a second, smaller question, independent of the fix direction above.
   - **THE RECEIVER WATCH SHIPPED BROKEN AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
     `ImageBuilder` stashes `watchRet`/`watchArg`/`watchX21` by name; `watchRecv` was not added, so
     `watchRecvAddr` stayed 0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware
