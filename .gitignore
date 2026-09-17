@@ -23,3 +23,6 @@ jars/
 
 # Staged by `make junitjar` from jars/ (itself gitignored) -- a 3 MB third-party binary, never vendored.
 ramfs/lib/junit.jar
+
+# Editor workspace file (references ../jdk, a local path) -- local-only.
+joe-ng.code-workspace
