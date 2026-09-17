@@ -20722,10 +20722,50 @@ public final class Loader
         int r = classRegOf(classIdx);
         if (r < 0 && !selfClassAt(classIdx))
         {
-            return -(unresolvedNewSite(classIdx) + 1);
+            int site = unresolvedNewSite(classIdx);
+            newLowerLog(classIdx, -1, site);            // DEFERRED: NEW_UNRESOLVED, allocated at first reach
+            return -(site + 1);
         }
         int fields = r >= 0 ? clTab[r].fieldCount : gifCount;
+        newLowerLog(classIdx, 16 + fields * 8, -1);     // INLINE: Heap.alloc + this class's TIB, here and now
         return 16 + fields * 8;
+    }
+
+    /**
+     * Which path a {@code new} of a watched class took, and the size it was given.
+     *
+     * <p>The two paths differ in far more than their code: the INLINE one allocates at a size derived from
+     * the registered class and stores that class's TIB, while the DEFERRED one records a site and lets
+     * {@code VM.newUnresolved} demand-load and allocate on first reach. Both push exactly one reference, so
+     * nothing downstream can tell them apart -- which is why the choice has to be reported rather than
+     * inferred from the object afterwards. Print-only: it emits no code and cannot perturb the lowering.
+     */
+    private static void newLowerLog(int classIdx, int size, int site)
+    {
+        if (!BUF_WATCH_ON)
+        {
+            return;
+        }
+        int nameOff = gcp[u2(gbase + gcp[classIdx])];
+        if (!utf8IsAtBase(gbase, nameOff, BUF_WATCH_CLASS))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  NEWWATCH new "));
+        printNameAt(gbase, nameOff);
+        Uart.write(Magic.bytes(" in "));
+        printNameAt(gbase, gThisNameOff);
+        if (size >= 0)
+        {
+            Uart.write(Magic.bytes(" -> INLINE size="));
+            VM.printDec(size);
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" -> DEFERRED (NEW_UNRESOLVED) site="));
+            VM.printDec(site);
+        }
+        Uart.putc(0x0A);
     }
 
     /** Type node of the interface owning InterfaceMethodref {@code idx}. */
