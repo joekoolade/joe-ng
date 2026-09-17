@@ -115,6 +115,63 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **MY INSTRUMENT PUSHED `lazyCompile` PAST `OP_MAX` AND BROKE THE PI -- CONTROL-PROVEN MINE, AND QEMU COULD
+  NOT SEE IT (2026-09-16).** The `betw`/`lzT`/`gcT` instrument below wedged the launcher at BATCH 2 on
+  hardware, in the recorded java.math landmine: `BigDecimal.<clinit>` -> `squareToomCook3` -> `RecursiveOp`
+  -> `ForkJoinTask` -> `Unsafe.getAndBitwiseOrInt`. An instrument-only change cannot move a closure, so my
+  first instinct was that this was pre-existing. **It was not, and one control boot said so.**
+
+  | launcher boot | result |
+  |---|---|
+  | control `f7b3eec` on the **Pi** | batch 209, `[2 tests successful]`, exit 0, 96,996ms |
+  | change `af291ca` on the **Pi** | **wedged at batch 2**, denylist trap |
+  | both, on **QEMU** | batch 209, identical counters, one known `ProcessImpl` trap |
+
+  - **ROOT CAUSE, AND IT IS VISIBLE IN THE BYTECODE RATHER THAN THE DIFF.** Two timestamp LOCALS added to
+    `Loader.lazyCompile` took it from **`stack=4, locals=4` to `stack=8, locals=8`**. `Baseline.OP_MAX` is
+    **7**: past it the operand stack leaves registers for FRAME MEMORY, so the method compiled in DEEP-STACK
+    mode for the first time in its life. Its compiled body went 532 -> 976 bytes, +83%, for what should have
+    been two clock reads.
+  - **AND `lazyCompile` CARRIES A `try/finally`.** A deep-stack HANDLER is exactly where this VM has already
+    been bitten and Pi-validated once: "a deep-stack handler read the caught exception from an unwritten
+    spill slot", where the inline path worked and only a CROSS-METHOD unwind failed. `lazyCompile` is the
+    hottest exception-bearing path in the VM, and on the launcher it unwinds for real -- JUnit throws as
+    ordinary control flow.
+  - **THE FIX MOVES THE STATE TO STATICS, which is what this file already prescribes for `Loader`** ("state
+    in statics because methods are capped at 10 local slots"). Two helpers, `lzEnter`/`lzExit`, so
+    `lazyCompile` gains NO locals and NO operands: it is back to **`stack=4, locals=4`, identical to the
+    control**. `lzExit` was then split into steps because it landed at `stack=8` itself -- it is a leaf and
+    would probably have been fine, and "probably fine" is precisely what cost the boot.
+  - **A BUILD-TIME GUARD NOW CATCHES THIS CLASS OUTRIGHT, and its bound is MEASURED rather than guessed.**
+    `vm/Loader` has 599 compiled methods, **52 of them legally deep (`stack > 7`), and NONE carries an
+    exception handler** -- so the forbidden thing is the PAIRING, not depth. `compiler: 37 -> 39 checks`.
+    **NEGATIVE CONTROL, run before it shipped:** against the failing commit the test FAILS, naming
+    `lazyCompile(I)J stack=8`; against the fix it passes. That check costs milliseconds and would have
+    replaced a Pi boot.
+  - **WHAT I HAVE PROVEN AND WHAT I HAVE NOT.** Proven: the regression is mine (control passes on the same
+    hardware), and the deep-stack switch is the ONLY codegen-mode change my instrument caused. **NOT proven:
+    that deep-stack is the mechanism by which an extra class entered batch 2.** The Pi pulled `+1344blob
+    rounds=3 reach=8` where QEMU pulled `+1343blob rounds=2 reach=1`, and I cannot yet explain that link.
+    Only a passing hardware boot closes it, and this entry stays NOT PI-VALIDATED until one does.
+  - **QEMU IS STRUCTURALLY BLIND HERE, which is worth stating precisely.** It ran BOTH binaries to batch 209
+    with byte-identical counters. The launcher's hardware-only conditions -- picocli's terminal-width probe
+    on its own thread, the `ProcessImpl` trap, real timing against a 166MHz core -- are what exercise this,
+    and the emulator runs execution ~100x slow with a near-real-time counter. **A green QEMU A/B is not
+    evidence that a codegen-mode change is safe.**
+  - **MY OWN A/B WAS BROKEN ONCE ON THE WAY, AND `cmp` CAUGHT IT -- the third recorded instance.** I compared
+    symmaps and got IDENTICAL addresses for both arms, because a `git checkout` of the other arm's sources
+    was never followed by `make build`, so `out/` held stale classes and both runs emitted the control
+    (33,288,136 bytes, byte-identical, neither containing the string `betw`). **An A/B whose arms are the
+    same binary looks exactly like a change that does nothing.** Checking the images, not the exit code, is
+    what separated the two.
+  - **ALSO FOUND, PRE-EXISTING AND UNRELATED, AND NOT FIXED HERE: the RTA closure is SILENTLY TRUNCATED.**
+    Batch 1 of every launcher boot reports **`reach=8192`, and `MAXREACH` is 8192** -- the cap hit exactly,
+    on the Pi and on QEMU, on control and change alike. `addReach` is `if (code == 0L || reachN >= MAXREACH)
+    { return false; }`: no report, no counter. That is the same silent `if (room) { record it }` shape that
+    `PEND LIST FULL` was raised and made to report for, and a dropped ref means a class is never pulled and
+    its `<clinit>` never enqueued. Deliberately left off this card -- two unvalidated changes on one card is
+    what forced a bisect last time -- and it is the first thing to look at next.
+
 - **THE LOAD PATH IS NO LONGER THE BOTTLENECK, AND THE THING THAT IS HAS NEVER BEEN MEASURED -- `betw`,
   `lzT`, `gcT` (2026-09-16, NOT YET PI-VALIDATED).** Nine increments took a launcher boot 161,556 ->
   96,983ms and the per-batch load path to 32.9ms. But every cumulative figure in this file measures time

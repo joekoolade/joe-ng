@@ -3658,6 +3658,16 @@ public final class Loader
     static long lzInBatch;               // of lzTicks, the same
     private static int lzDepth;          // OUTERMOST lazy compile only: counting re-entries would hide
                                          //   exactly the nesting this is here to measure (the `rel` lesson)
+    // THESE TWO ARE STATICS RATHER THAN LOCALS, AND THAT IS LOAD-BEARING RATHER THAN STYLE. Held as locals
+    // in `lazyCompile` they took its operand stack from `stack=4` to `stack=8` -- past `OP_MAX = 7` -- so
+    // the method compiled in DEEP-STACK mode, operand stack in frame memory, for the first time ever. It
+    // carries a try/finally, and a deep-stack HANDLER is precisely where this VM has been bitten before
+    // (the caught exception read from a spill slot nothing had written). PI-MEASURED: the launcher wedged
+    // at batch 2 with that shape while the SAME binary ran to batch 209 on QEMU, and the control at the
+    // parent commit passed on hardware. **An instrument must not change the CODEGEN MODE of the code it
+    // measures**, and on this VM `OP_MAX = 7` is the line it must not push a method across.
+    private static long lzT0;            // the outermost compile's start tick
+    private static long lzCum0;          // ... and cumAll at that moment, to subtract any batch it triggers
 
     /**
      * PHASE B's SPLIT. `B` is the largest item in the dominant batch -- 23,346ms of batch 1's 47,566ms
@@ -14283,6 +14293,44 @@ public final class Loader
      * method, compile just it, install the fresh buffer into the TIB slot, and return it. Called only from
      * the trampoline (via the stashed address). Guarded so the writer's dead force-reference is a no-op.
      */
+    /**
+     * Start the outermost lazy-compile measurement. Called INSIDE the loader lock: time spent waiting for it
+     * is another core's compile, and charging it here would bill one compile to two cores. The depth is
+     * raised in here for the same reason -- raised before the lock, two cores could both raise it and
+     * neither would see 0 at the end, so every nested compile would go unrecorded.
+     */
+    private static void lzEnter()
+    {
+        if (lzDepth == 0)
+        {
+            lzT0 = Magic.readCNTPCT_EL0();
+            lzCum0 = cumAll;
+        }
+        lzDepth += 1;
+    }
+
+    /**
+     * Close it, NET OF ANY BATCH THIS COMPILE TRIGGERED -- because it genuinely can trigger one:
+     * lazyCompile -> drainPendingPulls -> loadClassIncremental -> loadAll. {@code cumAll} grows by exactly
+     * that batch's own bracket, so subtracting its delta leaves compile time and nothing else, and keeps
+     * {@code lzT} a true subset of {@code betw} rather than a term that overlaps {@code tot}.
+     */
+    private static void lzExit()
+    {
+        lzDepth -= 1;
+        if (lzDepth == 0)
+        {
+            lzCalls += 1;
+            // SPLIT INTO STEPS TO KEEP THE OPERAND STACK UNDER `OP_MAX = 7`. As one expression this method
+            // compiled at `stack=8`, i.e. deep-stack -- the very thing that broke the Pi boot one commit
+            // ago. It is a leaf and would probably have been fine; "probably fine" is what cost that boot,
+            // so the depth is kept where it can be read straight off the bytecode.
+            long spent = Magic.readCNTPCT_EL0() - lzT0;
+            long nested = cumAll - lzCum0;
+            lzTicks += spent - nested;
+        }
+    }
+
     static long lazyCompile(int idx)
     {
         if (idx < 0 || lzTab == null || idx >= lzN)
@@ -14294,13 +14342,7 @@ public final class Loader
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
         VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
-        // TIMED INSIDE THE LOCK, deliberately. Time spent WAITING for it is another core's compile, and
-        // charging it here would count one compile against two cores. The depth counter must also live in
-        // here: incremented before the lock, two cores could both raise it and neither would see 0 at the
-        // end, so every nested compile would go unrecorded.
-        long tLz0 = Magic.readCNTPCT_EL0();
-        long lzCumAll0 = cumAll;
-        lzDepth += 1;
+        lzEnter();                                  // accounting only -- and it adds NO locals here
         long done;
         try
         {
@@ -14308,16 +14350,7 @@ public final class Loader
         }
         finally
         {
-            // NET OF ANY BATCH THIS COMPILE TRIGGERED, because it genuinely can trigger one:
-            // lazyCompile -> drainPendingPulls -> loadClassIncremental -> loadAll. `cumAll` grows by exactly
-            // that batch's own bracket, so subtracting its delta leaves compile time and nothing else --
-            // and keeps `lzT` a true SUBSET of `betw` rather than a term that overlaps `tot`.
-            lzDepth -= 1;
-            if (lzDepth == 0)
-            {
-                lzCalls += 1;
-                lzTicks += (Magic.readCNTPCT_EL0() - tLz0) - (cumAll - lzCumAll0);
-            }
+            lzExit();
             // A THROW INSIDE THE LOCKED REGION MUST NOT STRAND THE LOCK, and it did. Neither call was
             // inside a try/finally and VM.unwind touches none of loaderOwner/loaderDepth/loaderUnlock, so
             // an exception exiting non-locally skipped the unlock and the lock was never handed back --

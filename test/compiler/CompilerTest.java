@@ -325,6 +325,21 @@ public final class CompilerTest
         String img = new String(BuildRuntimeImage.build(classesDir).toBytes(), StandardCharsets.US_ASCII);
         T.eq("interned 'hello from joe-ng' in image", 1, img.contains("hello from joe-ng") ? 1 : 0);
 
+        // ---- NO METHOD IS BOTH DEEP-STACK AND HANDLER-BEARING ----
+        // `OP_MAX = 7` (Baseline): past it the operand stack moves out of registers into FRAME MEMORY, and
+        // a method's codegen MODE changes. A deep-stack HANDLER is where this VM has already been bitten --
+        // the caught exception read from a spill slot nothing had written -- and it bit again here: adding
+        // two timestamp LOCALS to `Loader.lazyCompile` took it from stack=4 to stack=8, which on the Pi
+        // wedged the launcher at batch 2 while the SAME binary ran to batch 209 on QEMU. QEMU could not see
+        // it and neither could reading the diff; the shape is visible in the bytecode, so check it there.
+        //
+        // The bound is measured, not guessed: `vm/Loader` has 599 compiled methods of which 52 are legally
+        // deep, and NONE of those carries an exception handler. The pairing is what is forbidden, not depth.
+        // NEGATIVE CONTROL (run before this shipped): against the failing commit this reports exactly one
+        // violation, `lazyCompile(I)J stack=8`.
+        assertNoDeepHandlers(classesDir.resolve("vm/Loader.class"));
+        assertNoDeepHandlers(classesDir.resolve("vm/VMGc.class"));
+
         T.summary("compiler");
     }
 
@@ -349,6 +364,33 @@ public final class CompilerTest
         }
         return a;
     }
+
+    /**
+     * Assert no method in {@code cls} is simultaneously deeper than {@code OP_MAX} and covered by an
+     * exception handler -- the codegen-mode pairing described at the call site. Named in the failure so a
+     * breakage says WHICH method crossed the line rather than only that one did.
+     */
+    private static void assertNoDeepHandlers(Path cls) throws Exception
+    {
+        ClassFile cf = ClassFile.parse(cls);
+        int bad = 0;
+        for (ClassFile.Method m : cf.methods())
+        {
+            if (m.code == null)
+            {
+                continue;
+            }
+            if (m.maxStack > OP_MAX && m.exceptions != null && m.exceptions.length > 0)
+            {
+                bad += 1;
+                System.out.println("  deep-stack handler: " + m.name + m.descriptor + " stack=" + m.maxStack);
+            }
+        }
+        T.eq("no deep-stack handlers in " + cls.getFileName(), 0, bad);
+    }
+
+    /** Mirrors {@code Baseline.OP_MAX}: past this the operand stack lives in frame memory. */
+    private static final int OP_MAX = 7;
 
     /** Append each word of {@code ws} to {@code l} (loadImm64 now returns int[]). */
     private static void addAll(List<Integer> l, int[] ws)
