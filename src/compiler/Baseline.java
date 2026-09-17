@@ -1358,10 +1358,17 @@ public final class Baseline
         {
             // DEBUG (off unless Loader.FIELD_STORE_WATCH): print the value being STORED, at the store itself.
             // Watching the READ of a field says only what it ended up holding; watching the WRITES says which
-            // assignment put it there, which is the question once the read is known correct. dup first -- the
-            // helper consumes its argument and the putfield below still needs the value. Metal only.
-            dup(cb);
-            emitCall(cb, 1, false, false, SYM_HELPER, Symbols.WATCH_RET);
+            // assignment put it there, which is the question once the read is known correct.
+            //
+            // Read in place rather than dup'd, for the reason the argument watch had to be corrected:
+            // `computeDepths` is a BYTECODE pre-pass and cannot see an operand the LOWERING pushes, so a dup
+            // here raises the true peak one above what the frame was sized for -- and a method whose real
+            // peak is exactly OP_MAX then overflows the register window. Metal only.
+            cb.emit(A64Enc.movReg(0, opSlot(sp - 1)));           // x0 = the value about to be stored
+            cb.emit(A64Enc.movz(1, cpIndex & 0xFFFF, 0));        // x1 = the SITE, matched to its ARMED line
+            spillLive(cb);
+            symbols.callHelper(cb, Symbols.WATCH_RET);
+            reloadLive(cb);
         }
         int off = symbols.fieldOffset(cpIndex);
         int val = popReg();
@@ -2245,7 +2252,59 @@ public final class Baseline
     /** A real call: args to x0.. (receiver first if any), BL to a cp method, result from x0. */
     private void lowerCall(int cpIndex, CodeBuffer cb, boolean hasReceiver)
     {
+        if (symbols.isWatchedCallArgs(cpIndex) && paramCount(cpIndex) > 0)
+        {
+            // DEBUG (off unless Loader.ARG_WATCH_ON): print the LAST ARGUMENT this call is about to pass,
+            // at the call site. `isWatchedCall` prints what a call RETURNED, which cannot see a value that
+            // is lost on the way IN -- and a value handed down a chain of frames as an argument is exactly
+            // the case where the caller and the callee disagree. Every frame that can lose such a value is
+            // a call site, so watching the argument names the frame instead of narrowing to two.
+            //
+            // IT MUST NOT PUSH AN OPERAND, and that is not tidiness. `computeDepths` is a BYTECODE pre-pass:
+            // it cannot see a transient the LOWERING introduces, so a `dup` here raises the real peak by one
+            // above the depth the frame was sized for. A method whose true peak is exactly OP_MAX then
+            // overflows the register window -- measured, as `JIT unsupported: reason=8 a=0x7` in picocli's
+            // ArgSpec, which is this project's recorded lowering-transient trap. (The putfield watch pushes
+            // the same way and has the same latent flaw; it has simply never been armed on a peak-depth
+            // method.) So the value is read from the top operand's register in place, exactly as checkCast
+            // reads its objref, with spillLive/reloadLive preserving the stack across the helper call.
+            // Metal only -- WriterSymbols.isWatchedCallArgs is always false, so baked code is byte-for-byte
+            // unchanged and the self-hosting fixpoint holds.
+            cb.emit(A64Enc.movReg(0, opSlot(sp - 1)));           // x0 = the last argument, left on the stack
+            cb.emit(A64Enc.movz(1, cpIndex & 0xFFFF, 0));        // x1 = the SITE, matched to its ARMED line
+            spillLive(cb);
+            symbols.callHelper(cb, Symbols.WATCH_ARG);
+            reloadLive(cb);
+        }
         emitCall(cb, paramCount(cpIndex), returnsValue(cpIndex), hasReceiver, SYM_CP, cpIndex);
+        // NOT gated on maxLocals: in a method that does not OWN slot 2, x21 still holds the CALLER'S local,
+        // which is exactly the value being traced. Dropping the guard lets the same watch follow x21 one
+        // frame deeper, into the callee that the launcher bisect named.
+        if (symbols.watchLocal2() && inReg(2))
+        {
+            // Print the caller's OWN local slot 2 after this call returns. The value is read from the
+            // register the local lives in, so it reports what the next `aload_2` would see -- which is the
+            // question when a local is alive before a call and null after it.
+            cb.emit(A64Enc.movReg(0, localReg(2)));
+            cb.emit(A64Enc.movz(1, cpIndex & 0xFFFF, 0));        // x1 = the SITE that just returned
+            spillLive(cb);
+            symbols.callHelper(cb, Symbols.WATCH_ARG);
+            reloadLive(cb);
+        }
+        if (symbols.isWatchedCall(cpIndex) && returnsValue(cpIndex))
+        {
+            // The return watch was wired into lowerInvokeVirtual ALONE, so arming it on a STATIC method was
+            // silent -- measured: `Assert.notNull` is invokestatic, and a whole launcher boot produced not
+            // one line. A watch that cannot fire reads exactly like a watch that fired and found nothing,
+            // which is the failure this file records against three earlier diagnostics.
+            //
+            // Read in place rather than dup'd, for the lowering-transient reason above.
+            cb.emit(A64Enc.movReg(0, opSlot(sp - 1)));           // x0 = the value just returned
+            cb.emit(A64Enc.movz(1, cpIndex & 0xFFFF, 0));        // x1 = the SITE, matched to its ARMED line
+            spillLive(cb);
+            symbols.callHelper(cb, Symbols.WATCH_RET);
+            reloadLive(cb);
+        }
     }
 
     /** Parameter count of the {@code *ref} at cp index {@code refCp} (each = one arg register). */
@@ -3065,6 +3124,67 @@ public final class Baseline
      * peak depth -- so a method whose DECLARED max_stack exceeds the register budget but never actually goes
      * deep (e.g. vm/VM.run) stays on the fast register-only path. Returns depth[] (-1 = unreached).
      */
+    /**
+     * The number of local slots the BODY actually reaches -- highest slot referenced, plus one, plus another
+     * for a long/double, which occupies two.
+     *
+     * <p>Derived from the bytecode so it is independent of the {@code max_locals} handed in. On the metal
+     * that value arrives through loader state rather than straight from javac, and if it is ever too small
+     * the prologue saves too few callee-saved registers while the body writes them anyway -- corrupting the
+     * CALLER'S locals with no fault of its own. A disagreement is worth a line; nothing else can see it.
+     */
+    private int maxLocalSlotUsed(byte[] code)
+    {
+        int need = 0;
+        int pc = 0;
+        while (pc < code.length)
+        {
+            int op = code[pc] & 0xFF;
+            int slot = -1;
+            int width = 1;
+            if (op == 0xC4)                                      // wide: u2 index
+            {
+                int wop = code[pc + 1] & 0xFF;
+                slot = ((code[pc + 2] & 0xFF) << 8) | (code[pc + 3] & 0xFF);
+                width = (wop == 0x16 || wop == 0x18 || wop == 0x37 || wop == 0x39) ? 2 : 1;
+            }
+            else if (op == 0x15 || op == 0x17 || op == 0x19 || op == 0x36 || op == 0x38 || op == 0x3A)
+            {
+                slot = code[pc + 1] & 0xFF;                      // iload/fload/aload/istore/fstore/astore
+            }
+            else if (op == 0x16 || op == 0x18 || op == 0x37 || op == 0x39)
+            {
+                slot = code[pc + 1] & 0xFF;                      // lload/dload/lstore/dstore -- two slots
+                width = 2;
+            }
+            else if (op == 0x84)                                 // iinc
+            {
+                slot = code[pc + 1] & 0xFF;
+            }
+            else if (op >= 0x1A && op <= 0x2D)                   // *load_<n>
+            {
+                slot = (op - 0x1A) % 4;
+                width = (op >= 0x1E && op <= 0x21) || (op >= 0x26 && op <= 0x29) ? 2 : 1;   // lload_n / dload_n
+            }
+            else if (op >= 0x3B && op <= 0x4E)                   // *store_<n>
+            {
+                slot = (op - 0x3B) % 4;
+                width = (op >= 0x3F && op <= 0x42) || (op >= 0x47 && op <= 0x4A) ? 2 : 1;   // lstore_n / dstore_n
+            }
+            if (slot >= 0 && slot + width > need)
+            {
+                need = slot + width;
+            }
+            int len = opLen(op, code, pc);
+            if (len <= 0)
+            {
+                return need;                                     // unknown form: say what was seen, guess nothing
+            }
+            pc += len;
+        }
+        return need;
+    }
+
     private int[] computeDepths(byte[] code)
     {
         int[] depth = new int[code.length];
@@ -3468,6 +3588,11 @@ public final class Baseline
         // method ever reaches). Only when the real peak exceeds OP_MAX does the operand stack spill to memory;
         // shallow methods stay register-only and byte-identical. The spill area (opStackBase) doubles as the
         // call-preservation area (spillLive), sized to the peak for deep methods, OP_MAX otherwise.
+        int needLocals = maxLocalSlotUsed(code);
+        if (needLocals > maxLocals)
+        {
+            symbols.reportLocalsUndersized(needLocals, maxLocals);
+        }
         this.reachDepth = computeDepths(code);   // depth[pc] >= 0 iff pc is reachable (control-flow pre-pass)
         this.deepStack = maxActualDepth > OP_MAX;
         if (deepStack && isEntry)

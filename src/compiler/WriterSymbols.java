@@ -154,6 +154,20 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         return false;   // host writer: never watches a field store
     }
 
+    public boolean watchLocal2()
+    {
+        return false;
+    }
+
+    public void reportLocalsUndersized(int needed, int declared)
+    {
+    }
+
+    public boolean isWatchedCallArgs(int methodCp)
+    {
+        return false;
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return false;   // host writer: never watches a call site

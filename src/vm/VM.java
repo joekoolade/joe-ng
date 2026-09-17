@@ -1039,13 +1039,33 @@ public final class VM
      * predicates called some other way, the slots, the cells. This one runs at the call site itself, so
      * "what did picocli's own invokevirtual actually get back" is answered by the program.
      */
-    static void watchRet(long v)
+    static void watchRet(long v, long site)
     {
-        Uart.write(Magic.bytes("  WATCHRET "));
+        Uart.write(Magic.bytes("  WATCHRET site="));
+        printDec((int) site);
+        Uart.putc((byte) 0x20);
         printHex(v);
         // ... and its first instance field. For a GroupValidationResult slot 0 is `type`, which is the thing
         // that decides success()/blockingFailure() -- so this says WHICH result was stored, not just that
         // something was.
+        if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
+        {
+            Uart.write(Magic.bytes(" field0="));
+            printHex(Magic.load64(v + 16L));
+        }
+        Uart.putc((byte) 0x0A);
+    }
+
+    /**
+     * DEBUG twin of {@link #watchRet}: the value a watched call is about to PASS, not the one it returned.
+     * Tagged differently so a log with both watches armed can be read at all.
+     */
+    static void watchArg(long v, long site)
+    {
+        Uart.write(Magic.bytes("  ARGWATCH site="));
+        printDec((int) site);
+        Uart.putc((byte) 0x20);
+        printHex(v);
         if (v >= Heap.BASE && v < Heap.managedTop() && (v & 7L) == 0L)
         {
             Uart.write(Magic.bytes(" field0="));
@@ -1364,7 +1384,8 @@ public final class VM
         if (setIn0Addr == 0L) { VMNatives.setIn0(0L); }                         // System.setIn0
         if (arraycopyAddr == 0L) { VMNatives.arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
-        if (watchRetAddr == 0L) { watchRet(0L); }                     // force-compile the debug watch helper
+        if (watchRetAddr == 0L) { watchRet(0L, 0L); }                     // force-compile the debug watch helper
+        if (watchArgAddr == 0L) { watchArg(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
@@ -2753,6 +2774,7 @@ public final class VM
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site
+    static long watchArgAddr;          // VM.watchArg(J)V — DEBUG: value an argument-watched call site passes
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)
     static long newReflectArrayAddr;   // VM.newReflectArray(JJ)J — reflect/Array.newInstance0 (typed ref array)

@@ -67,7 +67,7 @@ public class CtorArgProbe
 
     // ---- the static chain, mirroring forAnnotatedObject -> extractCommandSpec -> create ----
 
-    static String forAnnotated(Object command, IFactory factory)
+    static String forAnnotatedObject(Object command, IFactory factory)
     {
         fa1cmd = command != null;
         fa1fac = factory != null;
@@ -98,7 +98,7 @@ public class CtorArgProbe
         {
             c3cmd = command != null;
             c3fac = factory != null;
-            r = forAnnotated(command, factory);
+            r = forAnnotatedObject(command, factory);
         }
     }
 
@@ -112,7 +112,7 @@ public class CtorArgProbe
         {
             c3cmd = command != null;
             c3fac = factory != null;
-            r = forAnnotated(command, factory);
+            r = forAnnotatedObject(command, factory);
         }
     }
 
@@ -140,7 +140,201 @@ public class CtorArgProbe
             g = new DefaultFactory(null);
             c3cmd = command != null;
             c3fac = factory != null;
-            r = forAnnotated(command, factory);
+            r = forAnnotatedObject(command, factory);
+        }
+    }
+
+    /** A sink with seven reference parameters: calling it takes the operand stack to 7 -- {@code OP_MAX}. */
+    static Object sink7(Object a, Object b, Object c, Object d, Object e, Object f, Object g) { return a; }
+
+    /** picocli's {@code CommandLine.tracer()}: an ordinary static call made BEFORE the factory is passed on. */
+    static Object tracer() { return new Marker(); }
+
+    /** Something built FROM the receiver, like picocli's {@code new CommandLine$Interpreter(this)}. */
+    static final class Holder
+    {
+        Holder(Object owner) { }
+    }
+
+    /**
+     * The CONDITION {@code extractCommandSpec} has and every other frame in the failing chain does not.
+     * That method is {@code stack=7, locals=12} -- past {@code Baseline.LOC_MAX} (10), so slots 10 and 11
+     * live in frame memory, and exactly at {@code OP_MAX}. It calls {@code tracer()} at bytecode 7 and only
+     * then hands {@code aload_1} -- the factory -- to {@code create} at bytecode 38. Reading the trace frame
+     * by frame, four of the six frames pass their argument with NO intervening call and so cannot lose it;
+     * this is one of the two that can.
+     */
+    static String wideExtract(Object command, IFactory factory, boolean flag)
+    {
+        Object t = tracer();                       // a real call, before the hand-off
+        if (command == null)
+        {
+            return "early";                        // the instanceof short-circuit picocli takes first
+        }
+        ex1cmd = command != null;
+        ex1fac = factory != null;                  // slot 1, read AFTER that call
+        String r = create(command, factory);
+        Object l5 = t;
+        Object l6 = t;
+        Object l7 = t;
+        Object l8 = t;
+        Object l9 = t;
+        Object l10 = t;
+        Object l11 = t;
+        sink7(l5, l6, l7, l8, l9, l10, l11);       // seven live operands, and slots 5..11: locals 12
+        return r;
+    }
+
+    /** ARM D -- the same three-deep chain, through the WIDE extract above. */
+    static final class Wide
+    {
+        final String r;
+        Wide(Object command) { this(command, new DefaultFactory(null)); }
+        Wide(Object command, IFactory factory) { this(command, factory, true); }
+        private Wide(Object command, IFactory factory, boolean flag)
+        {
+            c3cmd = command != null;
+            c3fac = factory != null;
+            fa1cmd = command != null;
+            fa1fac = factory != null;
+            r = wideExtract(command, factory, true);
+        }
+    }
+
+    /**
+     * ARM E -- the OTHER place the reference can be lost. picocli's 3-arg constructor PASSES its own
+     * {@code Assert.notNull(factory)} at bytecode 54 (so the factory is alive there), then builds
+     * {@code new Interpreter(this)} at 64-69, and reads {@code aload_2} again only at 77. Arm C allocates
+     * mid-expression too, but none of its {@code new}s take the RECEIVER -- a different value is live across
+     * the call, and that is exactly the kind of difference that has made a probe pass while the program
+     * failed.
+     */
+    static final class LateThis
+    {
+        final String r;
+        Object h1, h2;
+        LateThis(Object command) { this(command, new DefaultFactory(null)); }
+        LateThis(Object command, IFactory factory) { this(command, factory, true); }
+        private LateThis(Object command, IFactory factory, boolean flag)
+        {
+            c3cmd = command != null;               // picocli's Assert.notNull, which PASSES on the launcher
+            c3fac = factory != null;
+            h1 = new Holder(this);                 // `new Interpreter(this)`
+            h2 = new Holder(this);
+            r = forAnnotatedObject(command, factory);    // slot 2, read after those calls
+        }
+    }
+
+    /**
+     * A constructor that forces a DEMAND-LOAD BATCH, which is the condition arm E lacks.
+     *
+     * <p>Measured on the launcher: between the 3-arg constructor's own {@code Assert.notNull(factory)} at
+     * bytecode 54 -- which returns the factory NON-NULL -- and its {@code aload_2} at bytecode 77, which
+     * reads NULL, the only call is {@code new CommandLine$Interpreter(this)}. That constructor runs
+     * {@code registerBuiltInConverters()}, and the log shows THREE demand-load batches pulling 6,495 blobs
+     * inside that 24-bytecode window. Arm E reproduces the bytecode shape with none of that underneath it.
+     */
+    static final class Loading
+    {
+        Object m;
+        Loading(Object owner)
+        {
+            m = loadSomething();
+        }
+    }
+
+    /** Pull a class the closure does not already carry: an incremental load, i.e. a real batch. */
+    static Object loadSomething()
+    {
+        try
+        {
+            return Class.forName("java.util.regex.Pattern");
+        }
+        catch (Throwable t)
+        {
+            return null;
+        }
+    }
+
+    /** ARM F -- arm E's shape PLUS the demand-load the launcher does inside the same window. */
+    static final class Batch
+    {
+        final String r;
+        Object h1;
+        Batch(Object command) { this(command, new DefaultFactory(null)); }
+        Batch(Object command, IFactory factory) { this(command, factory, true); }
+        private Batch(Object command, IFactory factory, boolean flag)
+        {
+            c3cmd = command != null;              // picocli's Assert.notNull, which PASSES on the launcher
+            c3fac = factory != null;
+            h1 = new Loading(this);               // the call that demand-loads, as Interpreter's does
+            r = forAnnotatedObject(command, factory);   // slot 2, read after it
+        }
+    }
+
+    /**
+     * ARM G -- the mechanism the launcher bisect points at, reduced.
+     *
+     * <p>MEASURED on the launcher: local slot 2 of {@code CommandLine.<init>} survives five calls and is
+     * destroyed by the sixth, {@code new CommandLine$Interpreter(this)}. That constructor is
+     * {@code locals=2}, so it never saves x21 itself; x21 is saved by whichever DEEPER frame uses slot 2 and
+     * restored by that frame's epilogue. An exception unwinding PAST such a frame skips its epilogue -- the
+     * unwinder pops frames without restoring callee-saved registers -- so the register is never put back and
+     * the damage lands on an ANCESTOR that never touched it.
+     *
+     * <p>The shape is exact: {@code thrower} uses slot 2 (so it saves x21) and throws; {@code middle} and
+     * {@code catcher} use two locals or fewer, so neither saves x21 and neither can repair it; and picocli
+     * throws as ordinary control flow while loading, which is why this fires there and nowhere in the suite.
+     */
+    static final class Unwinding
+    {
+        Unwinding(Object owner)
+        {
+            catcher();
+        }
+    }
+
+    static void catcher()
+    {
+        try
+        {
+            middle();
+        }
+        catch (RuntimeException e)
+        {
+            return;                                   // caught ABOVE the frame that saved x21
+        }
+    }
+
+    static void middle()
+    {
+        thrower();
+    }
+
+    static void thrower()
+    {
+        Object a = new Marker();
+        Object b = new Marker();
+        Object c = new Marker();                      // slot 2 -- this frame SAVES x21, then never restores it
+        if (a != null && b != null && c != null)
+        {
+            throw new RuntimeException();
+        }
+    }
+
+    /** ARM G's entry: the same three-deep chain, with the unwinding call where picocli's Interpreter is. */
+    static final class Unwind
+    {
+        final String r;
+        Object h1;
+        Unwind(Object command) { this(command, new DefaultFactory(null)); }
+        Unwind(Object command, IFactory factory) { this(command, factory, true); }
+        private Unwind(Object command, IFactory factory, boolean flag)
+        {
+            c3cmd = command != null;
+            c3fac = factory != null;
+            h1 = new Unwinding(this);                 // a call whose subtree throws and catches
+            r = forAnnotatedObject(command, factory); // slot 2, read after it
         }
     }
 
@@ -165,6 +359,14 @@ public class CtorArgProbe
         report("B via-call   ", new ViaCall(command).r);    // want df  (control)
         reset();
         report("C fat+inline ", new Fat(command).r);        // want df
+        reset();
+        report("D wide-locals", new Wide(command).r);       // want df
+        reset();
+        report("E late-this  ", new LateThis(command).r);   // want df
+        reset();
+        report("F demand-load", new Batch(command).r);      // want df
+        reset();
+        report("G unwind     ", new Unwind(command).r);     // want df
 
         System.out.println("CtorArgProbe done");
     }

@@ -91,6 +91,21 @@ final class MetalSymbols implements Symbols
         return Loader.isWatchedField(fieldCp);
     }
 
+    public boolean isWatchedCallArgs(int methodCp)
+    {
+        return Loader.isWatchedCallArgs(methodCp);
+    }
+
+    public void reportLocalsUndersized(int needed, int declared)
+    {
+        Loader.reportLocalsUndersized(needed, declared);
+    }
+
+    public boolean watchLocal2()
+    {
+        return Loader.watchLocal2();
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return Loader.isWatchedCall(methodCp);
@@ -509,6 +524,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.WATCH_RET)
         {
             return VM.watchRetAddr;
+        }
+        if (helper == Symbols.WATCH_ARG)
+        {
+            return VM.watchArgAddr;
         }
         if (helper == Symbols.ARRAY_CLONE)
         {

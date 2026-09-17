@@ -20098,14 +20098,121 @@ public final class Loader
     /** Watch STORES to one field name: the compiler prints each value as it is written. */
     private static final boolean FIELD_STORE_WATCH = false;
 
+    /**
+     * Watch the LAST ARGUMENT passed to calls of one or two method names.
+     *
+     * <p>A store watch can only see a value that is STORED, and picocli guards every {@code factory} field
+     * with {@code Assert.notNull} on the line above the {@code putfield} -- so on the failing run the store
+     * is never reached and the watch cannot fire. Measured from the jar's bytecode, not inferred. Watching
+     * the ARGUMENT instead sees the value at each hand-off, which is what names the frame that loses it.
+     */
+    private static final boolean ARG_WATCH_ON = false;
+
+    /**
+     * Say, at COMPILE time, which class got a watch on which callee.
+     *
+     * <p>Without it a runtime watch line is an unlabelled number and the reader has to INFER which site
+     * emitted it -- and an absent line cannot be told apart from a site that was never compiled, never
+     * armed, or simply never executed. Those are three different bugs. This is the same discriminator the
+     * field watch needed and never got, which is how "the watch does not fire" stayed open.
+     *
+     * <p>Two lines per site is expected and correct: the compiler visits every call twice, once to size the
+     * method and once to emit it.
+     */
+    /**
+     * A method whose body reaches a local slot its {@code max_locals} does not cover.
+     *
+     * <p>UNGATED, because this is silent caller corruption rather than a degraded answer: the prologue saves
+     * exactly {@code min(max_locals, LOC_MAX)} of x19..x28, so a body writing past that overwrites a
+     * CALLER'S local and the damage surfaces arbitrarily far away -- a reference that was non-null two
+     * bytecodes ago reading as null, with no fault and no trace.
+     */
+    static void reportLocalsUndersized(int needed, int declared)
+    {
+        Uart.write(Magic.bytes("  LOCALS UNDERSIZED: "));
+        if (gbase != 0L && gThisNameOff != 0)
+        {
+            printNameAt(gbase, gThisNameOff);
+        }
+        Uart.write(Magic.bytes(" uses slot "));
+        VM.printDec(needed - 1);
+        Uart.write(Magic.bytes(" but max_locals="));
+        VM.printDec(declared);
+        Uart.write(Magic.bytes(" -- the prologue saves too few callee-saved registers, so THE CALLER'S\n"));
+        Uart.write(Magic.bytes("  LOCALS ARE CORRUPTED from this call onward.\n"));
+    }
+
+    private static void reportArmed(int nameOff, int site)
+    {
+        if (gbase == 0L || gThisNameOff == 0)
+        {
+            return;                                     // no context to name it with; say nothing rather than guess
+        }
+        Uart.write(Magic.bytes("  ARMED site="));
+        VM.printDec(site);
+        Uart.putc(0x20);
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x2E);
+        printNameAt(gbase, nameOff);
+        Uart.putc(0x0A);
+    }
+
+    /**
+     * Trace local slot 2 of one class, after every call it makes.
+     *
+     * <p>Two readings 24 bytecodes apart proved the picocli factory is alive at bytecode 54 and null at 77;
+     * they cannot say WHICH of the intervening calls lost it. This prints the local after each, so one boot
+     * bisects the method instead of one boot per candidate.
+     */
+    private static final boolean LOCAL2_WATCH = false;
+
+    static boolean watchLocal2()
+    {
+        if (!LOCAL2_WATCH || gbase == 0L || gThisNameOff == 0)
+        {
+            return false;
+        }
+        // The constructor that loses the value, and the callee the bisect named. Two exact names rather than
+        // a prefix: every nested picocli class would bury the reading in noise.
+        return utf8IsAtBase(gbase, gThisNameOff,
+                        Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine"))
+                || utf8IsAtBase(gbase, gThisNameOff,
+                        Magic.bytes("org/junit/platform/console/shadow/picocli/CommandLine$Interpreter"));
+    }
+
+    static boolean isWatchedCallArgs(int idx)
+    {
+        if (!ARG_WATCH_ON)
+        {
+            return false;
+        }
+        int n = mrefNameOff(idx);
+        if (!utf8IsAtBase(gbase, n, Magic.bytes("forAnnotatedObject")))
+        {
+            return false;
+        }
+        reportArmed(n, idx);
+        return true;
+    }
+
     static boolean isWatchedField(int idx)
     {
-        return FIELD_STORE_WATCH && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("validationResult"));
+        return FIELD_STORE_WATCH && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("factory"));
     }
 
     static boolean isWatchedCall(int idx)
     {
-        return CALL_WATCH_ON && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("success"));
+        if (!CALL_WATCH_ON)
+        {
+            return false;
+        }
+        int n = mrefNameOff(idx);
+        if (!utf8IsAtBase(gbase, n, Magic.bytes("notNull")))
+        {
+            return false;
+        }
+        reportArmed(n, idx);
+        return true;
     }
 
     /** True if the *ref at {@code idx} is a {@code getClass()Ljava/lang/Class;} call (intrinsified to a helper). */

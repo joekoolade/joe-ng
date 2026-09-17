@@ -138,6 +138,20 @@ final class MetalWriterSymbols implements Symbols
         return false;
     }
 
+    public boolean watchLocal2()
+    {
+        return false;
+    }
+
+    public void reportLocalsUndersized(int needed, int declared)
+    {
+    }
+
+    public boolean isWatchedCallArgs(int methodCp)
+    {
+        return false;
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return false;

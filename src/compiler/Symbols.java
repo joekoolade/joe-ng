@@ -60,6 +60,10 @@ public interface Symbols
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
     int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
+    int WATCH_ARG = 50;         // vm/VM.watchArg(J)V — DEBUG: print an ARGUMENT a watched call is passing.
+                                // A SEPARATE id from WATCH_RET on purpose: with both watches armed the two
+                                // print identically, and an unlabelled column of values is exactly the
+                                // "instrument that conflates two things" failure this project records.
     int VIRTUAL_RESOLVE = 48;   // the late virtual-dispatch trampoline: resolve x17's site against x0's
                                 //   receiver, restore the args, and tail-branch to the real method
     int MON_NOTIFY = 26;        // vm/VM.objNotify(J)V     — wake one waiter on an object
@@ -122,6 +126,23 @@ public interface Symbols
     /** True if the field STORE at {@code fieldCp} is being watched: the compiler precedes it with a
      *  WATCH_RET helper call printing the value stored. Debug only; the writer always answers false. */
     boolean isWatchedField(int fieldCp);
+
+    /** True if the call at {@code methodCp} has its LAST ARGUMENT watched: the compiler precedes it with a
+     *  WATCH_RET helper call printing the value about to be passed. Debug only; the writer always answers
+     *  false. Watching an argument, not a return, is what names WHICH frame in a hand-off chain lost a
+     *  reference -- a return watch cannot see a value that never arrived. */
+    boolean isWatchedCallArgs(int methodCp);
+
+    /** Report a method whose body uses a local slot its {@code max_locals} does not cover. The prologue saves
+     *  exactly {@code min(max_locals, LOC_MAX)} callee-saved registers, so a body that writes past that
+     *  CORRUPTS ITS CALLER'S LOCALS and nothing else would say so. The writer is silent (its max_locals comes
+     *  straight from javac); the metal JIT reports, because there max_locals arrives through loader state. */
+    void reportLocalsUndersized(int needed, int declared);
+
+    /** True while compiling a class whose LOCAL SLOT 2 is being traced: the compiler prints that local after
+     *  every call, which bisects a method's calls in one run. Reading a value at two points says only THAT it
+     *  was lost; reading it after each call says WHICH call lost it. Debug only; the writer answers false. */
+    boolean watchLocal2();
 
     /** True if the call at {@code methodCp} is being WATCHED: the compiler follows it with a WATCH_RET
      *  helper call that prints what it returned. Debug only; the writer always answers false. */
