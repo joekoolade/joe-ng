@@ -115,115 +115,90 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **ADDING EIGHTEEN OVERLAY MEMBERS ABORTS THE DEMO SUITE -- OPEN, BISECTED, AND THREE HYPOTHESES ALREADY
-  DEAD (2026-09-17).** `Unsafe.getAndBitwiseOrInt` shipped alone because the FAMILY does not fit: with all
-  eighteen getAndBitwise{Or,And,Xor}{Int,Long} forms present the suite dies at `demo/DefaultIfaceDemo` with
-  an uncaught NPE. **This gates overlay-gap work generally** -- `overlaycheck-deep` lists ~250
-  referenced-but-dropped members on `Unsafe` alone, and they cannot be added in batches while this stands.
+- **A CONSTRUCTOR FELL BETWEEN BOTH DISPATCH TABLES, SO IT WAS NEVER CALLED AND THE OBJECT CAME BACK RAW --
+  FIXED (2026-09-17, NOT YET PI-VALIDATED).** Adding eighteen `Unsafe` overlay members aborted the demo
+  suite at `demo/DefaultIfaceDemo` with an uncaught NPE; the members were never the bug, they only moved
+  batch composition. **`armPhaseACells` armed phase-A cells for STATIC methods only**, while
+  `globalBufByRef` short-circuits every `<init>` straight to that cell tier -- a constructor is never
+  inherited, so tier 3 must not walk a super chain. A `<init>` is not static, so it got no cell; it is not
+  virtual, so it has no vtable slot either. **Tier 3 therefore returned 0: a call site bound to nothing,
+  which calls nothing.**
 
-  | arm | suite |
-  |---|---|
-  | plain HEAD | **pass** -- 33 programs, 0 exceptions |
-  | `+1` (`getAndBitwiseOrInt`) | **pass** |
-  | `+18` appended at class end | **FAIL** |
-  | `+18` inserted in place | **FAIL**, byte-identical trace |
+  | arm | before | after |
+  |---|---|---|
+  | plain HEAD | pass | pass |
+  | `+1` (`getAndBitwiseOrInt`) | pass | **pass** -- 33 programs, 0 exceptions |
+  | `+18` appended at class end | **FAIL** | **pass** -- 33 programs, 0 exceptions |
+  | `+18` inserted in place | **FAIL**, byte-identical trace | (same cause) |
 
-  - **APPENDED AND IN-PLACE FAIL IDENTICALLY, so vtable RENUMBERING is not the mechanism** -- inserting mid-
-    class shifts every later method's slot and appending shifts none, and both produce the same trace. What
-    is left is the SIZE of the addition, i.e. the layout/closure sensitivity this file already records as
-    having cost boots twice.
-  - **THE FAILURE, exactly:** `Map.forEach` (an interface DEFAULT, itable-routed) -> `LinkedEntrySet.iterator()`
-    -> `new LinkedEntryIterator(this$0, false)` -> `Objects.requireNonNull` NPE. Confirmed from the real
-    JDK's bytecode rather than guessed: that constructor opens `aload_1; dup; invokestatic requireNonNull`,
-    so the null is the OUTER INSTANCE the caller passed, i.e. `LinkedEntrySet.this$0`.
-  - **NOT ONE EXISTING GUARD FIRES.** No `UNREGISTERED SUPER`, no `aliases slot 0`, no `UNRESOLVED FIELD`,
-    no `CAP EXCEEDED`, no `PEND`/`REACH LIST FULL`, no parity `DIFF`, no `FAULT`. Silent, which is the
-    property that makes it worth its own arc rather than a footnote.
-  - **THREE HYPOTHESES KILLED, EACH BY AN INSTRUMENT RATHER THAN BY ARGUMENT** -- and each instrument is in
-    the tree:
-    - **A SKIPPED CONSTRUCTOR** (the recorded shape: a raw object whose fields stay 0). New `CTOR SKIPPED`
-      report names every non-Object `<init>` lowered to a pop. On BOTH arms it names exactly one thing, the
-      benign DENYLISTED `UnmappableCharacterException` -- the same single skip the earlier deferred-ctor arc
-      found by hand. So `LinkedEntrySet.<init>` IS emitted as a real call.
-    - **A WRONG FIELD OFFSET.** Live until it was measured, because `LinkedEntrySet` declares `reversed`
-      FIRST and `this$0` second, so slot 0 holds a boolean false -- and `globalFieldOffset`'s fall-through
-      returns exactly slot 0. A wrong-slot read would therefore produce precisely this clean null. It reads
-      **`this$0 -> +24 tier0`, twice**: correct, and the same on the store and the load.
-    - **THE COLLECTOR.** `gc` tracks between arms at the failure point (3 vs 4), so a swept-but-live object
-      is not indicated.
-  - **AND THE WATCH THAT ANSWERED IT COULD NOT ANSWER AT FIRST, which is its own lesson.** `fieldOffsetLog`
-    was called from two of five tiers, so an armed watch on `this$0` printed NOTHING -- a silence that reads
-    as "the resolver is not involved" and means "this path cannot report". Every tier logs now.
-  - **A FOURTH HYPOTHESIS IS DEAD, AND IT WAS THE LEADING ONE: the receiver is NOT mis-typed.** New
-    `RECVWATCH` (Loader.RECV_WATCH, off by default) describes a dispatch's receiver -- TIB, Type, class NAME
-    from the registry, status word, first field slots. At the same site in both arms:
-
-    | | class | status | slot0 (+16) `reversed` | slot1 (+24) `this$0` |
-    |---|---|---|---|---|
-    | passing | `LinkedHashMap$LinkedEntrySet` | `0x20` | `0x0` | **`0x04F32450`** |
-    | failing | `LinkedHashMap$LinkedEntrySet` | `0x20` | `0x0` | **`0x0`** |
-
-    Right class, right TIB, right SIZE (`0x20` = header + two fields). It is a genuine `LinkedEntrySet`, so
-    "a wrong TIB dispatched `iterator()` against something else" is out.
-  - **AND THE CONSTRUCTOR REFERENCE RESOLVES TO NOTHING -- MEASURED, and it closes the chain.** New
-    `BUFWATCH` (Loader.BUF_WATCH, off by default) names which TIER of `globalBufByRef` answered a reference
-    and with what. Same reference, both arms:
+  - **THE FIX IS FOUR LINES AND IT IS THE `mintPrunedStub` SHAPE ONE TIER FURTHER IN.** `armPhaseACells`
+    now arms a cell for `<init>` as well as for statics, with `isStatic = 0` because a constructor is an
+    INSTANCE method whose slot 0 is `this`. This VM has closed the same RTA blind spot twice before -- the
+    null-vtable-slot guard for virtuals, `mintPrunedStub` for itable entries -- and never for CONSTRUCTORS.
+  - **MEASURED, and the measurement IS the diagnosis.** `BUFWATCH` (new, print-only) names which tier of
+    `globalBufByRef` answered a reference. Same `LinkedEntrySet.<init>` reference, both arms:
 
     | arm | tier 1 (registry: exact class+name+descriptor) | tier 3 (`<init>` -> phase-A cell) |
     |---|---|---|
     | passing | **1x -> `buf=0x024AD1A8`** (the real constructor body) | 2x -> `buf=0` |
-    | failing | **never** | 3x -> `buf=0` |
+    | failing | **never** | **3x -> `buf=0`** |
 
-    In the passing arm the reference eventually resolves at TIER 1 to a real body. In the failing arm it
-    never does -- every attempt falls to the cell tier and gets nothing. **A call site that resolves to
-    nothing calls nothing**, which is exactly the object observed: right class, right TIB, right size,
-    `this$0` zero, and NO trap, NO fault, NO report.
-  - **THE MECHANISM, end to end:** the class IS pulled (its correct TIB is on the receiver) but its
-    CONSTRUCTOR is never compiled or registered, so the `<init>` reference resolves to nothing and the
-    object is returned raw. That is the recorded RTA blind spot one step further in -- **a class
-    instantiated only from a LAZILY compiled body is not seen to be instantiated at batch time**, the same
-    root the null-vtable-slot and `mintPrunedStub` fixes addressed for virtuals and itable entries, never
-    closed for CONSTRUCTORS. It is layout-sensitive because whether `LinkedHashMap.sequencedEntrySet()`
-    compiles in-batch or lazily depends on batch composition, which is what eighteen extra Unsafe members
-    move.
-  - **WHY THE SITE IS SILENT: THE CALL NEVER EXECUTES.** New `LINKWATCH` (the late-resolution twin of
-    BUFWATCH, also print-only) names which tier of `resolveLinkTarget` answered a link stub. For this
-    constructor it printed **NOTHING** -- not a failure, not a tier. And the site is NOT trap-wired (no
-    `TRAP-WIRED` line names it), so `linkStubFor` DID mint a stub and `patchRelocs` DID install it. A stub
-    that exists and never runs means the `invokespecial` never executes -- while the `new` on the line above
-    it plainly does, since the object is there with the right TIB and size.
-  - **EVERY FIELD OFFSET ON THE PATH IS CORRECT, so the cached-view branch is not reading a wrong slot:**
-    `this$0 -> +24 tier0`, `reversed -> +16 tier0` (a store here would have overwritten this$0 -- a live
-    hypothesis until measured), and `entrySet -> +40 tier2` matching `HashMap.entrySet -> +40 tier0`.
-  - **AND THE ONE EXPLANATION THAT WOULD HAVE COVERED ALL THE SILENCE AT ONCE IS FALSE, killed for free.**
+  - **THE FAILURE SHAPE IS WHY IT TOOK AN ARC: the object is PERFECT except for its fields.** The deferred-
+    `new` path allocates with the right TIB at the right size, so `RECVWATCH` reports the right class
+    (`LinkedHashMap$LinkedEntrySet`), the right `status=0x20` (header + two fields), and only `slot1(+24)`
+    differing -- `0x04F32450` passing, `0x0` failing. Then `Map.forEach` (an interface DEFAULT, itable-
+    routed) -> `LinkedEntrySet.iterator()` -> `new LinkedEntryIterator(this$0, false)` ->
+    `Objects.requireNonNull` NPE, on the outer instance. **No trap, no fault, no report, and not one
+    existing guard fires** -- no `UNREGISTERED SUPER`, no `aliases slot 0`, no `UNRESOLVED FIELD`, no
+    `CAP EXCEEDED`, no parity `DIFF`.
+  - **FIVE HYPOTHESES DIED TO INSTRUMENTS RATHER THAN TO ARGUMENT, and every instrument is in the tree
+    (all shipping OFF):**
+    - **A SKIPPED CONSTRUCTOR** -- the recorded shape, and the closest miss. New `CTOR SKIPPED` names every
+      non-Object `<init>` lowered to a pop; on BOTH arms it names only the benign DENYLISTED
+      `UnmappableCharacterException`. So the `invokespecial` IS emitted as a real call. **It was emitted and
+      still resolved to nothing**, which is one layer past what that instrument can see.
+    - **A WRONG FIELD OFFSET** -- live until measured, because `LinkedEntrySet` declares `reversed` FIRST
+      and `this$0` second, so slot 0 holds a boolean false and `globalFieldOffset`'s fall-through returns
+      exactly slot 0. It reads `this$0 -> +24 tier0` twice, `reversed -> +16 tier0`, and `entrySet -> +40
+      tier2` matching `HashMap.entrySet -> +40 tier0`. All correct.
+    - **THE COLLECTOR** -- `gc` tracks between arms at the failure point (3 vs 4).
+    - **A MIS-TYPED RECEIVER** -- the leading hypothesis, killed by `RECVWATCH` above.
+    - **THE DEFERRED-`new` LOWERING** -- the second leading one. New `NEWWATCH` names which lowering
+      `objectSizeOf` chose, and both arms read **DEFERRED** (`site=15` failing, `site=14` passing). Both
+      lowerings push exactly one reference, so nothing downstream can tell them apart.
+  - **AND ONE EXPLANATION THAT WOULD HAVE COVERED ALL THE SILENCE AT ONCE IS FALSE, REFUTED FOR FREE.**
     Every instrument here is loader-side, so "the failing code runs in the writer-BAKED world where none of
     them can see" fits perfectly -- and `JOENG_SYMMAP` shows **zero** baked `java/util/LinkedHashMap`,
-    `HashMap` or `Map` methods. No boot needed to refute it.
-  - **AND THE `new` LOWERING IS NOT THE VARIABLE EITHER -- BOTH ARMS DEFER.** New `NEWWATCH` (print-only)
-    names which of the two lowerings `objectSizeOf` chose: INLINE (allocate at the registered size, store
-    that class's TIB) or DEFERRED (record a site, let `VM.newUnresolved` demand-load on first reach). Both
-    push exactly one reference, so nothing downstream can tell them apart. Measured: **`DEFERRED site=15`
-    failing, `DEFERRED site=14` passing** -- identical. The deferred-`new` path was the leading suspect and
-    it is not the difference. Fifth hypothesis dead to an instrument.
-  - **WHICH LEAVES EXACTLY ONE VARIABLE, the one BUFWATCH already had:** whether `LinkedEntrySet.<init>` is
-    compiled and REGISTERED in time for `patchRelocs` to bind the site to it. Passing: `tier1 ->
-    0x024AD1A8`, and the constructor runs. Failing: never, the site keeps a link stub, the constructor never
-    runs, the object is returned raw.
-  - **THE DEFECT, as precisely as the evidence allows: a DEFERRED `new` demand-loads its CLASS but nothing
-    ensures its CONSTRUCTOR is compiled and registered.** The object half works -- correct TIB, correct size
-    -- and the `<init>` site beside it is left bound to something that does not construct. That is the same
-    "mint what the site will need" the null-vtable-slot and `mintPrunedStub` fixes did for virtuals and
-    itable entries, and it was never done for CONSTRUCTORS.
-  - **STILL OPEN, and deliberately not rounded away: why the link stub does not FIRE.** It is minted (the
-    site is not trap-wired) and `LINKWATCH` shows `resolveLinkTarget` never runs for it. A stub that exists
-    and is never invoked is a second, smaller question, independent of the fix direction above.
-  - **THE RECEIVER WATCH SHIPPED BROKEN AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
-    `ImageBuilder` stashes `watchRet`/`watchArg`/`watchX21` by name; `watchRecv` was not added, so
-    `watchRecvAddr` stayed 0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware
-    shim turns into a wild branch reported inside the itable dispatch. Armed on the FAILING image that reads
-    exactly like the defect changing shape. Arming it on the PASSING image broke that too, which is what
-    named it as mine. **A new helper needs a writer stash, and an instrument is not evidence until it has
-    run on a boot that passes** -- this file's own rule, now paid for a fourth time.
+    `HashMap` or `Map` methods. No boot needed.
+  - **A WATCH THAT COULD NOT REPORT READS EXACTLY LIKE A PATH THAT IS NOT INVOLVED.** `fieldOffsetLog` was
+    called from two of five tiers, so an armed watch on `this$0` printed NOTHING -- which reads as "the
+    resolver is not involved" and means "this path cannot report". All five tiers log now. Same lesson as
+    the `factory` watch that could not fire, one card below.
+  - **THE RECEIVER WATCH SHIPPED BROKEN, AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
+    `ImageBuilder` stashes helper addresses BY NAME; `watchRecv` was never added, so `watchRecvAddr` stayed
+    0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware shim turns into a wild
+    branch reported inside the itable dispatch. On the FAILING image that reads exactly like the defect
+    changing shape. **Arming it on the PASSING image broke that too, which is what named it as mine.**
+    A new helper needs a writer stash, and an instrument is not evidence until it has run on a boot that
+    passes -- this file's own rule, paid for a fourth time.
+  - **GATE: the demo suite, on BOTH arms, because the defect is layout-sensitive by nature.** +18-with-fix
+    and +1-with-fix each: 33 programs, 0 exceptions, `churnMB=625 live=32 intact=32`, `lisp evals=600
+    result=610 stable=1`, `finish HML`, `HIGH blocked 60ms`, `smp sched: 4 of 4`, and fourteen failure
+    markers zero -- `DIFF`, `FAULT`, `LINK FAILED`, `BOOT RE-ENTERED`, `CAP EXCEEDED`, `unclaimed pc`,
+    `VIRTUALRESOLVE`, `SCRATCH MAP`, `JIT unsupported`, `heap OOM`, `BADPATCH`, `STW TIMEOUT`, `ESR EC=0`.
+    Host tests unchanged: `compiler: 39 checks`, `overlay-check 0 new`. **`CAP EXCEEDED` is the one that
+    matters for THIS change** -- every demand-loaded class now arms extra cells.
+  - **STILL OPEN, and deliberately not rounded away:**
+    - **THE MAXLAZY CAP IS SILENT.** `armPhaseACells` skips arming when `lzN >= MAXLAZY` with no report,
+      while the two `capHalt` sites beside it are loud -- and a skipped `<init>` cell is now exactly this
+      bug again, silently. The `MAXREACH`/`MAXPEND` lesson, unlearned at a third site. Its own increment.
+    - **WHY THE LINK STUB NEVER FIRES.** The site is not trap-wired, so `linkStubFor` minted a stub and
+      `patchRelocs` installed it -- and `LINKWATCH` shows `resolveLinkTarget` never runs for it. A stub that
+      exists and is never invoked is a second, smaller question, independent of this fix.
+    - **PI-VALIDATION.** Nothing in this arc has run on hardware.
+    - **THE FULL 18-METHOD FAMILY CAN NOW LAND** (`getAndBitwiseOr/And/Xor{Int,Long}`), which unblocks
+      overlay-gap work generally: `overlaycheck-deep` lists ~250 referenced-but-dropped members on `Unsafe`
+      alone, and they could not be added in batches while this stood.
   - **A SEPARATE SILENT WRONG ANSWER, found on the way and NOT fixed:** a boolean CONCATENATES AS 1/0 rather
     than `true`/`false`. `Baseline.appendArg` routes a `'Z'` concat argument to `SC_INT`, which renders a
     decimal integer, where JLS 15.18.1 requires the words. Measured (metal printed `1` where the host

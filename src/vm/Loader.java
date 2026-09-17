@@ -15168,7 +15168,20 @@ public final class Loader
             int nameOff = gcp[u2(p + 2)];
             int descOff = gcp[u2(p + 4)];
             long code = findCode(gbase, p + 8, attrs);  // sets gcodeLen + gMaxLocals
-            if (code != 0L && (access & 0x0008) != 0    // static methods only (Objects is all-static)
+            boolean statics = (access & 0x0008) != 0;
+            // CONSTRUCTORS GET A CELL TOO, and the reason is that they fall between BOTH dispatch tables.
+            // A `<init>` is not static, so it was excluded here; it is not virtual, so it has no vtable slot
+            // either. `globalBufByRef` short-circuits every `<init>` straight to the cell tier (a constructor
+            // is never inherited, so it must not walk a chain), and with no cell to find that tier returned
+            // 0 -- a call site bound to nothing, which CALLS nothing. The object is still allocated with the
+            // right TIB and size by the deferred-`new` path, so every field simply stays 0 and the first
+            // symptom is an NPE on one of them, in another class, arbitrarily far away.
+            // MEASURED: `new LinkedHashMap$LinkedEntrySet` deferred in both arms, and its `<init>` resolved
+            // `buf=0 tier3` three times in the arm that failed against `tier1 -> a real body` in the arm
+            // that passed -- the whole difference. Same "mint what the site will need" the null-vtable-slot
+            // guard and mintPrunedStub already do for virtuals and itable entries; never done for `<init>`.
+            boolean ctor = utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
+            if (code != 0L && (statics || ctor)
                     && !utf8IsAtBase(gbase, nameOff, Magic.bytes("<clinit>")) && lzN < MAXLAZY && dlN < MAXLAZY)
             {
                 int idx = lzN;
@@ -15180,7 +15193,7 @@ public final class Loader
                 lzTab[idx].descOff = descOff;
                 lzTab[idx].code = code;
                 lzTab[idx].codeLen = gcodeLen;
-                lzTab[idx].isStatic = 1;
+                lzTab[idx].isStatic = statics ? 1 : 0;   // a ctor is an INSTANCE method: slot 0 is `this`
                 lzTab[idx].maxLocals = gMaxLocals;
                 lzTab[idx].cache = 0L;
                 long cell = Heap.allocData(8);
