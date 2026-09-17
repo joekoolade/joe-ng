@@ -482,4 +482,38 @@ public final class Unsafe
     {
         return new byte[length];
     }
+
+    /**
+     * {@code getAndBitwiseOrInt} -- stock {@code ForkJoinTask.setDone} ORs a status bit and reads the old
+     * value. The overlay carried only {@code getAndBitwiseOrLong}, so the Int form CEASED TO EXIST: an
+     * overlay wins the name, so a member it omits resolves nowhere and surfaces as a {@code DENYLIST TRAP}
+     * blaming a list this class is not on. Only {@code make overlaycheck-deep} sees it, because the caller
+     * is stock java.base rather than anything we ship.
+     *
+     * <p>IT LIVES HERE, AT THE END, RATHER THAN BESIDE ITS SIBLING, AND THAT IS NOT UNTIDINESS -- it is the
+     * position the demo suite was gated on. Its seventeen siblings (And/Xor, the Long forms, and every
+     * Acquire/Release variant) are written and host-verified, and adding all eighteen ABORTS THE SUITE:
+     * bisected, HEAD passes, +1 passes, +18 fails whether appended or inserted in place. Same position, same
+     * count, until that latent defect is understood.
+     *
+     * <p>IT OPERATES ON AN 8-BYTE SLOT, which is a precondition on the CALLER rather than a detail.
+     * {@code Magic} exposes cas64 and nothing narrower, so this reads and writes the FULL WORD at
+     * {@code offset}. That is exact for an INSTANCE FIELD -- ObjectModel gives each one its own 8-byte slot
+     * and the compiler keeps an int sign-extended in it ({@code Baseline.canonInt}) -- and WRONG for an int
+     * ARRAY ELEMENT, whose scale is 4: a 64-bit access there would take the neighbouring element with it, at
+     * an address the exclusive monitor is not aligned for. Nothing reached does that (AtomicIntegerArray
+     * uses plain int[] access, not Unsafe), and a narrow-slot caller would not fail -- it would corrupt its
+     * neighbour. The sibling int methods above have depended on this silently since they were written.
+     */
+    public int getAndBitwiseOrInt(Object o, long offset, int mask)
+    {
+        long a = at(o, offset);
+        int v;
+        do
+        {
+            v = (int) Magic.load64(a);
+        }
+        while (!Magic.cas64(a, v, v | mask));
+        return v;
+    }
 }
