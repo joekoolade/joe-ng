@@ -115,6 +115,58 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **ADDING EIGHTEEN OVERLAY MEMBERS ABORTS THE DEMO SUITE -- OPEN, BISECTED, AND THREE HYPOTHESES ALREADY
+  DEAD (2026-09-17).** `Unsafe.getAndBitwiseOrInt` shipped alone because the FAMILY does not fit: with all
+  eighteen getAndBitwise{Or,And,Xor}{Int,Long} forms present the suite dies at `demo/DefaultIfaceDemo` with
+  an uncaught NPE. **This gates overlay-gap work generally** -- `overlaycheck-deep` lists ~250
+  referenced-but-dropped members on `Unsafe` alone, and they cannot be added in batches while this stands.
+
+  | arm | suite |
+  |---|---|
+  | plain HEAD | **pass** -- 33 programs, 0 exceptions |
+  | `+1` (`getAndBitwiseOrInt`) | **pass** |
+  | `+18` appended at class end | **FAIL** |
+  | `+18` inserted in place | **FAIL**, byte-identical trace |
+
+  - **APPENDED AND IN-PLACE FAIL IDENTICALLY, so vtable RENUMBERING is not the mechanism** -- inserting mid-
+    class shifts every later method's slot and appending shifts none, and both produce the same trace. What
+    is left is the SIZE of the addition, i.e. the layout/closure sensitivity this file already records as
+    having cost boots twice.
+  - **THE FAILURE, exactly:** `Map.forEach` (an interface DEFAULT, itable-routed) -> `LinkedEntrySet.iterator()`
+    -> `new LinkedEntryIterator(this$0, false)` -> `Objects.requireNonNull` NPE. Confirmed from the real
+    JDK's bytecode rather than guessed: that constructor opens `aload_1; dup; invokestatic requireNonNull`,
+    so the null is the OUTER INSTANCE the caller passed, i.e. `LinkedEntrySet.this$0`.
+  - **NOT ONE EXISTING GUARD FIRES.** No `UNREGISTERED SUPER`, no `aliases slot 0`, no `UNRESOLVED FIELD`,
+    no `CAP EXCEEDED`, no `PEND`/`REACH LIST FULL`, no parity `DIFF`, no `FAULT`. Silent, which is the
+    property that makes it worth its own arc rather than a footnote.
+  - **THREE HYPOTHESES KILLED, EACH BY AN INSTRUMENT RATHER THAN BY ARGUMENT** -- and each instrument is in
+    the tree:
+    - **A SKIPPED CONSTRUCTOR** (the recorded shape: a raw object whose fields stay 0). New `CTOR SKIPPED`
+      report names every non-Object `<init>` lowered to a pop. On BOTH arms it names exactly one thing, the
+      benign DENYLISTED `UnmappableCharacterException` -- the same single skip the earlier deferred-ctor arc
+      found by hand. So `LinkedEntrySet.<init>` IS emitted as a real call.
+    - **A WRONG FIELD OFFSET.** Live until it was measured, because `LinkedEntrySet` declares `reversed`
+      FIRST and `this$0` second, so slot 0 holds a boolean false -- and `globalFieldOffset`'s fall-through
+      returns exactly slot 0. A wrong-slot read would therefore produce precisely this clean null. It reads
+      **`this$0 -> +24 tier0`, twice**: correct, and the same on the store and the load.
+    - **THE COLLECTOR.** `gc` tracks between arms at the failure point (3 vs 4), so a swept-but-live object
+      is not indicated.
+  - **AND THE WATCH THAT ANSWERED IT COULD NOT ANSWER AT FIRST, which is its own lesson.** `fieldOffsetLog`
+    was called from two of five tiers, so an armed watch on `this$0` printed NOTHING -- a silence that reads
+    as "the resolver is not involved" and means "this path cannot report". Every tier logs now.
+  - **WHAT IS LEFT, stated rather than guessed:** the offset is right, the constructor is called, so either
+    the store does not execute or the object `iterator()` runs against is not the one that was constructed
+    (a wrong TIB would dispatch `LinkedEntrySet.iterator()` against a different object whose slot 1 is
+    null). The next instrument should print the RECEIVER -- its Type and status word -- at the failing
+    dispatch, not another offset.
+  - **A SEPARATE SILENT WRONG ANSWER, found on the way and NOT fixed:** a boolean CONCATENATES AS 1/0 rather
+    than `true`/`false`. `Baseline.appendArg` routes a `'Z'` concat argument to `SC_INT`, which renders a
+    decimal integer, where JLS 15.18.1 requires the words. Measured (metal printed `1` where the host
+    printed `true`) and confirmed by reading the lowering. Not a one-liner -- the writer lowers concat too,
+    so a new helper perturbs the self-hosting fixpoint -- so it wants its own increment. `StringBuilder
+    .append(boolean)` is a different path and is correct, which is why `count=42 ok=true` in the suite never
+    caught it.
+
 - **THE picocli `factory` NPE IS FIXED, AND IT WAS THREE NESTED BUGS -- the last of them a 960 KiB memory
   overlap the boot-time overlap check was STRUCTURALLY UNABLE TO SEE (2026-09-17, PI-VALIDATED).** The
   launcher runs to completion on HARDWARE: `Test run finished after 102038 ms`, `[3 containers successful]`,
