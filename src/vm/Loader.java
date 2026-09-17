@@ -12613,7 +12613,43 @@ public final class Loader
         // Still skipped: a DENYLISTED or genuinely absent superclass. Those are the "unloaded root" the
         // skip exists for -- a class extending something the metal environment does not have -- and turning
         // their super() into a call that traps would break boots that are correct today.
-        return classLoadable(gbase, refClassNameOff(idx));
+        boolean real = classLoadable(gbase, refClassNameOff(idx));
+        if (!real)
+        {
+            reportSkippedInit(idx);
+        }
+        return real;
+    }
+
+    /**
+     * A non-Object {@code <init>} compiled away as a pop, named.
+     *
+     * <p>THIS IS THE ONE REMAINING SILENT PATH TO A RAW OBJECT. The object is still allocated with the right
+     * TIB, so nothing faults and nothing traps -- its fields simply stay 0 for ever, and the first symptom is
+     * an NPE on some field, in some other class, arbitrarily far away. That is how a deferred
+     * {@code new ReferencePipeline$Head} produced a null {@code sourceStage}; this file records the shape
+     * twice, and both times it cost boots because the skip itself said nothing.
+     *
+     * <p>DENYLISTED IS THE EXPECTED CASE and is reported at a lower volume than ABSENT: a class extending
+     * something this VM deliberately does not carry is exactly what the skip exists for. A class ABSENT from
+     * the classDir is the surprising one -- it means a constructor was dropped for a class the image was
+     * supposed to be able to load.
+     */
+    private static void reportSkippedInit(int idx)
+    {
+        Uart.write(Magic.bytes("\n  CTOR SKIPPED (fields stay 0): "));
+        printNameAt(gbase, refClassNameOff(idx));
+        Uart.putc(0x2E);
+        printNameAt(gbase, mrefNameOff(idx));
+        if (isDenylisted(gbase, refClassNameOff(idx)))
+        {
+            Uart.write(Magic.bytes(" -- DENYLISTED (skipping is intended)"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes(" -- ABSENT from the classDir; NOT intended"));
+        }
+        Uart.putc((byte) 0x0A);
     }
 
     /** True if the class named at {@code (base, off)} could be demand-loaded: not denylisted, and present in
