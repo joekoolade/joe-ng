@@ -115,6 +115,44 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `factory` NPE IS OURS, AND THE OBVIOUS SHAPE IS NOT THE CAUSE -- `demo/CtorArgProbe` IS A PINNED
+  NEGATIVE CONTROL (2026-09-16).** With the closure no longer truncated the launcher stops at
+  `NullPointerException: factory`, `CommandUserObject.create` -> `Assert.notNull`.
+  - **HOST CONTROL FIRST, and it settled authorship in ten seconds.** `java -jar ramfs/lib/junit.jar execute
+    --select-class=SleepSanity --disable-ansi-colors --disable-banner` on a stock JVM constructs
+    `CommandLine` fine and finishes in 12ms. picocli does not do this on a real VM, so the fault is ours.
+    (Its three container failures are just `SleepSanity` not being on the host classpath -- a different
+    claim, kept straight.)
+  - **THE VALUE'S PATH, read from the bytecode rather than guessed.** `CommandLine.<init>(Object)` builds it
+    MID-EXPRESSION -- `this(command, new DefaultFactory(null))` -- and it travels as a plain argument through
+    `<init>(Object,IFactory)` -> `<init>(Object,IFactory,boolean)` -> `forAnnotatedObject` ->
+    `extractCommandSpec` -> `create` -> `<init>`, where `aload_2` reads it as null.
+  - **IT IS POSITION-DEPENDENT, which is the discriminator.** `extractCommandSpec` runs
+    `notNull(userObject)` at offset 0 and PASSES, then hands `aload_1` to `create`. Slot 0 survives and slot
+    1 does not, so the reference is lost in transit rather than the object never being built -- a failed
+    `new` here would halt loudly in `newUnresolved`, not yield null.
+  - **THE PROBE REPRODUCES THE SHAPE EXACTLY AND PASSES ON METAL.** Three arms -- the inline
+    `new`-as-argument through a three-deep constructor chain, a control taking the same value from a CALL
+    instead, and a FAT private constructor doing seven mid-expression `new`s first to push the operand stack
+    -- all answer `df`, every argument `ok` at every frame, host and QEMU alike. **So the operand-live-
+    across-a-nested-`<init>` reading is NOT confirmed**, and this file's most-repeated lesson lands again:
+    reproducing the SHAPE is not reproducing the CONDITION. Kept in the tree as a pinned control, the way
+    `HighLocalThrowProbe` was kept after it refuted the high-local hypothesis.
+  - **AND A SECOND CANDIDATE IS DEAD BY MEASUREMENT: there is NO `newresolve` anywhere in a `LOAD_LOG`
+    launcher boot.** That `new` is never deferred -- `clinit-lazy ...CommandLine$DefaultFactory` shows the
+    class registered and initialised normally -- so "deferred `new` lost its result" is out.
+  - **THE PROBE RECORDS RATHER THAN PRINTS, deliberately:** a `println` inside the chain adds a call and
+    changes the operand depth of the frames under test, and this VM has already had a bug VANISH when an
+    instrument was added. Each frame writes a boolean to a static; the report prints afterwards, from
+    outside. It also reports EVERY argument at EVERY frame, not just the one that throws -- a probe checking
+    only the crashing value could not have established the position-dependence above.
+  - **STILL OPEN, and stated rather than guessed at:** `FIELD_STORE_WATCH` pointed at the field name
+    `factory` fired exactly ONCE, early in batch 1, and never for `CommandLine.factory` -- whose `putfield`
+    at offset 60 demonstrably executes, since the trace reaches line 230 (offset 75) above it. **Why the
+    watch does not fire there is not established**, and that is the next thing to settle, because until it
+    does the instrument cannot answer the question it was armed for: whether `factory` is already null on
+    entry to the 3-arg constructor, or is lost between it and `create`.
+
 - **THE SILENT CLOSURE TRUNCATION IS FIXED, AND FIXING IT REMOVED THE FAILURE THAT COST THIS ARC FOUR BOOTS
   (2026-09-16, NOT YET PI-VALIDATED).** `MAXREACH` 8192 -> 65536 plus the report `addReach` never had.
 
