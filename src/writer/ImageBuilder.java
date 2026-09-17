@@ -692,6 +692,13 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         // entries {start,end,handler,catchType} (8 words).
         int frameTableWord = cur;
         cur += frameCount * 6;
+        // ... and the LOCAL table, {start,end,regLocals} (6 words), the image-side counterpart of the
+        // loader's jitLocalTable. Without it an exception unwinding past a BAKED frame cannot know how many
+        // callee-saved registers that frame saved, so it propagates NONE of them -- and the handler's
+        // CALLER's locals come back holding throw-time values. frameSizeAt already consults both tables;
+        // jitRegLocalsAt consulted only the JIT's, which is the asymmetry this closes.
+        int localTableWord = cur;
+        cur += frameCount * 6;
         int handlerTableWord = cur;
         cur += handlerCount * 8;
         // embedded blobs (e.g. a raw .class for the runtime loader), 8-byte aligned.
@@ -897,6 +904,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         Vec<GlobalStatic> stats = new Vec<>();
         Vec<GlobalType> types = new Vec<>();
         Vec<long[]> frameEntries = new Vec<>();       // {codeStart, codeEnd, frameSize}
+        Vec<long[]> localEntries = new Vec<>();       // {codeStart, codeEnd, regLocals} -- parallel, same order
         Vec<long[]> handlerEntries = new Vec<>();     // {machStart, machEnd, handler, catchType}
         for (int si = 0; si < sizeWords.size(); si++)
         {
@@ -954,6 +962,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             if (cm.frameSize() > 0)
             {
                 frameEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.frameSize()});
+                localEntries.add(new long[] {addr(base), addr(base + cm.words().length), cm.regLocals()});
             }
             var _rh = cm.handlers();
             for (int _rhi = 0; _rhi < _rh.size(); _rhi++)
@@ -1130,6 +1139,14 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             writeLong(image, w + 2, e[1]);
             writeLong(image, w + 4, e[2]);
         }
+        for (int i = 0; i < localEntries.size(); i++)
+        {
+            long[] e = localEntries.get(i);
+            int w = localTableWord + i * 6;
+            writeLong(image, w, e[0]);
+            writeLong(image, w + 2, e[1]);
+            writeLong(image, w + 4, e[2]);
+        }
         for (int i = 0; i < handlerEntries.size(); i++)
         {
             long[] e = handlerEntries.get(i);
@@ -1175,6 +1192,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
         fillStatic(image, staticWord, "vm/VM.frameCount",   frameEntries.size());
+        fillStatic(image, staticWord, "vm/VM.localTable",   addr(localTableWord));
+        fillStatic(image, staticWord, "vm/VM.localCount",   localEntries.size());
         fillStatic(image, staticWord, "vm/VM.handlerTable", addr(handlerTableWord));
         fillStatic(image, staticWord, "vm/VM.handlerCount", handlerEntries.size());
         fillStatic(image, staticWord, "vm/VM.staticsStart", addr(staticsRegionStart));
@@ -1385,6 +1404,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.getClassOf(J)J",    "vm/VM.getClassAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchRet(JJ)V",   "vm/VM.watchRetAddr");   // DEBUG call-site watch
         stashHelper(image, staticWord, wordOffset, "vm/VM.watchArg(JJ)V",   "vm/VM.watchArgAddr");   // DEBUG argument watch
+        stashHelper(image, staticWord, wordOffset, "vm/VM.watchX21(JJ)V",   "vm/VM.watchX21Addr");   // DEBUG callee-save check
         for (int br = 0; br < BAKE_ROOTS.length; br++)
         {
             stashHelper(image, staticWord, wordOffset, BAKE_ROOTS[br][0], BAKE_ROOTS[br][1]);
@@ -1672,7 +1692,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         w.add(A64.ret());
         int[] words = w.toArray();
         Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
-        return new CompiledMethod(words, relocs, frame, handlers, null);   // synthetic: no bytecode -> no line info
+        return new CompiledMethod(words, relocs, frame, 0, handlers, null);   // synthetic: no bytecode, and it
+                                                                              //   saves no x19..x28
     }
 
     /** Image words a byte[] object for {@code b} occupies: header(16)+length(8)+bytes, 8-aligned. */
@@ -2195,7 +2216,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         w.add(A64.addImm(31, 31, 144));
         w.add(A64.br(16));
         Vec<BaselineCompiler.HandlerRange> handlers = new Vec<>();
-        return new CompiledMethod(w.toArray(), relocs, 144, handlers, null);
+        return new CompiledMethod(w.toArray(), relocs, 144, 0, handlers, null);   // hand-emitted: no x19..x28
     }
 
     /** Whether {@code cls}'s {@code <clinit>} never runs (neither at build time nor boot): explicitly

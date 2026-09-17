@@ -48,6 +48,9 @@ public final class Baseline
     private int frameSize;
     private int localSaveBase;
     private int spillBase;
+    private int csBase;           // frame offset of the x21 callee-saved snapshot (debug check only)
+    private boolean csCheck;      // this method does NOT own x21 and is being checked
+    private int csId;             // the id printed at compile time and again if the check fires
     private int overflowBase;     // frame offset of local slot LOC_MAX
     private int regLocals;        // locals held in x19.. (min(maxLocals, LOC_MAX))
     private int overflowLocals;   // locals held in the frame (maxLocals - LOC_MAX)
@@ -190,6 +193,20 @@ public final class Baseline
         {
             cb.emit(A64Enc.ret());
             return;
+        }
+        if (csCheck)
+        {
+            // Did this method leave x21 as it found it? It does not own the register, so anything else is a
+            // caller's local destroyed. The return value is parked across the report: the helper clobbers x0.
+            cb.emit(A64Enc.ldrx(16, 31, csBase));
+            cb.emit(A64Enc.subReg(17, 21, 16));
+            int skip = cb.emit(A64Enc.cbz(17, 0));
+            cb.emit(A64Enc.strx(0, 31, csBase + 8));
+            cb.emit(A64Enc.movReg(0, 21));
+            cb.emit(A64Enc.movz(1, csId, 0));
+            symbols.callHelper(cb, Symbols.WATCH_X21);
+            cb.emit(A64Enc.ldrx(0, 31, csBase + 8));
+            cb.set(skip, A64Enc.cbz(17, cb.wordCount() - skip));
         }
         if (saveLR)
         {
@@ -3606,7 +3623,14 @@ public final class Baseline
         this.opStackSlots = deepStack ? maxActualDepth + OPSTACK_MARGIN : 0;
         int spillWords = deepStack ? opStackSlots : ((!isEntry && nonLeaf) ? OP_MAX : 0);
         this.outArgsBase = opStackBase + spillWords * 8;
-        int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords + outArgsSlots;
+        // The check applies only to a method that does NOT own local slot 2: one that does saves and restores
+        // x21 itself, so it cannot be the violator. Two extra words: the entry snapshot, and somewhere to park
+        // the return value across the report call.
+        this.csCheck = symbols.checkX21() && !isEntry && saveLR && maxLocals <= 2;
+        this.csId = (int) (base & 0xFFFF);              // stable across the size and emit passes
+        this.csBase = outArgsBase + outArgsSlots * 8;
+        int savedWords = (saveLR ? 1 : 0) + regLocals + overflowLocals + spillWords + outArgsSlots
+                + (csCheck ? 2 : 0);
         this.frameSize = isEntry ? 0 : A64Enc.align16(savedWords * 8);
         sp = 0;
         for (int r = 0; r < OP_MAX; r++)
@@ -3724,6 +3748,11 @@ public final class Baseline
         for (int i = 0; i < regLocals; i++)              // only the register-backed ones
         {
             cb.emit(A64Enc.strx(LOC_BASE + i, 31, localSaveBase + i * 8));
+        }
+        if (csCheck)
+        {
+            cb.emit(A64Enc.strx(21, 31, csBase));        // x21 as this method FOUND it (it does not own it)
+            symbols.reportX21Site(csId);
         }
         // instance methods receive `this` as x0 -> slot 0; each parameter is one
         // argument register (long/double included), stepping its local slots wide.

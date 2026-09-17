@@ -138,6 +138,15 @@ final class MetalWriterSymbols implements Symbols
         return false;
     }
 
+    public void reportX21Site(int id)
+    {
+    }
+
+    public boolean checkX21()
+    {
+        return false;
+    }
+
     public boolean watchLocal2()
     {
         return false;

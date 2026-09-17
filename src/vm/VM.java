@@ -1074,6 +1074,21 @@ public final class VM
         Uart.putc((byte) 0x0A);
     }
 
+    /**
+     * A method left a callee-saved register it does not own holding a different value than it found.
+     *
+     * <p>That is silent corruption of a CALLER'S local, and nothing else can see it: the damage surfaces
+     * arbitrarily far away as a reference that was non-null two bytecodes ago reading as null.
+     */
+    static void watchX21(long bad, long site)
+    {
+        Uart.write(Magic.bytes("  X21 CLOBBERED id="));
+        printDec((int) site);
+        Uart.write(Magic.bytes(" now="));
+        printHex(bad);
+        Uart.putc((byte) 0x0A);
+    }
+
     static long newNpe()
     {
         return Loader.newNpe();
@@ -1385,7 +1400,8 @@ public final class VM
         if (arraycopyAddr == 0L) { VMNatives.arraycopy(0L, 0, 0L, 0, 0); }
         if (newNpeAddr == 0L) { long u = newNpe(); }                  // implicit-exception ctors (JIT'd checks)
         if (watchRetAddr == 0L) { watchRet(0L, 0L); }                     // force-compile the debug watch helper
-        if (watchArgAddr == 0L) { watchArg(0L, 0L); }                     // ... and its argument-side twin
+        if (watchArgAddr == 0L) { watchArg(0L, 0L); }
+        if (watchX21Addr == 0L) { watchX21(0L, 0L); }                     // ... and its argument-side twin
         if (newAioobeAddr == 0L) { long u = newAioobe(); }
         if (newAseAddr == 0L) { long u = newAse(); }                  // ArrayStoreException (aastore mismatch)
         if (arrayStoreOkAddr == 0L) { int u = arrayStoreOk(0L, 0L); } // aastore covariant check
@@ -2337,6 +2353,7 @@ public final class VM
     // Addresses/counts of the handler and frame tables, filled by the writer.
     static long handlerTable, handlerCount;   // entries: {machineStart, machineEnd, handler, catchType}
     static long frameTable, frameCount;       // entries: {codeStart, codeEnd, frameSize}
+    static long localTable, localCount;       // parallel {codeStart, codeEnd, regLocals} for IMAGE methods
     static long imageSymTable, imageSymCount; // stack-trace symbols: {codeStart, codeEnd, nameAddr, srcAddr, lineAddr}
 
     // A second frame table for methods JIT-compiled at runtime: their code isn't in
@@ -2428,9 +2445,25 @@ public final class VM
     }
 
     /** Callee-saved local count of the JIT'd method covering machine PC {@code pc} (0 = none / image method). */
+    /**
+     * How many callee-saved registers the method covering {@code pc} saved -- for IMAGE methods as well as
+     * JIT'd ones, which is the whole point.
+     *
+     * <p>This consulted the JIT table ALONE while {@link #frameSizeAt} consulted both, so an exception
+     * unwinding past a baked frame answered 0 and the unwinder copied NONE of that frame's saved registers
+     * into its reconstruction. The handler then resumed with its CALLER's x19.. still holding throw-time
+     * values -- a local that was live before the call reading as null or garbage, with no fault and no trace,
+     * arbitrarily far from the throw. Guest-only unwinds never showed it because every guest frame IS in the
+     * JIT table; it needs a throw that crosses baked java.base, which is what class loading does.
+     */
     static long jitRegLocalsAt(long pc)
     {
-        return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // 3rd word = regLocals
+        long rl = frameSizeIn(localTable, localCount, pc);           // image methods (3rd word = regLocals)
+        if (rl != 0L)
+        {
+            return rl;
+        }
+        return frameSizeIn(jitLocalTable, jitLocalCount, pc);        // runtime JIT'd methods
     }
     static final int JIT_FRAME_MAX = 16384;    // one BATCH's framed methods must fit (compacted at each
                                                //   rewind); 512 overflowed on the ~170-class Lisp closure and
@@ -2774,6 +2807,7 @@ public final class VM
     static long superclassAddr;        // VM.superclassOf(J)J — Class.superclass0(Class) native (M4)
     static long currentThreadAddr;     // VM.currentThreadObj()J — Thread.currentThread0() native (M4)
     static long watchRetAddr;          // VM.watchRet(J)V — DEBUG: value returned by a watched call site
+    static long watchX21Addr;          // VM.watchX21(JJ)V — DEBUG: callee-saved discipline check
     static long watchArgAddr;          // VM.watchArg(J)V — DEBUG: value an argument-watched call site passes
     static long getClassAddr;          // VM.getClassOf(J)J — Object.getClass() intrinsic
     static long arrayCloneAddr;        // VM.arrayClone(J)J — [T.clone() intrinsic (no vtable on array TIBs)

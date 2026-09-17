@@ -106,6 +106,16 @@ final class MetalSymbols implements Symbols
         return Loader.watchLocal2();
     }
 
+    public boolean checkX21()
+    {
+        return Loader.checkX21();
+    }
+
+    public void reportX21Site(int id)
+    {
+        Loader.reportX21Site(id);
+    }
+
     public boolean isWatchedCall(int methodCp)
     {
         return Loader.isWatchedCall(methodCp);
@@ -528,6 +538,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.WATCH_ARG)
         {
             return VM.watchArgAddr;
+        }
+        if (helper == Symbols.WATCH_X21)
+        {
+            return VM.watchX21Addr;
         }
         if (helper == Symbols.ARRAY_CLONE)
         {

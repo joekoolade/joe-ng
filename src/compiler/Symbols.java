@@ -60,6 +60,7 @@ public interface Symbols
     // Object monitors + Thread.join: the mini java.base runtime's wait/notify/join lower to VM scheduler helpers.
     int MON_WAIT = 25;          // vm/VM.objWait(JJ)V      — park the current task on an object until notified
     int WATCH_RET = 49;         // vm/VM.watchRet(J)V — DEBUG: print the value a watched call returned
+    int WATCH_X21 = 51;         // vm/VM.watchX21(JJ)V — DEBUG: a callee-saved register left changed
     int WATCH_ARG = 50;         // vm/VM.watchArg(J)V — DEBUG: print an ARGUMENT a watched call is passing.
                                 // A SEPARATE id from WATCH_RET on purpose: with both watches armed the two
                                 // print identically, and an unlabelled column of values is exactly the
@@ -143,6 +144,16 @@ public interface Symbols
      *  every call, which bisects a method's calls in one run. Reading a value at two points says only THAT it
      *  was lost; reading it after each call says WHICH call lost it. Debug only; the writer answers false. */
     boolean watchLocal2();
+
+    /** True while compiling under the x21 CALLEE-SAVED DISCIPLINE CHECK: a method that does not OWN local
+     *  slot 2 snapshots x21 at entry and compares at exit, reporting if it changed. Printing the register
+     *  cannot find a violator, because most frames legitimately own it; asking each frame "did you leave it
+     *  as you found it?" can. Debug only; the writer answers false. */
+    boolean checkX21();
+
+    /** Name the class of a method instrumented by {@link #checkX21()}, at compile time, so a runtime id is
+     *  traceable to something. Debug only; the writer does nothing. */
+    void reportX21Site(int id);
 
     /** True if the call at {@code methodCp} is being WATCHED: the compiler follows it with a WATCH_RET
      *  helper call that prints what it returned. Debug only; the writer always answers false. */

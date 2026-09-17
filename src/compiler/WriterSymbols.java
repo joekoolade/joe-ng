@@ -154,6 +154,15 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         return false;   // host writer: never watches a field store
     }
 
+    public void reportX21Site(int id)
+    {
+    }
+
+    public boolean checkX21()
+    {
+        return false;
+    }
+
     public boolean watchLocal2()
     {
         return false;

@@ -20166,6 +20166,37 @@ public final class Loader
      */
     private static final boolean LOCAL2_WATCH = false;
 
+    /**
+     * The x21 callee-saved discipline check.
+     *
+     * <p>MEASURED: picocli's factory (local slot 2 of {@code CommandLine.<init>}, i.e. x21) is intact after
+     * five calls and gone after {@code new CommandLine$Interpreter(this)}. Every frame from there down --
+     * {@code Interpreter.<init>}, {@code registerBuiltInConverters}, {@code excl} -- is {@code locals=2} and
+     * so does not OWN x21; they merely pass it through. Printing x21 deeper cannot find the violator because
+     * most frames down there legitimately use it for their own slot 2. Asking every non-owner "did you leave
+     * it as you found it?" can, and the INNERMOST reporter is adjacent to the culprit.
+     */
+    private static final boolean X21_CHECK = false;
+
+    static boolean checkX21()
+    {
+        return X21_CHECK;
+    }
+
+    /** Name the class each instrumented method belongs to, so a runtime id maps to something. */
+    static void reportX21Site(int id)
+    {
+        if (gbase == 0L || gThisNameOff == 0)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  X21CHECK id="));
+        VM.printDec(id);
+        Uart.putc(0x20);
+        printNameAt(gbase, gThisNameOff);
+        Uart.putc(0x0A);
+    }
+
     static boolean watchLocal2()
     {
         if (!LOCAL2_WATCH || gbase == 0L || gThisNameOff == 0)
