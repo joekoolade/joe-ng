@@ -195,6 +195,16 @@ final class VMUnwind
         while (true)
         {
             long h = findHandler(pc, exc);
+            if (Loader.UNWIND_DUMP && h != 0L)
+            {
+                Uart.write(Magic.bytes("  UNW handler pc="));
+                printHex(pc);
+                Uart.write(Magic.bytes(" nrl="));
+                printHex(jitRegLocalsAt(pc));
+                Uart.write(Magic.bytes(" buf0="));
+                printHex(Magic.load64(unwindLocBuf));
+                Uart.putc((byte) 0x0A);
+            }
             if (h != 0L)
             {
                 // unwindLocBuf now holds the handler's live locals: each frame we popped saved its CALLER's
@@ -341,6 +351,27 @@ final class VMUnwind
             // the seed / deeper frames. When the caller turns out to be the handler, these ARE its pre-try locals;
             // the frame the handler called into is popped last, so it wins for the slots it saved.
             long nrl = jitRegLocalsAt(pc);
+            if (Loader.UNWIND_DUMP)
+            {
+                // What a popped frame's save area ACTUALLY holds, for the frames the image lookup changes.
+                // [sp+0] is the saved LR (the walk already relies on it), so [sp+8+k*8] should be the saved
+                // x19.. -- printing both says whether that is true rather than assuming it.
+                Uart.write(Magic.bytes("  UNW pc="));
+                printHex(pc);
+                Uart.write(Magic.bytes(" img="));
+                printHex(pc < 0x02400000L ? 1L : 0L);
+                Uart.write(Magic.bytes(" fs="));
+                printHex(fs);
+                Uart.write(Magic.bytes(" nrl="));
+                printHex(nrl);
+                Uart.write(Magic.bytes(" lr@0="));
+                printHex(Magic.load64(sp));
+                Uart.write(Magic.bytes(" x19@8="));
+                printHex(Magic.load64(sp + 8L));
+                Uart.write(Magic.bytes(" x20@16="));
+                printHex(Magic.load64(sp + 16L));
+                Uart.putc((byte) 0x0A);
+            }
             long k2 = 0L;
             while (k2 < nrl && k2 < 16L)
             {

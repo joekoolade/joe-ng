@@ -20176,6 +20176,10 @@ public final class Loader
      * most frames down there legitimately use it for their own slot 2. Asking every non-owner "did you leave
      * it as you found it?" can, and the INNERMOST reporter is adjacent to the culprit.
      */
+    /** Dump every frame the unwinder pops: pc, image-or-JIT, frameSize, regLocals, and the words at
+     *  [sp+0]/[sp+8]/[sp+16] -- i.e. what an image frame's save area ACTUALLY holds. */
+    static final boolean UNWIND_DUMP = false;
+
     private static final boolean X21_CHECK = false;
 
     static boolean checkX21()
