@@ -116,10 +116,11 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE picocli `factory` NPE IS FIXED, AND IT WAS THREE NESTED BUGS -- the last of them a 960 KiB memory
-  overlap the boot-time overlap check was STRUCTURALLY UNABLE TO SEE (2026-09-17, NOT PI-VALIDATED).** The
-  launcher runs to completion on QEMU: `Test run finished after 99616 ms`, `[3 containers successful]`,
-  `[2 tests successful]`, `[0 tests failed]`, exit 0, at batch 139 (+2473 blobs). Each layer was invisible
-  until the one before it was fixed, which is this file's most-repeated shape and is why it took an arc.
+  overlap the boot-time overlap check was STRUCTURALLY UNABLE TO SEE (2026-09-17, PI-VALIDATED).** The
+  launcher runs to completion on HARDWARE: `Test run finished after 102038 ms`, `[3 containers successful]`,
+  `[2 tests successful]`, `[0 tests failed]`, exit 0, at batch 139 (+2473 blobs) -- with both stock jtreg
+  tests green (`testMillisNanos() 50808 ms`, `testMillis() 17376 ms`). Each layer was invisible until the
+  one before it was fixed, which is this file's most-repeated shape and is why it took an arc.
   - **(1) THE WATCH COULD NOT FIRE, which was the question this arc opened on.** `FIELD_STORE_WATCH` armed on
     the field name `factory` never fired for `CommandLine.factory` though its `putfield` at offset 60
     demonstrably executes on a HEALTHY run. Cause: on the FAILING path `Assert.notNull` throws SIX BYTECODES
@@ -185,8 +186,29 @@ defines the minimum the assembler must encode.
   - **Mark stack capacity falls ~213k -> ~90k entries**, still more than an order of magnitude above the few
     thousand blocks a real collection marks, and `markOverflow`'s fixpoint fallback finishes the trace
     correctly if it ever fills.
-  - **NEXT: PI-VALIDATION. Nothing in this arc has run on hardware**, and the launcher is where the
-    baked/JIT boundary is exercised for real.
+  - **PI-VALIDATED, AND THE BOOT ANSWERED THE QUESTION QEMU COULD NOT.** The emulator hands out ZEROED DRAM
+    and this change MOVED the GC mark stack, so a collector now writing into memory it had never touched
+    reads clean there by construction. On silicon: **`gc=15` collections, no `heap OOM`, no `STW TIMEOUT`,
+    no `FAULT`/`ESR EC=0`/`BOOT RE-ENTERED`** -- plus `SCRATCH MAP OVERLAP`, `X21 CLOBBERED`,
+    `JIT UNWIND TABLE FULL`, `BADPATCH`, `VIRTUALRESOLVE FAILED`, the `factory` NPE and
+    `DISPATCH ON UNREGISTERED TYPE` all absent. The batch-139 counters match the QEMU arm exactly
+    (+2473 blobs), so the closure is identical at both scales.
+  - **THE `ProcessImpl` TRAP FIRED AT BATCH 21 AND THE BOOT RAN ON TO 139 -- proof by PRESENCE, for the
+    fourth consecutive hardware boot.** picocli's terminal-width probe reaching a denied native inside
+    `lazyCompileLocked` is a routine survivable event; its ABSENCE would have been as suspicious as a new
+    failure. It brings the boot's only `LINK FAILED` and both `unclaimed pc` frames with it, all inside its
+    own trace.
+  - **ONE SPIKE, NAMED RATHER THAN CHASED: batch 133 reads `seed=640.158ms` against ~0.5ms for its
+    neighbours, and `gc` steps 14 -> 15 on that exact batch.** That is the batch-188 shape this file already
+    settled after four boots: a collection landing inside whichever timer happens to be holding the
+    stopwatch. Recorded so it is not re-found and re-chased.
+  - **EVERY PER-BATCH TIMING IN THE CARDS BELOW IS NOW STALE, and that is worth stating before someone
+    compares against them.** They were measured at batch 209 / 1782 blobs against a closure that was 44%
+    TRUNCATED; this boot is batch 139 / 2473 blobs on a complete one. The load-path arc's ratios still hold
+    as ratios -- the absolute figures describe a different VM.
+  - **NEXT, and it is a known gap rather than a failure:** `jdk/internal/misc/Unsafe.getAndBitwiseOrInt` is
+    still referenced-but-dropped (the overlay declares only the `Long` form), reachable from stock
+    `ForkJoinTask.setDone`. `make overlaycheck-deep` is what sees it; the shallow check cannot.
 - **THE SILENT CLOSURE TRUNCATION IS FIXED, AND FIXING IT REMOVED THE FAILURE THAT COST THIS ARC FOUR BOOTS
   (2026-09-16, NOT YET PI-VALIDATED).** `MAXREACH` 8192 -> 65536 plus the report `addReach` never had.
 
