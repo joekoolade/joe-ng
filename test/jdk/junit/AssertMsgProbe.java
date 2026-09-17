@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-08-30
+ */
 /**
  * The narrowest end-to-end test of a JUnit assertion message: call Assertions.assertEquals directly and
  * report what comes back. Isolates JUnit's own message plumbing from the MetalJUnit runner around it.

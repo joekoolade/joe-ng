@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-09-02
+ */
 /**
  * Reproduces the SHAPE of picocli's failing throw: a caught exception stored in a local slot PAST the
  * register window, then passed to an instance helper whose whole body is `aload_1; athrow`.

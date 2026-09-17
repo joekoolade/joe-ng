@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-07-19
+ */
 // Reproduces the M5.1 gap measurement in PLAN.md: runs joe-ng's own compiler
 // over a class and reports what it cannot yet compile, by category.
 //   javac -cp out -d tools tools/M5Gap.java && java -cp out:tools M5Gap out compiler/BaselineCompiler

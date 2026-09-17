@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2026 Joseph Kulig.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Created: 2026-09-03
+ */
 /**
  * Pins reflective field get/set when the SAME FIELD NAME is declared by two unrelated classes at different
  * slots, and when the field is reached on an instance of a SUBCLASS.
