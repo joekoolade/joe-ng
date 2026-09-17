@@ -14038,6 +14038,7 @@ public final class Loader
         if (classIndexByName(slash) < 0 && loadClassIncremental(slash) == 0L)
         {
             lnkFailWhy = 1;                             // RECORD, do not print: see reportLinkFail
+            linkResolveLog(clsU, nameU, descU, 0L, 0);
             return 0L;
         }
         int reg = classIndexByName(slash);
@@ -14046,6 +14047,7 @@ public final class Loader
             // Loaded but not brought all the way up: its <clinit> was blocked or its structure never
             // registered. Branching in would run against half-built statics and a possibly empty vtable.
             lnkFailWhy = 2;
+            linkResolveLog(clsU, nameU, descU, 0L, 0);
             return 0L;
         }
         long buf = bufBySigU(clsU, nameU, descU);
@@ -14079,6 +14081,7 @@ public final class Loader
             // abstract/native method with no VM helper, or a descriptor mismatch.
             lnkFailWhy = 3;
         }
+        linkResolveLog(clsU, nameU, descU, buf, tier);
         return buf;
     }
 
@@ -20270,6 +20273,32 @@ public final class Loader
         {
             Uart.write(Magic.bytes("  -- RESOLVED TO NOTHING"));
         }
+        Uart.putc(0x0A);
+    }
+
+    /** Late (link-stub) resolution of a watched class's method: which tier answered, and with what. The
+     *  patch-time twin is {@link #bufResolveLog}; a site that resolves to nothing at PATCH time takes a link
+     *  stub and is resolved again HERE, on first call, so a silent site has to be explained at both ends.
+     *  Tier 1 bufBySigU (registered buffer / static cell / vtable slot), 2 provided native, 3
+     *  compileSigOnDemand; 0 marks an EARLY return, where lnkFailWhy says which guard refused. */
+    private static void linkResolveLog(long clsU, long nameU, long descU, long buf, int tier)
+    {
+        if (!BUF_WATCH_ON || !utf8IsAtBase(clsU, 0, BUF_WATCH_CLASS))
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("  LINKWATCH "));
+        printNameAt(clsU, 0);
+        Uart.putc(0x2E);
+        printNameAt(nameU, 0);
+        Uart.putc(0x20);
+        printNameAt(descU, 0);
+        Uart.write(Magic.bytes(" -> buf="));
+        VM.printHex(buf);
+        Uart.write(Magic.bytes(" tier"));
+        VM.printDec(tier);
+        Uart.write(Magic.bytes(" why"));
+        VM.printDec(lnkFailWhy);
         Uart.putc(0x0A);
     }
 
