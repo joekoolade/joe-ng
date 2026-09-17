@@ -115,6 +115,50 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE FULL `getAndBitwise{Or,And,Xor}{Int,Long}` FAMILY IS IN -- all eighteen, the blocker below having
+  been the loader rather than these methods (2026-09-17, NOT YET PI-VALIDATED).** `overlaycheck-deep` lists
+  every one of them as referenced by stock java.base; only `getAndBitwiseOrLong` existed, so the other
+  seventeen CEASED TO EXIST -- an overlay wins the name, and a member it omits resolves nowhere and surfaces
+  as a `DENYLIST TRAP` blaming a list this class is not on. **This unblocks overlay-gap work generally:**
+  `Unsafe` alone has ~250 referenced-but-dropped members, and they could not be added in batches while the
+  constructor defect below stood.
+  - **ADDED AS A FAMILY, which is this file's standing advice and was not free here.** Adding the one member
+    that traps is how this family costs a boot each time; it has cost eleven sessions across the project.
+  - **ACQUIRE AND RELEASE SHARE THE PLAIN BODY, correct by being STRONGER rather than equal.** `Magic.cas64`
+    is LDAXR/STLXR -- already acquire-on-load and release-on-store -- so the plain form carries at least the
+    ordering either variant asks for. joe-ng has no one-way barrier intrinsic to emit a weaker form with, and
+    a weaker form we cannot emit could only be wrong invisibly. Same reasoning `VarHandle.setRelease` and the
+    memory-mode accessors already record.
+  - **THE INT FORMS OPERATE ON AN 8-BYTE SLOT, and that is a PRECONDITION ON THE CALLER rather than a
+    detail.** `Magic` exposes `cas64` and nothing narrower. Exact for an INSTANCE FIELD -- `ObjectModel` gives
+    each its own 8-byte slot and `Baseline.canonInt` keeps an int sign-extended in it -- and WRONG for an int
+    ARRAY element, whose scale is 4: a 64-bit access there takes the neighbouring element with it, at an
+    address the exclusive monitor is not even aligned for. Nothing reached does that (`AtomicIntegerArray`
+    uses plain `int[]` access, not Unsafe; the callers here are field-offset callers -- `ForkJoinTask.status`,
+    `AtomicInteger.value`). Stated because **a narrow-slot caller would not fail, it would corrupt its
+    neighbour**, and the existing int methods have depended on this silently since they were written.
+  - **THE PROBE COVERS ALL EIGHTEEN AND IS BYTE-IDENTICAL TO A HOST CONTROL.** 26 arms, every one `OK`, and
+    `diff` against a stock JVM running the same source (`--add-exports java.base/jdk.internal.misc=ALL-UNNAMED`)
+    is EMPTY. The arms are chosen so a plausible wrong implementation fails:
+    - **Or/And/Xor get a start and mask where all three answers differ** (`0b1100` with `0b1010` -> 14 / 8 /
+      6). A shared start of 0, or a mask of 0, makes two of the three agree and tests nothing about which
+      operator ran -- which is exactly the copy-paste slip eighteen near-identical bodies invite.
+    - **Acquire and Release get the SAME treatment as plain, not a smoke test.** They delegate, so the fault
+      they can have is delegating to the WRONG SIBLING; `XorIntAcquire` calling `getAndBitwiseOrInt` is one
+      character and passes any arm that only checks non-zero.
+    - **The long arms mask above 2^32** (`3L << 40` against `1L << 40`), so a truncating path is visible, and
+      the three operators differ in BOTH halves.
+    - **The sign-bit arms do a SECOND op on the same field**, through Or, And AND Xor. An int in an 8-byte
+      slot left non-canonical still reads back correctly through one `(int)` cast, and the NEXT CAS's expected
+      word no longer matches what is stored -- **so the retry loop spins for ever. A HANG, not a wrong
+      number**, which is why one op per operator cannot find it.
+    - **`want` is computed with Java's own operator, not transcribed** -- an oracle independent of this
+      overlay, since a transcribed constant can be copied wrong as easily as the body it checks.
+  - **GATE:** demo suite 33 programs, 0 exceptions, `churnMB=625 live=32 intact=32`, `lisp evals=600
+    result=610 stable=1`, `finish HML`, `smp sched: 4 of 4`, fourteen failure markers zero. Host tests
+    unchanged: `compiler: 39 checks`, `overlay-check 0 new` (28 gaps unchanged -- these members are visible
+    only to the DEEP scan, which is the blind spot that found them).
+
 - **A CONSTRUCTOR FELL BETWEEN BOTH DISPATCH TABLES, SO IT WAS NEVER CALLED AND THE OBJECT CAME BACK RAW --
   FIXED (2026-09-17, NOT YET PI-VALIDATED).** Adding eighteen `Unsafe` overlay members aborted the demo
   suite at `demo/DefaultIfaceDemo` with an uncaught NPE; the members were never the bug, they only moved
@@ -196,9 +240,7 @@ defines the minimum the assembler must encode.
       `patchRelocs` installed it -- and `LINKWATCH` shows `resolveLinkTarget` never runs for it. A stub that
       exists and is never invoked is a second, smaller question, independent of this fix.
     - **PI-VALIDATION.** Nothing in this arc has run on hardware.
-    - **THE FULL 18-METHOD FAMILY CAN NOW LAND** (`getAndBitwiseOr/And/Xor{Int,Long}`), which unblocks
-      overlay-gap work generally: `overlaycheck-deep` lists ~250 referenced-but-dropped members on `Unsafe`
-      alone, and they could not be added in batches while this stood.
+    - **(CLOSED by the card above: the full 18-method family landed, gated on its own suite run.)**
   - **A SEPARATE SILENT WRONG ANSWER, found on the way and NOT fixed:** a boolean CONCATENATES AS 1/0 rather
     than `true`/`false`. `Baseline.appendArg` routes a `'Z'` concat argument to `SC_INT`, which renders a
     decimal integer, where JLS 15.18.1 requires the words. Measured (metal printed `1` where the host
