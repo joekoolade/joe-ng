@@ -115,44 +115,78 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE `factory` NPE IS OURS, AND THE OBVIOUS SHAPE IS NOT THE CAUSE -- `demo/CtorArgProbe` IS A PINNED
-  NEGATIVE CONTROL (2026-09-16).** With the closure no longer truncated the launcher stops at
-  `NullPointerException: factory`, `CommandUserObject.create` -> `Assert.notNull`.
-  - **HOST CONTROL FIRST, and it settled authorship in ten seconds.** `java -jar ramfs/lib/junit.jar execute
-    --select-class=SleepSanity --disable-ansi-colors --disable-banner` on a stock JVM constructs
-    `CommandLine` fine and finishes in 12ms. picocli does not do this on a real VM, so the fault is ours.
-    (Its three container failures are just `SleepSanity` not being on the host classpath -- a different
-    claim, kept straight.)
-  - **THE VALUE'S PATH, read from the bytecode rather than guessed.** `CommandLine.<init>(Object)` builds it
-    MID-EXPRESSION -- `this(command, new DefaultFactory(null))` -- and it travels as a plain argument through
-    `<init>(Object,IFactory)` -> `<init>(Object,IFactory,boolean)` -> `forAnnotatedObject` ->
-    `extractCommandSpec` -> `create` -> `<init>`, where `aload_2` reads it as null.
-  - **IT IS POSITION-DEPENDENT, which is the discriminator.** `extractCommandSpec` runs
-    `notNull(userObject)` at offset 0 and PASSES, then hands `aload_1` to `create`. Slot 0 survives and slot
-    1 does not, so the reference is lost in transit rather than the object never being built -- a failed
-    `new` here would halt loudly in `newUnresolved`, not yield null.
-  - **THE PROBE REPRODUCES THE SHAPE EXACTLY AND PASSES ON METAL.** Three arms -- the inline
-    `new`-as-argument through a three-deep constructor chain, a control taking the same value from a CALL
-    instead, and a FAT private constructor doing seven mid-expression `new`s first to push the operand stack
-    -- all answer `df`, every argument `ok` at every frame, host and QEMU alike. **So the operand-live-
-    across-a-nested-`<init>` reading is NOT confirmed**, and this file's most-repeated lesson lands again:
-    reproducing the SHAPE is not reproducing the CONDITION. Kept in the tree as a pinned control, the way
-    `HighLocalThrowProbe` was kept after it refuted the high-local hypothesis.
-  - **AND A SECOND CANDIDATE IS DEAD BY MEASUREMENT: there is NO `newresolve` anywhere in a `LOAD_LOG`
-    launcher boot.** That `new` is never deferred -- `clinit-lazy ...CommandLine$DefaultFactory` shows the
-    class registered and initialised normally -- so "deferred `new` lost its result" is out.
-  - **THE PROBE RECORDS RATHER THAN PRINTS, deliberately:** a `println` inside the chain adds a call and
-    changes the operand depth of the frames under test, and this VM has already had a bug VANISH when an
-    instrument was added. Each frame writes a boolean to a static; the report prints afterwards, from
-    outside. It also reports EVERY argument at EVERY frame, not just the one that throws -- a probe checking
-    only the crashing value could not have established the position-dependence above.
-  - **STILL OPEN, and stated rather than guessed at:** `FIELD_STORE_WATCH` pointed at the field name
-    `factory` fired exactly ONCE, early in batch 1, and never for `CommandLine.factory` -- whose `putfield`
-    at offset 60 demonstrably executes, since the trace reaches line 230 (offset 75) above it. **Why the
-    watch does not fire there is not established**, and that is the next thing to settle, because until it
-    does the instrument cannot answer the question it was armed for: whether `factory` is already null on
-    entry to the 3-arg constructor, or is lost between it and `create`.
-
+- **THE picocli `factory` NPE IS FIXED, AND IT WAS THREE NESTED BUGS -- the last of them a 960 KiB memory
+  overlap the boot-time overlap check was STRUCTURALLY UNABLE TO SEE (2026-09-17, NOT PI-VALIDATED).** The
+  launcher runs to completion on QEMU: `Test run finished after 99616 ms`, `[3 containers successful]`,
+  `[2 tests successful]`, `[0 tests failed]`, exit 0, at batch 139 (+2473 blobs). Each layer was invisible
+  until the one before it was fixed, which is this file's most-repeated shape and is why it took an arc.
+  - **(1) THE WATCH COULD NOT FIRE, which was the question this arc opened on.** `FIELD_STORE_WATCH` armed on
+    the field name `factory` never fired for `CommandLine.factory` though its `putfield` at offset 60
+    demonstrably executes on a HEALTHY run. Cause: on the FAILING path `Assert.notNull` throws SIX BYTECODES
+    EARLIER, so the store is never reached -- the instrument was aimed at code the failing run does not run.
+    **An instrument that cannot fire looks exactly like a condition that never happens**, and reading its
+    silence as evidence is what this file forbids and what happened here for two sessions.
+  - **(2) A BAKED FRAME'S CALLEE-SAVED REGISTERS WERE DROPPED BY THE UNWINDER.** `jitRegLocalsAt` consulted
+    the JIT table ALONE while `frameSizeAt` consulted BOTH, and the writer emitted no image-side local table
+    at all -- so an unwind crossing a baked java.base frame answered 0 and copied NONE of that frame's saved
+    x19..x28 into the reconstruction. The handler then resumed with its CALLER's registers still holding
+    throw-time values: a local live before the call reading as null, **with no fault and no trace, arbitrarily
+    far from the throw.** Guest-only unwinds are structurally blind to it (every guest frame IS in the JIT
+    table); it needs a throw that crosses baked java.base, which is exactly what class loading does, and what
+    picocli and JUnit do constantly because they throw as ordinary control flow.
+  - **(3) FIXING (2) LOOKED LIKE A REGRESSION AND I BACKED IT OUT FOR A REASON THAT WAS WRONG.** Enabling the
+    image lookup cleared the NPE and made the launcher stop EARLIER, on a `Map.put` against a receiver whose
+    Type carried `ARRAY_TYPE_TAG`. I recorded that as "an image frame's save area is not what this
+    reconstruction assumes" and shelved it -- **while the dump I had already run showed the image save area
+    matches EXACTLY.** The real cause was underneath: **`VMGc.MARK_STACK` at `0x03E50000` overlapped
+    `Heap.JIT_TABLES..+0x140000` (`0x03E00000-0x03F40000`) by 0xF0000**, so every deep collection wrote heap
+    pointers over the JIT LOCAL and HANDLER tables. Enabling the image half merely changed which frames
+    reached a JIT half that was reading corrupted memory. Measured: a local entry holding
+    `{lo=0x060A3758 hi=0x060A37C0}` -- a heap range -- where its frame-table twin at the same index held a
+    valid code range.
+  - **IT ARRIVED WITH A CAP CHANGE AND NOTHING SAID SO.** `MARK_STACK` was placed at `JIT_TABLES + 0x50000`,
+    exactly right while `JIT_FRAME_MAX`/`JIT_HANDLER_MAX` were 4096. Raising them to 16384 took the three
+    tables `0x50000 -> 0x140000` and moved nothing else. VM.java's own comments still carried the 4096-cap
+    sizes (`0x18000`/`0x30000`/`0x20000`), which is half the reason it read as correct on inspection.
+  - **`ScratchMap` EXISTS FOR THIS AND COULD NOT SEE IT, because the reservation named its NEIGHBOUR instead
+    of its own size:** `add(Heap.JIT_TABLES, VMGc.MARK_STACK)` -- which cannot overlap the mark stack by
+    construction, it shrinks to fit it. It is `add(JIT_TABLES, JIT_TABLES + VM.JIT_TABLES_BYTES)` now, DERIVED
+    from the caps, so a future cap change trips the check. **NEGATIVE CONTROL, run before it shipped:** with
+    the old value restored, boot prints `SCRATCH MAP OVERLAP 0x03E00000-0x03F40000 vs
+    0x03E50000-0x03FF0000`; with the fix it is silent. **A guard written against the wrong quantity is worse
+    than no guard** -- this one had been quiet across four overlap bugs' worth of layout change, and was
+    created precisely because of them.
+  - **THE OTHER HALF OF THE REPAIR IS A `-1`.** `tableValueIn` returned 0 both for "no entry covers this pc"
+    and for "the entry says 0", and a LEAF IMAGE METHOD THAT SAVED NOTHING IS GENUINELY 0. Asking the image
+    table first is only sound once those are distinguishable, or the JIT table gets consulted for pcs the
+    image table already answered. The same distinction is what lets a real gap be REPORTED rather than
+    silently skipped.
+  - **MEASURED, A/B, same image layout in both arms:** `X21 CLOBBERED` 2 -> 0, `factory` NPE 1 -> 0,
+    `DISPATCH ON UNREGISTERED TYPE` 1 -> 0 (the "new blocker" the back-out was for), JIT local `nrl`
+    `0xFFFFFFFFFFFFFFFF` -> `0xA`/`0x1`. `FAULT`, `BOOT RE-ENTERED`, `SCRATCH MAP`, `BADPATCH`, `heap OOM`,
+    `JIT unsupported`, `JIT UNWIND TABLE FULL`, `VIRTUALRESOLVE FAILED` all zero, with only the standing
+    `ProcessImpl.init` `DENYLIST TRAP` (and its `LINK FAILED` and the two `unclaimed pc` frames inside that
+    trap's own trace).
+  - **`demo/CtorArgProbe` STAYS AS A PINNED NEGATIVE CONTROL, and it is a seven-arm one now** (A-G: inline
+    `new`-as-argument, via-call, fat, wide-locals, late-`this`, demand-load, unwind). Every arm passes host
+    AND metal -- which is the point: **it reproduces the SHAPE and never reproduced the CONDITION.** The
+    condition needs a throw crossing a BAKED frame, and no probe built from guest classes has one.
+  - **HOST CONTROL FIRST, and it settled authorship in ten seconds** -- `java -jar ramfs/lib/junit.jar` on a
+    stock JVM constructs `CommandLine` fine in 12ms, so the fault was ours. That is still the cheapest move
+    available on any library-misbehaviour symptom.
+  - **REGRESSION GATE: the demo suite, because `MARK_STACK` MOVED** and this project has twice had latent
+    bugs surface from layout movement alone. 33 programs, identity exact -- `memo=1418 res=2510 unres=2253`,
+    `rf:skip=1631 visit=1173 clos=1173 holeEnd=1074`, `n:imap=52 synth=18 clinits=25`, `churnMB=625 live=32
+    intact=32`, `gc: collections=55`, `lisp evals=600 result=610 stable=1`, `finish HML` / `HIGH blocked
+    60ms`, `smp sched: 4 of 4`, `YNW`/`RP`/`sum20=210` -- and eighteen failure markers zero. Host tests
+    unchanged: A64 105, object-model 22, class-reader 171, refmap 14, compiler 39, crypto 17, zip 91,
+    `overlay-check 0 new`. **The gate was re-run on the FINAL tree after a comment-only edit**, because this
+    file already records that such an edit changes the image (same size, different bytes: LineNumberTable).
+  - **Mark stack capacity falls ~213k -> ~90k entries**, still more than an order of magnitude above the few
+    thousand blocks a real collection marks, and `markOverflow`'s fixpoint fallback finishes the trace
+    correctly if it ever fills.
+  - **NEXT: PI-VALIDATION. Nothing in this arc has run on hardware**, and the launcher is where the
+    baked/JIT boundary is exercised for real.
 - **THE SILENT CLOSURE TRUNCATION IS FIXED, AND FIXING IT REMOVED THE FAILURE THAT COST THIS ARC FOUR BOOTS
   (2026-09-16, NOT YET PI-VALIDATED).** `MAXREACH` 8192 -> 65536 plus the report `addReach` never had.
 
@@ -5778,9 +5812,12 @@ defines the minimum the assembler must encode.
   in `catcher()`). `java/*` supers/`<init>` are roots/no-ops so throwables extend
   JDK classes cleanly (`ClassFile.isRoot`). Table locations live in writer-filled
   statics (`VM.frameTable`/`frameCount`/`handlerTable`/`handlerCount`).
-  **Limitation:** callee-saved locals are NOT restored during the walk, so a
-  handler must not read a *pre-try* local (it may be stale). No `finally`-specific
-  handling beyond catch-all entries.
+  **Limitation (SUPERSEDED 2026-09-17 -- see the top card):** this originally read
+  "callee-saved locals are NOT restored during the walk". `Magic.resume` DOES
+  restore all of x19..x28 now; what stayed broken far longer was the
+  RECONSTRUCTION feeding it -- an unwind past a BAKED frame dropped that frame's
+  saved registers, silently. No `finally`-specific handling beyond catch-all
+  entries.
 - **GC — conservative mark-sweep DONE (first cut of M6).** Each object records its
   allocation size in the status word (low bit = mark), so the heap is walkable and
   objects are sizable without per-type maps. `Magic.gc()` spills x19..x28 (so live
