@@ -12670,8 +12670,16 @@ public final class Loader
      * the inherited field's slot — the flattened layout keeps it consistent.
      */
     /** Watch ONE field name's resolved offset. A getfield that resolves to a WRONG-but-valid slot is silent:
-     *  `UNRESOLVED FIELD (aliases slot 0)` fires only on a total miss. Set to a name to trace it. */
-    private static final byte[] FIELD_WATCH = Magic.bytes("validationResult");
+     *  `UNRESOLVED FIELD (aliases slot 0)` fires only on a total miss. Set to a name to trace it.
+     *
+     *  <p>EVERY TIER REPORTS NOW, which is what makes the watch able to say "not here". Tiers 1 and 2 were
+     *  logged and the other three were not, so a field resolved by the same-class fast path (tier 0) or
+     *  handed slot 0 by the fall-through (tiers 3 and 4) left NO line -- indistinguishable from a field the
+     *  watch never saw. Chasing the open layout-sensitivity defect, an armed watch printed nothing at all
+     *  for `this$0` for exactly that reason, which reads as "the resolver is not involved" and is not the
+     *  same claim. Tier 0 same-class hit, 1 class-qualified, 2 super-chain, 3 pull-noted (compile discarded
+     *  and redone), 4 gave up at slot 0, 9 same-class miss falling through to the global path. */
+    private static final byte[] FIELD_WATCH = Magic.bytes("this$0");
     private static final boolean FIELD_WATCH_ON = false;
 
     private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
@@ -12740,8 +12748,10 @@ public final class Loader
         // take, and name it if it is still missing on the retry.
         if (lzCompiling && !lzRetried && notePullNeeded(gbase + classOff))
         {
+            fieldOffsetLog(classOff, nameOff, 16, 3);   // 3 = pull noted, compile to be discarded and redone
             return 16;                                  // this compile is discarded and redone with it loaded
         }
+        fieldOffsetLog(classOff, nameOff, 16, 4);       // 4 = gave up: slot 0, and it is NOT necessarily right
         reportUnresolvedField(gbase + classOff, gbase + nameOff);
         return 16;
     }
@@ -17869,10 +17879,12 @@ public final class Loader
             {
                 if (gifName[s] == nameOff)
                 {
+                    fieldOffsetLog(refClassNameOff(idx), nameOff, 16 + s * 8, 0);   // 0 = same-class fast path
                     return 16 + s * 8;                     // this class's own field (ObjectModel: +16)
                 }
                 s += 1;
             }
+            fieldOffsetLog(refClassNameOff(idx), nameOff, -1, 9);  // 9 = same-class MISS, fell through
         }
         return globalFieldOffset(idx);                     // another class, or an inherited field
     }
