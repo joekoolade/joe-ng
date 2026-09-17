@@ -3628,48 +3628,6 @@ public final class Loader
     static long cumBytes;                                // bytes markReachable allocates, summed over batches
 
     /**
-     * THE PART OF A BOOT NO TIMER HAS EVER COVERED. Every cumulative figure in this file measures time
-     * INSIDE {@code loadAll}; at batch 209 of a launcher boot that whole bracket is 32.9ms a batch, while
-     * the run reports 96,983ms of which 65,644ms is TEST EXECUTION. So the load path this arc cut nine
-     * times is now a few percent of the boot and roughly two thirds of it is measured by nothing at all.
-     *
-     * <p>{@code betwTicks} is the wall clock BETWEEN batches -- from one batch's end to the next batch's
-     * start -- and it costs NOTHING to collect: {@code tAll} and {@code tEnd} are already read. Together
-     * with {@code cumAll} it PARTITIONS the captured window exactly, which is the property the mark
-     * sub-split lacked when it lied: batches + between = elapsed, with no unnamed remainder.
-     *
-     * <p>Then two named terms inside that gap, because reading cannot rank them and this arc has been wrong
-     * about that five times. {@code lzTicks} is first-call compilation and {@code VMGc.gcTicks} the
-     * collector -- the launcher's ten collections at a measured ~565ms each are ~5.6s that shows up on no
-     * line today. Whatever the gap holds beyond those two is execution and genuine {@code Thread.sleep},
-     * which is the floor this boot cannot go below and is worth knowing as a number rather than a guess.
-     */
-    static long betwTicks;               // wall clock outside loadAll, summed over the captured window
-    static long rptTicks;                // ... of which THIS report's own serial traffic (kept out of betw)
-    private static long prevBatchEnd;    // ... the previous batch's tEnd (0 = no batch has finished yet)
-    static long lzTicks;                 // time in lazyCompile, NET of any batch it triggered (see below)
-    static int  lzCalls;                 // ... and how many, so the per-call cost is readable
-    // ... AND THE PART OF EACH THAT FIRED INSIDE A BATCH, because neither sits cleanly in `betw` and the
-    // FIRST QEMU run said so: batch 1 read `betw=0us gcT=7.081ms`, i.e. a collection inside loadAll with no
-    // gap yet to hold it. A batch allocates, so it can collect; it runs <clinit>s through Magic.call0, which
-    // is guest code, so it can lazily compile. Printed as totals PLUS their in-batch part, so `gcT - gcB`
-    // and `lzT - lzB` are the shares that decompose `betw` and nothing double-counts `tot`.
-    static long gcInBatch;               // of VMGc.gcTicks, the part spent inside loadAll
-    static long lzInBatch;               // of lzTicks, the same
-    private static int lzDepth;          // OUTERMOST lazy compile only: counting re-entries would hide
-                                         //   exactly the nesting this is here to measure (the `rel` lesson)
-    // THESE TWO ARE STATICS RATHER THAN LOCALS, AND THAT IS LOAD-BEARING RATHER THAN STYLE. Held as locals
-    // in `lazyCompile` they took its operand stack from `stack=4` to `stack=8` -- past `OP_MAX = 7` -- so
-    // the method compiled in DEEP-STACK mode, operand stack in frame memory, for the first time ever. It
-    // carries a try/finally, and a deep-stack HANDLER is precisely where this VM has been bitten before
-    // (the caught exception read from a spill slot nothing had written). PI-MEASURED: the launcher wedged
-    // at batch 2 with that shape while the SAME binary ran to batch 209 on QEMU, and the control at the
-    // parent commit passed on hardware. **An instrument must not change the CODEGEN MODE of the code it
-    // measures**, and on this VM `OP_MAX = 7` is the line it must not push a method across.
-    private static long lzT0;            // the outermost compile's start tick
-    private static long lzCum0;          // ... and cumAll at that moment, to subtract any batch it triggers
-
-    /**
      * PHASE B's SPLIT. `B` is the largest item in the dominant batch -- 23,346ms of batch 1's 47,566ms
      * (49%), and batch 1 is 86% of ALL load time -- and it had never been sub-split, so every reading of it
      * was a guess. The earlier perf arc settled three wrong guesses about `patch` by splitting the timer
@@ -7640,14 +7598,6 @@ public final class Loader
     private static void loadAll()
     {
         long tAll = Magic.readCNTPCT_EL0();
-        // THE GAP SINCE THE LAST BATCH, and it is free -- both clock reads already exist. This is the only
-        // measurement of the time the VM spends NOT loading, which on a launcher boot is most of the run.
-        if (prevBatchEnd != 0L)
-        {
-            betwTicks += tAll - prevBatchEnd;
-        }
-        long gcAtEntry = VMGc.gcTicks;                  // ... and what this batch itself spends on each
-        long lzAtEntry = lzTicks;
         long tMark = tAll;
         pbProbed = 0;                                    // per BATCH: probeAll runs once per mark round plus
                                                          //   once more below, and the count is only readable
@@ -7803,8 +7753,6 @@ public final class Loader
         // That is exactly what `clinit` and `tot` used to do -- ~300 characters, ~26ms, added to a phase whose
         // real cost was 7.5ms at batch 15 and 23.8ms at batch 209.
         long tEnd = Magic.readCNTPCT_EL0();
-        gcInBatch += VMGc.gcTicks - gcAtEntry;
-        lzInBatch += lzTicks - lzAtEntry;
         cumRunCl += tEnd - tSeed;
         // CUMULATIVE totals, always accumulated (a few adds per batch) and printed only on request. This is
         // what says where a whole boot went, as opposed to one batch of it.
@@ -7817,14 +7765,6 @@ public final class Loader
         {
             batchCostLine(tAll, tMark, tProbe, tA, tB, tPatch, tRest, tEnd);
         }
-        // THE REPORT'S OWN UART TRAFFIC, MEASURED RATHER THAN HIDDEN IN A NEIGHBOUR. One batch line is ~300
-        // characters and `Uart.putRaw` SPINS on the TX holding register, so at 115200 baud it is ~26ms --
-        // over ~200 batches, SECONDS. Charging that to a phase is the exact defect that made `clinit` read
-        // 50ms when its real cost was 24ms. Closing prevBatchEnd here instead of at tEnd keeps `betw` free
-        // of it while `rpt` states what it was, so the three terms still partition the window exactly.
-        long tRpt = Magic.readCNTPCT_EL0();
-        rptTicks += tRpt - tEnd;
-        prevBatchEnd = tRpt;
         cumMark += tProbe - tMark;
         cumProbe += tA - tProbe;
         cumA += tB - tA;
@@ -13083,31 +13023,6 @@ public final class Loader
         printDur(spanUs(tRest, tEnd));
         Uart.write(Magic.bytes(" tot="));
         printDur(spanUs(tAll, tEnd));
-        // EVERYTHING `tot` DOES NOT COVER. These four are CUMULATIVE over the boot where `tot` is this
-        // batch alone, and together with cumAll they partition the captured window exactly:
-        // cumAll + rpt + betw = elapsed. `lz` and `gc` are NOT subsets of any one of those -- they cut
-        // across, so each prints its total beside the part that fired inside a batch (`lzB`/`gcB`); the
-        // remainder is what they contribute to `betw`.
-        //
-        // This is the measurement the arc now needs. Nine increments cut the load path to 32.9ms a batch
-        // while the launcher still reports 96,983ms, of which 65,644ms is TEST EXECUTION -- so what this
-        // file has been optimising is a few percent of the boot, and the majority has never been measured
-        // by anything. Whatever `betw` holds beyond `lz` and `gc` is execution and real Thread.sleep, which
-        // is the floor, and a floor is worth knowing as a number rather than assumed.
-        Uart.write(Magic.bytes(" betw="));
-        printDur(ticksUs(betwTicks));
-        Uart.write(Magic.bytes(" rpt="));
-        printDur(ticksUs(rptTicks));
-        Uart.write(Magic.bytes(" lz:n="));
-        VM.printDec(lzCalls);
-        Uart.write(Magic.bytes(" lzT="));
-        printDur(ticksUs(lzTicks));
-        Uart.write(Magic.bytes(" lzB="));
-        printDur(ticksUs(lzInBatch));
-        Uart.write(Magic.bytes(" gcT="));
-        printDur(ticksUs(VMGc.gcTicks));
-        Uart.write(Magic.bytes(" gcB="));
-        printDur(ticksUs(gcInBatch));
         Uart.write(Magic.bytes(" rounds="));
         VM.printDec(mrRounds);
         Uart.write(Magic.bytes(" pend="));
@@ -14293,44 +14208,6 @@ public final class Loader
      * method, compile just it, install the fresh buffer into the TIB slot, and return it. Called only from
      * the trampoline (via the stashed address). Guarded so the writer's dead force-reference is a no-op.
      */
-    /**
-     * Start the outermost lazy-compile measurement. Called INSIDE the loader lock: time spent waiting for it
-     * is another core's compile, and charging it here would bill one compile to two cores. The depth is
-     * raised in here for the same reason -- raised before the lock, two cores could both raise it and
-     * neither would see 0 at the end, so every nested compile would go unrecorded.
-     */
-    private static void lzEnter()
-    {
-        if (lzDepth == 0)
-        {
-            lzT0 = Magic.readCNTPCT_EL0();
-            lzCum0 = cumAll;
-        }
-        lzDepth += 1;
-    }
-
-    /**
-     * Close it, NET OF ANY BATCH THIS COMPILE TRIGGERED -- because it genuinely can trigger one:
-     * lazyCompile -> drainPendingPulls -> loadClassIncremental -> loadAll. {@code cumAll} grows by exactly
-     * that batch's own bracket, so subtracting its delta leaves compile time and nothing else, and keeps
-     * {@code lzT} a true subset of {@code betw} rather than a term that overlaps {@code tot}.
-     */
-    private static void lzExit()
-    {
-        lzDepth -= 1;
-        if (lzDepth == 0)
-        {
-            lzCalls += 1;
-            // SPLIT INTO STEPS TO KEEP THE OPERAND STACK UNDER `OP_MAX = 7`. As one expression this method
-            // compiled at `stack=8`, i.e. deep-stack -- the very thing that broke the Pi boot one commit
-            // ago. It is a leaf and would probably have been fine; "probably fine" is what cost that boot,
-            // so the depth is kept where it can be read straight off the bytecode.
-            long spent = Magic.readCNTPCT_EL0() - lzT0;
-            long nested = cumAll - lzCum0;
-            lzTicks += spent - nested;
-        }
-    }
-
     static long lazyCompile(int idx)
     {
         if (idx < 0 || lzTab == null || idx >= lzN)
@@ -14342,7 +14219,6 @@ public final class Loader
             return lzTab[idx].cache;                         // memoized: compile once, however many callers hit the stub
         }
         VM.loaderLock(VM.LOCK_LAZY);                                // SMP: the compile context is static -- one compiler at a time
-        lzEnter();                                  // accounting only -- and it adds NO locals here
         long done;
         try
         {
@@ -14350,7 +14226,6 @@ public final class Loader
         }
         finally
         {
-            lzExit();
             // A THROW INSIDE THE LOCKED REGION MUST NOT STRAND THE LOCK, and it did. Neither call was
             // inside a try/finally and VM.unwind touches none of loaderOwner/loaderDepth/loaderUnlock, so
             // an exception exiting non-locally skipped the unlock and the lock was never handed back --

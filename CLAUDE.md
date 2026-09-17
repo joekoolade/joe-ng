@@ -115,8 +115,57 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE RTA CLOSURE HAS BEEN SILENTLY TRUNCATED AT 44% ON EVERY LAUNCHER BOOT -- AND MY DEEP-STACK
+  DIAGNOSIS ONE COMMIT AGO WAS WRONG (2026-09-16).** The fix below -- `lazyCompile` back to `stack=4`,
+  identical to the control -- **did not change the outcome**: the Pi wedged at batch 2 again, at the same
+  `BigDecimal.<clinit>` -> `ForkJoinTask` -> `Unsafe.getAndBitwiseOrInt` trap, with near-identical numbers
+  (`betw=3695.745ms lz:n=97 lzT=2003.987ms gcT=558.667ms` against 3690/97/2001/557). **`OP_MAX` was not the
+  mechanism. I stated it as the root cause and one boot refuted it.**
+
+  | `MAXREACH` | batch 1 `reach` | `rounds` | `pend` |
+  |---|---|---|---|
+  | **8192** (shipped for the life of this project) | **8192 -- THE CAP, EXACTLY** | 26 | 56,383 |
+  | 65536 | **14,554** | 54 | 96,158 |
+
+  - **THE TRUE CLOSURE IS 14,554 METHODS AND THE CAP IS 8,192, SO ~6,362 REACHABLE METHODS -- 44% -- HAVE
+    BEEN DROPPED ON EVERY LAUNCHER BOOT**, including every one that passed and exited 0. `addReach` was
+    `if (code == 0L || reachN >= MAXREACH) { return false; }`: **no report, no counter, no marker.** The
+    same silent `if (room) { record it }` shape `PEND LIST FULL` was raised and made to report for, and the
+    shape this file already records as "the single most expensive failure mode in this project's history".
+  - **AND IT MAKES CLOSURE MEMBERSHIP LAYOUT-SENSITIVE, which is what actually explains the two lost boots.**
+    Which 8,192 of 14,554 survive is insertion order, so ANY change to the image can move the cut. An
+    instrument that adds two statics is enough. **That is not a property a closure may have**, and it means
+    every "identity exact" claim in this file was made against a closure that was already 44% short --
+    stable between boots, which is why it never showed, but stable for no good reason.
+  - **A DROPPED METHOD IS NEVER COMPILED, so a by-name dispatch onto it fails somewhere else entirely** --
+    `VIRTUALRESOLVE FAILED jdk/internal/misc/Unsafe.getAndBitwiseOrInt`, in a class that looks unrelated to
+    anything I touched. This file already records that `getAndBitwiseOrInt` is one of the
+    signature-polymorphic VarHandle ops that **RTA cannot see and which must be seeded, "else a 0 vtable
+    slot"**. That is exactly the shape of a method falling off the end of a truncated mark.
+  - **RAISING THE CAP IS NOT A DROP-IN FIX, and that was checked rather than assumed.** At 65536 the closure
+    really does complete (`REACH LIST FULL` never fires) -- and QEMU then fails DIFFERENTLY, with
+    `NullPointerException: factory` in picocli's `CommandUserObject.create`, on a batch-2 closure of
+    **+2164 blobs against 1344**. 78% more classes is a different VM to debug. It needs its own arc.
+  - **SO THE INSTRUMENT IS REVERTED OUT OF THE IMAGE.** `src/vm/Loader.java` and `src/vm/VMGc.java` go back
+    to `f7b3eec` byte-for-byte (`git diff f7b3eec -- src/ guestsrc/ ramfs/` is empty), which is the build
+    PROVEN to pass on this Pi. A measurement is not worth a launcher that does not boot, and I have no fix
+    for the defect underneath it. **What is kept is the host-side guard** (`compiler: 37 -> 39 checks`),
+    because it is build-time only and cannot perturb an image.
+  - **THE ACCOUNTING, because it was expensive: THREE Pi boots.** One to find the regression, one to test a
+    wrong hypothesis, one control. What would have saved two of them is the rule this file already states
+    and I did not apply to myself: **the control comes FIRST.** I flashed an unvalidated instrument, and
+    when it failed I reached for a mechanism instead of a bisect. The `OP_MAX` work was not wasted -- the
+    guard is real and its negative control is verified -- but it was an answer to a question I had not
+    established was the right one.
+  - **WHAT THE THREE BOOTS DID BUY, and it is worth more than the instrument was:** a 44% truncated closure
+    on every boot of the flagship workload, the reason it was invisible (silent by construction), the reason
+    it bites unpredictably (layout-sensitive), a measured true size (14,554), and the knowledge that fixing
+    it uncovers a second failure rather than a green boot. **NEXT ARC, and it is ahead of any load-path
+    work:** report the overflow, raise the cap, and take the picocli `factory` NPE the full closure exposes.
+
 - **MY INSTRUMENT PUSHED `lazyCompile` PAST `OP_MAX` AND BROKE THE PI -- CONTROL-PROVEN MINE, AND QEMU COULD
-  NOT SEE IT (2026-09-16).** The `betw`/`lzT`/`gcT` instrument below wedged the launcher at BATCH 2 on
+  NOT SEE IT (2026-09-16). THE `OP_MAX` DIAGNOSIS BELOW IS REFUTED BY THE ENTRY ABOVE: the fix landed and
+  the Pi failed identically. The guard it produced is real and kept; the CAUSE it claims is not.** The `betw`/`lzT`/`gcT` instrument below wedged the launcher at BATCH 2 on
   hardware, in the recorded java.math landmine: `BigDecimal.<clinit>` -> `squareToomCook3` -> `RecursiveOp`
   -> `ForkJoinTask` -> `Unsafe.getAndBitwiseOrInt`. An instrument-only change cannot move a closure, so my
   first instinct was that this was pre-existing. **It was not, and one control boot said so.**
@@ -173,7 +222,8 @@ defines the minimum the assembler must encode.
     what forced a bisect last time -- and it is the first thing to look at next.
 
 - **THE LOAD PATH IS NO LONGER THE BOTTLENECK, AND THE THING THAT IS HAS NEVER BEEN MEASURED -- `betw`,
-  `lzT`, `gcT` (2026-09-16, NOT YET PI-VALIDATED).** Nine increments took a launcher boot 161,556 ->
+  `lzT`, `gcT` (2026-09-16, REVERTED OUT OF THE IMAGE -- see the two entries above; the READING stands,
+  the instrument cannot ship until the closure stops being layout-sensitive).** Nine increments took a launcher boot 161,556 ->
   96,983ms and the per-batch load path to 32.9ms. But every cumulative figure in this file measures time
   INSIDE `loadAll`, and the same log says **65,644ms of that 96,983ms is TEST EXECUTION** -- so what this
   arc has been cutting is now a few percent of the boot and roughly two thirds of it is covered by no timer

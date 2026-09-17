@@ -30,21 +30,8 @@ final class VMGc
     /** SP at the last collection -- the stack bottom compaction would have to work from. */
     static long lastScanFrom;
 
-    /**
-     * Wall clock spent collecting, cumulative over the boot. Two clock reads per collection -- a launcher
-     * boot has TEN -- so this is free by construction, unlike the per-item timers this project has had to
-     * remove twice.
-     *
-     * <p>It exists because a collection was MEASURED at ~565ms at 1750 blobs and most of them land during
-     * TEST EXECUTION, where no timer sees them: batch 188's 564ms was chased across four boots before
-     * `gc=` named it, and that counter says only that a collection HAPPENED, never what it cost. Ten of
-     * them is ~5.6s of a 97-second boot and it appears on no line today.
-     */
-    static long gcTicks;
-
     static void gcCollect(long scanFrom)
     {
-        long tGc0 = Magic.readCNTPCT_EL0();
         lastScanFrom = scanFrom;
         long daif = Magic.readDaif();                 // no preemption mid-collection: a switched-in task
         Magic.disableIrq();                           //   would allocate into the half-swept heap
@@ -59,7 +46,6 @@ final class VMGc
             {
                 Magic.enableIrq();
             }
-            gcTicks += Magic.readCNTPCT_EL0() - tGc0;  // a SKIPPED collection still cost the stop attempt
             return;
         }
         probes = 0L;                                  // precision metrics for this collection (gcLog)
@@ -242,7 +228,6 @@ final class VMGc
         {
             Magic.enableIrq();                        // restore: only unmask if the caller had IRQs on
         }
-        gcTicks += Magic.readCNTPCT_EL0() - tGc0;
     }
 
     /**
