@@ -186,11 +186,25 @@ defines the minimum the assembler must encode.
     closed for CONSTRUCTORS. It is layout-sensitive because whether `LinkedHashMap.sequencedEntrySet()`
     compiles in-batch or lazily depends on batch composition, which is what eighteen extra Unsafe members
     move.
-  - **WHAT IS STILL NOT ESTABLISHED, and should not be assumed:** why the site is SILENT. An unresolved,
-    non-denylisted call is supposed to get a LINK STUB that resolves on first call, and a failed late
-    resolve is supposed to land in `denylistTrap` loudly. Neither happened. Whether the stub is never
-    minted for `<init>`, or is minted and resolves to a no-op, is the next thing to instrument -- and it is
-    a far smaller question than the one this started as.
+  - **WHY THE SITE IS SILENT: THE CALL NEVER EXECUTES.** New `LINKWATCH` (the late-resolution twin of
+    BUFWATCH, also print-only) names which tier of `resolveLinkTarget` answered a link stub. For this
+    constructor it printed **NOTHING** -- not a failure, not a tier. And the site is NOT trap-wired (no
+    `TRAP-WIRED` line names it), so `linkStubFor` DID mint a stub and `patchRelocs` DID install it. A stub
+    that exists and never runs means the `invokespecial` never executes -- while the `new` on the line above
+    it plainly does, since the object is there with the right TIB and size.
+  - **EVERY FIELD OFFSET ON THE PATH IS CORRECT, so the cached-view branch is not reading a wrong slot:**
+    `this$0 -> +24 tier0`, `reversed -> +16 tier0` (a store here would have overwritten this$0 -- a live
+    hypothesis until measured), and `entrySet -> +40 tier2` matching `HashMap.entrySet -> +40 tier0`.
+  - **AND THE ONE EXPLANATION THAT WOULD HAVE COVERED ALL THE SILENCE AT ONCE IS FALSE, killed for free.**
+    Every instrument here is loader-side, so "the failing code runs in the writer-BAKED world where none of
+    them can see" fits perfectly -- and `JOENG_SYMMAP` shows **zero** baked `java/util/LinkedHashMap`,
+    `HashMap` or `Map` methods. No boot needed to refute it.
+  - **SO THE REMAINING QUESTION IS NARROW: an emitted `invokespecial` that does not execute, beside a `new`
+    that does.** Resolution is now measured at BOTH ends and is not the fault. That points at the
+    deferred-`new` lowering (`NEW_UNRESOLVED` / `resolveUnresolvedNew`) and at how the following
+    `dup`/`invokespecial` is lowered around it. **NEXT:** instrument the `new` lowering -- whether
+    `sequencedEntrySet`'s `new LinkedEntrySet` took the unresolved path, and what the operand stack looks
+    like across it.
   - **THE RECEIVER WATCH SHIPPED BROKEN AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
     `ImageBuilder` stashes `watchRet`/`watchArg`/`watchX21` by name; `watchRecv` was not added, so
     `watchRecvAddr` stayed 0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware
