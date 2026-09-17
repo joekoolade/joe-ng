@@ -165,12 +165,32 @@ defines the minimum the assembler must encode.
 
     Right class, right TIB, right SIZE (`0x20` = header + two fields). It is a genuine `LinkedEntrySet`, so
     "a wrong TIB dispatched `iterator()` against something else" is out.
-  - **SO THE CONSTRUCTOR RUNS AND ITS `putfield` DOES NOT TAKE EFFECT ON THIS OBJECT.** That is what the
-    three surviving facts force: `<init>` is emitted as a real call (`CTOR SKIPPED` clean), the offset is
-    `+24` on BOTH the store and the load (`tier0`, twice), and the field is still 0. **NEXT:** a wrongly
-    RESOLVED `<init>` body (the recorded `globalBufByRef` super-chain-on-`<init>` shape, or the link stub /
-    `resolveUnresolvedNew` pair for a deferred `new`), or a store to a different object than the one
-    returned. Instrument the `<init>` call itself -- which body it resolved to, and the receiver it got.
+  - **AND THE CONSTRUCTOR REFERENCE RESOLVES TO NOTHING -- MEASURED, and it closes the chain.** New
+    `BUFWATCH` (Loader.BUF_WATCH, off by default) names which TIER of `globalBufByRef` answered a reference
+    and with what. Same reference, both arms:
+
+    | arm | tier 1 (registry: exact class+name+descriptor) | tier 3 (`<init>` -> phase-A cell) |
+    |---|---|---|
+    | passing | **1x -> `buf=0x024AD1A8`** (the real constructor body) | 2x -> `buf=0` |
+    | failing | **never** | 3x -> `buf=0` |
+
+    In the passing arm the reference eventually resolves at TIER 1 to a real body. In the failing arm it
+    never does -- every attempt falls to the cell tier and gets nothing. **A call site that resolves to
+    nothing calls nothing**, which is exactly the object observed: right class, right TIB, right size,
+    `this$0` zero, and NO trap, NO fault, NO report.
+  - **THE MECHANISM, end to end:** the class IS pulled (its correct TIB is on the receiver) but its
+    CONSTRUCTOR is never compiled or registered, so the `<init>` reference resolves to nothing and the
+    object is returned raw. That is the recorded RTA blind spot one step further in -- **a class
+    instantiated only from a LAZILY compiled body is not seen to be instantiated at batch time**, the same
+    root the null-vtable-slot and `mintPrunedStub` fixes addressed for virtuals and itable entries, never
+    closed for CONSTRUCTORS. It is layout-sensitive because whether `LinkedHashMap.sequencedEntrySet()`
+    compiles in-batch or lazily depends on batch composition, which is what eighteen extra Unsafe members
+    move.
+  - **WHAT IS STILL NOT ESTABLISHED, and should not be assumed:** why the site is SILENT. An unresolved,
+    non-denylisted call is supposed to get a LINK STUB that resolves on first call, and a failed late
+    resolve is supposed to land in `denylistTrap` loudly. Neither happened. Whether the stub is never
+    minted for `<init>`, or is minted and resolves to a no-op, is the next thing to instrument -- and it is
+    a far smaller question than the one this started as.
   - **THE RECEIVER WATCH SHIPPED BROKEN AND A PASSING-IMAGE CONTROL IS THE ONLY REASON THAT IS KNOWN.**
     `ImageBuilder` stashes `watchRet`/`watchArg`/`watchX21` by name; `watchRecv` was not added, so
     `watchRecvAddr` stayed 0 and `callHelper` emitted a call to ADDRESS 0 -- an endless reboot the firmware
