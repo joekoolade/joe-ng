@@ -1311,7 +1311,6 @@ public final class Loader
         }
         if (clTab[reg].state >= RVMClass.ST_INITIALIZED)
         {
-            drainCtorInit(reg);                         // already initialized -- but see drainCtorInit
             return;
         }
         if (!lazyClinitGated(clTab[reg].base, clTab[reg].nameOff))
@@ -1337,7 +1336,6 @@ public final class Loader
         // costs nothing and a cycle cannot recurse for ever.
         initPrereq(reg);                                // the one edge no bytecode scan can see (see below)
         runPendingClinit(reg);
-        drainCtorInit(reg);                             // ... and whatever its constructors actively use
     }
 
     /**
@@ -1394,8 +1392,8 @@ public final class Loader
                 // with sun/nio/cs/UTF_8 uninitialized left the field null and `s.getBytes(UTF_8)` throwing a
                 // bare NPE.
                 //
-                // IT USED TO BE `drainCtorInit(reg)`, AND THAT WAS AN ORDERING BUG. The drain fires every
-                // class the COMPILE touched, which is a far wider set than the initializer's active uses:
+                // IT USED TO BE A `drainCtorInit(reg)` -- SINCE RETIRED ENTIRELY -- AND THAT WAS AN ORDERING
+                // BUG. The drain fired every class the COMPILE touched, a far wider set than its active uses:
                 // compiling a body pulls everything its constant pool names, nest host and inner-class
                 // references included. Initializing those here runs their <clinit>s BEFORE this body has
                 // executed a single instruction -- and a real JVM cannot do that, because linking (JVMS 5.4)
@@ -1433,101 +1431,6 @@ public final class Loader
 
 
 
-    // Classes an EAGERLY compiled method was seen to touch, i.e. one compiled with lzCompiling false.
-    //
-    // THIS EXISTED FOR `<init>`, AND `<init>` DEFERS NOW, so constructors no longer reach it: a deferred
-    // body compiles on the lazy path with lzCompiling TRUE, and its active uses are initialized right after
-    // that compile -- strictly before the body can run, which is the JVMS 5.5 order and STRICTER than what
-    // this mechanism gave (it waited for the owning class to initialize). The bug it was written for --
-    // `new ZipInputStream(...)` reaching `UTF_8.INSTANCE` before sun/nio/cs/UTF_8 had initialized, and
-    // reading null -- is covered by the lazy path for the same reason.
-    //
-    // AND THAT EXCEPTION IS GONE NOW: `eagerKept` is retired, so `java/lang/Object` defers like everything
-    // else and NOTHING is compiled at load time any more. This mechanism should therefore be DEAD -- nothing
-    // can reach it, because nothing compiles with lzCompiling false. It is left in place for exactly one
-    // increment so that claim is validated rather than assumed; retiring it is a separate change, and the
-    // evidence for it is `ctorInitN` staying 0 across a boot.
-    //
-    // Note the ordering it provided is WEAKER than the lazy path's (it waited for the owning class to
-    // initialize, where the lazy path initializes active uses strictly before the body runs), so it must not
-    // be reintroduced as a shortcut for anything else.
-    private static final boolean CTOR_TRACE = false;
-    private static final int MAXCTORINIT = 8192;
-    private static int[] ctorOwner;
-    private static int[] ctorNeed;
-    private static int ctorInitN;
-
-    /** Record that the constructor being compiled (of the class currently in {@code g*}) uses {@code reg}. */
-    private static void noteCtorInit(int reg)
-    {
-        if (ctorOwner == null || gbase == 0L)
-        {
-            return;
-        }
-        if (ctorInitN >= MAXCTORINIT)
-        {
-            capHalt(Magic.bytes("MAXCTORINIT"), ctorInitN);   // silently dropping an edge = a null static later
-        }
-        int owner = classRegByName(gThisNameOff);
-        if (owner < 0 || owner == reg)
-        {
-            return;
-        }
-        int i = 0;
-        while (i < ctorInitN)
-        {
-            if (ctorOwner[i] == owner && ctorNeed[i] == reg)
-            {
-                return;
-            }
-            i += 1;
-        }
-        ctorOwner[ctorInitN] = owner;
-        ctorNeed[ctorInitN] = reg;
-        ctorInitN += 1;
-        if (CTOR_TRACE)
-        {
-            Uart.write(Magic.bytes("  ctorinit "));
-            printNameAt(clTab[owner].base, clTab[owner].nameOff);
-            Uart.write(Magic.bytes(" -> "));
-            printNameAt(clTab[reg].base, clTab[reg].nameOff);
-            Uart.putc(0x0A);
-        }
-    }
-
-    /** Initialize what {@code reg}'s constructors -- and those of every superclass -- actively use. Entries
-     *  are consumed as they fire, which is also what keeps the mutual recursion with {@link #ensureClinit}
-     *  finite. */
-    private static void drainCtorInit(int reg)
-    {
-        if (ctorOwner == null)
-        {
-            return;
-        }
-        int c = reg;
-        while (c >= 0 && clTab != null && clTab[c] != null)
-        {
-            if (CTOR_TRACE)
-            {
-                Uart.write(Magic.bytes("  ctordrain "));
-                printNameAt(clTab[c].base, clTab[c].nameOff);
-                Uart.putc(0x0A);
-            }
-            int i = 0;
-            while (i < ctorInitN)
-            {
-                if (ctorOwner[i] == c)
-                {
-                    int need = ctorNeed[i];
-                    ctorOwner[i] = -1;                  // consume BEFORE recursing
-                    ensureClinit(need);
-                }
-                i += 1;
-            }
-            c = superRegOf(c);
-        }
-    }
-
     // Classes a lazily-compiling method was seen to touch (cross-class getstatic/putstatic owner, `new`
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
@@ -1536,6 +1439,32 @@ public final class Loader
     private static int[] lzInitReg;
     private static int lzInitN;
     private static boolean lzCompiling;
+
+    // Said ONCE if an active use is ever noted outside a bracketed compile. See noteInitNeeded: this
+    // replaced the ctor-init mechanism, which existed only because `<init>` used to compile at load time
+    // with lzCompiling false. That mechanism is retired -- and its ordering was WEAKER than the lazy path's
+    // (it waited for the OWNING class to initialize, where the lazy path initializes active uses strictly
+    // before the body can run, which is the JVMS 5.5 order), so it must not come back as a shortcut.
+    //
+    // MEASURED before the retirement rather than assumed: with its own CTOR_TRACE armed, a demo-suite boot
+    // recorded ZERO edges across 3,481 drain calls -- reached constantly, never with anything to record.
+    private static boolean unbracketedInitSaid;
+
+    private static void reportUnbracketedInit(int reg)
+    {
+        if (unbracketedInitSaid)
+        {
+            return;
+        }
+        unbracketedInitSaid = true;
+        Uart.write(Magic.bytes("\n  ACTIVE USE NOTED OUTSIDE A BRACKETED COMPILE (its <clinit> may not run): "));
+        if (clTab != null && reg >= 0 && clTab[reg] != null)
+        {
+            printNameAt(clTab[reg].base, clTab[reg].nameOff);
+        }
+        Uart.write(Magic.bytes(" -- a compile path is missing its lzCompiling bracket"));
+        Uart.putc(0x0A);
+    }
 
     /** Note that the method being lazily compiled touches class {@code reg}, so it must be initialized
      *  before that method runs (JVMS 5.5: a static access or a {@code new} is an active use). */
@@ -1549,7 +1478,16 @@ public final class Loader
         }
         if (!lzCompiling)
         {
-            noteCtorInit(reg);                          // a load-time <init> compile: due when its class is used
+            // OUTSIDE A BRACKETED COMPILE, WHICH SHOULD NOW BE UNREACHABLE. Every surviving compile() is
+            // bracketed by lzCompiling -- lazyCompileLocked, clinitEntryOf, compileMethodOnDemand,
+            // compileSigOnDemand and the drain re-entry -- and since `eagerKept` was retired nothing compiles
+            // at load time at all: compileClass defers every method of every class.
+            //
+            // IT REPORTS RATHER THAN RETURNING SILENTLY, and that is the whole point of the replacement.
+            // Dropping an active use here is the silent `if (room) { record it }` shape this file records as
+            // its most expensive failure mode: the class simply never initializes, and the first symptom is a
+            // static reading null somewhere else entirely, arbitrarily far away.
+            reportUnbracketedInit(reg);
             return;
         }
         if (lzInitN >= MAXPENDINIT)
@@ -3103,9 +3041,6 @@ public final class Loader
         clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
-        ctorOwner = new int[MAXCTORINIT];
-        ctorNeed = new int[MAXCTORINIT];
-        ctorInitN = 0;
         lzInitN = 0;
         clDepOff = new int[MAXDEP];
         clDepStart = new int[MAXBLOB];

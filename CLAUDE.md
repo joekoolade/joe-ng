@@ -115,6 +115,70 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE CTOR-INIT MECHANISM IS RETIRED -- MEASURED DEAD FIRST, AND REPLACED BY A REPORT RATHER THAN BY
+  NOTHING (2026-09-18).** `noteCtorInit`/`drainCtorInit`, their two arrays, the `MAXCTORINIT` cap, `CTOR_TRACE`
+  and both `ensureClinit` call sites are gone: 36 insertions, 101 deletions. It existed only because `<init>`
+  used to compile at load time with `lzCompiling` false, and since `eagerKept` was retired nothing compiles at
+  load time at all.
+  - **DEAD WAS MEASURED, NOT ASSUMED, because the previous commit said it would be.** That commit promised
+    "`CTOR_TRACE` answers it in one boot"; this is that boot. Demo suite, trace armed: **ZERO recorded edges
+    against 3,481 drain calls** -- reached constantly, never with anything to record, so `drainCtorInit`'s
+    loop body never fired and the mechanism was provably inert.
+  - **AND THE LIMIT OF THAT EVIDENCE IS STATED, because it changed what the next gate had to prove.**
+    `ctorinit=0` shows no edge was ever RECORDED; it cannot separate "never called" from "called but
+    filtered" -- `noteCtorInit` returned early for `owner < 0`, `owner == reg` or a duplicate, all BEFORE its
+    trace print. The replacement reports on ENTRY, ahead of that filtering, so it is exactly the kind of
+    instrument that cries wolf on a passing boot. **It does not: `OUTSIDE A BRACKETED COMPILE` reads 0 on the
+    suite and on the launcher.**
+  - **IT REPORTS RATHER THAN RETURNING SILENTLY, which is the point of the replacement.** The surviving
+    `!lzCompiling` arm of `noteInitNeeded` would otherwise drop an active use with no else -- the silent
+    `if (room) { record it }` shape this file calls its most expensive failure mode, whose symptom is a class
+    that never initializes and a static reading null somewhere else entirely.
+  - **GATES:** demo suite 33 programs, EIGHTEEN markers zero, `rounds=4 pend=180 reach=16`, `n:imap=52
+    synth=18 clinits=25`, `memo=1343 res=2478 unres=2224`, `sy:chg=0`, `lisp evals=600 result=610 stable=1`,
+    `churnMB=625 live=32 intact=32`, `finish HML` / `HIGH blocked 61ms`, `smp sched: 4 of 4`. QEMU launcher:
+    batch 139 `+2473blob`, `memo=27286 res=49267 unres=9022` -- identical to every arm since increment 2 --
+    `[2 tests successful]` / `[0 tests failed]`, `ProcessImpl` trap present. Host: `compiler: 39 checks`,
+    `overlay-check 0 new`.
+
+- **STILL OPEN, FOUND ON THE WAY, AND NOT CAUSED BY ANY OF THIS WORK: THE COMPILE CONTEXT IS CLOBBERED UNDER
+  SMP CONTENTION, AND A CONTROL PROVES IT PREDATES THE CHANGE (2026-09-18).** A launcher run that happened to
+  share the machine with a second QEMU died at batch 21 with
+  **`LOCALS UNDERSIZED: java/lang/Object uses slot 18 but max_locals=3`** plus `JIT unsupported reason=9` and
+  a `FAULT` -- and the lines above it are RAW CONSTANT-POOL BYTES printed as a class name, i.e. a report
+  walking a blob at a wrong offset. Both halves say the same thing: the g* context said `java/lang/Object`
+  while the bytecode being compiled belonged to something with at least 19 locals.
+
+  | arm | ALONE | UNDER LOAD (second QEMU alongside) |
+  |---|---|---|
+  | ctor-init retired | batch 139, exit 0 | **FAILS at batch 21** -- `LOCALS UNDERSIZED`, and on a second run a wild pc + `TRACE TRUNCATED` |
+  | **CONTROL: the PI-VALIDATED increment-3 image** (`sdcard/kernel8.img`, md5 `4d6f8c9e...`) | Pi: batch 139, exit 0 | **FAILS at batch 21, IDENTICALLY** -- same class, same slot 18, same max_locals=3 |
+
+  - **THE CONTROL IS UNUSUALLY GOOD AND COST NOTHING, which is worth copying.** `sdcard/kernel8.img` was
+    still on disk from the flash, byte-for-byte the image that passed on HARDWARE, so the control arm needed
+    no rebuild and introduced no second variable. Verified by md5 against the flash record before it was
+    trusted.
+  - **SO THE CLEANUP IS EXONERATED, AND THE FINDING IS REAL.** A one-line deletion cannot produce a symptom
+    that reproduces identically on an image built before it. What it is instead: **a static compile context
+    clobbered when two tasks compile at once.** `LOCALS UNDERSIZED` is a CODEGEN check, not a timer -- load
+    cannot manufacture one -- so this is not simply harness noise, even though this file already records that
+    "QEMU cannot gate SMP work: merged main itself flakes at the scheduler set-piece about one boot in three".
+  - **AND THE SITE IS NAMED BY THE LOG: BATCH 21, THE `ProcessImpl` THREAD.** picocli's terminal-width probe
+    runs `ProcessBuilder.start` on its OWN task, which lazily compiles -- `LOADER LOCK stuck >10s: owner task
+    4 ... doing lazy first-call compile ... depth 2 ... ctx~java/lang/Object`. Contention simply widens the
+    window. This VM has had this exact bug once already and fixed it (four paths reached the compiler
+    unlocked, clobbering the static context, surfacing as an NPE in `Baseline.s4` that looked nothing like a
+    locking bug); a FIFTH unlocked path, or a lock that does not cover the whole context, would look exactly
+    like this.
+  - **WHAT IS NOT ESTABLISHED, and it is the first thing the next arc should get:** whether deferring
+    `java/lang/Object` (increment 3) made this window REACHABLE for Object specifically -- before that, Object
+    was eager and never went through `lazyCompile` at all. The control here is increment 3, which already has
+    Object lazy, so it cannot answer that. **An increment-2 image under the same load is the missing arm.**
+    Against that: increment 3 passed on the Pi, and this file's own rule is that the Pi is the honest harness.
+  - **REPRODUCING IT IS CHEAP AND THE RECIPE IS EXACT:** boot the launcher image on QEMU with a second QEMU
+    running the demo-suite image alongside. Two of two loaded runs failed; two of two solo runs passed with
+    byte-identical counters.
+
 - **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
   every other class (2026-09-18, PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
   last exception to stage 5 is gone: every class is metadata-only -- phase-A cells for its statics, deferral
