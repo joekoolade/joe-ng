@@ -1433,12 +1433,18 @@ public final class Loader
 
 
 
-    // Classes an EAGERLY compiled constructor was seen to touch. <init> bodies compile at load time (see
-    // notInit), so lzCompiling is false while they compile and the collection above never sees their
-    // getstatic/new sites -- which is how `new ZipInputStream(...)` reached `UTF_8.INSTANCE` before
-    // sun/nio/cs/UTF_8 had initialized, and read null. Recorded per OWNING class and fired when that class
-    // is initialized, walking the superclass chain: `new C` runs C's constructor AND every super
-    // constructor above it, so their active uses come due at the same moment.
+    // Classes an EAGERLY compiled method was seen to touch, i.e. one compiled with lzCompiling false.
+    //
+    // THIS EXISTED FOR `<init>`, AND `<init>` DEFERS NOW, so constructors no longer reach it: a deferred
+    // body compiles on the lazy path with lzCompiling TRUE, and its active uses are initialized right after
+    // that compile -- strictly before the body can run, which is the JVMS 5.5 order and STRICTER than what
+    // this mechanism gave (it waited for the owning class to initialize). The bug it was written for --
+    // `new ZipInputStream(...)` reaching `UTF_8.INSTANCE` before sun/nio/cs/UTF_8 had initialized, and
+    // reading null -- is covered by the lazy path for the same reason.
+    //
+    // What still reaches it is whatever is left compiling at load: today only `java/lang/Object`, the one
+    // class eagerKept holds back. Retire this with that exception, not before -- and note the ordering it
+    // provides is WEAKER, so it must not be reintroduced as a shortcut for anything else.
     private static final boolean CTOR_TRACE = false;
     private static final int MAXCTORINIT = 8192;
     private static int[] ctorOwner;
@@ -7483,11 +7489,10 @@ public final class Loader
                 {
                     addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
                     // Everything else takes the other route to the same engine: a deferral stub standing in
-                    // for the body (statics went the cell way above). Only <init> is still compiled here --
-                    // <clinit> now defers too, since lazy initialization means loading a class no longer runs
-                    // it (see notInit).
+                    // for the body (statics went the cell way above). EVERY method kind defers now,
+                    // `<init>` included -- see notInit, which is retired.
                     boolean defer = stubOnly                    // a stub-blob virtual: NEVER compile the body here
-                            || (stage2Gated(gbase, gThisNameOff) && notInit(gcp[u2(p + 2)]));
+                            || stage2Gated(gbase, gThisNameOff);
                     if (defer && mCount > 0 && mCode[mCount - 1] == code)
                     {
                         mDefer[mCount - 1] = 1;         // compile this method on first call, not now
@@ -9255,9 +9260,8 @@ public final class Loader
         }
     }
 
-    /** True if {@code nameOff} is neither {@code <clinit>} nor {@code <init>} (the initializers must run at load). */
-    /**
-     * True if this method may take the deferral route -- everything except {@code <init>}.
+    /* RETIRED PREDICATE -- `notInit`. Kept as a note because it records why two method kinds were once
+     * excluded from the deferral route, and both exclusions turned out to be wrong.
      *
      * <p>{@code <clinit>} USED to be excluded too, on the stated grounds that "loading a class runs them".
      * The lazy-initialization arc (#114-#117) retired that premise: classes now initialize on first active
@@ -9267,13 +9271,19 @@ public final class Loader
      * emitted once per batch that loaded the class, and NEVER RAN. Four instances, ~4.7 MB, in an 8 MB
      * arena: roughly 70% of every code byte the VM emitted.
      *
-     * <p>{@code <init>} stays eager. Constructors are reached through {@code invokespecial} on paths that
-     * assume a compiled body, and they are small; the measured cost was entirely in {@code <clinit>}.
+     * <p>{@code <init>} DEFERS NOW TOO, and this predicate is retired. It had said constructors "are reached
+     * through {@code invokespecial} on paths that assume a compiled body" -- a claim with no mechanism behind
+     * it, and the deferral stub IS a compiled body as far as any caller can tell: the buffer is the method's
+     * registered address AND its TIB slot, so a direct BL and a virtual blr both land on it either way.
+     *
+     * <p>ONE ENTRY PER METHOD, WHOSE CONTENTS CHANGE -- which is what HotSpot does and what this VM had
+     * already built everywhere except here. {@code Method::_from_compiled_entry} is "Cache of: _code ?
+     * _code->entry_point() : _adapter->c2i_entry()", one word that always holds a valid callable address, and
+     * {@code Method::set_code} merely stores the new entry into it; call sites never change. joe-ng's
+     * equivalent is this buffer, holding a deferral stub until the body exists. Leaving `<init>` eager kept a
+     * SECOND shape alive, and the constructor-cell arc (reverted in 9e030aa) is what that cost: a cell was
+     * added as a third, and it shadowed the registry.
      */
-    private static boolean notInit(int nameOff)
-    {
-        return !utf8IsAtBase(gbase, nameOff, Magic.bytes("<init>"));
-    }
 
     /**
      * Install method {@code i}'s deferral stub into its (stub-sized) buffer instead of compiling the body:

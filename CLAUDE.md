@@ -115,6 +115,77 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`<init>` DEFERS LIKE EVERY OTHER METHOD NOW, WHICH IS THE OpenJDK SHAPE -- AND IT REFUTES THIS FILE'S OWN
+  2026-09-15 VERDICT (2026-09-18, NOT YET PI-VALIDATED).** `notInit` is retired: the defer decision is
+  `stubOnly || stage2Gated(...)`, so a constructor gets a deferral stub in its own registered buffer like
+  every other method kind, and the body compiles on first call.
+
+  | gate | result |
+  |---|---|
+  | demo suite | 33 programs, 0 exceptions, SIXTEEN failure markers zero |
+  | **QEMU launcher** | **batch 139, +2473blob, `[2 tests successful]` / `[0 tests failed]`** |
+  | closure | `rounds=4 pend=180 reach=16` -- identical to the recorded suite closure |
+  | host | `compiler: 39 checks`, `overlay-check 0 new` |
+
+  - **THE DESIGN QUESTION WAS SETTLED BY READING HotSpot, NOT BY REASONING ABOUT IT** -- the tree is at
+    `/Users/joe/git/jdk/src/hotspot` and rule 3's logic applies to the VM's own design as much as to an
+    overlay. Three facts, quoted:
+    - `oops/resolvedMethodEntry.hpp`: `Method* _method;  // Method for non virtual calls` -- a call site
+      caches ONE binding, resolved lazily once. There is no second table, so nothing can shadow anything.
+    - `oops/method.hpp`: `volatile address _from_compiled_entry;  // Cache of: _code ? _code->entry_point()
+      : _adapter->c2i_entry()` -- ONE WORD PER METHOD that always holds a valid callable address: compiled
+      body if there is one, an adapter to the interpreter otherwise.
+    - `oops/method.cpp`, `Method::set_code`: compiling a method just stores `code->verified_entry_point()`
+      into that word behind store-store barriers. **Call sites never change; the word changes.**
+  - **joe-ng ALREADY HAD THIS and had it everywhere except `<init>`.** `emitDeferredStub`'s own doc says it:
+    "the buffer IS the method's registered address AND its TIB vtable slot, so every caller -- direct BL or
+    virtual blr -- hits the stub". That buffer is `_from_compiled_entry`. Leaving `<init>` eager kept a
+    SECOND shape alive, and keeping two shapes is what let a THIRD be added on top -- see the reverted arc
+    below.
+  - **AND HotSpot MAKES THE INHERITED-`<init>` CASE A HARD ERROR, which this VM does silently.**
+    `linkResolver.cpp` `resolve_special`: if the resolved method is `<init>` and
+    `resolved_method->method_holder() != resolved_klass`, it throws `NoSuchMethodError`. joe-ng's
+    `dlCellFor` walks the super chain and would answer with an ANCESTOR's constructor. Inert while only
+    statics were celled; it is the guard the reverted arc needed and did not have.
+  - **INITIALIZATION IS TIED TO THE ACTIVE USE, NOT TO COMPILATION, and that is the deep lesson.**
+    `interpreterRuntime.cpp` `_new` does `klass->initialize_preemptable(CHECK...)` before allocating;
+    `linkResolver` initializes only for field resolution and static calls. So in HotSpot **when a body gets
+    compiled is irrelevant to when a class gets initialized** -- which is exactly the coupling that made the
+    reverted arc reproduce `fb799a9`'s symptom.
+  - **A COMMENT I WOULD HAVE DELETED AS STALE IS WHAT CAUGHT THE ONE REAL COUPLING.** `noteCtorInit`/
+    `drainCtorInit` exists BECAUSE `<init>` compiled at load with `lzCompiling` false, so the ordinary dep
+    collection never saw a constructor's `getstatic`/`new` sites -- the recorded `new ZipInputStream(...)`
+    reaching a null `UTF_8.INSTANCE`. Deferring flips that flag, so constructors now take the LAZY path
+    instead, where active uses are initialized right after the compile and **strictly before the body can
+    run**. That is the JVMS 5.5 order and is STRICTER than what the ctor-init mechanism gave (it waited for
+    the owning class to initialize). The special case is retired rather than extended; the comment now says
+    so, and says the ordering it provided is weaker so it must not come back as a shortcut.
+  - **THE 2026-09-15 ENTRY SAID THIS WILD-BRANCHES ON HARDWARE, AND THAT VERDICT DOES NOT STAND.** It was
+    measured on a VM whose RTA closure was **44% TRUNCATED** -- `MAXREACH` was fixed the NEXT DAY
+    (2026-09-16) -- and this file's own account of that truncation is that "ANY change to the image can move
+    the cut" and that two boots were lost to exactly that mechanism. A wild branch under those conditions is
+    not a verdict on the change. Same shape as the twice-rejected clinit rule: **the old measurement was
+    correct about the VM as it was, not about this one.**
+  - **AND THE GATE THAT WAS MISSING THEN EXISTS NOW.** That attempt had the demo suite, QEMU parity and
+    closure identity -- all three passed -- and only a Pi boot caught it; its own conclusion was "a suite
+    that exercises the SHAPE is still not the launcher". **The QEMU launcher is a validated harness now**:
+    it reproduces the Pi closure exactly (batch 139, +2473blob) and the control `895cd09` completes on it.
+    A failure costs a QEMU run and lands reproducibly instead of costing a flash and a bisect.
+  - **CONSISTENT-WITH, NOT PROVEN: the launcher ran 134,778ms -> 93,523ms on the same harness.** A
+    non-deferred method is compiled TWICE (`sizeMethod` at a dummy base, then `emitMethod` at the real one)
+    and that was ~853 methods per launcher batch, which is the cost the 2026-09-15 entry measured as the
+    motivation. QEMU wall clock is load-sensitive and this file records that confound four times, so the
+    figure is reported rather than claimed.
+  - **WHAT THIS DOES NOT YET DO: close the gap it was written for.** A metadata-only class's `<init>` having
+    neither stub nor cell is what the reverted arc was chasing; whether deferring closes it is what
+    RE-LANDING THE 18 UNSAFE MEMBERS tests, since that family aborting the suite was the gap's only
+    reproduction. That is the next increment, and it is a test as much as a feature.
+  - **STILL OPEN, FOUND ON THE WAY, DELIBERATELY NOT BUNDLED: `MAXPENDINIT` IS A SILENT DROP.** The lazy
+    path does `if (lzInitN >= MAXPENDINIT) { return; }` at a cap of 64, and constructors flow through it
+    now, so the pressure rises. A dropped entry is a class that never initializes -- a null static
+    surfacing arbitrarily far away. That is the silent `if (room) { record it }` shape `MAXREACH` and
+    `MAXPEND` were each taught to report, at a FOURTH site. It wants a report, not a bundled one.
+
 - **ADDING EIGHTEEN OVERLAY MEMBERS ABORTS THE DEMO SUITE -- OPEN, BISECTED, AND THREE HYPOTHESES ALREADY
   DEAD (2026-09-17).** `Unsafe.getAndBitwiseOrInt` shipped alone because the FAMILY does not fit: with all
   eighteen getAndBitwise{Or,And,Xor}{Int,Long} forms present the suite dies at `demo/DefaultIfaceDemo` with
