@@ -141,8 +141,8 @@ defines the minimum the assembler must encode.
     `[2 tests successful]` / `[0 tests failed]`, `ProcessImpl` trap present. Host: `compiler: 39 checks`,
     `overlay-check 0 new`.
 
-- **STILL OPEN, FOUND ON THE WAY, AND NOT CAUSED BY ANY OF THIS WORK: THE COMPILE CONTEXT IS CLOBBERED UNDER
-  SMP CONTENTION, AND A CONTROL PROVES IT PREDATES THE CHANGE (2026-09-18).** A launcher run that happened to
+- **THE COMPILE CONTEXT IS CLOBBERED UNDER SMP CONTENTION -- DIAGNOSED, THE WINDOW MEASURED AND CLOSED, AND
+  THE HAZARD STILL OPEN (2026-09-18, NOT YET PI-VALIDATED).** A launcher run that happened to
   share the machine with a second QEMU died at batch 21 with
   **`LOCALS UNDERSIZED: java/lang/Object uses slot 18 but max_locals=3`** plus `JIT unsupported reason=9` and
   a `FAULT` -- and the lines above it are RAW CONSTANT-POOL BYTES printed as a class name, i.e. a report
@@ -178,6 +178,41 @@ defines the minimum the assembler must encode.
   - **REPRODUCING IT IS CHEAP AND THE RECIPE IS EXACT:** boot the launcher image on QEMU with a second QEMU
     running the demo-suite image alongside. Two of two loaded runs failed; two of two solo runs passed with
     byte-identical counters.
+  - **CORRECTION TO THE LINE ABOVE: IT IS INTERMITTENT, NOT REPRODUCIBLE.** "Two of two loaded runs failed"
+    became **2 failures in 4 contended runs and 0 in 5 solo runs** once the arms were repeated. The recipe
+    raises the probability; it does not produce the failure on demand. Stated because the original wording
+    would have someone read a single clean loaded run as a fix.
+  - **THE UNLOCKED WINDOW IS REAL AND WAS MEASURED, NOT ARGUED: `compileClass` IS REACHED WITH NO LOADER LOCK
+    THROUGH FIVE ENTRY POINTS.** `mirrorOfInternalName`, `mirrorForNameAt` (`Class.forName`),
+    `defineFromBytes` (`defineClass`), `annoClassValue` and `annoEnumValue` (annotation Class/enum elements).
+    This file had recorded the first two as a known gap and **never measured it**; the annotation pair widens
+    it. A new `checkCompileLockHeld` guard at `compile()` and `compileClass()` counts every entry where the
+    lock is not ours and distinguishes merely-unlocked (`owner == -1`, benign) from a REAL collision
+    (`owner >= 0`, another task holding it). A launcher run makes **TWELVE unlocked `compileClass` entries**,
+    from `java/lang/Object` at boot to `java/io/ObjectStreamField` late.
+  - **THE LOCK GOES AT `loadAll()`, THE SINGLE CHOKE POINT -- one place rather than five.** Both routes to
+    `compileClass` pass through it, so a sixth caller added later is covered by construction. **12 -> 0 in
+    all three arms**, and launcher arms 1 and 2 reach batch 139 and pass. The guard ships UNGATED because it
+    is SILENT on a passing boot -- 0 reports across a clean 33-program suite -- which is this file's own
+    standing rule for an instrument.
+  - **IT DOES NOT CLOSE THE HAZARD, AND ARM 3 IS WHAT SAYS SO.** Under load, post-fix, with the unlocked
+    count at **0**, the launcher still stops at batch 21 -- now as an **NPE in `classfile/ClassReader.u1`
+    whose null argument is `gbytes`, the static PARSE context**, while `LOADER LOCK stuck >10s: owner task 4
+    ... doing lazy first-call compile ... ctx~java/lang/Object`. Main cannot be blocked on the lock AND
+    NPE at the same time, so main is touching the shared context on a path that takes no lock at all.
+    **The g\* context is reached by far more than the two COMPILER entries the guard covers** --
+    `ClassReader.refNameOff`/`u1` are reached from resolution paths outside them.
+  - **AND THE MECHANISM IS NOT ESTABLISHED, which is stated rather than guessed.** `gbytes` is written at
+    exactly two sites (`parseConstPool`'s cache hit and `toBytes`) and **never to null**; the only thing that
+    produces a null is `resetLoader` reallocating `pcBytes` as a fresh all-null array, and all three
+    `resetLoader` call sites are launch/probe entry points that cannot run mid-launcher. So a single
+    intermittent sighting does not name the interleaving, and no mechanism is claimed for it.
+  - **NOT A REGRESSION, and the accounting matters:** the contended failure predates the fix (2 of 4 pre-fix),
+    so this is a NARROWED window, not a new one. What the fix is worth is the 12 -> 0 and the closed known
+    gap; what it is not worth is a green light on contended runs.
+  - **THE RISK THE HARDWARE BOOT HAS TO ANSWER:** the lock is now held across a WHOLE batch, guest
+    `<clinit>`s included -- a longer hold than before -- so contended tasks block where they used to race.
+    That is correctness bought with concurrency, and only a Pi boot says what it costs.
 
 - **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
   every other class (2026-09-18, PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
