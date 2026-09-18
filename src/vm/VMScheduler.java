@@ -1555,9 +1555,28 @@ public final class VMScheduler
         return s;
     }
 
-    /** End the current task: park it BLOCKED on a never-posted semaphore so the scheduler skips it forever. */
+    /**
+     * End the current task: park it BLOCKED on a never-posted semaphore so the scheduler skips it forever.
+     *
+     * <p>IT MUST NOT STOP HOLDING THE LOADER LOCK, which is the same argument {@link VM#loaderForceRelease}
+     * already makes for a halting denylist trap: this task never runs again, so a hold it still owns is
+     * never given back and every other task that needs to compile hangs behind a task that is gone. The
+     * try/finally at each lock site is what should make this unreachable, and a permanent-stop path is
+     * exactly where "should" is not good enough -- an exception that escapes a thread's {@code run()}
+     * entirely does not necessarily run the intervening finallys.
+     *
+     * <p>It is also what makes the stuck-lock verdict able to tell a STRANDED lock from a held one: this
+     * parks {@link VM#TASK_BLOCKED}, the same state a task waiting on a monitor carries, so without the
+     * release the two are distinguishable only by {@code taskDone} and the repair for one looks like the
+     * other. Releasing removes the case rather than only labelling it.
+     *
+     * <p>BEFORE {@code schedLock()}, not inside it: {@code loaderForceRelease} takes the scheduler lock
+     * itself and {@code Magic.spinLock} is NOT recursive, so calling it from inside this critical section
+     * would deadlock the core on {@code SCHED_LOCK} the moment SMP is on.
+     */
     static void taskExit()
     {
+        loaderForceRelease();                              // strictly better than holding: see above
         long daif = schedLock();
         int me = curTask();
         taskDone[me] = 1;                                  // Thread.join() waiters observe this
