@@ -7360,8 +7360,80 @@ public final class Loader
      * target address is known) — so no method's compile nests inside another's.
      * Scope: same-class static callees, no recursion/cycles beyond dedup.
      */
+    /**
+     * Report if the compiler is entered WITHOUT the loader lock. Ungated: this is silent cross-task
+     * corruption, not a degraded answer.
+     *
+     * <p>The entire compile context is STATIC -- {@code g*}, the {@code m*} tables, {@code gMaxLocals} --
+     * so two tasks inside {@code compile()} at once interleave into each other's state. The first symptom
+     * is a body compiled against SOMEBODY ELSE'S max_locals (`LOCALS UNDERSIZED`), or a report printing raw
+     * constant-pool bytes where a class name should be, because {@code gbase} moved under it. This VM has
+     * had exactly that bug once already: four paths reached the compiler unlocked and it surfaced as an NPE
+     * in {@code Baseline.s4} that looked nothing like a locking bug.
+     *
+     * <p>It names the TASK, the recorded owner, the depth and the site, because "unlocked" on its own does
+     * not name the path -- and a path is what a fix needs. Said a few times rather than once: the first
+     * offender is not necessarily the only one, and a flood would starve the run it is meant to diagnose.
+     *
+     * <p>NOTE THE PRECONDITION IT CANNOT CHECK: {@code loaderLock} is a NO-OP while {@code smpSched == 0},
+     * on the stated premise "one core in the table: no other compiler to race". That premise is about
+     * CORES and the hazard is about TASKS -- a single core still time-slices preemptively -- so this guard
+     * stays silent in exactly the configuration where the lock protects nothing. Recorded rather than
+     * fixed here.
+     */
+    private static int compileUnlockedSaid;
+    static int compileUnlockedN;                         // entries with the lock NOT ours (benign at boot: nobody else compiles)
+    static int compileCollideN;                          // ... of those, the ones where ANOTHER TASK HELD IT: two compilers at once
+
+    private static void checkCompileLockHeld(int where)
+    {
+        if (VM.smpSched == 0 || VM.loaderOwner == VM.curTask())
+        {
+            return;                                      // held by us (possibly re-entrant), or the lock is inert
+        }
+        compileUnlockedN += 1;
+        // THE COLLISION, as opposed to the merely unlocked. owner == -1 is "nobody holds it", which at boot
+        // means no competitor exists and is why this guard fires on a PASSING run. owner >= 0 and not us is
+        // the real hazard: another task is inside the compiler right now, and the static context is shared.
+        boolean collide = VM.loaderOwner >= 0;
+        if (collide)
+        {
+            compileCollideN += 1;
+        }
+        if (compileUnlockedSaid >= 12 && !collide)
+        {
+            return;                                      // benign ones are capped; a COLLISION always prints
+        }
+        compileUnlockedSaid += 1;
+        if (collide)
+        {
+            Uart.write(Magic.bytes("\n  *** TWO COMPILERS AT ONCE ***"));
+        }
+        Uart.write(Magic.bytes(" n="));
+        VM.printDec(compileUnlockedN);
+        Uart.write(Magic.bytes(" collide="));
+        VM.printDec(compileCollideN);
+        Uart.write(Magic.bytes("\n  COMPILE WITHOUT THE LOADER LOCK (the static context can be clobbered): "));
+        if (gbase != 0L && gThisNameOff != 0)
+        {
+            printNameAt(gbase, gThisNameOff);
+        }
+        Uart.write(Magic.bytes(" at="));
+        VM.printDec(where);
+        Uart.write(Magic.bytes(" task="));
+        VM.printDec(VM.curTask());
+        Uart.write(Magic.bytes(" owner="));
+        VM.printDec(VM.loaderOwner);
+        Uart.write(Magic.bytes(" depth="));
+        VM.printDec(VM.loaderDepth);
+        Uart.write(Magic.bytes(" site="));
+        VM.printDec(VM.loaderLockSite);
+        Uart.putc(0x0A);
+    }
+
     private static long compile(long code, int len, int descOff, int isStatic)
     {
+        checkCompileLockHeld(1);
         allocMethodTables();
         addMethod(code, len, gMaxLocals, descOff, isStatic);
         int i = 0;
@@ -7402,6 +7474,7 @@ public final class Loader
     private static void compileClass(long bytes)
     {
         long cc0 = Magic.readCNTPCT_EL0();
+        checkCompileLockHeld(2);
         allocMethodTables();
         long p = gMethodsStart;
         int mcount = u2(p);
@@ -7595,7 +7668,44 @@ public final class Loader
      * the dependency order; a still-unloaded cross-class METHOD reference in the force-loaded class simply
      * compiles to an unresolved call ({@link #globalBuf} -> 0), and later blobs resolve back to it.
      */
+    /**
+     * A demand-load BATCH is one critical section, and the lock lives HERE rather than at each caller.
+     *
+     * <p>The compile context is STATIC -- {@code g*}, the {@code m*} method tables, {@code gMaxLocals} --
+     * so two tasks inside the compiler at once interleave into each other's state. `lazyCompile` has always
+     * taken the lock; the BATCH path had no lock of its own, and reached `compileClass` through five callers
+     * that do not take one: `mirrorOfInternalName` and `mirrorForNameAt` ({@code Class.forName}),
+     * {@code defineFromBytes} ({@code defineClass}), and `annoClassValue`/`annoEnumValue` (the Class- and
+     * enum-valued annotation elements). This file already listed the first two as a KNOWN GAP
+     * ("reflection-driven loading is not under the loader lock"); the annotation pair widens it.
+     *
+     * <p>MEASURED rather than reasoned: a guard at the compiler's entry reported TWELVE unlocked
+     * `compileClass` entries on a single PASSING launcher run -- `java/lang/Object` at boot through
+     * `java/io/ObjectStreamField` and `ConsoleTestExecutor$Factory` late -- so the window is open for the
+     * whole run, not just during bring-up. The symptom when it does collide is a body compiled against
+     * ANOTHER method's max_locals (`LOCALS UNDERSIZED: java/lang/Object uses slot 18 but max_locals=3`) or a
+     * report printing raw constant-pool bytes where a class name belongs, because {@code gbase} moved under
+     * it. Intermittent: two failures in four contended runs, none in five solo ones.
+     *
+     * <p>ONE PLACE, NOT FIVE, for the reason `resetTaskTable` swallowed its own drain: an invariant that
+     * belongs to the loader must not be left to each caller to remember, or a sixth caller forgets. The lock
+     * is recursive per task, so a caller that already holds it (lazyCompile's drain, resolveUnresolvedNew,
+     * resolveLinkStub, bakeResolve) just bumps the depth and pays nothing.
+     */
     private static void loadAll()
+    {
+        VM.loaderLock(VM.LOCK_DEMAND_LOAD);
+        try
+        {
+            loadAllLocked();
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
+    }
+
+    private static void loadAllLocked()
     {
         long tAll = Magic.readCNTPCT_EL0();
         long tMark = tAll;
