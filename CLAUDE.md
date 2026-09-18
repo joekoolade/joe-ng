@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE FULL `getAndBitwise{Or,And,Xor}{Int,Long}` FAMILY IS IN -- all eighteen, and landing it is what
-  PROVES the constructor gap is closed (2026-09-18, NOT YET PI-VALIDATED).** `overlaycheck-deep` lists every
+  PROVES the constructor gap is closed (2026-09-18, PI-VALIDATED).** `overlaycheck-deep` lists every
   one of them as referenced by stock java.base; only `getAndBitwiseOrLong` existed, so the other seventeen
   CEASED TO EXIST -- an overlay wins the name, and a member it omits resolves nowhere and surfaces as a
   `DENYLIST TRAP` blaming a list this class is not on. **This unblocks overlay-gap work generally:** `Unsafe`
@@ -148,6 +148,30 @@ defines the minimum the assembler must encode.
     successful]` / `[2 tests successful]` / `[0 tests failed]`, `Test run finished after 97705 ms`.** Host:
     `compiler: 39 checks`, `overlay-check 0 new` (28 gaps unchanged -- these members are visible only to the
     DEEP scan, the blind spot that found them).
+  - **PI-VALIDATED, AND THE ARC IS CLOSED: batch 139, +2473blob, `Test run finished after 100139 ms`,
+    `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]`, exit 0.** Both stock jtreg
+    tests green (`testMillisNanos() 50647 ms`, `testMillis() 17369 ms`). Against the increment-1 boot the
+    launcher moved **83ms on 100 seconds** -- flat, inside the noise, which is what eighteen members that add
+    no class to the closure should do.
+  - **THE ASSERTION IS A SET OF ABSENCES, because the failure this arc came from was SILENT.** The
+    constructor-cell regression showed as an `arg[3] '--disable-banner'` NPE and a usage dump; there is none.
+    Nor `JIT unsupported`, `LOCALS UNDERSIZED`, `CAP EXCEEDED`, `BOOT RE-ENTERED`, `FAULT`/`ESR EC=0`,
+    `heap OOM`, `STW TIMEOUT`, `BADPATCH`, `SCRATCH MAP`, `VIRTUALRESOLVE FAILED`, or a `DENYLIST TRAP`
+    naming any `getAndBitwise*` member. Only the known denylisted lines (`Normalizer$Form.NFD`/`NFC`,
+    `NetworkInterface.class`, the `java/nio/file` option arrays, the charset-exception `CTOR SKIPPED` pairs)
+    and the two `ServiceLoader` skips.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT, kept straight.** The launcher never calls a `getAndBitwise`
+    member directly, so hardware proves **NO REGRESSION at 2473-blob scale** -- `BitwiseRmwProbe`'s 26 arms
+    against a byte-identical host control are what prove the members themselves, and those ran on QEMU.
+    Different claims; this file has had to separate them before.
+  - **THE `ProcessImpl` TRAP FIRED AT BATCH 21 AND THE BOOT RAN ON TO 139 -- proof by PRESENCE, fifth
+    consecutive hardware boot**, bringing the boot's only `LINK FAILED` and both `unclaimed pc` frames inside
+    its own trace. Its absence would have been as suspicious as a new failure.
+  - **THE BATCH-133 SPIKE REPRODUCED AT A DIFFERENT TIMER, which STRENGTHENS the recorded reading rather than
+    reopening it.** `gc` steps 14 -> 15 on that exact batch again, and the cost lands on `mark=683.971ms` /
+    `entry=696.268ms` where the previous boot charged it to `seed=640.158ms`. A collection landing inside
+    whichever timer happens to be holding the stopwatch is precisely what this file already settled after
+    four boots; a defect would not move between timers.
 
 - **`<init>` DEFERS LIKE EVERY OTHER METHOD NOW, WHICH IS THE OpenJDK SHAPE -- AND IT REFUTES THIS FILE'S OWN
   2026-09-15 VERDICT, ON HARDWARE (2026-09-18, PI-VALIDATED).** `notInit` is retired: the defer decision is
