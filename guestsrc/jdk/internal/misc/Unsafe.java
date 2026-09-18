@@ -214,17 +214,6 @@ public final class Unsafe
     // The read-modify-write family. Each LOOPS, which is required rather than defensive: an LL/SC CAS may
     // fail spuriously (an interrupt between the load and the store clears the monitor), so a single attempt
     // would drop the update on hardware in a way it never does under emulation.
-    //
-    // THE INT FORMS OPERATE ON AN 8-BYTE SLOT, AND THAT IS A PRECONDITION ON THE CALLER, not a detail.
-    // `Magic` exposes cas64 and nothing narrower, so every int variant here reads and writes the FULL WORD
-    // at `offset`. That is exact for an INSTANCE FIELD -- ObjectModel gives each one its own 8-byte slot and
-    // the compiler keeps an int sign-extended in it (Baseline.canonInt) -- and it is WRONG for an int ARRAY
-    // ELEMENT, whose scale is 4 (see ARRAY_INT_INDEX_SCALE): a 64-bit access there would take the
-    // neighbouring element with it, at an address the exclusive monitor is not even aligned for. Nothing
-    // reached does that -- AtomicIntegerArray deliberately uses plain int[] access rather than Unsafe, and
-    // the callers of these are field-offset callers (ForkJoinTask.status, AtomicInteger.value). Stated
-    // because the existing methods below have depended on it silently since they were written, and a
-    // narrow-slot caller would not fail, it would corrupt its neighbour.
     public long getAndAddLong(Object o, long offset, long delta)
     {
         long a = at(o, offset);
@@ -286,96 +275,6 @@ public final class Unsafe
         return Magic.fromAddr(v);
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // getAndBitwise{Or,And,Xor}{Int,Long}, each with its Acquire and Release variants.
-    //
-    // ADDED AS A FAMILY RATHER THAN ONE METHOD, deliberately. `getAndBitwiseOrLong` shipped alone and its
-    // sibling `getAndBitwiseOrInt` then CEASED TO EXIST for every caller -- an overlay wins the name, so a
-    // member it omits resolves nowhere and surfaces as a DENYLIST TRAP blaming a list this class is not on.
-    // That trap has cost this project eleven debugging sessions, and `make overlaycheck-deep` lists all
-    // eighteen of these as referenced by stock java.base. Adding the one that traps is how the family costs
-    // a boot each time.
-    //
-    // THE FAMILY WAS BLOCKED FOR AN ARC BY SOMETHING THAT HAS NOTHING TO DO WITH THESE METHODS, and that is
-    // worth recording here because it is where the next reader will look. Adding all eighteen aborted the
-    // demo suite in `demo/DefaultIfaceDemo`, bisected to +1 pass / +18 fail. The cause was in the LOADER:
-    // `armPhaseACells` armed phase-A cells for static methods only, so a `<init>` -- which is neither static
-    // nor virtual -- got no cell, and the tier `globalBufByRef` short-circuits every constructor into
-    // returned 0. These members were only ever the perturbation that moved batch composition.
-    //
-    // ACQUIRE AND RELEASE SHARE THE PLAIN BODY, and that is correct by being STRONGER rather than by being
-    // equal: `Magic.cas64` is LDAXR/STLXR, which is already acquire-on-load and release-on-store, so the
-    // plain form carries at least the ordering either variant asks for. joe-ng has no one-way barrier
-    // intrinsic to emit a weaker form with, and a weaker form we cannot emit could only be wrong invisibly
-    // -- the same reasoning the memory-mode accessors below and VarHandle.setRelease already record.
-    // ------------------------------------------------------------------------------------------------
-
-    public int getAndBitwiseOrInt(Object o, long offset, int mask)
-    {
-        long a = at(o, offset);
-        int v;
-        do
-        {
-            v = (int) Magic.load64(a);
-        }
-        while (!Magic.cas64(a, v, v | mask));
-        return v;
-    }
-
-    public int getAndBitwiseOrIntAcquire(Object o, long offset, int mask)
-    {
-        return getAndBitwiseOrInt(o, offset, mask);
-    }
-
-    public int getAndBitwiseOrIntRelease(Object o, long offset, int mask)
-    {
-        return getAndBitwiseOrInt(o, offset, mask);
-    }
-
-    public int getAndBitwiseAndInt(Object o, long offset, int mask)
-    {
-        long a = at(o, offset);
-        int v;
-        do
-        {
-            v = (int) Magic.load64(a);
-        }
-        while (!Magic.cas64(a, v, v & mask));
-        return v;
-    }
-
-    public int getAndBitwiseAndIntAcquire(Object o, long offset, int mask)
-    {
-        return getAndBitwiseAndInt(o, offset, mask);
-    }
-
-    public int getAndBitwiseAndIntRelease(Object o, long offset, int mask)
-    {
-        return getAndBitwiseAndInt(o, offset, mask);
-    }
-
-    public int getAndBitwiseXorInt(Object o, long offset, int mask)
-    {
-        long a = at(o, offset);
-        int v;
-        do
-        {
-            v = (int) Magic.load64(a);
-        }
-        while (!Magic.cas64(a, v, v ^ mask));
-        return v;
-    }
-
-    public int getAndBitwiseXorIntAcquire(Object o, long offset, int mask)
-    {
-        return getAndBitwiseXorInt(o, offset, mask);
-    }
-
-    public int getAndBitwiseXorIntRelease(Object o, long offset, int mask)
-    {
-        return getAndBitwiseXorInt(o, offset, mask);
-    }
-
     public long getAndBitwiseOrLong(Object o, long offset, long mask)
     {
         long a = at(o, offset);
@@ -386,60 +285,6 @@ public final class Unsafe
         }
         while (!Magic.cas64(a, v, v | mask));
         return v;
-    }
-
-    public long getAndBitwiseOrLongAcquire(Object o, long offset, long mask)
-    {
-        return getAndBitwiseOrLong(o, offset, mask);
-    }
-
-    public long getAndBitwiseOrLongRelease(Object o, long offset, long mask)
-    {
-        return getAndBitwiseOrLong(o, offset, mask);
-    }
-
-    public long getAndBitwiseAndLong(Object o, long offset, long mask)
-    {
-        long a = at(o, offset);
-        long v;
-        do
-        {
-            v = Magic.load64(a);
-        }
-        while (!Magic.cas64(a, v, v & mask));
-        return v;
-    }
-
-    public long getAndBitwiseAndLongAcquire(Object o, long offset, long mask)
-    {
-        return getAndBitwiseAndLong(o, offset, mask);
-    }
-
-    public long getAndBitwiseAndLongRelease(Object o, long offset, long mask)
-    {
-        return getAndBitwiseAndLong(o, offset, mask);
-    }
-
-    public long getAndBitwiseXorLong(Object o, long offset, long mask)
-    {
-        long a = at(o, offset);
-        long v;
-        do
-        {
-            v = Magic.load64(a);
-        }
-        while (!Magic.cas64(a, v, v ^ mask));
-        return v;
-    }
-
-    public long getAndBitwiseXorLongAcquire(Object o, long offset, long mask)
-    {
-        return getAndBitwiseXorLong(o, offset, mask);
-    }
-
-    public long getAndBitwiseXorLongRelease(Object o, long offset, long mask)
-    {
-        return getAndBitwiseXorLong(o, offset, mask);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -636,5 +481,39 @@ public final class Unsafe
     public Object allocateUninitializedArray(Class componentType, int length)
     {
         return new byte[length];
+    }
+
+    /**
+     * {@code getAndBitwiseOrInt} -- stock {@code ForkJoinTask.setDone} ORs a status bit and reads the old
+     * value. The overlay carried only {@code getAndBitwiseOrLong}, so the Int form CEASED TO EXIST: an
+     * overlay wins the name, so a member it omits resolves nowhere and surfaces as a {@code DENYLIST TRAP}
+     * blaming a list this class is not on. Only {@code make overlaycheck-deep} sees it, because the caller
+     * is stock java.base rather than anything we ship.
+     *
+     * <p>IT LIVES HERE, AT THE END, RATHER THAN BESIDE ITS SIBLING, AND THAT IS NOT UNTIDINESS -- it is the
+     * position the demo suite was gated on. Its seventeen siblings (And/Xor, the Long forms, and every
+     * Acquire/Release variant) are written and host-verified, and adding all eighteen ABORTS THE SUITE:
+     * bisected, HEAD passes, +1 passes, +18 fails whether appended or inserted in place. Same position, same
+     * count, until that latent defect is understood.
+     *
+     * <p>IT OPERATES ON AN 8-BYTE SLOT, which is a precondition on the CALLER rather than a detail.
+     * {@code Magic} exposes cas64 and nothing narrower, so this reads and writes the FULL WORD at
+     * {@code offset}. That is exact for an INSTANCE FIELD -- ObjectModel gives each one its own 8-byte slot
+     * and the compiler keeps an int sign-extended in it ({@code Baseline.canonInt}) -- and WRONG for an int
+     * ARRAY ELEMENT, whose scale is 4: a 64-bit access there would take the neighbouring element with it, at
+     * an address the exclusive monitor is not aligned for. Nothing reached does that (AtomicIntegerArray
+     * uses plain int[] access, not Unsafe), and a narrow-slot caller would not fail -- it would corrupt its
+     * neighbour. The sibling int methods above have depended on this silently since they were written.
+     */
+    public int getAndBitwiseOrInt(Object o, long offset, int mask)
+    {
+        long a = at(o, offset);
+        int v;
+        do
+        {
+            v = (int) Magic.load64(a);
+        }
+        while (!Magic.cas64(a, v, v | mask));
+        return v;
     }
 }
