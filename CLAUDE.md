@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
-  every other class (2026-09-18, NOT YET PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
+  every other class (2026-09-18, PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
   last exception to stage 5 is gone: every class is metadata-only -- phase-A cells for its statics, deferral
   stubs for its virtuals, its `<init>` included. This completes "remove the eager compilation".
   - **THE RECORDED OBJECTION DID NOT SURVIVE READING THE MECHANISM, and it was a guess about one rather than
@@ -178,6 +178,29 @@ defines the minimum the assembler must encode.
     exception and not before. Nothing can reach it now, because nothing compiles with `lzCompiling` false. It
     is left in place for exactly one increment so that claim is VALIDATED rather than assumed -- `CTOR_TRACE`
     (default false) prints every edge, so one armed boot answers it, and it should print nothing.
+  - **PI-VALIDATED, AND THE IDENTITY IS EXACT ACROSS THREE BOOTS AND TWO ARMS.** `Test run finished after
+    100786 ms`, `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]`, exit 0, batch 139
+    `+2473blob`, both stock jtreg tests green (`testMillisNanos() 50642 ms`, `testMillis() 17360 ms`). Every
+    batch-139 counter matches the increment-2 Pi boot AND the increment-3 QEMU arm, to the digit:
+    `n:imap=1238 synth=2242 clinits=531`, `memo=27286 res=49267 unres=9022`, `sy:n=2242 slots=20k chg=0
+    obj=15k`. Boot 100,139 -> 100,786ms, inside the ~1.6s spread this file records for launcher boots.
+  - **`sy:chg=0` ON SILICON AT 2242 SYNTHESISED TIBs IS THE MEASUREMENT THAT SETTLES THE OBJECTION.** The
+    synth card kept that counter on the batch line expressly so a later boot could refute its soundness
+    argument; this is that boot, on the hardware the argument was written about, and not one write to a
+    shared-prefix slot was ever necessary. Object's vtable words are stub buffer addresses and they do not
+    move.
+  - **THE SPECIFIC ABSENCES ARE THE ASSERTION, because the failure shape here is a WILD BRANCH rather than a
+    wrong answer.** Baked code carries no `dispatchTargetGuard`, so a bad word in the nine-slot shared prefix
+    is a branch to nowhere: **no `BOOT RE-ENTERED`, no `ESR EC=0`, no `FAULT`, no `unclaimed pc` outside the
+    `ProcessImpl` trap's own trace.** Nor `lifecycle-compile` (an Object virtual dispatched before Object
+    reached `ST_RESOLVED` -- the one ordering hazard this change could create), `MAXLAZY-defer`, `arg[3]`,
+    `CAP EXCEEDED`, `heap OOM`, `STW TIMEOUT`, `BADPATCH`, `VIRTUALRESOLVE FAILED` or `SCRATCH MAP`.
+  - **AND QEMU COULD NOT HAVE SETTLED IT, which is why this one was flashed alone.** The emulator hands out
+    ZEROED DRAM, so a prefix slot that reads plausibly there can be firmware leftovers on a cold Pi; and it
+    does not model an incoherent I-cache, while this change puts a freshly published stub in a slot FOUR
+    CORES dispatch through -- the exact shape of the `IC IALLU` bug this project found only on silicon with
+    SMP on. `gc=15`, the `ProcessImpl` trap at batch 21 survived to 139 (sixth consecutive boot), and the
+    batch-133 collection spike reproduced again (`mark=682.215ms` / `entry=695.826ms`, `gc` 14 -> 15).
 
 - **THE FULL `getAndBitwise{Or,And,Xor}{Int,Long}` FAMILY IS IN -- all eighteen, and landing it is what
   PROVES the constructor gap is closed (2026-09-18, PI-VALIDATED).** `overlaycheck-deep` lists every
