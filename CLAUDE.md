@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`<init>` DEFERS LIKE EVERY OTHER METHOD NOW, WHICH IS THE OpenJDK SHAPE -- AND IT REFUTES THIS FILE'S OWN
-  2026-09-15 VERDICT (2026-09-18, NOT YET PI-VALIDATED).** `notInit` is retired: the defer decision is
+  2026-09-15 VERDICT, ON HARDWARE (2026-09-18, PI-VALIDATED).** `notInit` is retired: the defer decision is
   `stubOnly || stage2Gated(...)`, so a constructor gets a deferral stub in its own registered buffer like
   every other method kind, and the body compiles on first call.
 
@@ -171,6 +171,23 @@ defines the minimum the assembler must encode.
     that exercises the SHAPE is still not the launcher". **The QEMU launcher is a validated harness now**:
     it reproduces the Pi closure exactly (batch 139, +2473blob) and the control `895cd09` completes on it.
     A failure costs a QEMU run and lands reproducibly instead of costing a flash and a bisect.
+  - **PI-VALIDATED: `Test run finished after 100056 ms`, batch 139, +2473blob, `[3 containers successful]` /
+    `[2 tests successful]` / `[0 tests failed]` / exit 0**, with both stock jtreg tests green
+    (`testMillisNanos() 50623 ms`, `testMillis() 17366 ms`). No `JIT unsupported`, no `LOCALS UNDERSIZED`,
+    no `arg[3]` NPE, no `MAXCTORINIT`, no `CAP EXCEEDED`, no `BOOT RE-ENTERED`; the only trap is the known
+    `ProcessImpl.init` denylist one at batch 21, survived, with both `unclaimed pc` frames inside its own
+    trace. **So the 2026-09-15 "deferring `<init>` wild-branches on hardware" verdict is refuted ON THE
+    HARDWARE THAT PRODUCED IT** -- the truncated-closure explanation holds.
+  - **AND THE SPEEDUP DID NOT REPRODUCE, WHICH IS A CORRECTION TO MY OWN NOTE.** I recorded QEMU's
+    134,778ms -> 93,523ms as consistent-with removing the double compile, hedged as "reported rather than
+    claimed". The Pi says **102,038ms -> 100,056ms: FLAT**, inside the ~1.6s spread this file already
+    records for launcher boots. The QEMU figure was machine load. The hedge was right and the reading behind
+    it was wrong: **deferring `<init>` is performance-NEUTRAL on silicon**, and its value is the removed
+    special case, not the removed work.
+  - **ONE SPIKE, NAMED RATHER THAN CHASED, for the second time:** batch 133 reads `entry=694.877ms` against
+    ~45ms for its neighbours, and `gc` steps 14 -> 15 on that exact batch. That is the batch-188 shape this
+    file settled after four boots -- a collection landing inside whichever timer holds the stopwatch.
+    Recorded so it is not re-found and re-chased.
   - **CONSISTENT-WITH, NOT PROVEN: the launcher ran 134,778ms -> 93,523ms on the same harness.** A
     non-deferred method is compiled TWICE (`sizeMethod` at a dummy base, then `emitMethod` at the real one)
     and that was ~853 methods per launcher batch, which is the cost the 2026-09-15 entry measured as the
