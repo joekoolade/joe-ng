@@ -7733,6 +7733,35 @@ public final class Loader
      * belongs to the loader must not be left to each caller to remember, or a sixth caller forgets. The lock
      * is recursive per task, so a caller that already holds it (lazyCompile's drain, resolveUnresolvedNew,
      * resolveLinkStub, bakeResolve) just bumps the depth and pays nothing.
+     *
+     * <p>AND IT IS NOT FREE, WHICH THIS SAYS RATHER THAN LEAVES TO BE FOUND. The section spans {@code
+     * runClinits}, so it is held across GUEST CODE -- and {@code clinitEntryOf} states the opposite
+     * invariant in terms ("the lock covers the COMPILE only, never the running of an initializer: a {@code
+     * <clinit>} can block on a monitor or spawn threads, and holding the loader lock across that would
+     * deadlock any task that needs to compile before it can release"), as do {@code compileMethodOnDemand},
+     * {@code compileSigOnDemand} and the deferred-{@code <init>} path. {@code lazyCompile} already violates
+     * it -- its own comment records that ("this fixes the leak, not that") -- so the shape is not new; what
+     * IS new is that the five reflection callers above now violate it too, where their {@code runClinits}
+     * used to run unlocked.
+     *
+     * <p>NARROWING IT IS NOT A ONE-LINER, and that is the reason it is documented instead of done.
+     * Unlocking around {@code runClinits} hands the BATCH STATE to whoever enters next: this loop reads
+     * {@code clinitN} on every iteration and sizes its {@code done[]} from it at entry, so a second task's
+     * {@code loadAll} appending initializers walks the first one's loop past the end of its own array, and
+     * {@code clinitRunFrom}'s "already ran in an earlier batch" watermark stops meaning anything. The queue
+     * has to become snapshot-safe before the lock can be given back mid-batch.
+     *
+     * <p>WHAT IS DONE INSTEAD: the stuck-lock watchdog now NAMES this shape. An owner in {@code
+     * TASK_BLOCKED}/{@code TASK_SLEEPING} cannot be inside the compiler -- nothing there waits on another
+     * task -- so it is guest code under the lock, and {@code VM.reportStuckLockVerdict} says exactly that
+     * rather than printing a state number this file records being misread three times. Silent unless the
+     * hazard actually bites, which is the measurement this wants before a restructure.
+     *
+     * <p>AND IT IS WHY {@code loaderLock}'s {@code smpSched == 0} gate MUST NOT BE CLOSED FIRST. That gate
+     * makes the lock inert on a single scheduling core, which is wrong on its own terms (the hazard is per
+     * TASK and one core still time-slices preemptively) -- but closing it while the section spans guest code
+     * would extend this deadlock exposure to every single-core boot, including the demo suite. Order: make
+     * the clinit run phase lock-free, then close the gate.
      */
     private static void loadAll()
     {

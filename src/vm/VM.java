@@ -622,9 +622,81 @@ public final class VM
                 Uart.write(Magic.bytes(" ctx~"));
                 Loader.printCurrentClass();
                 Uart.putc(0x0A);
+                reportStuckLockVerdict();
             }
             VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
         }
+    }
+
+    /**
+     * SAY WHAT THE OWNER'S STATE MEANS, rather than leave a number the reader has to interpret.
+     *
+     * <p>The line above prints {@code state N} and this file records, three separate times, that {@code
+     * state 4} has been misread as a deadlock when it means the owner is WORKING. The number is necessary
+     * and it is not sufficient: the three outcomes it can carry want three different responses, and only one
+     * of them is a bug in the lock.
+     *
+     * <p><b>RUNNABLE</b> ({@link #TASK_RUNNING}/{@link #TASK_READY}) is the case that has been misread. A
+     * demand-load batch on a 166MHz core legitimately exceeds a ten-second WALL-CLOCK threshold, so this is
+     * a latency observation, not a deadlock. The discriminator is on the line above and across reports:
+     * {@code held} growing while {@code rel} does not advance is a leak; both advancing is a slow hold.
+     *
+     * <p><b>BLOCKED</b> ({@link #TASK_BLOCKED}/{@link #TASK_SLEEPING}) is the one worth shouting about, and
+     * it is a statement about the lock rather than about the owner. Nothing INSIDE the compiler blocks --
+     * the loader allocates, parses and emits, and none of that waits on another task. So an owner in this
+     * state is running GUEST CODE with the lock held, which happens on exactly two paths: {@code loadAll}
+     * spans {@code runClinits}, and {@code lazyCompile} spans its {@code drainPendingPulls}. Both run
+     * {@code <clinit>} bodies through {@code Magic.call0}, and a {@code <clinit>} may enter a monitor, wait,
+     * sleep or join. If whatever would wake the owner must itself compile first, it is behind this lock and
+     * nothing ever wakes it. {@code clinitEntryOf} states the invariant that forbids this ("the lock covers
+     * the COMPILE only, never the running of an initializer") and {@code lazyCompile} records that it is
+     * already violated there; this is what the violation looks like from the outside when it finally bites.
+     *
+     * <p><b>EXITED</b> is checked BEFORE blocked and is the reason {@code taskDone} is consulted at all:
+     * {@code taskExit} parks the task {@link #TASK_BLOCKED} on a never-posted semaphore, so a task that is
+     * GONE and a task that is WAITING carry the SAME state word and want opposite repairs. Reading the state
+     * alone would confidently name guest code for a stranded lock -- an unmeasured cause, which is the one
+     * thing a report in this VM may not assert.
+     *
+     * <p><b>GONE</b> ({@link #TASK_EMPTY}) means the owner slot was recycled entirely, so no release is
+     * coming from anywhere -- a stranded lock rather than a held one, and a different repair again.
+     *
+     * <p>It costs nothing on a healthy boot: the watchdog it hangs off only fires after ten seconds of
+     * waiting, and prints once per waiter.
+     */
+    private static void reportStuckLockVerdict()
+    {
+        int st = loaderOwner >= 0 && taskState != null ? taskState[loaderOwner] : -1;
+        if (st == TASK_RUNNING || st == TASK_READY)
+        {
+            Uart.write(Magic.bytes("  ... owner is RUNNABLE: a slow hold, not a deadlock. Compare held/rel on the next report.\n"));
+            return;
+        }
+        // EXITED FIRST, because taskExit parks BLOCKED on a never-posted semaphore -- so a task that is GONE
+        // and one that is WAITING carry the same state, and they want opposite repairs. taskDone is the
+        // discriminator, and without it this verdict would confidently name guest code for a stranded lock.
+        if (loaderOwner >= 0 && taskDone != null && taskDone[loaderOwner] != 0)
+        {
+            Uart.write(Magic.bytes("  *** THE OWNER HAS EXITED holding the loader lock: STRANDED, not held ***\n"));
+            Uart.write(Magic.bytes("  ... taskExit parks BLOCKED on a never-posted semaphore and does not release\n"));
+            Uart.write(Magic.bytes("  ... this lock, so no release is coming from anywhere. See loaderForceRelease.\n"));
+            return;
+        }
+        if (st == TASK_BLOCKED || st == TASK_SLEEPING)
+        {
+            Uart.write(Magic.bytes("  *** THE OWNER IS BLOCKED WHILE HOLDING THE LOADER LOCK ***\n"));
+            Uart.write(Magic.bytes("  ... nothing inside the compiler blocks, so the lock is held across GUEST CODE:\n"));
+            Uart.write(Magic.bytes("  ... loadAll spans runClinits, lazyCompile spans drainPendingPulls, and a <clinit>\n"));
+            Uart.write(Magic.bytes("  ... may enter a monitor, wait, sleep or join. If waking it needs a compile, it is\n"));
+            Uart.write(Magic.bytes("  ... behind this lock and nothing ever will. See clinitEntryOf's invariant.\n"));
+            return;
+        }
+        if (st == TASK_EMPTY)
+        {
+            Uart.write(Magic.bytes("  *** THE OWNER TASK IS GONE: the lock is STRANDED, not held ***\n"));
+            return;
+        }
+        Uart.write(Magic.bytes("  ... owner state is not one this verdict knows; the number above is the measurement.\n"));
     }
 
     /**
