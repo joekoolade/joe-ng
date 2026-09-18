@@ -2596,14 +2596,19 @@ public final class Loader
      */
     static void printCurrentClass()
     {
-        if (gbase != 0L && gThisNameOff != 0)
+        // NO CONTEXT and BAD CONTEXT are different answers, and every caller of this is a failure path that
+        // needs both. gbase == 0 means no compile is in progress; a non-zero gbase carrying a torn
+        // gThisNameOff is a pointer that LOOKS usable and is not -- and this is read from VM.loaderLock's
+        // watchdog WITHOUT the lock, i.e. deliberately while the owner may be mid-update. printNameAt loops
+        // for whatever u2 it finds, so a wrong offset streams up to 65535 bytes at ~87us a character and
+        // buries the report being read. That comment at the watchdog already claims a torn read here
+        // "misnames a class rather than faulting"; the cap is what makes the claim true.
+        if (gbase == 0L || gThisNameOff == 0)
         {
-            printNameAt(gbase, gThisNameOff);
+            Uart.write(Magic.bytes("<none>"));           // no compile in progress -- distinct from a bad pointer
+            return;
         }
-        else
-        {
-            Uart.write(Magic.bytes("<none>"));
-        }
+        printUtf8Capped(gbase + gThisNameOff);
     }
 
     // ----- code-embedded roots ---------------------------------------------------------------------
@@ -7373,7 +7378,17 @@ public final class Loader
      *
      * <p>It names the TASK, the recorded owner, the depth and the site, because "unlocked" on its own does
      * not name the path -- and a path is what a fix needs. Said a few times rather than once: the first
-     * offender is not necessarily the only one, and a flood would starve the run it is meant to diagnose.
+     * offender is not necessarily the only one.
+     *
+     * <p>BOTH BUDGETS ARE CAPPED, and the COLLISION one is the one that matters. An earlier cut capped only
+     * the benign entries, on the reading that a collision is rare enough to always print. It is not: this
+     * runs at the entry of {@code compile()}, i.e. once per METHOD -- thousands of times a batch -- and a
+     * collision is not a one-shot event, because the competing task is still inside the compiler for the
+     * next several thousand calls. One line is ~110 characters and {@code Uart.putRaw} SPINS on the TX
+     * holding register, so at 115200 baud that is ~9.6ms of BLOCKING serial each. An uncapped collision
+     * report therefore starves the run it is meant to diagnose AND widens the very window it is reporting
+     * on. Each budget says so when it is spent, because a report that goes quiet without a word reads
+     * exactly like a condition that stopped.
      *
      * <p>NOTE THE PRECONDITION IT CANNOT CHECK: {@code loaderLock} is a NO-OP while {@code smpSched == 0},
      * on the stated premise "one core in the table: no other compiler to race". That premise is about
@@ -7381,7 +7396,10 @@ public final class Loader
      * stays silent in exactly the configuration where the lock protects nothing. Recorded rather than
      * fixed here.
      */
+    private static final int SAID_MAX_BENIGN = 12;       // owner == -1: nobody to race, so a handful is plenty
+    private static final int SAID_MAX_COLLIDE = 8;       // owner is ANOTHER TASK: rare per event, but it repeats per method
     private static int compileUnlockedSaid;
+    private static int compileCollideSaid;               // capped SEPARATELY: see the note above on the per-method rate
     static int compileUnlockedN;                         // entries with the lock NOT ours (benign at boot: nobody else compiles)
     static int compileCollideN;                          // ... of those, the ones where ANOTHER TASK HELD IT: two compilers at once
 
@@ -7396,15 +7414,25 @@ public final class Loader
         // means no competitor exists and is why this guard fires on a PASSING run. owner >= 0 and not us is
         // the real hazard: another task is inside the compiler right now, and the static context is shared.
         boolean collide = VM.loaderOwner >= 0;
+        // The TOTALS are counted before either budget is consulted, so a capped report still leaves an
+        // accurate n=/collide= on the last line it does print.
         if (collide)
         {
             compileCollideN += 1;
+            if (compileCollideSaid >= SAID_MAX_COLLIDE)
+            {
+                return;
+            }
+            compileCollideSaid += 1;
         }
-        if (compileUnlockedSaid >= 12 && !collide)
+        else
         {
-            return;                                      // benign ones are capped; a COLLISION always prints
+            if (compileUnlockedSaid >= SAID_MAX_BENIGN)
+            {
+                return;
+            }
+            compileUnlockedSaid += 1;
         }
-        compileUnlockedSaid += 1;
         if (collide)
         {
             Uart.write(Magic.bytes("\n  *** TWO COMPILERS AT ONCE ***"));
@@ -7414,10 +7442,13 @@ public final class Loader
         Uart.write(Magic.bytes(" collide="));
         VM.printDec(compileCollideN);
         Uart.write(Magic.bytes("\n  COMPILE WITHOUT THE LOADER LOCK (the static context can be clobbered): "));
-        if (gbase != 0L && gThisNameOff != 0)
-        {
-            printNameAt(gbase, gThisNameOff);
-        }
+        // CAPPED, because this line runs in the one state where the length word cannot be trusted.
+        // printNameAt loops for whatever u2 it reads, and the condition being reported IS "gbase moved under
+        // the compiler" -- so a garbage length of 65535 is ~5.7 SECONDS of blocking UART plus a read far past
+        // the blob, burying the failure this exists to name. Not hypothetical: printUtf8Capped's own doc
+        // records a diagnostic that streamed several hundred bytes of the stub table onto the console for
+        // exactly this reason. It prints <null>/<bad utf8 ptr> itself, which says more than printing nothing.
+        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
         Uart.write(Magic.bytes(" at="));
         VM.printDec(where);
         Uart.write(Magic.bytes(" task="));
@@ -7429,6 +7460,17 @@ public final class Loader
         Uart.write(Magic.bytes(" site="));
         VM.printDec(VM.loaderLockSite);
         Uart.putc(0x0A);
+        // A BUDGET THAT RUNS OUT SILENTLY READS AS A CONDITION THAT STOPPED. The n=/collide= totals on this
+        // very line are the last ones a boot will see for this kind, so name the cap here rather than leave a
+        // reader to infer it from the report thinning out.
+        if (collide && compileCollideSaid == SAID_MAX_COLLIDE)
+        {
+            Uart.write(Magic.bytes("  (collision reports capped here; collide= above is the last shown)\n"));
+        }
+        else if (!collide && compileUnlockedSaid == SAID_MAX_BENIGN)
+        {
+            Uart.write(Magic.bytes("  (benign unlocked reports capped here; n= above is the last shown)\n"));
+        }
     }
 
     private static long compile(long code, int len, int descOff, int isStatic)
@@ -20409,10 +20451,14 @@ public final class Loader
     static void reportLocalsUndersized(int needed, int declared)
     {
         Uart.write(Magic.bytes("  LOCALS UNDERSIZED: "));
-        if (gbase != 0L && gThisNameOff != 0)
-        {
-            printNameAt(gbase, gThisNameOff);
-        }
+        // CAPPED, and this is the site where it matters most: THIS report is what the open SMP-contention
+        // bug prints, and it prints it with a CLOBBERED gbase. The recorded symptom is exactly
+        // `LOCALS UNDERSIZED: java/lang/Object uses slot 18 but max_locals=3` with RAW CONSTANT-POOL BYTES
+        // rendered as a class name on the lines around it -- a report walking a blob at a wrong offset.
+        // printNameAt trusts the u2 length it lands on, so that is unbounded output over the UART on the one
+        // line a reader most needs. printUtf8Capped answers <bad utf8 ptr>, which is both short and is itself
+        // the evidence that the context was clobbered rather than merely wrong.
+        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
         Uart.write(Magic.bytes(" uses slot "));
         VM.printDec(needed - 1);
         Uart.write(Magic.bytes(" but max_locals="));
