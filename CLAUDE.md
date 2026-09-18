@@ -115,6 +115,70 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
+  every other class (2026-09-18, NOT YET PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
+  last exception to stage 5 is gone: every class is metadata-only -- phase-A cells for its statics, deferral
+  stubs for its virtuals, its `<init>` included. This completes "remove the eager compilation".
+  - **THE RECORDED OBJECTION DID NOT SURVIVE READING THE MECHANISM, and it was a guess about one rather than
+    a measurement of one.** It read: Object's 9 virtuals "are the prefix of EVERY vtable in both worlds ...
+    Deferring them would put stubs in that shared prefix, and a stub there is entered before the loader can be
+    sure which world the receiver came from." Three facts, each read out of the code rather than argued:
+    - **A DEFERRAL STUB IS RECEIVER-INDEPENDENT.** It is five instructions -- `movz x17,idx`, the trampoline
+      address into x16, `br x16` -- and never touches x0. It cannot ask which world the receiver came from
+      because it never looks at the receiver. Object's body is the same body whoever is calling.
+    - **THE SHARED PREFIX IS A STABLE WORD, which is the whole point of the `_from_compiled_entry` shape.** A
+      deferral entry carries `slot = 0` ("no single slot to patch"), so `lazyCompileLocked` never re-points a
+      TIB slot, and `rememberLazyBody` updates the method REGISTRY and nothing else. The vtable word is the
+      stub buffer's address for the life of the VM, so every copy of Object's prefix -- `inheritVtable`,
+      `fillObjectVtableUpTo`, `refillArrayTibVtables` -- copies a word that never changes.
+    - **AND THE HOTTEST PATH DOES NOT EXIST.** `Object.<init>` looks like the risk, since every constructor
+      begins with it -- but `isRealSpecial` lowers it to a **POP in both worlds**, so it is never called at
+      all and deferring it costs and risks nothing.
+  - **THE SYNTH-LATCH SOUNDNESS NOTE KEEPS ITS CONCLUSION AND LOSES ITS REASON, and the counter it left behind
+    is what settled that.** That card argued from "Object is the one eagerly-compiled class, so its slots hold
+    real bodies and are never re-pointed", and explicitly kept `sy:chg` on the batch line "so a future boot can
+    refute it". This is that boot, and it does not: **`sy:chg=0` on the suite AND at full launcher scale
+    (`sy:n=2242 slots=20k chg=0 obj=15k`)**. The latch is still sound; the reason is the stub buffer's address
+    stability rather than eagerness.
+  - **THE LAUNCHER IS BYTE-IDENTICAL TO THE INCREMENT-2 Pi BOOT ON EVERY COUNTER**, which is the strongest
+    identity result this arc has produced -- one change apart, at the same closure scale:
+
+    | batch 139 | increment-2 Pi | increment-3 QEMU launcher |
+    |---|---|---|
+    | blobs | +2473blob | **+2473blob** |
+    | `n:imap` / `synth` / `clinits` | 1238 / 2242 / 531 | **1238 / 2242 / 531** |
+    | `memo` / `res` / `unres` | 27286 / 49267 / 9022 | **27286 / 49267 / 9022** |
+    | `sy:n` / `slots` / `chg` / `obj` | 2242 / 20k / 0 / 15k | **2242 / 20k / 0 / 15k** |
+
+    `Test run finished after 95557 ms`, `[3 containers successful]` / `[2 tests successful]` /
+    `[0 tests failed]`, and the `ProcessImpl` trap fired once -- proof by presence, as ever.
+  - **GATES:** demo suite 33 programs, EIGHTEEN failure markers zero (incl. `MAXLAZY` and `lifecycle-compile`,
+    the two this change could plausibly trip), closure `rounds=4 pend=180 reach=16` and `n:imap=52 synth=18
+    clinits=25` identical, `attributes forEach ok`, `finish HML` / `HIGH blocked 60ms`, `lisp evals=600
+    result=610 stable=1`, `churnMB=625 live=32 intact=32`, `smp sched: 4 of 4`. Host: `compiler: 39 checks`
+    (the writer is untouched -- `stage2Gated` is loader-only, so the self-hosting fixpoint cannot move),
+    `overlay-check 0 new`.
+  - **`lifecycle-compile` IS THE MARKER THAT MATTERED AND IT IS WORTH NAMING.** The one ordering hazard this
+    change could create is an Object virtual dispatched before Object reaches `ST_RESOLVED` -- the boot
+    battery calls `equals`/`toString` very early. `restoreCtxForCompile` halts loudly on exactly that, and it
+    is silent: the battery runs in the BAKED world against the writer's Object TIB, which this does not touch.
+  - **TWO NUMBERS I AM NOT CLAIMING, stated rather than rounded away.**
+    - **THE CODE ARENA IS NOT RESOLVABLE IN THIS HARNESS, and I predicted it would shrink.** Two runs of the
+      SAME binary read 1,256,368 and 1,226,824 bytes used -- **29,544 apart** -- against a 15,952-byte
+      difference from the increment-1 figure. The prediction is neither confirmed nor falsified; the variance
+      is bigger than the effect, which is what this file already records for arena high-water ("it tracks
+      demand between collections and moves with any layout shift").
+    - **THE SUITE'S `memo/res/unres` MOVED (1373/2486/2228 -> 1343/2478/2224) AND THAT COMPARISON SPANS TWO
+      CHANGES**, not one -- the recorded figure is increment 1's, and increment 2's eighteen Unsafe members
+      sit between. So it is not evidence about this change either way. The clean one-change comparison is the
+      launcher above, and it is zero-delta. `reach` -- the marked set, the discriminator this file established
+      for telling removed waste from lost marking -- is identical in both.
+  - **WHAT THIS RETIRES NEXT, and it is deliberately NOT bundled:** `noteCtorInit`/`drainCtorInit` exists for
+    "classes an EAGERLY compiled method was seen to touch", and its own comment said to retire it with this
+    exception and not before. Nothing can reach it now, because nothing compiles with `lzCompiling` false. It
+    is left in place for exactly one increment so that claim is VALIDATED rather than assumed -- `CTOR_TRACE`
+    (default false) prints every edge, so one armed boot answers it, and it should print nothing.
+
 - **THE FULL `getAndBitwise{Or,And,Xor}{Int,Long}` FAMILY IS IN -- all eighteen, and landing it is what
   PROVES the constructor gap is closed (2026-09-18, PI-VALIDATED).** `overlaycheck-deep` lists every
   one of them as referenced by stock java.base; only `getAndBitwiseOrLong` existed, so the other seventeen

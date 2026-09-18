@@ -1442,9 +1442,15 @@ public final class Loader
     // `new ZipInputStream(...)` reaching `UTF_8.INSTANCE` before sun/nio/cs/UTF_8 had initialized, and
     // reading null -- is covered by the lazy path for the same reason.
     //
-    // What still reaches it is whatever is left compiling at load: today only `java/lang/Object`, the one
-    // class eagerKept holds back. Retire this with that exception, not before -- and note the ordering it
-    // provides is WEAKER, so it must not be reintroduced as a shortcut for anything else.
+    // AND THAT EXCEPTION IS GONE NOW: `eagerKept` is retired, so `java/lang/Object` defers like everything
+    // else and NOTHING is compiled at load time any more. This mechanism should therefore be DEAD -- nothing
+    // can reach it, because nothing compiles with lzCompiling false. It is left in place for exactly one
+    // increment so that claim is validated rather than assumed; retiring it is a separate change, and the
+    // evidence for it is `ctorInitN` staying 0 across a boot.
+    //
+    // Note the ordering it provided is WEAKER than the lazy path's (it waited for the owning class to
+    // initialize, where the lazy path initializes active uses strictly before the body runs), so it must not
+    // be reintroduced as a shortcut for anything else.
     private static final boolean CTOR_TRACE = false;
     private static final int MAXCTORINIT = 8192;
     private static int[] ctorOwner;
@@ -15231,36 +15237,44 @@ public final class Loader
     }
 
     /**
-     * M8 stage 5: LAZY, FULL STOP. EVERY demand-loaded class is metadata-only — phase-A cells for its
-     * statics, deferred stubs for its virtuals — with only {@link #eagerKept} (now `java/lang/Object`
-     * alone) on the eager path. Initializers are the one thing still compiled at load: {@code <init>} and
-     * {@code <clinit>} run as part of loading, which is what has kept the hand-tuned clinit ordering intact
-     * through the whole arc.
+     * M8 stage 5: LAZY, FULL STOP — and it is FULL now, with no exception at all. EVERY class is
+     * metadata-only: phase-A cells for its statics, deferral stubs for its virtuals, its {@code <init>}
+     * included. Nothing is compiled at load time any more. This is the OpenJDK shape the `<init>` increment
+     * settled on, applied to the last class that was still outside it: ONE entry per method, always holding
+     * a valid callable address, whose CONTENTS change when the body compiles.
      *
-     * <p>This drops the last restriction — the `java/`/`jdk/`/`sun/` prefix — so demo and plugin classes are
-     * lazy too, not just `java.base`. There was never a reason for guest code to be the eager exception; the
+     * <p>The `java/`/`jdk/`/`sun/` prefix went first — guest code was never the right eager exception; the
      * prefix was scaffolding from when laziness was gated to a handful of named java.base utilities.
+     *
+     * <p>RETIRED PREDICATE — `eagerKept`. It held back {@code java/lang/Object} alone, on this stated
+     * objection: "its 9 virtuals are the prefix of EVERY vtable in both worlds, so its slots are what
+     * writer-baked code and loader-compiled code agree on. Deferring them would put stubs in that shared
+     * prefix, and a stub there is entered before the loader can be sure which world the receiver came
+     * from." That was a guess about a mechanism, not a measurement of one, and reading the mechanism
+     * refutes each half:
+     * <ul>
+     *   <li>A DEFERRAL STUB IS RECEIVER-INDEPENDENT. It is five instructions — `movz x17,idx`, the
+     *       trampoline address into x16, `br x16` — and never touches x0. It cannot ask which world the
+     *       receiver came from because it never looks at the receiver. Object's body is the same body
+     *       whoever is calling.</li>
+     *   <li>THE SHARED PREFIX IS A STABLE WORD, which is the whole point of the shape. A deferral entry
+     *       carries {@code slot = 0} ("no single slot to patch"), so {@link #lazyCompileLocked} never
+     *       re-points a TIB slot; {@link #rememberLazyBody} updates the method REGISTRY and nothing else.
+     *       The vtable word is the stub buffer's address for the life of the VM, so every copy of Object's
+     *       prefix — {@code inheritVtable}, {@code fillObjectVtableUpTo}, {@code refillArrayTibVtables} —
+     *       copies a word that never changes.</li>
+     *   <li>AND THE HOTTEST PATH DOES NOT EXIST. {@code Object.<init>} looks like the risk, since every
+     *       constructor begins with it — but {@link #isRealSpecial} lowers it to a POP in both worlds, so
+     *       it is never called at all and deferring it costs and risks nothing.</li>
+     * </ul>
+     * The synth-latch soundness note elsewhere in this file argues from "Object is the one eagerly-compiled
+     * class, so its slots are never re-pointed". The conclusion survives; the REASON is now the stub
+     * buffer's address stability rather than eagerness, and `sy:chg` on the batch line is the counter that
+     * says so empirically.
      */
     private static boolean stage2Gated(long base, int off)
     {
-        return !eagerKept(base, off);
-    }
-
-    /**
-     * The classes KEPT on the eager compile path — down to ONE. Stage 5 emptied this list a prefix at a
-     * time, each with its own Pi run: the reflection floor and Throwable hierarchy, the reference/cleaner/
-     * event subsystem, concurrency and {@code Unsafe}, {@code System}/{@code Thread}/the access shims, the
-     * charset/buffer/fd data layer, the invoke shims, and finally the socket-native stack itself.
-     *
-     * <p>{@code java.lang.Object} stays because it is not a class like the others: its 9 virtuals are the
-     * prefix of EVERY vtable in both worlds, so its slots are what writer-baked code and loader-compiled
-     * code agree on. Deferring them would put stubs in that shared prefix, and a stub there is entered
-     * before the loader can be sure which world the receiver came from. There is no demand for making it
-     * lazy either — every program uses it immediately.
-     */
-    private static boolean eagerKept(long base, int off)
-    {
-        return utf8IsAtBase(base, off, Magic.bytes("java/lang/Object"));
+        return true;
     }
 
     /** M8 Stage 2: true if the current class's method (name, desc) already has a structure-time phase-A cell,
