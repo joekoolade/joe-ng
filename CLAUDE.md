@@ -115,6 +115,40 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE FULL `getAndBitwise{Or,And,Xor}{Int,Long}` FAMILY IS IN -- all eighteen, and landing it is what
+  PROVES the constructor gap is closed (2026-09-18, NOT YET PI-VALIDATED).** `overlaycheck-deep` lists every
+  one of them as referenced by stock java.base; only `getAndBitwiseOrLong` existed, so the other seventeen
+  CEASED TO EXIST -- an overlay wins the name, and a member it omits resolves nowhere and surfaces as a
+  `DENYLIST TRAP` blaming a list this class is not on. **This unblocks overlay-gap work generally:** `Unsafe`
+  alone has ~250 referenced-but-dropped members.
+  - **IT IS A TEST AS MUCH AS A FEATURE, which is why it went second.** The family aborting the demo suite at
+    `demo/DefaultIfaceDemo` with an uncaught NPE was the ONLY reproduction of "a metadata-only class's
+    `<init>` has neither a deferral stub nor a cell". On the deferred-`<init>` base the suite prints
+    **`attributes forEach ok (inherits Map.forEach)`** -- the exact arm whose `LinkedEntrySet.<init>` used to
+    resolve to nothing -- with 33 programs, 0 exceptions and fourteen failure markers zero. **The gap is
+    closed by the STUB; the cell was never needed.**
+  - **ACQUIRE AND RELEASE SHARE THE PLAIN BODY, correct by being STRONGER rather than equal.** `Magic.cas64`
+    is LDAXR/STLXR -- already acquire-on-load and release-on-store -- so the plain form carries at least the
+    ordering either variant asks for, and joe-ng has no one-way barrier intrinsic to emit a weaker form with.
+  - **THE INT FORMS OPERATE ON AN 8-BYTE SLOT, a PRECONDITION ON THE CALLER rather than a detail.** `Magic`
+    exposes `cas64` and nothing narrower. Exact for an INSTANCE FIELD; WRONG for an int ARRAY element, whose
+    scale is 4 -- a 64-bit access there takes the neighbouring element with it, at an address the exclusive
+    monitor is not even aligned for. Nothing reached does that, and **a narrow-slot caller would not fail, it
+    would corrupt its neighbour.**
+  - **THE PROBE COVERS ALL EIGHTEEN AND IS BYTE-IDENTICAL TO A HOST CONTROL** -- 26 arms, every one `OK`,
+    `diff` against a stock JVM running the same source EMPTY. Or/And/Xor get a start and mask where all three
+    answers differ (14 / 8 / 6), which catches the wrong-operator paste eighteen near-identical bodies invite;
+    Acquire/Release get the same treatment, since their available fault is delegating to the WRONG SIBLING;
+    the long arms mask above 2^32; and the sign-bit arms do a SECOND op per operator, because a non-canonical
+    8-byte slot reads back correctly through one `(int)` cast and then spins the next CAS FOR EVER -- a hang,
+    not a wrong number. `want` is computed with Java's own operator, an oracle independent of this overlay.
+  - **GATES:** demo suite 33 programs, 0 exceptions, fourteen markers zero, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `finish HML`, `HIGH blocked 60ms`, `smp sched: 4 of 4`, closure
+    `rounds=4 pend=180 reach=16` unchanged. **QEMU launcher: batch 139, +2473blob, `[3 containers
+    successful]` / `[2 tests successful]` / `[0 tests failed]`, `Test run finished after 97705 ms`.** Host:
+    `compiler: 39 checks`, `overlay-check 0 new` (28 gaps unchanged -- these members are visible only to the
+    DEEP scan, the blind spot that found them).
+
 - **`<init>` DEFERS LIKE EVERY OTHER METHOD NOW, WHICH IS THE OpenJDK SHAPE -- AND IT REFUTES THIS FILE'S OWN
   2026-09-15 VERDICT, ON HARDWARE (2026-09-18, PI-VALIDATED).** `notInit` is retired: the defer decision is
   `stubOnly || stage2Gated(...)`, so a constructor gets a deferral stub in its own registered buffer like
@@ -193,10 +227,11 @@ defines the minimum the assembler must encode.
     and that was ~853 methods per launcher batch, which is the cost the 2026-09-15 entry measured as the
     motivation. QEMU wall clock is load-sensitive and this file records that confound four times, so the
     figure is reported rather than claimed.
-  - **WHAT THIS DOES NOT YET DO: close the gap it was written for.** A metadata-only class's `<init>` having
-    neither stub nor cell is what the reverted arc was chasing; whether deferring closes it is what
-    RE-LANDING THE 18 UNSAFE MEMBERS tests, since that family aborting the suite was the gap's only
-    reproduction. That is the next increment, and it is a test as much as a feature.
+  - **IT DOES CLOSE THE GAP IT WAS WRITTEN FOR, AND THE 18 UNSAFE MEMBERS ARE THE PROOF (see the card
+    above).** A metadata-only class's `<init>` having neither stub nor cell is what the reverted arc was
+    chasing; the family aborting the suite at `demo/DefaultIfaceDemo` was that gap's ONLY reproduction, and
+    on this base the suite prints `attributes forEach ok (inherits Map.forEach)` with 33 programs clean. So
+    the stub is sufficient and the cell was never needed.
   - **STILL OPEN, FOUND ON THE WAY, DELIBERATELY NOT BUNDLED: `MAXPENDINIT` IS A SILENT DROP.** The lazy
     path does `if (lzInitN >= MAXPENDINIT) { return; }` at a cap of 64, and constructors flow through it
     now, so the pressure rises. A dropped entry is a class that never initializes -- a null static
