@@ -311,6 +311,64 @@ defines the minimum the assembler must encode.
     `<clinit>`s included -- a longer hold than before -- so contended tasks block where they used to race.
     That is correctness bought with concurrency, and only a Pi boot says what it costs.
 
+- **THE TWENTY REFLECTION NATIVES ARE PI-VALIDATED -- AND THE SAME BOOT REFUTES THIS FILE'S OWN "LATENT, NOT
+  LIVE" CLAIM ABOUT THE CLINIT-UNDER-LOCK HAZARD (2026-09-19, PI-VALIDATED).** `1b72cd3` on hardware:
+  `Test run finished after 100195 ms`, `[3 containers successful]` / `[2 tests successful]` /
+  `[0 tests failed]`, exit 0, batch 139 `+2473blob`, both stock jtreg tests green (`testMillisNanos()
+  50629 ms`, `testMillis() 17363 ms`).
+
+  | gate | required | this boot |
+  |---|---|---|
+  | `n:imap` / `synth` / `clinits` | 1238 / 2242 / 531 | **1238 / 2242 / 531** |
+  | `memo` / `res` / `unres` | 27286 / 49267 / 9022 | **27286 / 49267 / 9022** |
+  | `sy:chg` | 0 | **0** at 2242 TIBs |
+  | `rel` (outermost lock releases) | ~4306 before the fix | **16728** |
+
+  - **`rel` 4306 -> 16728 IS THE MECHANICAL PROOF, and it is the reading that matters most.** Nearly FOUR
+    TIMES the lock acquisitions, on silicon, which is what twenty-three newly locked entry points look like
+    from the outside. `lk:wait=5` says almost none of them had to wait -- the lock was uncontended, not
+    unused, and those are different claims that `rel` and `lk:wait` separate.
+  - **AND THE COST I WARNED ABOUT IS NOT THERE.** The QEMU arm ran 125,594ms against ~95,557ms and I recorded
+    that part of it might be real serialization -- twenty-three paths that used to run concurrently now
+    queueing. **Hardware says no: 100,195ms against the 100,056 / 100,786ms this file records for the two
+    preceding PI-VALIDATED launcher boots.** Flat, inside the ~1.6s spread. The QEMU slowdown was host load,
+    and the serialization worry was mine rather than the VM's.
+  - **THE BOOT ALSO PROVES A DEFECT IN THIS FILE'S OWN SAFETY ARGUMENT, printed in its own stack trace.**
+    The card below states the clinit-under-lock deadlock is "latent, not live ... only because
+    `clinitEagerKept` returns false unconditionally". **That is wrong, and the routine batch-21 `ProcessImpl`
+    trap shows exactly why:**
+
+    ```
+    at java/lang/ProcessImpl.<clinit>                    <- GUEST CODE
+    at vm/Loader.runPendingClinit(Loader.java:1471)      <- the Magic.call0 that is NOT guarded
+    at vm/Loader.ensureClinit(Loader.java:1399)
+    at vm/Loader.lazyCompileLocked(Loader.java:14691)
+    at vm/Loader.lazyCompile(Loader.java:14601)          <- holding LOCK_LAZY
+    ```
+
+    `clinitEagerKept` gates `runClinits` ONLY; it does not gate `ensureClinit`. An initializer runs under the
+    loader lock through `lazyCompile` on EVERY boot, and `warnClinitUnderLock` is installed only on the three
+    `call0` sites that gate says are unreachable -- **an instrument wired exclusively to dead code, which is
+    the "cannot fire looks exactly like never happens" trap this file names.** Found by a peer review,
+    confirmed by reading, and then printed by the hardware unprompted.
+  - **AND `1b72cd3` WIDENS IT, stated rather than discovered later:** `forNameMirror` calls `ensureClinit`
+    (Loader.java:6040, 6056) and is now inside `LOCK_REFLECT`, so `Class.forName` from guest code runs an
+    initializer under the lock where it did not before. The hazard was already live; this enlarges its
+    surface. It has survived every boot so far because the trap force-releases the whole hold before it
+    spins -- which is luck about the ONE path that traps, not a safety argument.
+  - **ALSO OPEN AND NOT FIXED HERE: `ceb1a9d`'s acquire barrier cannot do its job.** `Magic.dsb()` sits
+    BEFORE `int ci = 0` (Loader.java:6630), so both the `pcN` load and the `pcBytes[ci]` load are after it --
+    and a barrier orders accesses before it against accesses after it, not two loads that are both after it.
+    Message-passing needs it BETWEEN observing the count and reading the entry. The comment states the
+    requirement correctly and the instruction is placed where it cannot meet it. **I reviewed that commit and
+    called the placement correct**, which is the second time in this arc I confirmed the specific claim in
+    front of me without asking whether it was the whole story.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT.** It proves NO REGRESSION at 2473-blob scale with the whole
+    reflection surface newly serialized, and it proves the lock is genuinely taken (`rel` 4x). It does NOT
+    prove the fix eliminates the parse-context corruption: that failure was never reproducible on demand
+    (5/5 quiescent passes, and the contended harness measured nothing), so a single clean boot is consistent
+    with the fix working and cannot distinguish that from the failure simply not occurring.
+
 - **THE FAILURE CANNOT BE REPRODUCED ON DEMAND, SO THERE IS NO RATE -- AND THE "FOUR-MINUTE LOCAL GATE" IS
   RETRACTED (2026-09-19).** Two runs were built to measure the batch-21 failure rate, control against fix,
   interleaved so load drift would hit both sides equally. **Neither produced a usable number, and the reason
