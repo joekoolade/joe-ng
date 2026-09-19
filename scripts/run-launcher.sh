@@ -37,7 +37,13 @@ qemu-system-aarch64 -M raspi4b -kernel /tmp/launcher.img -serial null -serial st
 PID=$!
 i=0
 while [ "$i" -lt "$SECS" ]; do
-    if grep -qaE "main returned normally|DENYLIST TRAP|Exception in thread|JIT unsupported" "$OUT"; then
+    # `DENYLIST TRAP` IS NOT A TERMINAL MARKER AND MUST NOT BE ONE. The ProcessImpl.init trap fires at
+    # batch 21 of EVERY healthy launcher boot -- picocli's terminal-width thread reaches a denied native,
+    # the trap force-releases the loader lock and the boot runs on to batch 139. Breaking on it killed the
+    # run 25s later, every time, and a log that stops at batch 21 reads exactly like a VM that died there.
+    # That is the same "I truncated my own evidence" failure this script's own header was written about.
+    # Break on the REAL endings instead: the launcher's own completion, or a fault it cannot survive.
+    if grep -qaE "main returned normally|Test run finished|Exception in thread|JIT unsupported|LOCALS UNDERSIZED|BOOT RE-ENTERED|heap OOM|STW TIMEOUT|ESR EC=" "$OUT"; then
         # GRACE PERIOD, and it is not politeness: the marker appears on the FIRST line of a report whose stack
         # trace is still being written a frame at a time over a 115200 baud UART. Killing on the marker chops
         # the trace off mid-frame -- which cost a whole boot here, because the frame that names the FAULTING
