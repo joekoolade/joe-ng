@@ -236,8 +236,50 @@ defines the minimum the assembler must encode.
       Host: `compiler: 40 checks` -- the new methods carry no handler, so `assertNoDeepHandlers` is unmoved.
     - **WHAT THAT DOES NOT SHOW, stated rather than rounded up: THE SUITE IS NOT THE LAUNCHER.** Arm 3's
       condition is contended batch 21 -- picocli's terminal-width thread against main -- and the suite never
-      reaches it. Silence here means no unlocked touch at SUITE scale and nothing more. The run that would
-      settle it is the launcher, armed, contended; that has not been done.
+      reaches it. Silence here means no unlocked touch at SUITE scale and nothing more.
+  - **THE ARMED LAUNCHER RAN CONTENDED AND REACHED 139, AND THE `lk:wait` TRAJECTORY IS WHAT THE TWO-QEMU
+    RECIPE IS ACTUALLY WORTH (2026-09-19, QEMU).** Prompted by the right question -- *two QEMUs are two
+    separate guests, so what does the second one prove?* It shares no memory with the first and cannot touch
+    its `gbase`; its only possible effect is host-scheduler jitter on the first VM's vCPU threads. Armed, with
+    a second guest alongside, on the byte-identical binary `b274d6b6...`:
+
+    | batch | 20 | 21 | **22** | 23-25 | ... | 139 |
+    |---|---|---|---|---|---|---|
+    | `lk:wait` | 0 | 0 | **8** | 8 | 8 | 8 |
+    | `yields` | 0 | 0 | **146,676** | frozen | | 146,676 |
+
+    - **ALL EIGHT WAITS LAND IN ONE BATCH AND NOTHING MOVES ACROSS THE REMAINING 117**, reproducing the
+      recorded shape exactly, and landing at 22 -- immediately after the `ProcessImpl` trap at 21 puts
+      picocli's terminal-width thread in the loader. Twenty batches of load ~37 produced `lk:wait=0`:
+      **guest-side lock contention is a property of what the GUEST is doing, not of host load.**
+    - **AND YET THE SECOND GUEST IS NOT WORTHLESS, WHICH IS A CORRECTION TO MY OWN DISMISSAL.** `lk:wait` is
+      **8** here against the **4** recorded solo. Stretching one vCPU thread relative to another genuinely
+      widens the window in which task A holds the lock when task B arrives. What it does NOT do is reach new
+      code: `PARSE_CTX_WATCH` reports an unlocked TOUCH -- a property of which code ran -- and it fired
+      **ZERO times** to batch 139. Window, not coverage.
+    - **THREE COUNTERS SEPARATE CLEANLY, and that separation is the reusable part:** `rel=16715` and
+      `clinitLk=233` are IDENTICAL to an earlier run of the same closure (deterministic -- properties of the
+      work and of the closure), while `lk:wait`/`yields` read 8/146,676 here against 6/129,509 there
+      (properties of the INTERLEAVING). A counter that moves between arms of the same binary is measuring
+      timing; one that does not is measuring the program.
+    - **THE ARM PASSED:** batch 139 `+2473blob`, `n:imap=1238 synth=2242 clinits=531`, `memo=27286 res=49267
+      unres=9022`, `sy:chg=0`, `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]`,
+      118,744ms against ~96,291ms solo. Every marker zero. **ONE PASSING CONTENDED ARM PROVES NOTHING ABOUT
+      THE FIX** -- the failure is 2-in-4 at best, and this file has already had to retract a claim built on
+      exactly that arithmetic. What it establishes is the guard's silence at LAUNCHER scale under contention.
+    - **THE EXIT-CODE FIX EARNED ITS KEEP ON ITS FIRST REAL USE:** `run-launcher.sh exit=0`, recorded rather
+      than inferred from grepping a log.
+    - **TWO ERRORS OF MINE ON THIS RUN, recorded because both would have corrupted the reading.** (1) An
+      ORPHANED third emulator from an earlier suite boot was never reaped, so the first ~5 minutes ran THREE
+      guests, not two -- load hit 39 on an 8-core host. (2) From inside that contaminated window I extrapolated
+      "it will not reach batch 21 inside the budget"; with the orphan gone it reached 139 comfortably.
+      **A prediction made from a contaminated arm is not a prediction about the arm.**
+    - **SOLO ARM IN FLIGHT at the time of writing**, same binary, booted at 1-minute load 2.97 with zero other
+      emulators. **PREDICTION, stated before the data so it is falsifiable: `lk:wait=4` and `PARSE VIEW 0`.**
+      If it lands there the answer is complete in both directions -- the second guest doubles the contention
+      WINDOW and reaches no path the solo run does not, so for hunting an unlocked path the solo arm was
+      always the better experiment. If instead the guard fires only when contended, the reasoning above is
+      wrong and load is reaching code solo does not.
   - **STILL OPEN, and the order is unchanged:** `loaderLock`'s `smpSched == 0` gate is wrong on its own
     terms -- it makes the lock inert on a single scheduling core while the hazard is per TASK, and one core
     still time-slices preemptively -- but closing it before the clinit phase can leave the batch would
