@@ -356,7 +356,31 @@ defines the minimum the assembler must encode.
     initializer under the lock where it did not before. The hazard was already live; this enlarges its
     surface. It has survived every boot so far because the trap force-releases the whole hold before it
     spins -- which is luck about the ONE path that traps, not a safety argument.
-  - **BOTH ARE FIXED NOW (`be81b06`), AND THE GUARD'S FIRST HONEST BOOT GIVES THE MAGNITUDE: `clinitLk=233`.**
+  - **PI-VALIDATED (2026-09-19): `Test run finished after 100261 ms`, `[3 containers successful]` /
+    `[2 tests successful]` / `[0 tests failed]`, exit 0, batch 139 `+2473blob`, closure identity EXACT
+    (`n:imap=1238 synth=2242 clinits=531`, `memo=27286 res=49267 unres=9022`, `sy:chg=0`), both stock jtreg
+    tests green (`testMillisNanos() 50648 ms`, `testMillis() 17361 ms`), and `JIT unsupported` /
+    `LOCALS UNDERSIZED` / `FAULT` / `BOOT RE-ENTERED` / `LOADER LOCK stuck` all ZERO.**
+    - **`clinitLk=234` ON SILICON AGAINST 233 ON QEMU -- a one-count difference across two harnesses.** That
+      near-identity is the useful part: the number is a property of the CLOSURE, not of the machine, so it is
+      a gate a future change can be held to rather than a curiosity.
+    - **AND THE EIGHT IT NAMES SPAN BOTH WORLDS, which the QEMU run did not show:** `java/lang/String`,
+      `java/lang/StringLatin1`, `jdk/internal/util/ArraysSupport`, `java/lang/Boolean`, `java/util/Optional`
+      -- and `org/junit/platform/commons/logging/LoggerFactory`, `.../util/ModuleUtils`,
+      `.../command/CustomClassLoaderCloseStrategy`. Not a java.base quirk: APPLICATION initializers run under
+      the lock too.
+    - **`clinitLk=0` THROUGH ALL OF BATCH 1, THEN 57 BY BATCH 2 -- and that shape confirms the mechanism
+      rather than contradicting it.** Batch 1 ENQUEUES 461 initializers and runs almost none (`runcl=18us`);
+      they fire later on first use, through `lazyCompile -> ensureClinit`, which is exactly the route the
+      guard was moved to. Had the count risen during the batch instead, the diagnosis would have been wrong.
+    - **THE COST IS AGAIN ABSENT ON SILICON:** 100,261ms against the 100,195 / 100,056 / 100,786ms recorded
+      for the three preceding PI-VALIDATED launcher boots. Flat, for a second consecutive hardware boot,
+      which retires the serialization worry for good.
+    - **THE `ProcessImpl` TRAP PRINTED THE LIVE CHAIN AGAIN, at the new line numbers** (`runPendingClinit`
+      :1501, `ensureClinit`:1428, `lazyCompileLocked`:14737, `lazyCompile`:14647) -- proof by presence for a
+      seventh consecutive boot, and the same evidence that refuted the "latent" claim in the first place.
+  - **BOTH ARE FIXED NOW (`be81b06`), AND THE GUARD'S FIRST HONEST BOOT GIVES THE MAGNITUDE: `clinitLk=233`
+    on QEMU, `234` on hardware.**
     Two hundred and thirty-three initializers run under the loader lock in ONE launcher boot -- `java/lang/
     String` and `java/lang/StringLatin1` among the eight it prints before the cap. **The old wiring reported
     zero**, so the gap between "silent" and "233 per boot" is exactly the cost of an instrument attached to
