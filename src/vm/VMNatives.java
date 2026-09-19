@@ -14,6 +14,35 @@ import static vm.VM.*;   // strBytes/printStr/heapBytes helpers + fileDir/fileCo
  * {@code vm/VMNatives.<name>}). Grouping them here keeps VM.java to its core (boot, scheduler, GC, unwind,
  * class-loading glue); the only in-VM references are the force-compile roots, which call {@code VMNatives.<name>}.
  * {@code instanceOf} deliberately stayed in VM -- it is also the checkcast/instanceof/unwind JIT helper.
+ *
+ * <p><b>EVERY REFLECTION ENTRY POINT HERE TAKES THE LOADER LOCK, and the reason is the loader's compile
+ * context rather than anything about reflection.</b> {@code gbase}/{@code gcp}/{@code gbytes} are a
+ * switchable VIEW onto ONE blob, held in statics. A native that calls {@code Loader.parseConstPool}
+ * re-points that view and then walks it -- {@code fieldTypeMirror} (the native behind
+ * {@code Field.getType}) parses and then reads the cursor for ~30 lines -- so a second task walking the
+ * context meanwhile reads ITS offsets against the new blob's bytes. The symptom is a report printing a
+ * constant pool where a class NAME belongs, and an NPE in {@code ClassReader.u1} on a null
+ * {@code gbytes}: both are recorded in CLAUDE.md, and both reproduce.
+ *
+ * <p><b>TWENTY ENTRY POINTS WERE UNLOCKED, not one.</b> The trampolines were locked one at a time
+ * ({@code lazyCompile}, {@code resolveLinkStub}, {@code resolveUnresolvedNew}, {@code bakeResolve},
+ * {@code virtualResolve}) and the last of those was recorded as closing the surface. It did not: the
+ * whole {@code Field}/{@code Method}/{@code Class} annotation-and-enumeration family reaches
+ * {@code parseConstPool} from here, and picocli calls {@code Field.getType} for EVERY option field while
+ * building its command spec -- the launcher's hot path, concurrently with compiles on other tasks.
+ *
+ * <p><b>THE LOCK GOES HERE RATHER THAN IN {@code Loader}, and that is measured.</b> Eight of the twenty
+ * are deep-stack ({@code fieldTypeMirror} is stack=10), and this project's build-time guard forbids an
+ * exception handler in a deep method -- so locking in {@code Loader} would have needed eight
+ * wrapper/{@code *Locked} splits. Every wrapper here is thin instead (deepest stack=6), so each is a
+ * plain {@code try/finally}. {@code CompilerTest.assertNoDeepHandlers} now covers this file, so an edit
+ * that fattens one of them is caught at build time rather than on hardware.
+ *
+ * <p><b>IT WIDENS THE CLINIT-UNDER-LOCK DEBT, stated rather than discovered later.</b> These paths can
+ * run an initializer, so the loader lock is now held across guest code here too -- as it already is for
+ * {@code loadAll}'s batch and {@code lazyCompile}'s drain. That deadlock is latent only because
+ * {@code clinitEagerKept} returns false unconditionally; {@code reportEagerClinitUnderLock} is the guard
+ * for the day it does not.
  */
 final class VMNatives
 {
@@ -261,13 +290,29 @@ final class VMNatives
      */
     static long declaredMethodAt(long mirror, long want)
     {
-        return Loader.declaredMethodName(mirror, (int) want);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredMethodName(mirror, (int) want);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredMethodDescAt0(Class,int)} native: the n-th declared method's DESCRIPTOR. */
     static long declaredMethodDescAt(long mirror, long want)
     {
-        return Loader.declaredMethodDesc(mirror, (int) want);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredMethodDesc(mirror, (int) want);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -289,37 +334,85 @@ final class VMNatives
     /** {@code Class.declaredFieldAt0(Class,int)} native: the NAME of the n-th field the class declares. */
     static long declaredFieldAt(long mirror, long want)
     {
-        return Loader.declaredFieldName(mirror, (int) want);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredFieldName(mirror, (int) want);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredFieldDescAt0(Class,int)} native: the n-th declared field's DESCRIPTOR. */
     static long declaredFieldDescAt(long mirror, long want)
     {
-        return Loader.declaredFieldDesc(mirror, (int) want);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredFieldDesc(mirror, (int) want);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredFieldCount0(Class)} native: how many fields the class declares (statics included). */
     static long declaredFieldCount(long mirror)
     {
-        return Loader.declaredFieldName(mirror, -1);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredFieldName(mirror, -1);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredCtorCount0(Class)}: how many CONSTRUCTORS the class declares. */
     static long declaredCtorCount(long mirror)
     {
-        return Loader.declaredCtorPart(mirror, -1, 0);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredCtorPart(mirror, -1, 0);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredCtorDescAt0(Class,int)}: the n-th constructor's DESCRIPTOR. */
     static long declaredCtorDescAt(long mirror, long want)
     {
-        return Loader.declaredCtorPart(mirror, (int) want, 1);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredCtorPart(mirror, (int) want, 1);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredMethodCount0(Class)} native: how many methods the class declares. */
     static long declaredMethodCount(long mirror)
     {
-        return Loader.declaredMethodName(mirror, -1);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.declaredMethodName(mirror, -1);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -328,12 +421,20 @@ final class VMNatives
      */
     static long annoPresent(long rgIndex, long descArr)
     {
-        if (descArr <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;                                     // boot-time force-compile passes 0; no-op
+            if (descArr <= 0x1000L)
+            {
+                return 0L;                                     // boot-time force-compile passes 0; no-op
+            }
+            int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+            return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
         }
-        int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
-        return Loader.methodAnnoPresent((int) rgIndex, descArr, n) ? 1L : 0L;
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -343,12 +444,20 @@ final class VMNatives
      */
     static long annoGet(long rgIndex, long descArr)
     {
-        if (descArr <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;                                     // boot-time force-compile passes 0; no-op
+            if (descArr <= 0x1000L)
+            {
+                return 0L;                                     // boot-time force-compile passes 0; no-op
+            }
+            int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
+            return Loader.methodAnnotation((int) rgIndex, descArr, n);
         }
-        int n = (int) Magic.load64(descArr + 16L);         // byte[] length @16
-        return Loader.methodAnnotation((int) rgIndex, descArr, n);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Field.annoGet0(Class, byte[] fieldName, byte[] desc)} native: an annotation on a FIELD. */
@@ -372,39 +481,79 @@ final class VMNatives
     /** {@code Field.fieldAnnoAll0(Class,byte[])} -> every annotation declared on that field. */
     static long fieldAnnoAll(long mirror, long nameArr)
     {
-        return Loader.fieldAnnotationsAll(mirror, nameArr);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.fieldAnnotationsAll(mirror, nameArr);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     static long fieldAnnoGet(long mirror, long nameArr, long descArr)
     {
-        if (descArr <= 0x1000L || mirror <= 0x1000L || nameArr <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;
+            if (descArr <= 0x1000L || mirror <= 0x1000L || nameArr <= 0x1000L)
+            {
+                return 0L;
+            }
+            int n = (int) Magic.load64(descArr + 16L);
+            return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
         }
-        int n = (int) Magic.load64(descArr + 16L);
-        return Loader.fieldAnnotation(mirror, nameArr, descArr, n);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Method.paramTypes0(int)} native: a {@code Class[]} of the method's parameter types. */
     static long methodParamTypes(long rgIndex)
     {
-        return Loader.methodParamTypes((int) rgIndex);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodParamTypes((int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Method.returnType0(int)} native: the Class mirror of the method's declared return type. */
     static long methodReturnType(long rgIndex)
     {
-        return Loader.methodReturnType((int) rgIndex);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodReturnType((int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Field.type0(Class, byte[])} native: the Class mirror of a field's declared type. */
     static long fieldType(long mirror, long nameArr)
     {
-        if (mirror <= 0x1000L || nameArr <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;
+            if (mirror <= 0x1000L || nameArr <= 0x1000L)
+            {
+                return 0L;
+            }
+            return Loader.fieldTypeMirror(mirror, nameArr);
         }
-        return Loader.fieldTypeMirror(mirror, nameArr);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.annoGet0(Class, byte[])} native: the same, for an annotation on the CLASS itself. */
@@ -417,29 +566,61 @@ final class VMNatives
     /** {@code Method.annoAll0(int)} native: every annotation DECLARED on that method, as an Annotation[]. */
     static long methodAnnoAll(long rgIndex)
     {
-        return Loader.methodAnnotationsAll((int) rgIndex);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.methodAnnotationsAll((int) rgIndex);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.declaredClasses0(Class)} native: the MEMBER classes it declares, as a Class[]. */
     static long classDeclClasses(long mirror)
     {
-        return Loader.classDeclaredClasses(mirror);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classDeclaredClasses(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.annoAll0(Class)} native: every annotation DECLARED on the class, as an Annotation[]. */
     static long classAnnoAll(long mirror)
     {
-        return Loader.classAnnotationsAll(mirror);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.classAnnotationsAll(mirror);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     static long classAnnoGet(long mirror, long descArr)
     {
-        if (descArr <= 0x1000L || mirror <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return 0L;
+            if (descArr <= 0x1000L || mirror <= 0x1000L)
+            {
+                return 0L;
+            }
+            int n = (int) Magic.load64(descArr + 16L);
+            return Loader.classAnnotation(mirror, descArr, n);
         }
-        int n = (int) Magic.load64(descArr + 16L);
-        return Loader.classAnnotation(mirror, descArr, n);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -484,7 +665,15 @@ final class VMNatives
      */
     static long forName(long nameArr)
     {
-        return Loader.forNameMirror(nameArr);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            return Loader.forNameMirror(nameArr);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** {@code Class.assignable0(from, target)} native: the VM's own type assignability, interfaces included. */
@@ -535,8 +724,16 @@ final class VMNatives
      */
     static long defineClass(long nameArr, long byteArr, long off, long len)
     {
-        long type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
-        return type == 0L ? 0L : Loader.classMirror(type);
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
+        {
+            long type = Loader.defineFromBytes(byteArr, (int) off, (int) len);
+            return type == 0L ? 0L : Loader.classMirror(type);
+        }
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /**
@@ -749,27 +946,43 @@ final class VMNatives
     /** Reflection: {@code Class.fieldMods0(Class,byte[])} -> the named own instance field's access_flags, or -1. */
     static int fieldMods(long mirrorRef, long nameArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return -1;
+            if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+            {
+                return -1;
+            }
+            long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
+            int fnLen = (int) Magic.load64(nameArrRef + 16L);
+            long fnBase = nameArrRef + 24L;
+            return Loader.fieldMods(typeAddr, fnBase, fnLen);
         }
-        long typeAddr = Magic.load64(mirrorRef + 16L);       // Class.typeAddr
-        int fnLen = (int) Magic.load64(nameArrRef + 16L);
-        long fnBase = nameArrRef + 24L;
-        return Loader.fieldMods(typeAddr, fnBase, fnLen);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** Reflection: {@code Class.fieldTypeChar0(Class,byte[])} -> the field's descriptor first char, or -1. */
     static int fieldTypeChar(long mirrorRef, long nameArrRef)
     {
-        if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+        VM.loaderLock(VM.LOCK_REFLECT);      // re-points gbase/gcp/gbytes -- see the class doc
+        try
         {
-            return -1;
+            if (mirrorRef <= 0x1000L || nameArrRef <= 0x1000L)
+            {
+                return -1;
+            }
+            long typeAddr = Magic.load64(mirrorRef + 16L);
+            int fnLen = (int) Magic.load64(nameArrRef + 16L);
+            long fnBase = nameArrRef + 24L;
+            return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
         }
-        long typeAddr = Magic.load64(mirrorRef + 16L);
-        int fnLen = (int) Magic.load64(nameArrRef + 16L);
-        long fnBase = nameArrRef + 24L;
-        return Loader.fieldTypeChar(typeAddr, fnBase, fnLen);
+        finally
+        {
+            VM.loaderUnlock();
+        }
     }
 
     /** getCallerClass: the Class mirror of the JIT'd method containing machine PC {@code pc} (a saved LR). */

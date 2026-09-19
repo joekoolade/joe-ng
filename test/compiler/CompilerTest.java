@@ -339,6 +339,12 @@ public final class CompilerTest
         // violation, `lazyCompile(I)J stack=8`.
         assertNoDeepHandlers(classesDir.resolve("vm/Loader.class"));
         assertNoDeepHandlers(classesDir.resolve("vm/VMGc.class"));
+        // VMNatives JOINED THIS GUARD when the reflection entry points took the loader lock: every one
+        // of those 23 wrappers now carries a try/finally, so the pairing this check forbids became
+        // reachable in a file it did not cover. They are thin by construction (the deepest is stack=6),
+        // and the point of checking is that a future edit which fattens one is caught HERE rather than
+        // on a Pi -- which is the whole history of the Loader entry above.
+        assertNoDeepHandlers(classesDir.resolve("vm/VMNatives.class"));
 
         T.summary("compiler");
     }
