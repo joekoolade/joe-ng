@@ -1042,6 +1042,50 @@ public final class Loader
     private static int clDepTop;         // running top of clDepOff
 
     /** Run each enqueued {@code <clinit>} now that patchRelocs has fixed every cross-class call. */
+    /**
+     * SHOUT IF AN INITIALIZER IS ABOUT TO RUN WITH THE LOADER LOCK HELD -- the deadlock this batch path is
+     * one edit away from.
+     *
+     * <p>{@code loadAll} takes the loader lock for the whole batch, and this loop is the only thing inside it
+     * that can run GUEST CODE. {@code clinitEntryOf}, {@code compileMethodOnDemand}, {@code
+     * compileSigOnDemand} and the deferred-{@code <init>} path all state the same invariant in terms: "the
+     * lock covers the COMPILE only, never the running of an initializer -- a {@code <clinit>} can block on a
+     * monitor or spawn threads, and holding the loader lock across that would deadlock any task that needs
+     * to compile before it can release."
+     *
+     * <p><b>TODAY THAT CANNOT HAPPEN, AND THAT IS THE ONLY REASON THIS IS A REPORT RATHER THAN A FIX.</b>
+     * {@code clinitEagerKept} returns false unconditionally, so {@code lazyClinitGated} is true for every
+     * class, so the deferral arm above always fires and sets {@code progress}; the three {@code Magic.call0}
+     * sites in this method are UNREACHABLE. Measured rather than read off the source: {@code runcl} is
+     * 4.813ms across a 139-batch launcher boot and 245us across the demo suite -- this loop's own
+     * bookkeeping over 531 initializers, not initializer execution.
+     *
+     * <p><b>SO THE HAZARD IS LATENT, NOT LIVE -- and one line away.</b> {@code clinitEagerKept}'s own doc
+     * describes the socket bring-up it used to hold, so a future entry there re-enables these call sites and
+     * silently puts a blocking {@code <clinit>} under a lock every other compiler waits on. A restructure
+     * cannot be validated today because nothing executes the path; a report can, because it is silent today
+     * and impossible to miss the moment it is not.
+     *
+     * <p>AND SUSPENDING THE LOCK HERE WOULD BE UNSOUND, which is why the obvious fix is not the fix. The
+     * lock is RECURSIVE: {@code loadAll} routinely runs nested inside {@code lazyCompile}'s hold, so
+     * dropping to depth 0 around a {@code call0} would release a lock the OUTER frame is relying on to keep
+     * the static compile context to itself -- trading a latent deadlock for a live clobber. Whatever closes
+     * this has to move the clinit phase out of the batch, not punch a hole in the middle of it.
+     */
+    private static void warnClinitUnderLock(int i)
+    {
+        if (VM.smpSched == 0 || VM.loaderOwner != VM.curTask())
+        {
+            return;                                      // not holding it (or the lock is inert): nothing to say
+        }
+        Uart.write(Magic.bytes("\n  *** INITIALIZER RUNNING UNDER THE LOADER LOCK: "));
+        printUtf8Capped(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L);
+        Uart.write(Magic.bytes(" ***\n  ... clinitEagerKept has an entry again, so loadAll now holds the lock\n"));
+        Uart.write(Magic.bytes("  ... across guest code. If this <clinit> blocks on a monitor, joins a thread\n"));
+        Uart.write(Magic.bytes("  ... or waits, every task that must compile to wake it is behind this lock.\n"));
+        Uart.write(Magic.bytes("  ... See clinitEntryOf's invariant and warnClinitUnderLock's own doc.\n"));
+    }
+
     private static void runClinits()
     {
         // Run each <clinit> AFTER the <clinit>s of the classes it references (its CONSTANT_Class deps), so an
@@ -1050,14 +1094,21 @@ public final class Loader
         // superclass-first, NOT usage-dependency-first, so enqueue order is NOT a safe run order -- this
         // restores the single-phase dependency-first init order. Cycles (rare among initializers) are broken by
         // force-running the first pending, matching the loader's own cycle handling.
-        boolean[] done = new boolean[clinitN];
-        int remaining = clinitN;
+        // SNAPSHOT, because clinitN is not ours alone. This loop is the one place in a batch that can run
+        // GUEST CODE (Magic.call0 below), and guest code can reach Class.forName -> loadClassIncremental ->
+        // loadAll, which APPENDS initializers. Re-reading clinitN each iteration while done[] was sized at
+        // entry walks the array past its end -- an AIOOBE inside the loader, from a length that grew under
+        // it. Bounding everything by one snapshot makes the pass describe the queue it started with;
+        // anything appended while it runs belongs to the batch that appended it.
+        int snap = clinitN;
+        boolean[] done = new boolean[snap];
+        int remaining = snap;
         // Incremental load (Class.forName after launch): clinits [0,clinitRunFrom) ran in an earlier batch. Mark
         // them done so this pass runs ONLY the newly-enqueued initializers (they may still depend on the earlier
         // ones, which count as satisfied). Without this watermark a second loadAll would re-run every prior
         // <clinit>, double-initialising the whole running program.
         int w = 0;
-        while (w < clinitRunFrom && w < clinitN)
+        while (w < clinitRunFrom && w < snap)
         {
             done[w] = true;
             remaining -= 1;
@@ -1069,7 +1120,7 @@ public final class Loader
         // With initialization lazy, the same rule lives in initPrereq instead -- FileDescriptor initializes
         // when the first sun/nio/ch or java/net class does, which is both later and exactly as ordered. The
         // eager pre-run is kept only for a FileDescriptor that is NOT lazy (nothing today).
-        if (clinitFdFirst >= 0 && clinitFdFirst < clinitN && !done[clinitFdFirst]
+        if (clinitFdFirst >= 0 && clinitFdFirst < snap && !done[clinitFdFirst]
                 && !lazyClinitGated(clinitBase[clinitFdFirst], clinitNameOff[clinitFdFirst]))
         {
             if (logClinit != 0)
@@ -1078,6 +1129,7 @@ public final class Loader
             }
             long fdEntry = clinitEntryOf(clinitFdFirst);
             checkClinitEntry(fdEntry, clinitFdFirst);
+            warnClinitUnderLock(clinitFdFirst);
             long unusedFd = Magic.call0(fdEntry);
             clinitRan[clinitFdFirst] = 1;
             done[clinitFdFirst] = true;
@@ -1087,7 +1139,7 @@ public final class Loader
         {
             int progress = 0;
             int i = 0;
-            while (i < clinitN)
+            while (i < snap)
             {
                 if (!done[i] && lazyClinitGated(clinitBase[i], clinitNameOff[i]))
                 {
@@ -1108,6 +1160,7 @@ public final class Loader
                     }
                     long entry = clinitEntryOf(i);   // compiled HERE, on the run that actually needs it
                     checkClinitEntry(entry, i);
+                    warnClinitUnderLock(i);
                     long unused = Magic.call0(entry);
                     clinitRan[i] = 1;
                     done[i] = true;
@@ -1119,14 +1172,15 @@ public final class Loader
             if (progress == 0)                          // initializer cycle: force-run the first pending
             {
                 int j = 0;
-                while (j < clinitN && done[j])
+                while (j < snap && done[j])
                 {
                     j += 1;
                 }
-                if (j < clinitN)
+                if (j < snap)
                 {
                     long cyEntry = clinitEntryOf(j);
                     checkClinitEntry(cyEntry, j);
+                    warnClinitUnderLock(j);
                     long unused = Magic.call0(cyEntry);
                     clinitRan[j] = 1;
                     done[j] = true;
@@ -1138,7 +1192,14 @@ public final class Loader
                 }
             }
         }
-        clinitRunFrom = clinitN;                         // these have run; a later incremental batch starts past here
+        // NEVER BACKWARDS. With the lock dropped around a Magic.call0 (which is what the guard below exists
+        // to force), a nested batch can advance this past our snapshot; assigning our own would re-run
+        // everything it had already marked done -- double-initialising a running program, which is the exact
+        // failure the watermark was introduced to prevent.
+        if (snap > clinitRunFrom)
+        {
+            clinitRunFrom = snap;                        // these have run; a later incremental batch starts past here
+        }
     }
 
     /**
