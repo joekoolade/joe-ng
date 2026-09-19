@@ -311,6 +311,40 @@ defines the minimum the assembler must encode.
     `<clinit>`s included -- a longer hold than before -- so contended tasks block where they used to race.
     That is correctness bought with concurrency, and only a Pi boot says what it costs.
 
+- **THE TWENTY REFLECTION NATIVES ARE LOCKED -- AND THE ARM THAT PASSED IS NOT EVIDENCE THAT IT WORKED
+  (2026-09-19, NOT VALIDATED).** `1b72cd3` closes the surface the card below names: all 23 `VMNatives`
+  wrappers reaching `parseConstPool` now take the loader lock, verified by re-running the reachability pass
+  from the VMNatives side -- **20 unlocked entry points -> 0**.
+
+  | arm | binary | result | load |
+  |---|---|---|---|
+  | control 1 | pre-change | **FAIL** batch 21 (`JIT unsupported`) | ~3.2 |
+  | control 2 | pre-change | **FAIL** batch 21 (`ClassReader.u1` NPE) | ~5.5 |
+  | **fix** | **HEAD + the twenty** | **PASS** batch 139 | ~5.4 |
+  | **control 3** | **pre-change** | **PASS** batch 139 | 5.44 |
+
+  - **CONTROL 3 IS WHY THIS SAYS "NOT VALIDATED", AND RUNNING IT IS THE ONLY REASON THAT IS KNOWN.** The fix
+    arm reached the gate with closure identity EXACT and twelve markers zero, after two controls had died at
+    batch 21 -- which reads exactly like a proven fix. Then the PRE-CHANGE binary reached the same gate under
+    the same load. **The failure is intermittent, so a single passing arm on each side distinguishes
+    nothing**: the tally is 2 fails and 1 pass on the control against 1 pass on the fix, which is not a
+    result. Had the A/B stopped at three arms it would have shipped as a validation.
+  - **WHAT IS ESTABLISHED, and it is not nothing.** (1) The hole is real and is closed -- 20 -> 0 by the same
+    analysis that found it. (2) No regression: `n:imap=1238 synth=2242 clinits=531`, `memo=27286 res=49267
+    unres=9022`, `[2 tests successful]` / `[0 tests failed]`, and `JIT unsupported` / `LOCALS UNDERSIZED` /
+    `FAULT` / `BOOT RE-ENTERED` / `heap OOM` / `STW TIMEOUT` / `BADPATCH` / `VIRTUALRESOLVE FAILED` /
+    `Exception in thread` / `COMPILE WITHOUT THE LOADER LOCK` / `OUTSIDE A BRACKETED COMPILE` /
+    `LOADER LOCK stuck` all ZERO. (3) **The lock is demonstrably taken where it was not**: `lk:wait` 4 -> 16
+    and `rel` 4306 -> 16715, ~4x the acquisitions, which is the mechanical proof the change does what it
+    says and is the handoff's own predicted signal.
+  - **AND IT COSTS SOMETHING, reported rather than buried:** the run took 125,594ms against ~95,557ms, with
+    `yields` 138,040 -> 211,985. Part is host load and part is real serialization -- 23 paths that ran
+    concurrently now queue -- and **this pair of runs cannot split the two.**
+  - **WHAT WOULD ACTUALLY SETTLE IT: a RATE, not a run.** Ten-plus arms per side on a host held at a fixed
+    load, or the Pi. Four minutes an arm makes that cheap; what it is not is free, and no number of
+    single-arm passes substitutes for it. **The batch-21 failure rate is the measurement this arc still
+    does not have** -- every claim about this race, in this file, rests on counts of two to four.
+
 - **A SAME-BINARY CONTROL EXONERATES THE LOCK COMMITS, AND THE "SOLO PASSES" BASELINE WAS A STATEMENT ABOUT
   MACHINE LOAD (2026-09-19).** `ceb1a9d` (parse-cache release/acquire) and `ee3f303` (lock `virtualResolve`)
   were handed over unvalidated. A launcher arm on them failed at **batch 21** with the recorded
