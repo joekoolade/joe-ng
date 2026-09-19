@@ -6623,6 +6623,11 @@ public final class Loader
     {
         gbase = base;
         pcCalls += 1;
+        // ACQUIRE. This scan reads `pcN` and then reads the entry it selects, and on AArch64 nothing orders
+        // the second load after the first: the control dependency through `ci < pcN` is not a dependency the
+        // architecture respects. Without this a task can observe a PUBLISHED count with an UNPUBLISHED entry
+        // and take `gbytes = pcBytes[ci]` as NULL -- see the release side below for why that matters.
+        Magic.dsb();
         int ci = 0;
         while (ci < pcN && pcBase[ci] != base)
         {
@@ -6648,6 +6653,22 @@ public final class Loader
         litObjByCp = new long[gcpCount];                // per-blob ldc-String intern cache (one object per cp entry)
         gAfterCp = ClassReader.constantPool(gbytes, gcp, gcpTag);   // stable: gp is later reused as a walk cursor
         gp = base + gAfterCp;
+        // RELEASE-PUBLISH, AND THE ORDER IS THE WHOLE POINT. `pcN` is incremented LAST so a reader either
+        // sees the entry complete or does not see it at all -- which is correct on a machine that keeps
+        // stores in program order, and this is not one. AArch64 may make the `pcN += 1` visible to another
+        // core BEFORE the `pcBytes[pcN] = ...` beside it, and a reader that lands in that window takes a
+        // NULL out of a slot whose count says it is filled.
+        //
+        // THAT IS A CANDIDATE MECHANISM FOR A RECORDED FAILURE THIS FILE COULD NOT EXPLAIN: the contended
+        // launcher arm dies at batch 21 with an NPE inside `ClassReader.u1` whose null argument is
+        // `gbytes`, and CLAUDE.md states outright that `gbytes` is never WRITTEN null and no mechanism is
+        // claimed. It is not written null -- it is READ from an array slot that is not visible yet, which
+        // is a different thing and is exactly what an unordered publish produces. Both tasks reaching the
+        // same blob is the ordinary case for the launcher: the log names `ctx~java/lang/Object`.
+        //
+        // FITS, NOT PROVEN. The failure is intermittent (2 in 4 contended runs) and this has not been
+        // reproduced against an instrumented boot, so the barrier is justified on its own terms -- an
+        // unordered publish read by another core is a defect whether or not it is THAT defect.
         if (pcN < MAXPARSECACHE)                         // remember it: RTA/phase-A/phase-B all re-parse this blob
         {
             pcBase[pcN] = base;
@@ -6657,7 +6678,8 @@ public final class Loader
             pcLitObj[pcN] = litObjByCp;
             pcCpCount[pcN] = gcpCount;
             pcAfterCp[pcN] = gAfterCp;
-            pcN += 1;
+            Magic.dsb();                                 // every field of the entry lands BEFORE the count
+            pcN += 1;                                    //   that makes it reachable (see above)
         }
     }
 
