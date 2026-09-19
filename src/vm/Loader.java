@@ -11630,7 +11630,18 @@ public final class Loader
      */
     static long virtualResolve(long recv, int idx)
     {
-        // THE SIXTH UNLOCKED PATH INTO THE LOADER'S STATIC CONTEXT, and the last trampoline without a lock.
+        // THE LAST TRAMPOLINE WITHOUT A LOCK -- AND NOT, AS THIS COMMENT FIRST CLAIMED, THE LAST UNLOCKED
+        // PATH. It called this "the SIXTH unlocked path into the loader's static context", which reads as a
+        // closed enumeration and is wrong by a factor of four: a reachability pass over the natives finds
+        // TWENTY MORE `Loader.X` entry points called from `VMNatives` that reach `parseConstPool` with no
+        // lock anywhere on the path -- essentially the whole Field/Method/Class reflection surface, and
+        // `VMNatives` itself contains not one `loaderLock` call. `fieldTypeMirror` IS the native behind
+        // `Field.getType`, which this file records picocli calling for every option field; it re-points
+        // gbase/gcp/gbytes and then walks the cursor with nothing holding it still. See
+        // /tmp/joe-ng-handoff/FINDING-reflection-natives-unlocked.md and the CLAUDE.md card.
+        //
+        // The correction matters because the wrong number was the reassuring one: "sixth of six" says the
+        // surface is closed, and it is not. What follows is still right for THIS path.
         // This is entered straight from the late-virtual dispatch trampoline via VMNatives, and it reuses
         // resolveLinkTarget -- which demand-loads the class and calls parseConstPool, re-pointing gbase /
         // gcp / gbytes at a different blob. Every sibling trampoline already locks (lazyCompile LOCK_LAZY,
