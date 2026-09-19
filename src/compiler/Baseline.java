@@ -781,12 +781,12 @@ public final class Baseline
         }
         else if (op == 0xBC)
         {
-            lowerNewArray(code[pos + 1] & 0xFF, cb);
+            lowerNewArray(code[pos + 1] & 0xFF, cb, pos);
             return 2;
         }
         else if (op == 0xBD)
         {
-            lowerAnewArray(cb, u2(code, pos + 1));           // operand = element-class Class-entry
+            lowerAnewArray(cb, u2(code, pos + 1), pos);      // operand = element-class Class-entry
             return 3;
         }
         else if (op == 0xBF)
@@ -2240,6 +2240,34 @@ public final class Baseline
         cb.set(over, A64Enc.cbnz(refReg, cb.wordCount() - over));
     }
 
+    /**
+     * {@code newarray}/{@code anewarray}: throw {@code NegativeArraySizeException} unless the length is >= 0
+     * (JVMS 6.5). Without it a negative length is not merely a missing throw -- it is a BOUNDS-CHECK BYPASS.
+     * {@code Heap.allocArray} stores the length as a sign-extended 64-bit word, and {@link #boundsCheck}
+     * compares UNSIGNED (so that a negative index becomes a huge one and throws); {@code -1} therefore reads
+     * back as {@code 0xFFFF_FFFF_FFFF_FFFF} and every index is below it. {@code new int[-1]} allocated 20
+     * bytes and then accepted a store at ANY index.
+     *
+     * <p>The length is canonicalised first because the test has to be sound against a non-canonical int:
+     * {@code f2i}/{@code d2i} write a W register, which zero-extends, so {@code (int) -1.5f} arrives as
+     * {@code 0x0000_0000_FFFF_FFFF} -- a 64-bit signed test would call that POSITIVE and wave it through,
+     * and {@code allocArray} would then store it as the same all-ones length. One {@code sxtw} makes the
+     * guard independent of that, and leaves a canonical int for the allocator to store.
+     */
+    private void negativeSizeCheck(CodeBuffer cb, int pos)
+    {
+        if (!symbols.implicitChecks())
+        {
+            return;                                             // resolve the length's register only INSIDE the
+        }                                                       //   guard: opSlot can EMIT in a deep method, and
+        int lenReg = opSlot(sp - 1);                            //   the writer's output must stay byte-identical
+        cb.emit(A64Enc.sxtw(lenReg, lenReg));                   // the length is an int: canonicalise before testing
+        cb.emit(A64Enc.cmpImm(lenReg, 0));
+        int over = cb.emit(A64Enc.bcond(A64Enc.GE, 0));         // length >= 0 -> skip the throw block
+        throwImplicit(cb, pos, Symbols.NEW_NASE);
+        cb.set(over, A64Enc.bcond(A64Enc.GE, cb.wordCount() - over));
+    }
+
     /** Null-check the array, then throw AIOOBE unless {@code indexReg} is in {@code [0, length)}. */
     private void boundsCheck(CodeBuffer cb, int arrReg, int indexReg, int pos)
     {
@@ -2445,8 +2473,9 @@ public final class Baseline
     }
 
     // ----- arrays: [header][length @16][elements @24], element = base + index<<scale -----
-    private void lowerNewArray(int atype, CodeBuffer cb)
+    private void lowerNewArray(int atype, CodeBuffer cb, int pos)
     {
+        negativeSizeCheck(cb, pos);                              // length is on top; NegativeArraySizeException if < 0
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
         symbols.tagArray(cb, opSlot(sp - 1), atype, false);    // tag the result (top of stack) as its array Type
@@ -2458,8 +2487,9 @@ public final class Baseline
      * element class, but nothing needs it: element access ({@code aaload}/
      * {@code aastore}) is untyped, and array TIBs (for typed GC) are set later.
      */
-    private void lowerAnewArray(CodeBuffer cb, int classCp)
+    private void lowerAnewArray(CodeBuffer cb, int classCp, int pos)
     {
+        negativeSizeCheck(cb, pos);                             // length is on top; NegativeArraySizeException if < 0
         loadConst(cb, ObjectModel.WORD);                        // 8-byte reference elements
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
         symbols.tagArray(cb, opSlot(sp - 1), classCp, true);  // tag the result as [L<element>;

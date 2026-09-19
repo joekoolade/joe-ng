@@ -69,6 +69,14 @@ public final class Heap
     public static final long LARGE_REQ  = 16384L;
     public static final long LARGE_BASE = 0x0C00_0000L;      // top 64 MiB of core 0's arena
     public static final long LARGE_LIMIT = 0x1000_0000L;
+    /**
+     * Largest byte size an array allocation may ask for. {@link #alloc} takes an INT and rounds it up to 8
+     * ({@code (size + 7) & -8}), so this is the largest multiple of 8 that survives that rounding without
+     * wrapping negative. It bounds REPRESENTABILITY, not capacity: an allocation that is expressible but
+     * larger than the heap still fails in {@code alloc}'s own {@code heap OOM} path, which is where capacity
+     * belongs. Guarding the wrong one of those two quantities is how a check ends up silent for years.
+     */
+    public static final int MAX_ARRAY_BYTES = 0x7FFF_FFF0;
     /** Bump pointer and free-list head for the large region, beside the small region's own cells. */
     public static final long LARGE_PTR_CELL  = 0x03FF_0208L;
     public static final long LARGE_FREE_CELL = 0x03FF_0210L;
@@ -1428,10 +1436,49 @@ public final class Heap
         return alloc(size + ObjectModel.HEADER_SIZE) + ObjectModel.HEADER_SIZE;
     }
 
-    /** Allocate an array of {@code length} elements of {@code elemSize} bytes. */
+    /**
+     * Allocate an array of {@code length} elements of {@code elemSize} bytes.
+     *
+     * <p>THE LENGTH IS RE-CHECKED HERE, AND THE REASON IT IS NOT MERELY DEFENSIVE: the sign of the length is
+     * what makes a bounds check mean anything. The length is stored as a sign-extended 64-bit word and
+     * {@code Baseline.boundsCheck} compares it UNSIGNED (so a negative INDEX becomes a huge one and throws) --
+     * so a length of {@code -1} reads back as {@code 0xFFFF_FFFF_FFFF_FFFF} and EVERY index is below it.
+     * {@code new int[-1]} allocated 20 bytes and then accepted a load or store at any index at all.
+     *
+     * <p>{@code Baseline.negativeSizeCheck} throws the {@code NegativeArraySizeException} JVMS 6.5 requires,
+     * but it is emitted ONLY by the metal JIT: {@code implicitChecks()} is false for the writer, so every
+     * WRITER-BAKED {@code newarray} in {@code java/}, {@code jdk/}, {@code sun/} and {@code zip/} reaches this
+     * method unchecked -- and the baked zip inflater takes its lengths from the archive. Reaching here is a VM
+     * invariant violation rather than a program error (the JIT would have thrown first), so it HALTS by name
+     * instead of corrupting the heap silently.
+     *
+     * <p>The size is computed in LONG arithmetic for the same reason, and it closes a second door into the
+     * same hole: {@code ARRAY_BASE_OFFSET + length * elemSize} in int arithmetic OVERFLOWS for a large
+     * positive length -- {@code new long[0x20000000]} wrapped to a 24-byte allocation carrying a length of
+     * 2^29, which is the identical unbounded-access shape arrived at from the other end. A real JVM answers
+     * that with OutOfMemoryError; {@code alloc} takes an int, so anything that will not fit is refused here.
+     */
     public static long allocArray(int length, int elemSize)
     {
-        long p = alloc(ObjectModel.ARRAY_BASE_OFFSET + length * elemSize);
+        long bytes = (long) ObjectModel.ARRAY_BASE_OFFSET + (long) length * (long) elemSize;
+        if (length < 0 || bytes > (long) MAX_ARRAY_BYTES)
+        {
+            board.bcm2711.Uart.write(Magic.bytes("BAD ARRAY LENGTH len="));
+            VM.printHex((long) length);
+            board.bcm2711.Uart.write(Magic.bytes(" elemSize="));
+            VM.printHex((long) elemSize);
+            board.bcm2711.Uart.write(Magic.bytes(" bytes="));
+            VM.printHex(bytes);
+            board.bcm2711.Uart.write(Magic.bytes("\n  (a negative length is a BOUNDS-CHECK BYPASS -- the"));
+            board.bcm2711.Uart.write(Magic.bytes(" length is compared unsigned. JIT-compiled code throws\n"));
+            board.bcm2711.Uart.write(Magic.bytes("   NegativeArraySizeException before reaching here, so this"));
+            board.bcm2711.Uart.write(Magic.bytes(" is a WRITER-BAKED newarray or a VM caller.)\n"));
+            while (true)
+            {
+                Magic.wfe();
+            }
+        }
+        long p = alloc((int) bytes);
         // The array's TIB slot holds its element size (1/2/4/8) — small, so it's distinguishable from an
         // object's TIB (a heap pointer), and it lets a generic System.arraycopy compute byte offsets. The
         // conservative GC never derefs this slot (it scans from +16), so a non-pointer here is safe.

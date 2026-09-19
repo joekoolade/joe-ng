@@ -1268,6 +1268,13 @@ public final class VM
         return Loader.newArrayStoreException();
     }
 
+    /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT calls this when a
+     *  {@code newarray}/{@code anewarray} length is negative (JVMS 6.5). */
+    static long newNase()
+    {
+        return Loader.newNase();
+    }
+
     /**
      * {@code aastore} type check: may {@code value} be stored into reference {@code array}? 1 = yes (null, an
      * untyped/raw array, a primitive-element array, or {@code value} is an instance of the array's element
@@ -1523,6 +1530,7 @@ public final class VM
         if (newUnresolvedAddr == 0L) { long u = newUnresolved(-1L); } // `new` the loader cannot resolve early
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
+        if (newNaseAddr == 0L) { long u = newNase(); }                // NegativeArraySizeException (newarray < 0)
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
@@ -2913,6 +2921,7 @@ public final class VM
     static long newAioobeAddr;         // VM.newAioobe()J — a java/lang/ArrayIndexOutOfBoundsException
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
+    static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
@@ -3812,6 +3821,12 @@ public final class VM
         // Real java.util.Arrays: fill/equals/binarySearch on int[].
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
         Loader.launchMain(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
+
+        // newarray/anewarray with a negative length: NegativeArraySizeException (JVMS 6.5). The last arm is
+        // the one with teeth -- an unchecked negative length is a BOUNDS-CHECK BYPASS, not a missing throw,
+        // because the length is stored sign-extended and compared UNSIGNED.
+        Uart.write(Magic.bytes("negative array length (JVMS 6.5):\n"));
+        Loader.launchMain(Magic.bytes("demo/NegArrayDemo"), Magic.bytes(""));
 
         // Real Integer.valueOf autoboxing: boxed Integer keys in a HashMap (real hashCode/equals dispatch).
         Uart.write(Magic.bytes("real Integer.valueOf boxing via HashMap (unmodified JDK):\n"));

@@ -93,6 +93,14 @@ public interface Symbols
     int NEW_CCE = 45;           // vm/VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     int SET_PRIO = 46;          // vm/VMScheduler.setPriority(JI)V — Thread.setPriority (0..1024 scale)
     int GET_PRIO = 47;          // vm/VMScheduler.getPriority(J)I  — Thread.getPriority (0..1024 scale)
+    // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr
+    // switches on) but they are NOT declared in one block -- WATCH_RET/WATCH_RECV/WATCH_X21/WATCH_ARG and
+    // VIRTUAL_RESOLVE sit EARLIER in this file at 48..52, above the run that ends at GET_PRIO = 47. This one
+    // first shipped as 48, colliding with VIRTUAL_RESOLVE, and helperAddr tests VIRTUAL_RESOLVE first -- so
+    // every negative-length throw branched into the late-virtual trampoline with the LENGTH in x0 and
+    // reported `BAD RECEIVER recv=0xFFFFFFFFFFFFFFFF site=storeFence()V`, naming a method nothing had called.
+    // Take the max over the WHOLE file, not the line above.
+    int NEW_NASE = 53;          // vm/VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.

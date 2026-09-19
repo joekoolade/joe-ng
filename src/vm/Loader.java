@@ -18583,6 +18583,14 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/ArrayStoreException"));
     }
 
+    /** Allocate a mini {@code java/lang/NegativeArraySizeException} — the JIT's newarray/anewarray length helper.
+     *  The class is already force-loaded by {@link #pullSupportClasses} and flagged instantiated, so this needs
+     *  no seeding of its own. */
+    static long newNase()
+    {
+        return newExc(Magic.bytes("java/lang/NegativeArraySizeException"));
+    }
+
     /** Allocate a mini {@code java/lang/ClassCastException} — the JIT's failed-checkcast helper. */
     private static long cceFromTib;
     private static long cceFromType;
