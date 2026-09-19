@@ -252,11 +252,10 @@ defines the minimum the assembler must encode.
       recorded shape exactly, and landing at 22 -- immediately after the `ProcessImpl` trap at 21 puts
       picocli's terminal-width thread in the loader. Twenty batches of load ~37 produced `lk:wait=0`:
       **guest-side lock contention is a property of what the GUEST is doing, not of host load.**
-    - **AND YET THE SECOND GUEST IS NOT WORTHLESS, WHICH IS A CORRECTION TO MY OWN DISMISSAL.** `lk:wait` is
-      **8** here against the **4** recorded solo. Stretching one vCPU thread relative to another genuinely
-      widens the window in which task A holds the lock when task B arrives. What it does NOT do is reach new
-      code: `PARSE_CTX_WATCH` reports an unlocked TOUCH -- a property of which code ran -- and it fired
-      **ZERO times** to batch 139. Window, not coverage.
+    - **I WROTE THAT THE SECOND GUEST "DOUBLES THE WINDOW" (8 against the 4 recorded solo) AND MY OWN SOLO
+      ARM REFUTED IT TEN MINUTES LATER -- SEE THE RETRACTION BELOW.** What survives is the half that was
+      never about timing: `PARSE_CTX_WATCH` reports an unlocked TOUCH -- a property of which code ran, not of
+      how it interleaved -- and it fired **ZERO times to batch 139 in BOTH arms**. No coverage gain.
     - **THREE COUNTERS SEPARATE CLEANLY, and that separation is the reusable part:** `rel=16715` and
       `clinitLk=233` are IDENTICAL to an earlier run of the same closure (deterministic -- properties of the
       work and of the closure), while `lk:wait`/`yields` read 8/146,676 here against 6/129,509 there
@@ -274,12 +273,42 @@ defines the minimum the assembler must encode.
       guests, not two -- load hit 39 on an 8-core host. (2) From inside that contaminated window I extrapolated
       "it will not reach batch 21 inside the budget"; with the orphan gone it reached 139 comfortably.
       **A prediction made from a contaminated arm is not a prediction about the arm.**
-    - **SOLO ARM IN FLIGHT at the time of writing**, same binary, booted at 1-minute load 2.97 with zero other
-      emulators. **PREDICTION, stated before the data so it is falsifiable: `lk:wait=4` and `PARSE VIEW 0`.**
-      If it lands there the answer is complete in both directions -- the second guest doubles the contention
-      WINDOW and reaches no path the solo run does not, so for hunting an unlocked path the solo arm was
-      always the better experiment. If instead the guard fires only when contended, the reasoning above is
-      wrong and load is reaching code solo does not.
+  - **THE SOLO ARM LANDED AND HALF MY PREDICTION WAS WRONG -- WHICH IS WHY IT WAS ON THE RECORD FIRST.**
+    I predicted `lk:wait=4` (the recorded solo figure) and `PARSE VIEW 0`. Same binary, booted at 1-minute
+    load 2.97 with zero other emulators:
+
+    | batch 139, `b274d6b6...` | SOLO | CONTENDED |
+    |---|---|---|
+    | exit | 0 | 0 |
+    | blobs / `n:imap` / `synth` / `clinits` | +2473 / 1238 / 2242 / 531 | **identical** |
+    | `memo` / `res` / `unres` | 27286 / 49267 / 9022 | **identical** |
+    | `rel` | **16715** | **16715** |
+    | `clinitLk` | **233** | **233** |
+    | `lk:wait` / `yields` | **6** / 152,136 | **8** / 146,676 |
+    | `PARSE VIEW` | **0** | **0** |
+    | wall clock | **97,578ms** | **118,744ms** |
+
+    - **RETRACTION: "the second guest doubles the contention window" IS NOT ESTABLISHED, and the arm I ran to
+      check it is what says so.** I predicted 4 and got **6**, so the comparison is 6 against 8, not 4 against
+      8. Across runs of this same binary and closure `lk:wait` has now read **4, 5 (Pi), 6, 6, 8** -- a
+      same-condition spread at least as large as the difference I was attributing to load. Contended sits at
+      the top of that range and solo in the middle, which is CONSISTENT WITH a widening effect and does not
+      demonstrate one. n=1 per side cannot, and this file has already had to retract one claim built on
+      exactly that arithmetic.
+    - **WHAT THE PAIR DOES ESTABLISH, cleanly.** (1) **No coverage gain: `PARSE VIEW` is 0 in BOTH arms** --
+      the load-bearing half of the prediction, and the reason the guard was put on the state rather than the
+      compiler. (2) **The deterministic counters are IDENTICAL to the digit** -- `rel=16715`, `clinitLk=233`,
+      and the whole closure triple -- so the two arms did the same work and only the interleaving differed.
+      (3) **The cost is real and measured: 118,744ms against 97,578ms, ~22%.**
+    - **SO THE ANSWER TO "WHAT DOES RUNNING TWO QEMUs PROVE" IS: ~22% SLOWDOWN AND NO MEASURED COVERAGE
+      GAIN.** They are separate guests sharing no memory, so the second cannot race the first's `gbase`; the
+      only channel is host-scheduler jitter, and one arm per side cannot resolve its effect against a counter
+      this noisy. **For hunting an unlocked path the SOLO arm is strictly better** -- same guard answer, 22%
+      cheaper, no host saturation, and none of the mis-scoring that a starved run invites. The older card's
+      "REPRODUCING IT IS CHEAP AND THE RECIPE IS EXACT" oversells a recipe that mostly buys wall clock.
+    - **AND `lk:wait` IS NOT A SINGLE-RUN DISCRIMINATOR, which is the reusable lesson.** `rel` and `clinitLk`
+      repeat to the digit across arms; `lk:wait`/`yields` do not. Before reading a difference in a timing
+      counter as an effect, check its spread on the SAME binary -- here that spread swallowed the effect.
   - **STILL OPEN, and the order is unchanged:** `loaderLock`'s `smpSched == 0` gate is wrong on its own
     terms -- it makes the lock inert on a single scheduling core while the hazard is per TASK, and one core
     still time-slices preemptively -- but closing it before the clinit phase can leave the batch would
