@@ -311,6 +311,48 @@ defines the minimum the assembler must encode.
     `<clinit>`s included -- a longer hold than before -- so contended tasks block where they used to race.
     That is correctness bought with concurrency, and only a Pi boot says what it costs.
 
+- **THE FAILURE CANNOT BE REPRODUCED ON DEMAND, SO THERE IS NO RATE -- AND THE "FOUR-MINUTE LOCAL GATE" IS
+  RETRACTED (2026-09-19).** Two runs were built to measure the batch-21 failure rate, control against fix,
+  interleaved so load drift would hit both sides equally. **Neither produced a usable number, and the reason
+  each failed is worth more than the number would have been.**
+
+  | run | protocol | control | fix | verdict |
+  |---|---|---|---|---|
+  | quiescent | 10 interleaved pairs, no induced load | **5 PASS / 0 FAIL** | 2 PASS / 0 FAIL | **no power** -- nothing failed |
+  | contended | second QEMU looping `suite.img` | 1 PASS | 1 "FAIL" | **INVALID** -- see below |
+
+  - **THE QUIESCENT RUN HAD NO POWER, which is a finding rather than a null result.** The control passed
+    FIVE consecutive times having failed twice that morning. If its rate were the ~40% those two failures
+    suggested, five straight passes has probability ~8%. The condition was simply absent, and **you cannot
+    measure a rate for a condition that is not occurring.**
+  - **AND IT KILLED THE LOAD HYPOTHESIS OUTRIGHT.** The card below offers load as the leading explanation.
+    It is wrong: the failures occurred at load 3.2 and 5.5, and the five passes ran at 3.16, 4.83, 5.20,
+    5.44 and ~5.4 -- the same band, opposite outcomes. Whatever the variable is, **it is not load average**,
+    and the earlier "solo passes / loaded fails" reading was a coincidence of two adjacent runs.
+  - **THE CONTENDED RUN WAS INVALID BECAUSE OF THE HARNESS, NOT THE VM, and the arithmetic is embarrassing
+    in hindsight: `qemu-system-aarch64 -M raspi4b` EMULATES FOUR CORES.** Two of them is eight spinning
+    threads on an eight-core host, so load went 5 -> 16 -> 75 and the arms simply ran slowly. The fix arm
+    scored `FAIL` at batch 94 with `secs=720` (the timeout, exactly) and `marker=-`: **zero fault markers,
+    zero stuck locks, healthy counters, still mid-batch when the harness killed it.** It had not failed at
+    all. A timeout scored as a failure is a fabricated data point, and it would have read as the fix being
+    WORSE than the control.
+  - **SO THE "2-IN-2 LOCAL GATE" CLAIM IS WITHDRAWN.** It was reported here, and to the session that handed
+    this over, as this arc's most useful outcome -- an intermittent hardware bug turned into a four-minute
+    QEMU gate. On the evidence it was **two failures inside one twenty-minute window that has not recurred
+    in fourteen subsequent arms**, under conditions both quieter and far noisier. Two samples inside one
+    window is not a gate, and calling it one was the same overclaim this file records against citing a
+    result instead of measuring it.
+  - **WHAT IS STILL TRUE OF THE FIX, unchanged by any of this:** the twenty unlocked paths were real and are
+    closed (20 -> 0), there is no regression (closure identity exact, twelve markers zero, host suite green),
+    and `lk:wait` 4 -> 16 proves the lock is taken where it was not. **What remains unavailable is evidence
+    that it fixes the batch-21 corruption** -- and after this, the honest statement is that **QEMU on this
+    host cannot supply that evidence at all. The Pi is the judge**, which is what this file said before the
+    gate was claimed.
+  - **THE METHOD NOTE, because it cost two hours:** a harness that scores "did not finish" as "failed" will
+    manufacture failures the moment the host is too slow, and it will do it silently. Separate TIMEOUT from
+    FAULT before trusting any arm -- the `secs` and `marker` columns are what caught it here, and they were
+    only in the table because a previous card insisted a diagnostic print what it measured.
+
 - **THE TWENTY REFLECTION NATIVES ARE LOCKED -- AND THE ARM THAT PASSED IS NOT EVIDENCE THAT IT WORKED
   (2026-09-19, NOT VALIDATED).** `1b72cd3` closes the surface the card below names: all 23 `VMNatives`
   wrappers reaching `parseConstPool` now take the loader lock, verified by re-running the reachability pass
