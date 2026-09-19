@@ -379,6 +379,20 @@ defines the minimum the assembler must encode.
     - **THE `ProcessImpl` TRAP PRINTED THE LIVE CHAIN AGAIN, at the new line numbers** (`runPendingClinit`
       :1501, `ensureClinit`:1428, `lazyCompileLocked`:14737, `lazyCompile`:14647) -- proof by presence for a
       seventh consecutive boot, and the same evidence that refuted the "latent" claim in the first place.
+  - **THE REVIEW'S THIRD POINT IS FIXED TOO (`run-launcher.sh` EXIT CODES), AND IT WAS A DEFECT THAT HAD
+    ALREADY COST ME A DATA POINT.** Every ending exited 0, so a harness scoring arms by grepping the log
+    could not tell a boot that FAILED from one that merely ran out of wall clock -- and my contended rate
+    run scored a 720-second timeout (batch 94, zero fault markers) as a FAILURE. **That fabricated point
+    pointed the wrong way: it read as the fix being WORSE than its control.** Now `0` = the launcher
+    finished, `1` = a fault it cannot survive, `2` = the budget ran out with no marker at all.
+    - **A FAULT OUTRANKS COMPLETION, because both can be present on one boot** -- the launcher prints
+      `Test run finished` and exits 0 even when a fault marker is in the log, and scoring that as a pass is
+      how a regression ships.
+    - **VERIFIED ON FOUR SYNTHETIC LOGS BEFORE IT SHIPPED, this file's own rule for an instrument:** a real
+      passing boot -> 0 **even though it carries the routine `ProcessImpl` `DENYLIST TRAP`** (the negative
+      control that matters, since that trap fires on every healthy boot and must never score as a fault);
+      the batch-21 corruption arm -> 1; **my own mis-scored batch-94 arm -> 2**; and a log carrying BOTH a
+      completion and a fault -> 1.
   - **BOTH ARE FIXED NOW (`be81b06`), AND THE GUARD'S FIRST HONEST BOOT GIVES THE MAGNITUDE: `clinitLk=233`
     on QEMU, `234` on hardware.**
     Two hundred and thirty-three initializers run under the loader lock in ONE launcher boot -- `java/lang/

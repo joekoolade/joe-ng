@@ -9,6 +9,16 @@
 #
 # The committed manifest is always restored, including on failure: ramfs/etc/init is TRACKED, and leaving a
 # generated one behind is how it gets committed by accident.
+#
+# EXIT CODE SAYS WHICH OF THREE ENDINGS HAPPENED, AND THAT IS NOT A NICETY -- IT IS A DEFECT THIS SCRIPT
+# ALREADY CAUSED. Every ending used to exit 0, so a harness scoring arms by grepping the log could not tell
+# a boot that FAILED from one that merely ran out of wall clock, and a contended rate run here scored a
+# 720-second timeout (batch 94, no fault marker anywhere) as a FAILURE. That is a fabricated data point, and
+# it pointed the wrong way: it read as the change under test being WORSE than its control.
+#   0  the launcher finished     -- `main returned normally` / `Test run finished`
+#   1  a fault the VM cannot survive -- `Exception in thread`, `JIT unsupported`, `LOCALS UNDERSIZED`,
+#                                      `BOOT RE-ENTERED`, `heap OOM`, `STW TIMEOUT`, `ESR EC=`
+#   2  the budget ran out with NO marker at all -- says NOTHING about the image, only about the machine
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,6 +26,11 @@ cd "$ROOT"
 
 SECS="${1:-900}"
 OUT="${2:-/tmp/launcher.log}"
+
+# The endings, kept as two separate patterns so the exit code can tell them apart. `DENYLIST TRAP` is in
+# NEITHER, for the reason spelled out at the wait loop below.
+DONE_RE="main returned normally|Test run finished"
+FAIL_RE="Exception in thread|JIT unsupported|LOCALS UNDERSIZED|BOOT RE-ENTERED|heap OOM|STW TIMEOUT|ESR EC="
 
 SAVED="$(mktemp)"
 cp ramfs/etc/init "$SAVED"
@@ -43,7 +58,7 @@ while [ "$i" -lt "$SECS" ]; do
     # run 25s later, every time, and a log that stops at batch 21 reads exactly like a VM that died there.
     # That is the same "I truncated my own evidence" failure this script's own header was written about.
     # Break on the REAL endings instead: the launcher's own completion, or a fault it cannot survive.
-    if grep -qaE "main returned normally|Test run finished|Exception in thread|JIT unsupported|LOCALS UNDERSIZED|BOOT RE-ENTERED|heap OOM|STW TIMEOUT|ESR EC=" "$OUT"; then
+    if grep -qaE "$DONE_RE|$FAIL_RE" "$OUT"; then
         # GRACE PERIOD, and it is not politeness: the marker appears on the FIRST line of a report whose stack
         # trace is still being written a frame at a time over a 115200 baud UART. Killing on the marker chops
         # the trace off mid-frame -- which cost a whole boot here, because the frame that names the FAULTING
@@ -57,6 +72,20 @@ done
 kill "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true
 
-echo "== ending, waited ${i}s =="
+# A FAULT OUTRANKS COMPLETION, because both can be present: the launcher prints `Test run finished` and
+# exits 0 on a boot that also carried a fault marker, and scoring that as a pass is how a regression ships.
+if grep -qaE "$FAIL_RE" "$OUT"; then
+    CODE=1
+    WHY="FAULT -- $(grep -aoE "$FAIL_RE" "$OUT" | sort -u | tr '\n' ' ')"
+elif grep -qaE "$DONE_RE" "$OUT"; then
+    CODE=0
+    WHY="the launcher finished"
+else
+    CODE=2
+    WHY="TIMED OUT after ${SECS}s with no marker -- this says nothing about the image, only about the machine"
+fi
+
+echo "== ending, waited ${i}s: $WHY (exit $CODE) =="
 tail -25 "$OUT"
 echo "== full log: $OUT =="
+exit "$CODE"
