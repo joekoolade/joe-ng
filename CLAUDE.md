@@ -356,7 +356,25 @@ defines the minimum the assembler must encode.
     initializer under the lock where it did not before. The hazard was already live; this enlarges its
     surface. It has survived every boot so far because the trap force-releases the whole hold before it
     spins -- which is luck about the ONE path that traps, not a safety argument.
-  - **ALSO OPEN AND NOT FIXED HERE: `ceb1a9d`'s acquire barrier cannot do its job.** `Magic.dsb()` sits
+  - **BOTH ARE FIXED NOW (`be81b06`), AND THE GUARD'S FIRST HONEST BOOT GIVES THE MAGNITUDE: `clinitLk=233`.**
+    Two hundred and thirty-three initializers run under the loader lock in ONE launcher boot -- `java/lang/
+    String` and `java/lang/StringLatin1` among the eight it prints before the cap. **The old wiring reported
+    zero**, so the gap between "silent" and "233 per boot" is exactly the cost of an instrument attached to
+    dead code. The barrier moved inside `if (ci < pcN)`, where message-passing needs it; the guard moved to
+    `runPendingClinit`'s `call0`, where guest code actually runs. Gate held twice: batch 139 `+2473blob`,
+    `n:imap=1238 synth=2242 clinits=531`, `memo=27286 res=49267 unres=9022`, both tests green, five markers
+    zero.
+  - **AND THE FIX'S OWN FIRST CUT REPEATED THE MISTAKE IT WAS CORRECTING, which is worth recording.** It
+    incremented `clinitLockN` and printed nothing -- counted but invisible, so "capped and counted" was half
+    true and the total could not be read by anyone operating the VM. It is on the batch line as `clinitLk=`
+    now. **An instrument that cannot be READ is the same defect as one that cannot FIRE**, and this file has
+    now paid for both inside one arc.
+  - **STILL NOT A FIX FOR THE DEADLOCK, stated plainly.** `be81b06` makes a standing hazard visible and
+    counts it. Closing it means moving the clinit phase out from under the batch -- and `warnClinitUnderLock`'s
+    own doc already argues why the obvious shortcut fails: the lock is RECURSIVE, `loadAll` runs nested inside
+    `lazyCompile`'s hold, so dropping to depth 0 around a `call0` would release a lock the OUTER frame relies
+    on to keep the static compile context to itself. That trades a latent deadlock for a live clobber.
+  - **FIXED -- `ceb1a9d`'s acquire barrier could not do its job.** `Magic.dsb()` sits
     BEFORE `int ci = 0` (Loader.java:6630), so both the `pcN` load and the `pcBytes[ci]` load are after it --
     and a barrier orders accesses before it against accesses after it, not two loads that are both after it.
     Message-passing needs it BETWEEN observing the count and reading the entry. The comment states the
