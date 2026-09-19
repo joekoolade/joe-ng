@@ -536,6 +536,13 @@ public final class VM
     static int loaderLockSite;                          // what the OUTERMOST holder is doing (a LOCK_* id)
     static long loaderLockAt;                           // CNTPCT when it took the lock, for the held-for time
     static int loaderReleases;                          // completed OUTERMOST releases, monotonic
+    // CONTENTION, MEASURED. `rel` says releases happen; neither it nor `held` says whether any task ever had
+    // to WAIT -- and that is the one number that tells a lock doing work from a lock nobody ever tests. It
+    // matters here because the guard that would otherwise answer it cannot: checkCompileLockHeld only
+    // reports entries where the lock is NOT ours, so once loadAll takes it, silence means "the lock worked"
+    // OR "nothing ever raced" and the two are indistinguishable. A non-zero loaderWaits separates them.
+    static int loaderWaits;                             // OUTERMOST acquisitions that found another task holding
+    static int loaderWaitYields;                        // ... and how many yields those waits cost in total
 
     /** Name a LOCK_* site. Kept beside the constants so a new site cannot be added without a name. */
     private static void printLockSite(int site)
@@ -571,6 +578,7 @@ public final class VM
         }
         long stuck = Magic.readCNTPCT_EL0() + Magic.readCNTFRQ_EL0() * 10L;
         int said = 0;
+        int waited = 0;                                 // this acquisition counts ONCE however long it waits
         while (true)
         {
             long daif = VMScheduler.schedLock();
@@ -624,6 +632,16 @@ public final class VM
                 Uart.putc(0x0A);
                 reportStuckLockVerdict();
             }
+            // COUNTED HERE, not at entry: reaching this line means the lock was genuinely held by ANOTHER
+            // task, which is the definition of contention. An uncontended acquisition returns above and
+            // never touches these. `waited` makes the acquisition count once while the yields count every
+            // time round, so the pair separates "often contended briefly" from "rarely contended for ages".
+            if (waited == 0)
+            {
+                waited = 1;
+                loaderWaits = loaderWaits + 1;
+            }
+            loaderWaitYields = loaderWaitYields + 1;
             VMScheduler.taskYield();                    // let the holder run -- it may be on THIS core
         }
     }

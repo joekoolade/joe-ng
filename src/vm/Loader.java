@@ -13491,6 +13491,15 @@ public final class Loader
         printDur(ticksUs(pcUnresT));
         Uart.write(Magic.bytes(" tailT="));
         printDur(ticksUs(pcTailT));
+        // CUMULATIVE, and on the batch line rather than in a report nobody runs: this is the only number
+        // that says whether the loader lock was ever actually contended. Zero across a whole boot means the
+        // run never tested the lock, so a clean boot says nothing about it either way.
+        Uart.write(Magic.bytes(" lk:wait="));
+        VM.printDec(VM.loaderWaits);
+        Uart.write(Magic.bytes(" yields="));
+        VM.printDec(VM.loaderWaitYields);
+        Uart.write(Magic.bytes(" rel="));
+        VM.printDec(VM.loaderReleases);
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
