@@ -374,13 +374,31 @@ defines the minimum the assembler must encode.
     was eager and never went through `lazyCompile` at all. The control here is increment 3, which already has
     Object lazy, so it cannot answer that. **An increment-2 image under the same load is the missing arm.**
     Against that: increment 3 passed on the Pi, and this file's own rule is that the Pi is the honest harness.
-  - **REPRODUCING IT IS CHEAP AND THE RECIPE IS EXACT:** boot the launcher image on QEMU with a second QEMU
-    running the demo-suite image alongside. Two of two loaded runs failed; two of two solo runs passed with
-    byte-identical counters.
-  - **CORRECTION TO THE LINE ABOVE: IT IS INTERMITTENT, NOT REPRODUCIBLE.** "Two of two loaded runs failed"
-    became **2 failures in 4 contended runs and 0 in 5 solo runs** once the arms were repeated. The recipe
-    raises the probability; it does not produce the failure on demand. Stated because the original wording
-    would have someone read a single clean loaded run as a fix.
+  - **THE "RECIPE" -- READ THE TWO CORRECTIONS UNDER IT BEFORE USING IT.** As originally written: boot the
+    launcher image on QEMU with a second QEMU running the demo-suite image alongside; two of two loaded runs
+    failed and two of two solo runs passed with byte-identical counters. **It was headed "REPRODUCING IT IS
+    CHEAP AND THE RECIPE IS EXACT", and both halves of that heading are now retracted.**
+  - **CORRECTION 1: IT IS INTERMITTENT, NOT REPRODUCIBLE.** "Two of two loaded runs failed" became
+    **2 failures in 4 contended runs and 0 in 5 solo runs** once the arms were repeated. It does not produce
+    the failure on demand. Stated because the original wording would have someone read a single clean loaded
+    run as a fix.
+  - **CORRECTION 2 (2026-09-19): WHAT THE SECOND GUEST BUYS IS MEASURED NOW, AND IT IS ~22% WALL CLOCK AND NO
+    MEASURED COVERAGE GAIN.** Two QEMUs are two separate guests -- no shared memory, so the second CANNOT
+    touch the first's `gbase`; the only channel is host-scheduler jitter on the first VM's vCPU threads. A
+    solo/contended pair on a byte-identical armed binary (see the `PARSE_CTX_WATCH` card at the top of this
+    file) gives **`PARSE VIEW` 0 in BOTH arms**, `rel`/`clinitLk`/closure identical to the digit, `lk:wait`
+    6 vs 8 -- **inside the 4/5/6/6/8 spread the same binary produces anyway** -- and 97,578ms vs 118,744ms.
+    So it reaches no code the solo arm does not, and its effect on the contention window is not resolvable at
+    one arm per side.
+    - **THE FAILURE TALLY ABOVE IS NOT RETRACTED BY THIS, and the distinction matters.** 2-in-4 contended
+      against 0-in-5 solo is an observation about FAILURES, which need a particular interleaving; the
+      counters above are aggregates, and an aggregate can sit still while the interleaving it summarises
+      changes. Both tallies are tiny. What is now clear is that the second guest is a blunt timing
+      perturbation, not a participant -- and that it costs a fifth of the run and invites the starvation
+      that already produced one fabricated data point (a 720s timeout scored as a FAIL).
+    - **SO FOR HUNTING AN UNLOCKED PATH, RUN SOLO.** Same guard answer, 22% cheaper, no host saturation.
+      Reach for the second guest only to perturb TIMING, knowing it is uncontrolled, and never read a single
+      contended arm as evidence either way.
   - **THE UNLOCKED WINDOW IS REAL AND WAS MEASURED, NOT ARGUED: `compileClass` IS REACHED WITH NO LOADER LOCK
     THROUGH FIVE ENTRY POINTS.** `mirrorOfInternalName`, `mirrorForNameAt` (`Class.forName`),
     `defineFromBytes` (`defineClass`), `annoClassValue` and `annoEnumValue` (annotation Class/enum elements).
