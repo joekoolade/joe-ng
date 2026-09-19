@@ -311,6 +311,73 @@ defines the minimum the assembler must encode.
     `<clinit>`s included -- a longer hold than before -- so contended tasks block where they used to race.
     That is correctness bought with concurrency, and only a Pi boot says what it costs.
 
+- **A SAME-BINARY CONTROL EXONERATES THE LOCK COMMITS, AND THE "SOLO PASSES" BASELINE WAS A STATEMENT ABOUT
+  MACHINE LOAD (2026-09-19).** `ceb1a9d` (parse-cache release/acquire) and `ee3f303` (lock `virtualResolve`)
+  were handed over unvalidated. A launcher arm on them failed at **batch 21** with the recorded
+  compile-context signature -- `FAULT`, `JIT unsupported reason=9 in java/lang/Object`, a >10s stuck lock on
+  task 4, and a blob's whole constant pool printed where a class NAME belongs. That reads exactly like a
+  regression, and it is not one.
+
+  | arm (QEMU, same machine, ~40 min apart) | last batch | `n:imap`/`clinits` | `memo/res/unres` |
+  |---|---|---|---|
+  | HEAD (both commits) | **batch 21** | 1123 / 464 | 241 / 3176 / 914 |
+  | **CONTROL: the pre-change binary** (md5 `2345f5e5...`) | **batch 21** | **1123 / 464** | **241 / 3176 / 914** |
+  | the same control binary, ~4 hours earlier | batch 139 `+2473blob` | 1238 / 531 | 27286 / 49267 / 9022 |
+
+  - **THE CONTROL COST ONE RUN AND SETTLED AUTHORSHIP, which is this file's own most expensive lesson paid
+    forward.** The pre-change image fails at the same batch with counters identical to the digit, so a
+    one-line barrier and a lock cannot be the cause. The recorded rule -- "the control comes FIRST" -- is
+    what stopped a mechanism being invented for a failure the change did not produce.
+  - **AND THE VARIABLE IS LOAD, MEASURED RATHER THAN SUPPOSED: `load average 3.24 4.53 4.72` on 8 cores,
+    with ZERO other QEMU processes running.** The elevated 5- and 15-minute figures are this session's own
+    image builds. So the "solo" arms were never solo, and this file's "0 failures in 5 SOLO runs" is really
+    **0 in 5 ON AN IDLE MACHINE**. The same binary that passes at load ~0 fails at load ~4. Load is a term
+    in this experiment, and it has not been reported as one.
+  - **THAT TURNS AN INTERMITTENT HARDWARE BUG INTO A LOCAL REPRODUCTION, which is worth more than either
+    commit.** The corruption was recorded as 2-in-4 contended and needing a deliberate second QEMU; it is
+    2-in-2 here with no second VM, just a loaded host. A fix for the parse-context race now has a gate that
+    costs four minutes instead of a flash -- **provided the run records the load average beside the result**,
+    because a "pass" on an idle machine proves nothing.
+  - **NEITHER COMMIT IS POSITIVELY VALIDATED, and that is a different claim from exonerated.** The gate
+    (batch 139, `+2473blob`) is unreachable on this host right now, so these two are "not a regression" and
+    nothing stronger. `lk:wait` was expected to RISE with `ee3f303` and reads 0 -- unresolvable, because the
+    run dies before contention accumulates.
+
+- **`virtualResolve` WAS NOT THE LAST UNLOCKED PATH -- TWENTY NATIVE ENTRY POINTS STILL RE-POINT THE PARSE
+  CONTEXT WITH NO LOCK (2026-09-19, MEASURED BY READING, NOT YET FIXED).** `ee3f303` calls itself "the SIXTH
+  unlocked path ... and the last trampoline without a lock". The TRAMPOLINE half is right; the "last" half is
+  not. Indexing every method in `Loader`, treating the ELEVEN methods that take the lock themselves as
+  BARRIERS (so anything reached only through `loadAll`/`lazyCompile`/`compileMethodOnDemand` is excluded),
+  **20 of the 50 `Loader.X` entry points called from `VMNatives` still reach `parseConstPool` with no lock
+  anywhere on the path**: `classAnnotation`, `classAnnotationsAll`, `classDeclaredClasses`,
+  `declaredCtorPart`, `declaredFieldDesc`, `declaredFieldName`, `declaredMethodDesc`, `declaredMethodName`,
+  `defineFromBytes`, `fieldAnnotation`, `fieldAnnotationsAll`, `fieldMods`, `fieldTypeChar`,
+  `fieldTypeMirror`, `forNameMirror`, `methodAnnoPresent`, `methodAnnotation`, `methodAnnotationsAll`,
+  `methodParamTypes`, `methodReturnType`. Only `constructorResolve` and `virtualResolve` are locked.
+  - **IT IS NOT HYPOTHETICAL, AND THIS FILE ALREADY NAMES THE CALLER.** `fieldTypeMirror` is the native
+    behind `Field.getType()`: it calls `parseConstPool(base, blobLenOf(base))` and then walks `gp`/`u2(p)`
+    for ~30 lines, unlocked. The `isAssignableFrom` card records picocli's `isMultiValue()` as
+    `Collection.class.isAssignableFrom(field.getType())` -- called for EVERY option field while the command
+    spec is built, i.e. the launcher's hot path, concurrently with compiles on other tasks.
+  - **AND THE FAILING RUN POINTS AT THAT SURFACE RATHER THAN AT A TRAMPOLINE.** The stuck lock names
+    `compileMethodOnDemand` -- the REFLECTIVE compile path -- holding `ctx~java/lang/Object`, while the
+    garbage name printed beside it is `java/lang/NumberFormatException`'s constant pool. One task holding the
+    context for Object while another re-points it at a different blob is exactly what an unlocked
+    `declaredMethodDesc`/`fieldTypeMirror` does.
+  - **A CANDIDATE THAT NEEDS LESS TO GO WRONG THAN `ceb1a9d`'s.** The missing barrier needs real store
+    reordering, which TCG does not do -- so it cannot be what fails on QEMU. Twenty unlocked re-points need
+    only two tasks, which the launcher demonstrably has. Both may be real; only one of them can explain a
+    QEMU failure.
+  - **THE FIX BELONGS IN `VMNatives`, NOT IN `Loader`, and that is what makes it small.** The build-time
+    deep-stack-plus-handler guard tests `vm/Loader.class` ALONE (`CompilerTest.assertNoDeepHandlers`), so the
+    `*Locked` body split `ee3f303` needed does not apply to the wrappers -- each is a shallow `try/finally`
+    around one call. **NOT bundled here:** three unvalidated changes on one card is what this file records as
+    forcing a bisect.
+  - **AND IT WIDENS THE CLINIT-UNDER-LOCK DEBT, stated rather than discovered later.** These paths can run an
+    initializer, so locking them holds the loader lock across guest code. That deadlock is latent ONLY
+    because `clinitEagerKept` returns false unconditionally (`Loader.java:1237-1240`, verified) -- and
+    `bd535c5` leaves a loud guard for the day it does not.
+
 - **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
   every other class (2026-09-18, PI-VALIDATED).** `stage2Gated` returns true unconditionally, so the
   last exception to stage 5 is gone: every class is metadata-only -- phase-A cells for its statics, deferral
