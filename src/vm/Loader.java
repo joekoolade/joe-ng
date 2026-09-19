@@ -1060,11 +1060,25 @@ public final class Loader
      * 4.813ms across a 139-batch launcher boot and 245us across the demo suite -- this loop's own
      * bookkeeping over 531 initializers, not initializer execution.
      *
-     * <p><b>SO THE HAZARD IS LATENT, NOT LIVE -- and one line away.</b> {@code clinitEagerKept}'s own doc
-     * describes the socket bring-up it used to hold, so a future entry there re-enables these call sites and
-     * silently puts a blocking {@code <clinit>} under a lock every other compiler waits on. A restructure
-     * cannot be validated today because nothing executes the path; a report can, because it is silent today
-     * and impossible to miss the moment it is not.
+     * <p><b>THE HAZARD IS LIVE, AND THIS FILE SAID OTHERWISE FOR A DAY.</b> The earlier text here read "the
+     * hazard is LATENT, NOT LIVE ... only because {@code clinitEagerKept} returns false unconditionally".
+     * That gate covers {@code runClinits} and NOTHING ELSE. {@code ensureClinit} is a separate route, and it
+     * runs an initializer under the lock on EVERY boot:
+     *
+     * <pre>
+     *   lazyCompile -&gt; VM.loaderLock(LOCK_LAZY) -&gt; lazyCompileLocked
+     *     -&gt; drainPendingInit -&gt; ensureClinit -&gt; runPendingClinit -&gt; Magic.call0   &lt;- GUEST CODE
+     * </pre>
+     *
+     * The Pi printed that stack itself, unprompted, in the routine batch-21 {@code ProcessImpl} trap. The
+     * claim was reached by checking the one gate that was pointed out and never asking whether it covered
+     * every path to {@code call0} -- it covers one of four.
+     *
+     * <p><b>AND THE GUARD WAS WIRED EXCLUSIVELY TO THE DEAD SITES, which is worse than not having it.</b> Its
+     * three call sites all sat inside the {@code clinitEagerKept} region, so a silent boot re-confirmed only
+     * that the gate is false -- something already known statically. That is exactly the "an instrument that
+     * cannot fire looks identical to a condition that never happens" trap this file names. It is installed on
+     * the LIVE site now, which is why it needs a budget: it fires on essentially every initializer.
      *
      * <p>AND SUSPENDING THE LOCK HERE WOULD BE UNSOUND, which is why the obvious fix is not the fix. The
      * lock is RECURSIVE: {@code loadAll} routinely runs nested inside {@code lazyCompile}'s hold, so
@@ -1072,18 +1086,33 @@ public final class Loader
      * the static compile context to itself -- trading a latent deadlock for a live clobber. Whatever closes
      * this has to move the clinit phase out of the batch, not punch a hole in the middle of it.
      */
+    /** How many of these to print. It fires on nearly every initializer, so an unbudgeted report would BE the
+     *  failure it reports -- this file already records a diagnostic flooding the UART and starving the run it
+     *  was meant to diagnose. The COUNT keeps accruing past the cap so the total is still honest. */
+    private static final int CLINIT_LOCK_SAID_MAX = 8;
+    private static int clinitLockSaid;
+    static int clinitLockN;                              // initializers run under the lock, cumulative
+
     private static void warnClinitUnderLock(int i)
     {
         if (VM.smpSched == 0 || VM.loaderOwner != VM.curTask())
         {
             return;                                      // not holding it (or the lock is inert): nothing to say
         }
+        clinitLockN += 1;
+        if (clinitLockSaid >= CLINIT_LOCK_SAID_MAX)
+        {
+            return;                                      // counted, not printed -- see CLINIT_LOCK_SAID_MAX
+        }
+        clinitLockSaid += 1;
         Uart.write(Magic.bytes("\n  *** INITIALIZER RUNNING UNDER THE LOADER LOCK: "));
         printUtf8Capped(clinitBase[i] != 0L ? clinitBase[i] + clinitNameOff[i] : 0L);
-        Uart.write(Magic.bytes(" ***\n  ... clinitEagerKept has an entry again, so loadAll now holds the lock\n"));
-        Uart.write(Magic.bytes("  ... across guest code. If this <clinit> blocks on a monitor, joins a thread\n"));
-        Uart.write(Magic.bytes("  ... or waits, every task that must compile to wake it is behind this lock.\n"));
-        Uart.write(Magic.bytes("  ... See clinitEntryOf's invariant and warnClinitUnderLock's own doc.\n"));
+        Uart.write(Magic.bytes(" ***\n  ... guest code is executing while this task holds the loader lock. If\n"));
+        Uart.write(Magic.bytes("  ... this <clinit> blocks on a monitor, joins a thread or waits, every task\n"));
+        Uart.write(Magic.bytes("  ... that must COMPILE in order to wake it is queued behind this lock.\n"));
+        Uart.write(Magic.bytes("  ... EXPECTED TODAY on the lazyCompile -> ensureClinit route, which is why\n"));
+        Uart.write(Magic.bytes("  ... this is capped, and the TOTAL is on the batch line as clinitLk=. It is NOT\n"));
+        Uart.write(Magic.bytes("  ... a deadlock report: it names a standing hazard, not an event.\n"));
     }
 
     private static void runClinits()
@@ -1468,6 +1497,7 @@ public final class Loader
                 // null to null, and a SUCCESS reported a BLOCKING FAILURE.
                 initClinitDeps(i, reg);
                 clinitCellWatch(reg, Magic.bytes("before"));
+                warnClinitUnderLock(i);                 // THE LIVE SITE: lazyCompile holds the lock across this
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 // NOW -- and not before -- initialize the classes this initializer's COMPILE noted. They are
@@ -6623,11 +6653,6 @@ public final class Loader
     {
         gbase = base;
         pcCalls += 1;
-        // ACQUIRE. This scan reads `pcN` and then reads the entry it selects, and on AArch64 nothing orders
-        // the second load after the first: the control dependency through `ci < pcN` is not a dependency the
-        // architecture respects. Without this a task can observe a PUBLISHED count with an UNPUBLISHED entry
-        // and take `gbytes = pcBytes[ci]` as NULL -- see the release side below for why that matters.
-        Magic.dsb();
         int ci = 0;
         while (ci < pcN && pcBase[ci] != base)
         {
@@ -6636,6 +6661,19 @@ public final class Loader
         pcSteps += ci;                                  // what the scan actually costs, not what its shape suggests
         if (ci < pcN)                                   // cache HIT: reuse the one-time copy + parse for this blob
         {
+            // ACQUIRE, AND ITS POSITION IS THE ENTIRE POINT -- it has to sit BETWEEN the two loads.
+            // The scan above observed `pcN`; the reads below take the entry that count claims is filled. A
+            // barrier orders accesses BEFORE it against accesses AFTER it, so one placed ahead of the scan
+            // constrains neither against the other and does nothing at all. There is no dependency to fall
+            // back on either: `ci` is a local counter, so the only link from `pcN` to `&pcBytes[ci]` is a
+            // CONTROL dependency, and AArch64 orders stores after one of those, never loads.
+            //
+            // Get it wrong and a task observes a PUBLISHED count with an UNPUBLISHED entry and takes
+            // `gbytes = pcBytes[ci]` as NULL -- which is the null-`gbytes` NPE inside `ClassReader.u1` this
+            // file records. **THE FIRST CUT OF THIS BARRIER WAS PLACED AHEAD OF THE SCAN**, where it could
+            // not meet the requirement its own comment stated, and it shipped through a review that quoted
+            // the placement accurately and called it correct. See the release side below.
+            Magic.dsb();
             pcHits += 1;
             gbytes = pcBytes[ci];
             gcp = pcCp[ci];
@@ -13626,6 +13664,14 @@ public final class Loader
         VM.printDec(VM.loaderWaitYields);
         Uart.write(Magic.bytes(" rel="));
         VM.printDec(VM.loaderReleases);
+        // INITIALIZERS RUN UNDER THE LOCK, cumulative. The per-occurrence report is capped at eight because
+        // it fires on nearly every initializer; without this total, "capped and counted" would be only half
+        // true -- the count would exist and be invisible, which is the shape of an instrument that cannot be
+        // read. A non-zero value is EXPECTED today (the lazyCompile -> ensureClinit route): it measures a
+        // standing hazard rather than an event, and it is the number that would drop if the clinit phase
+        // were ever moved out from under the lock.
+        Uart.write(Magic.bytes(" clinitLk="));
+        VM.printDec(clinitLockN);
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
