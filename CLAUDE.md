@@ -324,12 +324,40 @@ defines the minimum the assembler must encode.
   | **CONTROL: the pre-change binary** (md5 `2345f5e5...`) | **batch 21** | **1123 / 464** | **241 / 3176 / 914** |
   | the same control binary, ~4 hours earlier | batch 139 `+2473blob` | 1238 / 531 | 27286 / 49267 / 9022 |
 
-  - **THE CONTROL COST ONE RUN AND SETTLED AUTHORSHIP, which is this file's own most expensive lesson paid
-    forward.** The pre-change image fails at the same batch with counters identical to the digit, so a
-    one-line barrier and a lock cannot be the cause. The recorded rule -- "the control comes FIRST" -- is
-    what stopped a mechanism being invented for a failure the change did not produce.
-  - **AND THE VARIABLE IS LOAD, MEASURED RATHER THAN SUPPOSED: `load average 3.24 4.53 4.72` on 8 cores,
-    with ZERO other QEMU processes running.** The elevated 5- and 15-minute figures are this session's own
+  - **THE CONTROL SETTLED AUTHORSHIP, AND A SECOND CONTROL RUN CORRECTED HOW IT WAS ARGUED.** The first
+    write-up of this card said the arms "fail identically, counters identical to the digit". **Both halves
+    were weaker than stated.** The counters (`n:imap=1123`, `memo=241 res=3176 unres=914`) are the
+    DETERMINISTIC batch-21 closure state -- they show both runs REACHED the same point, not that they failed
+    the same way -- and the failures are not identical at all:
+
+    | run | binary | fatal marker | stuck-lock owner | depth / rel |
+    |---|---|---|---|---|
+    | solo4 | HEAD | `JIT unsupported reason=9`, `FAULT` x2 | `compileMethodOnDemand` | 1 / 2193 |
+    | control 1 | pre-change | `JIT unsupported reason=9`, `FAULT` x3 | `lazy first-call compile` | 2 / 1201 |
+    | control 2 | pre-change | **`NPE ClassReader.u1`**, no FAULT, no JIT unsup | `lazy first-call compile` | 1 / 1200 |
+
+    **Three runs, three signatures, one batch.** That variation IS the evidence -- it is what a race looks
+    like, and it means a single run says little about MODE while all three say the same thing about CAUSE.
+  - **AND CONTROL 2 REPRODUCED, ON THE PRE-CHANGE BINARY, THE EXACT FAILURE THIS FILE RECORDS AS
+    UNEXPLAINED.** Byte for byte the arm-3 trace: `NullPointerException at classfile/ClassReader.u1` with a
+    null `gbytes`, `<unclaimed pc=0x040238E4 after java/lang/ProcessBuilder.start ... end=0x027D2970>`,
+    `TRACE TRUNCATED`, caller `ClassReader.refNameOff`, beside `LOADER LOCK stuck ... ctx~java/lang/Object`.
+    Same pc, same end. **The failure the card below attributes to "the hazard the compile-side fix did not
+    close" happens with NEITHER of these two fixes present** -- which is the strongest form of the
+    exoneration, and better evidence than the counter table it replaced.
+  - **THE BINARY'S PROVENANCE IS MEASURED, NOT CITED, because the handoff supplied it by md5 label.**
+    `ee3f303` is the sole origin of the string `late-virtual resolve` (`git log -S`, one commit): the control
+    image contains ZERO occurrences and the HEAD build contains one. So the control really is pre-change,
+    and this does not rest on somebody's label -- the "a cited result is not a measured one" rule applied to
+    an artifact rather than a claim.
+  - **THE VARIABLE IS ENVIRONMENTAL, AND "LOAD" IS THE HYPOTHESIS RATHER THAN THE MEASUREMENT -- a
+    distinction the first draft of this card got wrong.** What is PROVEN: the control image is
+    self-contained (its ramfs is baked in), so identical bytes producing a pass at 09:57 and two failures at
+    10:10 and 10:19 cannot be a repo change. What is OBSERVED, not established: `load average 3.24 4.53
+    4.72` on 8 cores at the first failure, rising to 5.52 by the second, with ZERO other QEMU processes --
+    ordinary desktop noise (WindowServer, iTerm, Spotlight indexing, antivirus), none of it this session's
+    leftovers. Correlation at n=2 is not causation, and no arm has yet been run on a deliberately quiesced
+    host. The elevated 5- and 15-minute figures are this session's own
     image builds. So the "solo" arms were never solo, and this file's "0 failures in 5 SOLO runs" is really
     **0 in 5 ON AN IDLE MACHINE**. The same binary that passes at load ~0 fails at load ~4. Load is a term
     in this experiment, and it has not been reported as one.
