@@ -185,15 +185,32 @@ defines the minimum the assembler must encode.
     above, closure identical to the uninstrumented control on all of them -- the condition for keeping the
     counter at all, since this project has lost an arc to an instrument that moved the closure and a Pi boot
     to one that flipped a method to deep-stack mode. Host: `compiler: 39 checks`, `overlay-check 0 new`.
-  - **STILL OPEN, UNCHANGED BY ANY OF THIS, and the order is fixed:** `loadAll`'s section spans
-    `runClinits`, so the lock is held across GUEST CODE on five reflection paths where it used to be
-    unlocked -- which `clinitEntryOf`, `compileMethodOnDemand`, `compileSigOnDemand` and the
-    deferred-`<init>` path all forbid in terms. Narrowing is not a one-liner: `runClinits` re-reads
-    `clinitN` every iteration and sizes `done[]` from it at entry, so releasing mid-batch walks a second
-    task's loop past the end of its own array. **And `loaderLock`'s `smpSched == 0` gate is wrong on its own
-    terms** -- it makes the lock inert on a single scheduling core while the hazard is per TASK -- but
-    closing it BEFORE the clinit phase is lock-free would extend the deadlock exposure to every single-core
-    boot, the demo suite included.
+  - **CORRECTION TO THIS CARD'S OWN CLAIM: THE CLINIT-UNDER-LOCK HAZARD IS LATENT, NOT LIVE, AND TRACING THE
+    LOOP IS WHAT SAID SO.** Both this card and the review that produced it stated that `loadAll` holds the
+    lock across GUEST CODE because its section spans `runClinits`. It does not, today: `clinitEagerKept`
+    returns **false unconditionally**, so `lazyClinitGated` is true for EVERY class, so the deferral arm
+    always fires and sets `progress` -- and **all three `Magic.call0` sites in `runClinits` are
+    UNREACHABLE.** The fd-first pre-run is gated on `!lazyClinitGated` and never runs; the cycle arm needs
+    `progress == 0`, which the deferral arm makes impossible while anything is pending. **Measured, not just
+    read:** `runcl` is 4.813ms across a 139-batch launcher boot and 245us across the demo suite -- this
+    loop's own bookkeeping over 531 initializers, not initializer execution. The honest statement is that
+    the lock is ONE EDIT from being held across guest code: `clinitEagerKept`'s own doc describes the socket
+    bring-up it used to hold.
+  - **SO IT SHIPPED AS A GUARD RATHER THAN A RESTRUCTURE, and the reason is testability.** `runClinits` is
+    snapshot-bounded now (it re-read `clinitN` each iteration while `done[]` was sized at entry -- unsafe
+    the moment a `call0` there reaches `Class.forName` -> `loadAll`, which appends), `clinitRunFrom` can no
+    longer go backwards, and all three `call0` sites report if they ever run with the lock held. **A
+    restructure cannot be validated today because nothing executes the path; a guard can, and is verified
+    silent across the suite and four launcher arms.**
+  - **AND THE OBVIOUS FIX IS UNSOUND, which is the substantive reason it is not done.** Suspending the lock
+    around a `call0` would have to drop to depth 0, and the lock is RECURSIVE: `loadAll` routinely runs
+    nested inside `lazyCompile`'s hold, so that releases a lock the OUTER frame relies on to keep the static
+    compile context to itself -- **a latent deadlock traded for a live clobber.** Whatever closes this has to
+    move the clinit phase OUT of the batch, not punch a hole in the middle of one.
+  - **STILL OPEN, and the order is unchanged:** `loaderLock`'s `smpSched == 0` gate is wrong on its own
+    terms -- it makes the lock inert on a single scheduling core while the hazard is per TASK, and one core
+    still time-slices preemptively -- but closing it before the clinit phase can leave the batch would
+    extend the exposure to every single-core boot, the demo suite included.
 
 - **THE CTOR-INIT MECHANISM IS RETIRED -- MEASURED DEAD FIRST, AND REPLACED BY A REPORT RATHER THAN BY
   NOTHING (2026-09-18).** `noteCtorInit`/`drainCtorInit`, their two arrays, the `MAXCTORINIT` cap, `CTOR_TRACE`
