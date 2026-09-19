@@ -207,6 +207,37 @@ defines the minimum the assembler must encode.
     nested inside `lazyCompile`'s hold, so that releases a lock the OUTER frame relies on to keep the static
     compile context to itself -- **a latent deadlock traded for a live clobber.** Whatever closes this has to
     move the clinit phase OUT of the batch, not punch a hole in the middle of one.
+  - **THE GUARD MOVED OFF THE COMPILER AND ONTO THE STATE (`PARSE_CTX_WATCH`, default false).**
+    `checkCompileLockHeld` can only see the two COMPILER entries, and that is not where the open failure is:
+    arm 3 dies in `ClassReader.u1` on a null `gbytes` WHILE another task holds the lock, so main reached the
+    shared view on a path taking no lock at all. Twenty such paths were already found BY READING and closing
+    them did not end it, so `checkParseCtxOwned` sits on the view itself -- at `parseConstPool` (the WRITER,
+    placed ahead of `gbase = base` so the report names the view being REPLACED) and at the four cp-ref
+    readers that reach `ClassReader.refNameOff`, the frame the failing arm named.
+    - **IT COSTS NOTHING SHIPPED, AND THAT IS MEASURED RATHER THAN ASSERTED.** `PARSE_CTX_WATCH` is
+      `static final`, so javac's conditional compilation (JLS 14.21) emits nothing for a guarded body:
+      `javap` shows **0 `invokestatic checkParseCtxOwned`** disarmed and **5** armed, with `mrefNameOff`
+      byte-for-byte unchanged when off. RTA never marks the body reachable, so it is not in the image.
+      That check mattered because this VM's baseline compiler DOES NOT INLINE and `gbase` is touched at ~386
+      sites -- an always-on call per constant-pool reference is the per-item cost this file has stripped twice.
+    - **ITS FIRST ARMED BOOT CAUGHT A FALSE POSITIVE OF MY OWN, which is the rule this file states most
+      often.** The null arm fired once per boot at batch 1 -- `at=1 gbase=0x0 ctx~<null>` -- because at the
+      WRITER site the view is legitimately empty on the first call of a boot and `parseConstPool` is about to
+      ESTABLISH it. The null arm is READERS ONLY now (`where >= 2`), where a null is one instruction from
+      being handed to `ClassReader`. A second defect on the same line: `VM.printHex` emits its own `0x`, so
+      the literal beside it printed `gbase=0x0x0000...`.
+    - **AND THAT FALSE POSITIVE IS THE NEGATIVE CONTROL, better than the synthetic one I had staged.** It
+      proves the report path prints on metal, so the silence below is "nothing to find" rather than "cannot
+      fire" -- the distinction this file has had to pay for four times.
+    - **ARMED, IT IS SILENT ACROSS THE WHOLE DEMO SUITE:** 32 programs, **0 `PARSE VIEW`**, 0
+      `COMPILE WITHOUT`, and `FAULT` / `BOOT RE-ENTERED` / `JIT unsupported` / `LOCALS UNDERSIZED` /
+      `heap OOM` / `STW TIMEOUT` / `Exception in thread` all zero, with closure identity exact
+      (`rounds=4 pend=180 reach=16`, `n:imap=52 synth=18 clinits=25`, `memo=1343 res=2478 unres=2224`).
+      Host: `compiler: 40 checks` -- the new methods carry no handler, so `assertNoDeepHandlers` is unmoved.
+    - **WHAT THAT DOES NOT SHOW, stated rather than rounded up: THE SUITE IS NOT THE LAUNCHER.** Arm 3's
+      condition is contended batch 21 -- picocli's terminal-width thread against main -- and the suite never
+      reaches it. Silence here means no unlocked touch at SUITE scale and nothing more. The run that would
+      settle it is the launcher, armed, contended; that has not been done.
   - **STILL OPEN, and the order is unchanged:** `loaderLock`'s `smpSched == 0` gate is wrong on its own
     terms -- it makes the lock inert on a single scheduling core while the hazard is per TASK, and one core
     still time-slices preemptively -- but closing it before the clinit phase can leave the batch would

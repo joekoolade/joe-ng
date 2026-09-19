@@ -6651,6 +6651,13 @@ public final class Loader
      */
     private static void parseConstPool(long base, int len)
     {
+        // AHEAD OF `gbase = base`, DELIBERATELY: the report names the view through gbase, so a guard placed
+        // after the assignment would describe the blob being switched TO and say nothing about the one being
+        // clobbered. Here it names the view this call is about to replace, and who else is in the loader.
+        if (PARSE_CTX_WATCH)
+        {
+            checkParseCtxOwned(1);
+        }
         gbase = base;
         pcCalls += 1;
         int ci = 0;
@@ -7004,6 +7011,10 @@ public final class Loader
     /** Absolute address of the static field referenced by constant-pool Fieldref {@code idx}. */
     static long staticAddr(int idx)
     {
+        if (PARSE_CTX_WATCH)
+        {
+            checkParseCtxOwned(5);
+        }
         int nameOff = ClassReader.refNameOff(gbytes, gcp, idx);  // Fieldref -> name Utf8 offset
         // THE FAST PATH IS ONLY VALID FOR A REFERENCE TO THIS CLASS. It matches on the field NAME alone, and a
         // classfile's constant pool DEDUPES Utf8 -- so `OtherClass.foo` and this class's own `foo` share one
@@ -7592,6 +7603,146 @@ public final class Loader
         {
             Uart.write(Magic.bytes("  (benign unlocked reports capped here; n= above is the last shown)\n"));
         }
+    }
+
+    // ----- THE PARSE-CONTEXT GUARD: who is touching the shared view, and did they take the lock -----
+    //
+    // `checkCompileLockHeld` above sits at `compile()`/`compileClass()`, so it can only ever see the two
+    // COMPILER entries -- and that is not where the open failure is. The contended launcher arm dies at
+    // batch 21 with an NPE inside `ClassReader.u1` whose null argument is `gbytes`, WHILE the stuck-lock
+    // report says another task holds the lock doing a lazy compile. Main cannot be blocked on the lock and
+    // NPE at the same time, so main reached the shared view on a path that takes no lock at all, and
+    // `ClassReader.refNameOff`/`u1` are reached from resolution paths outside the two entries that guard
+    // covers.
+    //
+    // TWENTY such paths were already found BY READING (the VMNatives reflection wrappers, 20 -> 0) and
+    // closing them did not end it. So this one goes on the STATE rather than on the compiler: every
+    // re-point of the view, plus the cp-ref readers the failing trace actually named.
+    //
+    // GATED, where `checkCompileLockHeld` is not, and the asymmetry is deliberate. That one ships because it
+    // is SILENT on a passing boot. This one sits on the hottest path in the loader -- `gbase` is touched at
+    // ~386 sites and `gcp` at ~158 -- and THIS VM'S BASELINE COMPILER DOES NOT INLINE, so an always-on call
+    // per constant-pool reference is exactly the per-item cost this file has had to strip twice (the
+    // inflater paid a non-inlined call per BIT and it was worth 16.2x). `PARSE_CTX_WATCH` is `static final`,
+    // so javac's conditional compilation (JLS 14.21) emits NOTHING for a guarded body and RTA never marks
+    // this method reachable: an ARMED boot pays for it and a shipped one cannot.
+    private static final boolean PARSE_CTX_WATCH = false;
+    private static int parseCtxNullSaid;
+    private static int parseCtxUnlockedSaid;
+    private static int parseCtxCollideSaid;
+    static int parseCtxNullN;        // the view was read with a NULL gbytes -- the recorded arm-3 crash
+    static int parseCtxUnlockedN;    // the view was touched with the loader lock NOT ours
+    static int parseCtxCollideN;     // ... of those, the ones where ANOTHER TASK held it
+
+    /**
+     * Report an unguarded touch of the shared parse view. {@code where}: 1 = parseConstPool (the WRITER --
+     * this call re-points the view), 2 = mrefNameOff, 3 = refClassNameOff, 4 = mrefDescOff, 5 = the
+     * Fieldref name read in the static-resolution path. 2 and 5 are the two that reach
+     * {@code ClassReader.refNameOff}, which is the frame the failing arm named.
+     */
+    private static void checkParseCtxOwned(int where)
+    {
+        // THE NULL COMES FIRST, AHEAD OF THE OWNERSHIP RETURN, because a null view is the recorded CRASH
+        // rather than a hazard: the caller is about to hand it to ClassReader and take the NPE inside `u1`.
+        // It has to be reported even when the lock IS ours -- that would be a different and worse defect
+        // than an unlocked touch, and the early return below would have hidden it completely.
+        //
+        // READERS ONLY (`where >= 2`), AND THE FIRST ARMED BOOT IS WHY. At the WRITER site the view is
+        // legitimately empty on the very first call of a boot -- nothing has been parsed yet -- and
+        // `parseConstPool` is about to ESTABLISH it, so asking whether the PREVIOUS view was null is not a
+        // question about anything. Armed without this the guard fired exactly once per boot, at batch 1,
+        // reporting `gbase=0x0 ctx~<null>`: a false positive on a passing run, which this file's own
+        // standing rule calls worse than no report at all. The readers are where a null is real, because
+        // they are one instruction from handing it to ClassReader.
+        if (where >= 2 && gbytes == null)
+        {
+            parseCtxNullN += 1;
+            if (parseCtxNullSaid < SAID_MAX_COLLIDE)
+            {
+                parseCtxNullSaid += 1;
+                Uart.write(Magic.bytes("\n  *** PARSE VIEW IS NULL (gbytes) -- THIS IS THE ClassReader.u1 NPE ***\n  "));
+                parseCtxWhere(where);
+                // gbase IS PRINTED BESIDE IT BECAUSE THE PAIR IS THE DIAGNOSIS. parseConstPool assigns
+                // `gbase = base` as its FIRST statement, before the cache scan that decides everything else,
+                // so a non-zero gbase naming a plausible class while gbytes reads null is the torn view
+                // caught in the act -- either mid-switch, or a published count over an unpublished entry.
+                Uart.write(Magic.bytes(" gbase="));
+                VM.printHex(gbase);                      // prints its own "0x" -- see VM.printHex
+                Uart.putc(0x0A);
+                if (parseCtxNullSaid == SAID_MAX_COLLIDE)
+                {
+                    Uart.write(Magic.bytes("  (null-view reports capped here; nulls= above is the last shown)\n"));
+                }
+            }
+        }
+        if (VM.smpSched == 0 || VM.loaderOwner == VM.curTask())
+        {
+            return;                                      // held by us (possibly re-entrant), or the lock is inert
+        }
+        parseCtxUnlockedN += 1;
+        // Same split as checkCompileLockHeld, and for the same reason: owner == -1 is "nobody holds it",
+        // which at boot means no competitor exists. owner >= 0 and not us is the real hazard -- another task
+        // is in the loader right now and this call is reading or moving the view it is standing on.
+        boolean collide = VM.loaderOwner >= 0;
+        if (collide)
+        {
+            parseCtxCollideN += 1;
+            if (parseCtxCollideSaid >= SAID_MAX_COLLIDE)
+            {
+                return;
+            }
+            parseCtxCollideSaid += 1;
+            Uart.write(Magic.bytes("\n  *** PARSE VIEW TOUCHED WHILE ANOTHER TASK HOLDS THE LOADER LOCK ***\n  "));
+        }
+        else
+        {
+            if (parseCtxUnlockedSaid >= SAID_MAX_BENIGN)
+            {
+                return;
+            }
+            parseCtxUnlockedSaid += 1;
+            Uart.write(Magic.bytes("\n  PARSE VIEW TOUCHED WITH NO LOADER LOCK HELD\n  "));
+        }
+        parseCtxWhere(where);
+        Uart.putc(0x0A);
+        if (collide && parseCtxCollideSaid == SAID_MAX_COLLIDE)
+        {
+            Uart.write(Magic.bytes("  (collision reports capped here; collide= above is the last shown)\n"));
+        }
+        else if (!collide && parseCtxUnlockedSaid == SAID_MAX_BENIGN)
+        {
+            Uart.write(Magic.bytes("  (unlocked reports capped here; n= above is the last shown)\n"));
+        }
+    }
+
+    /**
+     * The shared tail of every parse-context report: the site, the lock state, and the running totals.
+     * Split out so a capped report still carries an accurate n=/collide=/nulls= on the last line it prints.
+     */
+    private static void parseCtxWhere(int where)
+    {
+        Uart.write(Magic.bytes("at="));
+        VM.printDec(where);
+        Uart.write(Magic.bytes(" task="));
+        VM.printDec(VM.curTask());
+        Uart.write(Magic.bytes(" owner="));
+        VM.printDec(VM.loaderOwner);
+        Uart.write(Magic.bytes(" depth="));
+        VM.printDec(VM.loaderDepth);
+        Uart.write(Magic.bytes(" site="));
+        VM.printDec(VM.loaderLockSite);
+        Uart.write(Magic.bytes(" n="));
+        VM.printDec(parseCtxUnlockedN);
+        Uart.write(Magic.bytes(" collide="));
+        VM.printDec(parseCtxCollideN);
+        Uart.write(Magic.bytes(" nulls="));
+        VM.printDec(parseCtxNullN);
+        Uart.write(Magic.bytes(" ctx~"));
+        // CAPPED, NEVER printNameAt, for the reason three diagnostics here have already had to be corrected:
+        // this line runs in the one state where the length word cannot be trusted -- the condition being
+        // reported IS "gbase moved under a reader" -- so a garbage u2 of 65535 is ~5.7 SECONDS of blocking
+        // UART plus a read far past the blob, burying the failure this exists to name.
+        printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
     }
 
     private static long compile(long code, int len, int descOff, int isStatic)
@@ -18252,18 +18403,30 @@ public final class Loader
     /** Name Utf8 offset of Methodref {@code idx}. */
     private static int mrefNameOff(int idx)
     {
+        if (PARSE_CTX_WATCH)
+        {
+            checkParseCtxOwned(2);
+        }
         return ClassReader.refNameOff(gbytes, gcp, idx);
     }
 
     /** Class-name Utf8 offset of a {@code *ref} constant (Fieldref/Methodref layout). */
     private static int refClassNameOff(int idx)
     {
+        if (PARSE_CTX_WATCH)
+        {
+            checkParseCtxOwned(3);
+        }
         return ClassReader.refClassNameOff(gbytes, gcp, idx);
     }
 
     /** Descriptor Utf8 offset of Methodref {@code idx}. */
     private static int mrefDescOff(int idx)
     {
+        if (PARSE_CTX_WATCH)
+        {
+            checkParseCtxOwned(4);
+        }
         return ClassReader.refDescOff(gbytes, gcp, idx);
     }
 
