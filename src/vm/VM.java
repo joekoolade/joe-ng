@@ -532,6 +532,7 @@ public final class VM
     static final int LOCK_NEW_RESOLVE = 7;   // resolveUnresolvedNew: a deferred `new`
     static final int LOCK_ALLOC_CODE  = 8;   // Heap.allocCode: the code arena bump
     static final int LOCK_BAKE_RESOLVE = 9;  // VM.bakeResolve: linking a baked body, may demand-load
+    static final int LOCK_VIRT_RESOLVE = 10; // Loader.virtualResolve: late virtual dispatch, parses + compiles
 
     static int loaderLockSite;                          // what the OUTERMOST holder is doing (a LOCK_* id)
     static long loaderLockAt;                           // CNTPCT when it took the lock, for the held-for time
@@ -556,6 +557,7 @@ public final class VM
         if (site == LOCK_NEW_RESOLVE) { Uart.write(Magic.bytes("deferred-new resolve")); return; }
         if (site == LOCK_ALLOC_CODE)  { Uart.write(Magic.bytes("Heap.allocCode")); return; }
         if (site == LOCK_BAKE_RESOLVE) { Uart.write(Magic.bytes("bakeResolve")); return; }
+        if (site == LOCK_VIRT_RESOLVE) { Uart.write(Magic.bytes("late-virtual resolve")); return; }
         Uart.write(Magic.bytes("<unspecified: a caller did not say>"));
     }
 

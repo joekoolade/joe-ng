@@ -11630,6 +11630,38 @@ public final class Loader
      */
     static long virtualResolve(long recv, int idx)
     {
+        // THE SIXTH UNLOCKED PATH INTO THE LOADER'S STATIC CONTEXT, and the last trampoline without a lock.
+        // This is entered straight from the late-virtual dispatch trampoline via VMNatives, and it reuses
+        // resolveLinkTarget -- which demand-loads the class and calls parseConstPool, re-pointing gbase /
+        // gcp / gbytes at a different blob. Every sibling trampoline already locks (lazyCompile LOCK_LAZY,
+        // resolveLinkStub LOCK_DEMAND_LOAD, resolveUnresolvedNew LOCK_NEW_RESOLVE, bakeResolve
+        // LOCK_BAKE_RESOLVE); this one never did, so a task resolving a virtual call could re-point the
+        // parse context under a task walking it. CLAUDE.md hypothesises exactly this shape -- "a FIFTH
+        // unlocked path, or a lock that does not cover the whole context" -- for the contended failure the
+        // compile-side fix did not close.
+        //
+        // THE BODY IS A SEPARATE METHOD because the wrapper must stay SHALLOW: this file's build-time guard
+        // forbids an exception handler in a method whose operand stack passes OP_MAX, and virtualResolve is
+        // large. Same shape as clinitEntryOf and compileMethodOnDemand, for the same reason.
+        //
+        // AND IT WIDENS A DEBT RATHER THAN CREATING ONE, stated because it should not be discovered later:
+        // this path can run a <clinit> (its own doc below says so), so the lock is now held across guest
+        // code here too -- exactly as it already is for lazyCompile's drain and loadAll's batch.
+        VM.loaderLock(VM.LOCK_VIRT_RESOLVE);
+        long r;
+        try
+        {
+            r = virtualResolveLocked(recv, idx);
+        }
+        finally
+        {
+            VM.loaderUnlock();   // see the note in lazyCompile: a throw here used to strand the lock
+        }
+        return r;
+    }
+
+    private static long virtualResolveLocked(long recv, int idx)
+    {
         if (recv == 0L || idx < 0 || idx >= vsCount || clTab == null)
         {
             return VM.denylistTrapAddr;
