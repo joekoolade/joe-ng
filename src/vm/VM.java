@@ -3088,20 +3088,24 @@ public final class VM
         // Every counter that outgrew four digits misreported silently. Two Pi runs showed exactly that in
         // the large-region reuse counter and were dismissed as UART corruption -- on the strength of this
         // same fix, which had been made on one branch and not merged into the other.
-        if (v < 0)
+        // WIDENED TO LONG for the same reason scInt was: -Integer.MIN_VALUE is still Integer.MIN_VALUE, so
+        // negating in int left v negative, `v / div >= 10` was false at div = 1, and the single digit printed
+        // was `0x30 + (v % 10)` with a NEGATIVE remainder -- Integer.MIN_VALUE came out as "-(".
+        long m = v;
+        if (m < 0L)
         {
             Uart.putc(0x2D);
-            v = -v;
+            m = -m;
         }
-        int div = 1;
-        while (v / div >= 10)
+        long div = 1L;
+        while (m / div >= 10L)
         {
-            div = div * 10;
+            div = div * 10L;
         }
-        while (div > 0)
+        while (div > 0L)
         {
-            Uart.putc(0x30 + (v / div) % 10);
-            div = div / 10;
+            Uart.putc(0x30 + (int) ((m / div) % 10L));
+            div = div / 10L;
         }
     }
 

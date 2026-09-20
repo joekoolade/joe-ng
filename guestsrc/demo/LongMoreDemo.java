@@ -18,6 +18,23 @@ public class LongMoreDemo
         showHex(255L);                                  // ff
         showHex(-1L);                                   // ffffffffffffffff (unsigned 64-bit)
         showHex(4886718345L);                           // 123456789
+
+        // THE EXTREMES OF THE RANGE, through STRING CONCAT rather than Long.toString: concat has its own
+        // formatter (VM.scLong), and it negated the value to take digits -- which is a no-op for
+        // Long.MIN_VALUE, so the digit loop ran zero times and the whole number printed as a bare "-".
+        // A silently truncated number, not a crash. Long.toString is the stock JDK path and was always fine,
+        // so printing both is what tells the two apart.
+        Magic.printStr("  concat MIN = " + lv(-9223372036854775808L) + " (want -9223372036854775808)\n");
+        Magic.printStr("  concat MAX = " + lv(9223372036854775807L) + " (want 9223372036854775807)\n");
+        Magic.printStr("  concat -1  = " + lv(-1L) + " (want -1)\n");
+        Magic.printStr("  toString MIN = " + Long.toString(lv(-9223372036854775808L))
+                + " (want -9223372036854775808)\n");
+    }
+
+    /** Opaque to javac's constant folding, so the concat sees a runtime value. */
+    private static long lv(long v)
+    {
+        return v;
     }
 
     private static void showParse(String s)

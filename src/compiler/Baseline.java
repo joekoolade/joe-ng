@@ -533,8 +533,9 @@ public final class Baseline
         {
             divisorCheck(cb, opSlot(sp - 1), pos);              // idiv/ldiv by 0 -> ArithmeticException
             binop(cb, BIN_DIV);
-            return 1;
-        }
+            canonInt(cb, op == 0x6C);                           // idiv OVERFLOWS in exactly one case:
+            return 1;                                           //   INT_MIN / -1, which JVMS says wraps back
+        }                                                       //   to INT_MIN rather than throwing
         else if (op == 0x70 || op == 0x71)
         {
             divisorCheck(cb, opSlot(sp - 1), pos);              // irem/lrem by 0 -> ArithmeticException
@@ -640,10 +641,10 @@ public final class Baseline
         else if (op == 0x87) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfDW(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // i2d
         else if (op == 0x89) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfSX(0, r)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; }   // l2f
         else if (op == 0x8A) { int r = opSlot(sp - 1); cb.emit(A64Enc.scvtfDX(0, r)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; }   // l2d
-        else if (op == 0x8B) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsWS(r, 0)); return 1; }  // f2i
+        else if (op == 0x8B) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsWS(r, 0)); canonInt(cb, true); return 1; }  // f2i
         else if (op == 0x8C) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtzsXS(r, 0)); return 1; }  // f2l
         else if (op == 0x8D) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovWtoS(0, r)); cb.emit(A64Enc.fcvtDS(0, 0)); cb.emit(A64Enc.fmovDtoX(r, 0)); return 1; } // f2d
-        else if (op == 0x8E) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsWD(r, 0)); return 1; }  // d2i
+        else if (op == 0x8E) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsWD(r, 0)); canonInt(cb, true); return 1; }  // d2i
         else if (op == 0x8F) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtzsXD(r, 0)); return 1; }  // d2l
         else if (op == 0x90) { int r = opSlot(sp - 1); cb.emit(A64Enc.fmovXtoD(0, r)); cb.emit(A64Enc.fcvtSD(0, 0)); cb.emit(A64Enc.fmovStoW(r, 0)); return 1; } // d2f
 
@@ -1066,6 +1067,18 @@ public final class Baseline
      * Re-establish the "an int lives sign-extended in its 64-bit register" invariant after an int operation
      * that can overflow 32 bits ({@code iadd}/{@code isub}/{@code imul}/{@code ishl}/{@code ineg}, and
      * {@code iushr}, whose zero-extended result may have bit 31 set).
+     *
+     * <p>Also after {@code idiv} and after {@code f2i}/{@code d2i}, which break the invariant in two
+     * different ways and were both missing it:
+     * <ul>
+     * <li>{@code idiv} overflows in EXACTLY ONE case -- {@code INT_MIN / -1}, which JVMS 6.5 says wraps back
+     *     to {@code INT_MIN} rather than throwing. A 64-bit SDIV answers {@code +2147483648} instead.</li>
+     * <li>{@code f2i}/{@code d2i} lower to {@code FCVTZS} with a W destination, and an AArch64 W-form write
+     *     ZERO-extends bits 63:32 -- so {@code (int) -1.5f} arrived as {@code 0x0000_0000_FFFF_FFFF}.
+     *     Consumers that sign-extend first ({@code branchCmp}, {@code i2l}, {@code iadd}) repaired it by
+     *     accident, which is why this stayed invisible; {@code idiv}, {@code irem} and {@code ishr} read the
+     *     whole register and answered from the unsigned value instead.</li>
+     * </ul>
      *
      * <p>Without this the invariant silently held only for values that never overflowed. Everything that masks
      * -- {@code Integer.toString}, {@code &}, the 32-bit compares -- still looked right, so the breakage stayed

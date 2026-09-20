@@ -52,7 +52,15 @@ final class VMConcat
         Magic.store64(sb + 24L, count + 1L);
     }
 
-    /** Append {@code v} in decimal to the builder. */
+    /**
+     * Append {@code v} in decimal to the builder.
+     *
+     * <p>THE DIGITS ARE ACCUMULATED IN A LONG, because {@code -Integer.MIN_VALUE} is still
+     * {@code Integer.MIN_VALUE}: negating in int left the value NEGATIVE, the {@code v > 0} loop ran zero
+     * times, and {@code Integer.MIN_VALUE} concatenated into a string as a bare {@code "-"} -- a silently
+     * truncated number rather than a crash. The int range fits a long with room to negate, so widening once
+     * removes the case instead of special-casing it.
+     */
     static void scInt(long sb, int v)
     {
         if (v == 0)
@@ -60,18 +68,19 @@ final class VMConcat
             scChar(sb, 0x30);
             return;
         }
-        if (v < 0)
+        long m = v;
+        if (m < 0L)
         {
-            scChar(sb, 0x2D);                              // '-' (Integer.MIN_VALUE not special-cased)
-            v = -v;
+            scChar(sb, 0x2D);                              // '-'
+            m = -m;                                        // safe: |Integer.MIN_VALUE| fits a long
         }
         byte[] tmp = new byte[12];
         int n = 0;
-        while (v > 0)
+        while (m > 0L)
         {
-            tmp[n] = (byte) (0x30 + v % 10);
+            tmp[n] = (byte) (0x30 + (int) (m % 10L));
             n = n + 1;
-            v = v / 10;
+            m = m / 10L;
         }
         while (n > 0)
         {
@@ -144,16 +153,24 @@ final class VMConcat
             scChar(sb, 0x30);
             return;
         }
+        // THE DIGITS ARE TAKEN IN THE NEGATIVE DOMAIN, because there is no wider type to borrow and
+        // {@code -Long.MIN_VALUE} is still {@code Long.MIN_VALUE}: negating left the value negative, the
+        // {@code v > 0} loop ran zero times, and Long.MIN_VALUE concatenated as a bare "-". The negative
+        // side of two's complement holds one more value than the positive side, so working there covers
+        // every long. {@code v % 10} is non-positive, and negating just the DIGIT is always in range.
         if (v < 0L)
         {
-            scChar(sb, 0x2D);                              // '-' (Long.MIN_VALUE not special-cased)
+            scChar(sb, 0x2D);                              // '-'
+        }
+        else
+        {
             v = -v;
         }
         byte[] tmp = new byte[24];
         int n = 0;
-        while (v > 0L)
+        while (v < 0L)
         {
-            tmp[n] = (byte) (0x30 + (int) (v % 10L));
+            tmp[n] = (byte) (0x30 - (int) (v % 10L));
             n = n + 1;
             v = v / 10L;
         }
