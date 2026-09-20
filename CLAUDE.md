@@ -115,6 +115,120 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A BYTECODE-CONFORMANCE AUDIT, AND THE WORST THING IT FOUND WAS NOT A MISSING OPCODE BUT A BOUNDS-CHECK
+  BYPASS (2026-09-19, PI-VALIDATED).** The JIT was measured against the JVMS opcode set: **193 of 202
+  lowered**. It is **198 of 199 REACHABLE** now -- `jsr`/`ret`/`jsr_w` are correctly absent (JVMS 4.9.1
+  forbids them at class-file version 51 and above), leaving only `multianewarray`. One hardware boot
+  validates all three increments: batch 67, every new arm exact, and every standing gate held.
+
+  | gate | this boot |
+  |---|---|
+  | negative array length | 9 arms, `bypass = blocked at the allocation` |
+  | `wide` / `dup2_x2` / `frem` / `drem` | 14 arms, incl. `1e18 rem 3.0 = 1000` |
+  | `f2i`/`d2i`/`idiv` canonical | 13 arms, incl. `MIN/-1 >> 1 = -1073741824` |
+  | LONG_MIN through concat | `-9223372036854775808` (was a bare `-`) |
+  | `churnMB` / `lisp` / `smp sched` | `625 live=32 intact=32` / `evals=600 result=610 stable=1` / `4 of 4` |
+  | priority + inversion | `finish HML`, `HIGH blocked 60ms`, `steps/core 61/60/60/59` |
+  | WiFi | WPA2 -> DHCP -> DNS -> TCP -> **HTTP 200 OK, 829 bytes** |
+
+  - **THE GAP LIST WAS MEASURED, NOT READ OFF THE SPEC, and that is what made it actionable.** A raw
+    bytecode scan of JDK 26's java.base (7,417 classes / 61,929 methods) and of `ramfs/lib/junit.jar`
+    (1,969 / 12,810) said how often each missing opcode actually occurs. It is why `wide` was a one-branch
+    fix -- **all 33 occurrences in java.base are `wide iinc`, not one is a wide load or store** -- and why
+    `goto_w` is lowered but stays UNEXERCISED (0 occurrences in both; it needs a >32 KB method).
+  - **A NEGATIVE ARRAY LENGTH WAS NOT A MISSING THROW, IT WAS UNBOUNDED MEMORY ACCESS.** The length is
+    stored as a sign-extended 64-bit word and `boundsCheck` compares it UNSIGNED -- deliberately, so that a
+    negative INDEX becomes a huge one and throws -- so a length of `-1` reads back as
+    `0xFFFF_FFFF_FFFF_FFFF` and EVERY index is below it. `new int[-1]` allocated 20 bytes and then accepted
+    a load or store at any index at all, in a VM whose stated protection model is language type-safety plus
+    GC. The JIT throws `NegativeArraySizeException` now, and `Heap.allocArray` backstops it for the paths
+    the JIT cannot reach -- `implicitChecks()` is false for the writer, so every WRITER-BAKED `newarray` in
+    `java/`, `jdk/`, `sun/` and `zip/` arrives unchecked, and the baked zip inflater takes its lengths from
+    the archive. **The backstop computes the size in LONG**, which closes the same hole from the other end:
+    `ARRAY_BASE_OFFSET + length * elemSize` overflows in int, so `new long[0x20000000]` wrapped to a 24-byte
+    allocation carrying a length of 2^29.
+  - **`f2i`/`d2i` BROKE THE SIGN-EXTENSION INVARIANT, AND ACCIDENTAL REPAIR IS WHY IT SURVIVED.** They lower
+    to `FCVTZS` with a W destination, and an AArch64 W-form write ZERO-extends bits 63:32. Every consumer
+    that sign-extends first fixed it up by accident and PRINTED THE RIGHT ANSWER -- a compare, `i2l`,
+    `iadd`, and string concat, whose `scInt` takes an `int` PARAMETER so the callee's own `i2l` repairs the
+    argument. Only `idiv`, `irem` and `ishr` read the whole register: `((int) -2.5f) / 2` was 2147483647.
+    `idiv` had its own single overflow case, `INT_MIN / -1`, which JVMS 6.5 wraps rather than throwing.
+  - **AND `demo/FloatDemo` ALREADY COVERED f2i AND d2i -- WITH EVERY ARM POSITIVE (8, 5, 35).** That is
+    exactly why it could not see this, and it is the cheapest lesson in the arc: its arms now DIVIDE, SHIFT
+    and REMAINDER each negative conversion, because that is the only way the defect becomes visible.
+  - **FIXING IT EXPOSED THREE FORMATTERS THAT COULD NOT PRINT MIN_VALUE**, which is the only reason those
+    are fixed here: all of them negate to take digits, and `-Integer.MIN_VALUE` is still
+    `Integer.MIN_VALUE`. `scInt` emitted a bare `"-"`; `scLong` the same for LONG_MIN (its own comment
+    admitted it); `VM.printDec` emitted `"-("`, because with `v` negative the single digit was `0x30` plus
+    a NEGATIVE remainder. A silently truncated number in the routine EVERY counter and batch-line
+    diagnostic goes through. `scInt`/`printDec` widen to long; `scLong` takes its digits in the NEGATIVE
+    domain, since there is no wider type and two's complement holds one more value below zero.
+  - **THE REMAINDER IS EXACT, AND THAT IS THE WHOLE DIFFICULTY.** JLS 15.17.3 defines `%` as C `fmod` --
+    truncated, with NO rounding error -- so `a - trunc(a/b)*b` is wrong the moment the quotient stops being
+    representable. `VM.drem` shift-and-subtracts: `t` runs over `|b| * 2^k` so every doubling and halving is
+    a pure exponent change, and each subtraction happens only when `t <= a < 2t`, where Sterbenz's lemma
+    makes `a - t` exact. **The loop test is `t + t <= a` rather than `t <= a * 0.5` deliberately** -- the
+    first is always exact, the second can ROUND for a subnormal `a` and start the descent one power too
+    low, leaving a remainder larger than the divisor. Validated on the HOST against Java's own `%`:
+    **600,841 pairs compared BY RAW BITS** (so -0.0 and 0.0 are distinguished), covering NaN, both
+    infinities, subnormals, random bit patterns and the float widen/narrow path -- 0 failures, no boot
+    needed, and far broader than any demo.
+  - **EVERY FIX HAS A NEGATIVE CONTROL, AND TWO OF THEM CORRECTED ME.** Disabling only the array check makes
+    the backstop print `BAD ARRAY LENGTH len=0xFFFF... bytes=0x14` -- proving the demo reaches -1 AND that
+    the allocation is the predicted 20 bytes. Disabling only the three `canonInt` calls fails SIX arms with
+    exactly the values the comments predict. **But it also showed that `MIN/-1` and `f2i -1e30` PASS
+    unfixed**, because printing sign-extends the argument -- so as written they tested the formatter, not
+    the divide; the idiv case earned teeth by shifting the quotient. One predicted value in a comment was
+    off by one. **A demo arm that passes in BOTH states is not a control, and only running the control says
+    which arms those are.**
+  - **TWO LATENT DEFECTS FOUND ON THE WAY.** `opLen` had no case for `goto_w`/`jsr_w` and fell through to 1,
+    so every scan that steps bytecode with it (`isNonLeaf`, `maxLocalSlotUsed`) would desync on the rest of
+    any method containing one -- which is why `computeDepths` and the dead-code skip each carry their own
+    `len = 5`. And `WriterSymbols.HELPER_KEY` was a SIX-element literal indexed raw by helper id, so any id
+    above 5 was an ArrayIndexOutOfBounds rather than a statement about what the host writer supports.
+  - **NO NEW PER-PC STATE WAS NEEDED FOR THE dup FIXES, which is what kept them small.** `computeDepths`
+    already builds a per-pc BITMASK of which operand slots are category-2 and keeps it in `preMask`;
+    `wideTop` is just its top bit. The `dup*_x*` family needs the slots BELOW the top to tell its JVMS forms
+    apart, and they were there all along. `dup2_x2` handles all four forms; `dup_x2`'s form 2 was reading a
+    slot that is not part of the group at all.
+  - **`isNonLeaf` LEARNED ABOUT `frem`/`drem`**, and the reason is recorded so the next helper-emitting
+    lowering does not re-find it: they lower to a BL, so a method whose ONLY call is a `%` would otherwise
+    save no LR and return to junk.
+  - **WHAT THE HARDWARE SAID THAT QEMU COULD NOT.** The negative-length backstop now runs on EVERY array
+    allocation, and QEMU hands out ZEROED DRAM where a cold Pi does not: `gc: collections=46` at the churn
+    demo (identical to QEMU) and 57 at the finale against QEMU's 56, with `churnMB=625 live=32 intact=32`
+    and no `heap OOM`/`STW TIMEOUT`. And PipDemo -- the scheduler set-piece that flakes about one boot in
+    three on QEMU -- passed on silicon at `HIGH blocked 60ms`.
+  - **MARKERS: `BAD ARRAY LENGTH`, `FAULT`, `BOOT RE-ENTERED`, `JIT unsupported`, `LOCALS UNDERSIZED`,
+    `heap OOM`, `STW TIMEOUT`, `Exception in thread`, `BADPATCH`, `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`,
+    `unclaimed pc`, parity `DIFF`, `LINK FAILED`, `SCRATCH MAP` and `ESR EC=0` ALL ZERO.** The backstop
+    staying silent is the load-bearing one: it is what says the JIT check fires first. Only the known
+    denylisted lines (`CodingErrorAction.REPLACE`, `Normalizer$Form.NFD`/`NFC`, the charset-exception
+    `CTOR SKIPPED` pairs, four `TRAP-WIRED`), every one labelled DENYLISTED. Host: A64 105, object-model 22,
+    class-reader 171, refmap 14, **compiler 40**, crypto 17, zip 91, `overlay-check 0 new` -- the compiler
+    count holding is the assertion that matters, since no fixture uses these opcodes and the writer's
+    byte-for-byte self-hosting fixpoint is therefore untouched.
+  - **STILL OPEN, AND THE ORDER IS WHAT IT COSTS TO VALIDATE.** `multianewarray` (0xC5, 16 uses in
+    java.base) is the one real opcode gap left and still fails LOUDLY. `Magic.load32` lowers to `ldrw`, so
+    an MMIO word with bit 31 set reads as 4294967295 rather than -1 -- the same invariant one layer down;
+    all 79 call sites were checked and every one masks, compares (already effectively signed) or widens to
+    long, and the only two that shift right also mask, so nothing works by accident today. It is a one-line
+    change (`ldrsw`) held back only because it is board-facing and the WiFi path cannot be gated on QEMU.
+    Float/double STRING CONCAT is unimplemented (`JIT unsupported reason=0 a=0xBA b=2`), found by walking
+    into it -- which is why the opcode demo prints doubles as scaled longs. `goto_w`'s lowering and
+    `dup_x2`'s form 2 are shipped but unexercised.
+  - **`ACC_SYNCHRONIZED` IS IMPLEMENTED AND STASHED, NOT MERGED, and the reason is a methodology failure
+    worth more than the code.** A synchronized METHOD carries no monitorenter/monitorexit bytecode, so the
+    VM owes the lock -- and joe-ng never took it, which means `synchronized` on a method gave NO mutual
+    exclusion at all on a four-core VM (475 instance-synchronized methods in java.base alone). The instance
+    case works: its demo passes 9/9 against the host, and the negative control LOSES 15 OF 20 UPDATES. The
+    static case is blocked outright -- the monitor is the class's `Class` object and `WriterSymbols
+    .classLiteral` THROWS, so the host writer can never name one. What stopped the merge is that the demo
+    suite died at PipDemo and **I ran four bisect arms before building the HEAD control** -- backwards, and
+    the rule this file states most often. The control then showed the failure survives with the codegen
+    ENTIRELY DISABLED, so it is layout perturbation surfacing the known 1-in-3 QEMU flake, not the change;
+    and n=1 per side cannot separate those. It needs a Pi boot, not another QEMU arm.
+
 - **THE LOCK'S CONTENTION IS MEASURED AT LAST -- 4 SOLO, 8 UNDER LOAD -- AND THE TWO CLEAN CONTENDED RUNS
   ARE NOT A FIX (2026-09-19, demo suite PI-VALIDATED; launcher arms on QEMU).** This continues the
   compile-context card below rather than replacing it. Four launcher boots, all batch 139 `+2473blob`,
