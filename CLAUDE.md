@@ -115,6 +115,51 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **ONE EXTRA ALLOCATION PER COMPILE BREAKS demo/PipDemo ON UNMODIFIED HEAD -- a latent bug with a TWO-LINE
+  reproducer, and it is NOT the 1-in-3 QEMU flake this file has been calling it (2026-09-20).** Adding a
+  single unused `new int[MAXM]` (2072 bytes, small-region) to `allocMethodTables` on HEAD makes the demo
+  suite die at `demo/PipDemo.main:95` -- `high.join()` on a Thread whose Type reads as garbage
+  (`itableDir=0x1`, `elem=0x2FD`, `super=0x17240`). Nothing else changes: the array is never read.
+
+  | arm | suite |
+  |---|---|
+  | HEAD | **pass** (batch 69/70, 0 traps, 2 runs) |
+  | HEAD + 16 unused statics | **pass** |
+  | HEAD + an extra field on `LazyMethod`/`VtSlot` (object SIZE) | **pass** |
+  | HEAD + ~140 lines of REACHABLE INERT CODE (46 placed methods, +12 KB image) | **pass** |
+  | **HEAD + ONE unused `int[512]` allocated per compile** | **FAIL** -- identical signature |
+
+  - **IT IS DETERMINISTIC AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT.** Two QEMU runs and a Pi boot
+    of the same image print **byte-identical** fault addresses -- `recv=0x471F290 tib=0x47163F0
+    type=0x46FF140`. So it is not a timing flake, and **QEMU is a faithful harness for this failure**: it
+    can be chased at 7 minutes an arm with no flashing, which is what made eight arms affordable.
+  - **THAT RETIRES THE "1-IN-3 SCHEDULER FLAKE" READING FOR THIS SYMPTOM.** This file records the demo suite
+    as flaking at the scheduler set-piece about one boot in three, and an earlier ACC_SYNCHRONIZED attempt
+    was parked on exactly that explanation ("layout perturbation surfacing the known flake"). That
+    conclusion was never tested against a control of the right SHAPE, and it is wrong: HEAD passes 2 of 2
+    while every allocating arm fails, deterministically, on both harnesses.
+  - **AND IT CORRECTS A CONTROL OF MY OWN THAT WAS FAIR IN THE WRONG DIMENSION.** I built "HEAD + ~140 lines
+    of reachable inert code", matched to the change's code volume (+12 KB image against the change's
+    +14 KB), watched it PASS, and concluded the bug had to be in my own logic. It was a real control and it
+    controlled the wrong variable: the change adds an ALLOCATION PER COMPILE, and the inert arm added none.
+    **Matching a change's size does not match its allocation behaviour**, and only the allocating control
+    separates the two.
+  - **WHAT THE FAILURE IS NOT, each killed by its own arm:** not the ACC_SYNCHRONIZED codegen (a control
+    with the emission entirely disabled fails identically), not the demo that exercises it (unwiring it
+    fails), not the monitor bookkeeping arrays (30x smaller fails; never allocated at all fails), not the
+    unwinder hook (disabled, fails), not the end-of-launch report (disabled, fails), and not object size or
+    statics (both pass on HEAD).
+  - **THE SHAPE OF THE BUG: a live Thread's header is wrong by the time PipDemo joins it.** `tib[0]` is not
+    a Type -- every field read out of it is nonsense -- so the receiver's TIB word has been overwritten. An
+    extra 2 KB allocation per compile moves collection timing and small-region placement; that this exposes
+    a corrupted live object points at the collector or at a stale root, which is where the next arc should
+    start. **`allocMethodTables` allocates ELEVEN arrays on every compile** and is called from both
+    `compile()` and `compileClass()`, so per-compile allocation pressure is not exotic here -- it is the
+    norm, and one more of the same shape is enough to cross whatever line this is.
+  - **WHY IT MATTERS BEYOND ONE DEMO:** any increment that adds a per-compile allocation now carries an
+    unrelated, deterministic suite failure. ACC_SYNCHRONIZED is the one that found it (its `mSync` table is
+    the twelfth array), and it is blocked behind it through no fault of its own.
+
 - **EVERY REACHABLE OPCODE IS LOWERED -- 199 OF 199 -- AND THE SIGN-EXTENSION INVARIANT REACHED THE BOARD
   (2026-09-20, PI-VALIDATED).** Two commits on one hardware boot: `320c8c1` (multianewarray) closes the last
   real gap in the opcode set, and `c2a9c74` (`Magic.load32` -> `ldrsw`) closes the last hole in "an int lives
