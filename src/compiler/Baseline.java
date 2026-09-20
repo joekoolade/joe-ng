@@ -3173,9 +3173,22 @@ public final class Baseline
         }
         else if (id == Intrinsics.LOAD32)
         {
+            // SIGN-extending, because Magic.load32 is declared to return an INT and Java says an int with
+            // bit 31 set is negative. `ldrw` zero-extends, which left the value INCONSISTENT with itself:
+            // a compare and an (int)->(long) cast already saw it as signed (both sxtw first), while `/`,
+            // `%` and `>>` read the whole register and answered from the unsigned value -- so an MMIO word
+            // of 0xFFFFFFFF was -1 to `< 0` and 4294967295 to `/`. Same invariant, and the same repair, as
+            // f2i/d2i.
+            //
+            // NO CALL SITE'S BEHAVIOUR CHANGES, checked rather than assumed across all 79 of them: every
+            // consumer either MASKS, uses `>>>` (iushr uxtw's first), COMPARES (branchCmp sxtw's),
+            // widens to long (i2l sxtw's), or does + - * (canonInt re-canonicalises). The only two
+            // arithmetic shifts on a load32 result are `(hw >> 16) & 0xFFFF` and `(x >> 10) & 0xFFF`, both
+            // masked; the instruction-word decoders use `>>> 26`; and the two unmasked `sum >> 16`
+            // checksum folds accumulate from load8, never from load32.
             int addr = popReg();
             int r = pushReg();
-            cb.emit(A64Enc.ldrw(r, addr, 0));
+            cb.emit(A64Enc.ldrsw(r, addr, 0));
         }
         else if (id == Intrinsics.LOAD8)
         {

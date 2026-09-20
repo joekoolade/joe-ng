@@ -3905,6 +3905,11 @@ public final class VM
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
         Loader.launchMain(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
 
+        // Magic.load32 returns a CANONICAL int. The first three arms change with the lowering; the rest
+        // could not, which is what made the fix safe across 79 board-facing call sites.
+        Uart.write(Magic.bytes("raw 32-bit loads are signed (Magic.load32):\n"));
+        Loader.launchMain(Magic.bytes("demo/RawLoadDemo"), Magic.bytes(""));
+
         // multianewarray (JVMS 6.5) -- the last opcode a class file may legally contain that would not
         // compile. The short[a][b][] arm is the one with teeth: dimensions FEWER than the type's rank.
         Uart.write(Magic.bytes("multianewarray (JVMS 6.5):\n"));
