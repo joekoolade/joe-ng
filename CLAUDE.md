@@ -115,6 +115,61 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE BOOT TASK'S STACK WAS NOT A GC ROOT WHEN ANOTHER TASK COLLECTED -- a live object swept, found from a
+  two-line reproducer, FIXED (2026-09-20).** The root scan took exactly ONE stack, the collector's own:
+
+  ```java
+  long stackTop = STACK_TOP;                       // boot task
+  int me = curTask();
+  if (taskStackBase != null && me != 0 && taskStackBase[me] != 0L)
+  {
+      stackTop = taskStackBase[me] + 0x8000L;      // a spawned task: its stack is a heap object
+  }
+  markRange(scanFrom, stackTop);                   // ... and nothing else's
+  ```
+
+  **A SPAWNED task's stack survives that omission and the BOOT task's does not, and the difference is the
+  whole bug.** `VMScheduler` allocates a spawned stack on the heap and says so -- `taskStackBase[id] = stk;
+  // object base: keeps the stack GC-reachable` -- so the trace reaches it however the collection was
+  triggered. Task 0's stack is the IMAGE stack, and the per-core idle tasks' are fixed scratch
+  (`taskStackBase[id] = 0L; // a fixed per-core stack, not a heap object`): they are heap objects for
+  NOBODY, so a collection triggered by a spawned thread scanned neither. Everything live only in `main`'s
+  frames was swept.
+  - **THE SYMPTOM IS THE ONE THIS VM IS WORST AT DIAGNOSING: a live object's header reused.** `demo/PipDemo`
+    dies at `high.join()` with `DISPATCH ON UNREGISTERED TYPE ... join()V` on a Thread whose `tib[0]` is not
+    a Type -- every field read out of it nonsense (`itableDir=0x1`, `elem=0x2FD`, `super=0x17260`). `high` is
+    a LOCAL in `main`; PipDemo's own spawned threads allocate; one of them collects; main's stack is not a
+    root; the Thread is swept and its memory handed to the next allocation.
+  - **AND THE STOP-THE-WORLD COMMENT ASSERTED THE OPPOSITE, which is why it survived.** It reads: cores park
+    "with the interrupted task's SP already saved to its stack -- which is how the trace still sees
+    everything they were holding". True for a task whose stack IS a heap object, false for the two kinds
+    that are not, and the sentence does not distinguish them. It does now.
+  - **TWO LINES ON HEAD REPRODUCE IT, which is what made it tractable at all.** Adding one unused
+    `new int[MAXM]` (2072 bytes, small-region, never read) to `allocMethodTables` -- which already allocates
+    ELEVEN arrays per compile -- is enough: it moves collection timing, and the suite then dies
+    deterministically at the same site. That is the fair control the ACC_SYNCHRONIZED arc needed and did not
+    have; see the card below for the six candidate mechanisms it killed first.
+  - **DETERMINISTIC, AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT** -- two QEMU runs and a Pi boot of
+    the same image print byte-identical fault addresses (`recv=0x471F290 tib=0x47163F0 type=0x46FF140`). So
+    this was never the "1-in-3 scheduler flake" two arcs have now blamed, and **QEMU is a faithful harness
+    for it**: eight arms at 7 minutes each, no flashing.
+  - **THE FIX IS THE MISSING ROOT, not a change to when collections happen:** when the collector is not task
+    0, also `markRange(taskSp[0], STACK_TOP)`. `taskSp[0]` is task 0's saved SP -- valid precisely because it
+    is not the running task. **GATES:** demo suite TWICE, batch 70, **eighteen failure markers zero** incl.
+    `DISPATCH ON UNREGISTERED TYPE`, `FAULT`, `BOOT RE-ENTERED` and `STW TIMEOUT`, with `churnMB=625 live=32
+    intact=32`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`, `steps/core 59/60/61/60`,
+    `finish HML` / `HIGH blocked 60ms`, `sum20=210`. Host: `compiler: 40 checks`, `overlay-check 0 new`.
+  - **IT IS ALSO WHAT UNBLOCKED ACC_SYNCHRONIZED**, whose `mSync` table is simply the twelfth per-compile
+    array: `demo/SyncMethodDemo` now runs IN THE SUITE at 18 arms exact, where it could only be validated
+    standalone before.
+  - **STILL OPEN, stated rather than rounded away: the per-core IDLE tasks' stacks are still unscanned.**
+    They have `taskStackBase == 0` like task 0, so the same hole applies to them; the reason it is not
+    urgent is that those flows run `smpSchedulerMain`'s pause-and-yield loop rather than guest code, so a
+    guest reference held only there is hard to construct -- but "hard to construct" is not "impossible", and
+    this file has been wrong about that before. **A second thing to look at while there:** when the
+    collector runs ON an idle task (`me != 0`, `taskStackBase[me] == 0`), `stackTop` stays `STACK_TOP` while
+    `scanFrom` is that core's fixed stack, so the range is whatever those two addresses happen to bracket.
+
 - **ONE EXTRA ALLOCATION PER COMPILE BREAKS demo/PipDemo ON UNMODIFIED HEAD -- a latent bug with a TWO-LINE
   reproducer, and it is NOT the 1-in-3 QEMU flake this file has been calling it (2026-09-20).** Adding a
   single unused `new int[MAXM]` (2072 bytes, small-region) to `allocMethodTables` on HEAD makes the demo

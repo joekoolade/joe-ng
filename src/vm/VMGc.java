@@ -92,6 +92,20 @@ final class VMGc
             stackTop = taskStackBase[me] + 0x8000L;        // a spawned task: its stack is a heap object
         }
         markRange(scanFrom, stackTop);
+        // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. A spawned task's stack is a
+        // HEAP OBJECT (taskStackBase, "keeps the stack GC-reachable"), so the trace reaches it; task 0's is
+        // the IMAGE stack and is a heap object for nobody. Scanned only when task 0 happened to be the one
+        // that called Magic.gc, so a collection triggered by a spawned thread swept everything live only in
+        // main's frames -- a local holding a Thread, say, whose header is then reused and whose next virtual
+        // call reads a garbage TIB.
+        if (me != 0)
+        {
+            long bootSp = taskSp != null ? taskSp[0] : 0L;
+            if (bootSp != 0L && bootSp < STACK_TOP)
+            {
+                markRange(bootSp, STACK_TOP);
+            }
+        }
         markRange(staticsStart, staticsEnd);
         staticsScans = staticsScans + 1L;             // did the root scan for statics actually run this pass?
         int sc = 1;                                   // secondary cores' arenas are ROOT RANGES (never
