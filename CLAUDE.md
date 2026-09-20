@@ -7173,21 +7173,14 @@ defines the minimum the assembler must encode.
   the launcher arc (the unwinder decoding a Throwable layout it never checked; `UNRESOLVED STATIC` asserting
   "class never pulled"; a `CLINIT LOST` report that could not tell "never ran" from "already ran"), and each
   redirected the search. A report that states an unmeasured cause is worse than no report.
-- **AN ABSOLUTE LINE NUMBER IS A LYING INSTRUMENT, and this file was carrying nine of them (2026-09-20).**
-  The EPL-2.0 header pass prepended 11 lines to all 369 of our Java files, so every recorded stack-trace line
-  moved by 11 -- and correcting the file by +11 was MEASURED and is WRONG in eight of nine cases, because the
-  numbers had already rotted through ordinary edits long before the headers. Real drift against what each
-  citation describes: `lazyCompileLocked` **+259**, `Baseline`'s `vtableSlot` site **+256**, `lazyCompile`
-  **+251**, `clinitEagerKept` **-164**, `forNameMirror` +26, `runPendingClinit` -20, `ensureClinit` -11.
-  Exactly two were +11 -- `Cyw43` and `PipDemo` -- and only because nothing has edited those two files since.
-  **A number that drifts silently and still reads as authoritative is the instrument defect this file names
-  most often**, arrived at from a new direction.
-  - **SO THE POINTERS ARE ANCHORED BY NAME NOW** (`the one symbols.vtableSlot site, ~1873`), with the number
-    kept only as a hint. **The QUOTED ARTIFACTS ARE LEFT VERBATIM and that is the distinction that matters:**
-    the `ProcessImpl` stack trace, `PipDemo.main:95`, and the `Loader.java:2052 -> 2059` A/B are records of
-    what a BOOT PRINTED or of a measured DELTA -- shifting those would falsify a log to keep a pointer tidy.
-    Third-party citations (`Class.java:3717`, `ClassValue.java:267`, `EnumMap.java:751`, `AssertThrows.java:57`)
-    are the JDK's and JUnit's own line numbers and were never ours to move.
+- **AN ABSOLUTE LINE NUMBER IS A LYING INSTRUMENT (2026-09-20).** The EPL-2.0 header pass moved every
+  recorded stack-trace line by 11, and repairing this file by +11 was MEASURED and is wrong in eight of nine
+  cases -- the numbers had already rotted through ordinary edits, drifting from **-164 to +259**, and only
+  `Cyw43` and `PipDemo` were +11, because nothing has edited those two files since. Source POINTERS are
+  anchored by name now with the number a hint only (`the one symbols.vtableSlot site, ~1873`), while QUOTED
+  ARTIFACTS -- the `ProcessImpl` stack trace, `PipDemo.main:95`, the `Loader.java:2052 -> 2059` A/B -- are
+  left VERBATIM, because shifting a record of what a boot PRINTED to keep a pointer tidy falsifies a log.
+
 - **A FETCHED REMOTE REF GOES STALE WITH TIME, AND `merge-base --is-ancestor` ANSWERS ABOUT YOUR LAST FETCH
   (2026-09-20).** A branch was handed over as "a clean fast-forward"; it was 72 commits BEHIND `origin/main`
   and the push would have been rejected. The peer session HAD fetched -- `150261f` really was the tip when it
