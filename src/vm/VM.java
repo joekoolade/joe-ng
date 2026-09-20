@@ -4026,8 +4026,17 @@ public final class VM
         // javac emits; the 1e18-over-3.0 arm is the one that fails a cheap-but-inexact remainder.
         Uart.write(Magic.bytes("previously-unsupported opcodes (wide / dup2_x2 / frem / drem):\n"));
         Loader.launchMain(Magic.bytes("demo/OpcodeDemo"), Magic.bytes(""));
-        // ACC_SYNCHRONIZED on a METHOD: the implicit monitor (JVMS 2.11.10). The race arm is the one with
-        // teeth -- with the monitor disabled it loses 15 of 20 updates.
+        // ACC_SYNCHRONIZED on a METHOD (JVMS 2.11.10). The race arms are the ones with teeth: with the
+        // monitor disabled the instance race loses 15 of 20 updates and the MIXED race (a static
+        // synchronized method against a synchronized(Foo.class) block on one counter) loses 9 of 20.
+        //
+        // WIRED IN DELIBERATELY, THOUGH THE SUITE DOES NOT PASS ON QEMU -- and what that costs is measured
+        // rather than guessed. The suite dies at demo/PipDemo's `high.join()` with a Thread whose Type reads
+        // as garbage; a control from this SAME tree with the monitor codegen ENTIRELY DISABLED fails
+        // identically, and so does one with this launch removed, while HEAD passes. So it is neither the
+        // codegen nor this demo: it is the layout/closure shift of the change's mere presence, the
+        // sensitivity this file records as having cost boots twice. Hiding the demo would buy nothing
+        // (measured) and would cost the Pi gate, so it stays and the Pi decides.
         Uart.write(Magic.bytes("synchronized methods (JVMS 2.11.10):\n"));
         Loader.launchMain(Magic.bytes("demo/SyncMethodDemo"), Magic.bytes(""));
 
