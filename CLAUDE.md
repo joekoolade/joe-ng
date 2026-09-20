@@ -288,7 +288,7 @@ defines the minimum the assembler must encode.
     silent) or `SCRATCH MAP` -- with only the known DENYLISTED lines.
   - **ONE THING IS NEW RELATIVE TO THE PREVIOUS Pi BOOT AND IS SAID RATHER THAN GLOSSED:** two
     `(skip ch=0x0000000000000003` lines after `wifi: eapol msg4 sent`. **Checked rather than assumed:** that
-    is `Cyw43.java:2515`, in the ioctl-response wait loop, and it reads its channel with
+    is `Cyw43`'s ioctl-response wait loop (the `(skip ch=` log call, ~2526), and it reads its channel with
     `Magic.load8(dst + 5) & 0x0F` -- a `load8`, masked, on a path this change does not touch. It fires when an
     event/data frame arrives while the loop waits for an ioctl ack, i.e. frame timing, and the boot goes on to
     `HTTP 200 OK`. Recorded so it is not re-found and re-chased.
@@ -779,7 +779,7 @@ defines the minimum the assembler must encode.
     the "cannot fire looks exactly like never happens" trap this file names.** Found by a peer review,
     confirmed by reading, and then printed by the hardware unprompted.
   - **AND `1b72cd3` WIDENS IT, stated rather than discovered later:** `forNameMirror` calls `ensureClinit`
-    (Loader.java:6040, 6056) and is now inside `LOCK_REFLECT`, so `Class.forName` from guest code runs an
+    (both `ensureClinit` calls in `forNameMirror`, ~6066) and is now inside `LOCK_REFLECT`, so `Class.forName` from guest code runs an
     initializer under the lock where it did not before. The hazard was already live; this enlarges its
     surface. It has survived every boot so far because the trap force-releases the whole hold before it
     spins -- which is luck about the ONE path that traps, not a safety argument.
@@ -840,7 +840,7 @@ defines the minimum the assembler must encode.
     `lazyCompile`'s hold, so dropping to depth 0 around a `call0` would release a lock the OUTER frame relies
     on to keep the static compile context to itself. That trades a latent deadlock for a live clobber.
   - **FIXED -- `ceb1a9d`'s acquire barrier could not do its job.** `Magic.dsb()` sits
-    BEFORE `int ci = 0` (Loader.java:6630), so both the `pcN` load and the `pcBytes[ci]` load are after it --
+    BEFORE `int ci = 0` (the `pcBytes` scan in the parse-cache lookup, ~6682), so both the `pcN` load and the `pcBytes[ci]` load are after it --
     and a barrier orders accesses before it against accesses after it, not two loads that are both after it.
     Message-passing needs it BETWEEN observing the count and reading the entry. The comment states the
     requirement correctly and the instruction is placed where it cannot meet it. **I reviewed that commit and
@@ -1020,7 +1020,7 @@ defines the minimum the assembler must encode.
     forcing a bisect.
   - **AND IT WIDENS THE CLINIT-UNDER-LOCK DEBT, stated rather than discovered later.** These paths can run an
     initializer, so locking them holds the loader lock across guest code. That deadlock is latent ONLY
-    because `clinitEagerKept` returns false unconditionally (`Loader.java:1237-1240`, verified) -- and
+    because `clinitEagerKept` returns false unconditionally (its whole body, ~1073, verified) -- and
     `bd535c5` leaves a loud guard for the day it does not.
 
 - **NOTHING IS COMPILED AT LOAD TIME ANY MORE -- `eagerKept` is retired and `java/lang/Object` defers like
@@ -5342,7 +5342,7 @@ defines the minimum the assembler must encode.
     is unregistered, reasoning that `invokeinterface` needed it. It did not fix the bug, because
     `ZipOutputStream` genuinely IS unregistered at compile time (the trace shows `newresolve` -- a deferred
     `new`), so the guess still fired. **Checking instead of assuming settled it:** `symbols.vtableSlot` is
-    called ONLY from `invokevirtual` (`Baseline:1617`); `invokeinterface` goes through `ifSlotOf`. The
+    called ONLY from `invokevirtual` (the one `symbols.vtableSlot` site, ~1873); `invokeinterface` goes through `ifSlotOf`. The
     cross-class guess served nothing and is deleted.
   - **`LOAD_LOG` paid for itself on its first real use.** Flipping it on printed the whole resolve sequence
     and showed `close`/`finish` resolving NOWHERE before the throw -- an ABSENCE again -- which moved the
@@ -7173,6 +7173,30 @@ defines the minimum the assembler must encode.
   the launcher arc (the unwinder decoding a Throwable layout it never checked; `UNRESOLVED STATIC` asserting
   "class never pulled"; a `CLINIT LOST` report that could not tell "never ran" from "already ran"), and each
   redirected the search. A report that states an unmeasured cause is worse than no report.
+- **AN ABSOLUTE LINE NUMBER IS A LYING INSTRUMENT, and this file was carrying nine of them (2026-09-20).**
+  The EPL-2.0 header pass prepended 11 lines to all 369 of our Java files, so every recorded stack-trace line
+  moved by 11 -- and correcting the file by +11 was MEASURED and is WRONG in eight of nine cases, because the
+  numbers had already rotted through ordinary edits long before the headers. Real drift against what each
+  citation describes: `lazyCompileLocked` **+259**, `Baseline`'s `vtableSlot` site **+256**, `lazyCompile`
+  **+251**, `clinitEagerKept` **-164**, `forNameMirror` +26, `runPendingClinit` -20, `ensureClinit` -11.
+  Exactly two were +11 -- `Cyw43` and `PipDemo` -- and only because nothing has edited those two files since.
+  **A number that drifts silently and still reads as authoritative is the instrument defect this file names
+  most often**, arrived at from a new direction.
+  - **SO THE POINTERS ARE ANCHORED BY NAME NOW** (`the one symbols.vtableSlot site, ~1873`), with the number
+    kept only as a hint. **The QUOTED ARTIFACTS ARE LEFT VERBATIM and that is the distinction that matters:**
+    the `ProcessImpl` stack trace, `PipDemo.main:95`, and the `Loader.java:2052 -> 2059` A/B are records of
+    what a BOOT PRINTED or of a measured DELTA -- shifting those would falsify a log to keep a pointer tidy.
+    Third-party citations (`Class.java:3717`, `ClassValue.java:267`, `EnumMap.java:751`, `AssertThrows.java:57`)
+    are the JDK's and JUnit's own line numbers and were never ours to move.
+- **A FETCHED REMOTE REF GOES STALE WITH TIME, AND `merge-base --is-ancestor` ANSWERS ABOUT YOUR LAST FETCH
+  (2026-09-20).** A branch was handed over as "a clean fast-forward"; it was 72 commits BEHIND `origin/main`
+  and the push would have been rejected. The peer session HAD fetched -- `150261f` really was the tip when it
+  measured -- and four days passed between that fetch and the merge. **I first recorded this as "never
+  fetched", which was an inference from a stale ref and not a measurement**; the peer checked its own
+  transcript and corrected it. The remedy is the same either way and is the part to keep: **fetch immediately
+  before any ff-only claim**, because the failure is a timestamp gap, not a missing command -- so looking for
+  the absent fetch finds nothing.
+
 - **A bisect assumes the culprit is inside the change.** When every single-variable removal still fails in a
   NEW place, the change is a perturbation, not a cause. And over a bug that depends on stale registers, a
   bisect ranks ingredients by whether they disturb the accident -- arms can pass by LUCK. Ask what a passing
