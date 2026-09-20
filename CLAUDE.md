@@ -115,6 +115,87 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **EVERY REACHABLE OPCODE IS LOWERED -- 199 OF 199 -- AND THE SIGN-EXTENSION INVARIANT REACHED THE BOARD
+  (2026-09-20, PI-VALIDATED).** Two commits on one hardware boot: `320c8c1` (multianewarray) closes the last
+  real gap in the opcode set, and `c2a9c74` (`Magic.load32` -> `ldrsw`) closes the last hole in "an int lives
+  sign-extended in its 64-bit register". The only opcodes still unlowered are **jsr/ret/jsr_w, which JVMS
+  4.9.1 FORBIDS at class-file version >= 51** -- so they are not a gap, they are unreachable by construction,
+  and `wide ret` now fails loudly rather than silently mis-stepping.
+
+  | arm | result |
+  |---|---|
+  | `MultiArrayDemo` | **21 of 21 exact** -- incl. `short[2][3][] null = 1`, all three NegativeArraySizeException arms, `int[2][2][2] deep = 9` |
+  | `RawLoadDemo` | **16 of 16 exact** -- `load32(-1)/2 = 0`, `>> 1 = -1`, `MIN/2 = -1073741824`, plus the 11 immune arms |
+  | `OpcodeDemo` / `FloatDemo` / `NegArrayDemo` | 14/14, 13/13, 9/9 |
+
+  - **THE LOAD-BEARING EVIDENCE IS THE WiFi FINALE, NOT THE DEMOS, AND THAT WAS STATED BEFORE THE BOOT.**
+    `Magic.load32` is board-facing, and the two sites that decode packed SDPCM headers
+    (`int nlen = (hw >> 16) & 0xFFFF`) live in the CYW43 driver -- **which QEMU does not have**. The audit's
+    claim was that they are immune BECAUSE THEY MASK, and that is an argument, not a measurement. The boot
+    measures it: `rx hw=0x00000000FFF3000C` -- **bit 31 SET**, the exact case whose representation the change
+    alters -- followed by `SDPCM frame valid (len/~len match)`. len `0x000C`, nlen `0xFFF3`, `len ^ nlen =
+    0xFFFF`. Then `wifi: FIRMWARE UP (F2 ready)`, WPA2 4-way, DHCP 192.168.1.247, DNS, **`HTTP/1.1 200 OK`,
+    827 bytes**. The masked shift over a sign-extended value works on silicon.
+  - **THE AUDIT-BY-CONSUMER IS WHAT MADE THAT A ONE-BOOT QUESTION.** All 79 `load32` call sites were
+    classified by what CONSUMES the result: masked, `>>>`, compares, `(long)`, and `+`/`-`/`*` are all immune
+    by construction; only `/`, `%` and `>>` can read the difference. Hunting those three specifically found
+    both arithmetic shifts already masked, the instruction decoders using `>>> 26`, and the checksum folds
+    accumulating from `load8`. **A classification that names what CANNOT be affected is worth more than a
+    sweep of what might be**, and the negative control agrees with it to the arm: of `RawLoadDemo`'s 16 arms,
+    reverting the change moves **exactly 5**.
+  - **multianewarray IS DESCRIPTOR-DRIVEN RECURSION, not a special case per rank.** `VM.multiNewArray(desc,
+    dims, c0..c3)` walks the descriptor one `[` at a time, takes the per-level TIB from `arrayTibOfDescN`,
+    and recurses while `level + 1 < dims` -- so **dims FEWER THAN the rank is the ordinary path, not an edge**
+    (`new short[2][3][]` leaves the innermost level null, and that arm is what discriminates a real
+    implementation from one that fills every level). `MAX_MULTI_DIMS = 4`; every count is checked for
+    negativity BEFORE any allocation, so a bad count at level 2 cannot leave a half-built tree behind.
+  - **THE NEGATIVE CONTROL SAID ONE OF MY DEMO'S CLAIMS WAS OVERSTATED, AND THE JAVADOC WAS CORRECTED RATHER
+    THAN THE CLAIM QUIETLY DROPPED.** `MultiArrayDemo`'s javadoc said the element-size arms (`byte`/`short`/
+    `long`/`Object`) were a test; with the rank-vs-dims handling reverted, **exactly ONE line moves** -- the
+    `short[2][3][]` null arm -- and every element-size arm still passes. They are SHAPE COVERAGE, not
+    discrimination, and the javadoc now says which arms are which. This is the same defect this file records
+    against instruments: an arm that passes in both states is not a control.
+  - **TWO SELF-INFLICTED BUGS ON THE WAY, both caught by a control rather than by reading.** (1) The lowering
+    marshalled counts into x0..x3 with the descriptor in x4 while the helper is `(desc, dims, c0..c3)`, so the
+    helper read a descriptor address of 2 and a dims of 3; the first `new int[2][3]` came back malformed and
+    the demo died with AIOOBE. (2) `NEW_NASE` was given helper id **48, which `VIRTUAL_RESOLVE` already
+    holds** -- and `helperAddr` tests VIRTUAL_RESOLVE first, so every negative-length throw branched into the
+    late-virtual trampoline with the array length in x0, printing `BAD RECEIVER at dispatch:
+    recv=0xFFFFFFFFFFFFFFFF`. **The helper ids are ONE NAMESPACE BUT NOT ONE CONTIGUOUS BLOCK** --
+    `VIRTUAL_RESOLVE=48` and `WATCH_*=49..52` are declared EARLIER in the file than `GET_PRIO=47` -- so
+    "append after the last line" picks a used number. A NOTE now sits at the declaration, and
+    `WriterSymbols.HELPER_KEY` is a sparse 64-entry table that THROWS on an unmapped id instead of the
+    6-element literal that turned any id above 5 into an ArrayIndexOutOfBounds.
+  - **GATES, identical to the QEMU arm to the digit:** `gc: collections=46` then `55`, `churnMB=625 live=32
+    intact=32`, `lisp: evals=600 result=610 stable=1`, `smp sched: 4 of 4`, `steps/core: c0=61 c1=59 c2=60
+    c3=60`, `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`, `finish HML`, `HIGH blocked 60ms`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's 7-frame trace, `concat MIN =
+    -9223372036854775808`. Every failure marker ZERO -- no `FAULT`, `BOOT RE-ENTERED`, `JIT unsupported`,
+    `LOCALS UNDERSIZED`, `heap OOM`, `STW TIMEOUT`, `BADPATCH`, `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`,
+    `unclaimed pc`, parity `DIFF`, `LINK FAILED`, **`BAD ARRAY LENGTH`** (the `Heap.allocArray` backstop,
+    silent) or `SCRATCH MAP` -- with only the known DENYLISTED lines.
+  - **ONE THING IS NEW RELATIVE TO THE PREVIOUS Pi BOOT AND IS SAID RATHER THAN GLOSSED:** two
+    `(skip ch=0x0000000000000003` lines after `wifi: eapol msg4 sent`. **Checked rather than assumed:** that
+    is `Cyw43.java:2515`, in the ioctl-response wait loop, and it reads its channel with
+    `Magic.load8(dst + 5) & 0x0F` -- a `load8`, masked, on a path this change does not touch. It fires when an
+    event/data frame arrives while the loop waits for an ioctl ack, i.e. frame timing, and the boot goes on to
+    `HTTP 200 OK`. Recorded so it is not re-found and re-chased.
+  - **COVERAGE WENT 193 -> 199 OF 202 LOWERED ACROSS THE ARC**, over the negative-length guard, `wide`,
+    `dup2_x2`'s four forms, `dup_x2` form 2, `frem`/`drem` (exact, via Sterbenz), the f2i/d2i/idiv
+    canonicalisation, multianewarray and `ldrsw`.
+  - **STILL OPEN, carried forward deliberately:** **ACC_SYNCHRONIZED** (stashed -- the instance case works
+    9/9 with a negative control losing 15 of 20 updates, the STATIC case is blocked outright because
+    `WriterSymbols.classLiteral` throws, and separating it from the known 1-in-3 QEMU scheduler flake needs a
+    Pi boot -- see the methodology note below); **float/double string concat** (`JIT unsupported reason=0
+    a=0xBA b=2`, walked into while writing `OpcodeDemo`, worked around there with scaled longs); and
+    `goto_w`'s 5-byte `opLen` plus `dup_x2` form 2, both SHIPPED BUT UNEXERCISED -- correct by reading, proven
+    by nothing.
+  - **A METHODOLOGY FAILURE OF MINE, RECORDED BECAUSE IT IS THE RULE THIS FILE STATES MOST OFTEN.** On the
+    ACC_SYNCHRONIZED increment I ran FOUR bisect arms against a PipDemo suite failure before building the HEAD
+    control. The control then showed the failure survives with the codegen ENTIRELY DISABLED -- so it was
+    layout perturbation surfacing the recorded 1-in-3 QEMU scheduler flake, and all four arms were measuring
+    noise. **The control comes FIRST**, and this file has now had to say so five times.
+
 - **A BYTECODE-CONFORMANCE AUDIT, AND THE WORST THING IT FOUND WAS NOT A MISSING OPCODE BUT A BOUNDS-CHECK
   BYPASS (2026-09-19, PI-VALIDATED).** The JIT was measured against the JVMS opcode set: **193 of 202
   lowered**. It is **198 of 199 REACHABLE** now -- `jsr`/`ret`/`jsr_w` are correctly absent (JVMS 4.9.1
