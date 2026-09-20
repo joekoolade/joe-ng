@@ -107,6 +107,7 @@ public interface Symbols
     // file, not the line above: 48 was taken once, and helperAddr tests VIRTUAL_RESOLVE first, so the call
     // branched into the late-virtual trampoline and reported a receiver nothing had dispatched on.
     int DREM = 54;              // vm/VM.drem(DD)D    — frem/drem (no AArch64 remainder instruction)
+    int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -141,6 +142,21 @@ public interface Symbols
 
     /** Load into {@code reg} the Class-mirror address for the CONSTANT_Class at {@code classCp} (a class literal). */
     void classLiteral(CodeBuffer cb, int reg, int classCp);
+
+    /**
+     * Materialise, in {@code reg}, the address of the ARRAY DESCRIPTOR Utf8 ({@code {u2 len}{bytes}}) named by
+     * the {@code CONSTANT_Class} at {@code classCp} -- "[[I", "[[Ljava/lang/String;". {@code multianewarray}
+     * is the only caller: its helper walks that descriptor to get the array TIB and the element size at EVERY
+     * level, which is what makes the "fewer dimensions than the type" form ({@code new short[a][b][]}) fall
+     * out rather than needing a case.
+     *
+     * <p>Default is a refusal, like {@link #classLiteral}: the host writer resolves array types by NAME at
+     * relocation time and has no address to hand at compile time. Nothing in the bake domain uses the opcode.
+     */
+    default void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
+    {
+        throw new UnsupportedOperationException("multianewarray not compiled by the host writer");
+    }
 
     /** True if the field STORE at {@code fieldCp} is being watched: the compiler precedes it with a
      *  WATCH_RET helper call printing the value stored. Debug only; the writer always answers false. */

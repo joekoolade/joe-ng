@@ -40,13 +40,25 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         }
         return k;
     }
-
-    /** Runtime-helper method keys, indexed by the ids in {@link Symbols}. */
-    private static final String[] HELPER_KEY =
+    /**
+     * Runtime-helper method keys, indexed by the ids in {@link Symbols}, and SPARSE: the host writer emits
+     * only a handful of these, so ids it never reaches stay null rather than being padded with a guess -- a
+     * null is the loud failure in helperKey above, not a neighbouring method quietly named by mistake.
+     */
+    private static final String[] HELPER_KEY = new String[64];
+    static
     {
-        "vm/Heap.alloc(I)J", "vm/Heap.allocArray(II)J", "vm/VMGc.gcCollect(J)V",
-        "vm/VM.instanceOf(JJ)I", "vm/VM.checkCast(JJ)J", "vm/VMUnwind.unwind(JJJ)V",
-    };
+        HELPER_KEY[Symbols.HEAP_ALLOC]       = "vm/Heap.alloc(I)J";
+        HELPER_KEY[Symbols.HEAP_ALLOC_ARRAY] = "vm/Heap.allocArray(II)J";
+        HELPER_KEY[Symbols.GC_COLLECT]       = "vm/VMGc.gcCollect(J)V";
+        HELPER_KEY[Symbols.INSTANCE_OF]      = "vm/VM.instanceOf(JJ)I";
+        HELPER_KEY[Symbols.CHECK_CAST]       = "vm/VM.checkCast(JJ)J";
+        HELPER_KEY[Symbols.UNWIND]           = "vm/VMUnwind.unwind(JJJ)V";
+        // frem/drem and multianewarray are METAL-JIT only today (arrayDescAddr refuses in the host writer),
+        // but naming them costs nothing and keeps the table a statement about capability.
+        HELPER_KEY[Symbols.DREM]             = "vm/VM.drem(DD)D";
+        HELPER_KEY[Symbols.MULTI_NEW_ARRAY]  = "vm/VM.multiNewArray(JIIIII)J";
+    }
 
     private final ClassFile cf;
     private final BaselineCompiler.ClassResolver resolver;

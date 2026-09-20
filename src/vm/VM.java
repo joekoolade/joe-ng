@@ -1275,6 +1275,17 @@ public final class VM
         return Loader.newNase();
     }
 
+    /** {@code multianewarray} (JVMS 6.5): the first {@code dims} levels of the array type named by the
+     *  descriptor at {@code desc}. Counts are range-checked by the JIT before the call. */
+    static long multiNewArray(long desc, int dims, int c0, int c1, int c2, int c3)
+    {
+        if (desc == 0L)
+        {
+            return 0L;                                   // the boot force-compile probe, not a real request
+        }
+        return Loader.multiNewArray(desc, dims, c0, c1, c2, c3);
+    }
+
     /**
      * {@code frem}/{@code drem}: Java's {@code %} on floating point. JLS 15.17.3 defines it as the C
      * {@code fmod} -- the TRUNCATED remainder, and it is EXACT (no rounding error), which is what rules out
@@ -1596,6 +1607,7 @@ public final class VM
         if (newArithAddr == 0L) { long u = newArith(); }
         if (newNaseAddr == 0L) { long u = newNase(); }                // NegativeArraySizeException (newarray < 0)
         if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
+        if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
@@ -2988,6 +3000,7 @@ public final class VM
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
     static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
+    static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
@@ -3891,6 +3904,11 @@ public final class VM
         // Real java.util.Arrays: fill/equals/binarySearch on int[].
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
         Loader.launchMain(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
+
+        // multianewarray (JVMS 6.5) -- the last opcode a class file may legally contain that would not
+        // compile. The short[a][b][] arm is the one with teeth: dimensions FEWER than the type's rank.
+        Uart.write(Magic.bytes("multianewarray (JVMS 6.5):\n"));
+        Loader.launchMain(Magic.bytes("demo/MultiArrayDemo"), Magic.bytes(""));
 
         // The opcodes the JIT could not compile: wide, dup2_x2, frem/drem. Each arm is ordinary Java that
         // javac emits; the 1e18-over-3.0 arm is the one that fails a cheap-but-inexact remainder.

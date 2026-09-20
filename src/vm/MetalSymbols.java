@@ -82,6 +82,10 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.ifaceTypeOfMethod(ifaceMethodCp));
     }
+    public void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
+    {
+        emitAddr(cb, reg, Loader.arrayDescAddr(classCp));
+    }
     public void classLiteral(CodeBuffer cb, int reg, int classCp)
     {
         emitAddr(cb, reg, Loader.classLiteral(classCp));
@@ -579,6 +583,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.DREM)
         {
             return VM.dremAddr;
+        }
+        if (helper == Symbols.MULTI_NEW_ARRAY)
+        {
+            return VM.multiNewArrayAddr;
         }
         if (helper == Symbols.NEW_CCE)
         {

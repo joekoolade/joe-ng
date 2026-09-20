@@ -809,6 +809,11 @@ public final class Baseline
             lowerAnewArray(cb, u2(code, pos + 1), pos);      // operand = element-class Class-entry
             return 3;
         }
+        else if (op == 0xC5)
+        {
+            lowerMultiANewArray(cb, u2(code, pos + 1), code[pos + 3] & 0xFF, pos);
+            return 4;
+        }  // multianewarray: index(2) + dims(1)
         else if (op == 0xBF)
         {
             athrow(cb, pos);
@@ -2423,11 +2428,18 @@ public final class Baseline
      */
     private void negativeSizeCheck(CodeBuffer cb, int pos)
     {
+        negativeSizeCheckAt(cb, sp - 1, pos);
+    }
+
+    /** {@link #negativeSizeCheck} on an arbitrary operand slot -- {@code multianewarray} checks EVERY count,
+     *  and JVMS 6.5 checks them all before allocating anything. */
+    private void negativeSizeCheckAt(CodeBuffer cb, int slot, int pos)
+    {
         if (!symbols.implicitChecks())
         {
             return;                                             // resolve the length's register only INSIDE the
         }                                                       //   guard: opSlot can EMIT in a deep method, and
-        int lenReg = opSlot(sp - 1);                            //   the writer's output must stay byte-identical
+        int lenReg = opSlot(slot);                              //   the writer's output must stay byte-identical
         cb.emit(A64Enc.sxtw(lenReg, lenReg));                   // the length is an int: canonicalise before testing
         cb.emit(A64Enc.cmpImm(lenReg, 0));
         int over = cb.emit(A64Enc.bcond(A64Enc.GE, 0));         // length >= 0 -> skip the throw block
@@ -2646,6 +2658,68 @@ public final class Baseline
         loadConst(cb, arrayElemSize(atype));                     // push elemSize
         emitCall(cb, 2, true, false, SYM_HELPER, Symbols.HEAP_ALLOC_ARRAY); // (length,elemSize)->ref
         symbols.tagArray(cb, opSlot(sp - 1), atype, false);    // tag the result (top of stack) as its array Type
+    }
+
+    /** How many dimensions {@code multianewarray} can allocate at once -- the counts ride in x0..x3. */
+    private static final int MAX_MULTI_DIMS = 4;
+
+    /**
+     * {@code multianewarray} (JVMS 6.5). The counts are the top {@code dims} operands, outermost deepest.
+     *
+     * <p>The recursion happens in {@code VM.multiNewArray}, driven by the array DESCRIPTOR rather than by
+     * {@code dims}, so the form where dims is FEWER than the type's rank ({@code new short[a][b][]}) needs no
+     * case of its own. All that is emitted here is the JVMS check order -- every count is tested BEFORE
+     * anything is allocated -- and the marshalling.
+     *
+     * <p>The counts are moved straight into the argument registers rather than pushed as operands, because
+     * pushing would raise the true operand peak above what {@code computeDepths} sized the frame for: the
+     * pre-pass is a BYTECODE pass and cannot see operands a LOWERING invents. That is the same correction
+     * the field-store watch and the argument watch each had to make.
+     *
+     * <p>More than {@link #MAX_MULTI_DIMS} dimensions is refused at COMPILE time, exactly as the whole opcode
+     * used to be. Every one of the 16 occurrences in JDK 26's java.base is dims=2.
+     */
+    private void lowerMultiANewArray(CodeBuffer cb, int classCp, int dims, int pos)
+    {
+        if (dims < 1 || dims > MAX_MULTI_DIMS)
+        {
+            symbols.fail(Symbols.FAIL_OPCODE, 0xC500 | dims, pos);
+            return;
+        }
+        int i = 0;
+        while (i < dims)                                         // JVMS: ALL dimensions checked before any alloc
+        {
+            negativeSizeCheckAt(cb, sp - dims + i, pos);
+            i += 1;
+        }
+        // ARGUMENT ORDER MUST MATCH vm/VM.multiNewArray(JIIIII)J EXACTLY -- x0 = desc, x1 = dims, x2.. = the
+        // counts. The first cut put the counts in x0..x3 and the descriptor in x4, which the helper then read
+        // as a descriptor address of 2 and a dims of 3; the very first `new int[2][3]` came back malformed.
+        symbols.arrayDescAddr(cb, 0, classCp);                   // x0 = the {u2 len}{bytes} descriptor
+        cb.emit(A64Enc.movz(1, dims, 0));                        // x1 = dims
+        i = 0;
+        while (i < MAX_MULTI_DIMS)                               // x2..x5 = counts, padded (the helper reads dims)
+        {
+            if (i < dims)
+            {
+                cb.emit(A64Enc.movReg(2 + i, opSlot(sp - dims + i)));
+            }
+            else
+            {
+                cb.emit(A64Enc.movz(2 + i, 0, 0));
+            }
+            i += 1;
+        }
+        spillLive(cb);                                           // the helper clobbers the operand registers
+        symbols.callHelper(cb, Symbols.MULTI_NEW_ARRAY);
+        reloadLive(cb);
+        i = 0;
+        while (i < dims)
+        {
+            popReg();                                            // the counts are consumed
+            i += 1;
+        }
+        cb.emit(A64Enc.movReg(pushReg(), 0));                    // ... and the array replaces them
     }
 
     /**
@@ -3239,10 +3313,11 @@ public final class Baseline
             {
                 return true;    // new/newarray/anewarray/invokevirtual/invoke{interface,dynamic}/athrow/checkcast/instanceof
             }
-            if (op == 0x72 || op == 0x73)
+            if (op == 0x72 || op == 0x73 || op == 0xC5)
             {
-                return true;    // frem/drem: AArch64 has no remainder instruction, so these emit a BL to VM.drem.
-            }                   //   Missing this, a method whose ONLY call is a `%` saves no LR and returns to junk.
+                return true;    // frem/drem emit a BL to VM.drem; multianewarray one to VM.multiNewArray.
+            }                   //   Missing this, a method whose ONLY call is one of them saves no LR and
+                                //   returns to junk -- the trap a synchronized-method monitor hits too.
             // With implicit checks on, a deref/index emits a BL to newNpe/newAioobe on its throw path — so a
             // method with getfield/putfield/arraylength/array-load/store is non-leaf and must save LR (else a
             // cross-method unwind can't read its return address). Image code (checks off) is unaffected.

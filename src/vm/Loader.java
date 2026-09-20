@@ -18591,6 +18591,79 @@ public final class Loader
         return newExc(Magic.bytes("java/lang/NegativeArraySizeException"));
     }
 
+    // ----- multianewarray (JVMS 6.5) ---------------------------------------
+
+    /** Absolute address of the ARRAY DESCRIPTOR Utf8 ({@code {u2 len}{bytes}}) named by {@code classCp} --
+     *  what {@link #multiNewArray} walks. Blobs do not move, so this address outlives the compile. */
+    static long arrayDescAddr(int classCp)
+    {
+        return gbase + (long) gcp[u2(gbase + gcp[classCp])];
+    }
+
+    /** Element size in bytes for the component named by the descriptor char after a '[': a reference
+     *  ({@code '['} or {@code 'L'}) is a pointer, everything else is a primitive of its own width. */
+    private static int descElemSize(int c)
+    {
+        if (c == 0x5B || c == 0x4C)
+        {
+            return ObjectModel.WORD;                     // '[' or 'L': the elements are references
+        }
+        int atype = atypeForDescChar(c);
+        return atype < 0 ? ObjectModel.WORD : arrayElemSizeOfAtype(atype);
+    }
+
+    /** Bytes per element for a {@code newarray} atype (JVMS Table 6.5.newarray-A). */
+    private static int arrayElemSizeOfAtype(int atype)
+    {
+        if (atype == 4 || atype == 8) { return 1; }      // boolean, byte
+        if (atype == 5 || atype == 9) { return 2; }      // char, short
+        if (atype == 6 || atype == 10) { return 4; }     // float, int
+        return 8;                                        // double, long
+    }
+
+    /**
+     * {@code multianewarray}: build the first {@code dims} levels of the array type named by the descriptor
+     * at {@code desc} ({@code {u2 len}{bytes}}), with {@code c0..c3} as the per-level counts.
+     *
+     * <p>THE DESCRIPTOR DRIVES EVERYTHING, which is what makes the awkward form fall out instead of needing a
+     * case: {@code dims} may be FEWER than the type's rank ({@code new short[a][b][]} is {@code [[[S} with
+     * dims 2), and then the innermost level allocated is an array OF REFERENCES whose elements stay null.
+     * Stripping one '[' per level gives both the level's own TIB and its element size, and the size question
+     * answers itself -- a level whose next char is '[' or 'L' holds pointers, anything else a primitive.
+     *
+     * <p>The counts are NOT range-checked here: {@code Baseline} emits a {@code NegativeArraySizeException}
+     * check on every one of them BEFORE the call, which is both the JVMS order (all dimensions are checked
+     * before anything is allocated) and the only way to throw from the caller's frame rather than this one.
+     */
+    static long multiNewArray(long desc, int dims, int c0, int c1, int c2, int c3)
+    {
+        int n = u2(desc);                                // descriptor length, then its bytes at desc+2
+        return multiLevel(desc, 2, n, dims, 0, c0, c1, c2, c3);
+    }
+
+    private static long multiLevel(long desc, int off, int n, int dims, int level,
+                                   int c0, int c1, int c2, int c3)
+    {
+        int cnt = level == 0 ? c0 : level == 1 ? c1 : level == 2 ? c2 : c3;
+        long arr = Heap.allocArray(cnt, descElemSize(u1(desc + off + 1)));
+        long tib = arrayTibOfDescN(desc, off, n);
+        if (tib != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, tib);   // else leave the raw element size, as tagArray does
+        }
+        if (level + 1 < dims)
+        {
+            int k = 0;
+            while (k < cnt)
+            {
+                long sub = multiLevel(desc, off + 1, n - 1, dims, level + 1, c0, c1, c2, c3);
+                Magic.store64(arr + ObjectModel.ARRAY_BASE_OFFSET + (long) k * ObjectModel.WORD, sub);
+                k += 1;
+            }
+        }
+        return arr;
+    }
+
     /** Allocate a mini {@code java/lang/ClassCastException} — the JIT's failed-checkcast helper. */
     private static long cceFromTib;
     private static long cceFromType;
