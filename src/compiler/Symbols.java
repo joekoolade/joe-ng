@@ -101,6 +101,12 @@ public interface Symbols
     // reported `BAD RECEIVER recv=0xFFFFFFFFFFFFFFFF site=storeFence()V`, naming a method nothing had called.
     // Take the max over the WHOLE file, not the line above.
     int NEW_NASE = 53;          // vm/VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
+    // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr
+    // switches on) but they are NOT declared in one block -- VIRTUAL_RESOLVE and the four WATCH_* helpers sit
+    // EARLIER in this file at 48..52, above the run that ends at GET_PRIO = 47. Take the max over the WHOLE
+    // file, not the line above: 48 was taken once, and helperAddr tests VIRTUAL_RESOLVE first, so the call
+    // branched into the late-virtual trampoline and reported a receiver nothing had dispatched on.
+    int DREM = 54;              // vm/VM.drem(DD)D    — frem/drem (no AArch64 remainder instruction)
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.

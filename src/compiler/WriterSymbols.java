@@ -27,6 +27,20 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
     private static final String EXCEPTION_KEY = "vm/VM.$exception";
 
+    /** The image method a helper id resolves to -- or a loud failure. HELPER_KEY covers only the handful of
+     *  ids the HOST writer can emit, and it was indexed RAW, so any id above 5 was an
+     *  ArrayIndexOutOfBoundsException rather than a statement about what the writer supports. */
+    private static String helperKey(int helper)
+    {
+        String k = helper >= 0 && helper < HELPER_KEY.length ? HELPER_KEY[helper] : null;
+        if (k == null)
+        {
+            throw new IllegalStateException("host writer cannot emit helper id " + helper
+                    + " -- add it to WriterSymbols.HELPER_KEY");
+        }
+        return k;
+    }
+
     /** Runtime-helper method keys, indexed by the ids in {@link Symbols}. */
     private static final String[] HELPER_KEY =
     {
@@ -57,7 +71,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     }
     public void callHelper(CodeBuffer cb, int helper)
     {
-        relocs.callSites().add(new CallSite(cb.emit(A64.bl(0)), HELPER_KEY[helper]));
+        relocs.callSites().add(new CallSite(cb.emit(A64.bl(0)), helperKey(helper)));
     }
     public void tib(CodeBuffer cb, int reg, int classCp)
     {

@@ -576,6 +576,10 @@ final class MetalSymbols implements Symbols
         {
             return VM.newNaseAddr;
         }
+        if (helper == Symbols.DREM)
+        {
+            return VM.dremAddr;
+        }
         if (helper == Symbols.NEW_CCE)
         {
             return VM.newCceAddr;

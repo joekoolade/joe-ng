@@ -408,6 +408,11 @@ public final class Baseline
             dup2X1(cb);
             return 1;
         }  // dup2_x1
+        else if (op == 0x5E)
+        {
+            dup2X2(cb);
+            return 1;
+        }  // dup2_x2 (all four JVMS forms)
         else if (op == 0x5F)
         {
             swap(cb);
@@ -625,6 +630,7 @@ public final class Baseline
         else if (op == 0x66 || op == 0x67) { fbinop(cb, 1, op == 0x67); return 1; }   // fsub / dsub
         else if (op == 0x6A || op == 0x6B) { fbinop(cb, 2, op == 0x6B); return 1; }   // fmul / dmul
         else if (op == 0x6E || op == 0x6F) { fbinop(cb, 3, op == 0x6F); return 1; }   // fdiv / ddiv
+        else if (op == 0x72 || op == 0x73) { frem(cb, op == 0x72); return 1; }        // frem / drem
         else if (op == 0x76 || op == 0x77) { fneg(cb, op == 0x77); return 1; }        // fneg / dneg
         else if (op == 0x95) { fcmp(cb, false, false); return 1; }   // fcmpl (NaN -> -1)
         else if (op == 0x96) { fcmp(cb, false, true); return 1; }    // fcmpg (NaN -> +1)
@@ -711,6 +717,19 @@ public final class Baseline
             branchCmp(cb, code, pos, A64Enc.NE);            // if_acmpne
             return 3;
         }
+        else if (op == 0xC4)
+        {
+            return wideOp(cb, code, pos);
+        }  // wide
+        else if (op == 0xC8)
+        {
+            int target = pos + s4(code, pos + 1);             // goto_w: a 4-byte signed offset
+            syncOut(cb);
+            int w = cb.emit(A64Enc.b(0));
+            addFixup(w, target, FIX_B, 0);
+            recordDepth(target);
+            return 5;
+        }  // goto_w
         else if (op == 0xA7)
         {
             int target = pos + s2(code, pos + 1);
@@ -1136,9 +1155,66 @@ public final class Baseline
         cb.emit(A64Enc.movReg(v2, 16));      // insert v1 at the bottom
     }
 
-    /** dup_x2 (category-1 form): {@code ..,v3,v2,v1 -> ..,v1,v3,v2,v1}. Deep-safe (see {@link #dupX1}). */
+    /**
+     * {@code wide}: the same local-variable instruction with a TWO-byte local index (and, for {@code iinc},
+     * a two-byte signed constant). javac emits it whenever an index or constant will not fit in a byte.
+     *
+     * <p>Every one of the 33 occurrences in JDK 26's java.base is {@code wide iinc} -- not one is a wide
+     * load or store -- but all the forms are lowered here rather than just the one that happens to occur,
+     * because the difference is only how the operand is read and a refusal is a method that will not compile.
+     *
+     * <p>{@code wide ret} is deliberately absent: {@code jsr}/{@code ret} are FORBIDDEN in a class file of
+     * version 51 or above (JVMS 4.9.1), so it cannot appear in anything this VM loads.
+     */
+    private int wideOp(CodeBuffer cb, byte[] code, int pos)
+    {
+        int sub = code[pos + 1] & 0xFF;
+        int slot = u2(code, pos + 2);
+        if (sub == 0x84)                                     // wide iinc: u2 index, s2 constant
+        {
+            iinc(cb, slot, s2(code, pos + 4));
+            return 6;
+        }
+        if (sub == 0x15 || sub == 0x16 || sub == 0x17 || sub == 0x18 || sub == 0x19)
+        {
+            load(cb, slot);                                  // iload/lload/fload/dload/aload
+            return 4;
+        }
+        if (sub == 0x36 || sub == 0x37 || sub == 0x38 || sub == 0x39 || sub == 0x3A)
+        {
+            store(cb, slot);                                 // istore/lstore/fstore/dstore/astore
+            return 4;
+        }
+        symbols.fail(Symbols.FAIL_OPCODE, 0xC400 | sub, pos);   // wide ret, or a malformed prefix
+        return 0;
+    }
+
+    /**
+     * Is operand slot {@code slot} a category-2 (long/double) value on entry to the bytecode being lowered?
+     *
+     * <p>{@code computeDepths} already builds a per-pc BITMASK of which operand slots are category-2 and
+     * keeps it in {@code preMask} -- {@code wideTop} is just its top bit. The {@code dup*_x*} family needs
+     * the slots BELOW the top to tell its JVMS forms apart, and reading them here costs no extra state.
+     */
+    private boolean slotWide(int slot)
+    {
+        return slot >= 0 && slot < 64 && preMask != null && ((preMask[curPos] >>> slot) & 1L) != 0L;
+    }
+
+    /**
+     * dup_x2, both JVMS forms. joe-ng keeps a long/double in ONE slot, so the shape depends on whether the
+     * value being stepped over is category-2:
+     * <ul><li>form 1 (v2, v3 category-1): {@code ..,v3,v2,v1 -> ..,v1,v3,v2,v1}</li>
+     * <li>form 2 (v2 category-2): {@code ..,v2,v1 -> ..,v1,v2,v1} -- exactly {@link #dupX1} here.</li></ul>
+     * Form 2 used to take the three-slot path, which reads a slot that is not part of the group at all.
+     */
     private void dupX2(CodeBuffer cb)
     {
+        if (slotWide(sp - 2))                // form 2: one category-2 value below the top -> insert past ONE slot
+        {
+            dupX1(cb);
+            return;
+        }
         int v1 = opSlot(sp - 1);
         int v2 = opSlot(sp - 2);
         int v3 = opSlot(sp - 3);
@@ -1148,6 +1224,50 @@ public final class Baseline
         cb.emit(A64Enc.movReg(v1, v2));      // shift v2 up
         cb.emit(A64Enc.movReg(v2, v3));      // shift v3 up
         cb.emit(A64Enc.movReg(v3, 16));      // insert v1 at the bottom
+    }
+
+    /**
+     * dup2_x2, all four JVMS forms. The group duplicated is ONE slot when the top is category-2 and TWO
+     * otherwise; it is inserted below ONE slot or TWO by the same test one level down. In joe-ng's one-slot
+     * world that collapses to three shapes already implemented:
+     * <ul><li>form 4 (v1, v2 both cat-2)      -&gt; {@link #dupX1}</li>
+     * <li>form 2 (v1 cat-2; v2, v3 cat-1)     -&gt; the three-slot {@link #dupX2}</li>
+     * <li>form 3 (v1, v2 cat-1; v3 cat-2)     -&gt; the three-slot {@link #dup2X1}</li>
+     * <li>form 1 (all four cat-1)             -&gt; the four-slot shuffle below</li></ul>
+     *
+     * <p>javac emits this for compound assignment on a {@code long[]}/{@code double[]} element
+     * ({@code a[i]++} is {@code dup2; laload; dup2_x2; lconst_1; ladd; lastore}), which is form 2 -- so an
+     * ordinary Java statement did not compile at all before this.
+     */
+    private void dup2X2(CodeBuffer cb)
+    {
+        boolean topWide = wideTop[curPos];
+        if (topWide)
+        {
+            if (slotWide(sp - 2)) { dupX1(cb); }    // form 4: one over one
+            else { dupX2(cb); }                     // form 2: one over two
+            return;
+        }
+        if (slotWide(sp - 3))
+        {
+            dup2X1(cb);                             // form 3: two over one
+            return;
+        }
+        // form 1: two over two -- v4,v3,v2,v1 -> v2,v1,v4,v3,v2,v1
+        int v1 = opSlot(sp - 1);
+        int v2 = opSlot(sp - 2);
+        int v3 = opSlot(sp - 3);
+        int v4 = opSlot(sp - 4);
+        cb.emit(A64Enc.movReg(16, v1));      // save v1
+        cb.emit(A64Enc.movReg(17, v2));      // save v2
+        int t1 = pushReg();
+        int t2 = pushReg();
+        cb.emit(A64Enc.movReg(t2, 16));      // new top = v1
+        cb.emit(A64Enc.movReg(t1, 17));      // next = v2
+        cb.emit(A64Enc.movReg(v1, v3));      // shift v3 up
+        cb.emit(A64Enc.movReg(v2, v4));      // shift v4 up
+        cb.emit(A64Enc.movReg(v3, 16));      // insert v1
+        cb.emit(A64Enc.movReg(v4, 17));      // insert v2 at the bottom
     }
 
     /**
@@ -1242,6 +1362,40 @@ public final class Baseline
             cb.emit(A64Enc.fmovWtoS(1, b));
             cb.emit(kind == 0 ? A64Enc.fadds(0, 0, 1) : kind == 1 ? A64Enc.fsubs(0, 0, 1)
                   : kind == 2 ? A64Enc.fmuls(0, 0, 1) : A64Enc.fdivs(0, 0, 1));
+            cb.emit(A64Enc.fmovStoW(r, 0));
+        }
+    }
+
+    /**
+     * {@code frem}/{@code drem}: Java's {@code %} on floating point, which JLS 15.17.3 defines as C
+     * {@code fmod} -- the TRUNCATED remainder, computed EXACTLY, not the rounded {@code IEEEremainder}.
+     * AArch64 has no remainder instruction and the obvious identity {@code a - trunc(a/b)*b} is not exact
+     * once the quotient is large, so this calls {@link vm.VM#drem}, which does the shift-and-subtract.
+     *
+     * <p>The float form widens both operands to double, takes the remainder there, and narrows back. That is
+     * exact rather than convenient: the true remainder of two floats is itself a float (it is reached by
+     * subtractions of float-representable values and is smaller than the divisor), every float is exactly a
+     * double, and narrowing an exactly-representable float value rounds nothing.
+     */
+    private void frem(CodeBuffer cb, boolean isFloat)
+    {
+        if (isFloat)
+        {
+            int b = opSlot(sp - 1);
+            int a = opSlot(sp - 2);
+            cb.emit(A64Enc.fmovWtoS(0, a));
+            cb.emit(A64Enc.fcvtDS(0, 0));
+            cb.emit(A64Enc.fmovDtoX(a, 0));
+            cb.emit(A64Enc.fmovWtoS(0, b));
+            cb.emit(A64Enc.fcvtDS(0, 0));
+            cb.emit(A64Enc.fmovDtoX(b, 0));
+        }
+        emitCall(cb, 2, true, false, SYM_HELPER, Symbols.DREM);
+        if (isFloat)
+        {
+            int r = opSlot(sp - 1);
+            cb.emit(A64Enc.fmovXtoD(0, r));
+            cb.emit(A64Enc.fcvtSD(0, 0));
             cb.emit(A64Enc.fmovStoW(r, 0));
         }
     }
@@ -3072,6 +3226,10 @@ public final class Baseline
             {
                 return true;    // new/newarray/anewarray/invokevirtual/invoke{interface,dynamic}/athrow/checkcast/instanceof
             }
+            if (op == 0x72 || op == 0x73)
+            {
+                return true;    // frem/drem: AArch64 has no remainder instruction, so these emit a BL to VM.drem.
+            }                   //   Missing this, a method whose ONLY call is a `%` saves no LR and returns to junk.
             // With implicit checks on, a deref/index emits a BL to newNpe/newAioobe on its throw path — so a
             // method with getfield/putfield/arraylength/array-load/store is non-leaf and must save LR (else a
             // cross-method unwind can't read its return address). Image code (checks off) is unaffected.
@@ -3390,9 +3548,14 @@ public final class Baseline
             boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);
             m = mput(m, d - 2, v1); m = mput(m, d - 1, v2); return mput(m, d, v1);
         }
-        if (op == 0x5B)                                                            // dup_x2: v3,v2,v1 -> v1,v3,v2,v1
+        if (op == 0x5B)                                                            // dup_x2, both forms
         {
-            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2), v3 = mbit(m, d - 3);
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);
+            if (v2)                                                                // form 2: over ONE cat-2 slot
+            {
+                m = mput(m, d - 2, v1); m = mput(m, d - 1, v2); return mput(m, d, v1);
+            }
+            boolean v3 = mbit(m, d - 3);                                           // form 1: over two cat-1 slots
             m = mput(m, d - 3, v1); m = mput(m, d - 2, v3); m = mput(m, d - 1, v2); return mput(m, d, v1);
         }
         if (op == 0x5C)                                                            // dup2
@@ -3412,10 +3575,26 @@ public final class Baseline
             m = mput(m, d - 3, v2); m = mput(m, d - 2, v1); m = mput(m, d - 1, v3);
             m = mput(m, d, v2); return mput(m, d + 1, v1);
         }
-        if (op == 0x5E)                                                            // dup2_x2 (rare; cat-1 four-slot form)
+        if (op == 0x5E)                                                            // dup2_x2, all four forms
         {
-            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2), v3 = mbit(m, d - 3), v4 = mbit(m, d - 4);
-            m = mput(m, d - 4, v2); m = mput(m, d - 3, v1); m = mput(m, d - 2, v4); m = mput(m, d - 1, v3);
+            boolean v1 = mbit(m, d - 1), v2 = mbit(m, d - 2);
+            if (tw)                                                                // group is ONE slot
+            {
+                if (v2)                                                            // form 4: one over one
+                {
+                    m = mput(m, d - 2, v1); m = mput(m, d - 1, v2); return mput(m, d, v1);
+                }
+                boolean v3 = mbit(m, d - 3);                                       // form 2: one over two
+                m = mput(m, d - 3, v1); m = mput(m, d - 2, v3); m = mput(m, d - 1, v2); return mput(m, d, v1);
+            }
+            boolean w3 = mbit(m, d - 3);
+            if (w3)                                                                // form 3: two over ONE cat-2
+            {
+                m = mput(m, d - 3, v2); m = mput(m, d - 2, v1); m = mput(m, d - 1, w3);
+                m = mput(m, d, v2); return mput(m, d + 1, v1);
+            }
+            boolean v4 = mbit(m, d - 4);                                           // form 1: two over two
+            m = mput(m, d - 4, v2); m = mput(m, d - 3, v1); m = mput(m, d - 2, v4); m = mput(m, d - 1, w3);
             m = mput(m, d, v2); return mput(m, d + 1, v1);
         }
         // generic: pop P slots off the top, then (maybe) push one value
@@ -3551,6 +3730,13 @@ public final class Baseline
         if (op == 0xC4)                                     // wide (iinc = 6, else 4)
         {
             return (code[pos + 1] & 0xFF) == 0x84 ? 6 : 4;
+        }
+        // goto_w / jsr_w: a 4-byte branch offset. Absent here, opLen fell through to 1, and EVERY scan that
+        // steps bytecode with it (isNonLeaf, maxLocalSlotUsed) would desync on the rest of the method --
+        // which is why computeDepths and the dead-code skip each carry their own `len = 5` special case.
+        if (op == 0xC8 || op == 0xC9)
+        {
+            return 5;
         }
         if (op == 0xC5)                                     // multianewarray: index(2)+dims(1)
         {

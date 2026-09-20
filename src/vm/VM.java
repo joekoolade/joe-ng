@@ -1276,6 +1276,70 @@ public final class VM
     }
 
     /**
+     * {@code frem}/{@code drem}: Java's {@code %} on floating point. JLS 15.17.3 defines it as the C
+     * {@code fmod} -- the TRUNCATED remainder, and it is EXACT (no rounding error), which is what rules out
+     * the obvious {@code a - trunc(a/b)*b}: that loses bits as soon as the quotient stops being exactly
+     * representable. AArch64 has no remainder instruction, so the JIT calls this.
+     *
+     * <p>Shift and subtract, which is exact by construction. {@code t} runs over {@code |b| * 2^k}, so every
+     * doubling and halving is a pure exponent change; and each subtraction happens only when
+     * {@code t <= a < 2t}, where Sterbenz's lemma makes {@code a - t} exactly representable. The loop ends
+     * when {@code t} is back at {@code |b|}, so it visits each power once -- linear in the exponent gap.
+     *
+     * <p>{@code t + t <= a} is the loop test rather than {@code t <= a * 0.5} deliberately: {@code t + t} is
+     * always exact, while {@code a * 0.5} can round when {@code a} is subnormal and would then start the
+     * descent one power too low, leaving a remainder larger than the divisor.
+     */
+    static double drem(double x, double y)
+    {
+        if (x != x || y != y)
+        {
+            return x + y;                          // either operand NaN -> NaN
+        }
+        if (x - x != 0.0)
+        {
+            return x - x;                          // x infinite -> NaN (inf - inf), per JLS
+        }
+        if (y == 0.0)
+        {
+            return y / y;                          // divisor zero -> NaN
+        }
+        if (y - y != 0.0)
+        {
+            return x;                              // y infinite, x finite -> x unchanged
+        }
+        if (x == 0.0)
+        {
+            return x;                              // +-0 keeps its sign
+        }
+        boolean neg = x < 0.0;
+        double a = neg ? -x : x;
+        double b = y < 0.0 ? -y : y;
+        if (a < b)
+        {
+            return x;                              // already reduced (and keeps x's sign, incl. -0 cases)
+        }
+        double t = b;
+        while (t + t <= a)
+        {
+            t = t + t;                             // exact: a pure exponent increment
+        }
+        while (true)
+        {
+            if (a >= t)
+            {
+                a = a - t;                         // exact: t <= a < 2t (Sterbenz)
+            }
+            if (t == b)
+            {
+                break;
+            }
+            t = t * 0.5;                           // exact: the doubling sequence, reversed
+        }
+        return neg ? -a : a;                       // the remainder takes the DIVIDEND's sign
+    }
+
+    /**
      * {@code aastore} type check: may {@code value} be stored into reference {@code array}? 1 = yes (null, an
      * untyped/raw array, a primitive-element array, or {@code value} is an instance of the array's element
      * type), 0 = no (the JIT then throws {@link #newAse}). Mirrors the JVM's covariant array-store check.
@@ -1531,6 +1595,7 @@ public final class VM
         if (ctorRefInit0 == 0L) { ctorRefInit(-1L); }                 // a constructor reference's <clinit> (JVMS 5.5)
         if (newArithAddr == 0L) { long u = newArith(); }
         if (newNaseAddr == 0L) { long u = newNase(); }                // NegativeArraySizeException (newarray < 0)
+        if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
@@ -2922,6 +2987,7 @@ public final class VM
     static long newArithAddr;          // VM.newArith()J  — a java/lang/ArithmeticException (divide by zero)
     static long newAseAddr;            // VM.newAse()J    — a java/lang/ArrayStoreException (aastore mismatch)
     static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)
+    static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
@@ -3821,6 +3887,11 @@ public final class VM
         // Real java.util.Arrays: fill/equals/binarySearch on int[].
         Uart.write(Magic.bytes("real java.util.Arrays (unmodified JDK):\n"));
         Loader.launchMain(Magic.bytes("demo/ArraysDemo"), Magic.bytes(""));
+
+        // The opcodes the JIT could not compile: wide, dup2_x2, frem/drem. Each arm is ordinary Java that
+        // javac emits; the 1e18-over-3.0 arm is the one that fails a cheap-but-inexact remainder.
+        Uart.write(Magic.bytes("previously-unsupported opcodes (wide / dup2_x2 / frem / drem):\n"));
+        Loader.launchMain(Magic.bytes("demo/OpcodeDemo"), Magic.bytes(""));
 
         // newarray/anewarray with a negative length: NegativeArraySizeException (JVMS 6.5). The last arm is
         // the one with teeth -- an unchecked negative length is a BOUNDS-CHECK BYPASS, not a missing throw,
