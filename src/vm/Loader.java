@@ -54,6 +54,7 @@ public final class Loader
     private static int gMaxLocals;  // ... and its max_locals (frame sizing)
     private static int gFoundDescOff;  // descriptor Utf8 offset of the last findMethod hit
     private static int gFoundStatic;   // 1 if that method is static
+    private static int gFoundSync;     // 1 if ACC_SYNCHRONIZED (the implicit method monitor, JVMS 2.11.10)
     private static int gFrameSize;     // frame size of the last method the core compiled
     private static int gRegLocals;     // its callee-saved local count (x19..) — for unwind's pre-try local restore
     // Try/catch ranges of the last method the core compiled (machine word offsets + catch-type cp),
@@ -529,7 +530,11 @@ public final class Loader
         lzCompiling = true;
         lzPullN = 0;
         lzRetried = false;
-        long buf = compile(clinitCode[i], clinitCodeLen[i], clinitDescOff[i], clinitStatic[i]);
+        // isSync = 0 STATED, not defaulted: a <clinit> is never synchronized (JVMS 2.9.2 -- the class
+        // initializer's ACC_SYNCHRONIZED is ignored), and the convenience overload that used to supply
+        // that 0 silently is deleted, because it is what let THREE compile paths drop the monitor without
+        // a word: compileMethodOnDemand (reflection), compileSigOnDemand (phase-A cells) and two probes.
+        long buf = compile(clinitCode[i], clinitCodeLen[i], clinitDescOff[i], clinitStatic[i], 0);
         lzCompiling = outerCompiling;
         compileReuseTib = false;
         boolean pulled = lzPullN > 0;
@@ -1773,7 +1778,7 @@ public final class Loader
         {
             return 0L;
         }
-        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);   // two int args
+        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic, gFoundSync);   // two int args
         return Magic.call2(buf, a, b);
     }
 
@@ -1797,7 +1802,7 @@ public final class Loader
             return 0L;
         }
         probeFound = 1;
-        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic);
+        long buf = compile(code, gcodeLen, gFoundDescOff, gFoundStatic, gFoundSync);
         return Magic.call2(buf, a, b);
     }
 
@@ -2107,6 +2112,7 @@ public final class Loader
             return;
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) -- x1 unused by a 1-arg static
+        reportSyncCoverage();
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
         reportGc();
     }
@@ -2237,6 +2243,7 @@ public final class Loader
             return;
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
+        reportSyncCoverage();
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
         reportGc();
     }
@@ -2645,6 +2652,7 @@ public final class Loader
                 {
                     gFoundDescOff = gcp[u2(p + 4)];
                     gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
+                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
                     return code;
                 }
             }
@@ -6853,6 +6861,7 @@ public final class Loader
                 gvTab[slot].name = gcp[u2(p + 2)];
                 gvTab[slot].desc = gcp[u2(p + 4)];
                 gvTab[slot].implCode = findCode(bytes, p + 8, attrs);   // this class's own impl
+                gvTab[slot].isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;     // ACC_SYNCHRONIZED (for mintPrunedStub)
                 gvTab[slot].implBuf = 0L;
             }
             p = skipAttributes(p + 8, attrs);
@@ -6938,6 +6947,7 @@ public final class Loader
                 gvTab[slot].desc = vtDescOff[i];
                 gvTab[slot].implBuf = vtBuf[i];             // inherited (already-compiled) impl
                 gvTab[slot].implCode = 0L;
+                gvTab[slot].isSync = 0;                     // inherited: the buffer is already compiled
                 if (slot + 1 > gvCount)
                 {
                     gvCount = slot + 1;
@@ -7385,6 +7395,7 @@ public final class Loader
                 {
                     gFoundDescOff = gcp[descIdx];       // for the shared core's prologue
                     gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
+                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
                     return code;
                 }
             }
@@ -7469,6 +7480,7 @@ public final class Loader
     private static int[] mLocals;     // ... its max_locals
     private static int[] mDescOff;    // ... its descriptor Utf8 offset (for the shared core's prologue)
     private static int[] mStatic;     // ... 1 if static
+    private static int[] mSync;       // ... 1 if ACC_SYNCHRONIZED
     private static int[] mDefer;      // M8 defer: 1 if this method's compile is deferred to first call (gated)
     private static int mCount;
 
@@ -7745,11 +7757,13 @@ public final class Loader
         printUtf8Capped(gbase != 0L ? gbase + gThisNameOff : 0L);
     }
 
-    private static long compile(long code, int len, int descOff, int isStatic)
+    /** {@code isSync} is MANDATORY rather than defaulted: dropping it compiles a synchronized method with no
+     *  monitor, which is silent and is the exact bug ACC_SYNCHRONIZED support exists to fix. */
+    private static long compile(long code, int len, int descOff, int isStatic, int isSync)
     {
         checkCompileLockHeld(1);
         allocMethodTables();
-        addMethod(code, len, gMaxLocals, descOff, isStatic);
+        addMethod(code, len, gMaxLocals, descOff, isStatic, isSync);
         int i = 0;
         while (i < mCount)                              // discover
         {
@@ -7815,7 +7829,8 @@ public final class Loader
                 }
                 else
                 {
-                    addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic);
+                    addMethod(code, gcodeLen, gMaxLocals, gcp[u2(p + 4)], isStatic,
+                              (u2(p) & 0x0020) != 0 ? 1 : 0);   // ACC_SYNCHRONIZED
                     // Everything else takes the other route to the same engine: a deferral stub standing in
                     // for the body (statics went the cell way above). EVERY method kind defers now,
                     // `<init>` included -- see notInit, which is retired.
@@ -9346,8 +9361,37 @@ public final class Loader
         }
     }
 
+    /**
+     * ACC_SYNCHRONIZED coverage for the launch that just ended, printed AT THE END rather than on the batch
+     * line -- which is where these counters started, and where they could not fire: a launched program's
+     * methods compile LAZILY on first call, long after batch 1's line is printed, so the batch line read
+     * `syncStatic=0` for a demo full of static synchronized methods and I read that as "all covered". It was
+     * "none seen yet". An instrument that cannot fire looks exactly like a condition that never happens.
+     *
+     * <p>{@code seen} counts static synchronized methods that reached the compiler at all; {@code skip}
+     * those compiled WITHOUT a monitor because the world could not name one. seen &gt; 0 with skip == 0 is
+     * the covered state; skip &gt; 0 names a real gap; seen == 0 means this program had none.
+     */
+    private static void reportSyncCoverage()
+    {
+        if (compiler.Baseline.syncStaticSeen == 0 && compiler.Baseline.syncStaticSkipped == 0)
+        {
+            return;                                     // no static synchronized method in this program
+        }
+        Uart.write(Magic.bytes("\n  sync: static seen="));
+        VM.printDec(compiler.Baseline.syncStaticSeen);
+        Uart.write(Magic.bytes(" nomonitor="));
+        VM.printDec(compiler.Baseline.syncStaticSkipped);
+        Uart.putc(0x0A);
+    }
+
     /** Record a method (deduped by bytecode address; dedup also breaks cycles). */
     private static void addMethod(long code, int len, int maxLocals, int descOff, int isStatic)
+    {
+        addMethod(code, len, maxLocals, descOff, isStatic, 0);
+    }
+
+    private static void addMethod(long code, int len, int maxLocals, int descOff, int isStatic, int isSync)
     {
         int i = 0;
         while (i < mCount)
@@ -9364,6 +9408,7 @@ public final class Loader
         mLocals[mCount] = maxLocals;
         mDescOff[mCount] = descOff;
         mStatic[mCount] = isStatic;
+        mSync[mCount] = isSync;
         mCount += 1;
     }
 
@@ -9379,6 +9424,7 @@ public final class Loader
         mLocals = new int[MAXM];
         mDescOff = new int[MAXM];
         mStatic = new int[MAXM];
+        mSync = new int[MAXM];
         mDefer = new int[MAXM];
         mCount = 0;
     }
@@ -9411,7 +9457,7 @@ public final class Loader
                 long c = calleeCodeOf(idx);                 // sets gcodeLen / gMaxLocals
                 if (c != 0L)
                 {
-                    addMethod(c, gcodeLen, gMaxLocals, mrefDescOff(idx), op == 0xb8 ? 1 : 0);
+                    addMethod(c, gcodeLen, gMaxLocals, mrefDescOff(idx), op == 0xb8 ? 1 : 0, gCalleeSync);
                 }
             }
             pc += insnLen(code, pc);
@@ -9441,7 +9487,8 @@ public final class Loader
             k += 1;
         }
         b.setExceptionTable(es, ee, eh, ec, n);
-        int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mLocals[i], base, false);
+        int[] words = b.compileBody(extractCode(i), mDescOff[i], mStatic[i] != 0, mSync[i] != 0,
+                                    mLocals[i], base, false);
         gFrameSize = b.frameSize();
         gRegLocals = b.regLocals();                    // for unwind's pre-try local restore
         gHN = b.handlerCount();                        // capture the machine-code handler ranges for emitMethod
@@ -9703,6 +9750,7 @@ public final class Loader
         lzTab[idx].code = mCode[i];                         // compile straight from the captured bytecode
         lzTab[idx].codeLen = mLen[i];
         lzTab[idx].isStatic = mStatic[i];
+        lzTab[idx].isSync = mSync[i];
         lzTab[idx].maxLocals = mLocals[i];
         lzTab[idx].cache = 0L;
         lzN += 1;
@@ -12575,6 +12623,7 @@ public final class Loader
         long code = 0L;
         int descOff = 0;
         int isStatic = 0;
+        int isSync = 0;
         int m = 0;
         while (m < mcount)
         {
@@ -12588,6 +12637,7 @@ public final class Loader
                     code = c;
                     descOff = gcp[u2(p + 4)];
                     isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
                     break;
                 }
             }
@@ -12607,7 +12657,7 @@ public final class Loader
         lzCompiling = true;                                // collect the classes this body's statics NAME
         lzPullN = 0;
         lzRetried = false;
-        compile(code, gcodeLen, descOff, isStatic);
+        compile(code, gcodeLen, descOff, isStatic, isSync);
         lzCompiling = outerCompiling;
         compileReuseTib = false;
         boolean pulled = lzPullN > 0;
@@ -12798,7 +12848,8 @@ public final class Loader
         lzCompiling = true;
         lzPullN = 0;
         lzRetried = false;
-        compile(code, gcodeLen, descOff, 0);               // <init> is an instance method (receiver = the new object)
+        // JLS 8.8.3 forbids `synchronized` on a constructor, so isSync is 0 by the language, not by omission.
+        compile(code, gcodeLen, descOff, 0, 0);           // <init> is an instance method (receiver = the new object)
         lzCompiling = outerCompiling;
         compileReuseTib = false;
         boolean pulled = lzPullN > 0;
@@ -13823,6 +13874,10 @@ public final class Loader
         // were ever moved out from under the lock.
         Uart.write(Magic.bytes(" clinitLk="));
         VM.printDec(clinitLockN);
+        // ACC_SYNCHRONIZED coverage is NOT reported here. It was, and it could not fire: a launched
+        // program's methods compile lazily on first call, long after batch 1's line is printed, so this
+        // line read "0 static synchronized methods" for a program full of them and I read that as "all
+        // covered". See reportSyncCoverage, which prints at the END of a launch, where the answer exists.
         Uart.write(Magic.bytes("}"));
         Uart.putc(0x0A);
     }
@@ -14646,6 +14701,7 @@ public final class Loader
         long code = 0L;
         int descOff = 0;
         int isStatic = 0;
+        int isSync = 0;
         int m = 0;
         while (m < mcount)
         {
@@ -14659,6 +14715,7 @@ public final class Loader
                     code = c;
                     descOff = gcp[u2(p + 4)];
                     isStatic = (u2(p) & 0x0008) != 0 ? 1 : 0;
+                    isSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED: the implicit monitor
                     break;
                 }
             }
@@ -14678,7 +14735,7 @@ public final class Loader
         lzCompiling = true;                             // same deferred-pull retry as compileMethodOnDemand
         lzPullN = 0;
         lzRetried = false;
-        compile(code, gcodeLen, descOff, isStatic);
+        compile(code, gcodeLen, descOff, isStatic, isSync);
         lzCompiling = outerCompiling;
         compileReuseTib = false;
         boolean pulled = lzPullN > 0;
@@ -14893,12 +14950,14 @@ public final class Loader
         int len;
         int descOff;
         int isStatic;
+        int isSync;
         if (lzTab[idx].code != 0L)                           // genuine deferral: the body was captured, compile it
         {
             code = lzTab[idx].code;
             len = lzTab[idx].codeLen;
             descOff = lzTab[idx].descOff;
             isStatic = lzTab[idx].isStatic;
+            isSync = lzTab[idx].isSync;
             gMaxLocals = lzTab[idx].maxLocals;
         }
         else                                            // 1b/1c: re-find the method by name+descriptor
@@ -14911,6 +14970,7 @@ public final class Loader
             len = gcodeLen;
             descOff = gFoundDescOff;
             isStatic = gFoundStatic;
+            isSync = gFoundSync;
         }
         // M8 endgame (the Loader USES baked java.base): if the writer baked this exact method and
         // listed it as loader-linkable, run the image's compiled stock code instead of compiling our
@@ -14962,7 +15022,7 @@ public final class Loader
         lzCompiling = true;                             // collect the classes this body actively uses
         lzPullN = 0;
         lzRetried = false;
-        long buf = compile(code, len, descOff, isStatic);
+        long buf = compile(code, len, descOff, isStatic, isSync);
         lzCompiling = false;
         if (lzPullN > 0)
         {
@@ -14988,9 +15048,10 @@ public final class Loader
                 len = gcodeLen;
                 descOff = gFoundDescOff;
                 isStatic = gFoundStatic;
+                isSync = gFoundSync;
             }
             lzCompiling = true;
-            buf = compile(code, len, descOff, isStatic);
+            buf = compile(code, len, descOff, isStatic, isSync);
             lzCompiling = false;
         }
         compileReuseTib = false;
@@ -15538,6 +15599,7 @@ public final class Loader
                 {
                     gFoundDescOff = gcp[u2(p + 4)];
                     gFoundStatic = (access & 0x0008) != 0 ? 1 : 0;
+                    gFoundSync = (access & 0x0020) != 0 ? 1 : 0;
                     return code;
                 }
             }
@@ -15645,6 +15707,7 @@ public final class Loader
                 lzTab[idx].code = code;
                 lzTab[idx].codeLen = gcodeLen;
                 lzTab[idx].isStatic = 1;
+                lzTab[idx].isSync = (access & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED (JVMS 2.11.10)
                 lzTab[idx].maxLocals = gMaxLocals;
                 lzTab[idx].cache = 0L;
                 long cell = Heap.allocData(8);
@@ -18296,6 +18359,7 @@ public final class Loader
         lzTab[idx].code = code;
         lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
         lzTab[idx].isStatic = 0;
+        lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
         lzTab[idx].maxLocals = u2(code - 6L);
         lzTab[idx].cache = 0L;
         lzN += 1;
@@ -18371,8 +18435,11 @@ public final class Loader
     }
 
     /** Resolve Methodref {@code idx} to its (same-class) method's bytecode; set {@code gcodeLen}. */
+    private static int gCalleeSync;    // ACC_SYNCHRONIZED of the method calleeCodeOf last found
+
     private static long calleeCodeOf(int idx)
     {
+        gCalleeSync = 0;
         if (!utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
             return 0L;                                  // not this class (Object.<init>, JDK, ...)
@@ -18391,6 +18458,7 @@ public final class Loader
                 long c = findCode(gbase, p + 8, attrs);
                 if (c != 0L)
                 {
+                    gCalleeSync = (u2(p) & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED, for scanCallees
                     return c;
                 }
             }
@@ -20593,6 +20661,25 @@ public final class Loader
     }
 
     /** {@code ldc} of a CONSTANT_Class (a class literal {@code X.class}) at cp {@code classCp} -> its Class mirror. */
+    /**
+     * The {@code Class} object of the class CURRENTLY BEING COMPILED -- a STATIC synchronized method's
+     * implicit monitor (JVMS 2.11.10). 0 when there is no Type to mirror, which is what lets the compiler
+     * decline to emit an acquire it could never pair with a release.
+     *
+     * <p>No constant-pool index is needed and none is wanted: {@code gType} IS this class's Type node, built
+     * by {@code buildTib} in phase A and restored by {@code restoreCtxForCompile} for every lazy compile --
+     * which is exactly the self-reference case {@code typeOfClass} already special-cases, because the class
+     * is not in the registry until after its own compile. Going through the constant pool would ask the
+     * registry a question it cannot answer yet.
+     *
+     * <p>{@code classMirror} caches per Type, so this is the SAME object {@code Foo.class} yields.
+     */
+
+    static long selfClassMirror()
+    {
+        return classMirror(gType);
+    }
+
     static long classLiteral(int classCp)
     {
         long type = typeOfClass(classCp);

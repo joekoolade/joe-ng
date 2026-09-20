@@ -74,6 +74,16 @@ public final class Baseline
     private int[] preWork;        // worklist scratch
     private int opStackSlots;     // deep: sized operand-spill area (maxActualDepth + margin)
     private boolean deepStack;
+    private boolean isSync;       // ACC_SYNCHRONIZED: emit the implicit monitor acquire/release
+    /** STATIC synchronized methods compiled WITHOUT their monitor, because the world could not NAME one
+     *  ({@link Symbols#selfClassMonitor} answered 0). Expected ZERO on the metal JIT -- this is not a count
+     *  of static synchronized methods, it is a count of the ones left unsynchronized, and each is a method
+     *  whose `synchronized` keyword does nothing. Reported on the batch line so the gap has a size. */
+    public static int syncStaticSkipped;
+    /** STATIC synchronized methods that reached compileBody AT ALL, counted before any gate. Without it
+     *  {@code syncStaticSkipped == 0} cannot separate "every one is covered" from "the ACC_SYNCHRONIZED flag
+     *  never arrived" -- which is exactly the pair of readings the first static-case boot had to tell apart. */
+    public static int syncStaticSeen;
     private int[] regHolds = new int[OP_MAX];
     private int[] savedHolds = new int[OP_MAX];   // regHolds snapshot around an off-path (skipped) throw block
     private int opStackBase;
@@ -232,12 +242,14 @@ public final class Baseline
         }  // nop
         else if (op == 0xB1)
         {
+            emitSyncExit(cb);                                // ACC_SYNCHRONIZED: drop the implicit monitor
             emitEpilogue(cb);
             return 1;
         }  // return
         else if (op == 0xAC || op == 0xAD || op == 0xB0 || op == 0xAE || op == 0xAF)
         {
-            cb.emit(A64Enc.movReg(0, popReg()));
+            emitSyncExit(cb);                                // ... BEFORE the value moves to x0: it is still
+            cb.emit(A64Enc.movReg(0, popReg()));             //     an operand, so spillLive preserves it
             emitEpilogue(cb);
             return 1;
         }  // ireturn/lreturn/areturn/freturn/dreturn (all bit-preserving)
@@ -2447,6 +2459,66 @@ public final class Baseline
         cb.set(over, A64Enc.bcond(A64Enc.GE, cb.wordCount() - over));
     }
 
+    /**
+     * ACC_SYNCHRONIZED entry: take the receiver's monitor and record it against this frame's SP.
+     *
+     * <p>A synchronized METHOD carries no monitorenter/monitorexit bytecode -- javac emits those only for a
+     * synchronized BLOCK -- so the monitor is the compiler's job. Without it `synchronized` on a method gave
+     * NO mutual exclusion whatever, on a VM that schedules four cores off one run queue; java.base alone has
+     * 475 instance-synchronized methods (Hashtable, Vector, StringBuffer, Properties...).
+     *
+     * <p>Emitted after the prologue, so local slot 0 already holds {@code this}, and BEFORE the first
+     * bytecode, so no handler range covers it -- an acquire that has not happened must not be released.
+     *
+     * <p>A STATIC synchronized method locks the class's own {@code Class} object instead
+     * ({@link Symbols#selfClassMonitor}), which is the same cached mirror {@code Foo.class} yields -- so the
+     * two forms exclude each other, as JVMS 2.11.10 requires. It was once recorded as blocked on
+     * {@code WriterSymbols.classLiteral} throwing; that is not the constraint, because the implicit monitor
+     * is METAL-JIT ONLY (see compileBody) and never asked of the host writer at all. A world that genuinely
+     * cannot name the monitor answers 0 and the method is compiled unsynchronized AND COUNTED, rather than
+     * taking an acquire nothing would release -- see {@link #syncStaticSkipped}.
+     */
+    private void emitSyncEnter(CodeBuffer cb, boolean isStatic)
+    {
+        if (!isSync || isEntry)
+        {
+            return;
+        }
+        if (isStatic)
+        {
+            symbols.emitSelfClassMonitor(cb, 0);                // x0 = this class's Class object
+        }
+        else
+        {
+            cb.emit(A64Enc.movReg(0, localReg(0)));             // x0 = this (an instance method always has slot 0)
+        }
+        cb.emit(A64Enc.movFromSp(1));                           // x1 = this frame's SP -- the unwinder's key
+        symbols.callHelper(cb, Symbols.MON_ENTER_SYNC);
+    }
+
+    /**
+     * ACC_SYNCHRONIZED normal return: release the monitor this frame took.
+     *
+     * <p>Emitted at the RETURN SITE rather than inside {@link #emitEpilogue}, and before the return value is
+     * moved to x0, so the value is still an ordinary operand that {@code spillLive}/{@code reloadLive}
+     * preserves across the call. Doing it after the move would need x0 parked somewhere, and the frame has
+     * no spare slot for it.
+     *
+     * <p>The other two ways out are covered elsewhere: an exception passing through releases in
+     * {@code VM.monUnwindSync} as the unwinder pops the frame, and a handler INSIDE this method keeps the
+     * monitor (its frame is not popped) until it reaches one of these returns.
+     */
+    private void emitSyncExit(CodeBuffer cb)
+    {
+        if (!isSync || isEntry)
+        {
+            return;
+        }
+        spillLive(cb);
+        symbols.callHelper(cb, Symbols.MON_EXIT_SYNC);
+        reloadLive(cb);
+    }
+
     /** Null-check the array, then throw AIOOBE unless {@code indexReg} is in {@code [0, length)}. */
     private void boundsCheck(CodeBuffer cb, int arrReg, int indexReg, int pos)
     {
@@ -3939,9 +4011,40 @@ public final class Baseline
      */
     public int[] compileBody(byte[] code, int descOff, boolean isStatic, int maxLocals, long base, boolean isEntry)
     {
+        return compileBody(code, descOff, isStatic, false, maxLocals, base, isEntry);
+    }
+
+    public int[] compileBody(byte[] code, int descOff, boolean isStatic, boolean isSynchronized,
+                             int maxLocals, long base, boolean isEntry)
+    {
         this.isEntry = isEntry;
         this.maxLocals = maxLocals;
-        this.nonLeaf = isNonLeaf(code);
+        // GATED ON implicitChecks(), i.e. METAL JIT ONLY, for the same reason the null/bounds/cast checks are:
+        // the writer's baked closure is trusted VM-adjacent code that must not block. The one baked
+        // instance-synchronized method is guestsrc Throwable.fillInStackTrace, which sits ON THE EXCEPTION
+        // PATH -- and VMScheduler.monEnter can block and YIELD, so acquiring there hands the scheduler a
+        // yield in the middle of an unwind. That is what the first cut did, and the demo suite died three
+        // set-pieces in with a Thread whose Type read as garbage.
+        this.isSync = isSynchronized && !isEntry && symbols.implicitChecks();
+        // A STATIC synchronized method locks its own Class object, so it needs a world that can NAME one.
+        // The query is here rather than at the emit because a synchronized method is never a leaf and the
+        // frame must be sized for the helper call before the prologue is written. Answering 0 means compile
+        // it unsynchronized and SAY SO -- an acquire with no nameable monitor could never be paired with a
+        // release, and an unpaired release pops a record belonging to an OUTER frame.
+        if (isSynchronized && isStatic && !isEntry)
+        {
+            syncStaticSeen += 1;         // ... counted BEFORE the gates, so 0 means the flag never arrived
+        }
+        if (this.isSync && isStatic && symbols.selfClassMonitor() == 0L)
+        {
+            this.isSync = false;
+            syncStaticSkipped += 1;      // measured, not silently dropped -- see emitSyncEnter
+        }
+        // A SYNCHRONIZED METHOD IS NEVER A LEAF, whatever its bytecode says: this compiler is about to add
+        // the monitor calls. Getting this wrong is not a missed optimisation -- a leaf saves no LR and gets
+        // NO operand spill area (spillWords = 0), so emitSyncExit's spillLive would write outside the frame
+        // and the helper's return would come back to a clobbered x30.
+        this.nonLeaf = isNonLeaf(code) || this.isSync;
         this.saveLR = !isEntry && nonLeaf;
         // Locals live in callee-saved x19..x28; a method needing more keeps the
         // overflow in the frame (see localMem). Slots 0..LOC_MAX-1 stay in registers.
@@ -3994,6 +4097,7 @@ public final class Baseline
         {
             emitPrologue(cb, descOff, isStatic);
         }
+        emitSyncEnter(cb, isStatic);         // ACC_SYNCHRONIZED: after the prologue (slot 0 = this), before bci 0
 
         int[] bcToWord = new int[code.length];
         // Drive sp from the control-flow pre-pass at EVERY reachable bytecode, not just at branch targets

@@ -29,6 +29,7 @@ public final class ClassFile
     public record FieldInfo(String name, String descriptor, boolean isStatic) {}
 
     private static final int ACC_STATIC = 0x0008;
+    private static final int ACC_SYNCHRONIZED = 0x0020;
 
     /** A try/catch entry: bytecode range [startPc,endPc), handler, and catch-type cp index (0 = any). */
     public record ExceptionEntry(int startPc, int endPc, int handlerPc, int catchType) {}
@@ -42,16 +43,22 @@ public final class ClassFile
         public final int maxStack;
         public final int maxLocals;
         public final boolean isStatic;
+        /** ACC_SYNCHRONIZED: the method owns a monitor for its whole execution (JVMS 2.11.10). There is no
+         *  monitorenter/monitorexit bytecode for it -- javac emits those only for a synchronized BLOCK -- so
+         *  the compiler owes the acquire/release itself. */
+        public final boolean isSynchronized;
         public final byte[] code;
         public final ExceptionEntry[] exceptions;
         public final int codeBodyOff;  // Code attribute body offset (at max_stack), for the LineNumberTable, or -1
-        Method(String name, String descriptor, int descOff, boolean isStatic, int maxStack, int maxLocals,
+        Method(String name, String descriptor, int descOff, boolean isStatic, boolean isSynchronized,
+               int maxStack, int maxLocals,
                byte[] code, ExceptionEntry[] exceptions, int codeBodyOff)
         {
             this.name = name;
             this.descriptor = descriptor;
             this.descOff = descOff;
             this.isStatic = isStatic;
+            this.isSynchronized = isSynchronized;
             this.maxStack = maxStack;
             this.maxLocals = maxLocals;
             this.code = code;
@@ -701,7 +708,8 @@ public final class ClassFile
                 }
                 p = body + ClassReader.u4(b, p + 2);            // next attribute
             }
-            ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0, maxStack, maxLocals, code, exceptions, codeBodyOff);
+            ms[i] = new Method(name, desc, descOff, (access & ACC_STATIC) != 0,
+                               (access & ACC_SYNCHRONIZED) != 0, maxStack, maxLocals, code, exceptions, codeBodyOff);
         }
         return ms;
     }

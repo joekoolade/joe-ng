@@ -90,6 +90,14 @@ final class MetalSymbols implements Symbols
     {
         emitAddr(cb, reg, Loader.classLiteral(classCp));
     }
+    public long selfClassMonitor()
+    {
+        return Loader.selfClassMirror();
+    }
+    public void emitSelfClassMonitor(CodeBuffer cb, int reg)
+    {
+        emitAddr(cb, reg, Loader.selfClassMirror());
+    }
     public boolean isWatchedField(int fieldCp)
     {
         return Loader.isWatchedField(fieldCp);
@@ -587,6 +595,14 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.MULTI_NEW_ARRAY)
         {
             return VM.multiNewArrayAddr;
+        }
+        if (helper == Symbols.MON_ENTER_SYNC)
+        {
+            return VM.monEnterSyncAddr;
+        }
+        if (helper == Symbols.MON_EXIT_SYNC)
+        {
+            return VM.monExitSyncAddr;
         }
         if (helper == Symbols.NEW_CCE)
         {

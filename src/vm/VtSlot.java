@@ -14,4 +14,7 @@ final class VtSlot
     int  desc;      // descriptor Utf8 offset (in base)
     long implBuf;   // inherited impl buffer (0 => this class's own)
     long implCode;  // this class's own method bytecode (0 => inherited)
+    int  isSync;    // ACC_SYNCHRONIZED of that own method -- mintPrunedStub has no method_info to read it
+                    //   from, and a deferral stub built without it compiles the body with NO implicit
+                    //   monitor, silently (JVMS 2.11.10).
 }

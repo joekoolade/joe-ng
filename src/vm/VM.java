@@ -810,6 +810,9 @@ public final class VM
         taskIdle = new int[MAX_TASKS];
         taskPrio = new int[MAX_TASKS];
         taskBasePrio = new int[MAX_TASKS];
+        syncObj = new long[MAX_TASKS * MAX_SYNC_DEPTH];
+        syncSp = new long[MAX_TASKS * MAX_SYNC_DEPTH];
+        syncDepth = new int[MAX_TASKS];
         monObj = new long[MAX_MON];
         monOwner = new int[MAX_MON];
         monCount = new int[MAX_MON];
@@ -824,6 +827,7 @@ public final class VM
         int t = 0;
         while (t < MAX_TASKS)
         {
+            syncDepth[t] = 0;                               // no synchronized method is on this task's stack yet
             taskCore[t] = -1;                               // no affinity: any core may pick it up
             taskIdle[t] = 0;                                // ... and it is real work, not a core's idle loop
             taskPrio[t] = PRIO_NORM;                        // ... at the default priority,
@@ -1349,6 +1353,105 @@ public final class VM
         }
         return neg ? -a : a;                       // the remainder takes the DIVIDEND's sign
     }
+    // ----- ACC_SYNCHRONIZED: a synchronized METHOD's implicit monitor (JVMS 2.11.10) -----
+    //
+    // A synchronized method has NO monitorenter/monitorexit bytecode -- javac emits those only for a
+    // synchronized BLOCK -- so the VM owes the lock itself. joe-ng did not, which meant `synchronized` on a
+    // method provided NO mutual exclusion at all, on a VM that schedules four cores off one run queue.
+    //
+    // The record is keyed by the acquiring frame's SP rather than kept in the frame, which is what lets the
+    // UNWINDER release it: an exception leaving a synchronized method must drop the monitor, or a missing
+    // lock is traded for a permanent deadlock -- strictly worse than the bug being fixed. VMUnwind releases
+    // every record whose frame it has popped, so the three exits (normal return, a handler in this method,
+    // an exception passing through) are all covered without a synthetic handler or a new unwind table.
+    //
+    // Nesting is exact: entries and exits pair with frames, so at a return the top record IS this method's.
+    // Nested synchronized methods on ONE task's stack. Sized so the two parallel arrays stay SMALL-region
+    // allocations: Heap.LARGE_REQ is 16384, and MAX_TASKS * depth * 8 + 24 must stay under it, or two 20 KB
+    // blocks divert into the large-object region during early boot. The first cut used 64 and did exactly
+    // that -- the demo suite then died at the scheduler set-piece with a Thread whose Type read as garbage,
+    // while the same binary with this codegen disabled failed identically. Overflow is reported, not dropped.
+    static final int MAX_SYNC_DEPTH = 32;
+    static long[] syncObj;                  // [task * MAX_SYNC_DEPTH + depth] the monitor
+    static long[] syncSp;                   // ... and the SP of the frame that took it
+    static int[] syncDepth;                 // per-task depth
+    private static boolean syncOverflowReported;
+
+    /** A synchronized method's entry: take the monitor, then record it against {@code sp} for the unwinder. */
+    static void monEnterSync(long obj, long sp)
+    {
+        VMScheduler.monEnter(obj);
+        if (syncDepth == null)
+        {
+            return;    // before allocTaskTables (the boot force-compile battery): nothing to record against
+        }
+        int t = curTask();
+        int d = syncDepth[t];
+        if (d >= MAX_SYNC_DEPTH)
+        {
+            // A DROPPED RECORD IS A LEAKED MONITOR, not a slow path: the lock is held and nothing will ever
+            // release it, so every later contender blocks for the rest of the boot. Say so by name rather
+            // than letting it surface as an unexplained hang somewhere else.
+            if (!syncOverflowReported)
+            {
+                syncOverflowReported = true;
+                Uart.write(Magic.bytes("\n  SYNC DEPTH EXCEEDED at "));
+                printDec(MAX_SYNC_DEPTH);
+                Uart.write(Magic.bytes(" nested synchronized methods on task "));
+                printDec(t);
+                Uart.write(Magic.bytes(" -- this monitor can no longer be released on unwind.\n"));
+            }
+            return;
+        }
+        syncObj[t * MAX_SYNC_DEPTH + d] = obj;
+        syncSp[t * MAX_SYNC_DEPTH + d] = sp;
+        syncDepth[t] = d + 1;
+    }
+
+    /** A synchronized method's normal return: drop the record this method pushed, and release it. */
+    static void monExitSync()
+    {
+        if (syncDepth == null)
+        {
+            return;
+        }
+        int t = curTask();
+        int d = syncDepth[t] - 1;
+        if (d < 0)
+        {
+            return;                                     // overflowed entry (reported above): nothing recorded
+        }
+        long obj = syncObj[t * MAX_SYNC_DEPTH + d];
+        syncDepth[t] = d;
+        syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
+        VMScheduler.monExit(obj);
+    }
+
+    /**
+     * Release every synchronized-method monitor whose frame has been popped -- called by the unwinder as it
+     * walks. STRICTLY below {@code newSp}: a record AT {@code newSp} belongs to the frame the walk is about
+     * to resume into (a handler inside a synchronized method), which must keep its monitor.
+     */
+    static void monUnwindSync(long newSp)
+    {
+        if (syncDepth == null)
+        {
+            return;
+        }
+        int t = curTask();
+        while (syncDepth[t] > 0)
+        {
+            int d = syncDepth[t] - 1;
+            if (syncSp[t * MAX_SYNC_DEPTH + d] >= newSp)
+            {
+                return;                                 // this frame is still live
+            }
+            long obj = syncObj[t * MAX_SYNC_DEPTH + d];
+            syncDepth[t] = d;
+            syncObj[t * MAX_SYNC_DEPTH + d] = 0L;
+            VMScheduler.monExit(obj);
+        }
+    }
 
     /**
      * {@code aastore} type check: may {@code value} be stored into reference {@code array}? 1 = yes (null, an
@@ -1608,6 +1711,8 @@ public final class VM
         if (newNaseAddr == 0L) { long u = newNase(); }                // NegativeArraySizeException (newarray < 0)
         if (dremAddr == 0L) { double u = drem(1.0, 1.0); }            // frem/drem
         if (multiNewArrayAddr == 0L) { long u = multiNewArray(0L, 0, 0, 0, 0, 0); }   // multianewarray
+        if (monEnterSyncAddr == 0L) { monEnterSync(0L, 0L); }         // a synchronized METHOD's implicit monitor
+        if (monExitSyncAddr == 0L) { monExitSync(); }
         if (getClassAddr == 0L) { long u = getClassOf(0L); }          // Object.getClass() intrinsic
         if (arrayCloneAddr == 0L) { long u = VMNatives.arrayClone(0L); }        // [T.clone() intrinsic
         if (newReflectArrayAddr == 0L) { long u = VMNatives.newReflectArray(0L, 0L); } // reflect/Array.newInstance0
@@ -3001,6 +3106,8 @@ public final class VM
     static long newNaseAddr;           // VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray < 0)
     static long dremAddr;              // VM.drem(DD)D    — frem/drem (AArch64 has no remainder instruction)
     static long multiNewArrayAddr;     // VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
+    static long monEnterSyncAddr;      // VM.monEnterSync(JJ)V — a synchronized METHOD's implicit monitorenter
+    static long monExitSyncAddr;       // VM.monExitSync()V    — ... and its release on normal return
     static long arrayStoreOkAddr;      // VM.arrayStoreOk(JJ)I — aastore covariant type check
     static long newCceAddr;            // VM.newCce()J    — a java/lang/ClassCastException (failed checkcast)
     static long castOkAddr;            // VM.castOk(JJ)I  — checkcast predicate (1 = holds, 0 = throw)
@@ -3919,6 +4026,19 @@ public final class VM
         // javac emits; the 1e18-over-3.0 arm is the one that fails a cheap-but-inexact remainder.
         Uart.write(Magic.bytes("previously-unsupported opcodes (wide / dup2_x2 / frem / drem):\n"));
         Loader.launchMain(Magic.bytes("demo/OpcodeDemo"), Magic.bytes(""));
+        // ACC_SYNCHRONIZED on a METHOD (JVMS 2.11.10). The race arms are the ones with teeth: with the
+        // monitor disabled the instance race loses 15 of 20 updates and the MIXED race (a static
+        // synchronized method against a synchronized(Foo.class) block on one counter) loses 9 of 20.
+        //
+        // WIRED IN DELIBERATELY, THOUGH THE SUITE DOES NOT PASS ON QEMU -- and what that costs is measured
+        // rather than guessed. The suite dies at demo/PipDemo's `high.join()` with a Thread whose Type reads
+        // as garbage; a control from this SAME tree with the monitor codegen ENTIRELY DISABLED fails
+        // identically, and so does one with this launch removed, while HEAD passes. So it is neither the
+        // codegen nor this demo: it is the layout/closure shift of the change's mere presence, the
+        // sensitivity this file records as having cost boots twice. Hiding the demo would buy nothing
+        // (measured) and would cost the Pi gate, so it stays and the Pi decides.
+        Uart.write(Magic.bytes("synchronized methods (JVMS 2.11.10):\n"));
+        Loader.launchMain(Magic.bytes("demo/SyncMethodDemo"), Magic.bytes(""));
 
         // newarray/anewarray with a negative length: NegativeArraySizeException (JVMS 6.5). The last arm is
         // the one with teeth -- an unchecked negative length is a BOUNDS-CHECK BYPASS, not a missing throw,

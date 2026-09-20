@@ -104,7 +104,8 @@ public final class BaselineCompiler
             ec[i] = ex[i].catchType();
         }
         core.setExceptionTable(es, ee, eh, ec, n);
-        int[] words = core.compileBody(method.code, method.descOff, method.isStatic, method.maxLocals, base, isEntry);
+        int[] words = core.compileBody(method.code, method.descOff, method.isStatic, method.isSynchronized,
+                                       method.maxLocals, base, isEntry);
 
         // Zip the core's machine-PC handler ranges with their catch classes.
         Vec<HandlerRange> handlers = new Vec<>();

@@ -101,13 +101,10 @@ public interface Symbols
     // reported `BAD RECEIVER recv=0xFFFFFFFFFFFFFFFF site=storeFence()V`, naming a method nothing had called.
     // Take the max over the WHOLE file, not the line above.
     int NEW_NASE = 53;          // vm/VM.newNase()J   — a java/lang/NegativeArraySizeException (newarray/anewarray)
-    // NOTE FOR THE NEXT HELPER ADDED: these ids are ONE namespace (everything MetalSymbols.helperAddr
-    // switches on) but they are NOT declared in one block -- VIRTUAL_RESOLVE and the four WATCH_* helpers sit
-    // EARLIER in this file at 48..52, above the run that ends at GET_PRIO = 47. Take the max over the WHOLE
-    // file, not the line above: 48 was taken once, and helperAddr tests VIRTUAL_RESOLVE first, so the call
-    // branched into the late-virtual trampoline and reported a receiver nothing had dispatched on.
     int DREM = 54;              // vm/VM.drem(DD)D    — frem/drem (no AArch64 remainder instruction)
     int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
+    int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
+    int MON_EXIT_SYNC = 57;     // vm/VM.monExitSync()V    — ... and its release on normal return
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -156,6 +153,30 @@ public interface Symbols
     default void arrayDescAddr(CodeBuffer cb, int reg, int classCp)
     {
         throw new UnsupportedOperationException("multianewarray not compiled by the host writer");
+    }
+
+    /**
+     * The {@code Class} OBJECT a STATIC synchronized method locks (JVMS 2.11.10), or 0 when this world
+     * cannot name one -- in which case the compiler emits NO implicit monitor for that method and counts it
+     * ({@code Baseline.syncStaticSkipped}) rather than emitting an acquire it could never pair with.
+     *
+     * <p>Queried BEFORE the prologue, because a synchronized method is never a leaf and the frame has to be
+     * sized for the helper call. {@link #emitSelfClassMonitor} then materialises the same address; the
+     * mirror is cached per Type, so asking twice costs one lookup and yields the identical object.
+     *
+     * <p>That identity is the whole correctness argument: it is the object {@code Foo.class} and
+     * {@code getClass()} answer, so a {@code static synchronized} method and a {@code synchronized
+     * (Foo.class)} block exclude each other, which JVMS 2.11.10 requires.
+     */
+    default long selfClassMonitor()
+    {
+        return 0L;      // host writer: it bakes no class literals, and emits no implicit monitor either
+    }
+
+    /** Materialise {@link #selfClassMonitor} in {@code reg}. Only called when the query answered non-zero. */
+    default void emitSelfClassMonitor(CodeBuffer cb, int reg)
+    {
+        throw new UnsupportedOperationException("static synchronized not compiled by the host writer");
     }
 
     /** True if the field STORE at {@code fieldCp} is being watched: the compiler precedes it with a

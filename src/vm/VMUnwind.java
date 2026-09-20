@@ -431,6 +431,12 @@ final class VMUnwind
             }
             pc = Magic.load64(sp) - 4L;             // the call site (return address - one instruction)
             sp = sp + fs;                           // pop this frame
+            // A SYNCHRONIZED METHOD whose frame just went away must drop its implicit monitor, or an
+            // exception leaving it leaks the lock for the rest of the boot -- trading a missing lock for a
+            // permanent deadlock, which is strictly worse than the bug ACC_SYNCHRONIZED support fixes.
+            // STRICTLY below the new sp, so a handler INSIDE a synchronized method keeps its own monitor:
+            // its frame is not popped, and its normal return still pairs with monExitSync.
+            VM.monUnwindSync(sp);
         }
     }
 
