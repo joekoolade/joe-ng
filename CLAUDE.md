@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE BOOT TASK'S STACK WAS NOT A GC ROOT WHEN ANOTHER TASK COLLECTED -- a live object swept, found from a
-  two-line reproducer, FIXED (2026-09-20).** The root scan took exactly ONE stack, the collector's own:
+  two-line reproducer, FIXED (2026-09-20, PI-VALIDATED).** The root scan took exactly ONE stack, the collector's own:
 
   ```java
   long stackTop = STACK_TOP;                       // boot task
@@ -162,6 +162,17 @@ defines the minimum the assembler must encode.
   - **IT IS ALSO WHAT UNBLOCKED ACC_SYNCHRONIZED**, whose `mSync` table is simply the twelfth per-compile
     array: `demo/SyncMethodDemo` now runs IN THE SUITE at 18 arms exact, where it could only be validated
     standalone before.
+  - **PI-VALIDATED, AND THE COST THE FIX COULD HAVE HAD IS MEASURED AT ZERO.** Adding a root can only
+    RETAIN MORE, so over-retention was the risk this boot had to price, and the collector says it is not
+    there: **`gc: collections=46` then `55` -- the same figures this file already records for the suite** --
+    with `churnMB=625 live=32 intact=32`. On hardware: batch 70, `priority inversion (guest Thread): finish
+    HML ... HIGH blocked 60ms` (the demo that was dying), `SMP: 4 of 4`, `ticks/core c1=50 c2=50 c3=50`,
+    `sched: 89 preemptions`, `steps/core 61/59/60/60`, ExcDemo's 7-frame trace, `sum20=210 weighted20=2870
+    tally17=1153 wide=7000000155`, `lisp evals=600 result=610 stable=1`, WPA2 -> HTTP 200 OK (828 bytes),
+    and every failure marker zero with only the known DENYLISTED lines.
+  - **AND IT CONFIRMS A READING RATHER THAN ASSUMING IT: the `(skip ch=)` CYW43 line reads CHANNEL 1 here
+    and channel 3 on the previous boot.** That line was recorded as a frame-timing diagnostic on a masked
+    `load8` path rather than a failure; a channel that moves between boots is what that claim predicts.
   - **STILL OPEN, stated rather than rounded away: the per-core IDLE tasks' stacks are still unscanned.**
     They have `taskStackBase == 0` like task 0, so the same hole applies to them; the reason it is not
     urgent is that those flows run `smpSchedulerMain`'s pause-and-yield loop rather than guest code, so a
@@ -171,7 +182,8 @@ defines the minimum the assembler must encode.
     `scanFrom` is that core's fixed stack, so the range is whatever those two addresses happen to bracket.
 
 - **ONE EXTRA ALLOCATION PER COMPILE BREAKS demo/PipDemo ON UNMODIFIED HEAD -- a latent bug with a TWO-LINE
-  reproducer, and it is NOT the 1-in-3 QEMU flake this file has been calling it (2026-09-20).** Adding a
+  reproducer, and it is NOT the 1-in-3 QEMU flake this file has been calling it (2026-09-20; CAUSE FOUND
+  and FIXED -- see the GC card above).** Adding a
   single unused `new int[MAXM]` (2072 bytes, small-region) to `allocMethodTables` on HEAD makes the demo
   suite die at `demo/PipDemo.main:95` -- `high.join()` on a Thread whose Type reads as garbage
   (`itableDir=0x1`, `elem=0x2FD`, `super=0x17240`). Nothing else changes: the array is never read.
