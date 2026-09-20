@@ -1346,6 +1346,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.newNase()J",         "vm/VM.newNaseAddr");    // NegativeArraySizeException
         stashHelper(image, staticWord, wordOffset, "vm/VM.drem(DD)D",          "vm/VM.dremAddr");       // frem / drem
         stashHelper(image, staticWord, wordOffset, "vm/VM.multiNewArray(JIIIII)J", "vm/VM.multiNewArrayAddr"); // multianewarray
+        stashHelper(image, staticWord, wordOffset, "vm/VM.monEnterSync(JJ)V", "vm/VM.monEnterSyncAddr");  // synchronized method
+        stashHelper(image, staticWord, wordOffset, "vm/VM.monExitSync()V",    "vm/VM.monExitSyncAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.arrayStoreOk(JJ)I",  "vm/VM.arrayStoreOkAddr"); // aastore check
         stashHelper(image, staticWord, wordOffset, "vm/VM.newCce()J",          "vm/VM.newCceAddr");     // ClassCastException
         stashHelper(image, staticWord, wordOffset, "vm/VM.castOk(JJ)I",        "vm/VM.castOkAddr");     // checkcast predicate

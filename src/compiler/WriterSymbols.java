@@ -27,23 +27,11 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
     /** Synthetic statics slot holding the in-flight exception during athrow dispatch. */
     private static final String EXCEPTION_KEY = "vm/VM.$exception";
 
-    /** The image method a helper id resolves to -- or a loud failure. HELPER_KEY covers only the handful of
-     *  ids the HOST writer can emit, and it was indexed RAW, so any id above 5 was an
-     *  ArrayIndexOutOfBoundsException rather than a statement about what the writer supports. */
-    private static String helperKey(int helper)
-    {
-        String k = helper >= 0 && helper < HELPER_KEY.length ? HELPER_KEY[helper] : null;
-        if (k == null)
-        {
-            throw new IllegalStateException("host writer cannot emit helper id " + helper
-                    + " -- add it to WriterSymbols.HELPER_KEY");
-        }
-        return k;
-    }
     /**
      * Runtime-helper method keys, indexed by the ids in {@link Symbols}, and SPARSE: the host writer emits
-     * only a handful of these, so ids it never reaches stay null rather than being padded with a guess -- a
-     * null is the loud failure in helperKey above, not a neighbouring method quietly named by mistake.
+     * only a handful of these, so ids it never reaches stay null rather than being padded with a guess. A
+     * null is a hard build-time failure (see helperKey) instead of an index that silently names the wrong
+     * method -- the old form was a 6-element literal, so ANY id above 5 was an ArrayIndexOutOfBounds.
      */
     private static final String[] HELPER_KEY = new String[64];
     static
@@ -58,6 +46,24 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // but naming them costs nothing and keeps the table a statement about capability.
         HELPER_KEY[Symbols.DREM]             = "vm/VM.drem(DD)D";
         HELPER_KEY[Symbols.MULTI_NEW_ARRAY]  = "vm/VM.multiNewArray(JIIIII)J";
+        // The implicit monitor is METAL-JIT ONLY (Baseline gates it on implicitChecks), so the writer never
+        // asks for these -- naming them is a statement about capability, like DREM above, and NOT a claim
+        // that a baked synchronized method locks. It does not: see the gate's comment in compileBody for
+        // why (guestsrc Throwable.fillInStackTrace is baked, synchronized, and ON THE UNWIND PATH).
+        HELPER_KEY[Symbols.MON_ENTER_SYNC]   = "vm/VM.monEnterSync(JJ)V";
+        HELPER_KEY[Symbols.MON_EXIT_SYNC]    = "vm/VM.monExitSync()V";
+    }
+
+    /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */
+    private static String helperKey(int helper)
+    {
+        String k = helper >= 0 && helper < HELPER_KEY.length ? HELPER_KEY[helper] : null;
+        if (k == null)
+        {
+            throw new IllegalStateException("host writer cannot emit helper id " + helper
+                    + " -- add it to WriterSymbols.HELPER_KEY");
+        }
+        return k;
     }
 
     private final ClassFile cf;
