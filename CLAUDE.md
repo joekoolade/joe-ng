@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`java.security` OPENS: the permission layer runs STOCK, and `MessageDigest` runs on joe-ng's own streaming
-  digests (2026-09-21, QEMU-VALIDATED, NOT YET PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is
+  digests (2026-09-21, PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is
   narrowed now along the line that actually matters -- what needs a subsystem this VM does not carry, and what
   merely sat behind the same prefix.
 
@@ -126,7 +126,7 @@ defines the minimum the assembler must encode.
   | `test/jdk/junit/DigestProbe` | **49 arms + 3 stated divergences**, `failures=0 divergences-unmet=0` |
   | stock jtreg `java/security/MessageDigest/ArgumentSanity` | **`Test succeeded`**, unmodified |
   | `crypto: 17 -> 37 checks` | incl. **756 byte-for-byte comparisons against the JDK's own MessageDigest** |
-  | demo suite (39 programs) | twenty-one markers zero, every standing gate held |
+  | demo suite (39 programs) | **on HARDWARE**: twenty-one markers zero, every standing gate held |
 
   - **THE PERMISSION LAYER IS NOT OVERLAID -- the STOCK classes load as-is, and that is the right shape.**
     `Permission`/`BasicPermission`/`AllPermission`/`Permissions`/`PermissionCollection`/`Principal`/
@@ -230,9 +230,36 @@ defines the minimum the assembler must encode.
     - **`Provider.Service` and provider registration.** A caller reaching for those wants a pluggable
       provider; a method answering null would read as "no such algorithm" when the truth is "no such
       mechanism".
-  - **NOT PI-VALIDATED, and that is the next step rather than a footnote.** QEMU hands out ZEROED DRAM and
-    this change makes `crypto/` demand-loadable into the guest world for the first time, so a Pi boot is what
-    says the new dual-world pulls behave on cold silicon.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite), AND THE DIGESTS WERE RE-DERIVED FROM THE SERIAL LOG
+    RATHER THAN EYEBALLED.** All eight arms off the wire were fed back through an independent implementation:
+    **8 of 8, zero mismatches**, byte-identical to the QEMU run and to the published vectors.
+    `sha256 clone` reads `.../fork-ok`, so the engine really is deep-copied on silicon.
+  - **THE BOOT ANSWERED THE QUESTION QEMU STRUCTURALLY COULD NOT.** `crypto/` is demand-loaded into the guest
+    world for the first time, and the emulator hands out ZEROED DRAM where a cold Pi does not -- so a new
+    dual-world pull that reads clean there can be firmware leftovers here. On hardware: **no `FAULT`, no
+    `ESR EC=0`, no `BOOT RE-ENTERED`, no `unclaimed pc`, no `CAP EXCEEDED`, no `LINK FAILED`, no parity
+    `DIFF`** -- and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the seven KNOWN ones, every one
+    labelled DENYLISTED.
+  - **THE COST OF THE LARGER CLOSURE IS MEASURED AT ZERO, which is the reading that matters for a change that
+    adds a package to the demand-loadable set.** `gc: collections=46` at the churn demo and `55` at the lisp
+    finale -- **byte-identical to the figures this file already records** -- with `churnMB=625 live=32
+    intact=32`. Nothing is being over-retained.
+  - **AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT ON THE CLOSURE:** batch 69, `rounds=4 pend=180
+    reach=16`, `n:imap=75 synth=36 clinits=28`, `memo=1626 res=2577 unres=2302` -- every counter identical to
+    the QEMU suite run. Plus the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`** (the secondaries'
+    own preemptive timers, which read 0/0/0 on the emulator), `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `steps/core 61/59/60/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's
+    seven-frame trace, `lisp evals=600 result=610 stable=1`, and WPA2 -> DHCP -> DNS -> TCP -> **HTTP 200 OK,
+    826 bytes**.
+  - **WHAT THE SUITE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight.** The suite exercises the DIGEST engine
+    and proves NO REGRESSION at 39 programs; it does not touch the permission layer, `DigestInputStream`/
+    `DigestOutputStream` or the argument-sanity paths. Those are `SecurityProbe` (46/46), `DigestProbe`
+    (49 + 3) and the stock `ArgumentSanity`, all on QEMU. Different claims.
+  - **ONE LINE NAMED RATHER THAN CHASED, for the third time:** a single `(skip ch=0x...0001` after
+    `wifi: JOINED`. This file already records it as `Cyw43`'s ioctl-response wait loop on a masked `load8`
+    path -- frame timing, not a failure -- and that the channel MOVES between boots (3 and 1 previously).
+    Channel 1 here, and the boot goes on to HTTP 200 OK.
 
 - **A BAKE-STUB MEMO OUTLIVES THE LAZY TABLE IT INDEXES -- the Preconditions "wild branch" ROOT-CAUSED, FIXED
   AND PI-VALIDATED (2026-09-21).** `VM.bakeResolve` memoizes into the bake-stub table, which the WRITER emits
