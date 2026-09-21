@@ -115,6 +115,52 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **FLOAT/DOUBLE STRING CONCAT: THE BAKE DOMAIN CANNOT CARRY THE JDK'S FORMATTERS, AND THE LOADER WORLD
+  ALREADY RUNS THEM (2026-09-20, ATTEMPTED AND REVERTED -- the findings are the deliverable).** `"x" + 1.5`
+  still fails loudly with `JIT unsupported reason=0 a=0xBA b=2`. An implementation was built end to end,
+  measured, and backed out; what it established is worth more than the code was.
+
+  - **DO NOT WRITE A FORMATTER: THE STOCK ONE ALREADY WORKS HERE, MEASURED FIRST.** `Double.toString` and
+    `Float.toString` demand-load and run on metal today, byte-identical to a host JVM on **1.5, 0.1, 0.0,
+    -0.0, 1e20, 1e-9 and NaN**. `Double.toString` is specified as the SHORTEST decimal that round-trips
+    (Schubfach since JDK 19); hand-rolling that is a silent wrong answer waiting to happen in a core
+    language feature, and it would re-derive something the VM can already do.
+  - **A FLOAT IS NOT A WIDENED DOUBLE, and a ten-second HOST CONTROL killed that shortcut before it could
+    ship.** `Float.toString(0.1f)` is `"0.1"` while `Double.toString((double) 0.1f)` is
+    `"0.10000000149011612"` -- shortest-round-trip is relative to the type's OWN precision. Widening would
+    have been wrong in EVERY float concat, and wrong in a way that still looks like a number. `SC_FLOAT`
+    must be its own helper.
+  - **THE LOWERING IS THE EASY HALF, and it is already solved by what is there.** This VM holds a double in
+    an ordinary 64-bit operand register and only `fmov`s it into an FP register for arithmetic, and
+    `Double.longBitsToDouble` is an IDENTITY native (`VMNatives`) -- so a helper taking the RAW BITS as a
+    `long` needs no FP marshalling and `appendArg`'s existing integer `movReg` path carries it unchanged.
+    A `long` already travels that way (`big=1234567890123`), and `argBase + argIdx` is per ARGUMENT, not
+    per category-2 slot.
+  - **WHAT IS DEAD: calling the formatter from a BAKED helper.** `VMBox` is the precedent for baked VM code
+    calling java.base (the wrappers' `valueOf`), so `VMConcat.scDouble` calling `Double.toString` looked
+    right. It is not, and the writer says so in two independent ways:
+    ```
+    bake-stub DoubleToDecimal.special(I)Ljava/lang/String;  (no method special(I) in DoubleToDecimal)
+    bake-stub DoubleToDecimal.<clinit>()V  (ldc class-literal not compiled by the host writer)
+    ```
+    **Neither is a cap to raise.** The bake domain cannot compile that `<clinit>` at all, and it cannot
+    resolve `special` -- the NaN/Infinity/+-0.0 path. The attempt got `[1.5]` and `[0.1]` EXACT on metal and
+    then stopped at `-0.0` with `BAKERESOLVE NO BODY`, which is this file's usual shape: each layer
+    invisible until the one before it is fixed.
+  - **AND IT DRAGS TWO MORE THINGS BEHIND IT, both measured rather than predicted.** The writer's
+    `StaticSnapshot` cannot reflect into `jdk.internal.math` without
+    `--add-opens java.base/jdk.internal.math=ALL-UNNAMED` (the build already does exactly this for
+    `java.lang`, so it is one more package, not a hack). And baking `Double` runs its `<clinit>` in
+    `VM.initClasses`, where `TYPE = getPrimitiveClass("double")` reaches `Class.primitiveClass0` before the
+    resolver can answer and **FAULTS AT BOOT** -- fixed by putting `java/lang/Double` and `java/lang/Float`
+    on `bakeNoClinit` beside `Integer` and `Long`, which were already there for the same reason. Image cost
+    of the baked route, for the record: **+53,624 bytes, 0.16%**.
+  - **THE DESIGN THAT SHOULD WORK, named so the next attempt does not repeat this one: resolve the
+    formatter BY NAME AT RUNTIME and keep it in the LOADER world**, where it demonstrably already runs --
+    `Loader.bufBySigU`/`compileSigOnDemand` plus `Magic.callN`, which is the shape `seedStandardProps`
+    already uses to reach `Properties.setProperty` from VM code. That never puts `DoubleToDecimal` in the
+    bake domain, and it pays the closure only when a program actually concatenates a double.
+
 - **THE BOOT TASK'S STACK WAS NOT A GC ROOT WHEN ANOTHER TASK COLLECTED -- a live object swept, found from a
   two-line reproducer, FIXED (2026-09-20, PI-VALIDATED).** The root scan took exactly ONE stack, the collector's own:
 
