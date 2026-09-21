@@ -69,7 +69,6 @@ public final class ReachScan
         // charset encoder/decoder fallback (never taken: the overlay singletons pin the UTF-8 fast path).
         "java/nio/charset/CharsetDecoder", "java/nio/charset/CharsetEncoder",
         "java/nio/charset/Coder", "java/nio/charset/Coding",
-        "java/nio/charset/Malformed",
         "java/nio/charset/IllegalCharsetName", "java/nio/charset/UnsupportedCharset",
         "java/nio/CharBuffer", "sun/nio/cs/Array",   // ByteBuffer now loadable (overlay -> socket buffers)
     };
