@@ -135,6 +135,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     // The indirection exists because javac cannot name a package-private java.base member (StringUTF16
     // is package-private in java.lang) from the vm/ tree -- the writer links by key instead.
     private static final String[][] BAKE_ROOTS = {
+        // A HAND-EMITTED stub is the only caller of this one, so nothing in Java reaches it and RTA cannot
+        // see it. Rooting it HERE is what puts a body in the image; a bare stashHelper() below would have
+        // silently stashed nothing, leaving the guard that calls it emitting no code at all.
+        { "vm/VM.badTailTarget(JJ)V",                     "vm/VM.badTailTargetAddr" },
         { "java/lang/StringUTF16.getBytes([BII[BI)V",     "vm/VM.utf16GetBytesAddr" },
         { "java/lang/Integer.formatUnsignedInt(II[BI)V",  "vm/VM.formatUnsignedIntAddr" },
         { "java/lang/Integer.intValue()I",                "vm/VM.integerIntValueAddr" },
@@ -2128,6 +2132,17 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         if (w >= 0)
         {
             fillStatic(image, staticWord, field, addr(w));
+            return;
+        }
+        // SILENCE HERE IS WHAT COSTS. The field keeps its 0, and every consumer that movz/movk-s it into a
+        // register then emits a CALL OR BRANCH TO ADDRESS 0 -- which a `br` cannot even attribute, because it
+        // writes no x30. A helper reached ONLY from hand-emitted A64 is invisible to RTA and must be rooted in
+        // BAKE_ROOTS; say so rather than stashing nothing. (This is the writer-side twin of the silent
+        // `if (room) { record it }` shape this project calls its most expensive failure mode.)
+        if (staticWord.get(field) >= 0)
+        {
+            System.out.println("  helper-stash MISS: no baked body for " + methodKey + ", so " + field
+                               + " stays 0 -- root it in BAKE_ROOTS");
         }
     }
 

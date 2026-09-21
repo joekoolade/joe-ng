@@ -3255,6 +3255,10 @@ public final class Baseline
         {
             cb.emit(A64Enc.movReg(pushReg(), 16));             // x16 = a dispatch's target (wild-branch diagnostic)
         }
+        else if (id == Intrinsics.READ_X19)
+        {
+            cb.emit(A64Enc.movReg(pushReg(), 19));             // x19: callee-saved, so it survives what clobbers x0
+        }
         else if (id == Intrinsics.RESUME)
         // restore the handler's callee-saved locals, exc->x9, SP=sp, br pc (no return)
         {

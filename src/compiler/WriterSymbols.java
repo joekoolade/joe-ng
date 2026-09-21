@@ -393,6 +393,7 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         case "readLR()J" -> Intrinsics.READ_LR;
         case "readX16()J" -> Intrinsics.READ_X16;
         case "readX0()J" -> Intrinsics.READ_X0;
+        case "readX19()J" -> Intrinsics.READ_X19;
         case "resume(JJJJJ)V" -> Intrinsics.RESUME;
         case "store32(JI)V" -> Intrinsics.STORE32;
         case "store8(JI)V" -> Intrinsics.STORE8;

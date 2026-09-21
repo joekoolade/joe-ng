@@ -481,6 +481,23 @@ public final class Magic
     }
 
     /**
+     * Read x19 -- a CALLEE-SAVED register, and the point of it.
+     *
+     * <p>x0 is the receiver of the dispatch that wild-branched, but between the branch and the image entry
+     * the firmware low-memory shim runs, and nothing has ever established that it leaves x0 alone. A baked
+     * callee that opens `mov x19, x0` (String.valueOf(Object) does) leaves a second copy in a register the
+     * AAPCS says a callee must preserve, so the two together say whether x0 is trustworthy: agree and the
+     * receiver is real, differ and x0 was clobbered on the way in.
+     *
+     * <p>Must be the FIRST body op of the handler, ahead of any local assignment -- this VM keeps locals in
+     * x19..x28, so the handler overwrites it the moment it stores one.
+     */
+    public static long readX19()
+    {
+        throw intrinsic();
+    }
+
+    /**
      * Resume execution at a handler: set SP, place {@code exc} in the handler's
      * operand-stack slot (x9), and branch to {@code pc}. Never returns — used by
      * the exception unwinder to transfer control to a catch block in a caller.
