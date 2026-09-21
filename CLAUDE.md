@@ -115,6 +115,152 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`java.security` OPENS: the permission layer runs STOCK, and `MessageDigest` runs on joe-ng's own streaming
+  digests (2026-09-21, PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is
+  narrowed now along the line that actually matters -- what needs a subsystem this VM does not carry, and what
+  merely sat behind the same prefix.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/SecurityProbe` | **46 of 46 arms**, byte-identical to a host JVM |
+  | `test/jdk/junit/DigestProbe` | **49 arms + 3 stated divergences**, `failures=0 divergences-unmet=0` |
+  | stock jtreg `java/security/MessageDigest/ArgumentSanity` | **`Test succeeded`**, unmodified |
+  | `crypto: 17 -> 37 checks` | incl. **756 byte-for-byte comparisons against the JDK's own MessageDigest** |
+  | demo suite (39 programs) | **on HARDWARE**: twenty-one markers zero, every standing gate held |
+
+  - **THE PERMISSION LAYER IS NOT OVERLAID -- the STOCK classes load as-is, and that is the right shape.**
+    `Permission`/`BasicPermission`/`AllPermission`/`Permissions`/`PermissionCollection`/`Principal`/
+    `Privileged*` need no natives and no provider machinery; they are data structures and string matching.
+    Prefix matching covers each one's package-private collection companion for free (`java/security/
+    BasicPermission` also matches `BasicPermissionCollection`; `java/security/Permissions` matches
+    `PermissionsHash` and `PermissionsEnumerator`). `sun/security/util/SecurityConstants` came out of the
+    `sun/security/` denial for the same reason: that denial exists for JAR SIGNATURE VERIFICATION, and this
+    is 66 lines of string constants.
+  - **`MessageDigest`/`MessageDigestSpi`/`Provider` ARE overlaid, and it is the `ServiceLoader` exception
+    again, stated rather than assumed.** Stock `getInstance` goes through `sun.security.jca.GetInstance` to a
+    `Provider` registry read from a properties FILE, populated by `ServiceLoader` over the MODULE GRAPH, and
+    instantiated reflectively through `java.lang.invoke`. All three are deliberately absent here, so no
+    faithful copy could work whatever its shape. `MessageDigest` stays ABSTRACT and still
+    `extends MessageDigestSpi`, which is stock's shape -- a program that subclasses it works unchanged.
+  - **`DigestInputStream`/`DigestOutputStream` are STOCK**, pure `java.io` filter streams; nothing to overlay.
+  - **`crypto/Digest` IS STREAMING, AND THAT IS WHY IT IS NOT `crypto/Sha1`.** `update` is incremental, so
+    buffering a whole message to hash it at the end would make a digest's memory cost its MESSAGE SIZE --
+    wrong for `DigestInputStream` over a large file, and wrong for the stock tests that feed 6 MB one byte at
+    a time. State is one partial block plus the chaining variables: ~200 bytes whatever it hashes. MD5,
+    SHA-1, SHA-224, SHA-256, SHA-384, SHA-512.
+  - **`crypto/` IS DUAL-WORLD NOW, for the reason `zip/` already is:** the baked copy backs the VM's WPA2
+    supplicant, and the SAME source is demand-loaded into the guest world so the overlay can delegate to it.
+    One prefix on `ImageBuilder.demandLoadable`.
+  - **THE HOST CROSS-CHECK IS THE GATE THAT MATTERS, AND IT COST NO BOOT.** Six algorithms x 22 message
+    lengths x five feeding patterns against the JDK's OWN `MessageDigest` -- **756 comparisons, 0 failures**,
+    in `crypto.CryptoTest`. The LENGTHS are the point: 55/56/57, 63/64/65, 111/112/113, 127/128/129 straddle
+    both block sizes AND the offset where the length field starts. The FEEDING PATTERNS are the other point:
+    one shot, byte at a time, ragged chunks, reuse after `digest()`, and `copy()`.
+  - **IT CAUGHT MD5's LENGTH FIELD, AND THE SHAPE OF THAT FAILURE IS THE LESSON.** RFC 1321 appends the bit
+    count **LOW-ORDER BYTE FIRST**; the SHA family is big-endian. Written big-endian for all six, MD5 agreed
+    on the EMPTY message -- where the count is zero and byte order cannot show -- and disagreed on all 21
+    other lengths, while SHA-1/224/256/384/512 were clean. **A one-length smoke test would have passed.**
+  - **KNOWN-ANSWER VECTORS, NOT SELF-CONSISTENCY, and the reason is specific to hashing.** A digest that is
+    self-consistent and wrong is the worst failure this subsystem has: stable, the right length, and agreeing
+    with nothing else in the world. SHA-224 and SHA-384 are the live risk -- each is the same compression
+    function with a DIFFERENT initial chaining value, so an implementation that TRUNCATED SHA-256/SHA-512
+    would pass every length and streaming arm and be wrong in every byte. Only the published NIST/RFC vectors
+    for the empty message and `"abc"` catch that, and they are in the probe, the suite demo AND CryptoTest.
+  - **THE HOST CONTROL FOUND A BUG IN MY OVERLAY IN TEN SECONDS, before any boot.** I canonicalised
+    `getAlgorithm()`; stock returns the spelling the caller ASKED FOR, so `getInstance("sha").getAlgorithm()`
+    is `"sha"`. The probe's alias arms now assert BOTH halves -- that each alias RESOLVES (right length, and
+    the same digest as the canonical name) and that the requested spelling survives -- which is what says the
+    alias table is used for lookup and nothing else.
+  - **THE PROBE SEPARATES "MUST MATCH STOCK" FROM "DELIBERATELY DIFFERS", and counts them apart.** Three arms
+    diverge by design -- no SHA-3, provider `joe-ng` not `SUN`, and the `toString` that names it. Reporting
+    those as FAIL on the host control would train a reader to ignore the count, so they print as `ok*`/`diff`
+    against a SEPARATE counter: **`failures=0` means the same thing in both worlds**, and the host reads
+    `divergences-unmet=3` (stock's answers) while the metal reads 0.
+  - **A CHM GAP FELL OUT OF IT -- the overlay-drops-stock-members trap, and `overlaycheck` STRUCTURALLY COULD
+    NOT SEE IT.** `perms.elements()` died with a `DENYLIST TRAP`, EMPTY callee, `TRAPWIRE index=-1` -- i.e. a
+    late-resolution failure blaming a denylist `ConcurrentHashMap` is not on. The frame named
+    `PropertyPermissionCollection.elements`, whose body is `(Enumeration) perms.elements()`, and the CHM
+    overlay declared no `elements()`. **The only caller is STOCK java.base, which is exactly the population
+    the shallow check does not scan** -- `make overlaycheck-deep` lists it. The whole LEGACY Hashtable-compat
+    surface landed in one pass (`keys`, `elements`, `contains`, `mappingCount`) rather than one member per
+    boot, plus `keySet()` with stock's covariant `KeySetView` return, which is a DESCRIPTOR gap on an
+    existing method rather than a dropped member.
+  - **AND THE SHALLOW CHECK CAUGHT ONE OF ITS OWN, on a member the stock MessageDigest sweep tests need:**
+    `java/util/Random.nextBytes([B)V`. Implemented with the JDK's exact algorithm (one `nextInt()` per FOUR
+    bytes, low byte first), because this class promises a bit-for-bit JDK sequence and a fresh int per byte
+    would be a perfectly good random fill that reproduces nothing.
+  - **IDENTITY IS EXACT AGAINST A CONTROL BUILT FROM HEAD IN A SEPARATE WORKTREE.** Same suite, same 38
+    programs: `batch 68`, `rounds=4 pend=180 reach=16`, `n:imap=73 synth=36 clinits=26`,
+    `memo=1580 res=2510 unres=2239` -- **every counter identical to the digit**. Of 778 normalised log lines
+    the ONLY difference is ExcDemo's four stack-trace pc addresses, shifted by a constant **0x40**, with the
+    same line numbers and the same frame offsets: a pure layout shift from the code this adds, and nothing
+    else. **The recorded suite figures in the cards below are from EARLIER commits and no longer match HEAD;
+    building the control is what said so, and saved reading a moved number as a regression.**
+  - **PI-GATED FROM HERE: `demo/DigestDemo` is in the boot suite**, because `crypto/` is newly dual-world and
+    a wrong digest is a silent wrong answer. Its two discriminating arms are byte-at-a-time streaming across
+    both boundaries, and a `clone()` that must DEEP-copy its engine -- `Object.clone()` is shallow, so an
+    inherited clone leaves the two sharing one engine and BOTH answers come out wrong while still looking
+    exactly like digests. Suite: 39 programs, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`,
+    `smp sched: 4 of 4`, `sum20=210`, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    `self-build retired`, and `FAULT`/`BOOT RE-ENTERED`/`JIT unsupported`/`LOCALS UNDERSIZED`/`heap OOM`/
+    `STW TIMEOUT`/`Exception in thread`/`BADPATCH`/`VIRTUALRESOLVE FAILED`/`CAP EXCEEDED`/`unclaimed pc`/
+    parity `DIFF`/`LINK FAILED`/`BAD ARRAY LENGTH`/`SCRATCH MAP`/`ESR EC=0`/`DISPATCH ON UNREGISTERED`/
+    `PENDING-INIT`/`REACH LIST FULL`/`PEND LIST FULL`/`MAXLAZY` all ZERO. Host: A64 105, object-model 22,
+    class-reader 171, refmap 14, **compiler 40**, crypto 37, zip 91, `overlay-check 0 new`. The compiler
+    count holding is the assertion that matters: the writer is untouched, so the byte-for-byte self-hosting
+    fixpoint cannot have moved.
+  - **A DOCUMENTED GAP SHOWED UP IN THE STOCK TEST'S OUTPUT AND WAS NOT "FIXED".** `ArgumentSanity` prints
+    its caught exceptions, and they read `java.lang.IllegalArgumentException@481fa20` where stock prints the
+    message. That is `Throwable.toString()`, which the overlay DELIBERATELY does not declare -- its own
+    comment says "do not fix the missing member" and gives the reason (the host writer has no `getClass`
+    intrinsic, so a baked `toString` would NPE inside the very report it exists to produce). Reading the
+    comment cost a minute; the arc it would otherwise have started is on the record twice already.
+  - **WHAT IS DELIBERATELY NOT DONE, named rather than left to be re-found:**
+    - **SHA-3.** A sponge over Keccak-f[1600] -- a different construction, not a parameter of this one.
+      `getInstance("SHA3-256")` throws `NoSuchAlgorithmException`, which is the truthful answer. It is what
+      keeps the stock `TestSameValue`/`TestSameLength` sweeps out of reach (they enumerate 12 and 16
+      algorithm names incl. four SHA3 ones, and feed up to 6,250,000 bytes).
+    - **`java/security/Security`.** It is the registry for PLUGGABLE providers, and joe-ng has none. Adding
+      it would be a registry with one permanent entry.
+    - **`SecureRandom`.** Needs an entropy source; the cycle counter is the obvious candidate and picking one
+      is a security decision, not a port.
+    - **`KeyStore`/`Signature`/`KeyFactory`/`java.security.cert`.** All need `java.math` (BigInteger), which
+      this file records as not working here -- its initializers are rejected and allowing them pulls
+      BigInteger's PARALLEL path and ForkJoin behind it.
+    - **`Provider.Service` and provider registration.** A caller reaching for those wants a pluggable
+      provider; a method answering null would read as "no such algorithm" when the truth is "no such
+      mechanism".
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite), AND THE DIGESTS WERE RE-DERIVED FROM THE SERIAL LOG
+    RATHER THAN EYEBALLED.** All eight arms off the wire were fed back through an independent implementation:
+    **8 of 8, zero mismatches**, byte-identical to the QEMU run and to the published vectors.
+    `sha256 clone` reads `.../fork-ok`, so the engine really is deep-copied on silicon.
+  - **THE BOOT ANSWERED THE QUESTION QEMU STRUCTURALLY COULD NOT.** `crypto/` is demand-loaded into the guest
+    world for the first time, and the emulator hands out ZEROED DRAM where a cold Pi does not -- so a new
+    dual-world pull that reads clean there can be firmware leftovers here. On hardware: **no `FAULT`, no
+    `ESR EC=0`, no `BOOT RE-ENTERED`, no `unclaimed pc`, no `CAP EXCEEDED`, no `LINK FAILED`, no parity
+    `DIFF`** -- and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the seven KNOWN ones, every one
+    labelled DENYLISTED.
+  - **THE COST OF THE LARGER CLOSURE IS MEASURED AT ZERO, which is the reading that matters for a change that
+    adds a package to the demand-loadable set.** `gc: collections=46` at the churn demo and `55` at the lisp
+    finale -- **byte-identical to the figures this file already records** -- with `churnMB=625 live=32
+    intact=32`. Nothing is being over-retained.
+  - **AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT ON THE CLOSURE:** batch 69, `rounds=4 pend=180
+    reach=16`, `n:imap=75 synth=36 clinits=28`, `memo=1626 res=2577 unres=2302` -- every counter identical to
+    the QEMU suite run. Plus the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`** (the secondaries'
+    own preemptive timers, which read 0/0/0 on the emulator), `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `steps/core 61/59/60/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's
+    seven-frame trace, `lisp evals=600 result=610 stable=1`, and WPA2 -> DHCP -> DNS -> TCP -> **HTTP 200 OK,
+    826 bytes**.
+  - **WHAT THE SUITE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight.** The suite exercises the DIGEST engine
+    and proves NO REGRESSION at 39 programs; it does not touch the permission layer, `DigestInputStream`/
+    `DigestOutputStream` or the argument-sanity paths. Those are `SecurityProbe` (46/46), `DigestProbe`
+    (49 + 3) and the stock `ArgumentSanity`, all on QEMU. Different claims.
+  - **ONE LINE NAMED RATHER THAN CHASED, for the third time:** a single `(skip ch=0x...0001` after
+    `wifi: JOINED`. This file already records it as `Cyw43`'s ioctl-response wait loop on a masked `load8`
+    path -- frame timing, not a failure -- and that the channel MOVES between boots (3 and 1 previously).
+    Channel 1 here, and the boot goes on to HTTP 200 OK.
+
 - **A BAKE-STUB MEMO OUTLIVES THE LAZY TABLE IT INDEXES -- the Preconditions "wild branch" ROOT-CAUSED, FIXED
   AND PI-VALIDATED (2026-09-21).** `VM.bakeResolve` memoizes into the bake-stub table, which the WRITER emits
   into the IMAGE, so the memo is immortal; `lzTab`/`lzN` are dropped and rebuilt from zero by the reclaim.

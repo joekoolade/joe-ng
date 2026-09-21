@@ -5725,7 +5725,57 @@ public final class Loader
                 // Its <clinit> IS blocked (see clinitBlocked): it builds a jdk/internal/loader/ClassLoaderValue
                 // cache, which stays denied. Sound here because isProxyClass reads no static of Proxy -- only
                 // the class literal.
-                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Proxy")))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/reflect/Proxy"))
+                // NARROWED OUT of the java/security/ denial: the PERMISSION + MARKER layer, which needs no
+                // natives and no provider machinery -- it is plain data structures and string matching, and
+                // the stock classes load AS-IS (guestsrc is for classes that need natives, and these do not).
+                // They were denied only by the broad prefix that keeps out the PROVIDER/POLICY subsystem.
+                //
+                // Prefix matching covers each class's package-private collection companion for free:
+                // "java/security/BasicPermission" also matches BasicPermissionCollection, "java/security/
+                // Permissions" matches PermissionsHash and PermissionsEnumerator, and so on.
+                //
+                // What STAYS denied is everything that needs a subsystem this VM does not carry: Provider/
+                // Security/Policy (a provider registry read from a properties FILE), KeyStore/Signature/
+                // KeyFactory (java.math + sun.security.provider), and java/security/cert (X.509 parsing).
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Permission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/BasicPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/AllPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecurityPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/UnresolvedPermission"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Guard"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Principal"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Privileged"))
+                // The java.security EXCEPTION hierarchy: ordinary Throwables with no machinery behind them.
+                // They are what a stub in this subsystem THROWS, so denying them would leave a stub unable
+                // to name its own failure.
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/GeneralSecurityException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchAlgorithmException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/NoSuchProviderException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidKeyException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidParameterException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/InvalidAlgorithmParameterException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/KeyException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SignatureException"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/ProviderException"))
+                // MessageDigest + its SPI + Provider are OVERLAID (see guestsrc/java/security): stock's
+                // getInstance goes through sun.security.jca -> a Provider registry read from a properties
+                // FILE -> ServiceLoader over the module graph -> java.lang.invoke, and all three of those
+                // are deliberately absent here. The denial has to be narrowed FIRST -- a denied class is
+                // trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/MessageDigest"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/Provider"))
+                // Digest{Input,Output}Stream are STOCK: pure java.io filter streams over a MessageDigest,
+                // no natives and nothing to overlay.
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestInputStream"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestOutputStream"))
+                // NARROWED OUT of the sun/security/ denial, which exists for JAR SIGNATURE VERIFICATION
+                // (JarVerifier -> the whole provider closure). This class is not that: 66 lines of String
+                // constants plus one AllPermission. PropertyPermission.getMask compares its actions string
+                // against these by IDENTITY -- and FALLS THROUGH to a char-by-char parse when they miss, so
+                // the answer is correct either way and only the fast path depends on interning.
+                || utf8HasPrefix(base, off, Magic.bytes("sun/security/util/SecurityConstants")))
         {
             return false;
         }

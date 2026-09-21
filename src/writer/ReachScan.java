@@ -91,7 +91,32 @@ public final class ReachScan
                 || c.startsWith("java/lang/reflect/Array")
                 || c.startsWith("java/lang/reflect/AccessibleObject")
                 || c.startsWith("java/lang/ClassLoader")                 // M3: JDK-free overlay (defineClass/loadClass)
-                || c.startsWith("sun/net/ext/ExtendedSocketOptions"))   // overlaid no-op; rest of sun/net/ext denied
+                || c.startsWith("sun/net/ext/ExtendedSocketOptions")    // overlaid no-op; rest of sun/net/ext denied
+                // The java.security PERMISSION + MARKER layer: plain data structures and string matching,
+                // no natives and no provider machinery. The PROVIDER/POLICY/cert subsystem stays denied.
+                || c.startsWith("java/security/Permission")
+                || c.startsWith("java/security/BasicPermission")
+                || c.startsWith("java/security/AllPermission")
+                || c.startsWith("java/security/SecurityPermission")
+                || c.startsWith("java/security/UnresolvedPermission")
+                || c.startsWith("java/security/Guard")
+                || c.startsWith("java/security/Principal")
+                || c.startsWith("java/security/Privileged")
+                || c.startsWith("java/security/GeneralSecurityException")
+                || c.startsWith("java/security/NoSuchAlgorithmException")
+                || c.startsWith("java/security/NoSuchProviderException")
+                || c.startsWith("java/security/DigestException")
+                || c.startsWith("java/security/InvalidKeyException")
+                || c.startsWith("java/security/InvalidParameterException")
+                || c.startsWith("java/security/InvalidAlgorithmParameterException")
+                || c.startsWith("java/security/KeyException")
+                || c.startsWith("java/security/SignatureException")
+                || c.startsWith("java/security/ProviderException")
+                || c.startsWith("java/security/MessageDigest")
+                || c.startsWith("java/security/Provider")
+                || c.startsWith("java/security/DigestInputStream")
+                || c.startsWith("java/security/DigestOutputStream")
+                || c.startsWith("sun/security/util/SecurityConstants"))
         {
             return false;
         }

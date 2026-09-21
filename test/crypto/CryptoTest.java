@@ -61,7 +61,162 @@ public final class CryptoTest
         keyUnwrap("000102030405060708090a0b0c0d0e0f",
                 "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5", "00112233445566778899aabbccddeeff");
 
+        // Streaming digests (crypto.Digest), which back java.security.MessageDigest.
+        digestVectors();
+        digestAgainstJdk();
+
         T.summary("crypto");
+    }
+
+    /**
+     * Known-answer vectors for every algorithm {@link Digest} implements -- the published NIST/RFC digests of
+     * the empty message and of {@code "abc"}, so they are independent of both this VM and the JDK.
+     *
+     * <p>These matter beyond the cross-check below because a WRONG IV is self-consistent: SHA-224 that
+     * truncated SHA-256 rather than starting from its own chaining value would produce a stable digest of
+     * exactly the right length that nothing else in the world agrees with.
+     */
+    private static void digestVectors()
+    {
+        dig(Digest.MD5, "", "d41d8cd98f00b204e9800998ecf8427e");
+        dig(Digest.MD5, "abc", "900150983cd24fb0d6963f7d28e17f72");
+        dig(Digest.SHA1, "", "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        dig(Digest.SHA1, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d");
+        dig(Digest.SHA224, "", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f");
+        dig(Digest.SHA224, "abc", "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7");
+        dig(Digest.SHA256, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        dig(Digest.SHA256, "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        dig(Digest.SHA384, "",
+                "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
+        dig(Digest.SHA384, "abc",
+                "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+        dig(Digest.SHA512, "",
+                "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+                        + "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+        dig(Digest.SHA512, "abc",
+                "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+                        + "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+    }
+
+    /**
+     * Every algorithm, against the JDK's OWN {@code MessageDigest}, over 22 message lengths x five feeding
+     * patterns -- 756 byte-for-byte comparisons, and no boot needed.
+     *
+     * <p>The LENGTHS are the point: 55/56/57, 63/64/65 and 111/112/113, 127/128/129 straddle both block
+     * sizes AND the offset where the length field starts, which is where a padding bug lives and where a
+     * short message cannot see one. The FEEDING PATTERNS are the other point: one shot, byte at a time,
+     * ragged chunks, reuse after {@code digest()}, and {@code copy()} -- a streaming bug that a one-shot
+     * arm cannot reach is still a wrong answer for {@code DigestInputStream}.
+     *
+     * <p>This is what caught MD5's length field: RFC 1321 appends the bit count LOW-ORDER BYTE FIRST while
+     * the SHA family is big-endian. Written big-endian for all six, MD5 agreed on the EMPTY message -- where
+     * the count is zero and byte order cannot show -- and disagreed on all 21 other lengths.
+     */
+    private static void digestAgainstJdk()
+    {
+        String[] names = { "MD5", "SHA-1", "SHA-224", "SHA-256", "SHA-384", "SHA-512" };
+        int[] lens = { 0, 1, 2, 55, 56, 57, 63, 64, 65, 110, 111, 112, 113, 119, 120, 127, 128, 129, 200,
+                1000, 4096, 6706 };
+        java.util.Random rnd = new java.util.Random(20260921L);
+        int compared = 0;
+        int bad = 0;
+        for (int alg = 0; alg < names.length; alg++)
+        {
+            java.security.MessageDigest jdk;
+            try
+            {
+                jdk = java.security.MessageDigest.getInstance(names[alg]);
+            }
+            catch (java.security.NoSuchAlgorithmException e)
+            {
+                throw new RuntimeException(e);
+            }
+            T.eq("digest length " + names[alg], jdk.getDigestLength(), Digest.lengthOf(alg));
+            for (int li = 0; li < lens.length; li++)
+            {
+                int len = lens[li];
+                byte[] data = new byte[len];
+                rnd.nextBytes(data);
+                byte[] want = jdk.digest(data);
+
+                Digest oneShot = new Digest(alg);
+                oneShot.update(data, 0, len);
+                compared += 1;
+                bad += same(want, oneShot.digest()) ? 0 : 1;
+
+                Digest byteWise = new Digest(alg);
+                for (int i = 0; i < len; i++)
+                {
+                    byteWise.update(data[i]);
+                }
+                compared += 1;
+                bad += same(want, byteWise.digest()) ? 0 : 1;
+
+                Digest ragged = new Digest(alg);
+                int p = 0;
+                while (p < len)
+                {
+                    int n = 1 + rnd.nextInt(70);
+                    if (n > len - p)
+                    {
+                        n = len - p;
+                    }
+                    ragged.update(data, p, n);
+                    p += n;
+                }
+                compared += 1;
+                bad += same(want, ragged.digest()) ? 0 : 1;
+
+                // digest() must RESET, or a reused object hashes the CONCATENATION of both messages.
+                Digest reused = new Digest(alg);
+                reused.update(data, 0, len);
+                reused.digest();
+                reused.update(data, 0, len);
+                compared += 1;
+                bad += same(want, reused.digest()) ? 0 : 1;
+
+                if (len > 4)
+                {
+                    // copy() must DEEP-copy: finish the fork, keep feeding the original, check BOTH.
+                    Digest orig = new Digest(alg);
+                    orig.update(data, 0, len - 3);
+                    Digest fork = orig.copy();
+                    orig.update(data, len - 3, 3);
+                    fork.update(data, len - 3, 3);
+                    compared += 2;
+                    bad += same(want, orig.digest()) ? 0 : 1;
+                    bad += same(want, fork.digest()) ? 0 : 1;
+                }
+            }
+        }
+        T.eq("digest cross-check comparisons", 756, compared);
+        T.eq("digest cross-check failures", 0, bad);
+    }
+
+    private static boolean same(byte[] a, byte[] b)
+    {
+        if (a.length != b.length)
+        {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** One known-answer vector: {@code algorithm} of {@code msg}'s ASCII bytes must be {@code expect}. */
+    private static void dig(int algorithm, String msg, String expect)
+    {
+        Digest d = new Digest(algorithm);
+        byte[] in = ascii(msg);
+        d.update(in, 0, in.length);
+        byte[] got = d.digest();
+        T.eqStr("Digest alg" + algorithm + "(\"" + msg + "\")", expect, hex(got, got.length));
     }
 
     private static void aesEnc(String keyHex, String ptHex, String expect)

@@ -85,4 +85,33 @@ public class Random
     {
         return next(1) != 0;
     }
+
+    /**
+     * Fill {@code bytes} with random bytes.
+     *
+     * <p>The JDK's OWN algorithm, kept bit for bit like the rest of this class: one {@code nextInt()} per
+     * FOUR bytes, taken low byte first, with a short final group drawing a whole int and discarding the
+     * spare bytes. Drawing a fresh int per byte would be a perfectly good random fill and would NOT
+     * reproduce the JDK's sequence for a given seed -- which is what this class promises, and what lets a
+     * seeded test compare joe-ng's output against a host JVM's.
+     *
+     * @param bytes the array to fill
+     */
+    public void nextBytes(byte[] bytes)
+    {
+        int i = 0;
+        int len = bytes.length;
+        while (i < len)
+        {
+            int rnd = nextInt();
+            int n = len - i < 4 ? len - i : 4;
+            while (n > 0)
+            {
+                bytes[i] = (byte) rnd;
+                i = i + 1;
+                n = n - 1;
+                rnd = rnd >> 8;
+            }
+        }
+    }
 }

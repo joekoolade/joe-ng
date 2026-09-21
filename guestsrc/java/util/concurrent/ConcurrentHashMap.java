@@ -200,6 +200,96 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> implements Concurrent
     }
 
     /**
+     * The {@link Set} of keys. Declared HERE, rather than inherited from {@link HashMap}, because stock's
+     * return type is {@code KeySetView} and joe-ng resolves a call by name AND DESCRIPTOR: a stock caller's
+     * {@code keySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;} does not bind to an inherited
+     * {@code ()Ljava/util/Set;}. javac emits the {@code Set}-returning bridge, so both descriptors exist and
+     * an ordinary {@code Set}-typed caller is unaffected.
+     *
+     * <p>The view's {@code mappedValue} is null, so {@code add} throws {@link UnsupportedOperationException} --
+     * exactly as in stock, and exactly what separates {@code keySet()} from {@code newKeySet()}.
+     */
+    @Override
+    public KeySetView<K, V> keySet()
+    {
+        return new KeySetView<K, V>(this, null);
+    }
+
+    /**
+     * The LEGACY {@link java.util.Hashtable}-compatible surface. CHM carries it because it was retrofitted
+     * onto Hashtable's API, and stock java.base still uses it: {@code PropertyPermissionCollection.elements()}
+     * is {@code (Enumeration) perms.elements()}, which is how this gap was found -- as a DENYLIST TRAP with an
+     * EMPTY callee and {@code TRAPWIRE index=-1}, i.e. a late-resolution failure blaming a denylist CHM is not
+     * on. The whole surface lands together rather than one member per boot, which is what has made this family
+     * expensive nine times over.
+     *
+     * <p>Weakly consistent like every other view here: the enumeration walks a {@link #snapshot()}, so a
+     * concurrent write neither appears nor throws.
+     *
+     * @return an enumeration of this map's keys
+     */
+    public java.util.Enumeration<K> keys()
+    {
+        final Iterator<Map.Entry<K, V>> it = snapshot().iterator();
+        return new java.util.Enumeration<K>()
+        {
+            @Override
+            public boolean hasMoreElements()
+            {
+                return it.hasNext();
+            }
+
+            @Override
+            public K nextElement()
+            {
+                return it.next().getKey();
+            }
+        };
+    }
+
+    /** {@return an enumeration of this map's values} See {@link #keys()} for why the legacy surface exists. */
+    public java.util.Enumeration<V> elements()
+    {
+        final Iterator<Map.Entry<K, V>> it = snapshot().iterator();
+        return new java.util.Enumeration<V>()
+        {
+            @Override
+            public boolean hasMoreElements()
+            {
+                return it.hasNext();
+            }
+
+            @Override
+            public V nextElement()
+            {
+                return it.next().getValue();
+            }
+        };
+    }
+
+    /**
+     * Legacy {@code Hashtable.contains}: tests for a VALUE, not a key. Named so confusingly that stock's own
+     * javadoc warns about it; it is kept exact rather than aliased to {@code containsKey}, which is the wrong
+     * answer in the shape a caller is most likely to write.
+     *
+     * @param value the value to look for
+     * @return whether some key maps to {@code value}
+     */
+    public boolean contains(Object value)
+    {
+        return containsValue(value);
+    }
+
+    /**
+     * {@return the number of mappings, as a {@code long}} Stock offers this because a CHM may exceed
+     * {@code Integer.MAX_VALUE} entries; joe-ng's cannot, so it is {@code size()} widened.
+     */
+    public long mappingCount()
+    {
+        return size();
+    }
+
+    /**
      * A {@link Set} view of a map's KEYS, each mapped to one fixed value.
      *
      * <p>Weakly consistent like the other views here: {@link #iterator} walks a snapshot rather than failing

@@ -4226,6 +4226,13 @@ public final class VM
         Uart.write(Magic.bytes("charset: new String(byte[]) / getBytes() (stock, UTF-8 fast path):\n"));
         Loader.launchMain(Magic.bytes("demo/CharsetDemo"), Magic.bytes(""));
 
+        // java.security.MessageDigest over joe-ng's own crypto.Digest: known-answer vectors plus the two
+        // arms that DISCRIMINATE (byte-at-a-time streaming across the block and length-field boundaries,
+        // and a clone that must DEEP-copy its engine). PI-GATED here because crypto/ is newly dual-world
+        // and a wrong digest is a stable, right-length, silent wrong answer.
+        Uart.write(Magic.bytes("MessageDigest (stock API, joe-ng crypto.Digest):\n"));
+        Loader.launchMain(Magic.bytes("demo/DigestDemo"), Magic.bytes(""));
+
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));
