@@ -1046,6 +1046,18 @@ public final class Loader
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
     private static int[] clinitRan;      // 1 once initializer i has actually executed (batch sweep OR lazy barrier)
+    // CLAIMED, BUT NOT YET RUNNING. joe-ng's <clinit> path does three things JVMS 5.5 does not put between
+    // marking a class in-flight (step 6) and executing its body (step 9): a dependency pre-pass, a COMPILE,
+    // and a second dependency pre-pass. Marking `clinitRan` at the top made every one of those a window in
+    // which the class reads as in-flight while its body has executed nothing -- so a nested active use took
+    // step 3's recursive-request return and got null. That is what made a mutually-referencing pair fail in
+    // ONE direction only: Early2 assigns EARLY at bytecode 3 and touches Late2 at 6, but the pre-pass ran
+    // Late2 first and its constructor's read of Early2.EARLY hit the empty window.
+    //
+    // So `clinitRan` now means RUNNING-OR-RUN and is set immediately before the call, and `clinitBusy` marks
+    // the dep/compile phase separately -- purely to stop that phase re-entering itself.
+    private static int[] clinitBusy;
+    private static long[] clinitEntryAddr;  // stashed by the dep/compile phase so a nested use can run it
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1335,6 +1347,155 @@ public final class Loader
      * bytecode (getstatic/putstatic/invokestatic owners, {@code new}/{@code anewarray} targets, Class
      * literals) -- not the whole constant pool, so this initializes what is actually used and nothing more.
      */
+    /**
+     * ABSOLUTE address of the class name of the {@code *ref} at {@code refCp} -- a {@code {u2 len}{bytes}}
+     * run inside the blob. Absolute because a blob never moves, so it is the same value in both compiler
+     * passes; an offset would need a base the compile can re-point underneath it.
+     */
+    static long refClassNameAddr(int refCp)
+    {
+        if (gbase == 0L)
+        {
+            return 0L;
+        }
+        return gbase + (long) refClassNameOff(refCp);
+    }
+
+    /** {@link #refClassNameAddr} for a {@code CONSTANT_Class} -- the {@code new} counterpart. */
+    static long classNameAddr(int classCp)
+    {
+        if (gbase == 0L)
+        {
+            return 0L;
+        }
+        return gbase + (long) gcp[u2(gbase + gcp[classCp])];
+    }
+
+    /**
+     * Initialize the class named by the absolute Utf8 run {@code clsU}. The runtime half of the active-use
+     * trigger.
+     *
+     * <p>An UNREGISTERED name is not an error and must not report: the class has simply not been pulled yet,
+     * and every path that pulls one (deferred new, link stub, late virtual resolve) initializes it itself.
+     * Reporting would cry wolf on every healthy boot -- this file's own standing rule for an instrument.
+     */
+    /** TEMPORARY (init-guard diagnosis): report every guard EMITTED and every guard that FIRES. */
+    static final boolean INIT_GUARD_LOG = false;
+
+    /** Print an absolute {u2 len}{bytes} class name with a tag. Temporary, paired with INIT_GUARD_LOG. */
+    static void logInitGuard(byte[] tag, long clsU)
+    {
+        if (!INIT_GUARD_LOG || clsU == 0L)
+        {
+            return;
+        }
+        Uart.write(tag);
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(" [in "));
+        if (gbase != 0L)
+        {
+            printNameAt(gbase, gThisNameOff);
+        }
+        Uart.write(Magic.bytes("]"));
+        Uart.putc(0x0A);
+    }
+
+    static void ensureInitFor(long clsU)
+    {
+        if (clsU == 0L)
+        {
+            return;                                     // VM.forceCompile's touch, and an unresolvable name
+        }
+        int reg = regBySigU(clsU);
+        if (INIT_GUARD_LOG)
+        {
+            logInitGuard(Magic.bytes("  IG-fire "), clsU);
+            Uart.write(Magic.bytes("      reg="));
+            VM.printDec(reg);
+            if (reg >= 0)
+            {
+                Uart.write(Magic.bytes(" state="));
+                VM.printDec(clTab[reg].state);
+            }
+            Uart.putc(0x0A);
+        }
+        if (reg >= 0)
+        {
+            ensureClinit(reg);
+        }
+    }
+
+    // Per-COMPILE memo for the init-guard decision, keyed by class-name address. Small and linear: it is
+    // consulted a handful of times per method and cleared per compile, so an index would cost more than it
+    // saves.
+    private static final int IGMEMO = 64;
+    private static long[] igName = new long[IGMEMO];
+    private static boolean[] igAns = new boolean[IGMEMO];
+    private static int igN;
+
+    /** Cleared at the top of every {@link #compile}: the decision must not outlive the compile it is for. */
+    private static void resetInitGuardMemo()
+    {
+        igN = 0;
+    }
+
+    /**
+     * Whether an active use of {@code clsU} needs a JVMS 5.5 trigger emitted.
+     *
+     * <p>Answered from the class's CURRENT state, which is sound because INITIALIZATION IS MONOTONE -- a
+     * class initialized now can never become uninitialized, so a guard skipped here can never be needed
+     * later. An unregistered class DOES get one: it may be pulled and need initializing before this code
+     * runs.
+     *
+     * <p>MEMOISED FOR THE COMPILE, and that is required rather than an optimization. Both compiler passes
+     * run inside one compile() and the size pass DRY-RUN COMPILES, so a demand-load between the passes can
+     * flip a live state check -- and two passes emitting different WORD COUNTS overruns the buffer the size
+     * pass reserved. A full memo answers TRUE (emit the guard), never false: over-emitting costs a call,
+     * under-emitting is a silent null static.
+     */
+    static boolean initGuardNeeded(long clsU)
+    {
+        if (clsU == 0L)
+        {
+            return false;
+        }
+        // A CLASS NEVER NEEDS A TRIGGER FOR ITSELF, and emitting one is not merely wasteful -- it is the
+        // re-entrant case. You cannot be executing C's code unless C is already in-flight or initialized:
+        // invoking a static method of C, reading a static of C or instantiating C are each themselves active
+        // uses that got you here, and C's own <clinit> is reached only from the initialization procedure.
+        //
+        // MEASURED, not reasoned: jdk/internal/util/Preconditions.<clinit> is three `aconst_null; putstatic`
+        // of its OWN fields -- thirteen bytecodes -- and ConcatDemo hung inside its compiled body with the
+        // initializer-start trace showing no cycle and the guard-fire counter under its threshold. Every one
+        // of those three sites was a self-reference.
+        if (gbase != 0L && utf8EqAt(clsU, 0, gbase, gThisNameOff))
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < igN)
+        {
+            if (igName[k] == clsU)
+            {
+                return igAns[k];
+            }
+            k += 1;
+        }
+        int reg = regBySigU(clsU);
+        boolean need = reg < 0 || clTab[reg] == null || clTab[reg].state < RVMClass.ST_INITIALIZED;
+        if (igN < IGMEMO)
+        {
+            igName[igN] = clsU;
+            igAns[igN] = need;
+            igN += 1;
+        }
+        else
+        {
+            return true;                                // memo full: emit, never silently skip
+        }
+        return need;
+    }
+
     private static void initClinitDeps(int i, int self)
     {
         int e = clDepStart[i] + clDepN[i];
@@ -1456,7 +1617,44 @@ public final class Loader
         {
             if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
             {
-                clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
+                if (clinitBusy[i] != 0)
+                {
+                    // RE-ENTERED DURING OUR OWN DEP/COMPILE PHASE -- the window this split exists to close.
+                    // A real JVM would already have run this body (it never starts a dependency first), so
+                    // the least-wrong thing is to run it NOW rather than hand the caller null. The outer
+                    // frame sees clinitRan and skips.
+                    long re = clinitEntryAddr[i];
+                    if (re == 0L)
+                    {
+                        return 0;                        // not compiled yet: nothing better is available
+                    }
+                    clinitRan[i] = 1;
+                    warnClinitUnderLock(i);
+                    long reUnused = Magic.call0(re);
+                    clTab[reg].state = RVMClass.ST_INITIALIZED;
+                    drainPendingInit();
+                    return 1;
+                }
+                clinitBusy[i] = 1;                       // the dep/compile phase, NOT yet "being initialized"
+                // COMPILE FIRST, AND STASH THE ENTRY BEFORE ANYTHING THAT CAN RE-ENTER. Measured: the
+                // dependency pre-pass was NOT what pulled the mutually-referencing partner in -- the COMPILE
+                // was, which is JVMS 5.4's "linking may never run an initializer" being violated by this VM's
+                // own codegen. With the entry stashed up here, a nested active use arriving out of that
+                // compile can run this body instead of reading null.
+                long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
+                clinitEntryAddr[i] = entry;              // a nested active use can run it from here
+                if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
+                {                                                //   Name it here, where the class is in hand.
+                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" entry="));
+                    VM.printHex(entry);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(i);
+                    Uart.putc(0x0A);
+                    VMGc.reportSweptPc(entry);
+                    while (true) { Magic.wfe(); }
+                }
                 // AND BEFORE ITS DEPENDENCIES: the getstatic/invokestatic/new sites inside this initializer
                 // are active uses of the classes they name (JVMS 5.5), so those must be initialized first or
                 // this body reads their statics UNSET. runClinits enforces that for eagerly-run initializers
@@ -1475,19 +1673,6 @@ public final class Loader
                     Uart.write(Magic.bytes("  clinit-lazy "));
                     printNameAt(clTab[reg].base, clTab[reg].nameOff);
                     Uart.putc(0x0A);
-                }
-                long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
-                if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
-                {                                                //   Name it here, where the class is in hand.
-                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
-                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
-                    Uart.write(Magic.bytes(" entry="));
-                    VM.printHex(entry);
-                    Uart.write(Magic.bytes(" idx="));
-                    VM.printDec(i);
-                    Uart.putc(0x0A);
-                    VMGc.reportSweptPc(entry);
-                    while (true) { Magic.wfe(); }
                 }
                 // BEFORE running it: initialize what the initializer ITSELF reads -- and ONLY that.
                 //
@@ -1512,8 +1697,14 @@ public final class Loader
                 // not run yet. Every GVR constant came out with a null `type`, blockingFailure() compared
                 // null to null, and a SUCCESS reported a BLOCKING FAILURE.
                 initClinitDeps(i, reg);
+                if (clinitRan[i] != 0)
+                {
+                    ran = 1;                             // a nested active use ran it during the walk above
+                    break;
+                }
                 clinitCellWatch(reg, Magic.bytes("before"));
                 warnClinitUnderLock(i);                 // THE LIVE SITE: lazyCompile holds the lock across this
+                clinitRan[i] = 1;                        // CLAIM here: step 6 and step 9 with nothing between
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 // NOW -- and not before -- initialize the classes this initializer's COMPILE noted. They are
@@ -1531,6 +1722,37 @@ public final class Loader
                 break;
             }
             i += 1;
+        }
+        if (INIT_GUARD_LOG && ran == 0)
+        {
+            // TEMPORARY: say WHY nothing ran. A silent miss here is indistinguishable from "already done".
+            int hits = 0;
+            int j = 0;
+            while (j < clinitN)
+            {
+                if (clinitBase[j] == clTab[reg].base)
+                {
+                    hits += 1;
+                    Uart.write(Magic.bytes("      CL-miss "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(j);
+                    Uart.write(Magic.bytes(" ran="));
+                    VM.printDec(clinitRan[j]);
+                    Uart.write(Magic.bytes(" code="));
+                    VM.printHex(clinitCode[j]);
+                    Uart.putc(0x0A);
+                }
+                j += 1;
+            }
+            if (hits == 0)
+            {
+                Uart.write(Magic.bytes("      CL-miss "));
+                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                Uart.write(Magic.bytes(" NO RECORD clinitN="));
+                VM.printDec(clinitN);
+                Uart.putc(0x0A);
+            }
         }
         return ran;
     }
@@ -3164,6 +3386,10 @@ public final class Loader
                 dlBucket = null;                        // the name index goes with the table it indexes
                 lzTab = null;
                 lzN = 0;
+                // ... and the IMAGE-side memos that point into the code just rewound. bakeResolve caches into
+                // the writer-emitted bake-stub table, which no reclaim can reach, so without this a memo
+                // keeps handing out a deferral stub whose lazy index belongs to the table being dropped.
+                invalidateBakeMemos();
             }
         }
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
@@ -3229,6 +3455,8 @@ public final class Loader
         clinitBase = new long[MAXBLOB];
         clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
+        clinitBusy = new int[MAXBLOB];
+        clinitEntryAddr = new long[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
         dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers
@@ -5593,9 +5821,7 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharacterCoding"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Malformed"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Unmappable"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
                 // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
@@ -6450,6 +6676,63 @@ public final class Loader
             i += 1;
         }
         return false;
+    }
+
+    /**
+     * Decode a JIT call site's PHASE-A CELL sequence and name the method it ACTUALLY reached.
+     *
+     * <p>A deferred static call lowers to {@code movz/movk x17,<cell>; ldr x16,[x17]; blr x16} -- the cell
+     * holds the callee's body address and is patched when that callee compiles. The instruction stream alone
+     * only says a call happened; following the cell says WHERE IT WENT, which is the difference between "the
+     * argument was marshalled wrong" and "the call reached a different method than the source names".
+     *
+     * <p>Scans the 16 words ending at {@code up} (a return address handed to a fault reporter), so it covers
+     * the faulting call AND the one before it -- the pair that matters when a result flows straight out of
+     * one call into the next.
+     */
+    static void reportCallCells(long up)
+    {
+        long w = up - 60L;
+        while (w <= up - 4L)
+        {
+            if ((Magic.load32(w) & 0xFFFFFFFFL) == 0xD63F0200L                    // blr x16
+                    && (Magic.load32(w - 4L) & 0xFFFFFFFFL) == 0xF9400230L)       // ldr x16,[x17]
+            {
+                Uart.write(Magic.bytes("      call at up-0x"));
+                VM.printHex(up - w);
+                Uart.write(Magic.bytes(" cell=0x"));
+                VM.printHex(cellImmAt(w - 8L));
+                Uart.write(Magic.bytes(" -> "));
+                if (cellImmAt(w - 8L) != 0L)
+                {
+                    printFrameAt(Magic.load64(cellImmAt(w - 8L)));
+                }
+                Uart.putc(0x0A);
+            }
+            w += 4L;
+        }
+    }
+
+    /** Reconstruct the {@code x17} immediate built by the (up to three) movz/movk words ending at {@code at}. */
+    private static long cellImmAt(long at)
+    {
+        long v = 0L;
+        int k = 0;
+        while (k < 3)
+        {
+            long insn = Magic.load32(at - (long) (k * 4)) & 0xFFFFFFFFL;
+            if ((insn & 0x1FL) != 17L
+                    || (((insn >> 23) & 0x1FFL) != 0x1A5L && ((insn >> 23) & 0x1FFL) != 0x1E5L))
+            {
+                k = 3;
+            }
+            else
+            {
+                v |= ((insn >> 5) & 0xFFFFL) << (int) (((insn >> 21) & 3L) * 16L);
+                k += 1;
+            }
+        }
+        return v;
     }
 
     /** #43 fault diagnostic: name the demand-compiled method whose code contains {@code addr} (the highest
@@ -7854,6 +8137,8 @@ public final class Loader
     {
         checkCompileLockHeld(1);
         allocMethodTables();
+        resetInitGuardMemo();                           // the guard decision is per COMPILE: both passes below
+                                                        //   must agree, and sizeMethod can demand-load
         addMethod(code, len, gMaxLocals, descOff, isStatic, isSync);
         int i = 0;
         while (i < mCount)                              // discover
@@ -9541,6 +9826,11 @@ public final class Loader
      */
     private static void reportSyncCoverage()
     {
+        // Printed BEFORE the early return: the repair must be READABLE, not merely present -- a counter
+        // nobody prints is the same defect as an instrument that cannot fire, and this one must not be
+        // hidden behind an unrelated condition. 0 on a boot that reclaims would mean the repair is misplaced.
+        Uart.write(Magic.bytes("\n  bakeMemosDropped="));
+        VM.printDec(bakeMemosDropped);
         if (compiler.Baseline.syncStaticSeen == 0 && compiler.Baseline.syncStaticSkipped == 0)
         {
             return;                                     // no static synchronized method in this program
@@ -9920,6 +10210,10 @@ public final class Loader
         lzTab[idx].isSync = mSync[i];
         lzTab[idx].maxLocals = mLocals[i];
         lzTab[idx].cache = 0L;
+        if (lzN >= lzNHigh)
+        {
+            lzNHigh = lzN + 1;                      // high-water across reclaims
+        }
         lzN += 1;
         long buf = mBuf[i];                             // stub-sized buffer allocated by sizeMethod
         noteStub(buf, idx);                             // ... and make it NAMEABLE: without this a fault landing
@@ -9930,6 +10224,9 @@ public final class Loader
         // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
         // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
         // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
+        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
+        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
+        checkTramp(lazyTrampAddr, idx, 1);
         Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
@@ -11358,6 +11655,79 @@ public final class Loader
     }
 
     /** 1 if {@code tib} is one of the synthesised TIBs (lambda / annotation) held in {@code lambdaTibRoots}. */
+    /**
+     * Describe the object a WILD BRANCH was about to dispatch on, from inside the BOOT RE-ENTERED handler.
+     *
+     * <p>RECV_WATCH cannot answer this: it is armed by the METAL JIT when it lowers a dispatch site, so it
+     * can only see sites the metal JIT compiled. The failing site is writer-BAKED java.base, which the metal
+     * JIT never lowers -- arming the watch there yields silence, and silence reads as "no such receiver".
+     *
+     * <p>EVERY DEREFERENCE IS BOUNDED, because this runs after a wild branch: the register may hold anything,
+     * and a report that faults replaces the diagnosis with a second fault. A TIB BELOW the heap is itself the
+     * answer rather than an error -- that is a writer-BAKED TIB, which would mean the hole is in the image
+     * rather than in anything the loader built.
+     */
+    static void reportReceiverAt(long recv)
+    {
+        Uart.write(Magic.bytes("\n    recv=0x"));
+        VM.printHex(recv);
+        if (recv < Heap.BASE || recv >= Heap.managedTop())
+        {
+            Uart.write(Magic.bytes("  NOT A MANAGED HEAP ADDRESS (not an object)\n"));
+            return;
+        }
+        long tib = Magic.load64(recv);
+        Uart.write(Magic.bytes(" tib=0x"));
+        VM.printHex(tib);
+        if (tib == 0L)
+        {
+            Uart.write(Magic.bytes("  NULL TIB\n"));
+            return;
+        }
+        if (tib < Heap.BASE || tib >= Heap.managedTop())
+        {
+            Uart.write(Magic.bytes("  TIB IS BELOW THE HEAP -> a writer-BAKED TIB"));
+            if (tib < 0x80000L)
+            {
+                Uart.write(Magic.bytes(" -- and below the IMAGE too, so not a TIB at all\n"));
+                return;
+            }
+            // A baked TIB is image memory and is safe to dereference -- and it is precisely the case where
+            // the vtable word matters MOST, because the writer FILLED those slots: a zero here is a RUNTIME
+            // CLOBBER, not a pruned slot. Returning before printing it (as this did) hid the one fact the
+            // report existed to produce.
+            Uart.putc(0x0A);
+        }
+        long type = Magic.load64(tib);
+        Uart.write(Magic.bytes(" type=0x"));
+        VM.printHex(type);
+        Uart.write(Magic.bytes("\n    vtable[3] (the slot read at tib+32) =0x"));
+        VM.printHex(Magic.load64(tib + 32L));
+        // ... and the WHOLE prefix beside it: one zero slot is a clobbered entry, all-zero is a clobbered
+        // or unbuilt TIB, and the two want completely different investigations.
+        Uart.write(Magic.bytes("\n    vtable[0..8] ="));
+        int vi = 0;
+        while (vi < 9)
+        {
+            Uart.write(Magic.bytes(" 0x"));
+            VM.printHex(Magic.load64(tib + 8L + (long) (vi * 8)));
+            vi += 1;
+        }
+        Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
+        VM.printDec(isSynthesisedTib(tib));
+        Uart.write(Magic.bytes("\n    class="));
+        int r = classRegByType(type);
+        if (r >= 0 && clTab != null && clTab[r] != null)
+        {
+            printNameAt(clTab[r].base, clTab[r].nameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<not in the class registry>"));
+        }
+        Uart.putc(0x0A);
+    }
+
     private static int isSynthesisedTib(long tib)
     {
         if (lambdaTibRoots == null)
@@ -12336,6 +12706,182 @@ public final class Loader
     }
 
     /**
+     * Name the BAKE-STUB MEMO, if any, that is still handing out a stub carrying {@code idx}.
+     *
+     * <p>{@code VM.bakeResolve} memoizes its answer into the bake-stub table -- which lives in the IMAGE and
+     * is therefore never reclaimed -- while {@code lzTab}/{@code lzN} ARE dropped and rebuilt by the reclaim.
+     * A memo taken before a reclaim keeps returning a deferral stub whose baked index belongs to a table
+     * generation that no longer exists. This walks the table and decodes each memo's first word: a deferral
+     * stub opens {@code movz x17,<idx>}, so an entry whose memo carries the failing index IS the source, and
+     * the entry's own class/name/descriptor names the baked method it belongs to.
+     *
+     * <p>Evidence, not inference: silence here means the stale index came from somewhere else.
+     */
+    /**
+     * Drop every bake-stub memo that points at loader-emitted code, as part of the reclaim.
+     *
+     * <p>{@code VM.bakeResolve} caches its answer in the bake-stub table -- which the WRITER emits into the
+     * IMAGE, so the memo is immortal -- while everything it can point at is mortal: the deferral stub, the
+     * compiled body, and the {@code lzTab} entry that stub's baked index refers to are all dropped and
+     * rebuilt by this reclaim. The two have independent lifetimes, and nothing reconciled them.
+     *
+     * <p>MEASURED, not argued: bake-stub entry 11, {@code java/lang/Integer.toString()}, kept returning a
+     * stub carrying lazy index 3138 long after the table had been rebuilt to 2274 entries. {@code
+     * lazyCompile} then rejected the index and returned 0, and the trampoline tail-branched to address 0 --
+     * which, because {@code br} writes no x30, surfaced as a BOOT RE-ENTERED naming a healthy call in
+     * {@code String.valueOf(Object)} rather than anything to do with this.
+     *
+     * <p>Only memos into the CODE ARENA are cleared. A memo naming a BAKED body points into image memory,
+     * which no reclaim touches, so re-resolving those would be pure cost. Clearing is safe either way: the
+     * next call re-resolves through the same three tiers and memoizes again.
+     */
+    /** The repair below, switchable so it has a NEGATIVE CONTROL: false restores the pre-fix behaviour
+     *  exactly, and the suite must then die again at LispDemo. A fix whose control was never run is a
+     *  change that correlates with a passing boot, not a demonstrated cause. */
+    static final boolean BAKE_MEMO_REPAIR = true;
+
+    private static void invalidateBakeMemos()
+    {
+        if (!BAKE_MEMO_REPAIR)
+        {
+            return;
+        }
+        if (VM.bakeStubTable == 0L || VM.bakeStubCount <= 0L)
+        {
+            return;
+        }
+        long i = 0L;
+        while (i < VM.bakeStubCount)
+        {
+            if (Magic.load64(VM.bakeStubTable + i * 32L + 24L) >= Heap.CODE_BASE)
+            {
+                Magic.store64(VM.bakeStubTable + i * 32L + 24L, 0L);
+                bakeMemosDropped += 1;
+            }
+            i += 1L;
+        }
+    }
+
+    /** How many bake-stub memos the reclaim has had to drop -- 0 would mean this repair never fires. */
+    static int bakeMemosDropped;
+
+    /** High-water mark of {@code lzN}: the deepest the lazy table has EVER been, across reclaims. The one
+     *  fact that separates "a stale index from a previous table generation" from "an index that was never
+     *  an lzTab index at all" -- and those want opposite fixes. */
+    static int lzNHigh;
+
+    private static void reportBakeMemoFor(int idx)
+    {
+        if (VM.bakeStubTable == 0L || VM.bakeStubCount <= 0L)
+        {
+            return;
+        }
+        long i = 0L;
+        while (i < VM.bakeStubCount)
+        {
+            long memo = Magic.load64(VM.bakeStubTable + i * 32L + 24L);
+            if (memo != 0L && stubIdxAt(memo) == (long) idx)
+            {
+                Uart.write(Magic.bytes("  ... and the BAKE-STUB MEMO still returns it: entry="));
+                VM.printDec((int) i);
+                Uart.write(Magic.bytes(" stub=0x"));
+                VM.printHex(memo);
+                Uart.write(Magic.bytes(" for "));
+                printUtf8Capped(Magic.load64(VM.bakeStubTable + i * 32L));
+                Uart.putc(0x2E);
+                printUtf8Capped(Magic.load64(VM.bakeStubTable + i * 32L + 8L));
+                printUtf8Capped(Magic.load64(VM.bakeStubTable + i * 32L + 16L));
+                Uart.putc(0x0A);
+            }
+            i += 1L;
+        }
+    }
+
+
+    /**
+     * Refuse to bake a stub whose tail-branch target is ZERO.
+     *
+     * <p>Four stub emitters read a trampoline address straight out of a static and {@code movz/movk} it into
+     * x16 ahead of {@code br x16}. Nothing checked it. A zero there bakes {@code br 0} into the stub, and
+     * because {@code br} does not write x30 the failure is invisible until that stub is finally entered --
+     * at which point the firmware shim re-enters the image entry and the fault report names whatever healthy
+     * call ran last. Two arcs of this project have been spent inside reports built that way.
+     *
+     * <p>So the check goes at EMIT time, not at branch time: the stub is permanently broken the moment it is
+     * written, and here the method it stands for is still in hand. A report thousands of batches later is
+     * not the same information.
+     *
+     * @param kind 1 = a lazy/deferral stub (idx indexes lzTab), 2 = a link stub
+     */
+    private static void checkTramp(long tramp, int idx, int kind)
+    {
+        if (tramp != 0L)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("\n*** STUB WOULD BRANCH TO 0: the "));
+        if (kind == 1)
+        {
+            Uart.write(Magic.bytes("lazy-compile"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("link"));
+        }
+        Uart.write(Magic.bytes(" trampoline is not built yet ***\n    stub idx="));
+        VM.printDec(idx);
+        if (kind == 1 && lzTab != null && idx >= 0 && idx < lzTab.length
+                && lzTab[idx] != null && lzTab[idx].blob != 0L && lzTab[idx].nameOff != 0)
+        {
+            Uart.write(Magic.bytes(" for "));
+            printUtf8Capped(lzTab[idx].blob + lzTab[idx].nameOff);   // Utf8-shaped: u2 length, then bytes
+        }
+        Uart.write(Magic.bytes("\n    Halting HERE, where the stub is still nameable. `br` does not write x30,"));
+        Uart.write(Magic.bytes("\n    so a 0 baked now is an untraceable reboot whenever this stub is entered.\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
+    /**
+     * Emit the zero-target guard that must precede a resolve trampoline's {@code br x16}.
+     *
+     * <p>All three trampolines end by tail-branching to whatever the resolver handed back. A {@code br} does
+     * NOT write x30, so a zero target branches to address 0 and the firmware shim re-enters the image entry
+     * carrying a STALE x30 -- the wild branch erases its own provenance, and every frame the fault report
+     * then derives is an artifact. This project has lost two arcs to exactly that, the second one to a report
+     * that named a perfectly healthy {@code blr} in {@code String.valueOf(Object)}.
+     *
+     * <p>Emitted HERE, immediately after {@code x16 = target} and while the frame is still up, because that
+     * is the only point where the caller's return address is still on the stack at {@code STUB_LR_OFF}: the
+     * guard can therefore name the CALL SITE exactly instead of guessing it from a register the branch
+     * destroys. Costs one {@code cbnz} on the path that works.
+     *
+     * <p>Emits nothing if the helper was never stashed -- a call to address 0 is the very failure this
+     * exists to prevent, and an instrument that causes it would be worse than none (see the {@code watchRecv}
+     * stash that shipped emitting exactly that).
+     *
+     * @param kind 1 = lazy-compile, 2 = link-stub, 3 = late-virtual
+     */
+    private static int emitTailGuard(long buf, int w, int kind)
+    {
+        long ha = VM.badTailTargetAddr;
+        if (ha == 0L)
+        {
+            return w;
+        }
+        Magic.store32(buf + w * 4L, A64Enc.cbnz(16, 7));                             w += 1;  // target ok: skip
+        Magic.store32(buf + w * 4L, A64Enc.movz(0, kind, 0));                         w += 1;  // x0 = which trampoline
+        Magic.store32(buf + w * 4L, A64Enc.ldrx(1, STUB_SP, STUB_LR_OFF));            w += 1;  // x1 = the call site
+        Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (ha & 0xFFFF), 0));         w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ha >> 16) & 0xFFFF), 1)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ha >> 32) & 0xFFFF), 2)); w += 1;
+        Magic.store32(buf + w * 4L, A64Enc.blr(16));                                  w += 1;  // halts; no return
+        return w;
+    }
+
+    /**
      * The late-dispatch trampoline: the twin of {@link #buildLinkTramp}, but the receiver is already in x0 and
      * the site index arrives in x17. Saves x0..x15 + LR so the resolve cannot disturb the arguments, then
      * tail-branches to the target -- so the callee returns straight to the original call site.
@@ -12363,6 +12909,10 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = resolved target
         Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
+        // branch would erase its own provenance. Check while the frame is still up: the call site
+        // is on it (late-virtual trampoline).
+        w = emitTailGuard(buf, w, 3);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -14252,6 +14802,9 @@ public final class Loader
         // x17/x16, NOT x9/x10: x0.. are the argument registers, so a stub that scratches x9/x10 destroys
         // the 10th and 11th arguments of the very call it is standing in for. x16/x17 are the architectural
         // intra-procedure scratch pair and are never arguments. (This is what broke demo deep10.)
+        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
+        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
+        checkTramp(lazyTrampAddr, idx, 1);
         Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;  // x17 = idx
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;  // x16 = tramp
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
@@ -14291,6 +14844,10 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ca >> 32) & 0xFFFF), 2)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = fresh buffer
         Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
+        // branch would erase its own provenance. Check while the frame is still up: the call site
+        // is on it (lazy-compile trampoline).
+        w = emitTailGuard(buf, w, 1);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -14405,6 +14962,9 @@ public final class Loader
         long buf = Heap.allocCode(32);
         Heap.pinCodeAt(buf);                                 // only a patched `bl` displacement names it
         int w = 0;
+        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
+        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
+        checkTramp(linkTrampAddr, idx, 2);
         Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (linkTrampAddr & 0xFFFF), 0));         w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((linkTrampAddr >> 16) & 0xFFFF), 1)); w += 1;
@@ -14441,6 +15001,10 @@ public final class Loader
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((ra >> 32) & 0xFFFF), 2)); w += 1;
         Magic.store32(buf + w * 4L, A64Enc.blr(16));             w += 1;   // x0 = resolved target
         Magic.store32(buf + w * 4L, A64Enc.movReg(16, 0));       w += 1;   // x16 = target (outside the restore set)
+        // A zero target here would `br` to address 0 -- and `br` does not write x30, so the wild
+        // branch would erase its own provenance. Check while the frame is still up: the call site
+        // is on it (link-stub trampoline).
+        w = emitTailGuard(buf, w, 2);
         r = 0;
         while (r <= STUB_SAVE_HI)
         {
@@ -15009,6 +15573,23 @@ public final class Loader
     {
         if (idx < 0 || lzTab == null || idx >= lzN)
         {
+            // SILENT UNTIL NOW. On the WRITER this is a dead force-reference and 0 is right; on METAL it is
+            // reached only from a deferral stub, whose idx was baked at emit time -- so a miss here means a
+            // stub outlived the table it indexes, and the 0 becomes `br 0` in the trampoline. Note the stub
+            // carries idx as a SINGLE movz, i.e. truncated to 16 bits.
+            if (lzTab != null)
+            {
+                Uart.write(Magic.bytes("\n  LAZY INDEX OUT OF RANGE (stub outlived its table): idx="));
+                VM.printDec(idx);
+                Uart.write(Magic.bytes(" lzN="));
+                VM.printDec(lzN);
+                Uart.write(Magic.bytes(" cap="));
+                VM.printDec(lzTab.length);
+                Uart.write(Magic.bytes(" everDeepest="));
+                VM.printDec(lzNHigh);
+                Uart.putc(0x0A);
+                reportBakeMemoFor(idx);       // who is still handing this index out?
+            }
             return 0L;                                  // dead force-reference (writer) / bad index
         }
         if (lzTab[idx].cache != 0L)
@@ -15132,6 +15713,21 @@ public final class Loader
             code = findMethodByOffsets(lzTab[idx].nameOff, lzTab[idx].descOff);
             if (code == 0L)
             {
+                // SILENT UNTIL NOW, and the silence is what made it untraceable: 0 flows back through
+                // lazyCompile (whose BAD LAZY TARGET guard only catches IMPLAUSIBLE buffers, not zero)
+                // into the trampoline, which tail-branches to address 0 -- and `br` writes no x30, so the
+                // fault report then names whatever healthy call ran last.
+                Uart.write(Magic.bytes("\n  LAZY RE-FIND FAILED (method not in its blob): idx="));
+                VM.printDec(idx);
+                Uart.write(Magic.bytes(" name="));
+                printUtf8Capped(lzTab[idx].blob + lzTab[idx].nameOff);
+                Uart.write(Magic.bytes(" desc="));
+                printUtf8Capped(lzTab[idx].blob + lzTab[idx].descOff);
+                Uart.write(Magic.bytes(" blob=0x"));
+                VM.printHex(lzTab[idx].blob);
+                Uart.write(Magic.bytes(" reg="));
+                VM.printDec(lzTab[idx].reg);
+                Uart.putc(0x0A);
                 return 0L;
             }
             len = gcodeLen;
@@ -15875,6 +16471,10 @@ public final class Loader
                 lzTab[idx].codeLen = gcodeLen;
                 lzTab[idx].isStatic = 1;
                 lzTab[idx].isSync = (access & 0x0020) != 0 ? 1 : 0;   // ACC_SYNCHRONIZED (JVMS 2.11.10)
+                if (lzN >= lzNHigh)
+                {
+                    lzNHigh = lzN + 1;                      // high-water across reclaims
+                }
                 lzTab[idx].maxLocals = gMaxLocals;
                 lzTab[idx].cache = 0L;
                 long cell = Heap.allocData(8);
@@ -18524,6 +19124,10 @@ public final class Loader
         lzTab[idx].descOff = gvTab[s].desc;
         lzTab[idx].slot = 0L;                               // shared stub buffer: no single slot to patch
         lzTab[idx].code = code;
+        if (lzN >= lzNHigh)
+        {
+            lzNHigh = lzN + 1;                      // high-water across reclaims
+        }
         lzTab[idx].codeLen = u4(code - 4L);                 // Code attr: {u2 maxStack}{u2 maxLocals}{u4 len}
         lzTab[idx].isStatic = 0;
         lzTab[idx].isSync = gvTab[s].isSync;                // else this body compiles with NO monitor
@@ -18534,6 +19138,9 @@ public final class Loader
         noteStub(buf, idx);
         Heap.pinCodeAt(buf);
         int w = 0;
+        // A 0 here bakes `br 0` into the stub, and `br` writes no x30 -- so the failure would
+        // surface as an untraceable reboot whenever this stub is finally entered. Fail now.
+        checkTramp(lazyTrampAddr, idx, 1);
         Magic.store32(buf + w * 4L, A64Enc.movz(17, idx & 0xFFFF, 0));                           w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movz(16, (int) (lazyTrampAddr & 0xFFFF), 0));         w += 1;
         Magic.store32(buf + w * 4L, A64Enc.movk(16, (int) ((lazyTrampAddr >> 16) & 0xFFFF), 1)); w += 1;

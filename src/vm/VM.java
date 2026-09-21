@@ -61,6 +61,19 @@ public final class VM
         // and every compiled dispatch does `blr x16`, so after a wild branch it still holds the target that was
         // branched TO -- the one fact the branch itself destroys. Anything executed before this can clobber it.
         // On a normal boot the value is meaningless and unused.
+        // x0 is the RECEIVER of the dispatch that wild-branched. Read FIRST as the safer form -- though
+        // MEASURED, it does not matter here: reading it before and after readX16 both give the same value,
+        // so x0 survives the branch. That control is the reason the value below can be trusted at all.
+        // x19 FIRST, ahead of everything: this VM keeps locals in x19..x28, so the first local assignment
+        // in this method destroys it. A baked callee that opens `mov x19, x0` leaves a callee-saved copy of
+        // the receiver there -- the control on whether x0 itself survived the firmware low-memory shim.
+        long recvSaved = Magic.readX19();
+        long recv = Magic.readX0();
+        // AND THE CALLER, which is the question the receiver alone cannot answer: "who handed it that?".
+        // SP still points at the faulting method's frame -- the reset below happens after these reads -- and
+        // this VM's frame convention puts the saved LR at [sp+0] (see VM.unwind, which pops frames exactly
+        // that way). One word is all it takes to name the frame above.
+        long sp0 = Magic.readSP();
         long tgt = Magic.readX16();
         // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
         // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
@@ -75,6 +88,54 @@ public final class VM
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(src);
+            Loader.reportReceiverAt(recv);
+            Uart.write(Magic.bytes("    x19 (callee-saved copy of the receiver): 0x"));
+            printHex(recvSaved);
+            Uart.putc(0x0A);
+            Loader.reportReceiverAt(recvSaved);
+            Uart.write(Magic.bytes("    caller (saved LR at [sp]): "));
+            if (sp0 >= 0x1000L)
+            {
+                long up = Magic.load64(sp0);
+                printHex(up);
+                Uart.putc(0x20);
+                Loader.reportMethodAt(up);
+
+                // ... and the SOURCE LINE. A "+0xNNNN" offset cannot say WHICH call site it is when a method
+                // holds several of the same shape (LispDemo.main makes FOUR String.valueOf(Object) calls),
+                // and the line table the printStackTrace walker already reads answers that in one boot.
+                Uart.write(Magic.bytes("\n    caller frame: "));
+                Loader.printFrameAt(up);
+                Uart.putc(0x0A);
+
+                // AND THE CALLER'S OWN CODE. The line names the STATEMENT; only the words that marshal x0
+                // name the VALUE's origin -- whether the argument is the callee's return register untouched, or
+                // was reloaded from an operand slot holding something else. The call is at up-4.
+                if (up > 0x80000L && up < 0x3000000L)
+                {
+                    Uart.write(Magic.bytes("    caller insns (call at up-4):"));
+                    long cw = up - 64L;
+                    while (cw < up)
+                    {
+                        Uart.write(Magic.bytes(" 0x"));
+                        printHex(Magic.load32(cw) & 0xFFFFFFFFL);
+                        cw += 4L;
+                    }
+                    Uart.putc(0x0A);
+
+                    // ... and WHERE each of those two calls actually went. The cell is the only handle:
+                    // the source names `run`, the cell says which body the site was bound to.
+                    Uart.write(Magic.bytes("    call targets:\n"));
+                    Loader.reportCallCells(up);
+                }
+            }
+            else
+            {
+                Uart.write(Magic.bytes("<SP implausible: 0x"));
+                printHex(sp0);
+                Uart.putc(0x3E);
+            }
+            Uart.putc(0x0A);
             // THE INSTRUCTION THAT BRANCHED. x30 is the return address, so the call is at x30-4, and its
             // ENCODING says which of two very different bugs this is:
             //   0x94000000            -> `bl 0`: an UNPATCHED RELOCATION. patchRelocs never resolved the
@@ -1474,6 +1535,23 @@ public final class VM
      * Delegates to the loader, which holds the site table: it demand-loads the class and returns a correctly
      * typed object, or names the class and halts. Returns the new reference in x0, which the JIT pushes.
      */
+    /**
+     * JVMS 5.5 initialization trigger, called from an ACTIVE USE.
+     *
+     * <p>{@code clsU} is the ABSOLUTE address of the target class's name Utf8 ({@code {u2 len}{bytes}}) in
+     * its blob, baked at compile time. Absolute rather than a registry index deliberately: a blob never
+     * moves, so the operand is identical in the size pass and the emit pass, whereas a registry index is not
+     * -- sizeMethod DRY-RUN COMPILES and can demand-load, registering a class between the passes, and two
+     * passes emitting different word counts overruns the buffer the first one reserved.
+     *
+     * <p>Cheap after the first time: the lookup is a hash probe (classRegAt is indexed) and ensureInitFor
+     * returns at once for a class already initialized.
+     */
+    static void ensureInitByName(long clsU)
+    {
+        Loader.ensureInitFor(clsU);
+    }
+
     static long newUnresolved(long site)
     {
         long lr = Magic.readLR();                      // FIRST op: x30 = the `new` site + 4 (denylistTrap's idiom)
@@ -1687,6 +1765,7 @@ public final class VM
         if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
+        if (ensureInitAddr == 0L) { ensureInitByName(0L); }   // 0 is the no-op arg (Loader.ensureInitFor)
         if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
         if (scIntAddr == 0L) { VMConcat.scInt(0L, 0); }
         if (scEndAddr == 0L) { long u = VMConcat.scEnd(0L); }
@@ -2314,6 +2393,46 @@ public final class VM
      * A well-formed metal program never reaches it (denylisted subtrees are cold); if it fires, the halt +
      * message is a deterministic signal that a denylist prefix was too broad (un-denylist that subtree).
      */
+    /**
+     * A resolve trampoline produced a tail-branch target of ZERO -- reported here instead of branched to.
+     *
+     * <p>The three resolve trampolines end in {@code br x16}, and <b>{@code br} does not write x30</b>. A zero
+     * target therefore branches to address 0, the firmware low-memory shim turns that into a re-entry of the
+     * image entry, and the resulting {@code BOOT RE-ENTERED} report carries a STALE x30 from whatever healthy
+     * call ran last -- so every frame derived from it is an artifact. That has now cost this project two
+     * separate arcs. Checking BEFORE branching is what makes the failure nameable, and it is nameable
+     * precisely here: the trampoline's frame is still up, so the caller's return address is on it and the
+     * call SITE is known exactly rather than guessed from a stale register.
+     *
+     * <p>Never returns.
+     */
+    static void badTailTarget(long kind, long lr)
+    {
+        Uart.write(Magic.bytes("\n*** TAIL TARGET IS 0: a resolve trampoline would have branched to address 0 ***"));
+        Uart.write(Magic.bytes("\n    trampoline: "));
+        if (kind == 1L)
+        {
+            Uart.write(Magic.bytes("lazy-compile (first call of a deferred method)"));
+        }
+        else if (kind == 2L)
+        {
+            Uart.write(Magic.bytes("link-stub (a call site left unresolved at patch time)"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("late-virtual (dispatch resolved against the receiver)"));
+        }
+        Uart.write(Magic.bytes("\n    call site (where the branch would have returned): 0x"));
+        printHex(lr);
+        Uart.write(Magic.bytes("\n    at "));
+        Loader.printFrameAt(lr);
+        Uart.write(Magic.bytes("\n    Halting. Without this check the branch erases its own provenance. ***\n"));
+        while (true)
+        {
+            Magic.wfe();
+        }
+    }
+
     static void denylistTrap()
     {
         long lr = Magic.readLR();                              // FIRST op: x30 = caller's return addr (the bl site + 4)
@@ -3096,6 +3215,7 @@ public final class VM
     static long scEndAddr;             // VM.scEnd(J)J
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    static long ensureInitAddr;        // VM.ensureInitByName(J)V — JVMS 5.5 trigger at an active use
     static long scBoolAddr;            // VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1)
     static long scDoubleAddr;          // VMConcat.scDouble(JJ)V — append a double (raw bits in)
     static long scFloatAddr;           // VMConcat.scFloat(JI)V  — ... and a float (its OWN shortest string)
@@ -3199,6 +3319,7 @@ public final class VM
     static long declFieldCountAddr;    // VMNatives.declaredFieldCount(J)J — Class.declaredFieldCount0
     static long stackTraceAddr;        // VM.throwableTrace(J)J — Throwable.stackTrace0 (inline bt -> STE[])
     static long virtualResolveAddr;    // VM.virtualResolve(JJ)J — late virtual dispatch (receiver + site idx)
+    static long badTailTargetAddr;     // VM.badTailTarget(JJ)V -- a trampoline whose resolved target came back 0
     static long reportFaultAddr;       // VM.reportFault()V — the exception-vector handler's address
     static long irqHandlerAddr;        // VM.irqHandler()V — the IRQ-vector handler's address (writer-stashed)
     static long scheduleAddr;          // VM.schedule(J)J — the timer-path switcher (writer-stashed)
