@@ -2076,6 +2076,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     // reading, and the SAME source is demand-loaded into the guest world so the
                     // java.util.zip overlays can delegate to it. Ordinary bytecode, no intrinsics.
                     || n.startsWith("zip/")
+                    // crypto/* is dual-world for the SAME reason zip/ is: the image-baked copy backs the
+                    // VM's WPA2 supplicant, and the SAME source is demand-loaded into the guest world so the
+                    // java.security.MessageDigest overlay can delegate to it. Ordinary bytecode, no intrinsics.
+                    || n.startsWith("crypto/")
                     || !n.contains("/"))
             {
                 out.add(n);
