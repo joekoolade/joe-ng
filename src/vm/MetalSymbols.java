@@ -555,6 +555,14 @@ final class MetalSymbols implements Symbols
         {
             return VM.scBoolAddr;
         }
+        if (helper == Symbols.SC_DOUBLE)
+        {
+            return VM.scDoubleAddr;
+        }
+        if (helper == Symbols.SC_FLOAT)
+        {
+            return VM.scFloatAddr;
+        }
         if (helper == Symbols.NEW_NPE)
         {
             return VM.newNpeAddr;

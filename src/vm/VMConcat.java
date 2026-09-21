@@ -11,6 +11,7 @@
  */
 package vm;
 
+import board.bcm2711.Uart;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes (the string-ref -> byte[] accessor stays in VM, shared with the natives)
@@ -77,6 +78,82 @@ final class VMConcat
         scChar(sb, 0x73);                                  // 's'
         scChar(sb, 0x65);                                  // 'e'
     }
+
+    /**
+     * Append a double, and a float, exactly as {@code String.valueOf} would (JLS 15.18.1).
+     *
+     * <p>THE ARGUMENT IS THE RAW BITS, not a {@code double}, and that is what leaves the lowering alone:
+     * this VM holds a double in an ordinary 64-bit operand register and only {@code fmov}s it into an FP
+     * register to do arithmetic, so {@code appendArg}'s existing integer {@code movReg} path carries it and
+     * a compiled {@code Double.toString} receives the bits in x0 the same way.
+     *
+     * <p>THE JDK'S OWN FORMATTER DOES THE WORK, reached BY NAME THROUGH THE LOADER rather than by a static
+     * call. {@code Double.toString} is specified as the SHORTEST decimal that round-trips (Schubfach in
+     * JDK 19+), which is not something to re-derive by hand in a core language feature -- and a static call
+     * from here would drag {@code jdk/internal/math/DoubleToDecimal} into the BAKE domain, which cannot
+     * carry it (its {@code <clinit>} uses an {@code ldc} class literal the host writer refuses, and its
+     * {@code special} method does not resolve). Demand-loaded it works: measured byte-identical to a host
+     * JVM on 1.5, 0.1, 0.0, -0.0, 1e20, 1e-9 and NaN before any of this was written.
+     *
+     * <p>FLOAT IS NOT A WIDENED DOUBLE, and a host control is what said so: {@code Float.toString(0.1f)} is
+     * {@code "0.1"} while {@code Double.toString((double) 0.1f)} is {@code "0.10000000149011612"} --
+     * shortest-round-trip is relative to the type's OWN precision. Widening would have been wrong in every
+     * float concat, and wrong in a way that still looks like a number.
+     */
+    static void scDouble(long sb, long bits)
+    {
+        long buf = Loader.doubleToStringBuf();
+        if (buf == 0L)
+        {
+            appendNoFormatter(sb, 'D');
+            return;
+        }
+        // THE RESULT GOES IN A LOCAL FIRST, and that is load-bearing rather than style. Written as the
+        // obvious `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` is live ON THE OPERAND STACK
+        // ACROSS the call and comes back clobbered: every arm printed an EMPTY string -- no null, no trap,
+        // no fault -- while the formatter was returning the right bytes all along. Bracketing the call with
+        // literal appends is what separated the two: `[XY1.5Z]` with a local, `[]` nested.
+        long s = Magic.call2(buf, bits, 0L);           // (D)->String takes ONE arg; x1 is ignored by it
+        scStr(sb, s);
+    }
+
+    /** The float half of {@link #scDouble} -- its own shortest string, never the widened double's. */
+    static void scFloat(long sb, int bits)
+    {
+        long buf = Loader.floatToStringBuf();
+        if (buf == 0L)
+        {
+            appendNoFormatter(sb, 'F');
+            return;
+        }
+        long s = Magic.call2(buf, bits & 0xFFFFFFFFL, 0L);   // a local, for scDouble's reason
+        scStr(sb, s);
+    }
+
+    /**
+     * The formatter could not be resolved: say so IN THE STRING, and loudly once.
+     *
+     * <p>Deliberately not a plausible number and not an empty append. This concat was a HARD compile-time
+     * failure before ({@code JIT unsupported reason=0 a=0xBA b=2}), so a marker is not a regression -- and
+     * a stub that answers something numeric-looking is indistinguishable from a working one, which is the
+     * shape this project pays for most.
+     */
+    private static void appendNoFormatter(long sb, int kind)
+    {
+        if (!noFmtSaid)
+        {
+            noFmtSaid = true;
+            Uart.write(Magic.bytes("\n  NO FLOAT FORMATTER: java/lang/"));
+            Uart.write(kind == 'D' ? Magic.bytes("Double") : Magic.bytes("Float"));
+            Uart.write(Magic.bytes(".toString would not resolve -- concat prints a marker, not a number\n"));
+        }
+        scChar(sb, 0x3C);                              // '<'
+        scChar(sb, kind == 'D' ? 0x64 : 0x66);         // 'd' / 'f'
+        scChar(sb, 0x3F);                              // '?'
+        scChar(sb, 0x3E);                              // '>'
+    }
+
+    private static boolean noFmtSaid;
 
     /** Append one byte {@code c} to the builder. */
     static void scChar(long sb, int c)

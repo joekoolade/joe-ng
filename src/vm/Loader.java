@@ -1542,6 +1542,16 @@ public final class Loader
     // target). Collected DURING the compile and initialized right after it, which is still strictly before
     // the method can run -- so those two triggers need no emitted runtime barrier at all. Recording is gated
     // on lzCompiling: a load-time compile (an initializer) must leave ordering to runClinits.
+    // Compiled bodies of the float/double string formatters, resolved BY NAME at runtime and memoised.
+    // NOT reached by a static call from baked VM code, and that is the whole design: baking
+    // Double.toString drags jdk/internal/math/DoubleToDecimal into the bake domain, which CANNOT carry it
+    // -- its <clinit> uses an `ldc` class literal the host writer refuses, and its `special` method (the
+    // NaN/Infinity/+-0.0 path) does not resolve there. Demand-loaded into the LOADER world it works
+    // perfectly, measured before this was written: byte-identical to a host JVM on 1.5, 0.1, 0.0, -0.0,
+    // 1e20, 1e-9 and NaN. Same shape as seedStandardProps reaching Properties.setProperty.
+    private static long dblToStrBuf;
+    private static long fltToStrBuf;
+
     private static final int MAXPENDINIT = 64;
     private static int[] lzInitReg;
     private static int lzInitN;
@@ -3221,6 +3231,8 @@ public final class Loader
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
+        dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers
+        fltToStrBuf = 0L;                               //   it names would call into swept memory
         lzInitDropped = 0;                              // per LAUNCH, beside the table they describe --
         lzInitWant = 0;                                 //   reportPendInitDrops prints at the end of one
         lzInitWantMax = 0;
@@ -9119,6 +9131,82 @@ public final class Loader
      * <p>{@code line.separator} is "\n": {@code Uart.putc} is what turns that into CRLF for the console, so a
      * "\r\n" here would double the carriage returns.
      */
+    /**
+     * The compiled body of {@code Double.toString(double)}, resolved BY NAME and memoised -- 0 if it cannot
+     * be had. {@link VMConcat#scDouble} calls it for string concat.
+     *
+     * <p>BY NAME rather than through a static call, because a static call from baked VM code would put
+     * {@code DoubleToDecimal} in the BAKE domain, and the writer cannot compile it there. Through the
+     * LOADER it is ordinary demand-loaded java.base and works.
+     */
+    static long doubleToStringBuf()
+    {
+        if (dblToStrBuf == 0L)
+        {
+            dblToStrBuf = fmtBuf(Magic.bytes("java/lang/Double"), Magic.bytes("(D)Ljava/lang/String;"));
+        }
+        return dblToStrBuf;
+    }
+
+    /** The float twin of {@link #doubleToStringBuf} -- a DIFFERENT string, never the widened double's. */
+    static long floatToStringBuf()
+    {
+        if (fltToStrBuf == 0L)
+        {
+            fltToStrBuf = fmtBuf(Magic.bytes("java/lang/Float"), Magic.bytes("(F)Ljava/lang/String;"));
+        }
+        return fltToStrBuf;
+    }
+
+    /**
+     * Resolve {@code cls.toString(desc)} to a compiled buffer, compiling it if nothing has called it yet.
+     *
+     * <p>THE SECOND STEP IS NOT OPTIONAL, and seedStandardProps records why: {@code rgTab} holds one entry
+     * per COMPILED method and bodies compile on FIRST CALL, so a zero from {@link #bufBySigU} means "not
+     * yet", not "unavailable". Treating those alike is the "works in one closure, broken in another"
+     * signature this file keeps paying for.
+     */
+    private static long fmtBuf(byte[] cls, byte[] desc)
+    {
+        long buf = bufBySigU(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
+        if (buf == 0L)
+        {
+            buf = compileSigOnDemand(utf8Blob(cls), utf8Blob(Magic.bytes("toString")), utf8Blob(desc));
+        }
+        // INITIALIZE BEFORE CALLING, because calling a compiled buffer raw is not an ACTIVE USE and so
+        // skips JVMS 5.5 entirely.
+        //
+        // THIS IS NOT WHAT FIXED THE EMPTY STRINGS, and saying so matters: that was an operand clobber in
+        // VMConcat (see scDouble), and I added this first on the theory that DoubleToDecimal's statics were
+        // unset. A run with it in place still printed `[]`, which refuted that. It stays because the
+        // JVMS 5.5 argument is true on its own terms -- a raw buffer call initializes nothing -- and NOT
+        // because it was ever observed to repair anything.
+        if (buf != 0L)
+        {
+            int reg = classRegByNameBytes(cls);
+            if (reg >= 0)
+            {
+                ensureClinit(reg);
+            }
+            int dec = classRegByNameBytes(helperOf(cls));
+            if (dec >= 0)
+            {
+                ensureClinit(dec);
+            }
+        }
+        return buf;
+    }
+
+    /** The {@code jdk/internal/math} formatter {@code cls}'s {@code toString} delegates to. */
+    private static byte[] helperOf(byte[] cls)
+    {
+        if (cls.length == 16)                            // "java/lang/Double"
+        {
+            return Magic.bytes("jdk/internal/math/DoubleToDecimal");
+        }
+        return Magic.bytes("jdk/internal/math/FloatToDecimal");
+    }
+
     private static void seedStandardProps(long props, int propsClass)
     {
         // NOT through the method registry: `rgTab` holds one entry per COMPILED method, and bodies compile on

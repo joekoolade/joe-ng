@@ -2238,6 +2238,14 @@ public final class Baseline
         {
             helper = Symbols.SC_INT;
         }
+        else if (k == 'D')
+        {
+            helper = Symbols.SC_DOUBLE;                          // raw bits travel in the operand register
+        }
+        else if (k == 'F')
+        {
+            helper = Symbols.SC_FLOAT;                           // ... and a float is NOT a widened double
+        }
         else if (k == 'J')
         {
             helper = Symbols.SC_LONG;                            // long -> decimal

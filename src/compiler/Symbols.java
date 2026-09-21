@@ -117,6 +117,8 @@ public interface Symbols
     int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
     int MON_EXIT_SYNC = 57;     // vm/VM.monExitSync()V    — ... and its release on normal return
     int SC_BOOL = 58;           // vm/VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
+    int SC_DOUBLE = 59;         // vm/VMConcat.scDouble(JJ)V — append a double (raw BITS in), JLS 15.18.1
+    int SC_FLOAT = 60;          // vm/VMConcat.scFloat(JI)V  — ... and a float, which is NOT the same string
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.

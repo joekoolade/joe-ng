@@ -67,6 +67,8 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // concat too, so a baked `"x" + aBoolean` resolves through here. It is why the self-hosting
         // fixpoint (`compiler: N checks`) is the gate on this change.
         HELPER_KEY[Symbols.SC_BOOL]          = "vm/VMConcat.scBool(JI)V";
+        HELPER_KEY[Symbols.SC_DOUBLE]        = "vm/VMConcat.scDouble(JJ)V";
+        HELPER_KEY[Symbols.SC_FLOAT]         = "vm/VMConcat.scFloat(JI)V";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */

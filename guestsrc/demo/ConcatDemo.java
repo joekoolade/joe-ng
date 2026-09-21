@@ -79,5 +79,39 @@ public class ConcatDemo
         // the descriptor is (ZZ), because javac folds a constant int straight into the recipe TEXT -- the
         // digits would never reach SC_INT and the arm would discriminate nothing. With locals it is (ZIZI).
         System.out.println("bool vs int  = [" + bt + n + bf + k + "] (want [true42false7])");
+
+        // FLOAT AND DOUBLE CONCAT (JLS 15.18.1). This block was a HARD FAILURE -- `JIT unsupported
+        // reason=0 a=0xBA b=2` -- which is why OpcodeDemo still prints doubles as scaled longs.
+        //
+        // Runtime-derived again, for the reason the boolean arms record: javac folds a constant expression
+        // straight into a string literal, and a folded arm never reaches the concat lowering at all.
+        double d15 = 1.5;
+        double dp1 = 0.1;
+        double dnz = -0.0;
+        double dbig = 1e20;
+        double dsml = 1e-9;
+        double zero = d15 - d15;                        // 0.0, but COMPUTED -- 0.0/0.0 would fold
+        double dnan = zero / zero;
+        double dinf = d15 / zero;
+        float fp1 = 0.1f;
+        float f15 = 1.5f;
+        System.out.println("dbl 1.5      = [" + d15 + "] (want [1.5])");
+        // 0.1 IS THE ARM WITH TEETH for the double half: its exact value is
+        // 0.1000000000000000055511151231257827..., so anything but SHORTEST-round-trip prints that instead.
+        System.out.println("dbl 0.1      = [" + dp1 + "] (want [0.1])");
+        System.out.println("dbl -0.0     = [" + dnz + "] (want [-0.0])");
+        System.out.println("dbl 1e20     = [" + dbig + "] (want [1.0E20])");
+        System.out.println("dbl 1e-9     = [" + dsml + "] (want [1.0E-9])");
+        System.out.println("dbl NaN      = [" + dnan + "] (want [NaN])");
+        System.out.println("dbl Infinity = [" + dinf + "] (want [Infinity])");
+        System.out.println("flt 0.1f     = [" + fp1 + "] (want [0.1])");
+        System.out.println("flt 1.5f     = [" + f15 + "] (want [1.5])");
+        // THE ARM THAT SEPARATES FLOAT FROM DOUBLE, and the reason float cannot just widen: shortest
+        // round-trip is relative to the type's OWN precision, so the same value prints two strings.
+        System.out.println("flt vs dbl   = [" + fp1 + "|" + (double) fp1 + "] (want [0.1|0.10000000149011612])");
+        // ... and SC_INT must still render digits beside them. Descriptor is (DID): the trailing 7 is a
+        // CONSTANT and javac folds it into the recipe TEXT, so it never reaches SC_LONG -- said here rather
+        // than left implied, because that is exactly the mistake the boolean arm made and had to correct.
+        System.out.println("dbl vs int   = [" + d15 + n + dp1 + 7L + "] (want [1.5420.17])");
     }
 }
