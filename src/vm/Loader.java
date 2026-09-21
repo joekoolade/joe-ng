@@ -1545,6 +1545,10 @@ public final class Loader
     private static final int MAXPENDINIT = 64;
     private static int[] lzInitReg;
     private static int lzInitN;
+    private static int lzInitDropped;                    // active uses discarded for want of room (0 = none)
+    private static int lzInitWant;                       // DISTINCT classes this compile wants initialized
+    private static int lzInitWantMax;                    // ... and the most any one compile has wanted
+    private static boolean lzInitFullSaid;
     private static boolean lzCompiling;
 
     // Said ONCE if an active use is ever noted outside a bracketed compile. See noteInitNeeded: this
@@ -1597,10 +1601,6 @@ public final class Loader
             reportUnbracketedInit(reg);
             return;
         }
-        if (lzInitN >= MAXPENDINIT)
-        {
-            return;
-        }
         int i = 0;
         while (i < lzInitN)
         {
@@ -1609,6 +1609,34 @@ public final class Loader
                 return;                                 // already noted for this compile
             }
             i += 1;
+        }
+        // THE DEDUP SCAN RUNS FIRST SO THAT A REFUSAL BELOW IS A GENUINE LOSS. Ordered the other way -- as
+        // it was -- a full list also refused classes ALREADY ON IT, which are not losses at all, and a count
+        // taken there would over-report exactly the way MAXREACH's first cut did: it counted already-marked
+        // methods as dropped and claimed 2,384,018 against a true shortfall of ~6,000.
+        lzInitWant += 1;
+        if (lzInitWant > lzInitWantMax)
+        {
+            lzInitWantMax = lzInitWant;                 // the size this cap would have had to be
+        }
+        if (lzInitN >= MAXPENDINIT)
+        {
+            // A DROPPED ACTIVE USE IS A CLASS THAT NEVER INITIALIZES (JVMS 5.5). It was a bare `return`:
+            // the silent `if (room) { record it }` shape this file calls its most expensive failure mode, at
+            // a FOURTH site after MAXREACH, MAXPEND and the unbracketed arm just above. The symptom is a
+            // static reading null arbitrarily far away, with nothing connecting it back to here.
+            // UNGATED, because a class that never initializes is a failure and failures are not gated.
+            lzInitDropped += 1;
+            if (!lzInitFullSaid)
+            {
+                lzInitFullSaid = true;
+                Uart.write(Magic.bytes("\n  PENDING-INIT LIST FULL: <clinit> will NOT run for "));
+                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                Uart.write(Magic.bytes(" -- its statics read null. MAXPENDINIT="));
+                VM.printDec(MAXPENDINIT);
+                Uart.putc(0x0A);
+            }
+            return;
         }
         lzInitReg[lzInitN] = reg;
         lzInitN += 1;
@@ -1624,6 +1652,40 @@ public final class Loader
             int reg = lzInitReg[lzInitN];
             ensureClinit(reg);
         }
+        lzInitWant = 0;                                 // the list is empty: this compile's want is settled.
+                                                        //   Reset HERE rather than at note time because an
+                                                        //   initializer compiles further methods, which note
+                                                        //   more classes -- the drain is the real boundary.
+    }
+
+    /**
+     * Say how many active uses were dropped for want of room, at the END of a launch -- where the answer
+     * exists. SILENT when none, which is this file's standing rule for an instrument: a report that cries
+     * wolf on a passing boot is worse than none.
+     *
+     * <p>Unlike the MAXREACH report, this one can NAME THE SIZE TO USE. That report deliberately suggests
+     * none, because a run that truncated its closure cannot know the true total; here {@code lzInitWantMax}
+     * is measured directly -- the most distinct classes any single compile actually asked for.
+     *
+     * <p>THE LIMIT OF THAT NUMBER, stated rather than rounded up: it is exact for the compiles that RAN, and
+     * the compiles that ran on a dropping boot are not the ones that would run on a healthy one -- a class
+     * whose {@code <clinit>} was skipped changes what is compiled after it. So treat it as a FLOOR ("at
+     * least this") rather than the final size, which is how the wording puts it.
+     */
+    private static void reportPendInitDrops()
+    {
+        if (lzInitDropped == 0)
+        {
+            return;
+        }
+        Uart.write(Magic.bytes("\n  PENDING-INIT DROPS: "));
+        VM.printDec(lzInitDropped);
+        Uart.write(Magic.bytes(" active use(s) never initialized -- MAXPENDINIT="));
+        VM.printDec(MAXPENDINIT);
+        Uart.write(Magic.bytes(", but one compile wanted "));
+        VM.printDec(lzInitWantMax);
+        Uart.write(Magic.bytes("; raise it to at least that"));
+        Uart.putc(0x0A);
     }
 
     /** Class-registry index of the class whose Type node is {@code type}, or -1. */
@@ -2124,6 +2186,7 @@ public final class Loader
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) -- x1 unused by a 1-arg static
         reportSyncCoverage();
+        reportPendInitDrops();
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
         reportGc();
     }
@@ -2255,6 +2318,7 @@ public final class Loader
         }
         long unused = Magic.call2(buf, argv, 0L);           // main(args) — x1 unused by a 1-arg static
         reportSyncCoverage();
+        reportPendInitDrops();
         Uart.write(Magic.bytes("\n[main returned normally]\n"));
         reportGc();
     }
@@ -3157,6 +3221,10 @@ public final class Loader
         clinitRan = new int[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
+        lzInitDropped = 0;                              // per LAUNCH, beside the table they describe --
+        lzInitWant = 0;                                 //   reportPendInitDrops prints at the end of one
+        lzInitWantMax = 0;
+        lzInitFullSaid = false;
         clDepOff = new int[MAXDEP];
         clDepStart = new int[MAXBLOB];
         clDepN = new int[MAXBLOB];
