@@ -11582,6 +11582,60 @@ public final class Loader
     }
 
     /** 1 if {@code tib} is one of the synthesised TIBs (lambda / annotation) held in {@code lambdaTibRoots}. */
+    /**
+     * Describe the object a WILD BRANCH was about to dispatch on, from inside the BOOT RE-ENTERED handler.
+     *
+     * <p>RECV_WATCH cannot answer this: it is armed by the METAL JIT when it lowers a dispatch site, so it
+     * can only see sites the metal JIT compiled. The failing site is writer-BAKED java.base, which the metal
+     * JIT never lowers -- arming the watch there yields silence, and silence reads as "no such receiver".
+     *
+     * <p>EVERY DEREFERENCE IS BOUNDED, because this runs after a wild branch: the register may hold anything,
+     * and a report that faults replaces the diagnosis with a second fault. A TIB BELOW the heap is itself the
+     * answer rather than an error -- that is a writer-BAKED TIB, which would mean the hole is in the image
+     * rather than in anything the loader built.
+     */
+    static void reportReceiverAt(long recv)
+    {
+        Uart.write(Magic.bytes("\n    recv=0x"));
+        VM.printHex(recv);
+        if (recv < Heap.BASE || recv >= Heap.managedTop())
+        {
+            Uart.write(Magic.bytes("  NOT A MANAGED HEAP ADDRESS (not an object)\n"));
+            return;
+        }
+        long tib = Magic.load64(recv);
+        Uart.write(Magic.bytes(" tib=0x"));
+        VM.printHex(tib);
+        if (tib == 0L)
+        {
+            Uart.write(Magic.bytes("  NULL TIB\n"));
+            return;
+        }
+        if (tib < Heap.BASE || tib >= Heap.managedTop())
+        {
+            Uart.write(Magic.bytes("  TIB IS BELOW THE HEAP -> a writer-BAKED TIB\n"));
+            return;
+        }
+        long type = Magic.load64(tib);
+        Uart.write(Magic.bytes(" type=0x"));
+        VM.printHex(type);
+        Uart.write(Magic.bytes("\n    vtable[3] (the slot read at tib+32) =0x"));
+        VM.printHex(Magic.load64(tib + 32L));
+        Uart.write(Magic.bytes("  synthesised(lambda/anno TIB)="));
+        VM.printDec(isSynthesisedTib(tib));
+        Uart.write(Magic.bytes("\n    class="));
+        int r = classRegByType(type);
+        if (r >= 0 && clTab != null && clTab[r] != null)
+        {
+            printNameAt(clTab[r].base, clTab[r].nameOff);
+        }
+        else
+        {
+            Uart.write(Magic.bytes("<not in the class registry>"));
+        }
+        Uart.putc(0x0A);
+    }
+
     private static int isSynthesisedTib(long tib)
     {
         if (lambdaTibRoots == null)

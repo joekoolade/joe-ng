@@ -61,6 +61,10 @@ public final class VM
         // and every compiled dispatch does `blr x16`, so after a wild branch it still holds the target that was
         // branched TO -- the one fact the branch itself destroys. Anything executed before this can clobber it.
         // On a normal boot the value is meaningless and unused.
+        // x0 is the RECEIVER of the dispatch that wild-branched. Read FIRST as the safer form -- though
+        // MEASURED, it does not matter here: reading it before and after readX16 both give the same value,
+        // so x0 survives the branch. That control is the reason the value below can be trusted at all.
+        long recv = Magic.readX0();
         long tgt = Magic.readX16();
         // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
         // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
@@ -75,6 +79,7 @@ public final class VM
             printHex(src);
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(src);
+            Loader.reportReceiverAt(recv);
             // THE INSTRUCTION THAT BRANCHED. x30 is the return address, so the call is at x30-4, and its
             // ENCODING says which of two very different bugs this is:
             //   0x94000000            -> `bl 0`: an UNPATCHED RELOCATION. patchRelocs never resolved the
