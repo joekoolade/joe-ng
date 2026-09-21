@@ -1251,11 +1251,27 @@ defines the minimum the assembler must encode.
     chasing; the family aborting the suite at `demo/DefaultIfaceDemo` was that gap's ONLY reproduction, and
     on this base the suite prints `attributes forEach ok (inherits Map.forEach)` with 33 programs clean. So
     the stub is sufficient and the cell was never needed.
-  - **STILL OPEN, FOUND ON THE WAY, DELIBERATELY NOT BUNDLED: `MAXPENDINIT` IS A SILENT DROP.** The lazy
-    path does `if (lzInitN >= MAXPENDINIT) { return; }` at a cap of 64, and constructors flow through it
-    now, so the pressure rises. A dropped entry is a class that never initializes -- a null static
-    surfacing arbitrarily far away. That is the silent `if (room) { record it }` shape `MAXREACH` and
-    `MAXPEND` were each taught to report, at a FOURTH site. It wants a report, not a bundled one.
+  - **FOUND ON THE WAY, AND IT GOT THE UNBUNDLED INCREMENT IT ASKED FOR -- `MAXPENDINIT` REPORTS NOW
+    (2026-09-20, NOT YET PI-VALIDATED).** The lazy path did `if (lzInitN >= MAXPENDINIT) { return; }` at a
+    cap of 64, and constructors flow through it now, so the pressure rises. A dropped entry is a class that
+    never initializes -- a null static surfacing arbitrarily far away. That is the silent
+    `if (room) { record it }` shape `MAXREACH` and `MAXPEND` were each taught to report, at a FOURTH site.
+    - **THE DEDUP SCAN MOVED ABOVE THE CAP CHECK, and that is a correctness change rather than tidying.**
+      Ordered as it was, a full list ALSO refused classes already on it -- not losses at all, since the
+      active use is already recorded. A count taken there would have over-reported exactly the way
+      **MAXREACH's first cut did** (it counted already-marked methods and claimed 2,384,018 against a true
+      shortfall of ~6,000). Post-dedup, a refusal is a genuine loss.
+    - **IT NAMES A SIZE, WHICH THE MAXREACH REPORT DELIBERATELY REFUSES TO.** That one cannot -- a run that
+      truncated its closure has no way to know the true total. Here `lzInitWantMax` is MEASURED: the most
+      distinct classes any one compile actually asked for. **Its limit is stated rather than rounded up** --
+      exact for the compiles that RAN, and a dropping boot does not run the compiles a healthy one would, so
+      it is a FLOOR and the wording says "at least".
+    - **BOTH HALVES VERIFIED, because an instrument that cannot fire looks exactly like a condition that
+      never happens.** SILENT on a passing boot (ConcatDemo, 0 `PENDING-INIT` lines, output exact); and with
+      the cap lowered 64 -> 2 the same boot prints `<clinit> will NOT run for sun/nio/cs/US_ASCII` and
+      `24 active use(s) ... one compile wanted 14`.
+    - **THE CAP STAYS AT 64 ON PURPOSE:** there is no evidence it is short, and raising it on the
+      pressure-rises reasoning would be the guess the report exists to replace.
 
 - **ADDING EIGHTEEN OVERLAY MEMBERS ABORTS THE DEMO SUITE -- OPEN, BISECTED, AND THREE HYPOTHESES ALREADY
   DEAD (2026-09-17).** `Unsafe.getAndBitwiseOrInt` shipped alone because the FAMILY does not fit: with all
