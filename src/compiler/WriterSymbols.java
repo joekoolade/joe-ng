@@ -63,6 +63,10 @@ final class WriterSymbols implements Symbols, ClassFile.Resolver
         // why (guestsrc Throwable.fillInStackTrace is baked, synchronized, and ON THE UNWIND PATH).
         HELPER_KEY[Symbols.MON_ENTER_SYNC]   = "vm/VM.monEnterSync(JJ)V";
         HELPER_KEY[Symbols.MON_EXIT_SYNC]    = "vm/VM.monExitSync()V";
+        // Unlike DREM/MULTI_NEW_ARRAY/MON_*_SYNC above, this one is REACHED: the writer lowers string
+        // concat too, so a baked `"x" + aBoolean` resolves through here. It is why the self-hosting
+        // fixpoint (`compiler: N checks`) is the gate on this change.
+        HELPER_KEY[Symbols.SC_BOOL]          = "vm/VMConcat.scBool(JI)V";
     }
 
     /** The image method a helper id resolves to -- or a loud failure, never a silently wrong neighbour. */

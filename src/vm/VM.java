@@ -1692,6 +1692,7 @@ public final class VM
         if (scEndAddr == 0L) { long u = VMConcat.scEnd(0L); }
         if (scStrAddr == 0L) { VMConcat.scStr(0L, 0L); }
         if (scLongAddr == 0L) { VMConcat.scLong(0L, 0L); }
+        if (scBoolAddr == 0L) { VMConcat.scBool(0L, 0); }
         if (printStrAddr == 0L) { printStr(0L); }
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
@@ -3093,6 +3094,7 @@ public final class VM
     static long scEndAddr;             // VM.scEnd(J)J
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    static long scBoolAddr;            // VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1)
     static long printStrAddr;          // VM.printStr(J)V
     static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).

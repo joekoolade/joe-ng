@@ -2230,7 +2230,11 @@ public final class Baseline
         {
             helper = Symbols.SC_CHAR;
         }
-        else if (k == 'I' || k == 'S' || k == 'B' || k == 'Z')
+        else if (k == 'Z')
+        {
+            helper = Symbols.SC_BOOL;                            // the WORD true/false (JLS 15.18.1), not 1/0
+        }
+        else if (k == 'I' || k == 'S' || k == 'B')
         {
             helper = Symbols.SC_INT;
         }

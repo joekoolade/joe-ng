@@ -55,5 +55,29 @@ public class ConcatDemo
         System.out.println("null twice   = [" + ns + no + "] (want [nullnull])");
         // A non-null reference beside it, so the fix cannot be "always print null".
         System.out.println("null mixed   = [" + ns + "x" + no + "] (want [nullxnull])");
+
+        // A BOOLEAN CONCATENATES AS THE WORD (JLS 15.18.1), not as 1/0. `Baseline.appendArg` routed a 'Z'
+        // argument to SC_INT for the life of the project, so this whole block printed 1 and 0.
+        //
+        // EVERY VALUE HERE IS DERIVED FROM A RUNTIME COMPARISON, and that is load-bearing rather than
+        // stylistic: javac constant-folds `"[" + true + "]"` into the literal "[true]" at compile time, so
+        // an arm written with a literal is a BAKED STRING that never reaches the concat lowering and passes
+        // in both states. `n` and `k` are ordinary locals, so `n > k` is computed at run time and a real
+        // invokedynamic is emitted.
+        boolean bt = n > k;                             // true, but not a compile-time constant
+        boolean bf = n < k;                             // false, ditto
+        System.out.println("bool true    = [" + bt + "] (want [true])");
+        System.out.println("bool false   = [" + bf + "] (want [false])");
+        // Surrounded on BOTH sides, so an append emitting nothing still looks right at end-of-line.
+        System.out.println("bool middle  = [a" + bt + "b] (want [atrueb])");
+        // Two in a row: catches a fix that emits one and stops, and pins the ORDER.
+        System.out.println("bool twice   = [" + bt + bf + "] (want [truefalse])");
+        // THE ARM THAT DISCRIMINATES: RUNTIME ints beside booleans, so a "fix" that made SC_INT print words
+        // would pass every arm above and fail this one -- 42 and 7 must still render as DIGITS.
+        //
+        // `n` and `k` rather than literals, and CHECKED rather than assumed: written as `+ bt + 1 + bf + 0`
+        // the descriptor is (ZZ), because javac folds a constant int straight into the recipe TEXT -- the
+        // digits would never reach SC_INT and the arm would discriminate nothing. With locals it is (ZIZI).
+        System.out.println("bool vs int  = [" + bt + n + bf + k + "] (want [true42false7])");
     }
 }

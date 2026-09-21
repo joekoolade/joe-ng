@@ -49,6 +49,35 @@ final class VMConcat
         return nbuf;
     }
 
+    /**
+     * Append {@code v} as the WORD {@code "true"} or {@code "false"} -- NOT as 1/0.
+     *
+     * <p>JLS 15.18.1 defines string concatenation of a boolean through {@code String.valueOf(boolean)},
+     * which is the word. joe-ng routed a {@code 'Z'} concat argument to {@link #scInt} for the life of the
+     * project, so {@code "flag=" + true} rendered {@code flag=1}: a SILENTLY WRONG ANSWER in a core language
+     * feature, and the failure mode this project pays for most. It survived because
+     * {@code StringBuilder.append(boolean)} is a DIFFERENT path and is correct -- so the suite's own
+     * {@code count=42 ok=true} arm, which goes through the builder, never had a chance to see it.
+     *
+     * <p>A verified classfile only ever holds 0 or 1 in a boolean, so {@code v != 0} is the whole test.
+     */
+    static void scBool(long sb, int v)
+    {
+        if (v != 0)
+        {
+            scChar(sb, 0x74);                              // 't'
+            scChar(sb, 0x72);                              // 'r'
+            scChar(sb, 0x75);                              // 'u'
+            scChar(sb, 0x65);                              // 'e'
+            return;
+        }
+        scChar(sb, 0x66);                                  // 'f'
+        scChar(sb, 0x61);                                  // 'a'
+        scChar(sb, 0x6C);                                  // 'l'
+        scChar(sb, 0x73);                                  // 's'
+        scChar(sb, 0x65);                                  // 'e'
+    }
+
     /** Append one byte {@code c} to the builder. */
     static void scChar(long sb, int c)
     {

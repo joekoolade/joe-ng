@@ -116,6 +116,7 @@ public interface Symbols
     int MULTI_NEW_ARRAY = 55;   // vm/VM.multiNewArray(JIIIII)J — multianewarray (JVMS 6.5)
     int MON_ENTER_SYNC = 56;    // vm/VM.monEnterSync(JJ)V — a SYNCHRONIZED METHOD's implicit monitorenter
     int MON_EXIT_SYNC = 57;     // vm/VM.monExitSync()V    — ... and its release on normal return
+    int SC_BOOL = 58;           // vm/VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
