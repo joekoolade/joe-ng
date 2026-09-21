@@ -53,8 +53,8 @@ public class ClinitOrderProbe
         System.out.println("order1 ctor saw      = " + Late.FIRST.sawFromEarly + " (want early-value)");
 
         // ORDER 2 -- touch the constructor-holding class first, on an independent pair.
-        System.out.println("order2 ctor saw      = " + Late2.FIRST.sawFromEarly + " (want early2-value)");
-        System.out.println("order2 early field   = " + Early2.EARLY + " (want early2-value)");
+        System.out.println("order2 ctor saw      = " + Late2.FIRST2.sawFromEarly2 + " (want early2-value)");
+        System.out.println("order2 early field   = " + Early2.EARLY2 + " (want early2-value)");
 
         System.out.println("ClinitOrderProbe done");
     }
@@ -92,8 +92,8 @@ class Late
 /** The same pair again, so the opposite initialization order is covered by a class nothing has touched. */
 class Early2
 {
-    static final String EARLY = makeTag();                 // non-constant, as above
-    static final Late2 VIA_LATE = Late2.FIRST;
+    static final String EARLY2 = makeTag();                 // non-constant, as above
+    static final Late2 VIA_LATE2 = Late2.FIRST2;
 
     private static String makeTag()
     {
@@ -103,11 +103,11 @@ class Early2
 
 class Late2
 {
-    static final Late2 FIRST = new Late2();
-    final String sawFromEarly;
+    static final Late2 FIRST2 = new Late2();
+    final String sawFromEarly2;
 
     Late2()
     {
-        this.sawFromEarly = Early2.EARLY;
+        this.sawFromEarly2 = Early2.EARLY2;
     }
 }

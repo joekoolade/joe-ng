@@ -1474,6 +1474,23 @@ public final class VM
      * Delegates to the loader, which holds the site table: it demand-loads the class and returns a correctly
      * typed object, or names the class and halts. Returns the new reference in x0, which the JIT pushes.
      */
+    /**
+     * JVMS 5.5 initialization trigger, called from an ACTIVE USE.
+     *
+     * <p>{@code clsU} is the ABSOLUTE address of the target class's name Utf8 ({@code {u2 len}{bytes}}) in
+     * its blob, baked at compile time. Absolute rather than a registry index deliberately: a blob never
+     * moves, so the operand is identical in the size pass and the emit pass, whereas a registry index is not
+     * -- sizeMethod DRY-RUN COMPILES and can demand-load, registering a class between the passes, and two
+     * passes emitting different word counts overruns the buffer the first one reserved.
+     *
+     * <p>Cheap after the first time: the lookup is a hash probe (classRegAt is indexed) and ensureInitFor
+     * returns at once for a class already initialized.
+     */
+    static void ensureInitByName(long clsU)
+    {
+        Loader.ensureInitFor(clsU);
+    }
+
     static long newUnresolved(long site)
     {
         long lr = Magic.readLR();                      // FIRST op: x30 = the `new` site + 4 (denylistTrap's idiom)
@@ -1687,6 +1704,7 @@ public final class VM
         if (runResolveAddr == 0L) { long u = Loader.resolveRun(0L); }   // the run-trampoline's dispatch
         if (boxPrimAddr == 0L) { long u = VMBox.box(0L, 0); }          // boxes a method ref's primitive result
         if (scStartAddr == 0L) { long u = VMConcat.scStart(); }        // string-concat helpers (JIT'd concat only)
+        if (ensureInitAddr == 0L) { ensureInitByName(0L); }   // 0 is the no-op arg (Loader.ensureInitFor)
         if (scCharAddr == 0L) { VMConcat.scChar(0L, 0); }
         if (scIntAddr == 0L) { VMConcat.scInt(0L, 0); }
         if (scEndAddr == 0L) { long u = VMConcat.scEnd(0L); }
@@ -3096,6 +3114,7 @@ public final class VM
     static long scEndAddr;             // VM.scEnd(J)J
     static long scStrAddr;             // VM.scStr(JJ)V   — append a String/byte[] (slice 1b)
     static long scLongAddr;            // VM.scLong(JJ)V  — append a long in decimal (slice 1b)
+    static long ensureInitAddr;        // VM.ensureInitByName(J)V — JVMS 5.5 trigger at an active use
     static long scBoolAddr;            // VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1)
     static long scDoubleAddr;          // VMConcat.scDouble(JJ)V — append a double (raw bits in)
     static long scFloatAddr;           // VMConcat.scFloat(JI)V  — ... and a float (its OWN shortest string)

@@ -1490,14 +1490,42 @@ public final class Baseline
     }
 
     // ----- static fields: absolute address in the image statics area --------
+    /**
+     * JVMS 5.5: trigger the target class's initialization AT THIS ACTIVE USE, when the Symbols seam says one
+     * is needed (metal JIT, and only where the target is not yet initialized).
+     *
+     * <p>Spilled around, because the guard is a CALL and the operand stack lives in caller-saved x9.. -- the
+     * discipline {@code appendChar} already uses. The spill is emitted ONLY when the guard is, so a compiler
+     * whose seam declines (the writer) produces byte-identical code and the self-hosting fixpoint holds.
+     */
+    private void initGuardAt(CodeBuffer cb, int cp, boolean isClass)
+    {
+        if (!(isClass ? symbols.needsInitGuardClass(cp) : symbols.needsInitGuard(cp)))
+        {
+            return;
+        }
+        spillLive(cb);
+        if (isClass)
+        {
+            symbols.initGuardClass(cb, cp);
+        }
+        else
+        {
+            symbols.initGuard(cb, cp);
+        }
+        reloadLive(cb);
+    }
+
     private void getstatic(CodeBuffer cb, int cpIndex)
     {
+        initGuardAt(cb, cpIndex, false);
         int r = pushReg();
         symbols.staticField(cb, r, cpIndex);
         cb.emit(A64Enc.ldrx(r, r, 0));
     }
     private void putstatic(CodeBuffer cb, int cpIndex)
     {
+        initGuardAt(cb, cpIndex, false);               // BEFORE the pop: spillLive only covers the stack
         int v = popReg();
         symbols.staticField(cb, 16, cpIndex);
         cb.emit(A64Enc.strx(v, 16, 0));
@@ -1603,6 +1631,7 @@ public final class Baseline
      */
     private void lowerNew(int classIndex, CodeBuffer cb)
     {
+        initGuardAt(cb, classIndex, true);
         if (isEntry)
         {
             expectEmpty(Symbols.SITE_NEW);                                   // frameless: nowhere to spill
@@ -1751,11 +1780,18 @@ public final class Baseline
     // ----- calls / intrinsics ----------------------------------------------
     private void lowerInvokeStatic(int cpIndex, CodeBuffer cb)
     {
+        // AN INTRINSIC IS NOT AN ACTIVE USE, AND GUARDING ONE IS ACTIVELY HARMFUL. `Magic.*` is a pseudo-class
+        // of lowerings -- it has no <clinit>, is never registered and can never need initializing -- so a
+        // guard here buys nothing. Worse, the guard is a CALL, and emitting it immediately before an
+        // intrinsic leaves that intrinsic's operands live across it. jdk/internal/misc/Unsafe
+        // .getLongUnaligned is `Magic.load64(Magic.addrOf(o) + offset)`, pure intrinsics, and it NPE'd there
+        // -- the operand-clobbered-across-a-call family this file already records for Magic.call2.
         if (symbols.isIntrinsicCall(cpIndex))
         {
             lowerIntrinsic(symbols.intrinsicId(cpIndex), cb);
             return;
         }
+        initGuardAt(cb, cpIndex, false);         // a REAL static call: JVMS 5.5 active use
         lowerCall(cpIndex, cb, false);
     }
 

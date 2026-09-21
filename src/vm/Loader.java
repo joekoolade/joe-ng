@@ -1046,6 +1046,18 @@ public final class Loader
     private static int clinitFdFirst;    // index of java/io/FileDescriptor's enqueued <clinit> (run first), or -1
     private static int clinitRunFrom;    // watermark: clinits [0,clinitRunFrom) already ran (incremental forName load)
     private static int[] clinitRan;      // 1 once initializer i has actually executed (batch sweep OR lazy barrier)
+    // CLAIMED, BUT NOT YET RUNNING. joe-ng's <clinit> path does three things JVMS 5.5 does not put between
+    // marking a class in-flight (step 6) and executing its body (step 9): a dependency pre-pass, a COMPILE,
+    // and a second dependency pre-pass. Marking `clinitRan` at the top made every one of those a window in
+    // which the class reads as in-flight while its body has executed nothing -- so a nested active use took
+    // step 3's recursive-request return and got null. That is what made a mutually-referencing pair fail in
+    // ONE direction only: Early2 assigns EARLY at bytecode 3 and touches Late2 at 6, but the pre-pass ran
+    // Late2 first and its constructor's read of Early2.EARLY hit the empty window.
+    //
+    // So `clinitRan` now means RUNNING-OR-RUN and is set immediately before the call, and `clinitBusy` marks
+    // the dep/compile phase separately -- purely to stop that phase re-entering itself.
+    private static int[] clinitBusy;
+    private static long[] clinitEntryAddr;  // stashed by the dep/compile phase so a nested use can run it
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1335,6 +1347,155 @@ public final class Loader
      * bytecode (getstatic/putstatic/invokestatic owners, {@code new}/{@code anewarray} targets, Class
      * literals) -- not the whole constant pool, so this initializes what is actually used and nothing more.
      */
+    /**
+     * ABSOLUTE address of the class name of the {@code *ref} at {@code refCp} -- a {@code {u2 len}{bytes}}
+     * run inside the blob. Absolute because a blob never moves, so it is the same value in both compiler
+     * passes; an offset would need a base the compile can re-point underneath it.
+     */
+    static long refClassNameAddr(int refCp)
+    {
+        if (gbase == 0L)
+        {
+            return 0L;
+        }
+        return gbase + (long) refClassNameOff(refCp);
+    }
+
+    /** {@link #refClassNameAddr} for a {@code CONSTANT_Class} -- the {@code new} counterpart. */
+    static long classNameAddr(int classCp)
+    {
+        if (gbase == 0L)
+        {
+            return 0L;
+        }
+        return gbase + (long) gcp[u2(gbase + gcp[classCp])];
+    }
+
+    /**
+     * Initialize the class named by the absolute Utf8 run {@code clsU}. The runtime half of the active-use
+     * trigger.
+     *
+     * <p>An UNREGISTERED name is not an error and must not report: the class has simply not been pulled yet,
+     * and every path that pulls one (deferred new, link stub, late virtual resolve) initializes it itself.
+     * Reporting would cry wolf on every healthy boot -- this file's own standing rule for an instrument.
+     */
+    /** TEMPORARY (init-guard diagnosis): report every guard EMITTED and every guard that FIRES. */
+    static final boolean INIT_GUARD_LOG = false;
+
+    /** Print an absolute {u2 len}{bytes} class name with a tag. Temporary, paired with INIT_GUARD_LOG. */
+    static void logInitGuard(byte[] tag, long clsU)
+    {
+        if (!INIT_GUARD_LOG || clsU == 0L)
+        {
+            return;
+        }
+        Uart.write(tag);
+        printNameAt(clsU, 0);
+        Uart.write(Magic.bytes(" [in "));
+        if (gbase != 0L)
+        {
+            printNameAt(gbase, gThisNameOff);
+        }
+        Uart.write(Magic.bytes("]"));
+        Uart.putc(0x0A);
+    }
+
+    static void ensureInitFor(long clsU)
+    {
+        if (clsU == 0L)
+        {
+            return;                                     // VM.forceCompile's touch, and an unresolvable name
+        }
+        int reg = regBySigU(clsU);
+        if (INIT_GUARD_LOG)
+        {
+            logInitGuard(Magic.bytes("  IG-fire "), clsU);
+            Uart.write(Magic.bytes("      reg="));
+            VM.printDec(reg);
+            if (reg >= 0)
+            {
+                Uart.write(Magic.bytes(" state="));
+                VM.printDec(clTab[reg].state);
+            }
+            Uart.putc(0x0A);
+        }
+        if (reg >= 0)
+        {
+            ensureClinit(reg);
+        }
+    }
+
+    // Per-COMPILE memo for the init-guard decision, keyed by class-name address. Small and linear: it is
+    // consulted a handful of times per method and cleared per compile, so an index would cost more than it
+    // saves.
+    private static final int IGMEMO = 64;
+    private static long[] igName = new long[IGMEMO];
+    private static boolean[] igAns = new boolean[IGMEMO];
+    private static int igN;
+
+    /** Cleared at the top of every {@link #compile}: the decision must not outlive the compile it is for. */
+    private static void resetInitGuardMemo()
+    {
+        igN = 0;
+    }
+
+    /**
+     * Whether an active use of {@code clsU} needs a JVMS 5.5 trigger emitted.
+     *
+     * <p>Answered from the class's CURRENT state, which is sound because INITIALIZATION IS MONOTONE -- a
+     * class initialized now can never become uninitialized, so a guard skipped here can never be needed
+     * later. An unregistered class DOES get one: it may be pulled and need initializing before this code
+     * runs.
+     *
+     * <p>MEMOISED FOR THE COMPILE, and that is required rather than an optimization. Both compiler passes
+     * run inside one compile() and the size pass DRY-RUN COMPILES, so a demand-load between the passes can
+     * flip a live state check -- and two passes emitting different WORD COUNTS overruns the buffer the size
+     * pass reserved. A full memo answers TRUE (emit the guard), never false: over-emitting costs a call,
+     * under-emitting is a silent null static.
+     */
+    static boolean initGuardNeeded(long clsU)
+    {
+        if (clsU == 0L)
+        {
+            return false;
+        }
+        // A CLASS NEVER NEEDS A TRIGGER FOR ITSELF, and emitting one is not merely wasteful -- it is the
+        // re-entrant case. You cannot be executing C's code unless C is already in-flight or initialized:
+        // invoking a static method of C, reading a static of C or instantiating C are each themselves active
+        // uses that got you here, and C's own <clinit> is reached only from the initialization procedure.
+        //
+        // MEASURED, not reasoned: jdk/internal/util/Preconditions.<clinit> is three `aconst_null; putstatic`
+        // of its OWN fields -- thirteen bytecodes -- and ConcatDemo hung inside its compiled body with the
+        // initializer-start trace showing no cycle and the guard-fire counter under its threshold. Every one
+        // of those three sites was a self-reference.
+        if (gbase != 0L && utf8EqAt(clsU, 0, gbase, gThisNameOff))
+        {
+            return false;
+        }
+        int k = 0;
+        while (k < igN)
+        {
+            if (igName[k] == clsU)
+            {
+                return igAns[k];
+            }
+            k += 1;
+        }
+        int reg = regBySigU(clsU);
+        boolean need = reg < 0 || clTab[reg] == null || clTab[reg].state < RVMClass.ST_INITIALIZED;
+        if (igN < IGMEMO)
+        {
+            igName[igN] = clsU;
+            igAns[igN] = need;
+            igN += 1;
+        }
+        else
+        {
+            return true;                                // memo full: emit, never silently skip
+        }
+        return need;
+    }
+
     private static void initClinitDeps(int i, int self)
     {
         int e = clDepStart[i] + clDepN[i];
@@ -1456,7 +1617,44 @@ public final class Loader
         {
             if (clinitRan[i] == 0 && clinitCode[i] != 0L && clinitBase[i] == clTab[reg].base)
             {
-                clinitRan[i] = 1;                        // set BEFORE the call: the initializer may re-enter here
+                if (clinitBusy[i] != 0)
+                {
+                    // RE-ENTERED DURING OUR OWN DEP/COMPILE PHASE -- the window this split exists to close.
+                    // A real JVM would already have run this body (it never starts a dependency first), so
+                    // the least-wrong thing is to run it NOW rather than hand the caller null. The outer
+                    // frame sees clinitRan and skips.
+                    long re = clinitEntryAddr[i];
+                    if (re == 0L)
+                    {
+                        return 0;                        // not compiled yet: nothing better is available
+                    }
+                    clinitRan[i] = 1;
+                    warnClinitUnderLock(i);
+                    long reUnused = Magic.call0(re);
+                    clTab[reg].state = RVMClass.ST_INITIALIZED;
+                    drainPendingInit();
+                    return 1;
+                }
+                clinitBusy[i] = 1;                       // the dep/compile phase, NOT yet "being initialized"
+                // COMPILE FIRST, AND STASH THE ENTRY BEFORE ANYTHING THAT CAN RE-ENTER. Measured: the
+                // dependency pre-pass was NOT what pulled the mutually-referencing partner in -- the COMPILE
+                // was, which is JVMS 5.4's "linking may never run an initializer" being violated by this VM's
+                // own codegen. With the entry stashed up here, a nested active use arriving out of that
+                // compile can run this body instead of reading null.
+                long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
+                clinitEntryAddr[i] = entry;              // a nested active use can run it from here
+                if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
+                {                                                //   Name it here, where the class is in hand.
+                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" entry="));
+                    VM.printHex(entry);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(i);
+                    Uart.putc(0x0A);
+                    VMGc.reportSweptPc(entry);
+                    while (true) { Magic.wfe(); }
+                }
                 // AND BEFORE ITS DEPENDENCIES: the getstatic/invokestatic/new sites inside this initializer
                 // are active uses of the classes they name (JVMS 5.5), so those must be initialized first or
                 // this body reads their statics UNSET. runClinits enforces that for eagerly-run initializers
@@ -1475,19 +1673,6 @@ public final class Loader
                     Uart.write(Magic.bytes("  clinit-lazy "));
                     printNameAt(clTab[reg].base, clTab[reg].nameOff);
                     Uart.putc(0x0A);
-                }
-                long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
-                if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
-                {                                                //   Name it here, where the class is in hand.
-                    Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
-                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
-                    Uart.write(Magic.bytes(" entry="));
-                    VM.printHex(entry);
-                    Uart.write(Magic.bytes(" idx="));
-                    VM.printDec(i);
-                    Uart.putc(0x0A);
-                    VMGc.reportSweptPc(entry);
-                    while (true) { Magic.wfe(); }
                 }
                 // BEFORE running it: initialize what the initializer ITSELF reads -- and ONLY that.
                 //
@@ -1512,8 +1697,14 @@ public final class Loader
                 // not run yet. Every GVR constant came out with a null `type`, blockingFailure() compared
                 // null to null, and a SUCCESS reported a BLOCKING FAILURE.
                 initClinitDeps(i, reg);
+                if (clinitRan[i] != 0)
+                {
+                    ran = 1;                             // a nested active use ran it during the walk above
+                    break;
+                }
                 clinitCellWatch(reg, Magic.bytes("before"));
                 warnClinitUnderLock(i);                 // THE LIVE SITE: lazyCompile holds the lock across this
+                clinitRan[i] = 1;                        // CLAIM here: step 6 and step 9 with nothing between
                 long unused = Magic.call0(entry);
                 clTab[reg].state = RVMClass.ST_INITIALIZED;
                 // NOW -- and not before -- initialize the classes this initializer's COMPILE noted. They are
@@ -1531,6 +1722,37 @@ public final class Loader
                 break;
             }
             i += 1;
+        }
+        if (INIT_GUARD_LOG && ran == 0)
+        {
+            // TEMPORARY: say WHY nothing ran. A silent miss here is indistinguishable from "already done".
+            int hits = 0;
+            int j = 0;
+            while (j < clinitN)
+            {
+                if (clinitBase[j] == clTab[reg].base)
+                {
+                    hits += 1;
+                    Uart.write(Magic.bytes("      CL-miss "));
+                    printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                    Uart.write(Magic.bytes(" idx="));
+                    VM.printDec(j);
+                    Uart.write(Magic.bytes(" ran="));
+                    VM.printDec(clinitRan[j]);
+                    Uart.write(Magic.bytes(" code="));
+                    VM.printHex(clinitCode[j]);
+                    Uart.putc(0x0A);
+                }
+                j += 1;
+            }
+            if (hits == 0)
+            {
+                Uart.write(Magic.bytes("      CL-miss "));
+                printNameAt(clTab[reg].base, clTab[reg].nameOff);
+                Uart.write(Magic.bytes(" NO RECORD clinitN="));
+                VM.printDec(clinitN);
+                Uart.putc(0x0A);
+            }
         }
         return ran;
     }
@@ -3229,6 +3451,8 @@ public final class Loader
         clinitBase = new long[MAXBLOB];
         clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
+        clinitBusy = new int[MAXBLOB];
+        clinitEntryAddr = new long[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
         dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers
@@ -5593,9 +5817,7 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharacterCoding"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Malformed"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Unmappable"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
                 // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
@@ -7854,6 +8076,8 @@ public final class Loader
     {
         checkCompileLockHeld(1);
         allocMethodTables();
+        resetInitGuardMemo();                           // the guard decision is per COMPILE: both passes below
+                                                        //   must agree, and sizeMethod can demand-load
         addMethod(code, len, gMaxLocals, descOff, isStatic, isSync);
         int i = 0;
         while (i < mCount)                              // discover

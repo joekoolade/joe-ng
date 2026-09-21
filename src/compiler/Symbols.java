@@ -119,6 +119,10 @@ public interface Symbols
     int SC_BOOL = 58;           // vm/VMConcat.scBool(JI)V — append "true"/"false" (JLS 15.18.1), NOT 1/0
     int SC_DOUBLE = 59;         // vm/VMConcat.scDouble(JJ)V — append a double (raw BITS in), JLS 15.18.1
     int SC_FLOAT = 60;          // vm/VMConcat.scFloat(JI)V  — ... and a float, which is NOT the same string
+    // JVMS 5.5 initialization AT THE ACTIVE USE. 61 is the max over the WHOLE file + 1, per the NOTE at the
+    // declaration: the ids are one namespace but NOT one contiguous block, so appending after the last line
+    // picks a used number (NEW_NASE took VIRTUAL_RESOLVE's 48 exactly that way).
+    int ENSURE_INIT = 61;       // vm/VM.ensureInitByName(J)V — initialize the class named by an absolute Utf8
 
     /**
      * The largest value a code address's top byte (bits 31..24) can take, for the dispatch-target guard.
@@ -274,6 +278,42 @@ public interface Symbols
 
     /** Load into {@code reg} the address of the static field at Fieldref index {@code fieldCp}. */
     void staticField(CodeBuffer cb, int reg, int fieldCp);
+
+    /**
+     * Emit a JVMS 5.5 initialization trigger for the class named by the {@code *ref} at {@code refCp}.
+     * A NO-OP by default, which is what keeps the WRITER byte-for-byte identical and the self-hosting
+     * fixpoint ({@code compiler: N checks}) intact -- the baked world's statics come from StaticSnapshot, so
+     * nothing there is produced by running an initializer.
+     *
+     * <p>Emitted at the ACTIVE USES (getstatic/putstatic/invokestatic/new) because that is where the
+     * specification triggers initialization, and MEASUREMENT says nothing weaker suffices: reordering the
+     * pending-init drain was built and booted and does not fix it, because whatever order is chosen, some
+     * constructor reads a field of a class scheduled later (see test/jdk/junit/ClinitOrderProbe).
+     */
+    default void initGuard(CodeBuffer cb, int refCp)
+    {
+    }
+
+    /** {@link #initGuard} for a {@code CONSTANT_Class} operand -- {@code new}, whose cp index IS the class. */
+    default void initGuardClass(CodeBuffer cb, int classCp)
+    {
+    }
+
+    /**
+     * Whether {@link #initGuard} will emit anything -- asked BEFORE it, because the guard is a call and the
+     * operand stack lives in caller-saved registers, so the caller must spill around it. Emitting that spill
+     * unconditionally would change the writer's codegen, so the question must be askable without the answer.
+     */
+    default boolean needsInitGuard(int refCp)
+    {
+        return false;
+    }
+
+    /** {@link #needsInitGuard} for a {@code CONSTANT_Class} operand. */
+    default boolean needsInitGuardClass(int classCp)
+    {
+        return false;
+    }
 
     /** Load into {@code reg} the address of the interned string at String index {@code stringCp}. */
     void string(CodeBuffer cb, int reg, int stringCp);

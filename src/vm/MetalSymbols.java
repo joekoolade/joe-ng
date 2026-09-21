@@ -188,6 +188,50 @@ final class MetalSymbols implements Symbols
         }
         emitAddr(cb, reg, addr);
     }
+    /**
+     * JVMS 5.5 at the active use -- emitted ONLY where the compiler can see the target is not yet
+     * initialized, which is both sufficient and cheap because INITIALIZATION IS MONOTONE: a class that is
+     * initialized now can never become uninitialized, so skipping the guard there is provably safe rather
+     * than merely likely. In steady state (a method compiled after the classes it touches are up) this emits
+     * nothing at all, which is what keeps it off the per-item cost this project has stripped twice.
+     *
+     * <p>The decision is MEMOISED FOR THE COMPILE (Loader.initGuardNeeded). It has to be: both passes run
+     * inside one compile(), and the size pass DRY-RUN COMPILES, so a demand-load between them could flip a
+     * live state check and make the two passes emit different word counts.
+     */
+    public void initGuard(CodeBuffer cb, int refCp)
+    {
+        emitInitGuard(cb, Loader.refClassNameAddr(refCp));
+    }
+
+    /** {@link #initGuard} for {@code new}, whose operand is a CONSTANT_Class rather than a {@code *ref}. */
+    public void initGuardClass(CodeBuffer cb, int classCp)
+    {
+        emitInitGuard(cb, Loader.classNameAddr(classCp));
+    }
+
+    public boolean needsInitGuard(int refCp)
+    {
+        return Loader.initGuardNeeded(Loader.refClassNameAddr(refCp));
+    }
+
+    public boolean needsInitGuardClass(int classCp)
+    {
+        return Loader.initGuardNeeded(Loader.classNameAddr(classCp));
+    }
+
+    /** x0 = the class-name Utf8 address, then the helper. Shared so the two seams cannot drift apart. */
+    private void emitInitGuard(CodeBuffer cb, long clsU)
+    {
+        if (clsU == 0L)
+        {
+            return;                                     // no resolvable name: the late paths still cover it
+        }
+        Loader.logInitGuard(Magic.bytes("  IG-emit "), clsU);
+        emitAddr(cb, 0, clsU);
+        callHelper(cb, Symbols.ENSURE_INIT);
+    }
+
     public void string(CodeBuffer cb, int reg, int stringCp)
     {
         // Intern the literal now and bake in its address: a mini java/lang/String OBJECT if String is
@@ -406,6 +450,10 @@ final class MetalSymbols implements Symbols
         if (helper == Symbols.VIRTUAL_RESOLVE)
         {
             return Loader.virtualTramp();               // built on first use, like the link trampoline
+        }
+        if (helper == Symbols.ENSURE_INIT)
+        {
+            return VM.ensureInitAddr;
         }
         if (helper == Symbols.HEAP_ALLOC)
         {
