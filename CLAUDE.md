@@ -1252,7 +1252,7 @@ defines the minimum the assembler must encode.
     on this base the suite prints `attributes forEach ok (inherits Map.forEach)` with 33 programs clean. So
     the stub is sufficient and the cell was never needed.
   - **FOUND ON THE WAY, AND IT GOT THE UNBUNDLED INCREMENT IT ASKED FOR -- `MAXPENDINIT` REPORTS NOW
-    (2026-09-20, NOT YET PI-VALIDATED).** The lazy path did `if (lzInitN >= MAXPENDINIT) { return; }` at a
+    (2026-09-20, PI-VALIDATED).** The lazy path did `if (lzInitN >= MAXPENDINIT) { return; }` at a
     cap of 64, and constructors flow through it now, so the pressure rises. A dropped entry is a class that
     never initializes -- a null static surfacing arbitrarily far away. That is the silent
     `if (room) { record it }` shape `MAXREACH` and `MAXPEND` were each taught to report, at a FOURTH site.
@@ -1270,6 +1270,9 @@ defines the minimum the assembler must encode.
       never happens.** SILENT on a passing boot (ConcatDemo, 0 `PENDING-INIT` lines, output exact); and with
       the cap lowered 64 -> 2 the same boot prints `<clinit> will NOT run for sun/nio/cs/US_ASCII` and
       `24 active use(s) ... one compile wanted 14`.
+    - **PI-VALIDATED AS AN ABSENCE, which is the only way this one can be validated:** ZERO `PENDING-INIT`
+      lines across the whole 70-batch suite, and that silence MEANS something only because the lowered-cap
+      control had already shown the same code printing. 64 is comfortable for this workload.
     - **THE CAP STAYS AT 64 ON PURPOSE:** there is no evidence it is short, and raising it on the
       pressure-rises reasoning would be the guess the report exists to replace.
 
@@ -1382,7 +1385,7 @@ defines the minimum the assembler must encode.
     exactly like the defect changing shape. Arming it on the PASSING image broke that too, which is what
     named it as mine. **A new helper needs a writer stash, and an instrument is not evidence until it has
     run on a boot that passes** -- this file's own rule, now paid for a fourth time.
-  - **A SEPARATE SILENT WRONG ANSWER, found on the way -- FIXED 2026-09-20, NOT YET PI-VALIDATED:** a boolean
+  - **A SEPARATE SILENT WRONG ANSWER, found on the way -- FIXED 2026-09-20, PI-VALIDATED:** a boolean
     CONCATENATED AS 1/0 rather than `true`/`false`. `Baseline.appendArg` routed a `'Z'` concat argument to
     `SC_INT`, which renders a decimal integer, where JLS 15.18.1 requires the words. It wanted its own
     increment because the writer lowers concat too, and it got one: a new `SC_BOOL` (id **58**, the max over
@@ -1394,6 +1397,11 @@ defines the minimum the assembler must encode.
       `[a1b]`, `[10]`, `[14207]` against `[true]`, `[false]`, `[atrueb]`, `[truefalse]`, `[true42false7]` --
       while all five NULL arms are UNCHANGED. Arms that move in one state and not the other are the control;
       arms that pass in both are not.
+    - **PI-VALIDATED on the demo suite:** all five arms exact on silicon -- `[true]`, `[false]`, `[atrueb]`,
+      `[truefalse]`, `[true42false7]` -- plus a SECOND, unplanned confirmation the arms were not written for:
+      `StrOpsDemo` prints `concat int=42 bool=true`, a site that would have said `bool=1` before. And the
+      baked world agrees, which is the half QEMU proved least: the boot battery's `String.valueOf(true)=true
+      PASS` runs before `launch`, in writer-baked java.base.
     - **AND javac ALMOST MADE THE WHOLE DEMO VACUOUS, TWICE.** `"[" + true + "]"` is CONSTANT-FOLDED into the
       literal `"[true]"`, so an arm written with a literal is a baked string that never reaches the concat
       lowering and passes in both states; every value is derived from a runtime comparison instead. Then the
