@@ -57,7 +57,7 @@ test: build
 	$(JAVA) -cp $(OUT) objectmodel.ObjectModelTest
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
 	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
-	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
 	$(JAVA) -cp $(OUT) crypto.CryptoTest
 	$(JAVA) -cp $(OUT) zip.ZipTest
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt
@@ -177,7 +177,7 @@ junitjar: $(JUNIT_JAR)
 	@mkdir -p ramfs/lib && cp $(JUNIT_JAR) ramfs/lib/junit.jar && ls -l ramfs/lib/junit.jar
 
 image: build jdktests plugins appjar junitjar
-	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
+	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) writer.BuildRuntimeImage $(OUT) $(IMG)
 	@ls -l $(IMG)
 
 qemu: image

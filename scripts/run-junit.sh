@@ -26,7 +26,7 @@ trap restore EXIT INT TERM
 printf 'main=MetalJUnit\nargs=%s\nclasspath=/lib/junit.jar\n' "$CLASSES" > ramfs/etc/init
 
 echo "== build image: $CLASSES =="
-java --add-opens java.base/java.lang=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/junit.img >/dev/null
+java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/junit.img >/dev/null
 ls -l /tmp/junit.img
 
 # The serial log goes straight to /tmp/junit.log rather than to a mktemp file copied at the end, so it is

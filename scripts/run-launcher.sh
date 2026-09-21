@@ -42,7 +42,7 @@ trap restore EXIT INT TERM
 printf 'main=org/junit/platform/console/ConsoleLauncher\nargs=execute --select-class=SleepSanity --disable-ansi-colors --disable-banner\nclasspath=/lib/junit.jar\n' > ramfs/etc/init
 
 echo "== build launcher image =="
-java --add-opens java.base/java.lang=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/launcher.img >/dev/null
+java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/launcher.img >/dev/null
 ls -l /tmp/launcher.img
 
 : > "$OUT"
