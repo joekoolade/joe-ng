@@ -4233,6 +4233,13 @@ public final class VM
         Uart.write(Magic.bytes("MessageDigest (stock API, joe-ng crypto.Digest):\n"));
         Loader.launchMain(Magic.bytes("demo/DigestDemo"), Magic.bytes(""));
 
+        // java.security.SecureRandom over joe-ng's own crypto.Sha1Prng: a KNOWN-ANSWER stream (a DRBG's
+        // output always looks correct, so nothing weaker is a test), the refusal that is this class's
+        // whole safety property, and a read-only probe of the BCM2711 hardware RNG -- which is measurably
+        // absent under QEMU, so what a real Pi answers is the thing this line exists to report.
+        Uart.write(Magic.bytes("SecureRandom (stock API, joe-ng crypto.Sha1Prng):\n"));
+        Loader.launchMain(Magic.bytes("demo/SecureRandomDemo"), Magic.bytes(""));
+
         // The GC milestone: churn far beyond the arena size -- completes only if allocation pressure
         // triggers collections (Heap.alloc -> Magic.gc) and the freed blocks are reused.
         Uart.write(Magic.bytes("GC under allocation pressure (churn >> heap):\n"));

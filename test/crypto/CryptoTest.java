@@ -65,6 +65,9 @@ public final class CryptoTest
         digestVectors();
         digestAgainstJdk();
 
+        // The SHA1PRNG DRBG behind java.security.SecureRandom.
+        prngAgainstJdk();
+
         T.summary("crypto");
     }
 
@@ -191,6 +194,105 @@ public final class CryptoTest
         }
         T.eq("digest cross-check comparisons", 756, compared);
         T.eq("digest cross-check failures", 0, bad);
+    }
+
+    /**
+     * {@link Sha1Prng} against the JDK's OWN {@code SecureRandom.getInstance("SHA1PRNG")}, byte for byte.
+     *
+     * <p>THIS IS THE ONLY GATE A DRBG CAN HAVE HERE, and it is worth stating why. Every output of a random
+     * generator looks equally correct, so a subtly wrong one is invisible to inspection, to a demo, and to
+     * any statistical test -- the stream is still random, it is just not the RIGHT random. SHA1PRNG is
+     * deterministic from {@code setSeed}, so the JDK can serve as a known-answer oracle; nothing else
+     * available to this project can.
+     *
+     * <p>The draw lengths are RAGGED on purpose. SHA1PRNG generates in 20-byte blocks and carries the
+     * unused tail into the next call, so a 5-byte draw followed by a 3-byte draw must come out of ONE
+     * block. An implementation that discarded the remainder passes any whole-block test and disagrees with
+     * every other SHA1PRNG in the world. The mid-stream reseed is there for the same reason: stock
+     * SUPPLEMENTS the state rather than replacing it, and one draw cannot tell those apart.
+     */
+    private static void prngAgainstJdk()
+    {
+        java.util.Random rnd = new java.util.Random(31337L);
+        int compared = 0;
+        int bad = 0;
+        for (int trial = 0; trial < 40; trial++)
+        {
+            byte[] seed = new byte[1 + rnd.nextInt(40)];
+            rnd.nextBytes(seed);
+            java.security.SecureRandom jdk;
+            try
+            {
+                jdk = java.security.SecureRandom.getInstance("SHA1PRNG");
+            }
+            catch (java.security.NoSuchAlgorithmException e)
+            {
+                throw new RuntimeException(e);
+            }
+            jdk.setSeed(seed);
+            Sha1Prng ours = new Sha1Prng(seed, seed.length);
+
+            for (int k = 0; k < 8; k++)
+            {
+                int n = 1 + rnd.nextInt(50);
+                byte[] want = new byte[n];
+                byte[] got = new byte[n];
+                jdk.nextBytes(want);
+                ours.nextBytes(got, 0, n);
+                compared += 1;
+                bad += same(want, got) ? 0 : 1;
+            }
+
+            // setSeed mid-stream SUPPLEMENTS; it must not reset.
+            byte[] more = new byte[9];
+            rnd.nextBytes(more);
+            jdk.setSeed(more);
+            ours.setSeed(more, more.length);
+            byte[] want = new byte[32];
+            byte[] got = new byte[32];
+            jdk.nextBytes(want);
+            ours.nextBytes(got, 0, 32);
+            compared += 1;
+            bad += same(want, got) ? 0 : 1;
+
+            // An offset write must touch ONLY its own range -- nextBytes(out, off, len) is joe-ng's
+            // spelling, and a fencepost there would corrupt a caller's buffer rather than its own output.
+            byte[] canvas = new byte[40];
+            for (int i = 0; i < canvas.length; i++)
+            {
+                canvas[i] = (byte) 0xAA;
+            }
+            java.security.SecureRandom ref;
+            try
+            {
+                ref = java.security.SecureRandom.getInstance("SHA1PRNG");
+            }
+            catch (java.security.NoSuchAlgorithmException e)
+            {
+                throw new RuntimeException(e);
+            }
+            ref.setSeed(seed);
+            byte[] refBytes = new byte[16];
+            ref.nextBytes(refBytes);
+            new Sha1Prng(seed, seed.length).nextBytes(canvas, 12, 16);
+            boolean ok = true;
+            for (int i = 0; i < 12; i++)
+            {
+                ok = ok && canvas[i] == (byte) 0xAA;
+            }
+            for (int i = 28; i < 40; i++)
+            {
+                ok = ok && canvas[i] == (byte) 0xAA;
+            }
+            for (int i = 0; i < 16; i++)
+            {
+                ok = ok && canvas[12 + i] == refBytes[i];
+            }
+            compared += 1;
+            bad += ok ? 0 : 1;
+        }
+        T.eq("prng cross-check comparisons", 400, compared);
+        T.eq("prng cross-check failures", 0, bad);
     }
 
     private static boolean same(byte[] a, byte[] b)

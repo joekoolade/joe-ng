@@ -115,6 +115,88 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, QEMU-VALIDATED, NOT YET
+  PI-VALIDATED).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
+  increment's real content is that the VM now says out loud what it does not have.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/SecureRandomProbe` | **14 arms + 6 stated divergences**, `failures=0 divergences-unmet=0` |
+  | `crypto: 37 -> 39 checks` | incl. **400 byte-for-byte comparisons against the JDK's own SHA1PRNG** |
+  | demo suite (40 programs) | twenty-one markers zero, every standing gate held |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, zip 91, `overlay-check 0 new` |
+
+  - **A DRBG IS THE HARDEST THING IN THIS VM TO TEST, AND THAT DECIDED THE ALGORITHM.** Every output of a
+    random generator looks equally correct, so a subtly wrong one is invisible to inspection, to a demo, and
+    to any statistical test -- the stream is still random, it is just not the RIGHT random. SHA1PRNG was
+    chosen because the JDK ships it AND it is deterministic from `setSeed`, so the JDK can serve as a
+    known-answer oracle. **SP 800-90A's Hash_DRBG is the better modern choice and was NOT taken: its CAVP
+    vectors are not in this tree, and writing a DRBG against vectors recalled from memory is precisely the
+    silent wrong answer the rest of this card is about.** That is a testability argument, not a
+    cryptographic one, and it is stated as such in the class.
+  - **THE RECOLLECTION WAS VERIFIED BEFORE ANY CODE WAS WRITTEN.** The SUN algorithm was reproduced from
+    memory on the HOST and put beside the JDK's own: **360 comparisons, 0 mismatches**, over ragged draws
+    and mid-stream reseeds. Only then was it ported. Writing it into the VM first and testing afterwards
+    would have made a wrong recollection indistinguishable from a wrong port.
+  - **THERE IS NO VALIDATED ENTROPY SOURCE, SO AN UNSEEDED GENERATOR THROWS.** This is the whole safety
+    property. A generator that quietly seeded itself from a clock would pass every other arm in the probe
+    while producing a predictable stream -- and "plausible" is all any random output ever looks like. So
+    `nextBytes` on an unseeded instance, `generateSeed` and `getInstanceStrong` all REFUSE and name the
+    problem. It is an `Error` rather than a `RuntimeException`, for the reason `jdk/internal/lang/
+    CaseFolding` already uses: an application's broad `catch (Exception)` must not be able to turn a missing
+    entropy source into a silently weak key. `setSeed(byte[])` works everywhere.
+  - **THE HARDWARE RNG IS MEASURABLY ABSENT UNDER QEMU, and that is a measurement rather than an
+    assumption.** The BCM2711 carries an RNG at `0xFE104000`. A guarded probe reads **FAULT on every
+    register in that window** while **PM `+0x1C` reads `0x102` and GPIO reads succeed** -- the controls are
+    what make the fault mean "no device there" rather than "this probe cannot do MMIO". Whether a real Pi
+    answers differently is the one question this arc leaves open, and `demo/SecureRandomDemo` prints the
+    four registers on every boot so the next flash settles it.
+  - **THE PROBE IS READ-ONLY ON PURPOSE, AND THE REASON IS A SECOND MEASUREMENT.** A guarded *read* of an
+    unmapped peripheral raises a recoverable fault this VM turns into a catchable exception. A *STORE* does
+    not: the first version of the probe wrote `CTRL=1` and died at an `<unclaimed pc>` that the unwinder
+    could not attribute. So a driver must never write to a window it has not first proven readable, and the
+    probe never enables anything.
+  - **THE HOST CONTROL CAUGHT FIVE WRONG EXPECTATIONS AND ONE REAL BUG, BEFORE ANY BOOT.** Five were
+    constants I had invented for the probe; the sixth was the overlay itself. **`setSeed(long)` spreads the
+    long LOW BYTE FIRST** -- stock's `longToByteArray` is little-endian, the opposite of everything else in
+    this VM's crypto, so it reads like a typo and is not. Written big-endian it produced a perfectly good
+    stream and passed every arm except the one comparing `setSeed(0x0102030405060708L)` against
+    `setSeed({8,7,6,5,4,3,2,1})`. **The probe now asserts the pairing rather than a constant**, so it tests
+    byte ORDER instead of testing that I typed the same number twice.
+  - **A CONSTRUCTOR HAZARD, CAUGHT BY READING AND THEN DEMONSTRATED RATHER THAN ASSERTED.**
+    `java.util.Random`'s constructor calls `setSeed(long)` VIRTUALLY, so it lands on `SecureRandom`'s
+    override before any field of the new object exists. Left with an implicit `super()`, that seeds the DRBG
+    **from `System.nanoTime()`** -- or dereferences a still-null engine. A twenty-line host reproduction
+    prints `SR.setSeed(12345) reached with spi=null` for the implicit form and the guard firing for
+    `super(0)`. Stock does `super(0)` for exactly this reason, and its `seed == 0` guard is what makes it
+    work; both are now here, with the reason recorded at both sites.
+  - **`java/util/Random` HAD DROPPED `setSeed(long)` -- the overlay-drops-stock-members trap, caught by
+    javac this time.** It is core API (`new Random(seed)` and re-seeding for a reproducible run) and it is
+    what `SecureRandom` must intercept. The constructor now goes THROUGH it rather than assigning the field,
+    so the one scrambling rule lives in one place.
+  - **AND THE SUPERTYPE DIFF CAUGHT THREE MORE.** `SecureRandom` and `SecureRandomSpi` were each dropping
+    `java.io.Serializable` (free markers stock declares -- now declared). The third,
+    `java/util/random/RandomGenerator`, is INHERITED from `java/util/Random`'s own recorded decision rather
+    than a new one: its default methods are stream pipelines this VM does not carry, and declaring it on
+    `SecureRandom` alone would be wrong anyway. Baselined beside its parent, with that reasoning.
+  - **THE ARMS THAT DISCRIMINATE, as opposed to merely exercising the API:** RAGGED draw lengths (SHA1PRNG
+    generates in 20-byte blocks and CARRIES the unused tail, so `8+8` must equal `16`; an implementation
+    that discarded the remainder produces a perfectly random-looking stream that agrees with nothing);
+    `setSeed` MID-STREAM (stock SUPPLEMENTS, and one draw cannot tell that from a reset); and
+    `nextInt`/`nextLong`/`nextBoolean`/`nextInt(bound)`, which are only secure because `next(int)` is
+    overridden -- un-overridden they still return plausible numbers, from a linear congruential generator.
+  - **ONE ARM WAS REMOVED AS MEANINGLESS RATHER THAN MADE TO PASS.** `new SecureRandom(byte[])` uses the
+    PLATFORM DEFAULT algorithm on stock (NativePRNG on macOS), so comparing its bytes across the two worlds
+    compares two different algorithms; on the host it is not even deterministic. It is a stated divergence
+    now, not a `say()`.
+  - **WHAT IS DELIBERATELY NOT DONE:** the hardware RNG DRIVER (the next flash decides whether there is
+    anything to drive); Hash_DRBG/SP 800-90A (needs CAVP vectors in-tree); `SecureRandomParameters` and the
+    `engineReseed`/`engineGetParameters` surface (provider machinery this VM does not carry); and any
+    claim that a `SecureRandom` here is "strong" -- `getInstanceStrong` refuses, because strength is a
+    statement about the seed.
+  - **NOT PI-VALIDATED.** `demo/SecureRandomDemo` is in the boot suite, so the next hardware boot both gates
+    the DRBG and reports what the RNG window holds on silicon.
+
 - **`java.security` OPENS: the permission layer runs STOCK, and `MessageDigest` runs on joe-ng's own streaming
   digests (2026-09-21, PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is
   narrowed now along the line that actually matters -- what needs a subsystem this VM does not carry, and what

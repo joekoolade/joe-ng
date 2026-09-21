@@ -114,6 +114,8 @@ public final class ReachScan
                 || c.startsWith("java/security/ProviderException")
                 || c.startsWith("java/security/MessageDigest")
                 || c.startsWith("java/security/Provider")
+                // SecureRandom + SecureRandomSpi: overlaid over crypto.Sha1Prng.
+                || c.startsWith("java/security/SecureRandom")
                 || c.startsWith("java/security/DigestInputStream")
                 || c.startsWith("java/security/DigestOutputStream")
                 || c.startsWith("sun/security/util/SecurityConstants"))
