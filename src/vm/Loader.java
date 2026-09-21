@@ -5821,7 +5821,6 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Malformed"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
                 // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
