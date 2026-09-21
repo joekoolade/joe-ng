@@ -115,10 +115,53 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **FLOAT/DOUBLE STRING CONCAT: THE BAKE DOMAIN CANNOT CARRY THE JDK'S FORMATTERS, AND THE LOADER WORLD
-  ALREADY RUNS THEM (2026-09-20, ATTEMPTED AND REVERTED -- the findings are the deliverable).** `"x" + 1.5`
-  still fails loudly with `JIT unsupported reason=0 a=0xBA b=2`. An implementation was built end to end,
-  measured, and backed out; what it established is worth more than the code was.
+- **AN OPERAND LIVE ACROSS A `Magic.call2` COMES BACK CLOBBERED -- LATENT, FOUND BY THE CONCAT ARC, NOT
+  FIXED (2026-09-20).** Written as `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` sits on the
+  OPERAND STACK across the intrinsic call and is destroyed: every double concat printed an EMPTY string,
+  with no null, no trap, no fault, while the callee was returning the right bytes the whole time. Hoisting
+  the result into a LOCAL fixes it, which is what `VMConcat.scDouble` now does.
+  - **THE DISCRIMINATOR IS WORTH COPYING: bracket the call with literal appends.** `scChar('X')` before and
+    `scChar('Y')`/`scChar('Z')` after separated "the string is wrong" from "the append is lost" in one run
+    -- `[XY1.5Z]` with a local against `[]` nested. Until then the symptom was indistinguishable from a
+    broken formatter, and TWO of my hypotheses died to it (below).
+  - **THIS FILE ALREADY RECORDS THE FAMILY** -- "operand values spill to the frame across calls so
+    mid-expression calls do not clobber live refs", and the `opSlot` bug that "evicted an operand register
+    without spilling it". So the spill discipline exists and something about the `Magic.call*` INTRINSIC
+    path does not honour it. **NOT diagnosed further and NOT fixed**: the concat increment routed around it
+    with a local rather than bundling an unvalidated compiler change, and no audit has been done of who
+    else calls `Magic.call0/2/N` with a live operand.
+
+- **FLOAT/DOUBLE STRING CONCAT WORKS -- through the JDK's own formatter, resolved BY NAME (2026-09-20,
+  NOT YET PI-VALIDATED).** `"x" + 1.5` was a hard failure (`JIT unsupported reason=0 a=0xBA b=2`); it is
+  now `SC_DOUBLE`/`SC_FLOAT` calling `Double.toString`/`Float.toString`, 11 arms exact on QEMU including
+  `-0.0`, `1.0E20`, `1.0E-9`, `NaN` and `Infinity`. The first attempt -- a static call from a BAKED helper
+  -- was built, measured and reverted, and that is what chose this design:
+
+  | | baked helper (reverted) | resolved by name |
+  |---|---|---|
+  | image cost | **+53,624 B** | **+3,080 B** |
+  | build flags | needed `--add-opens jdk.internal.math` | none |
+  | `bakeNoClinit` | needed Double + Float | none |
+  | bake-stubs naming the formatters | many | **0** |
+
+  - **THE BAKE DOMAIN CANNOT CARRY `DoubleToDecimal`, and the writer says so two independent ways:** its
+    `<clinit>` uses an `ldc` class literal the host writer refuses, and its `special` method -- the
+    NaN/Infinity/+-0.0 path -- does not resolve there. Neither is a cap to raise. The baked attempt printed
+    `[1.5]` and `[0.1]` EXACT and then died at `-0.0`, the usual one-layer-at-a-time shape.
+  - **DO NOT HAND-ROLL IT.** `Double.toString` is the SHORTEST decimal that round-trips (Schubfach), and it
+    was MEASURED to already work here before anything was written -- byte-identical to a host JVM on seven
+    values. Re-deriving that by hand is a silent wrong answer waiting to happen in a core language feature.
+  - **FLOAT IS NOT A WIDENED DOUBLE, and a ten-second HOST CONTROL killed that shortcut before it shipped:**
+    `Float.toString(0.1f)` is `"0.1"`, `Double.toString((double) 0.1f)` is `"0.10000000149011612"`.
+    Shortest-round-trip is relative to the type's OWN precision. The demo pins it as ONE arm --
+    `[0.1|0.10000000149011612]` -- so collapsing the two helpers later fails loudly rather than printing a
+    number that is merely wrong.
+  - **TWO OF MY HYPOTHESES WERE REFUTED BY MEASUREMENT, and both are recorded because the reasoning was the
+    defect.** I INFERRED the returned string was empty; instrumenting it read `len=3 '1' '.'` -- the string
+    was right all along. And I added `ensureClinit` believing `DoubleToDecimal`'s statics were unset; a run
+    with it in place still printed `[]`. That call is KEPT, and its comment says plainly that it is there
+    because a raw buffer call initializes nothing (JVMS 5.5) and **not** because it was ever observed to
+    repair anything.
 
   - **DO NOT WRITE A FORMATTER: THE STOCK ONE ALREADY WORKS HERE, MEASURED FIRST.** `Double.toString` and
     `Float.toString` demand-load and run on metal today, byte-identical to a host JVM on **1.5, 0.1, 0.0,
