@@ -141,12 +141,41 @@ defines the minimum the assembler must encode.
 
     `PrimitiveClassDescImpl.<clinit>` is one `new`, whose constructor does
     `super(ConstantDescs.BSM_PRIMITIVE_CLASS, ...)` -- and that handle is null.
-  - **THIS IS WHAT `initClinitDeps` EXISTS TO PAPER OVER, AND THE PAPERING IS WHAT INVERTS A MUTUAL PAIR.**
-    The pre-pass initializes a `<clinit>`'s dependencies UP FRONT; JVMS 5.5 triggers them lazily AT THE
-    ACTIVE USE. `ConstantDescs` assigns `CD_Class` and `BSM_PRIMITIVE_CLASS` BEFORE it first touches
-    `PrimitiveClassDescImpl`, so a real JVM reaches that constructor with both fields set. Pre-initializing
-    runs the callee first and hands it nulls. **Stock is not leaning on CDS for this: `java -Xshare:off`
-    passes every arm**, so the ordering really is achievable.
+  - **TWO SITES DECIDE INITIALIZATION AWAY FROM THE ACTIVE USE, AND THE FIRST CUT OF THIS CARD NAMED ONLY
+    ONE.** Both paper over the missing trigger, and the two probes go through DIFFERENT ones -- which is why
+    attributing the family to a single site was wrong:
+    - `initClinitDeps`, the pre-pass that initializes a `<clinit>`'s dependencies UP FRONT. That is
+      `ConstantDescProbe`'s route, and its trace names it.
+    - `drainPendingInit`, which at the end of a lazy compile initializes every class the COMPILE noted. That
+      is `ClinitOrderProbe`'s route -- the `lazyCompile -> ensureClinit` warning says so in its own words.
+
+    JVMS 5.5 triggers initialization lazily AT THE ACTIVE USE instead. `ConstantDescs` assigns `CD_Class` and
+    `BSM_PRIMITIVE_CLASS` BEFORE it first touches `PrimitiveClassDescImpl`, so a real JVM reaches that
+    constructor with both fields set; deciding up front runs the callee first and hands it nulls. **Stock is
+    not leaning on CDS for this: `java -Xshare:off` passes every arm**, so the ordering really is achievable.
+
+  - **NO PRE-ORDERING CAN FIX IT, AND THAT IS MEASURED RATHER THAN ARGUED -- which is the most useful thing
+    in this card, because it removes the cheap options.** The drain consumes its list LIFO while
+    `noteInitNeeded` appends as the compiler walks, so reversing it to bytecode order looked like a one-line
+    fix. Built, booted, and it does NOT work: the order genuinely changed (`Late2, Late, Early, Early2` ->
+    `Late, Late2, Early2, Early`, confirmed under LOAD_LOG) and the probe still printed null in both arms.
+    **`Late` precedes `Early` under BOTH orders**, and the note list is not in bytecode order anyway --
+    `Early` lands LAST under FIFO -- so it reflects registration/compile order, not the program's use order.
+    Whatever order you pick, some constructor reads a field of a class scheduled later. The experiment was
+    REVERTED rather than kept: it changes initialization behaviour for every boot and fixes nothing.
+
+  - **FOUR HYPOTHESES KILLED, EACH IN MINUTES, BECAUSE THE PROBE IS A SECONDS-LONG GATE.** Recorded so they
+    are not re-tested:
+
+    | hypothesis | how it died |
+    |---|---|
+    | `ensureClinit`'s gate declines for a non-gated class | `clinitEagerKept` returns `false` unconditionally -- the gate never declines |
+    | `initClinitDeps` is the mechanism for BOTH probes | the `lazyCompile -> ensureClinit` route names `drainPendingInit` for ClinitOrderProbe |
+    | the drain's LIFO order is the mechanism | reversed it; order changed, probe still null |
+    | the ctor's getstatic binds the permanently-zero cell | one `UNRESOLVED STATIC` in the whole boot, the known DENYLISTED one |
+
+    **The value of the probe is this ratio.** Four wrong models cost minutes each against a ten-minute suite
+    and a flash, and three of them were mine and confidently held.
   - **BOTH ORDERS FAIL IDENTICALLY, which is the load-bearing reading.** It is therefore NOT an ordering
     subtlety to be fixed by reordering the pre-pass -- the active-use trigger simply does not exist outside
     initializer bodies, and `initClinitDeps` is a workaround for its absence.
