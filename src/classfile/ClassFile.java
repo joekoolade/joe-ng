@@ -460,6 +460,9 @@ public final class ClassFile
      *  class could never provide an itable implementation). */
     public static String findImpl(String cls, String name, String descriptor, Resolver resolve)
     {
+        // A CLASS METHOD WINS, and that ordering is JVMS 5.4.3.3 rather than a preference: method resolution
+        // searches the class chain first and only then the superinterfaces, so a concrete override must be
+        // found before any default that it overrides.
         for (String c = cls; c != null; c = resolve.resolve(c).superClass)
         {
             for (Method m : resolve.resolve(c).methods)
@@ -470,8 +473,67 @@ public final class ClassFile
                 }
             }
         }
+        // FAILING THAT, AN INTERFACE DEFAULT -- searched TRANSITIVELY, which is the half that was missing.
+        // A default lives on an interface, so the class-chain walk above can never find one, and the
+        // interface it lives on is routinely a SUPER-interface rather than one the class names directly:
+        // ImmutableCollections$List12 gets toArray(IntFunction) from Collection, two links up through List.
+        // The writer refused that outright ("no implementation of toArray(Ljava/util/function/IntFunction;)
+        // [Ljava/lang/Object; in java/util/ImmutableCollections$List12"), which is what blocked removing the
+        // jdk/internal/util/Preconditions overlay -- stock Preconditions.<clinit> reaches List.of.
+        //
+        // NEAREST-FIRST rather than JVMS 5.4.3.3's full maximally-specific selection, and the limit is
+        // stated rather than glossed: with two unrelated superinterfaces both declaring a default of this
+        // name+descriptor the specification requires an IncompatibleClassChangeError and this takes the
+        // first found. That shape is what the metal-side resolveViaInterfaces already does.
+        for (String c = cls; c != null; c = resolve.resolve(c).superClass)
+        {
+            for (String i : resolve.resolve(c).interfaces)
+            {
+                String owner = findDefault(i, name, descriptor, resolve, 0);
+                if (owner != null)
+                {
+                    return owner;
+                }
+            }
+        }
         throw new IllegalArgumentException("no implementation of " + name + descriptor + " in " + cls);
     }
+
+    /** The interface declaring a DEFAULT {@code name+descriptor}, searching {@code iface} then its
+     *  super-interfaces. Null when there is none. Depth-bounded: an interface hierarchy is a DAG, and a
+     *  malformed classfile must not spin the writer. */
+    private static String findDefault(String iface, String name, String descriptor, Resolver resolve,
+                                      int depth)
+    {
+        if (depth > MAX_IFACE_DEPTH)
+        {
+            return null;
+        }
+        ClassFile cf = resolve.resolve(iface);
+        if (cf == null)
+        {
+            return null;                    // not resolvable here (denied, or absent): not an error to search
+        }
+        for (Method m : cf.methods)
+        {
+            if (!m.isStatic && m.code != null && m.name.equals(name) && m.descriptor.equals(descriptor))
+            {
+                return iface;
+            }
+        }
+        for (String s : cf.interfaces)
+        {
+            String owner = findDefault(s, name, descriptor, resolve, depth + 1);
+            if (owner != null)
+            {
+                return owner;
+            }
+        }
+        return null;
+    }
+
+    /** Bound on the super-interface walk in {@link #findDefault}. java.base's deepest is ~5. */
+    private static final int MAX_IFACE_DEPTH = 16;
 
     public Method method(String name, String descriptor)
     {
