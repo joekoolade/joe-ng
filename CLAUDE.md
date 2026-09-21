@@ -1366,13 +1366,24 @@ defines the minimum the assembler must encode.
     exactly like the defect changing shape. Arming it on the PASSING image broke that too, which is what
     named it as mine. **A new helper needs a writer stash, and an instrument is not evidence until it has
     run on a boot that passes** -- this file's own rule, now paid for a fourth time.
-  - **A SEPARATE SILENT WRONG ANSWER, found on the way and NOT fixed:** a boolean CONCATENATES AS 1/0 rather
-    than `true`/`false`. `Baseline.appendArg` routes a `'Z'` concat argument to `SC_INT`, which renders a
-    decimal integer, where JLS 15.18.1 requires the words. Measured (metal printed `1` where the host
-    printed `true`) and confirmed by reading the lowering. Not a one-liner -- the writer lowers concat too,
-    so a new helper perturbs the self-hosting fixpoint -- so it wants its own increment. `StringBuilder
-    .append(boolean)` is a different path and is correct, which is why `count=42 ok=true` in the suite never
-    caught it.
+  - **A SEPARATE SILENT WRONG ANSWER, found on the way -- FIXED 2026-09-20, NOT YET PI-VALIDATED:** a boolean
+    CONCATENATED AS 1/0 rather than `true`/`false`. `Baseline.appendArg` routed a `'Z'` concat argument to
+    `SC_INT`, which renders a decimal integer, where JLS 15.18.1 requires the words. It wanted its own
+    increment because the writer lowers concat too, and it got one: a new `SC_BOOL` (id **58**, the max over
+    the WHOLE file per the NOTE) calling `VMConcat.scBool`, with the writer STASH wired -- the defect that
+    made `watchRecv` emit a call to address 0. `StringBuilder.append(boolean)` is a different path and is
+    correct, which is why `count=42 ok=true` in the suite never caught it.
+    - **THE NEGATIVE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT, which is the property this file keeps
+      having to ask for.** Reverting ONLY the `'Z'` routing moves all five boolean arms -- `[1]`, `[0]`,
+      `[a1b]`, `[10]`, `[14207]` against `[true]`, `[false]`, `[atrueb]`, `[truefalse]`, `[true42false7]` --
+      while all five NULL arms are UNCHANGED. Arms that move in one state and not the other are the control;
+      arms that pass in both are not.
+    - **AND javac ALMOST MADE THE WHOLE DEMO VACUOUS, TWICE.** `"[" + true + "]"` is CONSTANT-FOLDED into the
+      literal `"[true]"`, so an arm written with a literal is a baked string that never reaches the concat
+      lowering and passes in both states; every value is derived from a runtime comparison instead. Then the
+      discriminating arm, first written `+ bt + 1 + bf + 0`, came back with descriptor **(ZZ)** -- a constant
+      int is folded into the recipe TEXT, so the digits never reach `SC_INT` and the arm discriminated
+      NOTHING. With locals it is **(ZIZI)**. Both were caught by reading `javap`, not by the arm failing.
 
 - **THE picocli `factory` NPE IS FIXED, AND IT WAS THREE NESTED BUGS -- the last of them a 960 KiB memory
   overlap the boot-time overlap check was STRUCTURALLY UNABLE TO SEE (2026-09-17, PI-VALIDATED).** The
