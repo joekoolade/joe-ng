@@ -65,6 +65,11 @@ public final class VM
         // MEASURED, it does not matter here: reading it before and after readX16 both give the same value,
         // so x0 survives the branch. That control is the reason the value below can be trusted at all.
         long recv = Magic.readX0();
+        // AND THE CALLER, which is the question the receiver alone cannot answer: "who handed it that?".
+        // SP still points at the faulting method's frame -- the reset below happens after these reads -- and
+        // this VM's frame convention puts the saved LR at [sp+0] (see VM.unwind, which pops frames exactly
+        // that way). One word is all it takes to name the frame above.
+        long sp0 = Magic.readSP();
         long tgt = Magic.readX16();
         // Firmware enters here at EL2 (CurrentEL bits[3:2] = 0b10, value 0x8). If we RE-enter at EL1, we did not
         // come from a reset -- execution wild-branched back to the image entry (a corrupted return address /
@@ -80,6 +85,21 @@ public final class VM
             Uart.write(Magic.bytes("\n    branch source: "));
             Loader.reportMethodAt(src);
             Loader.reportReceiverAt(recv);
+            Uart.write(Magic.bytes("    caller (saved LR at [sp]): "));
+            if (sp0 >= 0x1000L)
+            {
+                long up = Magic.load64(sp0);
+                printHex(up);
+                Uart.putc(0x20);
+                Loader.reportMethodAt(up);
+            }
+            else
+            {
+                Uart.write(Magic.bytes("<SP implausible: 0x"));
+                printHex(sp0);
+                Uart.putc(0x3E);
+            }
+            Uart.putc(0x0A);
             // THE INSTRUCTION THAT BRANCHED. x30 is the return address, so the call is at x30-4, and its
             // ENCODING says which of two very different bugs this is:
             //   0x94000000            -> `bl 0`: an UNPATCHED RELOCATION. patchRelocs never resolved the
