@@ -115,10 +115,97 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A BAKE-STUB MEMO OUTLIVES THE LAZY TABLE IT INDEXES -- the Preconditions "wild branch" ROOT-CAUSED, FIXED
+  AND PI-VALIDATED (2026-09-21).** `VM.bakeResolve` memoizes into the bake-stub table, which the WRITER emits
+  into the IMAGE, so the memo is immortal; `lzTab`/`lzN` are dropped and rebuilt from zero by the reclaim.
+  The two have INDEPENDENT LIFETIMES BY CONSTRUCTION and nothing reconciled them.
+  - **MEASURED, not argued, and the numbers are the whole case:** bake-stub entry 11,
+    `java/lang/Integer.toString()`, kept returning stub `0x024B4DF0` carrying lazy index **3138**. The table
+    was **4074** deep when that index was minted and **2274** deep when it was used. `lazyCompile` rejected
+    it, returned 0, and the lazy trampoline tail-branched to address 0. `everDeepest` is what separates "a
+    stale index from a previous generation" from "an index that was never an lzTab index" -- opposite fixes.
+  - **WHY IT WAS UNTRACEABLE, AND THAT IS MOST OF WHAT IT COST: `br` WRITES NO x30.** The branch to 0 goes
+    through the firmware low-memory shim into the image entry, so `BOOT RE-ENTERED` carried a STALE x30 that
+    named a perfectly healthy `blr` in `String.valueOf(Object)`. **THREE OF THAT REPORT'S FOUR FIELDS WERE
+    ARTIFACTS** -- `recv=0x2` and `x16=0` are the SHIM's registers, and x30 was truthful all along. Four
+    boots were spent reasoning from the three that were not. This file already records the trap
+    ("do not chase the provenance: make the branch refuse to happen"); it was paid for again anyway.
+  - **THE CONTROL THAT BROKE IT OPEN WAS A SECOND COPY OF THE RECEIVER.** `String.valueOf(Object)` opens
+    `mov x19, x0`, and x19 is callee-saved, so reading it at the image entry gives the real receiver: a valid
+    `java/lang/Integer` with an INTACT vtable (`vtable[3] = Integer.toString`, all nine slots filled).
+    `Magic.readX0`'s comment claimed a measurement -- "reading it before and after readX16 both give the same
+    value" -- and that control only ever tested the READER, never the shim. **A control that cannot see the
+    thing it is controlling for licenses exactly the wrong conclusion.**
+  - **FIX: the reclaim drops the image-side memos pointing into the code it just rewound.** Only CODE_ARENA
+    memos are cleared -- a memo naming a baked body is image memory no reclaim touches, and re-resolving
+    those is pure cost. Clearing is safe either way: the memo is a CACHE, so the next call re-resolves and
+    memoizes again. Generation-stamping `lzTab` cannot work (by the time `lazyCompile` sees a stale index the
+    table is gone and the method identity is unrecoverable -- it could detect the fault but not repair it).
+  - **NEGATIVE CONTROL, kept runnable as `BAKE_MEMO_REPAIR`.** ON: 38 demos, `bakeMemosDropped=11`, twenty-one
+    failure markers zero. OFF: the IDENTICAL failure -- same `idx=3138`, same entry 11, same method, LispDemo
+    dead. One word apart. (QEMU; the Pi boot confirms the repair FIRES and that nothing regressed, which is a
+    weaker and different claim.)
+  - **PI-VALIDATED: `bakeMemosDropped` 0 -> 11 on silicon**, the same count as QEMU and at the same point.
+    38 demos, `self-build retired`, twenty-one markers zero, `ticks/core c1=50 c2=50 c3=50`, `finish HML`
+    20/20/20, inversion `HML` / `HIGH blocked 60ms`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`,
+    `sum20=210`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55` (byte-identical to the
+    figures already recorded), `lisp evals=600 result=610 stable=1` -- the demo that was dying -- and
+    WPA2 -> HTTP 200 OK, 828 bytes.
+  - **FOUR SILENCES CLOSED, each of which ALONE turns a nameable failure into an untraceable one.** They
+    compose, which is why the arc cost what it did:
+    - `stashHelper` stashed NOTHING for a helper with no baked body. A helper called only from hand-emitted
+      A64 is invisible to RTA, so `badTailTarget` was never laid out, its address static stayed 0, and the
+      guard that calls it **emitted no code at all**. It reports now, and the helper is rooted in
+      `BAKE_ROOTS`. **This is the `watchRecv` bug a second time**, and the writer-side twin of the silent
+      `if (room) { record it }` shape this file calls its most expensive failure mode.
+    - the three resolve trampolines tail-branched UNGUARDED. They check now, and name the CALL SITE off the
+      frame -- still up at that point -- rather than a register the branch destroys.
+    - four stub emitters baked a trampoline address with NO check; a 0 there bakes `br 0` at EMIT time and
+      stays silent until the stub is finally entered, possibly thousands of batches later.
+    - both of `lazyCompile`'s `return 0L` paths were silent. The index guard is **benign on the WRITER and
+      fatal on METAL and returned the same value in both** -- a path whose meaning depends on which world
+      runs it, with no way for the caller to tell.
+  - **AND THE INSTRUMENT HAD TO BE PROVEN BEFORE ITS SILENCE MEANT ANYTHING.** The first guard build was
+    INERT (the stash above), so "the three trampolines are cleared" was worth nothing and was retracted.
+    Inverting `cbnz` to `cbz` made a healthy resolve trip it at `java/util/Properties.<clinit>+0x28`; that is
+    what licensed reading the real polarity's silence. Same for the repair counter: `bakeMemosDropped` was
+    added and PRINTED NOWHERE, which is the same defect as an instrument that cannot fire.
+
+- **THE `jdk/internal/util/Preconditions` OVERLAY IS RETIRED -- stock java.base is used instead (2026-09-21,
+  PI-VALIDATED).** A hand-written 61-line minimum shadowing the class every index and range check routes
+  through. Against stock it dropped the entire **`long` family** (its own javadoc admitted it: "a long
+  overload is added on demand if jitFail names it"), `outOfBoundsExceptionFormatter`, and the whole
+  `outOfBounds*`/`outOfBoundsMessage` machinery -- so **EVERY out-of-bounds exception lost its message**,
+  stock's "Index 5 out of bounds for length 3" becoming a bare `IndexOutOfBoundsException`. The three
+  formatters were real `BiFunction`s in stock and `null` here.
+  - **Removal was blocked twice and both blockers are closed:** the writer's `findImpl` not searching
+    interface defaults (`9e5666f`), and the memo defect above -- **which this overlay never caused, only
+    EXPOSED.** Dropping it changes which methods defer and when the reclaim lands relative to a memo.
+  - **THE BOOT PROVES THE STOCK CLASS IS ACTUALLY USED, rather than merely tolerated:** new
+    `arrayadopt [Ljava/lang/Number;` lines appear where there were none, which is stock's
+    `outOfBoundsMessage` building its `List<? extends Number>`. The message machinery is live.
+  - **`--add-opens java.base/java.util=ALL-UNNAMED` is needed at FIVE sites, not the four recorded.**
+    `CompilerTest` builds an image as its fixpoint check and failed with `InaccessibleObjectException` on
+    `ImmutableCollections.EMPTY_LIST` until it got the flag. Host: A64 105, object-model 22, class-reader
+    171, refmap 14, **compiler 40**, crypto 17, zip 91, `overlay-check 0 new` -- the compiler count holding
+    is the assertion that matters, since the guards are loader-emitted metal stubs and `READ_X19` only adds
+    an intrinsic id the writer's fixtures never use.
+
 - **A `getstatic` FROM AN ORDINARY METHOD DOES NOT INITIALIZE THE CLASS -- a PRE-EXISTING silent wrong answer,
-  reduced to twenty lines (2026-09-21, QEMU; a FINDING, not a fix, and NOT Pi-validated).** The field reads
-  NULL. `test/jdk/junit/ClinitOrderProbe` is a mutually-referential `<clinit>` pair whose back-reference sits
-  in a CONSTRUCTOR, and on HEAD it fails in BOTH orders while its own control arms pass:
+  reduced to twenty lines (2026-09-21).**
+  **FIXED AND PI-VALIDATED SINCE -- the card below is the FINDING as it stood, kept for the hypotheses it
+  killed.** `a12acf8` emits a JVMS 5.5 active-use guard at getstatic/putstatic/new/invokestatic (`ENSURE_INIT`,
+  with a per-compile memo) and closes the re-entrancy window in `runPendingClinit`; all four probe arms match
+  the host, and the Pi ran 38 demos with every failure marker zero. THREE THINGS THAT CARD GOT WRONG, each
+  corrected by a control rather than by argument: the guard must go AFTER the intrinsic check in
+  `lowerInvokeStatic` (before it, `Unsafe.getLongUnaligned` NPE'd and took ArraysDemo with it); a
+  SELF-REFERENTIAL guard must be suppressed, or a `<clinit>` whose body is three `putstatic`s to its own
+  class re-enters forever (this is what hung ConcatDemo); and suppressing notes for guarded classes stalls
+  the boot outright -- reverted, and it reproduced order2's shape on a second class.
+
+  THE FINDING, as it stood: the field reads NULL. `test/jdk/junit/ClinitOrderProbe` is a
+  mutually-referential `<clinit>` pair whose back-reference sits in a CONSTRUCTOR, and on HEAD it failed in
+  BOTH orders while its own control arms passed:
 
   | arm | host | joe-ng HEAD |
   |---|---|---|
