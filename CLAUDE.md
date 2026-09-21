@@ -115,6 +115,88 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A `getstatic` FROM AN ORDINARY METHOD DOES NOT INITIALIZE THE CLASS -- a PRE-EXISTING silent wrong answer,
+  reduced to twenty lines (2026-09-21, QEMU; a FINDING, not a fix, and NOT Pi-validated).** The field reads
+  NULL. `test/jdk/junit/ClinitOrderProbe` is a mutually-referential `<clinit>` pair whose back-reference sits
+  in a CONSTRUCTOR, and on HEAD it fails in BOTH orders while its own control arms pass:
+
+  | arm | host | joe-ng HEAD |
+  |---|---|---|
+  | `order1 early field` -- a plain static read | `early-value` | `early-value` |
+  | **`order1 ctor saw`** -- getstatic inside `<init>` | `early-value` | **`null`** |
+  | **`order2 ctor saw`** | `early2-value` | **`null`** |
+  | `order2 early field` | `early2-value` | `early2-value` |
+
+  - **FOUR LINES REPRODUCE IT WITH NO GUEST CLASSES AT ALL.** `test/jdk/junit/ConstantDescProbe` reads
+    `java.lang.constant.ConstantDescs.CD_Class` and dies before printing anything:
+
+    ```
+    Exception in thread "main" java/lang/NullPointerException
+      at java/util/Objects.requireNonNull(Objects.java:220)
+      at java/lang/constant/DynamicConstantDesc.<init>(DynamicConstantDesc.java:92)
+      at <unclaimed pc=... after java/util/Objects.requireNonNull ...>
+      at jdk/internal/constant/PrimitiveClassDescImpl.<clinit>
+      at vm/Loader.runPendingClinit / ensureClinit / initClinitDeps / runPendingClinit
+    ```
+
+    `PrimitiveClassDescImpl.<clinit>` is one `new`, whose constructor does
+    `super(ConstantDescs.BSM_PRIMITIVE_CLASS, ...)` -- and that handle is null.
+  - **THIS IS WHAT `initClinitDeps` EXISTS TO PAPER OVER, AND THE PAPERING IS WHAT INVERTS A MUTUAL PAIR.**
+    The pre-pass initializes a `<clinit>`'s dependencies UP FRONT; JVMS 5.5 triggers them lazily AT THE
+    ACTIVE USE. `ConstantDescs` assigns `CD_Class` and `BSM_PRIMITIVE_CLASS` BEFORE it first touches
+    `PrimitiveClassDescImpl`, so a real JVM reaches that constructor with both fields set. Pre-initializing
+    runs the callee first and hands it nulls. **Stock is not leaning on CDS for this: `java -Xshare:off`
+    passes every arm**, so the ordering really is achievable.
+  - **BOTH ORDERS FAIL IDENTICALLY, which is the load-bearing reading.** It is therefore NOT an ordering
+    subtlety to be fixed by reordering the pre-pass -- the active-use trigger simply does not exist outside
+    initializer bodies, and `initClinitDeps` is a workaround for its absence.
+  - **IT BLOCKS THE MethodHandle ARC, and that is how it was found.** Stock `MethodType` otherwise RUNS on
+    metal: its `<clinit>` executes and pulls `ReferencedKeyMap` and `ReferenceQueue` without complaint, and
+    stock's weak intern table degrades to a strong one here (this collector never clears a `Reference`),
+    which over-retains one entry per distinct signature and is otherwise correct.
+
+  - **ATTEMPTED AND REVERTED, and the measurement is worth more than the code (stash `mh-arc:` ...).** A JVMS
+    5.5 trigger emitted at getstatic/putstatic/invokestatic/new, but ONLY inside `<clinit>` bodies -- new
+    helper `ENSURE_INIT` (**61**, the max over the WHOLE file + 1 per the NOTE), all seven wiring points,
+    `initClinitDeps` retired.
+    - **IT COULD NEVER HAVE WORKED, and the probe is what says so rather than the reasoning.** Both failing
+      arms read the field from `<init>`, an ORDINARY method, so a guard confined to initializer bodies never
+      fires on the instruction that matters.
+    - **AND IT COST THE SUITE: 38 demos -> 2.** The two logs are byte-identical up to `batch 6` and both
+      `CTOR SKIPPED` lines; the control then prints `batch 7` and `dbl 1.5 = [1.5]` while the fixed image
+      HANGS -- no trap, no output, 12 minutes at a point the control cleared in seconds. That arm is the
+      float/double concat path, which resolves `Double.toString` BY NAME at run time and compiles a large
+      closure on the spot, so every initializer in it carried a guard that re-enters `ensureClinit` ->
+      `clinitEntryOf` -> `LOCK_CLINIT`. Retiring the pre-pass while it is still the only thing doing that
+      work is not a safe half-way state.
+    - **TWO HAZARDS WERE CAUGHT IN DESIGN RATHER THAN BY A BOOT, and both are reusable.** The guard's operand
+      must be COMPILE-TIME IMMUTABLE -- a blob's Utf8 address, never a registry index, because a demand-load
+      can register a class between the size pass and the emit pass and a differing WORD COUNT overruns the
+      buffer. And the guard is a CALL, so it needs `spillLive`/`reloadLive` -- which means the seam needs a
+      separate PREDICATE, or the spill would be emitted in the writer too and break the byte-for-byte
+      self-hosting fixpoint. It held: `compiler: 40 checks`.
+
+  - **MY OWN PROBE WAS VACUOUS FIRST TIME, AND IT PASSED ON A VM THAT DEMONSTRABLY HAS THE BUG.**
+    `static final String EARLY = "early-value"` is a CONSTANT VARIABLE (JLS 4.12.4), so javac inlines it at
+    every use site as an `ldc`: there is no getstatic, no initialization dependency, and nothing under test.
+    A method call makes the initializer a non-constant expression, and `javap -c` then shows the real
+    `getstatic Early.EARLY` in `Late.<init>`. **This is the third time constant folding has hollowed out an
+    arm in this file** (both ConcatDemo cases), and the rule is the same: verify with `javap` that the arm
+    emits the instruction it claims to test.
+  - **THREE HARNESS DEFECTS OF MINE ON THE WAY, each of which silently fakes a result.** (1) macOS has NO
+    `timeout` -- `nohup timeout 900 qemu ...` failed with "No such file or directory" and the run never
+    started, which reads exactly like a boot that produced nothing; `perl -e 'alarm N; exec @ARGV'` is the
+    portable form. (2) A bare `nohup qemu &` NEVER EXITS, because a finished guest spins in `Magic.wfe()`
+    rather than powering off -- two probe boots were still running four hours later and were killed by the
+    host for memory pressure. (3) My suite terminal-state filter did not include the real end marker
+    (`self-build retired`), so a COMPLETED control run looked like a hang -- "silence is not success" applied
+    to my own instrument.
+  - **WHAT IS NOT ESTABLISHED:** whether the self-patching form of the guard (first execution initializes,
+    then NOPs out its own call site and publishes the line) fixes the ConcatDemo hang. That hang looks like
+    re-entrancy during initializer COMPILATION rather than per-site cost, so it needs diagnosis before more
+    code. The two probes are the gate for that work -- seconds on QEMU, with control arms, instead of a
+    ten-minute suite.
+
 - **AN OPERAND LIVE ACROSS A `Magic.call2` COMES BACK CLOBBERED -- LATENT, FOUND BY THE CONCAT ARC, NOT
   FIXED (2026-09-20).** Written as `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` sits on the
   OPERAND STACK across the intrinsic call and is destroyed: every double concat printed an EMPTY string,
@@ -7318,10 +7400,14 @@ defines the minimum the assembler must encode.
   NEW place, the change is a perturbation, not a cause. And over a bug that depends on stale registers, a
   bisect ranks ingredients by whether they disturb the accident -- arms can pass by LUCK. Ask what a passing
   arm left undisturbed, not only what it removed.
-- **`make overlaycheck` does NOT see a dropped superclass or interface** (it diffs members only). That blind
-  spot has now cost two of the worst bugs in the project -- StringBuilder dropping `Appendable`, and
-  PrintStream dropping `OutputStream`, the latter producing TOTAL SILENCE from the launcher. Until the tool
-  diffs the supertype chain, check it by hand whenever an overlay is added or edited.
+- **`make overlaycheck` DOES diff the supertype chain now -- this agreement used to say it did not, and that
+  is stale (corrected 2026-09-21).** The blind spot cost two of the worst bugs in the project -- StringBuilder
+  dropping `Appendable`, and PrintStream dropping `OutputStream`, the latter producing TOTAL SILENCE from the
+  launcher -- and it was closed by the supertype diff (see its FIRST find, StringBuilder/CharSequence). It is
+  not theoretical: a throwaway `java/lang/invoke/MethodType` overlay tried on 2026-09-21 was refused with
+  **`4 NEW dropped supertype(s)`**, naming `Serializable`, `Constable`, `TypeDescriptor` and
+  `TypeDescriptor$OfMethod`. Read the count as well as the pass/fail -- the backlog moving by less than
+  expected is itself a signal, which is how `Class.getAnnotation`'s erased-bound bug hid in plain sight.
 
 - Validate on a **real Pi 4** (USB-TTL serial) from M0 onward; QEMU `raspi4b` is
   a test aid with partial peripheral emulation, not ground truth, and it is not
