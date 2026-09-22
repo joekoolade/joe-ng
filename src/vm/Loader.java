@@ -11512,6 +11512,13 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("paramTypes0")))       { return VM.paramTypesAddr; }    // (I)Class[]
         }
+        // The BCM2711 hardware RNG, behind java.security.SecureRandom's self-seeding. Keyed by DECLARING
+        // CLASS like every native here -- registering one under the wrong class is the LINK FAILED this
+        // file already paid for once.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/security/SecureRandom")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("hwEntropy0")))        { return VM.hwEntropyAddr; }  // (byte[],I)I
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/ClassLoader")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("defineClass0")))      { return VM.defineClassAddr; }   // (String,byte[],II)Class

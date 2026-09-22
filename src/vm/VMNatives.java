@@ -12,6 +12,7 @@
 package vm;
 
 import board.bcm2711.Uart;
+import board.bcm2711.Rng;
 import magic.Magic;
 import objectmodel.ObjectModel;
 import static vm.VM.*;   // strBytes/printStr/heapBytes helpers + fileDir/fileCount/taskThreadObj/curTask fields
@@ -700,6 +701,26 @@ final class VMNatives
      * resource is genuinely absent. This is what lets it tell the two cases apart and report the second
      * rather than answer it wrongly in silence.
      */
+    /**
+     * {@code SecureRandom.hwEntropy0(byte[], int)} native: fill the array with hardware entropy.
+     *
+     * @param arr the guest {@code byte[]} to fill
+     * @param len how many bytes are wanted
+     * @return how many were written -- 0 when this board has no usable source, and SHORT of {@code len}
+     *         when the FIFO ran dry. The caller must treat both as a failure rather than pad: partial
+     *         entropy stretched to a full seed is a weak seed that looks exactly like a strong one.
+     */
+    static long hwEntropy(long arr, long len)
+    {
+        if (arr == 0L || len <= 0L)
+        {
+            return 0L;
+        }
+        long cap = Magic.load64(arr + ObjectModel.ARRAY_LENGTH_OFFSET);
+        long n = len < cap ? len : cap;
+        return Rng.fill(arr + ObjectModel.ARRAY_BASE_OFFSET, (int) n);
+    }
+
     static long resourceExists(long nameArr)
     {
         if (nameArr == 0L)

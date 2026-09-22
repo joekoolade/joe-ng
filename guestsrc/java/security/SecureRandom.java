@@ -157,18 +157,48 @@ public class SecureRandom extends java.util.Random implements java.io.Serializab
     /**
      * {@return a generator the platform considers STRONG}
      *
-     * <p>joe-ng cannot make that claim: "strong" is a statement about the SEED, and this VM has no proven
-     * entropy source. Refusing is the truthful answer, and a different one from "no such algorithm" only in
-     * the message -- which is why the message says so.
+     * <p>"Strong" is a statement about the SEED, so this asks the BOARD rather than asserting anything: it
+     * builds an instance and forces it to seed. On a board whose hardware RNG is present and passes the
+     * liveness check that succeeds; on one without, it refuses here rather than handing back a generator
+     * that will throw later from somewhere less obvious.
      *
-     * @throws NoSuchAlgorithmException always, until this VM has a validated entropy source
+     * @throws NoSuchAlgorithmException if this board has no usable entropy source
      */
     public static SecureRandom getInstanceStrong() throws NoSuchAlgorithmException
     {
-        throw new NoSuchAlgorithmException(
-                "joe-ng has no validated entropy source, so no SecureRandom here can be called strong; "
-                        + "seed one explicitly with setSeed(byte[]) if you have seed material");
+        SecureRandom sr = new SecureRandom();
+        try
+        {
+            sr.nextBytes(new byte[1]);
+        }
+        catch (Error e)
+        {
+            throw new NoSuchAlgorithmException(
+                    "this board has no usable entropy source, so no SecureRandom here can be called "
+                            + "strong; seed one explicitly with setSeed(byte[]) if you have seed material");
+        }
+        return sr;
     }
+
+    /**
+     * The board's hardware entropy source: fills {@code out} and returns how many bytes it managed.
+     *
+     * <p>A SHORT answer is a failure, not a partial success. Backed by {@code board.bcm2711.Rng}, which
+     * probes the BCM2711's RNG200 once, REFUSES a source whose sample words do not vary, and degrades to 0
+     * where the window is not mapped at all (QEMU).
+     *
+     * <p>DECLARED ON THE OUTER CLASS DELIBERATELY. A native is registered in {@code Loader.nativeBufAt}
+     * keyed by its DECLARING CLASS, and putting this on the nested {@code Sha1PrngSpi} made that key
+     * {@code java/security/SecureRandom$Sha1PrngSpi} -- which is not what was registered, so it resolved
+     * nowhere and surfaced as
+     * {@code LINK FAILED: ...$Sha1PrngSpi.hwEntropy0([BI)I -- class OK but no body}. That is the same trap
+     * the registration site's own comment warns about, and the diagnostic named it exactly.
+     *
+     * @param out where to put the entropy
+     * @param len how many bytes are wanted
+     * @return how many were written; 0 if this board has no usable source
+     */
+    private static native int hwEntropy0(byte[] out, int len);
 
     /** {@return this generator's provider} */
     public final Provider getProvider()
@@ -298,6 +328,9 @@ public class SecureRandom extends java.util.Random implements java.io.Serializab
      */
     private static final class Sha1PrngSpi extends SecureRandomSpi
     {
+        /** Bytes of hardware entropy taken per seed. 32 comfortably exceeds SHA1PRNG's 20-byte state. */
+        private static final int SEED_BYTES = 32;
+
         private crypto.Sha1Prng prng;
 
         @Override
@@ -328,30 +361,64 @@ public class SecureRandom extends java.util.Random implements java.io.Serializab
             prng.nextBytes(bytes, 0, bytes.length);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * <p>Served from the BOARD, never from the generator. Returning this DRBG's own output would let a
+         * caller "reseed" it from itself -- zero new uncertainty, dressed up as fresh seed -- so when the
+         * hardware cannot supply the full request this refuses rather than making up the difference.
+         */
         @Override
         protected byte[] engineGenerateSeed(int numBytes)
         {
-            // Deliberately NOT served from the generator. Seed material must come from an entropy source;
-            // returning this DRBG's own output would let a caller "reseed" it from itself -- zero new
-            // uncertainty, dressed up as fresh seed.
+            if (numBytes < 0)
+            {
+                throw new IllegalArgumentException("negative seed length");
+            }
+            byte[] seed = new byte[numBytes];
+            if (numBytes == 0 || hwEntropy0(seed, numBytes) == numBytes)
+            {
+                return seed;
+            }
             throw noEntropy("generateSeed");
         }
 
+        /**
+         * Ensure this generator has a seed, taking one from the BOARD if it has a usable source.
+         *
+         * <p>The check is ALL OR NOTHING on purpose: a short read means the hardware FIFO ran dry, and
+         * stretching partial entropy over a full seed produces a weak seed that is indistinguishable from
+         * a strong one. So anything less than {@link #SEED_BYTES} is treated exactly like no source at all.
+         */
         private void require()
         {
-            if (prng == null)
+            if (prng != null)
             {
-                throw noEntropy("nextBytes");
+                return;
             }
+            byte[] seed = new byte[SEED_BYTES];
+            if (hwEntropy0(seed, SEED_BYTES) == SEED_BYTES)
+            {
+                prng = new crypto.Sha1Prng(seed, SEED_BYTES);
+                // The seed array is ZEROED rather than left for the collector. It is the ONE piece of
+                // memory whose contents can reproduce every byte this generator will ever emit.
+                for (int i = 0; i < SEED_BYTES; i++)
+                {
+                    seed[i] = 0;
+                }
+                return;
+            }
+            throw noEntropy("nextBytes");
         }
 
         private static Error noEntropy(String what)
         {
-            return new Error("SecureRandom." + what + ": joe-ng has no validated entropy source, so this "
+            return new Error("SecureRandom." + what + ": this board has no usable entropy source, so this "
                     + "generator has no seed. An unseeded DRBG produces a PREDICTABLE stream that looks "
                     + "exactly like a random one, so this refuses rather than guessing. Call "
-                    + "setSeed(byte[]) with real seed material. (The BCM2711 hardware RNG at 0xFE104000 is "
-                    + "the intended source; it is absent under QEMU and not yet validated on silicon.)");
+                    + "setSeed(byte[]) with real seed material. (The source is the BCM2711 hardware RNG at "
+                    + "0xFE104000; it is absent under QEMU, and board.bcm2711.Rng also refuses a block "
+                    + "whose sample words do not vary. The boot log's `hw rng:` line says which.)");
         }
     }
 }

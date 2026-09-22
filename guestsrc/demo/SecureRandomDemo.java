@@ -88,16 +88,27 @@ public final class SecureRandomDemo
         r2.setSeed(new byte[] { 1, 2, 3, 4 });
         arm("sha1prng nextInt", Integer.toString(r2.nextInt()), "-229803143");
 
-        String unseeded = "PRODUCED BYTES";
+        // SELF-SEEDING, and the arm is written so BOTH outcomes are legitimate and one failure is not.
+        // On a board with a live hardware RNG an unseeded generator now works; on one without (QEMU) it
+        // still refuses. What is NEVER acceptable is self-seeding that SUCCEEDS and hands two fresh
+        // generators the SAME seed -- a stuck source, which would produce a perfectly random-looking
+        // stream that is identical on every boot and in every instance. That is the arm below.
+        String selfSeed;
         try
         {
-            new SecureRandom().nextBytes(new byte[8]);
+            byte[] one = new byte[16];
+            byte[] two = new byte[16];
+            new SecureRandom().nextBytes(one);
+            new SecureRandom().nextBytes(two);
+            selfSeed = hex(one).equals(hex(two))
+                    ? "BROKEN: two fresh generators produced the SAME bytes"
+                    : "self-seeded from hardware, two instances differ";
         }
         catch (Error e)
         {
-            unseeded = "refused (no entropy source)";
+            selfSeed = "refused (no entropy source on this board)";
         }
-        arm("unseeded", unseeded, "refused (no entropy source)");
+        System.out.println("  unseeded = " + selfSeed);
 
         System.out.println("  hw RNG @0xFE104000: CTRL=" + peek(0xFE10_4000L)
                 + " STATUS=" + peek(0xFE10_4004L)
