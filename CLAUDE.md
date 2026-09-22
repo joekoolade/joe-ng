@@ -115,13 +115,15 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22, QEMU-VALIDATED,
-  NOT YET PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
+- **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22,
+  PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
   `java.security.SecureRandom` seeds itself from it and **still refuses on a board that has none**.
 
   | gate | result |
   |---|---|
-  | `test/jdk/junit/SecureRandomProbe` | **QEMU `failures=0 divergences-unmet=0`**, host control `failures=0` |
+  | **Pi, boot report** | **`hw rng: RNG200 at 0xFE104000, live`** |
+  | **Pi, `demo/SecureRandomDemo`** | **`unseeded = self-seeded from hardware, two instances differ`** |
+  | `test/jdk/junit/SecureRandomProbe` | QEMU `failures=0 divergences-unmet=0`, host control `failures=0` |
   | demo suite (40 programs) | nineteen markers zero, every standing gate held, closure identical |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 39, zip 91, `overlay-check 0 new` |
 
@@ -166,10 +168,36 @@ defines the minimum the assembler must encode.
     control ran `java -cp out:$D`, and `out/` holds a copy of the probe built by `make jdktests` -- so the
     STALE class won and the control printed the OLD arms while the source plainly had the new ones. It reads
     exactly like an edit that did not take. The fresh directory goes FIRST.
-  - **NOT PI-VALIDATED.** QEMU can only exercise the ABSENT path -- the window faults there. What silicon has
-    to show is the live path: `hw rng: RNG200 at 0xFE104000, live`, `unseeded = self-seeded from hardware,
-    two instances differ`, and the probe's `board entropy: nextBytes=true generateSeed=true
-    getInstanceStrong=true`.
+  - **PI-VALIDATED, AND THE LIVE PATH IS THE HALF QEMU STRUCTURALLY COULD NOT REACH** -- the window faults
+    on the emulator, so every QEMU arm of this arc exercised the ABSENT path only. On silicon:
+    `hw rng: RNG200 at 0xFE104000, live` before any demo, then `unseeded = self-seeded from hardware, two
+    instances differ` -- the anti-stuck-source arm run against the REAL source rather than against a host's.
+    40 programs, nineteen markers zero (**`BROKEN` among them**), `ticks/core c1=50 c2=50 c3=50`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `steps/core 60/61/60/59`, `sum20=210`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`,
+    `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`, ExcDemo's 7-frame trace, and WPA2 -> HTTP
+    200 OK, 829 bytes.
+  - **THE NEVER-WRITE PREMISE IS MEASURED NOW RATHER THAN INFERRED: `CTRL=0x7fff`,** i.e. all thirteen
+    RBGEN bits (mask `0x1FFF`) set by the VideoCore firmware before our first instruction. The driver reads
+    that and enables nothing. `FIFO_COUNT=0x40001010` decodes as count **16** words with threshold 16 --
+    a full FIFO waiting -- and `bcm2835DATA=0` keeps the discriminator on the record: under the LEGACY
+    BCM2835 decode this block claims no words and no data at once, which cannot both be true of a source
+    that is visibly handing out entropy. Only the RNG200 decode is coherent.
+  - **AND THE CROSS-BOOT CHECK IS THE ONE A SINGLE BOOT CANNOT MAKE.** Within a boot the liveness check
+    only proves the three sample words DIFFER FROM EACH OTHER; a source that replayed the same three words
+    on every power-on would pass that and seed every boot of every board identically. It does not: this
+    boot drew `98e058ca 334b29a7 fa8b9e16` where the diagnostic boot drew `a77bf507 f2077214 65f887c6`.
+    Popcount 47 of 96 against an ideal of 48 (the previous boot's was 51) -- which is a sanity check on the
+    sample and **not** a randomness test, and is recorded as one.
+  - **THE FIFO DRAINS BY EXACTLY WHAT IS TAKEN: `count 16 -> 13` for three words**, so the driver is
+    consuming the hardware's queue rather than re-reading a latched register three times -- the failure that
+    would make three IDENTICAL words, which is what the distinctness check is for.
+  - **A DEFECT IN MY OWN PREDICTION, stated rather than quietly dropped.** I said silicon had to show three
+    lines and it showed two: the third, `board entropy: nextBytes=true generateSeed=true
+    getInstanceStrong=true`, belongs to `SecureRandomProbe`, which is a SEPARATE jdktest image and was never
+    on the card. So the probe's three-arm agreement is still QEMU-and-host only, and
+    **`getInstanceStrong` has not run on hardware**. Nothing about the boot contradicts it; it is simply not
+    what was flashed, and naming the gate you did not run is cheaper than re-deriving it later.
 
 - **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, PI-VALIDATED -- AND THE BOOT
   FOUND THE HARDWARE RNG).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
@@ -246,7 +274,8 @@ defines the minimum the assembler must encode.
     compares two different algorithms; on the host it is not even deterministic. It is a stated divergence
     now, not a `say()`.
   - **WHAT IS DELIBERATELY NOT DONE:** the hardware RNG DRIVER (the next flash decides whether there is
-    anything to drive); Hash_DRBG/SP 800-90A (needs CAVP vectors in-tree); `SecureRandomParameters` and the
+    anything to drive -- **DONE AND PI-VALIDATED the following day; see the RNG card at the top of this
+    file**); Hash_DRBG/SP 800-90A (needs CAVP vectors in-tree); `SecureRandomParameters` and the
     `engineReseed`/`engineGetParameters` surface (provider machinery this VM does not carry); and any
     claim that a `SecureRandom` here is "strong" -- `getInstanceStrong` refuses, because strength is a
     statement about the seed.
