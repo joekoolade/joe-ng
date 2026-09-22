@@ -32,6 +32,24 @@ public class Random
 
     public Random(long s)
     {
+        setSeed(s);
+    }
+
+    /**
+     * Reset this generator to the given seed, so the sequence from here is the JDK's for that seed.
+     *
+     * <p>Declared because a name-winning overlay DELETES whatever it does not declare, and this one is
+     * load-bearing twice over: {@code java.security.SecureRandom} OVERRIDES it (stock's SecureRandom must
+     * intercept {@code Random}'s seeding, or its inherited constructor would quietly install a linear
+     * congruential seed), and ordinary code re-seeds a {@code Random} to make a run reproducible.
+     *
+     * <p>{@code synchronized} as stock is, and the constructor now goes THROUGH it rather than assigning
+     * the field directly -- one scrambling rule in one place, so the two spellings cannot drift.
+     *
+     * @param s the seed
+     */
+    public synchronized void setSeed(long s)
+    {
         this.seed = (s ^ MULT) & MASK;
     }
 

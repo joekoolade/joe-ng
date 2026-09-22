@@ -5766,6 +5766,10 @@ public final class Loader
                 // trap-wired at PATCH TIME, so no link stub runs and the overlay is never consulted.
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/MessageDigest"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/Provider"))
+                // SecureRandom + its SPI are OVERLAID over crypto.Sha1Prng. The prefix covers
+                // SecureRandomSpi too. Stock reaches sun.security.jca and a regex over the
+                // securerandom.strongAlgorithms property, neither of which exists here.
+                || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureRandom"))
                 // Digest{Input,Output}Stream are STOCK: pure java.io filter streams over a MessageDigest,
                 // no natives and nothing to overlay.
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestInputStream"))
