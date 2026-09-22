@@ -219,15 +219,32 @@ defines the minimum the assembler must encode.
       say `STATUS = 0` ("no words available") and `DATA = 0`, which cannot both be true of an enabled RNG.
       So the block is RNG200, and the VideoCore firmware has already enabled it and let the FIFO fill --
       which matters, because it means joe-ng may never need to WRITE to that window.
-    - **WHAT IS NOT ESTABLISHED, and it is the whole remaining question: FIFO_DATA WAS NOT READ.** A
-      register that decodes plausibly as a FIFO count is not the same thing as a live entropy source. The
-      conclusive measurement is to read `FIFO_DATA +0x20` several times and show the values DIFFER and
-      `FIFO_COUNT` DECREMENTS -- a constant, or a count that never moves, would mean the decode above is a
-      coincidence. The demo reads it now, gated on a non-zero count, so the next boot settles it.
+    - **AND THE FIFO IS LIVE -- SETTLED ON THE NEXT BOOT, WHICH IS WHY THE CLAIM WAS SPLIT IN TWO.**
+
+      ```
+      hw RNG fifo: count 16 -> 13  words a77bf507 f2077214 65f887c6  (distinct=true, drained=true)
+      ```
+
+      Three reads drained EXACTLY three words, so the count tracks consumption; the words are distinct and
+      their popcount is 51 of 96 bits against a uniform expectation of 48. **96 bits is a liveness check and
+      NOT a randomness test** -- what it rules out is a constant, a counter, and a count that does not follow
+      reads, which is precisely what a coincidental decode of `0x40001010` would have looked like. Under
+      QEMU the same code prints `hw RNG fifo: absent (no device mapped)`.
+    - **SO joe-ng HAS A HARDWARE ENTROPY SOURCE, and `SecureRandom` can stop refusing.** That is the next
+      increment and it is now well-defined rather than speculative: a `board/bcm2711/Rng` that drains the
+      FIFO behind a liveness check, and self-seeding built on it. **It stays REFUSING until that lands** --
+      the measurement says a source exists, not that the VM is wired to it.
   - **AND THE READ-ONLY DISCIPLINE IS VINDICATED RATHER THAN MERELY CAUTIOUS.** The probe never writes, and
     on this board it never needs to: the firmware left the block enabled. Had it written `CTRL` to "make
     sure", it would have done so on a window whose layout it had not yet identified -- and a store to the
     wrong offset of a live peripheral is the one failure this VM cannot recover from.
+  - **THE WiFi FINALE FAILED ON THE SECOND BOOT AND IT IS ENVIRONMENTAL, checked rather than assumed.**
+    `wifi: join timeout` on `ATT2i7F662`. The scan COMPLETED (`wifi: scan done`), so SDIO, the firmware
+    upload and the scan path all worked -- and the target SSID is **not in the scan list**. The two boots'
+    scans share **NOT ONE** network (`ATT2i7F662`/`ATTFQF8r3A`/`MotoVAP_*` against
+    `ATTGh4ybVc`/`McClarenmesh`/`Donelson-*`): a different location or a changed AP, and nothing in this
+    change touches the WiFi path. This file already records one WiFi failure mis-read as a regression; the
+    discriminator both times is whether the CONFIGURED SSID appears in the scan.
 
 - **`java.security` OPENS: the permission layer runs STOCK, and `MessageDigest` runs on joe-ng's own streaming
   digests (2026-09-21, PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is
