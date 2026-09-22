@@ -115,6 +115,71 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **HMAC IS GENERIC AND STREAMING OVER `crypto/Digest` -- the engine half of `javax.crypto.Mac`
+  (2026-09-22, HOST-GATED; no boot, and the symmap says why).** `crypto/Hmac` gains an INSTANCE side --
+  MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512, fed incrementally -- while the static `sha1` that backs WPA2 is
+  left byte-for-byte alone.
+
+  | gate | result |
+  |---|---|
+  | `crypto: 39 -> 83 checks` | incl. **3,432 comparisons against the JDK's own `javax.crypto.Mac`** |
+  | published vectors | RFC 2202 (MD5, SHA-1) + RFC 4231 (SHA-224..512), 20 cases, **each asserted TWICE** |
+  | `generic HMAC-SHA1 == the WPA2 one-shot` | **99 of 99 pairs**, two independent SHA-1s through two HMACs |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, zip 91, `overlay-check 0 new` |
+
+  - **STREAMING IS THE POINT, not a nicety.** `Mac.update()`/`doFinal()` is the stock contract, and the
+    existing one-shot allocates `block + msgLen` -- which makes a MAC's memory cost its MESSAGE SIZE. The
+    instance form holds two `Digest`s and two pads, ~200 bytes whatever it authenticates. Same argument
+    that made `crypto/Digest` streaming rather than `crypto/Sha1`-shaped.
+  - **THE WPA2 PATH IS UNTOUCHED ON PURPOSE, AND THE REASON IS WHAT IT WOULD COST TO GATE.** Collapsing
+    `Hmac.sha1` onto the instance path switches the 4-way handshake -- the most hardware-validated code in
+    this tree -- onto a DIFFERENT SHA-1 implementation, buys WPA2 nothing, and can only be gated by a flash.
+    So it is not done here; instead `hmacAgreesWithWpa2` MEASURES the two as byte-identical across 99
+    key/message pairs, which turns that collapse from a guess into a change whose evidence already stands.
+  - **EVERY PUBLISHED CONSTANT IS ASSERTED TWICE -- against our engine AND against the JDK -- and that is
+    not redundancy.** The constants are TRANSCRIBED rather than read from an RFC in this tree, and this file
+    already records what a recalled constant costs. If one is wrong BOTH arms fail together and the engine
+    is exonerated; if only the first fails, the engine is wrong. **The negative control proved the split
+    works:** with the opad byte flipped one bit, all 20 engine arms failed and **all 20 "is the CONSTANT
+    right?" arms passed** -- the test said "engine wrong, constants right" without anyone having to reason
+    about it. (All 20 recalled constants were in fact correct on the first run.)
+  - **AND THE SECOND CONTROL LANDED ON EXACTLY ONE ARM, which is what says that arm earns its place.**
+    Deleting `doFinal`'s reset failed **858 of 3,432** comparisons -- precisely a quarter, i.e. the REUSE
+    pattern alone (6 algs x 11 keys x 13 messages), with one-shot/byte-wise/ragged all still passing. A
+    `doFinal` that did not reset authenticates the CONCATENATION of two messages and returns a perfectly
+    plausible MAC; no other arm can see it.
+  - **THE KEY LENGTHS STRADDLE BOTH BLOCK SIZES, because "hash the key first" turns on at the BLOCK and the
+    block differs by algorithm** -- 64 for MD5/SHA-1/224/256, 128 for SHA-384/512. A 100-byte key is SHORT
+    for SHA-512 and LONG for SHA-256, so one length cannot exercise both branches.
+  - **THE COMPARISON COUNTS ARE ASSERTED, not merely printed.** `0 mismatches` also passes when the loop
+    never ran, which is the "an instrument that cannot fire looks exactly like a condition that never
+    happens" trap this file records four times. The expected count is derived from the loop dimensions and
+    checked (`3432`, `99`).
+  - **NO BOOT GATES THIS, AND THE SYMBOL MAP IS WHY -- I PREDICTED THE IMAGE WOULD BARELY MOVE AND IT GREW
+    6,592 BYTES.** `JOENG_SYMMAP=1` shows only `crypto/Hmac.sha1` and `crypto/Hmac.copy` compiled into the
+    image: **not one of the new members is baked**, because nothing references them yet. So the prediction
+    was right about the MECHANISM and wrong about the SIZE, and checking it is what found the next item.
+  - **A HOST TEST SHIPS IN EVERY `kernel8.img`, and it is three quarters of that growth. FOUND, RECORDED,
+    DELIBERATELY NOT FIXED HERE.** `demandLoadable` takes everything under `crypto/` -- correct for the
+    dual-world engine -- and `out/crypto/CryptoTest.class` matches that prefix, so the host test's BYTES are
+    in the classDir of every image. The account closes to 5 bytes (8-alignment):
+
+    | | HEAD | now | delta |
+    |---|---|---|---|
+    | `crypto/Hmac.class` (the engine, intended) | 807 | 2,483 | **+1,676** |
+    | `crypto/CryptoTest.class` (a HOST TEST) | 10,429 | 15,340 | **+4,911** |
+    | image | 33,595,124 | 33,601,716 | **+6,592** |
+
+    ~15 KB of host-only code -- `java.util.Random`, `javax.crypto`, JDK exceptions -- reachable by name from
+    guest code via `Class.forName`. **Not bundled:** excluding tests from the classDir is a WRITER change
+    that alters every image and deserves its own gate, and this file records what putting two unvalidated
+    changes on one card costs.
+  - **NEXT, and it is what needs a boot:** the `javax.crypto.Mac`/`MacSpi`/`SecretKeySpec` overlay. It is
+    the `ServiceLoader`/`MessageDigest` exception again and for the same measured reason -- stock
+    `Mac.getInstance` goes through `JceSecurity` provider VERIFICATION, i.e. jar signing under
+    `sun/security/`, which is denied here -- so no faithful copy can work whatever its shape. That increment
+    is what first makes the engine above reachable on metal.
+
 - **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22,
   PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
   `java.security.SecureRandom` seeds itself from it and **still refuses on a board that has none**.

@@ -65,6 +65,11 @@ public final class CryptoTest
         digestVectors();
         digestAgainstJdk();
 
+        // HMAC (crypto.Hmac's instance side), which backs javax.crypto.Mac.
+        hmacVectors();
+        hmacAgainstJdk();
+        hmacAgreesWithWpa2();
+
         // The SHA1PRNG DRBG behind java.security.SecureRandom.
         prngAgainstJdk();
 
@@ -211,6 +216,232 @@ public final class CryptoTest
      * every other SHA1PRNG in the world. The mid-stream reseed is there for the same reason: stock
      * SUPPLEMENTS the state rather than replacing it, and one draw cannot tell those apart.
      */
+    /**
+     * Published HMAC known-answer vectors: RFC 2202 (HMAC-MD5, HMAC-SHA1) and RFC 4231 (SHA-224..512).
+     *
+     * <p>EVERY constant here is checked TWICE -- against our engine AND against the JDK's own
+     * {@code javax.crypto.Mac}. That is not redundancy. These constants are transcribed rather than read
+     * from an RFC in this tree, and this file already records what a recalled constant costs: if one is
+     * wrong, BOTH arms fail together and the engine is exonerated; if only the first fails, the engine is
+     * wrong. One arm alone cannot separate those, and a MAC is the worst possible place to guess, because
+     * every wrong answer looks exactly as random as every right one.
+     *
+     * <p>The cases that DISCRIMINATE rather than merely exercise: a key LONGER than the block (RFC 2202
+     * cases 6 and 7), which turns on the hash-the-key branch -- at 64 bytes for MD5/SHA-1/224/256 and at
+     * 128 for SHA-384/512, so the same key length exercises different branches per algorithm.
+     */
+    private static void hmacVectors()
+    {
+        // RFC 2202 §2 -- HMAC-MD5.
+        hmacVector(Digest.MD5, "HmacMD5", rep((byte) 0x0b, 16), ascii("Hi There"),
+                "9294727a3638bb1c13f48ef8158bfc9d");
+        hmacVector(Digest.MD5, "HmacMD5", ascii("Jefe"), ascii("what do ya want for nothing?"),
+                "750c783e6ab0b503eaa86e310a5db738");
+        hmacVector(Digest.MD5, "HmacMD5", rep((byte) 0xaa, 16), rep((byte) 0xdd, 50),
+                "56be34521d144c88dbb8c733f0e8b3f6");
+
+        // RFC 2202 §3 -- HMAC-SHA1. Cases 6 and 7 use an 80-byte key, i.e. LONGER than the 64-byte block.
+        hmacVector(Digest.SHA1, "HmacSHA1", rep((byte) 0x0b, 20), ascii("Hi There"),
+                "b617318655057264e28bc0b6fb378c8ef146be00");
+        hmacVector(Digest.SHA1, "HmacSHA1", ascii("Jefe"), ascii("what do ya want for nothing?"),
+                "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
+        hmacVector(Digest.SHA1, "HmacSHA1", rep((byte) 0xaa, 20), rep((byte) 0xdd, 50),
+                "125d7342b9ac11cd91a39af48aa17b4f63f175d3");
+        hmacVector(Digest.SHA1, "HmacSHA1", rep((byte) 0xaa, 80),
+                ascii("Test Using Larger Than Block-Size Key - Hash Key First"),
+                "aa4ae5e15272d00e95705637ce8a3b55ed402112");
+        hmacVector(Digest.SHA1, "HmacSHA1", rep((byte) 0xaa, 80),
+                ascii("Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"),
+                "e8e99d0f45237d786d6bbaa7965c7808bbff1a91");
+
+        // RFC 4231 §4.2 (case 1), §4.3 (case 2), §4.4 (case 3) -- the SHA-2 family.
+        byte[] k1 = rep((byte) 0x0b, 20);
+        byte[] d1 = ascii("Hi There");
+        hmacVector(Digest.SHA224, "HmacSHA224", k1, d1,
+                "896fb1128abbdf196832107cd49df33f47b4b1169912ba4f53684b22");
+        hmacVector(Digest.SHA256, "HmacSHA256", k1, d1,
+                "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+        hmacVector(Digest.SHA384, "HmacSHA384", k1, d1,
+                "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2f"
+                        + "a9cb6");
+        hmacVector(Digest.SHA512, "HmacSHA512", k1, d1,
+                "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea"
+                        + "3f4e4be9d914eeb61f1702e696c203a126854");
+
+        byte[] k2 = ascii("Jefe");
+        byte[] d2 = ascii("what do ya want for nothing?");
+        hmacVector(Digest.SHA224, "HmacSHA224", k2, d2,
+                "a30e01098bc6dbbf45690f3a7e9e6d0f8bbea2a39e6148008fd05e44");
+        hmacVector(Digest.SHA256, "HmacSHA256", k2, d2,
+                "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        hmacVector(Digest.SHA384, "HmacSHA384", k2, d2,
+                "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab"
+                        + "21649");
+        hmacVector(Digest.SHA512, "HmacSHA512", k2, d2,
+                "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f"
+                        + "0e6fdcaeab1a34d4a6b4b636e070a38bce737");
+
+        byte[] k3 = rep((byte) 0xaa, 20);
+        byte[] d3 = rep((byte) 0xdd, 50);
+        hmacVector(Digest.SHA224, "HmacSHA224", k3, d3,
+                "7fb3cb3588c6c1f6ffa9694d7d6ad2649365b0c1f65d69d1ec8333ea");
+        hmacVector(Digest.SHA256, "HmacSHA256", k3, d3,
+                "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe");
+        hmacVector(Digest.SHA384, "HmacSHA384", k3, d3,
+                "88062608d3e6ad8a0aa2ace014c8a86f0aa635d947ac9febe83ef4e55966144b2a5ab39dc13814b94e3ab6e101a"
+                        + "34f27");
+        hmacVector(Digest.SHA512, "HmacSHA512", k3, d3,
+                "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39bf3e848279a722c806b485a47e6"
+                        + "7c807b946a337bee8942674278859e13292fb");
+    }
+
+    /** One published vector, asserted against our engine AND against the JDK -- see {@link #hmacVectors}. */
+    private static void hmacVector(int alg, String jdkName, byte[] key, byte[] data, String expect)
+    {
+        byte[] out = new byte[Digest.lengthOf(alg)];
+        Hmac.mac(alg, key, key.length, data, data.length, out);
+        T.eqStr(jdkName + " vector", expect, hex(out, out.length));
+
+        byte[] jdk = jdkMac(jdkName, key, data);
+        T.eqStr(jdkName + " vector (is the CONSTANT right?)", expect, hex(jdk, jdk.length));
+    }
+
+    /**
+     * Every HMAC this engine offers, against the JDK's own {@code javax.crypto.Mac}, over key and message
+     * lengths chosen to cross every boundary that changes a code path.
+     *
+     * <p>The KEY lengths straddle 64 and 128, because "hash the key first" turns on at the BLOCK size and
+     * the block size differs by algorithm -- so a 100-byte key is short for SHA-512 and long for SHA-256,
+     * and one length cannot exercise both. The MESSAGE lengths straddle the same two block sizes plus the
+     * offsets where the length field starts. The FEEDING patterns are the other half: one-shot, byte at a
+     * time, ragged chunks, and REUSE after {@code doFinal} -- an implementation whose doFinal did not reset
+     * authenticates the CONCATENATION of two messages and still returns a perfectly plausible MAC.
+     */
+    private static void hmacAgainstJdk()
+    {
+        String[] names = { "HmacMD5", "HmacSHA1", "HmacSHA224", "HmacSHA256", "HmacSHA384", "HmacSHA512" };
+        int[] keyLens = { 1, 16, 20, 32, 63, 64, 65, 127, 128, 129, 200 };
+        int[] msgLens = { 0, 1, 55, 56, 63, 64, 65, 111, 112, 127, 128, 129, 1000 };
+        java.util.Random rnd = new java.util.Random(20260922L);
+        int compared = 0;
+        int bad = 0;
+
+        for (int alg = 0; alg < names.length; alg++)
+        {
+            for (int ki = 0; ki < keyLens.length; ki++)
+            {
+                byte[] key = new byte[keyLens[ki]];
+                rnd.nextBytes(key);
+
+                for (int mi = 0; mi < msgLens.length; mi++)
+                {
+                    int len = msgLens[mi];
+                    byte[] data = new byte[len];
+                    rnd.nextBytes(data);
+                    byte[] want = jdkMac(names[alg], key, data);
+
+                    Hmac oneShot = new Hmac(alg, key, key.length);
+                    oneShot.update(data, 0, len);
+                    compared += 1;
+                    bad += same(want, oneShot.doFinal()) ? 0 : 1;
+
+                    Hmac byteWise = new Hmac(alg, key, key.length);
+                    for (int i = 0; i < len; i++)
+                    {
+                        byteWise.update(data[i]);
+                    }
+                    compared += 1;
+                    bad += same(want, byteWise.doFinal()) ? 0 : 1;
+
+                    Hmac ragged = new Hmac(alg, key, key.length);
+                    int p = 0;
+                    while (p < len)
+                    {
+                        int n = 1 + rnd.nextInt(70);
+                        if (n > len - p)
+                        {
+                            n = len - p;
+                        }
+                        ragged.update(data, p, n);
+                        p += n;
+                    }
+                    compared += 1;
+                    bad += same(want, ragged.doFinal()) ? 0 : 1;
+
+                    // doFinal must RESET under the same key: the SECOND answer from a reused object must
+                    // equal the first, not the MAC of both messages run together.
+                    Hmac reused = new Hmac(alg, key, key.length);
+                    reused.update(data, 0, len);
+                    reused.doFinal();
+                    reused.update(data, 0, len);
+                    compared += 1;
+                    bad += same(want, reused.doFinal()) ? 0 : 1;
+                }
+            }
+        }
+
+        // The COUNT is asserted, not just embedded in a label: a loop that never ran reports zero
+        // mismatches and passes vacuously, which is the "an instrument that cannot fire looks exactly like
+        // a condition that never happens" trap this project has paid for four times.
+        T.eq("hmac vs jdk: comparisons made", names.length * keyLens.length * msgLens.length * 4, compared);
+        T.eq("hmac vs jdk: mismatches over " + compared + " comparisons", 0, bad);
+    }
+
+    /**
+     * The generic HMAC-SHA1 against the WPA2 one-shot it does not yet replace.
+     *
+     * <p>This exists so that collapsing {@link Hmac#sha1} onto the instance path is later a change with its
+     * evidence already standing rather than a guess gated by a flash. It compares two INDEPENDENT SHA-1
+     * implementations ({@link Digest} and {@link Sha1}) through two independent HMAC constructions, so a
+     * disagreement names a real defect in one of them rather than a refactor risk.
+     */
+    private static void hmacAgreesWithWpa2()
+    {
+        int[] keyLens = { 1, 16, 20, 32, 63, 64, 65, 100, 200 };
+        int[] msgLens = { 0, 1, 20, 55, 56, 63, 64, 65, 127, 128, 500 };
+        java.util.Random rnd = new java.util.Random(20260922L);
+        int compared = 0;
+        int bad = 0;
+
+        for (int ki = 0; ki < keyLens.length; ki++)
+        {
+            byte[] key = new byte[keyLens[ki]];
+            rnd.nextBytes(key);
+            for (int mi = 0; mi < msgLens.length; mi++)
+            {
+                byte[] data = new byte[msgLens[mi]];
+                rnd.nextBytes(data);
+
+                byte[] wpa2 = new byte[Sha1.DIGEST];
+                Hmac.sha1(key, key.length, data, data.length, wpa2);
+
+                byte[] generic = new byte[Digest.lengthOf(Digest.SHA1)];
+                Hmac.mac(Digest.SHA1, key, key.length, data, data.length, generic);
+
+                compared += 1;
+                bad += same(wpa2, generic) ? 0 : 1;
+            }
+        }
+
+        T.eq("generic vs WPA2 HMAC-SHA1: pairs compared", keyLens.length * msgLens.length, compared);
+        T.eq("generic HMAC-SHA1 == the WPA2 one-shot, over " + compared + " pairs", 0, bad);
+    }
+
+    /** {@return the JDK's own MAC} The independent oracle: a different implementation, not a second copy. */
+    private static byte[] jdkMac(String name, byte[] key, byte[] data)
+    {
+        try
+        {
+            javax.crypto.Mac m = javax.crypto.Mac.getInstance(name);
+            m.init(new javax.crypto.spec.SecretKeySpec(key, name));
+            return m.doFinal(data);
+        }
+        catch (java.security.GeneralSecurityException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
     private static void prngAgainstJdk()
     {
         java.util.Random rnd = new java.util.Random(31337L);
