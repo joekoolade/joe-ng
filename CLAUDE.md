@@ -192,12 +192,40 @@ defines the minimum the assembler must encode.
   - **THE FIFO DRAINS BY EXACTLY WHAT IS TAKEN: `count 16 -> 13` for three words**, so the driver is
     consuming the hardware's queue rather than re-reading a latched register three times -- the failure that
     would make three IDENTICAL words, which is what the distinctness check is for.
-  - **A DEFECT IN MY OWN PREDICTION, stated rather than quietly dropped.** I said silicon had to show three
-    lines and it showed two: the third, `board entropy: nextBytes=true generateSeed=true
-    getInstanceStrong=true`, belongs to `SecureRandomProbe`, which is a SEPARATE jdktest image and was never
-    on the card. So the probe's three-arm agreement is still QEMU-and-host only, and
-    **`getInstanceStrong` has not run on hardware**. Nothing about the boot contradicts it; it is simply not
-    what was flashed, and naming the gate you did not run is cheaper than re-deriving it later.
+  - **A DEFECT IN MY OWN PREDICTION, stated rather than quietly dropped -- AND THEN CLOSED BY FLASHING THE
+    PROBE (2026-09-22).** I said silicon had to show three lines and it showed two: the third,
+    `board entropy: ...`, belongs to `SecureRandomProbe`, a SEPARATE jdktest image that was never on the
+    card. Naming the gate you did not run is what made it one boot to close rather than a re-derivation:
+    an image with `main=SecureRandomProbe` was built and flashed, and the Pi reads
+
+    ```
+         board entropy: nextBytes=true generateSeed=true getInstanceStrong=true
+    ok   entropy answers agree = true (want true)
+    ok   two fresh generators differ = true (want true)
+    SecureRandomProbe done, failures=0 divergences-unmet=0
+    ```
+
+    against QEMU's `false/false/false` + `skipped` on the byte-identical source. **`getInstanceStrong` HAS
+    run on hardware now**, and it is not a construction that merely succeeds: the overlay draws a byte and
+    converts a refusal into `NoSuchAlgorithmException`, so `true` means it went `require()` -> `hwEntropy0`
+    -> `Rng.fill` -> 32 bytes -> `Sha1Prng` on silicon. The 14 deterministic SHA1PRNG arms are known-answer
+    checks against the JDK's own stream and all passed, so the DRBG is gated independently of entropy.
+  - **THE PROBE'S REGISTER DUMP IS WIDER THAN THE DEMO'S, AND THE EXTRA REGISTER IS A THIRD COHERENCE
+    CHECK.** It also reads **`+0x0C` = `0x0048d799`**, which under RNG200 is `RNG_TOTAL_BIT_COUNT`:
+    **4,773,785 bits, ~583 KiB, free-run since power-on** -- orders of magnitude more than this boot
+    consumed, which is what a continuously-running RBG discarding into a full FIFO looks like. It is
+    therefore evidence the CORE is generating, not merely that a window holds plausible words. **Stated as
+    a reading rather than a measurement:** the BCM2835 layout puts a small FIFO-threshold field at that
+    offset, which cannot hold 4.77 million, and that map is recalled rather than read from this tree -- so
+    this SUPPORTS the RNG200 identification the two independent grounds above already establish, and is not
+    load-bearing on its own. `FIFO +0x20` popped `0x9977c27c` with `FIFOCNT` still reading count 16 after
+    four seedings, so the queue refills faster than the probe drains it.
+  - **NINE `INITIALIZER RUNNING UNDER THE LOADER LOCK` LINES ON THAT BOOT, AND THEY ARE THE STANDING HAZARD
+    RATHER THAN AN EVENT** -- the report says so itself, and this file already records the mechanism
+    (`lazyCompile -> ensureClinit`, capped, totalled as `clinitLk=`). **NOT CHASED, and the difference is
+    recorded rather than explained:** the 40-program suite boot printed none, this single-launch probe
+    printed nine. A probe image has ONE batch and then compiles everything lazily, which is the route the
+    warning sits on -- but that is a reading, not a measurement, and no boot has been spent on it.
 
 - **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, PI-VALIDATED -- AND THE BOOT
   FOUND THE HARDWARE RNG).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
