@@ -115,6 +115,62 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22, QEMU-VALIDATED,
+  NOT YET PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
+  `java.security.SecureRandom` seeds itself from it and **still refuses on a board that has none**.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/SecureRandomProbe` | **QEMU `failures=0 divergences-unmet=0`**, host control `failures=0` |
+  | demo suite (40 programs) | nineteen markers zero, every standing gate held, closure identical |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 39, zip 91, `overlay-check 0 new` |
+
+  - **THE DRIVER NEVER WRITES, AND THAT IS A SAFETY PROPERTY RATHER THAN LAZINESS.** The firmware has
+    already enabled the block and let the FIFO fill, so there is nothing to configure -- and a guarded READ
+    of an unmapped peripheral raises a fault this VM recovers from, while a STORE does not (the first probe
+    of this arc died at an `<unclaimed pc>` the unwinder could not attribute). If `CTRL` ever reads as
+    DISABLED this reports "no entropy" instead of enabling it: refusing is recoverable, guessing at the
+    layout of a live peripheral is not.
+  - **THE LIVENESS CHECK IS THE POINT, AND IT REJECTS RATHER THAN REPORTS.** `Rng.available()` draws sample
+    words and refuses the source unless they VARY. A stuck-at line, a counter, or a window that reads back a
+    constant all produce a perfectly stable stream that looks exactly like data -- and nothing downstream
+    could ever tell, because every output of a random source looks equally correct. It probes once, latches,
+    and DISCARDS its samples rather than feeding them to a caller.
+  - **SEEDING IS ALL OR NOTHING.** A short read from the FIFO is treated exactly like no source at all.
+    Stretching partial entropy over a full seed produces a weak seed that is indistinguishable from a strong
+    one, so `require()` demands all 32 bytes or throws. The seed array is ZEROED after use -- it is the one
+    piece of memory whose contents reproduce every byte the generator will ever emit.
+  - **BAKED VM CODE CAN CATCH A HARDWARE DATA ABORT -- MEASURED, not assumed, and it was worth the boot.**
+    The whole driver sits inside `try`/`catch (Throwable)`, and whether that works in WRITER-BAKED code (where
+    `implicitChecks()` is false, so no null/bounds checks are emitted at all) was an open question. It does:
+    under QEMU every register in the window faults and the driver returns "absent" with the boot intact.
+    **The alternative was to HW-gate on `Uart.coreHz` like the WiFi path -- which would have worked and would
+    have left the question permanently unanswered**, because QEMU would never have exercised the catch.
+  - **AND THE FIRST QEMU RUN FAILED FOR A REASON I HAD WRITTEN A COMMENT ABOUT ONE LINE EARLIER.** A native
+    is registered in `Loader.nativeBufAt` keyed by its DECLARING CLASS. I declared `hwEntropy0` on the nested
+    `Sha1PrngSpi`, making that key `java/security/SecureRandom$Sha1PrngSpi` -- not what was registered. The
+    diagnostic named it exactly (`LINK FAILED: ...$Sha1PrngSpi.hwEntropy0([BI)I -- class OK but no body for
+    that name+descriptor`), which is the report earning its keep for the second time in two arcs. Moved to
+    the outer class, with the reason recorded there.
+  - **THE PROBE'S THREE ENTROPY ARMS NO LONGER ASSERT AN OUTCOME, BECAUSE THE OUTCOME IS NOW A PROPERTY OF
+    THE BOARD.** With a hardware RNG present `nextBytes`, `generateSeed` and `getInstanceStrong` all succeed;
+    without one they all refuse. Neither is a failure, so none is checked against a fixed expectation --
+    **what IS asserted is that the three AGREE**. A VM whose `getInstanceStrong` hands back a generator that
+    then refuses to produce bytes is incoherent on any board, and no single arm could see it. QEMU reads
+    `false/false/false`, the host `true/true/true`, and both pass.
+  - **PLUS THE ARM THAT CATCHES A SOURCE THAT WORKS AND IS WRONG:** where self-seeding succeeds, two FRESH
+    generators must differ. A stuck source would seed every instance identically and still emit a perfectly
+    random-looking stream -- the one failure no amount of looking at the output can catch. `BROKEN` is a
+    suite marker now, and it reads 0.
+  - **A CLASSPATH-ORDER MISTAKE OF MINE, recorded because it produced a CONFIDENT WRONG READING.** The host
+    control ran `java -cp out:$D`, and `out/` holds a copy of the probe built by `make jdktests` -- so the
+    STALE class won and the control printed the OLD arms while the source plainly had the new ones. It reads
+    exactly like an edit that did not take. The fresh directory goes FIRST.
+  - **NOT PI-VALIDATED.** QEMU can only exercise the ABSENT path -- the window faults there. What silicon has
+    to show is the live path: `hw rng: RNG200 at 0xFE104000, live`, `unseeded = self-seeded from hardware,
+    two instances differ`, and the probe's `board entropy: nextBytes=true generateSeed=true
+    getInstanceStrong=true`.
+
 - **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, PI-VALIDATED -- AND THE BOOT
   FOUND THE HARDWARE RNG).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
   increment's real content is that the VM now says out loud what it does not have.

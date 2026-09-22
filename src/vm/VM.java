@@ -1853,6 +1853,7 @@ public final class VM
         if (classNameAddr == 0L) { long u = VMNatives.classNameOf(0L); }        // Class.getName0() native (M4)
         if (forNameAddr == 0L) { long u = VMNatives.forName(0L); }              // Class.forName0() native (reflection M1)
         if (assignableAddr == 0L) { long u = VMNatives.assignable(0L, 0L); }    // Class.assignable0 (interfaces too)
+        if (hwEntropyAddr == 0L) { long u = VMNatives.hwEntropy(0L, 0L); } // SecureRandom.hwEntropy0
         if (resourceExistsAddr == 0L) { long u = VMNatives.resourceExists(0L); } // ClassLoader.resourceExists0
         if (resourceBytesAddr == 0L) { long u = VMNatives.resourceBytes(0L); }  // ClassLoader.resourceBytes0
         if (methodAnnoAllAddr == 0L) { long u = VMNatives.methodAnnoAll(-1L); } // Method.annoAll0
@@ -3273,6 +3274,7 @@ public final class VM
     static long classNameAddr;         // VM.classNameOf(J)J — Class.getName0(Class) native (M4)
     static long forNameAddr;           // VM.forName(J)J — Class.forName0(byte[]) native (reflection arc M1)
     static long assignableAddr;        // VMNatives.assignable(JJ)J — Class.assignable0(J,J)
+    static long hwEntropyAddr;         // VMNatives.hwEntropy(JJ)J — SecureRandom.hwEntropy0(byte[],int)
     static long resourceExistsAddr;    // VMNatives.resourceExists(J)J — ClassLoader.resourceExists0(byte[])
     static long resourceBytesAddr;     // VMNatives.resourceBytes(J)J — ClassLoader.resourceBytes0(byte[])
     static long methodAnnoAllAddr;     // VMNatives.methodAnnoAll(J)J — Method.annoAll0(int)
@@ -4232,6 +4234,10 @@ public final class VM
         // and a wrong digest is a stable, right-length, silent wrong answer.
         Uart.write(Magic.bytes("MessageDigest (stock API, joe-ng crypto.Digest):\n"));
         Loader.launchMain(Magic.bytes("demo/DigestDemo"), Magic.bytes(""));
+
+        // What the BOARD has, before any demo asks for it -- one line, so a log says whether this machine
+        // can seed a SecureRandom at all. The probe is read-only and degrades to "absent" under QEMU.
+        board.bcm2711.Rng.report();
 
         // java.security.SecureRandom over joe-ng's own crypto.Sha1Prng: a KNOWN-ANSWER stream (a DRBG's
         // output always looks correct, so nothing weaker is a test), the refusal that is this class's

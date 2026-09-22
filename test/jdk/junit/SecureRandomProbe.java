@@ -180,39 +180,62 @@ public class SecureRandomProbe
         }
         diverge("NativePRNG", noAlg, "NSAE", "an instance on most platforms");
 
-        // ---- THE SAFETY PROPERTY: an unseeded generator must REFUSE -----------------------------------
-        String unseeded = "produced bytes";
+        // ---- THE SAFETY PROPERTY, and it now depends on the BOARD rather than on joe-ng-vs-stock -----
+        //
+        // With a hardware RNG present these three succeed; without one (QEMU) all three refuse. Neither
+        // outcome is a failure, so none of them is asserted against a fixed expectation -- what IS asserted
+        // is that the three AGREE. A VM where getInstanceStrong hands back a generator that then refuses to
+        // produce bytes is incoherent whichever board it is running on, and that is a bug no single arm
+        // could see.
+        boolean seeds = true;
         try
         {
             new SecureRandom().nextBytes(new byte[8]);
         }
         catch (Error e)
         {
-            unseeded = "refused";
+            seeds = false;
         }
-        diverge("unseeded nextBytes", unseeded, "refused", "produced bytes (it has an OS entropy source)");
 
-        String gen = "produced seed";
+        boolean gen = true;
         try
         {
             SecureRandom.getInstance("SHA1PRNG").generateSeed(8);
         }
         catch (Error e)
         {
-            gen = "refused";
+            gen = false;
         }
-        diverge("generateSeed", gen, "refused", "produced seed");
 
-        String strong = "returned one";
+        boolean strong = true;
         try
         {
             SecureRandom.getInstanceStrong();
         }
         catch (NoSuchAlgorithmException e)
         {
-            strong = "refused";
+            strong = false;
         }
-        diverge("getInstanceStrong", strong, "refused", "returned one");
+
+        System.out.println("     board entropy: nextBytes=" + seeds + " generateSeed=" + gen
+                + " getInstanceStrong=" + strong);
+        say("entropy answers agree", Boolean.valueOf(seeds == gen && gen == strong), Boolean.TRUE);
+
+        // And where it DOES self-seed, two fresh generators must differ. A stuck source would seed every
+        // instance identically and still emit a perfectly random-looking stream -- the one failure that no
+        // amount of looking at the output can catch.
+        if (seeds)
+        {
+            byte[] one = new byte[16];
+            byte[] two = new byte[16];
+            new SecureRandom().nextBytes(one);
+            new SecureRandom().nextBytes(two);
+            say("two fresh generators differ", Boolean.valueOf(!hex(one).equals(hex(two))), Boolean.TRUE);
+        }
+        else
+        {
+            System.out.println("ok   two fresh generators differ = skipped (this board has no source)");
+        }
 
         diverge("provider", SecureRandom.getInstance("SHA1PRNG").getProvider().getName(), "joe-ng", "SUN");
 
