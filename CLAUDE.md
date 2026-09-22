@@ -115,15 +115,15 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, QEMU-VALIDATED, NOT YET
-  PI-VALIDATED).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
+- **`SecureRandom` RUNS, AND IT REFUSES TO PRETEND IT HAS ENTROPY (2026-09-21, PI-VALIDATED -- AND THE BOOT
+  FOUND THE HARDWARE RNG).** The DRBG is joe-ng's own `crypto/Sha1Prng`; the SEED is the honest part, and this
   increment's real content is that the VM now says out loud what it does not have.
 
   | gate | result |
   |---|---|
   | `test/jdk/junit/SecureRandomProbe` | **14 arms + 6 stated divergences**, `failures=0 divergences-unmet=0` |
   | `crypto: 37 -> 39 checks` | incl. **400 byte-for-byte comparisons against the JDK's own SHA1PRNG** |
-  | demo suite (40 programs) | twenty-one markers zero, every standing gate held |
+  | demo suite (40 programs) | **on HARDWARE**: twenty-one markers zero, every standing gate held |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, zip 91, `overlay-check 0 new` |
 
   - **A DRBG IS THE HARDEST THING IN THIS VM TO TEST, AND THAT DECIDED THE ALGORITHM.** Every output of a
@@ -194,8 +194,40 @@ defines the minimum the assembler must encode.
     `engineReseed`/`engineGetParameters` surface (provider machinery this VM does not carry); and any
     claim that a `SecureRandom` here is "strong" -- `getInstanceStrong` refuses, because strength is a
     statement about the seed.
-  - **NOT PI-VALIDATED.** `demo/SecureRandomDemo` is in the boot suite, so the next hardware boot both gates
-    the DRBG and reports what the RNG window holds on silicon.
+  - **PI-VALIDATED (`core 166MHz`, SMP on, full suite).** All four DRBG arms exact on silicon -- including
+    `unseeded = refused (no entropy source)`, which is the safety property and the one that would silently
+    read `PRODUCED BYTES` had the constructor hazard gone unnoticed. Twenty-one markers zero, every standing
+    gate held (`ticks/core c1=50 c2=50 c3=50`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`,
+    `bakeMemosDropped=11`, WPA2 -> HTTP 200 OK), and batch 70's closure identical to the QEMU run to the
+    digit (`rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`).
+
+  - **THE ENTROPY QUESTION HAS AN ANSWER: THE HARDWARE RNG IS THERE, AND IT IS RNG200 RATHER THAN THE
+    BCM2835 BLOCK.** This is the finding the boot existed for, and the QEMU/silicon contrast is what makes
+    it one rather than a guess:
+
+    | `0xFE104000` | QEMU raspi4b | **Pi 4** |
+    |---|---|---|
+    | `CTRL +0x00` | FAULT | **`0x00007fff`** |
+    | `STATUS +0x04` | FAULT | `0x00000000` |
+    | `DATA +0x08` (bcm2835) | FAULT | `0x00000000` |
+    | `FIFO_COUNT +0x24` (rng200) | FAULT | **`0x40001010`** |
+
+    - **THE TWO CANDIDATE DECODES DISAGREE, AND ONLY ONE IS COHERENT.** Under the RNG200 layout
+      (Linux `iproc-rng200.c`) `CTRL`'s RBGEN field (bits 12:0) reads `0x1FFF` -- fully enabled -- and
+      `FIFO_COUNT` decodes as **count = 16 words, threshold = 16**. Under the BCM2835 layout the SAME words
+      say `STATUS = 0` ("no words available") and `DATA = 0`, which cannot both be true of an enabled RNG.
+      So the block is RNG200, and the VideoCore firmware has already enabled it and let the FIFO fill --
+      which matters, because it means joe-ng may never need to WRITE to that window.
+    - **WHAT IS NOT ESTABLISHED, and it is the whole remaining question: FIFO_DATA WAS NOT READ.** A
+      register that decodes plausibly as a FIFO count is not the same thing as a live entropy source. The
+      conclusive measurement is to read `FIFO_DATA +0x20` several times and show the values DIFFER and
+      `FIFO_COUNT` DECREMENTS -- a constant, or a count that never moves, would mean the decode above is a
+      coincidence. The demo reads it now, gated on a non-zero count, so the next boot settles it.
+  - **AND THE READ-ONLY DISCIPLINE IS VINDICATED RATHER THAN MERELY CAUTIOUS.** The probe never writes, and
+    on this board it never needs to: the firmware left the block enabled. Had it written `CTRL` to "make
+    sure", it would have done so on a window whose layout it had not yet identified -- and a store to the
+    wrong offset of a live peripheral is the one failure this VM cannot recover from.
 
 - **`java.security` OPENS: the permission layer runs STOCK, and `MessageDigest` runs on joe-ng's own streaming
   digests (2026-09-21, PI-VALIDATED).** `java/security/` was denied WHOLESALE. It is

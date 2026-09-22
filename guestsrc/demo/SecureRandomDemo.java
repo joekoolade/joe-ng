@@ -103,5 +103,43 @@ public final class SecureRandomDemo
                 + " STATUS=" + peek(0xFE10_4004L)
                 + " bcm2835DATA=" + peek(0xFE10_4008L)
                 + " rng200FIFOCNT=" + peek(0xFE10_4024L));
+
+        // THE CONCLUSIVE MEASUREMENT, and the reason it is separate from the register dump above.
+        // A register that DECODES plausibly as a FIFO count is not the same thing as a live entropy
+        // source. On a Pi 4 the dump reads CTRL=0x7fff (RNG200's RBGEN field fully set) and
+        // FIFO_COUNT=0x40001010 (count 16, threshold 16), which is coherent under the RNG200 layout and
+        // incoherent under the BCM2835 one -- but coherent is not the same as alive.
+        //
+        // What would settle it: successive FIFO_DATA words that DIFFER, while FIFO_COUNT DECREMENTS. A
+        // constant value, or a count that never moves, means the decode above is a coincidence and there
+        // is no usable source here.
+        //
+        // Gated on a non-zero count and READ-ONLY: draining an empty RNG200 FIFO is not defined to return
+        // anything meaningful, and this VM must never WRITE to a peripheral window whose layout it has not
+        // yet confirmed -- a store fault here is not recoverable.
+        String cnt = peek(0xFE10_4024L);
+        if (cnt.equals("FAULT"))
+        {
+            System.out.println("  hw RNG fifo: absent (no device mapped)");
+        }
+        else
+        {
+            int before = Magic.load32(0xFE10_4024L) & 0xFF;
+            if (before == 0)
+            {
+                System.out.println("  hw RNG fifo: EMPTY (count=0) -- nothing to draw, would need a CTRL write");
+            }
+            else
+            {
+                String w0 = peek(0xFE10_4020L);
+                String w1 = peek(0xFE10_4020L);
+                String w2 = peek(0xFE10_4020L);
+                int after = Magic.load32(0xFE10_4024L) & 0xFF;
+                boolean vary = !w0.equals(w1) && !w1.equals(w2) && !w0.equals(w2);
+                System.out.println("  hw RNG fifo: count " + before + " -> " + after
+                        + "  words " + w0 + " " + w1 + " " + w2
+                        + "  (distinct=" + vary + ", drained=" + (before > after) + ")");
+            }
+        }
     }
 }
