@@ -5785,6 +5785,13 @@ public final class Loader
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/Key"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/KeySpec"))
                 || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/AlgorithmParameterSpec"))
+                // javax/crypto/SecretKeyFactory is OVERLAID over crypto.Pbkdf2, and its two companions are
+                // NOT: SecretKeyFactorySpi is purely abstract and PBEKeySpec imports only KeySpec and
+                // Arrays, so both load STOCK. What they need from here is the exception their signatures
+                // name. EXACT, for the reason above: "java/security/spec/" as a prefix would open the whole
+                // spec package -- the RSA/EC/DSA key specs, which need BigInteger, which this file records
+                // as not working here.
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/InvalidKeySpecException"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestInputStream"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestOutputStream"))
                 // NARROWED OUT of the sun/security/ denial, which exists for JAR SIGNATURE VERIFICATION

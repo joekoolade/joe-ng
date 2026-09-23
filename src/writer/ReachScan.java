@@ -122,6 +122,7 @@ public final class ReachScan
                 || c.equals("java/security/Key")
                 || c.equals("java/security/spec/KeySpec")
                 || c.equals("java/security/spec/AlgorithmParameterSpec")
+                || c.equals("java/security/spec/InvalidKeySpecException")
                 || c.startsWith("java/security/DigestInputStream")
                 || c.startsWith("java/security/DigestOutputStream")
                 || c.startsWith("sun/security/util/SecurityConstants"))
