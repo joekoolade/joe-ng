@@ -2493,6 +2493,14 @@ public final class Loader
             VM.printHex(VMGc.nomap);
             Uart.write(Magic.bytes(" lastReclaimed="));
             VM.printHex(VM.reclaimed);
+            Uart.write(Magic.bytes(" idleRoots="));        // per-core IDLE stacks scanned as roots, of the
+            VM.printDec(VMGc.idleRoots);                   //   idle tasks found: N is what says the root
+            Uart.putc(0x2F);                               //   FIRES, N < M that one was out of band and
+            VM.printDec(VMGc.idleSeen);                    //   was SKIPPED rather than silently guessed
+            Uart.write(Magic.bytes(" idleMarked="));       // ... of which actually RETAINED something: 0 =
+            VM.printDec(VMGc.idleMarked);                  //   the hole is closed, not a loss repaired
+            Uart.write(Magic.bytes(" idleGc="));           // collections that ran ON an idle task (the
+            VM.printDec(VMGc.idleGc);                      //   mis-bracketed case): expected 0 -- measured
             Uart.putc(0x0A);
         }
     }

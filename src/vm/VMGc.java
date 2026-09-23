@@ -98,9 +98,23 @@ final class VMGc
         buildBlockBitmap(Magic.load64(Heap.PTR_CELL));     // pre-pass: exact block bases for the probes
         long stackTop = STACK_TOP;                    // boot task: SP runs down from the image stack top
         int me = curTask();
-        if (taskStackBase != null && me != 0 && taskStackBase[me] != 0L)
+        if (taskStackBase != null && me != 0)
         {
-            stackTop = taskStackBase[me] + 0x8000L;        // a spawned task: its stack is a heap object
+            if (taskStackBase[me] != 0L)
+            {
+                stackTop = taskStackBase[me] + 0x8000L;    // a spawned task: its stack is a heap object
+            }
+            else if (taskIdle != null && taskIdle[me] != 0 && taskCore[me] >= 1)
+            {
+                // A PER-CORE IDLE TASK -- the THIRD stack kind, and the one the two arms above miss. Its
+                // stack is neither the image stack nor a heap block: it is the fixed SEC-band stack the
+                // secondary boot stub set up. Left at STACK_TOP the range is markRange(0x038x_xxxx,
+                // 0x80000), lo ABOVE hi, and markRange's `while (lo < hi)` then runs ZERO times -- so the
+                // collector's own frames are scanned NOT AT ALL, which is a stronger statement than the
+                // "whatever those two addresses bracket" this was first written up as.
+                stackTop = secStackTop(taskCore[me]);
+                idleGc = idleGc + 1;
+            }
         }
         markRange(scanFrom, stackTop);
         // THE BOOT TASK'S STACK IS A ROOT EVEN WHEN ANOTHER TASK IS COLLECTING. A spawned task's stack is a
@@ -115,6 +129,44 @@ final class VMGc
             if (bootSp != 0L && bootSp < STACK_TOP)
             {
                 markRange(bootSp, STACK_TOP);
+            }
+        }
+        // AND EVERY OTHER CORE'S IDLE STACK, for exactly the reason above it. Those are fixed SEC-band
+        // stacks, heap objects for NOBODY, so -- like task 0's -- no trace reaches them however the
+        // collection was triggered. This is the boot-task hole one stack kind further out; adding a root
+        // can only RETAIN more, never sweep more, which is why it is cheap to be safe here.
+        //
+        // The saved SPs are trustworthy BY CONSTRUCTION: stopTheWorld has already parked every scheduling
+        // core, and gcPark writes taskSp[coreTask[core]] BEFORE it publishes its generation, so a parked
+        // core's idle task has a current SP. The collector's OWN core is excluded (idle == me) because the
+        // arm above already brackets it from the live SP rather than a stale saved one.
+        if (coreIdle != null && taskSp != null)
+        {
+            int ic = 1;                               // core 0 has no idle task: coreIdle[0] stays -1
+            while (ic < 4)
+            {
+                int idle = coreIdle[ic];
+                // A saved SP of 0 is the core's own registration window -- smpSchedulerMain sets coreIdle
+                // before the flow has ever switched out -- so it is not counted at all rather than counted
+                // as a skip: that would make idleRoots < idleSeen mean two different things.
+                if (idle > 0 && idle != me && taskSp[idle] != 0L)
+                {
+                    long top = secStackTop(ic);
+                    long sp = taskSp[idle];
+                    idleSeen = idleSeen + 1;
+                    // IN-BAND OR NOT AT ALL. A stale or recycled slot would otherwise hand markRange an
+                    // arbitrary range, which is the failure this whole fix is about; the counters print as
+                    // idleRoots=N/M so a skip is VISIBLE rather than silent.
+                    if (sp < top && sp > top - 0x100000L)
+                    {
+                        if (markRange(sp, top))
+                        {
+                            idleMarked = idleMarked + 1;   // ... and did the range actually RETAIN anything
+                        }
+                        idleRoots = idleRoots + 1;
+                    }
+                }
+                ic += 1;
             }
         }
         markRange(staticsStart, staticsEnd);
@@ -146,7 +198,7 @@ final class VMGc
             Loader.verifyCells();
             findStaleCodeHolders(Heap.BASE, Magic.load64(Heap.PTR_CELL));
             findStaleCodeHolders(Heap.LARGE_BASE, Magic.load64(Heap.LARGE_PTR_CELL));
-            findStaleCodeInRaw(scanFrom, STACK_TOP, 1L);                    // the stack
+            findStaleCodeInRaw(scanFrom, stackTop, 1L);                     // the stack (the CURRENT task's)
             findStaleCodeInRaw(staticsStart, staticsEnd, 2L);               // image statics
             findStaleCodeInRaw(VM.jitFrameTable, VM.jitFrameTable + VM.jitFrameCount * 24L, 3L);
             findStaleCodeInRaw(VM.jitHandlerTable, VM.jitHandlerTable + VM.jitHandlerCount * 32L, 4L);
@@ -546,6 +598,40 @@ final class VMGc
      *  a full-java.base image's statics region dwarfs the heap walk. */
     static long rootProbes;
 
+    /** Idle-task stacks scanned as roots, cumulative / idle tasks found. Printed as {@code idleRoots=N/M}
+     *  by {@code Loader.reportGc}: N is what says the new root actually FIRES (an instrument that cannot
+     *  fire looks exactly like a condition that never happens), and N &lt; M is what says an idle task's
+     *  saved SP was out of its core's band and the range was skipped rather than silently guessed at. */
+    static int idleRoots;   // int, not long: bounded by 3 per collection
+    static int idleSeen;
+
+    /** Of those ranges, the ones that marked something no other root reached. SCANNED and RETAINED are
+     *  different claims and are counted apart: an idle stack holds only smpSchedulerMain's own primitive
+     *  locals today, so this reading zero is the expected one and says the fix currently changes no
+     *  outcome -- it closes a hole rather than repairing an observed loss. It moves the day a guest
+     *  reference reaches one of those frames, which is the whole reason the hole is worth closing. */
+    static int idleMarked;
+
+    /**
+     * Collections that ran ON a per-core idle task -- the case whose stack-top bracket was wrong. Expected
+     * ZERO on any boot today, and the arm above it is therefore DEFENCE rather than a live fix, which is
+     * said plainly because "it changed nothing" and "it works" are different claims. THREE independent
+     * reasons, each read out of the code rather than assumed:
+     * <ul>
+     *   <li>{@link VMScheduler#smpSchedulerMain}'s loop is {@code taskYield()} + {@code pauseMs1()}, which
+     *       allocates nothing -- and gcCollect is only ever reached from an allocation or Magic.gc.</li>
+     *   <li>{@code Heap.alloc} says it outright: {@code if (core != 0 || attempt == 1) break; // secondaries
+     *       are never collected}. Each secondary has its own arena, which the sweep never touches.</li>
+     *   <li>And if one somehow did, {@link #stopTheWorld} would refuse it: {@code unparked()} counts cores
+     *       1..3 that have not parked for THIS generation, WITHOUT excluding the collecting core, so a
+     *       secondary collecting itself counts as unparked, times out after ~1 s, and the collection is
+     *       SKIPPED before the bracket is ever reached.</li>
+     * </ul>
+     * Printed per boot so the claim keeps being MEASURED rather than resting on that reading: the day
+     * anything on the idle path allocates, this figure moves instead of the hole quietly reopening.
+     */
+    static int idleGc;
+
     /**
      * The trace worklist: a block is pushed the moment it is marked ({@link #tryMark}), and scanned once
      * when popped. Scanning pushes whatever it discovers, so the drain ends exactly when the reachable set
@@ -668,6 +754,19 @@ final class VMGc
 
     private static long markSp;        // next free worklist slot
     private static int  markOverflow;  // 1 = the queue filled; the fixpoint fallback finishes the trace
+
+    /**
+     * The TOP of a secondary core's fixed EL1 stack. The secondary boot stub computes it as
+     * {@code movz x2, SEC_STACK_HI, lsl 16} then {@code add x2, x2, core << 20} -- 0x0380_0000 plus one
+     * MiB per core, growing DOWN -- and this is DERIVED from that same constant rather than written out,
+     * because the two drifting apart gives a root range over the wrong memory and is silent in both
+     * directions (too low retains nothing it should, too high traces neighbouring scratch as if it were
+     * stack). {@code ScratchMap} reserves the whole 0x0380_0000 band for these.
+     */
+    private static long secStackTop(int core)
+    {
+        return ((long) SEC_STACK_HI << 16) + ((long) core << 20);
+    }
 
     /** Mark every heap object pointed to by an 8-aligned word in [lo,hi). Returns true if any newly marked. */
     private static boolean markRange(long lo, long hi)
