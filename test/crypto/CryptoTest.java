@@ -37,15 +37,6 @@ public final class CryptoTest
         hmac(rep((byte) 0x0b, 20), "Hi There", "b617318655057264e28bc0b6fb378c8ef146be00");
         hmac(ascii("Jefe"), "what do ya want for nothing?", "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
 
-        // PBKDF2-HMAC-SHA1 (RFC 6070).
-        pbkdf2("password", "salt", 1, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6");
-        pbkdf2("password", "salt", 2, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957");
-        pbkdf2("password", "salt", 4096, 20, "4b007901b765489abead49d926f721d065a429c1");
-
-        // WPA2 PMK = PBKDF2(passphrase, ssid, 4096, 32) — IEEE 802.11i test vector.
-        pbkdf2("password", "IEEE", 4096, 32,
-                "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
-
         // PRF self-consistency: each 20-byte block must equal HMAC-SHA1(K, A || 0x00 || B || i). HMAC is
         // already RFC-validated above, so this confirms the PRF's input construction + counter across blocks
         // (the full PTK is ultimately proven by the on-metal 4-way handshake).
@@ -72,10 +63,9 @@ public final class CryptoTest
         hmacAgreesWithWpa2();
         hmacCopyIsDeep();
 
-        // PBKDF2 (crypto.Pbkdf2's generic side), which backs javax.crypto.SecretKeyFactory.
+        // PBKDF2 (crypto.Pbkdf2), which backs javax.crypto.SecretKeyFactory AND the WPA2 PMK.
         pbkdf2Vectors();
         pbkdf2AgainstJdk();
-        pbkdf2GenericMatchesWpa2();
 
         // The SHA1PRNG DRBG behind java.security.SecureRandom.
         prngAgainstJdk();
@@ -707,7 +697,8 @@ public final class CryptoTest
     }
 
     /**
-     * PUBLISHED PBKDF2 vectors -- RFC 6070 (HMAC-SHA1) and RFC 7914 section 11 (HMAC-SHA256).
+     * PUBLISHED PBKDF2 vectors -- RFC 6070 (HMAC-SHA1), RFC 7914 section 11 (HMAC-SHA256) and
+     * IEEE 802.11i (the WPA2 PMK shape).
      *
      * <p><b>Every constant is asserted TWICE, against our engine AND against the JDK's own
      * SecretKeyFactory, and that is not redundancy.</b> These are TRANSCRIBED rather than read from an RFC
@@ -721,6 +712,8 @@ public final class CryptoTest
         // stops at the NUL and still produces a perfectly plausible key.
         pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "salt", 1, 20,
                 "0c60c80f961f0e71f3a9b524af6012062fe037a6");
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "salt", 2, 20,
+                "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957");
         pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "salt", 4096, 20,
                 "4b007901b765489abead49d926f721d065a429c1");
         pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1",
@@ -738,6 +731,19 @@ public final class CryptoTest
         pbkdf2Vector(Digest.SHA256, "PBKDF2WithHmacSHA256", "Password", "NaCl", 80000, 64,
                 "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56"
                         + "a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d");
+
+        // IEEE 802.11i: the WPA2 PMK shape, PBKDF2(passphrase, SSID, 4096, 32).
+        //
+        // THESE ARE THE ARMS THAT GUARD THE WiFi SUPPLICANT, and they are why retiring the old
+        // generic-vs-one-shot comparison is not a loss of coverage. That comparison could only ever say
+        // two of OUR implementations agreed; with one implementation left it would compare the survivor
+        // to itself and pass for ever. A published constant, asserted against the engine AND against the
+        // JDK, says what the answer IS -- which is the property the handshake actually depends on, since
+        // a wrong PMK is a wrong PTK is a wrong MIC and the AP just drops msg2 without saying why.
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "IEEE", 4096, 32,
+                "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "ThisIsAPassword", "ThisIsASSID", 4096, 32,
+                "0dc0d6eb90555ed6419756b9a15ec3e3209b63df707dd508d14581f8982721af");
     }
 
     /** One published vector, checked against the engine and then against the JDK. */
@@ -830,49 +836,6 @@ public final class CryptoTest
         T.eq("pbkdf2 vs jdk: mismatches over " + compared + " comparisons", 0, bad);
     }
 
-    /**
-     * The generic path and the WPA2 one-shot must agree BYTE FOR BYTE for SHA-1.
-     *
-     * <p>This is what turns "collapse {@link Pbkdf2#deriveSha1} onto the generic path" from a guess into a
-     * change whose evidence already stands. The WPA2 derivation is the most hardware-validated code in this
-     * tree and its only gate is a flash, so it is left alone and MEASURED against its replacement instead.
-     */
-    private static void pbkdf2GenericMatchesWpa2()
-    {
-        int[] pwLens = { 0, 1, 8, 63, 64, 65, 100 };
-        int[] saltLens = { 1, 6, 32 };
-        int[] dkLens = { 16, 20, 32, 40 };
-        java.util.Random rnd = new java.util.Random(20260925L);
-        int bad = 0;
-        int compared = 0;
-        for (int pi = 0; pi < pwLens.length; pi++)
-        {
-            byte[] pw = new byte[pwLens[pi]];
-            rnd.nextBytes(pw);
-            for (int si = 0; si < saltLens.length; si++)
-            {
-                byte[] salt = new byte[saltLens[si]];
-                rnd.nextBytes(salt);
-                for (int di = 0; di < dkLens.length; di++)
-                {
-                    int dkLen = dkLens[di];
-                    byte[] generic = new byte[dkLen];
-                    byte[] wpa2 = new byte[dkLen];
-                    Pbkdf2.derive(Digest.SHA1, pw, pw.length, salt, salt.length, 37, generic, dkLen);
-                    Pbkdf2.deriveSha1(pw, pw.length, salt, salt.length, 37, wpa2, dkLen);
-                    compared = compared + 1;
-                    if (!hex(generic, dkLen).equals(hex(wpa2, dkLen)))
-                    {
-                        bad = bad + 1;
-                    }
-                }
-            }
-        }
-        T.eq("generic vs WPA2 PBKDF2-SHA1: pairs compared",
-                pwLens.length * saltLens.length * dkLens.length, compared);
-        T.eq("generic PBKDF2-SHA1 == the WPA2 one-shot, over " + compared + " pairs", 0, bad);
-    }
-
     /** The JDK's own PBKDF2, the oracle. {@code keyBits} is in BITS, as {@code PBEKeySpec} counts. */
     private static byte[] jdkPbkdf2(String name, char[] pw, byte[] salt, int iters, int keyBits)
     {
@@ -919,15 +882,6 @@ public final class CryptoTest
         Hmac.sha1(key, key.length, m, m.length, out);
         String label = msg.length() > 12 ? msg.substring(0, 12) + "..." : msg;
         T.eqStr("hmac(\"" + label + "\")", expect, hex(out, out.length));
-    }
-
-    private static void pbkdf2(String pw, String salt, int iters, int dkLen, String expect)
-    {
-        byte[] p = ascii(pw);
-        byte[] s = ascii(salt);
-        byte[] out = new byte[dkLen];
-        Pbkdf2.deriveSha1(p, p.length, s, s.length, iters, out, dkLen);
-        T.eqStr("pbkdf2(\"" + salt + "\"," + iters + ")", expect, hex(out, dkLen));
     }
 
     private static byte[] ascii(String s)

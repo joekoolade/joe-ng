@@ -700,7 +700,10 @@ public final class Cyw43
         staPmk = new byte[32];
         byte[] pass = heapBytes(psk, pl);
         byte[] ssid = heapBytes(staSsid, staSsidLen);
-        crypto.Pbkdf2.deriveSha1(pass, pass.length, ssid, ssid.length, 4096, staPmk, 32);
+        // Generic PBKDF2 over crypto/Digest's SHA-1, not a WPA2-private copy: one derivation serves
+        // this and javax.crypto.SecretKeyFactory. It also builds ONE Hmac and reuses it, where the
+        // one-shot it replaced re-padded the key on every one of these 4096 iterations.
+        crypto.Pbkdf2.derive(crypto.Digest.SHA1, pass, pass.length, ssid, ssid.length, 4096, staPmk, 32);
         board.bcm2711.Uart.write(Magic.bytes("wifi: pmk ready\n"));
         if (WPA2_OFFLOAD)
         {
