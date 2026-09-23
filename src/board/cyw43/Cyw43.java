@@ -830,7 +830,7 @@ public final class Cyw43
             j = j + 1;
         }
         byte[] calc = new byte[20];
-        crypto.Hmac.sha1(kck, 16, frame3, frame3.length, calc);
+        crypto.Hmac.mac(crypto.Digest.SHA1, kck, 16, frame3, frame3.length, calc);
         if (cmp(calc, rxMic, 16) != 0)
         {
             board.bcm2711.Uart.write(Magic.bytes("wifi: msg3 MIC mismatch\n"));
@@ -934,7 +934,7 @@ public final class Cyw43
         {
             byte[] eap = slice(f, o, 4 + eapLen);
             byte[] mic = new byte[20];
-            crypto.Hmac.sha1(kck, 16, eap, eap.length, mic);
+            crypto.Hmac.mac(crypto.Digest.SHA1, kck, 16, eap, eap.length, mic);
             int i = 0;
             while (i < 16)
             {

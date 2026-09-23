@@ -115,6 +115,132 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **HMAC IS ONE CONSTRUCTION, AND THE SECOND SHA-1 LEAVES THE IMAGE (2026-09-23, PI-VALIDATED).**
+  `Hmac.sha1` -- the WPA2-private one-shot -- is DELETED, and the 4-way handshake's PRF (the PTK) and both
+  EAPOL-Key MIC sites go through the same streaming `Hmac` over `crypto/Digest` that `javax.crypto.Mac` and
+  PBKDF2 already used. `crypto/Sha1` is then referenced by NOTHING and is deleted too.
+
+  | gate | result |
+  |---|---|
+  | negative control (reset) | `prf block 1`/`block 2` fail, **`block 0` correctly does not**, + 858 of 3,432 |
+  | negative control (opad) | **20 engine vector arms fail, 0 of the JDK-constant arms** |
+  | baked crypto | 48 methods / 53,212 B -> **43 / 48,772**, account closes EXACTLY |
+  | image | 33,684,440 -> **33,675,140 (-9,300)** |
+  | **Pi, the whole handshake** | **`ptk derived` -> `msg3 MIC ok` -> `msg4 sent` -> HTTP 200 OK, 828 bytes** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE EVIDENCE STOOD BEFORE THE CHANGE WAS WRITTEN, AND THE TEST THAT PROVIDED IT DIED WITH THE CODE IT
+    COMPARED -- SECOND TIME IN TWO INCREMENTS.** `hmacAgreesWithWpa2` measured the two paths as byte-identical
+    over 99 key/message pairs straddling HMAC's 64-byte key-hashing branch. With one construction left it
+    compares the survivor to ITSELF: passes for ever, cannot fail, looks exactly like coverage. **This is now
+    a recognised shape rather than a surprise** -- a collapse consumes its own justification, so the
+    replacement has to be DIFFERENT IN KIND, not a smaller version. Here that is five RFC 2202 HMAC-SHA1
+    vectors, each asserted against the engine AND against the JDK's own `javax.crypto.Mac`, plus the
+    3,432-comparison sweep. Agreement was never correctness.
+  - **THE PRF GAINED COVERAGE IT COULD NOT PREVIOUSLY HAVE HAD, and the control shows it precisely.**
+    `Prf.sha1` builds ONE `Hmac` and reuses it across the PRF's blocks, for the reason `Pbkdf2` records.
+    With `doFinal`'s reset deleted: **`prf block 1` and `prf block 2` FAIL and `prf block 0` does NOT** --
+    correctly, because at the first block the reset has not yet mattered. Before this change `Prf` called the
+    one-shot, so a broken reset could not reach the handshake at all. **The WPA2 PRF is guarded by the crypto
+    suite now rather than only by a flash**, which is the same coverage statement the PBKDF2 collapse made
+    one increment earlier.
+  - **AND IT IS CHEAPER ON A PATH THIS FILE RECORDS AS LATENCY-CRITICAL, which is worth checking rather
+    than hoping.** The PTK derivation sits on the msg1 -> msg2 leg, and the AP restarts the 4-way with a
+    fresh ANonce about once a second and silently drops a stale reply -- the reason the PMK is hoisted
+    pre-association at all. Counting `new` sites: the old path ran three `Hmac.sha1` calls, each allocating
+    4 arrays and calling `Sha1.hash` twice at 4 more, and each re-padding the key -- ~36 arrays and 3 key
+    schedules. The new one builds ONE `Hmac` (~10 arrays, one schedule) and allocates one array per
+    `doFinal` -- ~13. **Stated as a derivation from counting allocations, not a measurement**, but the
+    direction is the safe one: the collapse cannot have made that leg slower.
+  - **THE REAL HEADLINE IS THE DUPLICATE PRIMITIVE, NOT THE ONE-SHOT.** The image carried TWO SHA-1
+    implementations on the WiFi path, and only one of them was cross-checked against the JDK. `crypto/Sha1`
+    is referenced by nothing once the one-shot is gone -- `Sha1Prng` was always built on `Digest`, and `Prf`
+    now takes its length from the `Hmac` -- so RTA stops baking it. **The account closes exactly:**
+
+    | | before | after | delta |
+    |---|---|---|---|
+    | `crypto/Sha1` | 3,716 B / 4 | **0 / 0** | **-3,716** |
+    | `crypto/Hmac` | 3,808 / 12 | 2,948 / 11 | -860 (`sha1` 960 + its private `copy` 152, less `mac` 252) |
+    | `crypto/Prf` | 800 / 1 | 936 / 1 | +136 (the instance construction) |
+    | baked crypto TOTAL | 53,212 / 48 | **48,772 / 43** | **-4,440** |
+  - **WHAT IS LOST, STATED RATHER THAN GLOSSED: a second INDEPENDENT in-tree SHA-1 to cross-check the first
+    against.** That is what gave the 99-pair comparison its value -- two implementations, two HMAC
+    constructions, so a disagreement named a real defect rather than a refactor risk. It was worth something
+    when `Digest` had no external oracle. **It has one now:** 756 byte-for-byte comparisons against the JDK's
+    OWN `MessageDigest` over 22 message lengths and five feeding patterns, which is a better oracle than a
+    second implementation by the same author in the same tree.
+  - **A LATENT BUILD DEFECT FELL OUT OF THE MEASUREMENT BEING WRONG -- THIRD INSTANCE OF ONE THIS FILE
+    ALREADY RECORDS TWICE.** Deleting `crypto/Sha1.java` shrank the image by **304 bytes** where the class is
+    worth ~1,700, and that gap is the whole finding: **`out/crypto/Sha1.class` survived the rebuild and was
+    still in the classDir of every image.** An incremental javac never deletes the `.class` of a REMOVED
+    source, and `ImageBuilder.demandLoadable` ships `crypto/*` and `zip/*` by PREFIX -- so a retired class
+    keeps being embedded and stays reachable BY NAME from guest code. The Makefile purges the guest output
+    packages for exactly this reason and its own comment records what `org/` cost; the two src-side packages
+    were never on that list. Purged, the same deletion is **-1,704**, and a byte scan of the image finds
+    **zero bare `crypto/Sha1`** (the five hits are `Sha1Prng`, which the substring matches -- checked rather
+    than assumed, because a loose grep here is an instrument that lies).
+  - **AND THE STALE CLASS WOULD HAVE SHIPPED SILENTLY.** Nothing fails when a dead class is embedded: it is
+    unreferenced, unbaked and simply present. The only signal was an image delta that did not match the
+    arithmetic -- which is why the measurement was worth doing rather than asserting "deleting a class makes
+    the image smaller".
+  - **TWO SELF-INFLICTED NEAR-MISSES ON THE CONTROLS, both caught by checking rather than by the result.**
+    (1) My first opad control printed `0` failing engine arms and `0` failing constant arms -- which reads
+    exactly like an edit that did not take. The anchor HAD applied; my grep pattern was wrong
+    (`FAIL hmac Hmac` against the real `FAIL HmacSHA1 vector`). Re-run with the anchor count ASSERTED and the
+    real labels, it is 20 and 0. **A control that reports zero on both sides is indistinguishable from a
+    no-op, and the fix is to assert the edit applied rather than to trust the output.**
+    (2) A `git rm` staged earlier rode along into the Makefile commit, mixing two independent changes; caught
+    by reading `git show --stat` before pushing, and split back apart so a bisect can separate them.
+  - **QEMU CANNOT GATE THE THING THIS CHANGE DOES, for the third increment running.** The WiFi path is
+    HW-gated on `Uart.coreHz`, so neither the PRF nor either MIC site executes on the emulator. What QEMU
+    proves is NO REGRESSION across a **9,300-byte layout shift**, and this file records latent bugs surfacing
+    from layout movement alone twice: 40 programs, batch 70 `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` -- **byte-identical to the recorded
+    figures** -- with `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `smp sched: 4 of 4`, `steps/core 60/60/59/61`, `sum20=210 weighted20=2870`,
+    `lisp evals=600 result=610 stable=1`, every digest vector exact including `sha256 clone = .../fork-ok`,
+    and **twenty-two failure markers zero** (the `FAULT` grep ANCHORED). **The Pi is the gate and it is named in advance:** `wifi: ptk derived`
+    -> `msg3 MIC ok` -> `eapol msg4 sent`. Every one of those three is computed by code this increment
+    rewrote -- the PTK by the collapsed `Prf`, the msg3 check and the msg2/msg4 MIC by the collapsed MIC
+    sites -- so unlike the PBKDF2 collapse, which touched one line of the handshake, this one touches all of
+    it.
+  - **PI-VALIDATED, AND ALL THREE NAMED LINES PRINTED IN ORDER.** `wifi: pmk ready` -> `eapol msg1` ->
+    **`wifi: ptk derived`** -> `eapol msg2 sent` -> **`msg3 MIC ok`** -> `GTK unwrapped` ->
+    **`eapol msg4 sent`** -> `keys installed` -> DHCP 192.168.1.247 -> DNS 172.66.147.243 -> TCP ->
+    **`HTTP/1.1 200 OK`, 828 bytes**. Every MIC and every PRF block in that exchange was computed by the
+    collapsed construction. **The handshake is the measurement rather than an argument**, and it is a
+    stronger one than the PBKDF2 collapse's: a wrong PTK, a wrong msg2 MIC or a wrong msg3 verify each ends
+    the same way -- the AP drops the reply without saying why -- so reaching `keys installed` establishes
+    all three at once, and nothing short of a boot could.
+  - **AND THE PRF IS THE PART QEMU HAD NEVER RUN, which is why this boot was worth more than the last one.**
+    `Prf.sha1` is HW-gated with the rest of the WiFi path, so the emulator exercised the collapsed PRF
+    exactly zero times; its 20 vector arms and the reset control ran on the HOST. This is the first
+    execution of `Prf`'s one-`Hmac`-reused form anywhere, and it produced a PTK the AP accepted.
+  - **THE CLOSURE IS IDENTICAL TO THE QEMU ARM TO THE DIGIT:** batch 70 `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`, plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `sched: 89 preemptions`,
+    `jobs/core 6/6/6/6`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace, every digest
+    vector exact including `sha256 clone = .../fork-ok`, and `hw rng: RNG200 at 0xFE104000, live` with
+    `unseeded = self-seeded from hardware, two instances differ`.
+  - **TWENTY-TWO MARKERS ZERO**, and only the seven known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, every one
+    labelled DENYLISTED. One `(skip ch=0x...0001)` after `wifi: JOINED` -- `Cyw43`'s ioctl-response wait
+    loop on a masked `load8` path, frame timing rather than a failure, and channel 1 again.
+  - **A CROSS-BOOT RNG SAMPLE, AND ONE RECORDED FIGURE DOES NOT REPRODUCE -- STATED RATHER THAN SMOOTHED
+    OVER.** `639825d3 9ee15e80 cb0037f3`, distinct from every previous boot, popcount **46 of 96** against
+    an ideal of 48 (the series reads 51, 47, 63, 50, 41, 46 -- still six samples of three words, still not
+    a randomness test). But the FIFO reads **`count 16 -> 14` for three words**, where this file records
+    `16 -> 13`. **That does not weaken the anti-stuck-source argument and it does correct how it is
+    phrased:** the SecureRandomProbe card already records the queue refilling faster than a caller drains it
+    (`FIFOCNT` still reading 16 after four seedings), so the post-read count is a race between drain and
+    refill and was never an exact accounting. The claim the liveness check actually needs is **the count
+    FOLLOWS reads** -- it is not a constant, and it is not a counter that ignores consumption -- and that
+    holds at 14 exactly as it did at 13. "Drains by exactly what is taken" was over-stated from a single
+    observation.
+
 - **PBKDF2 IS ONE DERIVATION NOW -- THE WPA2 PMK IS COLLAPSED ONTO THE GENERIC PATH (2026-09-23,
   PI-VALIDATED).** `Pbkdf2.deriveSha1` -- the WPA2-private one-shot over the static `Hmac.sha1` --
   is DELETED, and `Cyw43.setupWpa2` calls `Pbkdf2.derive(Digest.SHA1, ...)` like every other caller.
@@ -186,7 +312,9 @@ defines the minimum the assembler must encode.
     one.** `crypto/Sha1` (3,716 B) stays baked because `Hmac.sha1` still backs the WPA2 PRF (the PTK) and
     both EAPOL-Key MICs; only the PMK moved. Those are a separate collapse with a separate flash, and
     `hmacAgreesWithWpa2`'s 99 pairs are the evidence already standing for it -- exactly the position this
-    increment was in.
+    increment was in. **DONE the same day -- see the card at the top of this file. `crypto/Sha1` is not
+    merely unbaked now but DELETED, and that collapse's own 99-pair justification had to die with it for
+    the second time running.**
   - **THE WRITER COMPILED THE WHOLE GENERIC PATH, MEASURED RATHER THAN ASSUMED.** That was the one
     structural risk: this file records that the bake domain **cannot** carry `DoubleToDecimal`'s `<clinit>`
     (an `ldc` class literal the host writer refuses), so a `<clinit>` with four large constant tables was
@@ -542,6 +670,9 @@ defines the minimum the assembler must encode.
     this tree -- onto a DIFFERENT SHA-1 implementation, buys WPA2 nothing, and can only be gated by a flash.
     So it is not done here; instead `hmacAgreesWithWpa2` MEASURES the two as byte-identical across 99
     key/message pairs, which turns that collapse from a guess into a change whose evidence already stands.
+    **DONE -- see the collapse card at the top of this file, which also records that this 99-pair
+    measurement had to be DELETED by the change it justified, and that the PRF GAINED coverage from the
+    move because it now reuses one `Hmac` where it used to call the one-shot.**
   - **EVERY PUBLISHED CONSTANT IS ASSERTED TWICE -- against our engine AND against the JDK -- and that is
     not redundancy.** The constants are TRANSCRIBED rather than read from an RFC in this tree, and this file
     already records what a recalled constant costs. If one is wrong BOTH arms fail together and the engine
@@ -666,6 +797,10 @@ defines the minimum the assembler must encode.
   - **THE FIFO DRAINS BY EXACTLY WHAT IS TAKEN: `count 16 -> 13` for three words**, so the driver is
     consuming the hardware's queue rather than re-reading a latched register three times -- the failure that
     would make three IDENTICAL words, which is what the distinctness check is for.
+    **OVER-STATED FROM ONE OBSERVATION -- a later boot reads `16 -> 14` for the same three words** (see the
+    HMAC collapse card at the top of this file). The queue refills faster than a caller drains it, which
+    this arc records elsewhere, so the post-read count is a race and never an exact accounting. What the
+    liveness check needs, and what holds at both 13 and 14, is that the count FOLLOWS reads.
   - **A DEFECT IN MY OWN PREDICTION, stated rather than quietly dropped -- AND THEN CLOSED BY FLASHING THE
     PROBE (2026-09-22).** I said silicon had to show three lines and it showed two: the third,
     `board entropy: ...`, belongs to `SecureRandomProbe`, a SEPARATE jdktest image that was never on the

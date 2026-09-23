@@ -12,21 +12,20 @@
 package crypto;
 
 /**
- * HMAC (RFC 2104) -- the keyed message authentication code, in two shapes over two engines.
+ * HMAC (RFC 2104) -- the keyed message authentication code, STREAMING and generic over {@link Digest}:
+ * MD5, SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512, fed incrementally.
  *
- * <p>The INSTANCE side is STREAMING and generic over {@link Digest}: MD5, SHA-1, SHA-224, SHA-256, SHA-384
- * and SHA-512, fed incrementally. That is what backs the {@code javax.crypto.Mac} overlay, and streaming is
- * not a nicety there -- a {@code Mac} authenticating a large input must not hold it, and buffering the whole
- * message would make a MAC's memory cost its MESSAGE SIZE. State is two {@link Digest}s plus two block-sized
- * pads: ~200 bytes whatever it authenticates.
+ * <p><b>ONE CONSTRUCTION SERVES EVERYTHING NOW</b> -- {@code javax.crypto.Mac}, PBKDF2, the WPA2 PRF (the
+ * PTK) and the EAPOL-Key MIC. Until this class was collapsed the 4-way handshake ran on a separate static
+ * one-shot {@code sha1()} over a separate SHA-1 engine, so the image carried TWO implementations of one
+ * primitive and only one of them was cross-checked against the JDK. That one-shot was kept while the
+ * generic path was unproven on hardware; it is gone now, and CLAUDE.md records what the collapse cost and
+ * what gated it.
  *
- * <p>The STATIC {@link #sha1} is the one-shot HMAC-SHA1 over {@link Sha1} that backs PBKDF2 (PMK derivation),
- * the WPA2 PRF (PTK) and the EAPOL-Key MIC. **It is deliberately left alone by this increment.** Collapsing
- * it onto the instance path would switch the most hardware-validated code in this tree -- the 4-way handshake
- * that reaches HTTP 200 OK on every Pi boot -- onto a different SHA-1 implementation, which buys WPA2 nothing
- * and can only be gated by a flash. {@code CryptoTest.hmacAgreesWithWpa2} MEASURES the two as byte-identical
- * across key and message lengths, so that collapse is a separate, separately-gated increment with its
- * evidence already standing rather than a guess.
+ * <p>STREAMING rather than one-shot, and that is not a nicety: a {@code Mac} authenticating a large input
+ * must not hold it, and the one-shot this replaced buffered {@code block + msgLen} bytes -- which made a
+ * MAC's memory cost its MESSAGE SIZE. State is two {@link Digest}s plus two block-sized pads: ~200 bytes
+ * whatever it authenticates.
  *
  * <p>JDK-free, so the same source runs the seed-JVM vectors, compiles into the image, and demand-loads into
  * the guest world.
@@ -207,69 +206,5 @@ public final class Hmac
         Hmac h = new Hmac(algorithm, key, keyLen);
         h.update(msg, 0, msgLen);
         h.doFinal(out, 0);
-    }
-
-    /**
-     * HMAC-SHA1 of {@code msg[0..msgLen)} under {@code key[0..keyLen)}; 20-byte MAC into {@code out}.
-     *
-     * <p>THE WPA2 PATH, over {@link Sha1} rather than {@link Digest}, and untouched on purpose -- see the
-     * class javadoc. Equivalent to {@code mac(Digest.SHA1, ...)}, which {@code CryptoTest} measures rather
-     * than assumes. One-shot by construction: it buffers {@code block + msgLen} bytes, which is right for the
-     * handshake's tiny frames and is exactly why the instance API above exists for anything larger.
-     */
-    public static void sha1(byte[] key, int keyLen, byte[] msg, int msgLen, byte[] out)
-    {
-        byte[] k = new byte[Sha1.BLOCK];                 // key padded/hashed to the 64-byte block
-        if (keyLen > Sha1.BLOCK)
-        {
-            byte[] kh = new byte[Sha1.DIGEST];
-            Sha1.hash(key, keyLen, kh);
-            copy(kh, k, Sha1.DIGEST);
-        }
-        else
-        {
-            copy(key, k, keyLen);
-        }
-
-        byte[] inner = new byte[Sha1.BLOCK + msgLen];    // SHA1( (k^ipad) || msg )
-        int i = 0;
-        while (i < Sha1.BLOCK)
-        {
-            inner[i] = (byte) ((k[i] & 0xFF) ^ 0x36);
-            i = i + 1;
-        }
-        i = 0;
-        while (i < msgLen)
-        {
-            inner[Sha1.BLOCK + i] = msg[i];
-            i = i + 1;
-        }
-        byte[] ih = new byte[Sha1.DIGEST];
-        Sha1.hash(inner, Sha1.BLOCK + msgLen, ih);
-
-        byte[] outer = new byte[Sha1.BLOCK + Sha1.DIGEST];   // SHA1( (k^opad) || inner-hash )
-        i = 0;
-        while (i < Sha1.BLOCK)
-        {
-            outer[i] = (byte) ((k[i] & 0xFF) ^ 0x5C);
-            i = i + 1;
-        }
-        i = 0;
-        while (i < Sha1.DIGEST)
-        {
-            outer[Sha1.BLOCK + i] = ih[i];
-            i = i + 1;
-        }
-        Sha1.hash(outer, Sha1.BLOCK + Sha1.DIGEST, out);
-    }
-
-    private static void copy(byte[] src, byte[] dst, int len)
-    {
-        int i = 0;
-        while (i < len)
-        {
-            dst[i] = src[i];
-            i = i + 1;
-        }
     }
 }

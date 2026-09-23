@@ -33,8 +33,16 @@ all: test image
 build: $(OUT)/.stamp guest
 
 # Recompile the whole set whenever any source is newer than the stamp.
+# Purge the src-side DEMAND-LOADABLE packages first, for exactly the reason the guest purge below exists:
+# an incremental javac never deletes the .class of a REMOVED source, and ImageBuilder.demandLoadable ships
+# crypto/* and zip/* into the classDir by PREFIX -- so a retired class keeps being embedded and stays
+# reachable by name from guest code. Those two are the only src packages that ship (everything else
+# demandLoadable names comes from guestsrc and is purged there). MEASURED, not hypothetical: deleting
+# crypto/Sha1 shrank the image by 304 bytes instead of ~2 KB, because the stale out/crypto/Sha1.class was
+# still in the classDir of every image. Third instance of this defect, after org/ and sun/.
 $(OUT)/.stamp: $(SOURCES)
 	@mkdir -p $(OUT)
+	rm -rf $(OUT)/crypto $(OUT)/zip
 	$(JAVAC) -d $(OUT) $(SOURCES)
 	@touch $@
 
