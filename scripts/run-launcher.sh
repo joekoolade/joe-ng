@@ -41,6 +41,14 @@ trap restore EXIT INT TERM
 # and chasing that one proved nothing about this one.
 printf 'main=org/junit/platform/console/ConsoleLauncher\nargs=execute --select-class=SleepSanity --disable-ansi-colors --disable-banner\nclasspath=/lib/junit.jar\n' > ramfs/etc/init
 
+# COMPILE FIRST. This used to go straight to BuildRuntimeImage, which reads `out/` and never builds it --
+# so an edit that was never compiled produced an image BYTE-IDENTICAL to the previous run's, and the boot
+# read exactly like a change that does nothing. That is the trap CLAUDE.md records three times ("an A/B
+# whose arms are the same binary looks exactly like a change that does nothing"), and this script walked
+# into it while diagnosing a launcher failure -- costing a whole ~20-minute boot to discover.
+echo "== compile =="
+make build >/dev/null
+
 echo "== build launcher image =="
 java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp out writer.BuildRuntimeImage out /tmp/launcher.img >/dev/null
 ls -l /tmp/launcher.img

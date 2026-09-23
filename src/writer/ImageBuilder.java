@@ -1203,6 +1203,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                         addr(base), addr(base + sizeWords.get(k)), k));
             }
         }
+        // ... and every STATIC's cell address beside them. A bare image address is the only evidence a
+        // corrupt reference leaves, and the symmap names CODE only -- so an address above the code ceiling
+        // could be named as "somewhere in the data region" and no further. That cost a whole arc: a
+        // Class.getName() answering 1 was traced to a receiver at 0x0016C300, read out of the image file by
+        // hand as a bare `new Object()` with Object's own vtable, and the statics cell holding it could only
+        // be found by scanning the image for the word. This prints the map that search reconstructed.
+        if (System.getenv("JOENG_SYMMAP") != null)
+        {
+            for (int i = 0; i < staticWord.size(); i++)
+            {
+                System.out.println(String.format("  statmap %08x %s",
+                        addr(staticWord.valAt(i)), staticWord.keyAt(i)));
+            }
+        }
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));

@@ -6166,6 +6166,7 @@ public final class Loader
         int len = classNameLen(type);
         if (len <= 0)
         {
+            reportNamelessType(type);
             return 0L;
         }
         long arr = Heap.allocArray(len, 1);
@@ -6175,6 +6176,69 @@ public final class Loader
         Magic.store64(obj + 16L, arr);                  // value byte[]; coder@24 stays 0 = LATIN1
         return obj;
     }
+
+    /**
+     * {@code Class.getName()} is about to answer NULL, and that is a SILENT WRONG ANSWER rather than a gap:
+     * stock's {@code getName()} never returns null, so the null flows into ordinary library code and NPEs
+     * arbitrarily far from here.
+     *
+     * <p>The launcher is where this was found and it shows the cost exactly. JUnit builds a
+     * {@code ClassSelector} as {@code className = clazz.getName()}, and its whole {@code hashCode()} is
+     * {@code aload_0; getfield className; invokevirtual String.hashCode} -- so a null name surfaces as a
+     * bare NPE inside {@code HashMap.put}, THREE frames and one collection deep, naming a JUnit class and
+     * nothing about this VM.
+     *
+     * <p>The report names WHICH of the two cases it is, because they want opposite investigations: an array
+     * whose ELEMENT type never resolved (the name is genuinely underivable and the element is the thing to
+     * chase), or a Type the class registry does not hold -- which for a synthesised lambda/annotation TIB is
+     * BY CONSTRUCTION (a hidden class has no binary name) and for anything else is a registration gap.
+     * Capped, because {@code getName()} is called freely and an unbounded report would flood the UART and
+     * starve the run it is meant to diagnose.
+     */
+    private static void reportNamelessType(long type)
+    {
+        if (namelessN >= 8)
+        {
+            namelessN += 1;
+            return;
+        }
+        namelessN += 1;
+        Uart.write(Magic.bytes("\n  CLASS NAME UNRESOLVED (Class.getName() answers NULL): type=0x"));
+        VM.printHex(type);
+        if (isArrayType(type))
+        {
+            Uart.write(Magic.bytes("\n  ... an ARRAY whose ELEMENT type is unresolved -- chase the element, not this"));
+        }
+        else
+        {
+            Uart.write(Magic.bytes("\n  ... not in the class registry; synthesised(lambda/anno TIB)="));
+            VM.printDec(isSynthesisedType(type));
+            Uart.write(Magic.bytes(" -- a synthesised type has no binary name BY CONSTRUCTION"));
+        }
+        Uart.putc(0x0A);
+    }
+
+    /** {@link #isSynthesisedTib} keyed by TYPE: a synthesised TIB holds its Type in slot 0. */
+    private static int isSynthesisedType(long type)
+    {
+        if (lambdaTibRoots == null)
+        {
+            return 0;
+        }
+        int i = 0;
+        while (i < lambdaTibRoots.length)
+        {
+            if (lambdaTibRoots[i] != 0L && Magic.load64(lambdaTibRoots[i]) == type)
+            {
+                return 1;
+            }
+            i += 1;
+        }
+        return 0;
+    }
+
+    /** How many times {@code Class.getName()} has answered null; the report itself is capped at 8. */
+    static int namelessN;
 
     private static long[] primTypeCache;                 // primitive Type per atype-style index (see primTypeIdx)
 
@@ -6358,7 +6422,43 @@ public final class Loader
             }
             i += 1;
         }
-        return 0;
+        return isSynthesisedType(type) != 0 ? SYNTH_NAME_LEN : 0;
+    }
+
+    /** {@code "$$Lambda/0x"} + 16 hex digits -- the length {@link #writeSynthName} writes. */
+    private static final int SYNTH_NAME_LEN = 11 + 16;
+
+    /**
+     * Name a SYNTHESISED (lambda/annotation) type, which the class registry does not hold.
+     *
+     * <p>It used to answer nothing, so {@code getClass().getName()} on a lambda returned NULL -- and stock's
+     * {@code getName()} NEVER returns null, so that null flows into ordinary library code and NPEs somewhere
+     * unrelated. This VM has just paid five boots chasing exactly that shape for a different object.
+     *
+     * <p>The shape is stock's: a hidden class reads {@code Outer$$Lambda/0x00007f...}, its name deliberately
+     * opaque and NOT a binary name that could be looked up. The outer class is not recorded here, so the
+     * prefix is bare -- and the TYPE ADDRESS is what makes it distinct per lambda, which matters because a
+     * single constant name would make every lambda compare equal by name.
+     */
+    private static int writeSynthName(long type, long dst, int pos)
+    {
+        byte[] pre = Magic.bytes("$$Lambda/0x");
+        int k = 0;
+        while (k < pre.length)
+        {
+            Magic.store8(dst + pos + k, pre[k]);
+            k += 1;
+        }
+        pos += pre.length;
+        int d = 15;
+        while (d >= 0)
+        {
+            int nib = (int) ((type >>> (d * 4)) & 0xFL);
+            Magic.store8(dst + pos, (byte) (nib < 10 ? 0x30 + nib : 0x61 + nib - 10));
+            pos += 1;
+            d -= 1;
+        }
+        return pos;
     }
 
     /** The Java source name of a primitive descriptor char ("int"), as bytes. */
@@ -6452,7 +6552,7 @@ public final class Loader
             }
             i += 1;
         }
-        return pos;
+        return writeSynthName(type, dst, pos);   // unregistered => synthesised; classNameLen sized it
     }
 
     /**
@@ -10112,7 +10212,7 @@ public final class Loader
     /** The class COMPILE_WATCH reports on, matched as a PREFIX so nested classes are included. */
     private static byte[] compileWatchClass()
     {
-        return Magic.bytes("org/junit/jupiter/engine/descriptor/TestMethodTestDescriptor");
+        return Magic.bytes("org/junit/platform/engine/discovery/ClassSelector");
     }
 
     /** One COMPILE_WATCH line for method {@code i}: who it is, and whether it was emitted or deferred. */
@@ -13999,7 +14099,7 @@ public final class Loader
      *  for `this$0` for exactly that reason, which reads as "the resolver is not involved" and is not the
      *  same claim. Tier 0 same-class hit, 1 class-qualified, 2 super-chain, 3 pull-noted (compile discarded
      *  and redone), 4 gave up at slot 0, 9 same-class miss falling through to the global path. */
-    private static final byte[] FIELD_WATCH = Magic.bytes("this$0");
+    private static final byte[] FIELD_WATCH = Magic.bytes("className");
     private static final boolean FIELD_WATCH_ON = false;
 
     private static void fieldOffsetLog(int classOff, int nameOff, int off, int tier)
@@ -21684,7 +21784,7 @@ public final class Loader
      * {@code iterator()} runs against is the one that was constructed, and that is a question about
      * IDENTITY, which no value watch can answer.
      */
-    private static final byte[] RECV_WATCH = Magic.bytes("iterator");
+    private static final byte[] RECV_WATCH = Magic.bytes("getName");
     private static final boolean RECV_WATCH_ON = false;
 
     static boolean isWatchedRecv(int idx)
@@ -21701,7 +21801,8 @@ public final class Loader
         // NARROWED TO THE CALLER, not just the callee: `iterator` is dispatched all over the suite, and an
         // unfiltered watch floods the UART and starves the run it is meant to diagnose -- already paid for
         // once by the COMPILE_WATCH arc. The failing dispatch is Map.forEach's, so that is the only one armed.
-        if (!utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/util/Map")))
+        if (!utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
         }
@@ -21971,7 +22072,14 @@ public final class Loader
 
     static boolean isWatchedField(int idx)
     {
-        return FIELD_STORE_WATCH && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("factory"));
+        // CLASS-QUALIFIED, and that is not tidiness: the watch prints the cp INDEX, not the owner, so a
+        // field of the same name in another class reads as the same site. `className` alone matched
+        // ClassSelector, ClassSource AND ObjectStreamClass$ExceptionInfo, and cp index 7 is not unique
+        // across them -- an ambiguous line is an instrument that invites the wrong conclusion.
+        return FIELD_STORE_WATCH
+                && utf8IsAtBase(gbase, mrefNameOff(idx), Magic.bytes("className"))
+                && utf8IsAtBase(gbase, refClassNameOff(idx),
+                        Magic.bytes("org/junit/platform/engine/discovery/ClassSelector"));
     }
 
     static boolean isWatchedCall(int idx)
@@ -21981,7 +22089,14 @@ public final class Loader
             return false;
         }
         int n = mrefNameOff(idx);
-        if (!utf8IsAtBase(gbase, n, Magic.bytes("notNull")))
+        if (!utf8IsAtBase(gbase, n, Magic.bytes("getName")))
+        {
+            return false;
+        }
+        // Only the ONE call site under investigation, or every `getName` in a 2371-class closure prints and
+        // the UART traffic starves the run it exists to diagnose -- a cost this file records paying once.
+        if (!utf8IsAtBase(gbase, gThisNameOff,
+                Magic.bytes("org/junit/platform/engine/discovery/ClassSelector")))
         {
             return false;
         }

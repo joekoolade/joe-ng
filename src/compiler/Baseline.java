@@ -1917,6 +1917,12 @@ public final class Baseline
             return;
         }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
+        // DEBUG (off unless Loader.RECV_WATCH_ON). Wired here as well as into the interface path, which is
+        // where it was born: armed on an `invokevirtual` it used to print NOTHING, which reads exactly like
+        // a receiver that is always fine. An instrument that CANNOT FIRE looks exactly like a condition that
+        // never happens -- this file's most-repeated lesson, paid again while chasing a Class.getName() that
+        // answered 1. Before marshalling, for the reason watchReceiver's own doc gives.
+        watchReceiver(cpIndex, cb);
         if (deepStack)
         {
             marshalArgsFromMemory(cb, nargs);   // receiver -> x0
