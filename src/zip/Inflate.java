@@ -18,7 +18,7 @@ package zip;
  * loader both decode through it.
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports, no exceptions), so the same code runs on the
- * seed JVM under {@code test/zip/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
+ * seed JVM under {@code test/hosttest/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
  *
  * <p><b>Streaming and resumable.</b> Compressed bytes arrive through {@link #input}; {@link #inflate} produces
  * as much output as the caller's buffer holds and returns. It can stop anywhere — mid-block, mid-LZ-copy, or

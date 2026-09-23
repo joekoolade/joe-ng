@@ -18,7 +18,7 @@ package zip;
  * mid-code when the input runs dry (the property the streaming decoder is built on).
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports), so the same code runs on the seed JVM under
- * {@code test/zip/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
+ * {@code test/hosttest/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
  */
 public final class Huff
 {

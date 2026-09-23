@@ -16,7 +16,7 @@ package crypto;
  * SHA-384, SHA-512. This is what backs the {@code java.security.MessageDigest} overlay.
  *
  * <p>Strictly JDK-free (primitive arrays + int/long math), so the same source runs on the seed JVM under
- * {@code test/crypto/CryptoTest} -- where it is cross-checked against the JDK's OWN {@code MessageDigest},
+ * {@code test/hosttest/CryptoTest} -- where it is cross-checked against the JDK's OWN {@code MessageDigest},
  * byte for byte, over every algorithm and a sweep of lengths -- and compiles into the bare-metal image via
  * our own baseline compiler. {@code crypto/} is on the writer's demand-loadable prefix list for the same
  * reason {@code zip/} is: the baked copy serves VM code and the SAME source is pulled into the guest world
