@@ -123,10 +123,14 @@ defines the minimum the assembler must encode.
     (`javac --patch-module java.base=guestsrc ... -d out`) and purged again by `make build`'s `guest` rule.
     `jdk/` is a `demandLoadable` prefix, so it ships in the classDir -- and pulls enough behind it to cost
     **87x its own size**.
-  - **REPRODUCED BYTE-FOR-BYTE: `make build jdktests plugins` then a no-manifest image is `cmp`-identical
-    to the flashed binary.** So nothing is retracted -- the Pi-validated image is exactly reproducible and
-    the `Magic.call` card's `33,646,196 -> 33,646,444 (+248)` pair were both jdktests-state builds, a
-    consistent pair whose arithmetic still closes.
+  - **REPRODUCED TO 20 BYTES: `make build jdktests plugins` then a no-manifest image is byte-identical to
+    the rebuild, and differs from THE CARD in exactly 20 bytes** -- ten pairs at `/lib/app.jar`'s
+    `META-INF/` local headers, i.e. the regenerated jar's DOS timestamps, which this file already records
+    as the one benign source of image churn. **I first wrote this as "cmp-identical to the flashed
+    binary", which compared against my own copy of the build rather than against the card**; reading the
+    card settled it. Nothing is retracted -- the size is reproduced exactly, and the `Magic.call` card's
+    `33,646,196 -> 33,646,444 (+248)` pair were both jdktests-state builds, a consistent pair whose
+    arithmetic still closes -- but "byte-for-byte" was a claim about the wrong artifact.
   - **THE LESSON IS THE RECIPE, and it is the one that cost a re-flash the day before:** `sdcard.sh` runs
     `make image`, which depends on `jdktests`, so **an image gated with `make build` alone is not the image
     that gets flashed.** Gate with the same target chain, or `cmp` before flashing. The Makefile's own
