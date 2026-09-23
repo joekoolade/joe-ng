@@ -115,6 +115,124 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`javax.crypto.SecretKeyFactory` RUNS ON THE METAL -- PBKDF2 through the stock API, over joe-ng's own
+  engine (2026-09-23, QEMU; NOT YET PI-VALIDATED).** `PBKDF2WithHmacSHA1/224/256/384/512`.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/SecretKeyFactoryProbe` on QEMU | **38 arms, `failures=0 divergences-unmet=0`** |
+  | the same source as a HOST CONTROL | `failures=0 divergences-unmet=5` -- every hex byte-identical |
+  | `crypto: 87 -> 104 checks` | incl. **2,025 comparisons against the JDK's own `SecretKeyFactory`** |
+  | demo suite | 40 programs, batch 70, **closure identity EXACT**, 21 markers zero |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 104, zip 91, `overlay-check 0 new` |
+
+  - **ONE CLASS IS OVERLAID, AND THE OTHER TWO WERE CHECKED RATHER THAN ASSUMED -- a narrower surface than
+    `Mac` needed.** `SecretKeyFactorySpi` is a constructor and three abstract methods; `PBEKeySpec` imports
+    only `KeySpec` and `Arrays` and is a data holder. Neither needs a native or a subsystem this VM lacks,
+    so **both load STOCK** -- the shape the permission layer already uses. Only `SecretKeyFactory` itself
+    needs overlaying, and for the MEASURED reason: it imports `sun.security.jca.*` and ends in
+    `JceSecurity` verifying the provider's JAR SIGNATURE, which is the whole of why `sun/security/` is
+    denied here. **Reading the three imports is what turned a three-file overlay into a one-file one.**
+  - **TWO SEMANTICS WERE MEASURED BEFORE ANY CODE WAS WRITTEN, AND BOTH WOULD HAVE BEEN SILENTLY WRONG.**
+    - **The `char[]` password is UTF-8.** A host control put the UTF-8, Latin-1 and UTF-16 arms side by side
+      against the JDK's answer for `U+00E9`; only UTF-8 matched. **Latin-1 is the tempting one** -- it is
+      what "one char, one byte" suggests -- and it produces a perfectly good key that agrees with nothing in
+      the world. Recalling this instead of measuring it is the silent wrong answer this file exists to
+      remove.
+    - **`keyLength` is in BITS, TRUNCATED by integer division.** Measured: 7 bits yields a **ZERO-LENGTH
+      key on stock without throwing**, 9 bits yields 1 byte, and 255 bits yields the 256-bit answer's first
+      31 bytes. Rounding up, or reading it as bytes, fails only on those arms.
+  - **AND ONE WAS CONFIRMED RATHER THAN RECALLED: an unpaired surrogate becomes `'?'`.** Stock is
+    `UTF_8.encode(CharBuffer.wrap(passwd))`, whose malformed-input action is REPLACE. **The probe asserts
+    that the unpaired-surrogate derivation EQUALS the `'?'` derivation rather than pinning a constant**, so
+    it tests the behaviour instead of testing that I typed the same hex twice -- the defect `javap` caught
+    twice in the boolean-concat arc.
+  - **THE DENIAL IS NARROWED BY EXACT NAME, AND `java/security/spec/` IS WHY.** `InvalidKeySpecException` is
+    what the stock SPI's signatures name. As a PREFIX that entry would also open the RSA/EC/DSA key specs --
+    the `java.math`-dependent half this file records as deliberately out of reach. Same care `java/security/
+    Key` needed; mirrored in `writer/ReachScan`.
+  - **FIVE STATED DIVERGENCES, counted apart so `failures=0` means the same thing in both worlds:** the
+    provider name; `PBKDF2WithHmacSHA512/224` and `/256` (SHA-512 under a DIFFERENT initial chaining value,
+    not a truncation of the output -- answering them by truncating SHA-512 would be wrong in every byte
+    while looking exactly like a key, the SHA-224/384 hazard the digest card already records);
+    `keyLength` under one byte, where stock hands back an unusable empty key and this names the bits-vs-bytes
+    mistake; and `getKeySpec`, which refuses because **this VM's key does not RETAIN the password.** Stock
+    can round-trip a `PBEKeySpec` only because `PBKDF2KeyImpl` keeps the password, the salt and the count
+    alive inside the key -- the one thing a key should not do.
+  - **`PBKDF2WithHmacMD5` IS ABSENT AND THAT IS A MATCH, NOT A DIVERGENCE** -- checked: stock ships no such
+    algorithm either. The engine accepts MD5; nothing asserts what it produces, because there is no oracle
+    for it and inventing one is the recalled constant this file warns about.
+  - **THE KEY IS A `SecretKeySpec`, and the host control says that is not a compromise:** stock's
+    `PBKDF2KeyImpl` compares EQUAL to a `SecretKeySpec` of the same bytes and algorithm, so the object this
+    factory returns is equal to the one stock returns. `translateKey` accepts it (stock demands a `PBEKey`
+    and would refuse the very keys this class produces -- a divergence in the useful direction).
+  - **REGRESSION IS CLOSURE IDENTITY, not "it looks clean":** batch 70 reads `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` -- **byte-identical to the figures
+    already in this file** -- with 40 programs, `churnMB=625 live=32 intact=32`, `gc: collections=46` then
+    `55`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=11`, and every digest vector
+    exact including `sha256 clone = .../fork-ok`.
+  - **STILL TO DO: a Pi boot.** `crypto/Pbkdf2` is now DEMAND-LOADED into the guest world for the first
+    time and the image layout moved again; the baked `deriveSha1` that backs WPA2 is byte-for-byte
+    unchanged, so the handshake is untouched BY CONSTRUCTION -- but this file records latent bugs surfacing
+    from layout movement alone twice, so the 4-way handshake reaching HTTP 200 OK is the measurement.
+  - **NEXT, and it is a real decision rather than wiring:** `deriveSha1` can now be collapsed onto the
+    generic path -- `pbkdf2GenericMatchesWpa2` measures the two as byte-identical over 84 pairs, so the
+    evidence already stands. It buys WPA2 nothing and its only gate is a flash, which is exactly why it has
+    not been done.
+
+- **PBKDF2 IS GENERIC OVER `crypto/Hmac` -- the engine half of `javax.crypto.SecretKeyFactory`
+  (2026-09-23, HOST-GATED; no boot, and the symmap says why).** `crypto/Pbkdf2` gains `derive`, generic over
+  `Digest`'s algorithms, while the static `deriveSha1` that backs WPA2 is left byte-for-byte alone.
+
+  | gate | result |
+  |---|---|
+  | `crypto: 87 -> 104 checks` | |
+  | vs the JDK's own `SecretKeyFactory` | **2,025 comparisons**, 5 algorithms x 9 password lengths x 3 salts x 3 iteration counts x 5 derived lengths |
+  | published vectors | RFC 6070 + RFC 7914 s11, 6 cases, **each asserted TWICE** |
+  | `generic SHA-1 == the WPA2 one-shot` | **84 of 84 pairs** |
+
+  - **ONE `Hmac` IS BUILT AND REUSED, AND THAT IS THE WHOLE REASON THE STREAMING HMAC EXISTS.** Every
+    iteration re-MACs under the SAME key, so a fresh `Hmac` per iteration would re-derive both pads -- and
+    re-HASH a key longer than the block -- once per iteration. At PBKDF2's whole point, a high iteration
+    count, that is the dominant cost and it is pure waste: 4096 iterations means 4096 redundant key
+    schedules. `reset()` replays the ipad and nothing else.
+  - **THE WPA2 PATH IS UNTOUCHED ON PURPOSE, AND THE REASON IS WHAT IT WOULD COST TO GATE.** Collapsing
+    `deriveSha1` onto the generic path switches the 4-way handshake -- the most hardware-validated code in
+    this tree -- onto a different HMAC, buys WPA2 nothing, and can only be gated by a flash. So it is not
+    done; `pbkdf2GenericMatchesWpa2` MEASURES the two as byte-identical instead, which turns that collapse
+    from a guess into a change whose evidence already stands. Same argument the HMAC arc made, reused
+    deliberately.
+  - **EVERY PUBLISHED CONSTANT IS ASSERTED TWICE -- against our engine AND against the JDK -- and the
+    NEGATIVE CONTROL PROVES THE SPLIT WORKS.** They are TRANSCRIBED rather than read from an RFC in this
+    tree. With the XOR accumulation broken, **all four discriminating ENGINE arms failed and all six "is the
+    CONSTANT right?" arms passed** -- the test says "engine wrong, constants right" without anyone having to
+    reason about it. (All six recalled constants were in fact correct on the first run.)
+  - **AND THE SAME CONTROL SAID WHICH ARMS DISCRIMINATE, which is the part worth keeping.** The two
+    `iters=1` vectors did NOT fail, correctly: at one iteration the inner loop never executes, so they are
+    SHAPE coverage rather than discrimination for that defect. The sweep failed **1350 of 2025** -- exactly
+    two thirds, i.e. the `iters` in {2,17} arms -- which is arithmetic confirming the iteration dimension
+    does what it claims. An arm that passes in both states is not a control, and only running the control
+    says which arms those are.
+  - **THE PASSWORD LENGTHS STRADDLE BOTH BLOCK SIZES**, because HMAC replaces a key longer than the BLOCK by
+    its own hash and the block is 64 for SHA-1/224/256 and 128 for SHA-384/512: 63/64/65 and 127/128/129
+    exercise both branches, and one length cannot.
+  - **NO BOOT GATES THIS, AND THE SYMBOL MAP IS WHY.** `JOENG_SYMMAP=1` shows only `Pbkdf2.deriveSha1`
+    compiled into the image: **not one line of the new code is baked**, because nothing referenced it yet.
+  - **AND THE HOST TEST IN THE classDir IS MEASURED AGAIN, at 20 KB now.** The image grew 5,096 bytes and the
+    account closes to 5 (8-alignment):
+
+    | | HEAD | now | delta |
+    |---|---|---|---|
+    | `crypto/Pbkdf2.class` (the engine, intended) | 808 | 1,860 | **+1,052** |
+    | `crypto/CryptoTest.class` (a HOST TEST) | 16,723 | 20,762 | **+4,039** |
+    | image | 33,625,092 | 33,630,188 | **+5,096** |
+
+    **79% of the growth is a host test**, for the reason the Mac card already records: `demandLoadable`
+    takes everything under `crypto/`, and `out/crypto/CryptoTest.class` matches that prefix. Second
+    measurement of the same defect. **Still not fixed here:** excluding tests from the classDir is a WRITER
+    change that alters every image and deserves its own gate.
+
 - **`javax.crypto.Mac` RUNS ON THE METAL -- HMAC through the stock API, over joe-ng's own engine
   (2026-09-22, PI-VALIDATED).** `Mac`, `MacSpi` and `SecretKeySpec` are overlaid over the
   streaming `crypto/Hmac` from the increment below.
