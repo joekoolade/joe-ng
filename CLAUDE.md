@@ -115,7 +115,7 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **HMAC IS ONE CONSTRUCTION, AND THE SECOND SHA-1 LEAVES THE IMAGE (2026-09-23, NOT YET PI-VALIDATED).**
+- **HMAC IS ONE CONSTRUCTION, AND THE SECOND SHA-1 LEAVES THE IMAGE (2026-09-23, PI-VALIDATED).**
   `Hmac.sha1` -- the WPA2-private one-shot -- is DELETED, and the 4-way handshake's PRF (the PTK) and both
   EAPOL-Key MIC sites go through the same streaming `Hmac` over `crypto/Digest` that `javax.crypto.Mac` and
   PBKDF2 already used. `crypto/Sha1` is then referenced by NOTHING and is deleted too.
@@ -126,6 +126,7 @@ defines the minimum the assembler must encode.
   | negative control (opad) | **20 engine vector arms fail, 0 of the JDK-constant arms** |
   | baked crypto | 48 methods / 53,212 B -> **43 / 48,772**, account closes EXACTLY |
   | image | 33,684,440 -> **33,675,140 (-9,300)** |
+  | **Pi, the whole handshake** | **`ptk derived` -> `msg3 MIC ok` -> `msg4 sent` -> HTTP 200 OK, 828 bytes** |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE EVIDENCE STOOD BEFORE THE CHANGE WAS WRITTEN, AND THE TEST THAT PROVIDED IT DIED WITH THE CODE IT
@@ -204,6 +205,41 @@ defines the minimum the assembler must encode.
     rewrote -- the PTK by the collapsed `Prf`, the msg3 check and the msg2/msg4 MIC by the collapsed MIC
     sites -- so unlike the PBKDF2 collapse, which touched one line of the handshake, this one touches all of
     it.
+  - **PI-VALIDATED, AND ALL THREE NAMED LINES PRINTED IN ORDER.** `wifi: pmk ready` -> `eapol msg1` ->
+    **`wifi: ptk derived`** -> `eapol msg2 sent` -> **`msg3 MIC ok`** -> `GTK unwrapped` ->
+    **`eapol msg4 sent`** -> `keys installed` -> DHCP 192.168.1.247 -> DNS 172.66.147.243 -> TCP ->
+    **`HTTP/1.1 200 OK`, 828 bytes**. Every MIC and every PRF block in that exchange was computed by the
+    collapsed construction. **The handshake is the measurement rather than an argument**, and it is a
+    stronger one than the PBKDF2 collapse's: a wrong PTK, a wrong msg2 MIC or a wrong msg3 verify each ends
+    the same way -- the AP drops the reply without saying why -- so reaching `keys installed` establishes
+    all three at once, and nothing short of a boot could.
+  - **AND THE PRF IS THE PART QEMU HAD NEVER RUN, which is why this boot was worth more than the last one.**
+    `Prf.sha1` is HW-gated with the rest of the WiFi path, so the emulator exercised the collapsed PRF
+    exactly zero times; its 20 vector arms and the reset control ran on the HOST. This is the first
+    execution of `Prf`'s one-`Hmac`-reused form anywhere, and it produced a PTK the AP accepted.
+  - **THE CLOSURE IS IDENTICAL TO THE QEMU ARM TO THE DIGIT:** batch 70 `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`, plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `sched: 89 preemptions`,
+    `jobs/core 6/6/6/6`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace, every digest
+    vector exact including `sha256 clone = .../fork-ok`, and `hw rng: RNG200 at 0xFE104000, live` with
+    `unseeded = self-seeded from hardware, two instances differ`.
+  - **TWENTY-TWO MARKERS ZERO**, and only the seven known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, every one
+    labelled DENYLISTED. One `(skip ch=0x...0001)` after `wifi: JOINED` -- `Cyw43`'s ioctl-response wait
+    loop on a masked `load8` path, frame timing rather than a failure, and channel 1 again.
+  - **A CROSS-BOOT RNG SAMPLE, AND ONE RECORDED FIGURE DOES NOT REPRODUCE -- STATED RATHER THAN SMOOTHED
+    OVER.** `639825d3 9ee15e80 cb0037f3`, distinct from every previous boot, popcount **46 of 96** against
+    an ideal of 48 (the series reads 51, 47, 63, 50, 41, 46 -- still six samples of three words, still not
+    a randomness test). But the FIFO reads **`count 16 -> 14` for three words**, where this file records
+    `16 -> 13`. **That does not weaken the anti-stuck-source argument and it does correct how it is
+    phrased:** the SecureRandomProbe card already records the queue refilling faster than a caller drains it
+    (`FIFOCNT` still reading 16 after four seedings), so the post-read count is a race between drain and
+    refill and was never an exact accounting. The claim the liveness check actually needs is **the count
+    FOLLOWS reads** -- it is not a constant, and it is not a counter that ignores consumption -- and that
+    holds at 14 exactly as it did at 13. "Drains by exactly what is taken" was over-stated from a single
+    observation.
 
 - **PBKDF2 IS ONE DERIVATION NOW -- THE WPA2 PMK IS COLLAPSED ONTO THE GENERIC PATH (2026-09-23,
   PI-VALIDATED).** `Pbkdf2.deriveSha1` -- the WPA2-private one-shot over the static `Hmac.sha1` --
@@ -761,6 +797,10 @@ defines the minimum the assembler must encode.
   - **THE FIFO DRAINS BY EXACTLY WHAT IS TAKEN: `count 16 -> 13` for three words**, so the driver is
     consuming the hardware's queue rather than re-reading a latched register three times -- the failure that
     would make three IDENTICAL words, which is what the distinctness check is for.
+    **OVER-STATED FROM ONE OBSERVATION -- a later boot reads `16 -> 14` for the same three words** (see the
+    HMAC collapse card at the top of this file). The queue refills faster than a caller drains it, which
+    this arc records elsewhere, so the post-read count is a race and never an exact accounting. What the
+    liveness check needs, and what holds at both 13 and 14, is that the count FOLLOWS reads.
   - **A DEFECT IN MY OWN PREDICTION, stated rather than quietly dropped -- AND THEN CLOSED BY FLASHING THE
     PROBE (2026-09-22).** I said silicon had to show three lines and it showed two: the third,
     `board entropy: ...`, belongs to `SecureRandomProbe`, a SEPARATE jdktest image that was never on the
