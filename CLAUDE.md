@@ -115,6 +115,105 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A 321-BYTE jtreg TEST-LIBRARY CLASS COSTS 27,984 IMAGE BYTES, AND WHICH `make` TARGET RAN LAST DECIDES
+  WHETHER IT IS THERE (2026-09-23, MEASURED, NOT FIXED).** Found while building a control: an image from
+  `make build` was **27,984 bytes smaller** than the one flashed the day before from the same commit and a
+  clean tree. The build is deterministic (two runs byte-identical), so the difference is a build INPUT.
+  - **It is one class: `out/jdk/test/lib/RandomFactory.class`, 321 bytes**, emitted by `make jdktests`
+    (`javac --patch-module java.base=guestsrc ... -d out`) and purged again by `make build`'s `guest` rule.
+    `jdk/` is a `demandLoadable` prefix, so it ships in the classDir -- and pulls enough behind it to cost
+    **87x its own size**.
+  - **REPRODUCED BYTE-FOR-BYTE: `make build jdktests plugins` then a no-manifest image is `cmp`-identical
+    to the flashed binary.** So nothing is retracted -- the Pi-validated image is exactly reproducible and
+    the `Magic.call` card's `33,646,196 -> 33,646,444 (+248)` pair were both jdktests-state builds, a
+    consistent pair whose arithmetic still closes.
+  - **THE LESSON IS THE RECIPE, and it is the one that cost a re-flash the day before:** `sdcard.sh` runs
+    `make image`, which depends on `jdktests`, so **an image gated with `make build` alone is not the image
+    that gets flashed.** Gate with the same target chain, or `cmp` before flashing. The Makefile's own
+    comment block above `$(OUT)/.stamp` is about exactly this defect class (stale `.class` files riding
+    into the classDir) and did not anticipate a target ADDING one.
+  - **NOT FIXED HERE**, and the options are a real choice rather than an omission: purge `out/jdk/test`
+    after `jdktests`, narrow `demandLoadable`, or move the jtreg library out of a shipped prefix -- the
+    third is what the `hosttest` move did for `crypto/` and `zip/`, and it is the one that does not touch
+    the filter deciding what the metal can load.
+
+- **THE PER-CORE IDLE STACKS ARE GC ROOTS -- AND THE COLLECTION THAT PROVES IT IS THE FIRST THIS SUITE HAS
+  EVER RUN WITH FOUR CORES LIVE (2026-09-23, NOT YET PI-VALIDATED).** The 2026-09-20 root-scan card left
+  this open and both halves are closed: the three secondaries' idle tasks have `taskStackBase == 0` like
+  task 0, so the same hole applied to them, and a collector running ON an idle task got a nonsense bracket.
+
+  | gate | result |
+  |---|---|
+  | **`smp gc:` (new line)** | **`collected with the secondaries scheduling -- idleRoots=3/3 marked=0 idleGc=0`** |
+  | **negative control** | `secStackTop` off by one core-band -> **`idleRoots=0/3`**, every range SKIPPED |
+  | stop-the-world PARK path | exercised for the FIRST time; no `STW TIMEOUT` |
+  | closure identity | **batch 70 byte-identical to the control**, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms` |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE BRACKET WAS WORSE THAN MY OWN WRITE-UP SAID, AND `markRange` IS WHAT SAYS SO.** That card read
+    "the range is whatever those two addresses happen to bracket". It is not: `markRange` is
+    `while (lo < hi)`, and for an idle collector `lo` is ~`0x038x_xxxx` while `hi` stayed `STACK_TOP` =
+    `0x80000` -- **lo ABOVE hi, so the loop runs ZERO times and the collector's OWN frames are scanned NOT
+    AT ALL.** Reading the loop turned a vague statement into an exact one, and the exact one is worse.
+  - **BUT THAT ARM IS DEFENCE, NOT A LIVE FIX -- "proven not to change anything, not proven to work", the
+    same honest position the `lowerGc` spill took one increment ago.** `idleGc` reads 0, and THREE
+    independent reasons say it must, each read out of the code rather than assumed: `smpSchedulerMain`'s
+    loop is `taskYield()` + `pauseMs1()`, which allocates nothing; `Heap.alloc` says it outright
+    (`if (core != 0 || attempt == 1) break; // secondaries are never collected`); and `stopTheWorld` would
+    refuse it anyway (below). The counter is PRINTED per boot so the claim keeps being measured rather than
+    resting on that reading -- the day anything on the idle path allocates, the figure moves instead of the
+    hole quietly reopening.
+  - **THE NEGATIVE CONTROL I SET OUT TO BUILD COULD NOT BE BUILT, AND THAT IS THE MORE USEFUL FINDING.** To
+    show an idle stack losing a live object I needed one whose ONLY reference sits in an idle frame -- and
+    a secondary's allocations come from ITS OWN arena, which the sweep never touches AND which is ALREADY a
+    root range (`markRange(Heap.arenaBase(sc), ...)`). So an idle stack can only hold references that are
+    rooted twice over, which is a FOURTH reason this hole is presently unreachable. **`marked=0` is the
+    measured form of it:** the three ranges scanned retain nothing today. This **closes a hole rather than
+    repairing a loss** -- a weaker claim than the boot-task fix's, and it is stated as one.
+  - **SO THE CONTROL THAT COULD BE BUILT IS THE ONE FOR THE GUARD, AND IT FIRED.** With `secStackTop`
+    pointed one core-band low, all three saved SPs fall out of band and the loop SKIPS them:
+    **`idleRoots=0/3`** against `3/3`. That is worth having because a wrong stack top is exactly the failure
+    this file records against `ScratchMap` -- "a guard written against the wrong quantity is worse than no
+    guard" -- and it is silent in both directions (too low retains nothing, too high traces neighbouring
+    scratch as if it were stack). `secStackTop` is DERIVED from `VM.SEC_STACK_HI` for the same reason.
+  - **THE REAL CONTENT IS THE COVERAGE, AND IT IS BIGGER THAN THE FIX. EVERY COLLECTION IN THIS SUITE TOOK
+    `stopTheWorld`'s FAST PATH, so the park handshake was exercised by NOTHING.** Measured, not guessed:
+    `scheduling()` counts `coreSched[1..3]`, which is non-zero only inside `smpThreadsDemo`'s ~0.5 s window,
+    and the first build of this change read **`idleRoots=0/0` for a whole boot** -- the new root never ran.
+    An instrument that cannot fire looks exactly like a condition that never happens, so the suite now
+    collects ONCE inside that window: the park handshake, the `gcParked` generation, the `unparked()` wait
+    and the idle roots are all exercised on every boot, and `idleRoots` must be NON-ZERO or the demo is
+    testing nothing.
+  - **A LATENT DEFECT FOUND BY READING `stopTheWorld`, RECORDED AND DELIBERATELY NOT FIXED.**
+    `unparked()` counts cores 1..3 that have not parked for this generation **without excluding the
+    COLLECTING core**, so a collection attempted from a secondary counts itself as unparked, waits the full
+    ~1 s and is SKIPPED. Unreachable today (`Heap.alloc`'s `secondaries are never collected`), and it means
+    every `me != 0` arm in `gcCollect` is about **a spawned task on CORE 0**, never about a secondary core
+    -- which is the reading the 2026-09-20 card needed and did not state.
+  - **THE COVERAGE ADDITION MOVES ONE IDENTITY FIGURE AND IT IS NAMED RATHER THAN BURIED: the BATCH-LINE
+    `gc=` differs by +1 in 8 of 70 batches.** The forced collection resets the volume trigger and changes
+    the free list, so a later pressure collection fires at a different point; the counter converges again
+    (batch 53 agrees, 61-65 differ). **Batch 70 is byte-identical**, and so are both `gc: collections=`
+    figures -- 46 at the churn demo and 55 at the lisp finale -- because those are `Heap.gcPressure`, which
+    counts ALLOCATION-pressure collections and not an explicit `Magic.gc`. That is why the new line says in
+    words that a collection happened there.
+  - **A/A FIRST, AND IT IS THE TIGHTEST THIS FILE HAS MEASURED: 2 differing lines out of ~920.** Two QEMU
+    runs of the IDENTICAL control image, with the census's five noisy families masked, differ in ONE batch
+    line and one field: **`ac:n ... bump`** (8991k-style sibling of `scan`). So **`bump` joins `scan` on the
+    noisy list** -- both are downstream of a sweep, which is the rule the census already stated. Against
+    that baseline the A/B's 101 lines account fully: 40 `gc:` lines gaining the three new fields, the one
+    new `smp gc:` line, 8 batch lines on `gc=` (above), and ONE stack-trace line number
+    (`VM.run(VM.java:4059)` -> `:4082`, exactly the 23 lines this adds above it, same pc offset).
+  - **A TRAP THIS FILE ALREADY RECORDS, WALKED INTO ANYWAY: `diff` TREATS A UART LOG AS BINARY.** My first
+    A/A and A/B both came back "0 differing lines" -- which reads exactly like a change that does nothing --
+    because `diff` printed `Binary files ... differ` and my `grep '^[<>]'` found none. The memory entry says
+    it for `grep`; it is true of `diff` too, and `diff -a` is the fix. **A comparison that reports zero on
+    both sides is indistinguishable from a comparison that did not run.**
+  - **WHAT IS NOT ESTABLISHED, stated because the useful claim is the narrow one:** that any of this is
+    needed today. Four independent mechanisms keep a guest reference off an idle stack, and `marked=0` says
+    none arrived. What the increment buys is that the hole is closed, the park path is covered, and both are
+    measured every boot instead of argued once.
+
 - **AN OPERAND LIVE ACROSS A `Magic.call*` IS SPILLED NOW -- the intrinsic path never had the call discipline
   (2026-09-23, PI-VALIDATED).** Four arms of `lowerIntrinsic` emit a call and none of them spilled the
   operand stack, which lives in x9..x15 -- caller-saved. The recorded LATENT bug is closed, its workaround
@@ -1769,6 +1868,8 @@ defines the minimum the assembler must encode.
   - **AND IT CONFIRMS A READING RATHER THAN ASSUMING IT: the `(skip ch=)` CYW43 line reads CHANNEL 1 here
     and channel 3 on the previous boot.** That line was recorded as a frame-timing diagnostic on a masked
     `load8` path rather than a failure; a channel that moves between boots is what that claim predicts.
+  - **CLOSED 2026-09-23 -- see the card at the top of this file, which also corrects the second half below:
+    the bracket does not "bracket whatever those addresses happen to", it scans NOTHING.** As it stood:
   - **STILL OPEN, stated rather than rounded away: the per-core IDLE tasks' stacks are still unscanned.**
     They have `taskStackBase == 0` like task 0, so the same hole applies to them; the reason it is not
     urgent is that those flows run `smpSchedulerMain`'s pause-and-yield loop rather than guest code, so a

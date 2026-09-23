@@ -1029,12 +1029,41 @@ public final class VM
         Magic.writeCNTP_CTL_EL0(1);
         Magic.enableIrq();                                 // core 0 preempts too -- here it is just another core
         long d0 = Magic.readCNTPCT_EL0();
+        long gcAt = d0 + Magic.readCNTFRQ_EL0() / 4L;      // ~0.25 s in: by then the six tasks are spread
+        int collected = 0;                                 //   over the cores and every secondary has joined
         while (Magic.readCNTPCT_EL0() < d0 + Magic.readCNTFRQ_EL0() / 2L)   // ~0.5 s
         {
+            if (collected == 0 && Magic.readCNTPCT_EL0() >= gcAt)
+            {
+                // COLLECT WHILE THE OTHER THREE CORES ARE SCHEDULING -- the one window in this suite where
+                // that is possible, and until this line nothing exercised it. Every other collection here
+                // happens with the secondaries OUT of the run queue, so stopTheWorld takes its "no other
+                // core is scheduling" fast path: the park handshake, the gcParked generation, and the
+                // per-core idle stacks (which exist only inside this window) were covered by NOTHING.
+                collected = 1;
+                Magic.gc();
+            }
             VMScheduler.taskYield();                       // task 0 keeps offering core 0 to the queue
         }
         stopTimerTick();
         VMScheduler.stopSmpScheduling();                   // the secondaries leave the table before we reset it
+        // The counters are the assertion, not the absence of a crash: idleRoots must be NON-ZERO, or the
+        // collection above found no idle task to root and this demo is testing nothing.
+        //
+        // It does NOT appear in `gc: collections=`, and that is deliberate rather than an oversight: that
+        // figure is Heap.gcPressure, which counts ALLOCATION-pressure collections, and this one is an
+        // explicit Magic.gc. Bumping it would move a number this file quotes as an identity gate a dozen
+        // times, for a reason that has nothing to do with GC behaviour -- so the line below is what says a
+        // collection happened here.
+        Uart.write(Magic.bytes("smp gc: collected with the secondaries scheduling -- idleRoots="));
+        printDec(VMGc.idleRoots);
+        Uart.putc(0x2F);
+        printDec(VMGc.idleSeen);
+        Uart.write(Magic.bytes(" marked="));
+        printDec(VMGc.idleMarked);
+        Uart.write(Magic.bytes(" idleGc="));
+        printDec(VMGc.idleGc);
+        Uart.putc(0x0A);
         Uart.write(Magic.bytes("steps/core: "));
         int c = 0;
         while (c < 4)
