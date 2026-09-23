@@ -302,12 +302,45 @@ defines the minimum the assembler must encode.
     | `Aes`/`KeyWrap`/`Prf`/`Sha1` | 23,872 / 14 | 23,872 / 14 | 0 |
     | image | 33,649,876 | 33,684,440 | **+34,564** |
   - **SO THE WiFi PATH NOW PAYS FOR FIVE ALGORITHMS IT DOES NOT USE, and the reason is structural rather
-    than careless.** `Digest` is ONE class whose `compress` switches on the algorithm, so RTA marks all six
-    compression functions once anything instantiates it -- MD5, SHA-224, SHA-256, SHA-384 and SHA-512 are
-    baked into an image whose only baked consumer is a SHA-1 PMK. `Digest.<clinit>` alone is **8,812 B**,
-    which is the K256/K512/MD5_S/MD5_K tables materialised as fill code. **The lever, if it ever matters:
-    split `Digest` per algorithm.** Not done -- that is a refactor of the class every digest in the VM goes
-    through, and it would need its own gate rather than an argument.
+    than careless.** `Digest` is ONE class whose `compress` switches on the algorithm, so RTA marks every
+    block function once anything instantiates it -- MD5, SHA-224, SHA-256, SHA-384 and SHA-512 are baked
+    into an image whose only baked consumer is a SHA-1 PMK. `Digest.<clinit>` alone is **8,812 B**, which is
+    the K256/K512/MD5_S/MD5_K tables materialised as fill code.
+    - **CORRECTION (2026-09-23): "all six compression functions" IS WRONG -- THERE ARE FOUR.** `compress`
+      calls `md5Block`/`sha1Block`/`sha256Block`/`sha512Block`; SHA-224 and SHA-384 SHARE the 256 and 512
+      blocks, differing only by initial chaining value and output truncation. Six ALGORITHMS, four block
+      functions. Counted from the source rather than from the algorithm list, which is where the six came
+      from.
+    - **AND THE LEVER NAMED HERE -- "split `Digest` per algorithm" -- DOES NOT WORK, ON ITS OWN TERMS.**
+      Whatever maps the `algorithm` int onto six classes REFERENCES all six, so RTA marks them exactly as it
+      does now; the split moves the cost into a factory. The lever that could work is host-side, because
+      **RTA IS A HOST PASS AT IMAGE-BUILD TIME**: at every baked entry the algorithm is a LITERAL
+      (`Pbkdf2.derive(Digest.SHA1, ...)`, `Hmac.mac(Digest.SHA1, ...)`, `new Hmac(Digest.SHA1, ...)`), so a
+      writer that constant-propagated it would prune three of the four blocks.
+    - **MEASURED, AND IT RETIRES THE ITEM RATHER THAN QUEUEING IT. THE CEILING IS 0.070% OF THE IMAGE.**
+      One `JOENG_SYMMAP=1 make image` and no boot -- which is the whole point of RTA being a host pass, and
+      is what this card should have said instead of "it would need its own gate rather than an argument"
+      (that reads as a flash; it is a build):
+
+      | baked `crypto/Digest`, 23,724 B / 21 methods | bytes | of Digest | of a 33,675,140 B image |
+      |---|---|---|---|
+      | `<clinit>` (four constant tables as fill code) | 8,812 | 37% | 0.026% |
+      | `md5Block` + `sha256Block` + `sha512Block` -- UNREACHABLE here | **6,028** | 25% | **0.018%** |
+      | `sha1Block` -- the one the PMK, PTK and both MICs use | 1,712 | 7% | |
+      | update/digest/reset/copy/writeState/... | 7,172 | 30% | |
+
+      **Constant propagation reaches only the 6,028 B**, because `<clinit>` is ONE method initialising all
+      four tables unconditionally -- pruning it needs DEAD-STATIC ELIMINATION, a far stronger claim for the
+      writer (a static can be read reflectively by name). So: a new dataflow capability in the writer, with
+      a real soundness burden, for 0.018%. **Not worth building, and the reason is a number rather than a
+      preference.**
+    - **THE COST IS IMAGE BYTES AND NEVER RUN TIME, which this card also blurred.** The unused blocks are
+      dead code the writer laid out; nothing on the WiFi path branches into them. "The WiFi path pays for
+      five algorithms" is true of the image and false of the boot.
+    - **AND THE NEIGHBOUR IS AN ORDER OF MAGNITUDE BIGGER WITH NO ANALYSIS AT ALL: `crypto/CryptoTest.class`
+      is ~20 KB in every `kernel8.img`** -- more than the ENTIRE baked `Digest` -- because
+      `demandLoadable` matches `crypto/` by PREFIX. A prefix test, not a dataflow problem. That is the
+      item to take if image size is ever worth an increment; this one is closed.
   - **AND IT DOES NOT REMOVE THE OTHER SHA-1 -- the image carries TWO on the WiFi path now where it carried
     one.** `crypto/Sha1` (3,716 B) stays baked because `Hmac.sha1` still backs the WPA2 PRF (the PTK) and
     both EAPOL-Key MICs; only the PMK moved. Those are a separate collapse with a separate flash, and
@@ -318,8 +351,9 @@ defines the minimum the assembler must encode.
   - **THE WRITER COMPILED THE WHOLE GENERIC PATH, MEASURED RATHER THAN ASSUMED.** That was the one
     structural risk: this file records that the bake domain **cannot** carry `DoubleToDecimal`'s `<clinit>`
     (an `ldc` class literal the host writer refuses), so a `<clinit>` with four large constant tables was
-    not obviously bakeable. **ZERO `bake-stub` lines name `crypto/`** -- `Digest.<clinit>`, all six
-    compression functions, the `Hmac` instance side and `derive` are real baked bodies.
+    not obviously bakeable. **ZERO `bake-stub` lines name `crypto/`** -- `Digest.<clinit>`, all FOUR
+    block functions (the same miscount corrected above; the symmap lists md5/sha1/sha256/sha512 and no
+    others), the `Hmac` instance side and `derive` are real baked bodies.
   - **IT IS ALSO MUCH CHEAPER AT RUN TIME, AND THIS IS A DERIVATION FROM COUNTING `new` SITES RATHER THAN A
     MEASUREMENT.** `Hmac.sha1` allocates 4 arrays per call and calls `Sha1.hash` twice, which allocates 4
     more each -- ~12 short-lived arrays PER ITERATION. A 32-byte PMK is two blocks x 4096 iterations =
