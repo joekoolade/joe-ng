@@ -115,6 +115,100 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AT LAST:
+  `ImmutableCollections.EMPTY` (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** Two findings, one arc; the
+  second was located WITHOUT a boot, by reading the image file.
+
+  | gate | result |
+  |---|---|
+  | `SynthNameProbe` | 5 arms, **every one matching the host's semantics** |
+  | `CLASS NAME UNRESOLVED` (new report) | **1 on the suite before the fix, 0 after** |
+  | demo suite | 40 programs, every marker zero, batch 70 identity EXACT |
+  | java.math, re-run on this tree | `math jtreg: ran 4, failures 0`, `sb-probe: 28 checks, 0 failures` |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
+
+  - **`classNameLen` ANSWERED 0 FOR ANY TYPE THE CLASS REGISTRY DOES NOT HOLD, AND `classNameString` TURNED
+    THAT INTO A NULL STRING.** A synthesised lambda/annotation Type is never registered -- a hidden class has
+    no binary name BY CONSTRUCTION -- so `getClass().getName()` on a lambda returned NULL. **Stock never
+    returns null**, so it flows into library code and NPEs somewhere unrelated.
+  - **THE FIX IS A NAME, NOT A MUTED REPORT: `$$Lambda/0x<16 hex>`**, stock's own shape for a hidden class.
+    **The TYPE ADDRESS is what makes it distinct, and that is the whole design decision**: one constant name
+    would pass every non-null check while making every lambda compare EQUAL BY NAME -- a silent wrong answer
+    that looks exactly like a working one. The probe asserts distinctness and stability, not just non-nullness.
+    **STATED LIMIT:** stock prefixes the outer class (`Foo$$Lambda/0x...`); a Type here does not record its
+    origin, so the prefix is bare.
+  - **THE REPORT FOUND IT ON ITS FIRST BOOT, AND WAS THEN CHECKED AGAINST A PASSING ONE.** `CLASS NAME
+    UNRESOLVED` fires where a name genuinely cannot be derived and says WHICH case it is -- an array whose
+    ELEMENT never resolved, or a Type not in the registry -- because the two want opposite investigations.
+    One line on the suite; silent across all 40 programs afterwards.
+  - **THE LAUNCHER'S BLOCKER, NAMED FROM THE IMAGE FILE RATHER THAN FROM A BOOT.**
+    `ClassSelector.<init>(Class)` runs four times in nested-class discovery and the fourth receives
+    `0x0016C300` -- an IMAGE address, below the heap. Read out of `kernel8.img` by hand, that object has
+    instance size 16 (header only) and a vtable EVERY slot of which is `java/lang/Object`'s own method; there
+    is exactly ONE such object in the image, held by exactly one statics cell. The new `statmap` dump names
+    it: **`java/util/ImmutableCollections.EMPTY`**. `List12`/`Set12` keep that sentinel in the slot a
+    one-element collection does not use and test `e1 != EMPTY` BY IDENTITY, so a sentinel escaping AS an
+    element is exactly what a failed identity test looks like -- and `Class.getName`'s vtable slot indexed
+    into a bare Object's vtable returns whatever sits there, **0 on one boot and 1 on another, which is why
+    the symptom read as noise**.
+  - **ONE CELL, TWO WRITERS -- read out of both sites, not inferred.** The writer STUBS
+    `ImmutableCollections.<clinit>` (it `ldc`s a class literal the host writer refuses), so its statics come
+    from a seed-JVM snapshot and `EMPTY` is deep-baked into the image; and `Loader.clinitCompilable`
+    EXPLICITLY allows that same `<clinit>` to RUN on metal, where it assigns `EMPTY = new Object()` on the
+    heap. **The general rule: a class must not have BOTH a seed-JVM static snapshot AND a metal `<clinit>`
+    that reassigns those statics** -- the snapshot exists precisely because the initializer cannot run.
+  - **NOT FIXED HERE, and the reason is scope rather than doubt:** that is an initialization-policy change
+    for the class every immutable collection depends on, and it deserves its own increment and gate.
+  - **AND THE PROBE REFUTES THE LEAK IN A SMALL CLOSURE, which is stated rather than buried.**
+    `EmptySentinelProbe` is byte-identical to the host across List/Set/Map in one- and two-element forms
+    (the two-element form being the built-in control). **So the identification is from the image, not from a
+    reproduction** -- the leak needs the launcher's closure, and no probe here produces it.
+  - **A SECOND OPEN ITEM, MEASURED RATHER THAN ASSUMED: `getStackTrace()` ANSWERS NULL.**
+    `ExceptionUtils.pruneStackTrace` is `Arrays.asList(t.getStackTrace())` and line 130 is bytecode 14, so
+    the array was null where stock answers a ZERO-LENGTH array. `TraceProbe` pins the three states a caller
+    can be handed -- NULL, 0 and n -- plus the CROSS-METHOD arm, which is the condition rather than the shape
+    (the VM fills `bt0..bt7` inside `VM.unwind`, so a same-method catch is a different path).
+  - **FOUR INSTRUMENTS THAT COULD NOT FIRE, EACH FIXED WHERE IT WAS BROKEN -- three of this arc's five
+    ~20-minute launcher boots went on instruments rather than on the VM.**
+    - **`scripts/run-launcher.sh` NEVER COMPILED.** It went straight to `BuildRuntimeImage`, which READS
+      `out/` and does not build it, so an edit that was never compiled produced an image BYTE-IDENTICAL to
+      the previous run's -- reading exactly like a change that does nothing. **That is the trap this file
+      records three times, walked into while diagnosing.** It runs `make build` now.
+    - **`watchReceiver` was wired into `lowerInvokeInterface` ONLY.** Armed on an `invokevirtual` it printed
+      NOTHING, which reads exactly like a receiver that is always fine. Wired into the virtual path too.
+    - **`isWatchedField` matched the field NAME alone while its line prints only the cp INDEX.** `className`
+      matched three unrelated classes and index 7 is not unique across them: an AMBIGUOUS line is an
+      instrument that invites the wrong conclusion. Class-qualified now.
+    - **The symbol map named CODE only**, so an address above the code ceiling could be called "somewhere in
+      the data region" and no further. `JOENG_SYMMAP` now prints a `statmap` line per static cell -- which is
+      what named `ImmutableCollections.EMPTY` in one command, after a hand-written scan had reconstructed it.
+
+- **`Exception`, `RuntimeException` AND `Error` RUN STOCK -- THE OVERLAYS ARE DELETED (2026-09-23,
+  QEMU-GATED).** All three were hand-written shells whose whole bodies delegated to `super`, with no native
+  and no state, and all three DROPPED the protected `(String, Throwable, boolean, boolean)` constructor.
+  - **THE VM WAS HALTING WHILE REPORTING A FAILURE, which is the worst place to lose a member.**
+    `JUnitException.<init>` -> `RuntimeException.<init>(String,Throwable,ZZ)` read `LINK FAILED ... class OK
+    but no body for that name+descriptor` and then trapped in a DENYLIST TRAP naming a list RuntimeException
+    is not on -- replacing a nameable defect with a mystery. **Tenth instance of the overlay-drops-members
+    trap.**
+  - **`java/lang/Throwable` KEEPS its overlay, and that is not inconsistent:** the VM HARDCODES `bt0..bt7` at
+    obj+16..+72 and `detailMessage` at obj+80, so its layout is VM-visible. It gains the 4-arg constructor
+    and the package-private `setCause`.
+  - **`enableSuppression` IS HONOURED because ignoring it is OBSERVABLE** through `getSuppressed()`, which
+    JUnit reads. **`writableStackTrace` is NOT, stated as a divergence:** this VM captures the backtrace in
+    `VM.unwind` at THROW time, not in the constructor, so an exception stock would leave traceless carries
+    one here -- MORE information than stock, never less.
+  - **`overlay-check` 28 -> 27 gaps and 103 -> 100 dropped supertypes**, the supertype count moving because
+    three overlaid classes stopped dropping `java.io.Serializable`. Suite: 40 programs, every marker zero,
+    and the exception demos `YNW` / `E` / `U` with `printStackTrace` walking to `vm/VM.boot` -- the assertion
+    for this change.
+  - **ONE CLOSURE COUNTER MOVED AND THE DISCRIMINATOR DID NOT.** Batch 70 `res`/`unres` each fell 134 while
+    `memo`, **`reach=16`**, `rounds`, `pend`, `n:imap/synth/clinits` and every `rf:*` were byte-identical,
+    with `+240blob` and `rb:cl=240` unchanged -- so the closure SIZE and the marked set did not move, `reach`
+    being the discriminator this file established for telling removed waste from lost marking. `pc:n` falls
+    114 -> 112: two of the three deleted overlays are no longer PARSED into the guest world. **The exact
+    magnitude is NOT attributed and is not claimed to be.**
+
 - **`java.math` RUNS ON THE METAL, AND THE BUG THAT WAS BLOCKING IT WAS A FIVE-INSTRUCTION INFINITE LOOP
   (2026-09-23, NOT YET PI-VALIDATED).** BigInteger and BigDecimal work: `BigMathProbe`'s 38 arms are
   byte-identical to a host control, and four unmodified OpenJDK jtreg tests pass under one runner.
