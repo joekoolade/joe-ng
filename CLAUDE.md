@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **AN OPERAND LIVE ACROSS A `Magic.call*` IS SPILLED NOW -- the intrinsic path never had the call discipline
-  (2026-09-23, NOT YET PI-VALIDATED).** Four arms of `lowerIntrinsic` emit a call and none of them spilled the
+  (2026-09-23, PI-VALIDATED).** Four arms of `lowerIntrinsic` emit a call and none of them spilled the
   operand stack, which lives in x9..x15 -- caller-saved. The recorded LATENT bug is closed, its workaround
   deleted, and the defect it was found by is now the standing regression for the fix.
 
@@ -128,6 +128,8 @@ defines the minimum the assembler must encode.
   | audit: baked methods whose codegen moved | **0 of 1,943** (three source files' own bodies aside) |
   | image | 33,646,196 -> **33,646,444 (+248 B)**, and 56 + 168 + 24 = **248 EXACTLY** |
   | demo suite, QEMU | 40 programs, 24 markers zero, batch 70 identity EXACT |
+  | **Pi, the eleven arms** | **all exact**, incl. `[0.1\|0.10000000149011612]` and `[1.5420.17]` |
+  | **Pi, closure identity** | batch 70 `memo=1672 res=2651 unres=2372` -- **EXACT**, `ticks/core c1=50 c2=50 c3=50`, WPA2 -> HTTP 200 OK |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE DISCIPLINE EXISTED AND FOUR ARMS WALKED PAST IT, which is what the old card could not name.**
@@ -223,10 +225,38 @@ defines the minimum the assembler must encode.
     different** -- LineNumberTable pairs, the shape this file already records twice. Every figure above is
     from the byte-exact tree that the diff and the PR carry, because a card quoting suite figures for an
     image nobody booted is a citation rather than a measurement.
-  - **WHAT IS NOT ESTABLISHED: no Pi boot.** QEMU proves the arms and the identity; what hardware still has
-    to answer is a 248-byte layout shift, which this file records surfacing latent bugs twice. The gate is
-    named in advance and is the suite's own ConcatDemo block -- eleven arms that print `[]` the moment the
-    spill is not emitted.
+  - **PI-VALIDATED, AND THE ELEVEN ARMS ARE EXACT ON SILICON:** `[1.5]`, `[0.1]`, `[-0.0]`, `[1.0E20]`,
+    `[1.0E-9]`, `[NaN]`, `[Infinity]`, `[0.1]`, `[1.5]`, `[0.1|0.10000000149011612]`, `[1.5420.17]` -- plus
+    `concat int=42 bool=true` from `StrOpsDemo`, a second site the arms were not written for. Closure
+    identity EXACT at batch 70 (`rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`), 40 programs, every
+    failure marker zero, and only the seven known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, each labelled
+    DENYLISTED. Plus the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`,
+    `sched: 89 preemptions`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `hw rng: RNG200 live`, and WPA2 -> HTTP 200 OK, 829 bytes.
+  - **AND THE LISP FINALE READS 55 ON HARDWARE WHERE BOTH QEMU RUNS OF THIS BINARY READ 56, which is the
+    census's own claim holding rather than a discrepancy.** That card says the finale is the noisy figure on
+    QEMU and that hardware has read `46 then 55` across many boots; it does so again here. `gc: collections
+    =46` at the churn demo is identical on both harnesses, which is the half the census called a gate.
+  - **WHAT THE BOOT CLAIMS THAT QEMU COULD NOT, kept straight -- the two harnesses run the SAME code here.**
+    `VMConcat` is writer-BAKED, so the emulator already exercised the fixed lowering; the arms passing on
+    silicon is confirmation, not a new claim. What is new is a **248-byte layout shift on cold DRAM** (the
+    emulator hands out ZEROED memory), four cores under real preemption, and freshly published `scDouble`/
+    `scFloat` bodies on a machine with an **incoherent I-cache** -- the shape of the `IC IALLU` bug this
+    project found only on silicon with SMP on. None of the three shows anything.
+  - **A SEVENTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `ed89a1a3 5c510258 ae60bf55`,
+    distinct from every previous boot, `count 16 -> 13`. Popcount **45 of 96** against an ideal of 48, so the
+    series reads 51, 47, 63, 50, 41, 46, 45. **Still not a randomness test** -- seven samples of three words
+    cannot support a conclusion either way; what stays ruled out is a constant, a counter, and a count that
+    does not follow reads.
+  - **ONE LINE IS ABSENT THAT USUALLY IS NOT, AND IT IS SAID RATHER THAN PASSED OVER:** no `(skip ch=...)`
+    after `wifi: JOINED`. This file records that line as `Cyw43`'s ioctl-response wait loop seeing an
+    event frame arrive while it waits -- frame timing, not a failure, with a channel that MOVES between
+    boots. A timing-dependent diagnostic sometimes not firing is what that reading predicts; its absence is
+    not evidence of anything, and it is noted only so the next reader does not treat it as one.
 
 - **TWO HOST TESTS SHIPPED IN EVERY `kernel8.img` -- 28,944 BYTES, MORE THAN ALL OF BAKED `crypto/Digest`
   (2026-09-23, PI-VALIDATED).** `CryptoTest` declared `package crypto;` and `ZipTest` `package zip;`, and
