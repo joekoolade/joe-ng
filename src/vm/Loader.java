@@ -1057,7 +1057,6 @@ public final class Loader
     // So `clinitRan` now means RUNNING-OR-RUN and is set immediately before the call, and `clinitBusy` marks
     // the dep/compile phase separately -- purely to stop that phase re-entering itself.
     private static int[] clinitBusy;
-    private static long[] clinitEntryAddr;  // stashed by the dep/compile phase so a nested use can run it
     // PRECISE per-<clinit> init dependencies: the classes the initializer BODY actively touches
     // (getstatic/putstatic/invokestatic owner, new/anewarray class, ldc Class literal), name Utf8 offsets in the
     // owning blob's gbase. Used by clinitDepBlocked INSTEAD of the whole-constant-pool dp table, whose field-type /
@@ -1619,30 +1618,43 @@ public final class Loader
             {
                 if (clinitBusy[i] != 0)
                 {
-                    // RE-ENTERED DURING OUR OWN DEP/COMPILE PHASE -- the window this split exists to close.
-                    // A real JVM would already have run this body (it never starts a dependency first), so
-                    // the least-wrong thing is to run it NOW rather than hand the caller null. The outer
-                    // frame sees clinitRan and skips.
-                    long re = clinitEntryAddr[i];
-                    if (re == 0L)
-                    {
-                        return 0;                        // not compiled yet: nothing better is available
-                    }
-                    clinitRan[i] = 1;
-                    warnClinitUnderLock(i);
-                    long reUnused = Magic.call0(re);
-                    clTab[reg].state = RVMClass.ST_INITIALIZED;
-                    drainPendingInit();
-                    return 1;
+                    // RE-ENTERED WHILE THIS CLASS IS ALREADY BEING INITIALIZED BY US -- JVMS 5.5 step 3:
+                    // "this must be a recursive request for initialization ... complete normally". So we
+                    // RETURN, and the caller proceeds against whatever this initializer has assigned so far.
+                    // That is the specified answer, and a real JVM gives exactly it.
+                    //
+                    // IT USED TO RUN THE BODY HERE, on the reasoning that "a real JVM would already have run
+                    // this body (it never starts a dependency first), so the least-wrong thing is to run it
+                    // NOW rather than hand the caller null". The first half is true and the conclusion does
+                    // not follow: running it from INSIDE the dep phase runs it before its own dependencies
+                    // are initialized, and then marks it RAN so the outer frame -- which is about to finish
+                    // those deps and call it properly -- skips it for ever.
+                    //
+                    // MEASURED, on the stock jtreg java/math suite. Bracketing both call0 sites printed
+                    //     >RE java/math/BigInteger      (entered here, threw, never returned)
+                    //     >RE java/math/BigDecimal      (same)
+                    // and the trace read BigDecimal.<clinit> -> BigInteger.valueOf -> `posConst` NULL:
+                    // BigInteger's body had been started from this arm and had not reached its own array
+                    // assignments. Six of six tests died that way, each as an NPE inside java.math with no
+                    // hint that an initializer had been run twice over from the middle.
+                    //
+                    // Returning instead keeps the ORDER the outer frame was establishing: its
+                    // initClinitDeps finishes, so the dependency is fully initialized, and THEN the body
+                    // runs once at the live site below.
+                    return 0;
                 }
                 clinitBusy[i] = 1;                       // the dep/compile phase, NOT yet "being initialized"
-                // COMPILE FIRST, AND STASH THE ENTRY BEFORE ANYTHING THAT CAN RE-ENTER. Measured: the
-                // dependency pre-pass was NOT what pulled the mutually-referencing partner in -- the COMPILE
-                // was, which is JVMS 5.4's "linking may never run an initializer" being violated by this VM's
-                // own codegen. With the entry stashed up here, a nested active use arriving out of that
-                // compile can run this body instead of reading null.
+                // COMPILE FIRST. Measured: the dependency pre-pass was NOT what pulled the
+                // mutually-referencing partner in -- the COMPILE was, which is JVMS 5.4's "linking may never
+                // run an initializer" being violated by this VM's own codegen. That is why the phase is
+                // marked BUSY around the compile at all: so an active use arriving out of it is recognised
+                // as the recursive request it is and returns, instead of starting this body early.
+                //
+                // THE ENTRY USED TO BE STASHED HERE (`clinitEntryAddr`) so the re-entrant arm could run the
+                // body from it. That arm is gone -- see the JVMS 5.5 note above -- so the stash had become a
+                // write-only field whose comment claimed something no longer true, and it is deleted with
+                // the arm rather than left to read as live machinery.
                 long entry = clinitEntryOf(i);           // compile it now -- this is the first (and only) run
-                clinitEntryAddr[i] = entry;              // a nested active use can run it from here
                 if (Heap.codeBlockFreeAt(entry) == 1)   // GUARD: about to call a SWEPT initializer.
                 {                                                //   Name it here, where the class is in hand.
                     Uart.write(Magic.bytes("  CLINIT ENTRY WAS SWEPT: "));
@@ -3464,7 +3476,6 @@ public final class Loader
         clinitNameOff = new int[MAXBLOB];
         clinitRan = new int[MAXBLOB];
         clinitBusy = new int[MAXBLOB];
-        clinitEntryAddr = new long[MAXBLOB];
         lzInitReg = new int[MAXPENDINIT];
         lzInitN = 0;
         dblToStrBuf = 0L;                               // per LAUNCH: a memo that outlived the code buffers

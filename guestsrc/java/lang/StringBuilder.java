@@ -334,4 +334,134 @@ public final class StringBuilder implements Appendable, CharSequence
         System.arraycopy(value, 0, t, 0, count);
         return new String(t, (byte) 0);
     }
+
+    // ----- the members stock declares that this overlay had dropped -----
+    //
+    // EVERY ONE OF THESE WAS REFERENCED BY SOMETHING WE SHIP AND RESOLVED NOWHERE. An overlay wins the
+    // name, so a stock member it omits CEASES TO EXIST: the call surfaces as a VIRTUALRESOLVE FAILED and
+    // then a DENYLIST TRAP naming a list this class is not on. `repeat` is how it showed here --
+    // BigDecimal.toPlainString builds its zero run with it, so the stock jtreg ToPlainStringTests died in
+    // java.math with no hint that the gap was in StringBuilder. They land TOGETHER rather than one per
+    // boot, which is the recorded cost of taking this family a member at a time.
+
+    /**
+     * {@code repeat(codePoint, count)} -- JDK 21. A NEGATIVE count is rejected, and zero is a legal no-op:
+     * stock throws only for count < 0, and answering an empty run for a negative one would be a plausible
+     * wrong answer rather than a visible failure.
+     */
+    public StringBuilder repeat(int codePoint, int count)
+    {
+        if (count < 0)
+        {
+            throw new IllegalArgumentException("count is negative: " + count);
+        }
+        int i = 0;
+        while (i < count)
+        {
+            appendCodePoint(codePoint);
+            i = i + 1;
+        }
+        return this;
+    }
+
+    /** {@code repeat(cs, count)} -- a null CharSequence repeats the four characters {@code null}, as
+     *  stock's own {@code String.valueOf} contract requires and as {@link #append(CharSequence)} does. */
+    public StringBuilder repeat(CharSequence cs, int count)
+    {
+        if (count < 0)
+        {
+            throw new IllegalArgumentException("count is negative: " + count);
+        }
+        String s = cs == null ? "null" : cs.toString();
+        int i = 0;
+        while (i < count)
+        {
+            append(s);
+            i = i + 1;
+        }
+        return this;
+    }
+
+    /**
+     * {@code replace(start, end, str)} -- delete the range, then insert at its start.
+     *
+     * <p>Written as delete-then-insert rather than as a copy loop because the two halves are already
+     * bounds-checked here; open-coding a shift would be a third place to get the end clamp wrong, and
+     * stock clamps {@code end} to the length exactly as {@link #delete} does.
+     */
+    public StringBuilder replace(int start, int end, String str)
+    {
+        delete(start, end);
+        return insert(start, str);
+    }
+
+    public void setCharAt(int index, char ch)
+    {
+        if (index < 0 || index >= count)
+        {
+            throw new StringIndexOutOfBoundsException(index);
+        }
+        value[index] = (byte) ch;
+    }
+
+    /** {@code ensureCapacity} is ADVISORY: {@link #put} grows the buffer on demand, so a caller that asks
+     *  for room is asking for fewer copies and never for a guarantee. Growing here honours the hint. */
+    public void ensureCapacity(int minimumCapacity)
+    {
+        if (minimumCapacity > value.length)
+        {
+            byte[] bigger = new byte[minimumCapacity];
+            System.arraycopy(value, 0, bigger, 0, count);
+            value = bigger;
+        }
+    }
+
+    /** Latin-1 buffer, so every character is one code point and the offset is the index -- the same
+     *  reasoning {@link #codePointAt} records. Bounds are stock's: the WALK may end at {@code count}. */
+    public int offsetByCodePoints(int index, int codePointOffset)
+    {
+        int to = index + codePointOffset;
+        if (index < 0 || index > count || to < 0 || to > count)
+        {
+            throw new StringIndexOutOfBoundsException(index);
+        }
+        return to;
+    }
+
+    public StringBuilder insert(int offset, char c)
+    {
+        return insert(offset, String.valueOf(c));
+    }
+
+    public StringBuilder insert(int offset, long v)
+    {
+        return insert(offset, Long.toString(v));
+    }
+
+    public StringBuilder insert(int offset, char[] str)
+    {
+        return insert(offset, new String(str));
+    }
+
+    /** {@code append(float)} -- through {@code Float.toString}, which this VM resolves BY NAME at run time
+     *  (the shortest decimal that round-trips). A float is NOT a widened double here: this file already
+     *  records that {@code Float.toString(0.1f)} is {@code "0.1"} where the widened double is
+     *  {@code "0.10000000149011612"}, so the float formatter is the only correct one. */
+    public StringBuilder append(float f)
+    {
+        return append(Float.toString(f));
+    }
+
+    /**
+     * {@code append(StringBuffer)} -- the descriptor is what makes this a separate member, so it has to be
+     * declared even though the body is {@link #append(CharSequence)}'s.
+     *
+     * <p>CHECKED rather than assumed: {@code java/lang/StringBuffer} is NOT overlaid here, so the parameter
+     * type is the STOCK class, demand-loadable like the rest of {@code java/}. It is a CharSequence, so the
+     * widening is stock's own and no conversion is invented.
+     */
+    public StringBuilder append(StringBuffer sb)
+    {
+        return append((CharSequence) sb);
+    }
 }
