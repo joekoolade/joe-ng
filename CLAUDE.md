@@ -116,14 +116,14 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`javax.crypto.SecretKeyFactory` RUNS ON THE METAL -- PBKDF2 through the stock API, over joe-ng's own
-  engine (2026-09-23, QEMU; NOT YET PI-VALIDATED).** `PBKDF2WithHmacSHA1/224/256/384/512`.
+  engine (2026-09-23, PI-VALIDATED).** `PBKDF2WithHmacSHA1/224/256/384/512`.
 
   | gate | result |
   |---|---|
   | `test/jdk/junit/SecretKeyFactoryProbe` on QEMU | **38 arms, `failures=0 divergences-unmet=0`** |
   | the same source as a HOST CONTROL | `failures=0 divergences-unmet=5` -- every hex byte-identical |
   | `crypto: 87 -> 104 checks` | incl. **2,025 comparisons against the JDK's own `SecretKeyFactory`** |
-  | demo suite | 40 programs, batch 70, **closure identity EXACT**, 21 markers zero |
+  | demo suite | **on HARDWARE**: 40 programs, batch 70, **closure identity EXACT**, 21 markers zero |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 104, zip 91, `overlay-check 0 new` |
 
   - **ONE CLASS IS OVERLAID, AND THE OTHER TWO WERE CHECKED RATHER THAN ASSUMED -- a narrower surface than
@@ -172,10 +172,38 @@ defines the minimum the assembler must encode.
     `55`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`, `finish HML` 20/20/20, inversion
     `HIGH blocked 61ms`, `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=11`, and every digest vector
     exact including `sha256 clone = .../fork-ok`.
-  - **STILL TO DO: a Pi boot.** `crypto/Pbkdf2` is now DEMAND-LOADED into the guest world for the first
-    time and the image layout moved again; the baked `deriveSha1` that backs WPA2 is byte-for-byte
-    unchanged, so the handshake is untouched BY CONSTRUCTION -- but this file records latent bugs surfacing
-    from layout movement alone twice, so the 4-way handshake reaching HTTP 200 OK is the measurement.
+  - **PI-VALIDATED, AND `wifi: pmk ready` IS THE LINE THIS BOOT EXISTED FOR.** `crypto/Pbkdf2` became
+    DEMAND-LOADABLE into the guest world for the first time and the image layout moved again; the baked
+    `deriveSha1` is byte-for-byte unchanged, so WPA2 is untouched BY CONSTRUCTION -- an argument, which this
+    file records being wrong about layout movement twice. **The handshake is the measurement, and it is not
+    merely that it passed: `pmk ready` IS `Pbkdf2.deriveSha1` running, and `msg3 MIC ok` is what says the
+    PMK it produced was CORRECT** -- the MIC is derived from the PTK, which is derived from that PMK, so a
+    wrong PMK is a wrong MIC and the AP drops msg2. On silicon: `pmk ready` -> `eapol msg2 sent` ->
+    `msg3 MIC ok` -> `GTK unwrapped` -> `eapol msg4 sent` -> `keys installed` -> DHCP 192.168.1.247 -> DNS
+    -> **`HTTP/1.1 200 OK`, 828 bytes**.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: the suite never calls
+    `javax.crypto.SecretKeyFactory`.** So hardware proves NO REGRESSION at 40 programs with a moved layout
+    and a newly demand-loadable `crypto/Pbkdf2` -- `SecretKeyFactoryProbe`'s 38 arms against a byte-identical
+    host control are what prove the OVERLAY, and those ran on QEMU. Different claims.
+  - **THE CLOSURE IS IDENTICAL TO THE QEMU ARM TO THE DIGIT:** batch 70, `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`, plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`**, `sched: 89 preemptions`, `jobs/core 6/6/6/6`, `smp sched: 4 of 4`,
+    `steps/core 61/59/59/61`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `churnMB=625 live=32
+    intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`,
+    `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`, `sum20=210 weighted20=2870 tally17=1153
+    wide=7000000155`, ExcDemo's seven-frame trace, `sha256 clone = .../fork-ok`, and
+    `hw rng: RNG200 at 0xFE104000, live` with `unseeded = self-seeded from hardware, two instances differ`.
+  - **TWENTY-ONE MARKERS ZERO**, and only the seven known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, every one
+    labelled DENYLISTED. One `(skip ch=0x...0001)` after `wifi: JOINED`, which this file already records as
+    `Cyw43`'s ioctl-response wait loop on a masked `load8` path -- frame timing, not a failure -- and whose
+    channel MOVES between boots. Channel 1 here.
+  - **A FOURTH CROSS-BOOT RNG SAMPLE, AND IT PARTLY RETIRES MY OWN FLAGGED CONCERN.** `ee6253fd 12fd031f
+    d62b182c`, distinct from all three previous boots, `count 16 -> 13` again. Its popcount is **50 of 96**
+    against an ideal of 48 -- so the series now reads 51, 47, **63**, 50. The 63 I recorded last boot as
+    "about 3 sigma high, noted not diagnosed" looks like the single-sample noise it was flagged as, which is
+    what declining to diagnose it bought. **Still not a randomness test:** four samples of three words
+    cannot support a conclusion either way, and what is ruled out is unchanged -- a constant, a counter, and
+    a count that does not follow reads.
   - **NEXT, and it is a real decision rather than wiring:** `deriveSha1` can now be collapsed onto the
     generic path -- `pbkdf2GenericMatchesWpa2` measures the two as byte-identical over 84 pairs, so the
     evidence already stands. It buys WPA2 nothing and its only gate is a flash, which is exactly why it has
