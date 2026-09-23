@@ -205,6 +205,43 @@ defines the minimum the assembler must encode.
     - **THE COST OF FINDING THIS WAS ONE RE-RUN OF A BINARY ALREADY BUILT**, and it only happened because
       the figure was reported instead of waved through. The cheapest control in this file is running the
       same image twice.
+  - **SO EVERY OTHER IDENTITY COUNTER WAS AUDITED AGAINST THAT SAME A/A PAIR, AND THE NOISE IS FAR NARROWER
+    THAN THE GC FINDING SUGGESTED.** Two QEMU runs of the IDENTICAL binary, timers stripped:
+    **16 differing lines out of 851, and 1 differing field out of 60+ across all 70 batch lines.**
+    - **STABLE IN ALL 70 BATCHES -- these are identity gates and may be cited from either harness:**
+      `rounds pend reach` - `memo res unres` - `n:imap synth clinits` - `rf:skip visit clos holeEnd` -
+      `rfs:type clos fill` - `sd:n steps` - `ps:n miss tab` - `rb:n cl` - `sy:n slots chg obj` -
+      `pb:probed of` - `fp:n` - `un:memo full deny stub` - `dbs probe hcls hnam chain` - `ac:n reuse bump` -
+      **`gc` (the BATCH-LINE one)** - `v:walks levels grew cached` - `pcCalls pcHits pcSteps` -
+      `lk:wait yields rel clinitLk` - `dl jf:n finds fsteps infl meth passes checks`. Plus every headline
+      gate: `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, `sum20`/`weighted20`/
+      `tally17`/`wide`, `sha256 clone .../fork-ok`, `finish HML`, `smp sched: 4 of 4`, `sync: static seen`,
+      `bakeMemosDropped` -- **and `steps/core`, which came out IDENTICAL (c0=59 c1=60 c2=60 c3=61) though
+      this file records it as varying.** One A/A pair cannot promote it to a gate; what it does show is that
+      the recorded variation is smaller than assumed.
+    - **NOISY -- FOUR FAMILIES, AND THREE WERE ALREADY ON THE RECORD:**
+
+      | family | example | status |
+      |---|---|---|
+      | SMP interleaving: `smp jobs`, `jobs/core`, `per-core tasks`, `sched` | `c0=9 c1=6 c2=6 c3=3` vs `c0=10 c1=3 c2=6 c3=5` | already recorded |
+      | inversion LATENCY (the ORDER `HML` is stable) | `63ms` vs `61ms` | already recorded |
+      | code arena `cur`/`peak` | `...26622C0` vs `...26625A0` | already recorded |
+      | **`ac:n ... scan`** (the allocCode free-list walk) | 8,991k vs 8,993k | **NEW** |
+      | **the FINAL `gc: collections`** + `lastProbes`/`roots`/`heap`/`nomap`/`lastReclaimed` | 56 vs 57 | **NEW** |
+    - **THE SHARPEST READING: OF THE 40 `gc: collections=` LINES, 39 ARE IDENTICAL AND ONLY THE LAST MOVES.**
+      The sequence is `3 x12, 4 x22, 5 x4, 46, 56` against `... 46, 57` -- matching to the digit until the
+      lisp finale. **So `gc: collections=46` at the churn demo IS a gate**, which matters because that is
+      the figure the cards quote beside `churnMB=625`; only the finale's count is not.
+    - **AND THE TWO NEW ITEMS SHARE ONE CAUSE, which is why this is one finding rather than two.** The code
+      arena's `cur`/`peak` differ, and this file already records that the arena "tracks demand between
+      collections". Arena demand varies -> collection timing varies -> the finale's count varies, and the
+      free list the next `allocCode` walks differs, which IS `scan`. **Anything downstream of a SWEEP is
+      noisy; the closure and marking counters are not.**
+    - **WHAT THIS DOES NOT ESTABLISH, stated because the useful rule is the narrow one: that any of it is
+      noisy ON HARDWARE.** There is one Pi run of this binary (46 / 55) and many recorded boots at 46/55,
+      but a single run cannot prove stability -- it can only fail to show noise. So the rule is not "these
+      counters are unreliable": it is **on QEMU, do not cite the finale `gc: collections` or `ac:n scan`;
+      everything else in the batch line is an identity gate on both harnesses.**
   - **STILL NOT DONE, and now the measured next item if image size is ever worth an increment:** nothing.
     The `Digest` split is closed at a 0.070% ceiling (see the card below), and this was the bigger half.
 
