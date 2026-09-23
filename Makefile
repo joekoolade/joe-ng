@@ -40,6 +40,11 @@ build: $(OUT)/.stamp guest
 # demandLoadable names comes from guestsrc and is purged there). MEASURED, not hypothetical: deleting
 # crypto/Sha1 shrank the image by 304 bytes instead of ~2 KB, because the stale out/crypto/Sha1.class was
 # still in the classDir of every image. Third instance of this defect, after org/ and sun/.
+#
+# AND FOR THE SAME REASON, A HOST TEST MUST NOT DECLARE `package crypto;` OR `package zip;`. Those prefixes
+# ship, so a test in them rides into every kernel8.img and becomes reachable by name from guest code through
+# Class.forName. CryptoTest and ZipTest did exactly that -- 28,944 image bytes, MEASURED, more than the whole
+# baked crypto/Digest -- and they live in `hosttest` now. New host tests go there, not into a shipped package.
 $(OUT)/.stamp: $(SOURCES)
 	@mkdir -p $(OUT)
 	rm -rf $(OUT)/crypto $(OUT)/zip
@@ -66,8 +71,8 @@ test: build
 	$(JAVA) -cp $(OUT) classfile.ClassReaderTest $(OUT)
 	$(JAVA) -cp $(OUT) classfile.RefMapTest $(OUT)
 	$(JAVA) --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -cp $(OUT) compiler.CompilerTest $(OUT)
-	$(JAVA) -cp $(OUT) crypto.CryptoTest
-	$(JAVA) -cp $(OUT) zip.ZipTest
+	$(JAVA) -cp $(OUT) hosttest.CryptoTest
+	$(JAVA) -cp $(OUT) hosttest.ZipTest
 	$(JAVA) -cp $(OUT) overlay.OverlayCheck --baseline test/overlay/known-gaps.txt
 
 # A guestsrc/ overlay WINS the name, so every stock member it does not declare CEASES TO EXIST -- with no

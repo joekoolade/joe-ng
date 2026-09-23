@@ -25,7 +25,7 @@ package zip;
  * interface later without disturbing a caller.
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports, no exceptions), so the same code runs on the
- * seed JVM under {@code test/zip/ZipTest} — where the JDK's own {@code Inflater} decodes its output, which is
+ * seed JVM under {@code test/hosttest/ZipTest} — where the JDK's own {@code Inflater} decodes its output, which is
  * what proves the framing is right — and compiles into the bare-metal image via our own baseline compiler.
  *
  * <p>Output is staged a whole block at a time into {@link #stage} and handed out from there, so the caller's

@@ -17,7 +17,7 @@ package zip;
  * and {@link Deflate}'s zlib trailer use.
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports), so the same code runs on the seed JVM under
- * {@code test/zip/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
+ * {@code test/hosttest/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
  *
  * <p>The running value packs the two halves as {@code (b << 16) | a}, exactly as zlib and stock
  * {@code Adler32.getValue()} do; a fresh checksum starts at 1, not 0.

@@ -9,7 +9,27 @@
  *
  * Created: 2026-08-25
  */
-package zip;
+/*
+ * NOT in package `crypto` (nor `zip`) ON PURPOSE, and this is the invariant rather than a style choice.
+ *
+ * `ImageBuilder.demandLoadable` decides what ships in the image classDir BY NAME PREFIX, and `crypto/` and
+ * `zip/` are on that list because both are DUAL-WORLD: the baked copy backs the VM's WPA2 supplicant and jar
+ * reader, and the SAME source is demand-loaded into the guest world so the java.security / java.util.zip
+ * overlays can delegate to it. A host test declaring `package crypto;` matches that prefix, so its bytes
+ * rode into EVERY kernel8.img -- 18,586 B here and 10,244 B for ZipTest, 42% of the two prefixes -- and,
+ * worse, became reachable BY NAME from guest code through `Class.forName`.
+ *
+ * The move costs nothing: every class in both packages is `public final` and every member is public or
+ * private, so there is no package-private anything a same-package test needed. Keep new host tests out of
+ * any package on that prefix list.
+ */
+package hosttest;
+
+import zip.Crc32;
+import zip.Deflate;
+import zip.Huff;
+import zip.Inflate;
+import zip.ZipDir;
 
 import harness.T;
 

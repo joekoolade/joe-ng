@@ -1183,7 +1183,7 @@ gated on `Uart.coreHz` and skipped under QEMU. **Verified end-to-end on a real P
   example.com). The "internet device" **acceptance test — passed on real hardware.**
 - **M5 — WPA2-PSK: WORKS on real hardware (host supplicant, DONE).** A full **JDK-free WPA2 supplicant** runs
   the 4-way handshake in Java: SHA-1, HMAC-SHA1, PBKDF2 (PMK), PRF (PTK), AES-128 + RFC-3394 key-unwrap (GTK)
-  in `crypto/*` (17 vectors in `test/crypto/CryptoTest`), plus msg1..msg4 + `WLC_SET_KEY`. Config = `wsec=4`
+  in `crypto/*` (17 vectors in `test/hosttest/CryptoTest`), plus msg1..msg4 + `WLC_SET_KEY`. Config = `wsec=4`
   (CCMP), `wpa_auth=0x80` (WPA2-PSK), `auth=0`, associate unkeyed, run the host 4-way, install PTK/GTK →
   CCMP flows → DHCP → **HTTP 200 OK over WPA2**. The earlier "banked — firmware won't relay host EAPOL"
   conclusion was **wrong**; five stacked bugs hid it, each found by pairing UART traces with monitor
@@ -3831,7 +3831,7 @@ canonical code table (counts + symbols, walked one bit at a time — which is wh
 possible). `zip/ZipDir` parses the End Of Central Directory record and the central directory and serves
 entries by name; `zip/Crc32` is the checksum. All four are strictly JDK-free, so the SAME source both
 compiles into the image (for the class loader) and demand-loads into the guest world (for the overlays) —
-one decoder implementation, not two, and no VM native to bridge them. `test/zip/ZipTest` cross-validates
+one decoder implementation, not two, and no VM native to bridge them. `test/hosttest/ZipTest` cross-validates
 against the seed JDK's own `java.util.zip`/`java.util.jar` writers: 61 checks, including 1-byte-in/1-byte-out
 streaming, stored blocks, HUFFMAN_ONLY, and data past the 32 KiB window.
 

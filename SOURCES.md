@@ -79,8 +79,8 @@ logs what informed each piece so encodings and boot facts are auditable.
   layouts `zip/ZipDir` parses. Zip64 and encryption are deliberately unsupported.
 - **IEEE 802.3 / ITU-T V.42 CRC-32** — the reflected polynomial `0xEDB88320` and
   the standard `0xCBF43926` check value for `"123456789"`, both pinned in
-  `test/zip/ZipTest`.
-- Cross-validation, not code: `test/zip/ZipTest` builds archives with the seed
+  `test/hosttest/ZipTest`.
+- Cross-validation, not code: `test/hosttest/ZipTest` builds archives with the seed
   JDK's `java.util.zip`/`java.util.jar` writers and compares our reader against
   them byte-for-byte.
 

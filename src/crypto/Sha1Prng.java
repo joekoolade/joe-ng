@@ -23,7 +23,7 @@ package crypto;
  * worst possible place for a from-memory implementation: every output looks equally random, so a
  * subtly-wrong one is not detectable by inspection, by a statistical test, or by any demo. What makes this
  * algorithm safe to write here is that the JDK ships it and it is DETERMINISTIC from {@code setSeed} -- so
- * {@code crypto.CryptoTest} can put this side by side with the JDK's own and compare byte for byte, over
+ * {@code hosttest.CryptoTest} can put this side by side with the JDK's own and compare byte for byte, over
  * many seeds, ragged draw lengths and mid-stream reseeds. That is a known-answer gate, and no other
  * generator available to this project has one. (SP 800-90A's Hash_DRBG would be the better modern choice;
  * its CAVP vectors are not in this tree, and writing a DRBG against vectors recalled from memory is exactly

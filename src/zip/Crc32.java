@@ -17,7 +17,7 @@ package zip;
  * instructions), so on metal this is the implementation the {@code java.util.zip.CRC32} overlay calls.
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports), so the same code runs on the seed JVM under
- * {@code test/zip/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
+ * {@code test/hosttest/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
  *
  * <p>Values are carried in the running form stock {@code CRC32} exposes: {@link #update} takes and returns the
  * checksum with no pre/post inversion applied, exactly like {@code CRC32.updateBytes0}.

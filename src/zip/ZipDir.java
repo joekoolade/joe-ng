@@ -19,7 +19,7 @@ package zip;
  * by name — {@link #read} returns an entry's uncompressed bytes, inflating through {@link Inflate}.
  *
  * <p>Strictly JDK-free (primitive arrays + int math, no imports, no exceptions), so the same code runs on the
- * seed JVM under {@code test/zip/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
+ * seed JVM under {@code test/hosttest/ZipTest} and compiles into the bare-metal image via our own baseline compiler.
  * This is what lets the on-metal class loader pull {@code .class} bytes straight out of a jar.
  *
  * <p>Supported entry methods are STORED (0) and DEFLATE (8) — the only two a javac-produced jar uses.

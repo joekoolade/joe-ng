@@ -115,6 +115,99 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **TWO HOST TESTS SHIPPED IN EVERY `kernel8.img` -- 28,944 BYTES, MORE THAN ALL OF BAKED `crypto/Digest`
+  (2026-09-23, PI-VALIDATED).** `CryptoTest` declared `package crypto;` and `ZipTest` `package zip;`, and
+  `ImageBuilder.demandLoadable` ships those prefixes, so both rode into the classDir of every image -- and
+  became reachable BY NAME from guest code through `Class.forName`. Moved to `package hosttest;`.
+
+  | gate | result |
+  |---|---|
+  | image | 33,675,140 -> **33,646,196 (-28,944 B, -0.086%)**, and **the account closes to ZERO** |
+  | **Pi, closure identity** | batch 70 `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372` -- **EXACT** |
+  | **Pi, WiFi** | `ptk derived` -> `msg3 MIC ok` -> `keys installed` -> **HTTP 200 OK, 828 bytes** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE PREFIX IS CORRECT AND THE TESTS MATCHING IT WERE NOT.** `crypto/` and `zip/` are on
+    `demandLoadable` because both are DUAL-WORLD -- the baked copy backs the WPA2 supplicant and the jar
+    reader, and the SAME source is demand-loaded into the guest world so the `java.security` and
+    `java.util.zip` overlays can delegate to it. That stays. What rode along is that the build is one
+    `javac -d out src/... test/...`, so `src/` and `test/` land in the SAME tree and the writer cannot tell
+    them apart by the time `demandLoadable` filters by name.
+  - **THE ACCOUNT CLOSES TO ZERO BYTES, which is what says nothing else moved.** Predicted from the classDir
+    layout -- `align8(18,586) + align8("crypto/CryptoTest") + align8(10,244) + align8("zip/ZipTest") +
+    2 x 4-slot directory entries = 28,944` -- against a measured 28,944.
+
+    | shipped under the two src-side prefixes | bytes |
+    |---|---|
+    | `crypto/CryptoTest.class` | 18,586 |
+    | `zip/ZipTest.class` | 10,244 |
+    | **tests, total** | **28,830** (42% of the two prefixes) |
+    | crypto engine, 7 classes | 23,950 |
+    | zip engine, 6 classes | 15,970 |
+  - **I HAD ONLY EVER NAMED `CryptoTest`. `ZipTest` IS A SECOND INSTANCE AND APPEARS IN NO CARD** -- found
+    by listing what the prefixes actually ship rather than by re-reading what I had written about them.
+  - **THE SIZE IS NOT THE WORST OF IT.** A demand-loadable class is reachable by name from guest code, so
+    `Class.forName("crypto.CryptoTest")` on metal would parse it and start pulling its closure --
+    `java.util.Random`, `javax.crypto.*`, JDK exceptions. **Latent, not live:** nothing does that today.
+    "Ships a host test a guest program can invoke" is still the wrong property for an image to have.
+  - **NO WRITER CHANGE, AND THAT IS THE POINT.** Three fixes were available: a `endsWith("Test")` heuristic
+    in `demandLoadable`; exact denials there; or moving the tests out of the shipped packages. The first two
+    touch the one filter that decides what the metal can load -- where this file already records a measured
+    rejection (the blanket `javax/`, +450 KB) -- and the second re-arms the same trap on the next test.
+    **The move costs nothing, and that was CHECKED rather than assumed: every class in both packages is
+    `public final` and every member is public or private**, so there was no package-private anything a
+    same-package test needed.
+  - **IT IS 4.8x THE LEVER THE `Digest` CARD PROPOSED, and the comparison is the useful part.** Constant-
+    propagating `Digest.SHA1` reaches 6,028 B; this is 28,944 B for a package declaration. **A prefix test,
+    not a dataflow problem** -- and the reason it sat unfixed through three cards is that "excluding tests
+    from the classDir" was written up as a WRITER change, which it never had to be.
+  - **THE INVARIANT IS RECORDED WHERE THE NEXT PERSON WILL LOOK** -- beside the Makefile's `rm -rf
+    $(OUT)/crypto $(OUT)/zip` purge, which exists for the sibling defect (a retired source's stale `.class`
+    staying embedded), and in a header comment on both test files.
+  - **PI-VALIDATED, AND THE RISK WAS LAYOUT RATHER THAN BEHAVIOUR.** This removes two classDir entries and
+    changes no VM code, so what the boot had to answer is the 28,944-byte shift -- and this file records
+    latent bugs surfacing from layout movement alone twice. On silicon: closure identity exact, every marker
+    zero, only the seven known DENYLISTED lines, `ticks/core c1=50 c2=50 c3=50`, `sched: 89 preemptions`,
+    `jobs/core 6/6/6/6`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> HTTP 200 OK.
+  - **ONE FIGURE MOVED UNDER QEMU AND DID NOT ON SILICON, AND IT IS REPORTED RATHER THAN ROUNDED AWAY.**
+    The QEMU suite read `gc: collections=46` then **56**, where this file records `46 then 55` TWELVE times
+    and a control run of the previous image on the same emulator in the same session read 55.
+    **The Pi ran the same binary and read 46 then 55** -- the recorded figure. So the evidence points at
+    emulator noise rather than an effect of the change, and the mechanism would be hard to credit anyway:
+    the classDir is below the heap and the number of classes loaded is unchanged. **What is NOT established
+    is whether that counter is deterministic at all**; a second QEMU run of the IDENTICAL image is the test,
+    and if one binary yields both 55 and 56 then twelve cards have been treating a noisy counter as an
+    identity gate. Stated as an open question because it is one.
+  - **ANSWERED BY THAT RUN, AND IT IS THE MORE USEFUL HALF OF THIS INCREMENT: THE LISP-FINALE `gc:
+    collections` IS NOT DETERMINISTIC ON QEMU.** The IDENTICAL binary read **57** on the second run:
+
+    | run | harness | binary | `gc: collections` |
+    |---|---|---|---|
+    | control | QEMU | previous image | 46 / **55** |
+    | 1 | QEMU | this image | 46 / **56** |
+    | 2 | QEMU | **identical to run 1** | 46 / **57** |
+    | Pi | hardware | this image | 46 / **55** |
+
+    - **SO THE 55 -> 56 WAS NEVER ATTRIBUTABLE TO THE CHANGE**, and the mechanism was never credible anyway:
+      the classDir is below the heap and the number of classes loaded is unchanged. **One binary, two QEMU
+      runs, two different answers** -- which is the definition of a counter that cannot serve as an identity
+      gate on that harness.
+    - **AND THE TWO FIGURES ON THAT LINE BEHAVE DIFFERENTLY, which is what makes this actionable rather than
+      just a caution.** The CHURN figure reads **46 in all four runs** across two binaries and two harnesses;
+      only the LISP FINALE moves. So `gc: collections=46` is a gate and the finale's count is not -- on QEMU.
+    - **WHAT IS NOT ESTABLISHED, stated rather than rounded up: that it varies on the Pi.** Hardware has
+      read `46 then 55` across many recorded boots and read it again here. The honest position is that the
+      gate is sound on SILICON and must not be quoted from a QEMU run -- not that twelve cards are wrong.
+      Nothing is retracted; what changes is which harness the figure may be cited from.
+    - **THE COST OF FINDING THIS WAS ONE RE-RUN OF A BINARY ALREADY BUILT**, and it only happened because
+      the figure was reported instead of waved through. The cheapest control in this file is running the
+      same image twice.
+  - **STILL NOT DONE, and now the measured next item if image size is ever worth an increment:** nothing.
+    The `Digest` split is closed at a 0.070% ceiling (see the card below), and this was the bigger half.
+
 - **HMAC IS ONE CONSTRUCTION, AND THE SECOND SHA-1 LEAVES THE IMAGE (2026-09-23, PI-VALIDATED).**
   `Hmac.sha1` -- the WPA2-private one-shot -- is DELETED, and the 4-way handshake's PRF (the PTK) and both
   EAPOL-Key MIC sites go through the same streaming `Hmac` over `crypto/Digest` that `javax.crypto.Mac` and
