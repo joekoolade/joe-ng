@@ -66,9 +66,11 @@ public final class CryptoTest
         digestAgainstJdk();
 
         // HMAC (crypto.Hmac's instance side), which backs javax.crypto.Mac.
+        oracleIsTheJdk();
         hmacVectors();
         hmacAgainstJdk();
         hmacAgreesWithWpa2();
+        hmacCopyIsDeep();
 
         // The SHA1PRNG DRBG behind java.security.SecureRandom.
         prngAgainstJdk();
@@ -425,6 +427,89 @@ public final class CryptoTest
 
         T.eq("generic vs WPA2 HMAC-SHA1: pairs compared", keyLens.length * msgLens.length, compared);
         T.eq("generic HMAC-SHA1 == the WPA2 one-shot, over " + compared + " pairs", 0, bad);
+    }
+
+    /**
+     * The oracle is the JDK's, not ours -- asserted rather than assumed.
+     *
+     * <p>{@code guestsrc} puts overlays of {@code java.security.MessageDigest} and {@code javax.crypto.Mac}
+     * into {@code out/}, which is this test's classpath. Today they cannot shadow the real ones: both
+     * packages belong to java.base, a NAMED module, so the boot loader wins and a classpath class in a
+     * java.base package is ignored (MEASURED: {@code MessageDigest.class.getClassLoader()} is null and its
+     * module is java.base). But "today" is the operative word -- run this under
+     * {@code --patch-module java.base=out} and the oracle silently becomes the implementation under test,
+     * and 756 digest and 3,432 MAC comparisons would all pass while comparing our engine to ITSELF.
+     *
+     * <p>That is the most expensive shape of vacuous test available here, so it is checked rather than
+     * reasoned about: the providers must NOT be ours.
+     */
+    private static void oracleIsTheJdk()
+    {
+        try
+        {
+            String mdProvider = java.security.MessageDigest.getInstance("SHA-256").getProvider().getName();
+            String macProvider = javax.crypto.Mac.getInstance("HmacSHA256").getProvider().getName();
+            T.check("digest oracle is NOT joe-ng's overlay (got " + mdProvider + ")",
+                    !"joe-ng".equals(mdProvider));
+            T.check("MAC oracle is NOT joe-ng's overlay (got " + macProvider + ")",
+                    !"joe-ng".equals(macProvider));
+        }
+        catch (java.security.GeneralSecurityException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * {@link Hmac#copy} must be a DEEP copy -- the arm that a shallow one fails.
+     *
+     * <p>Both objects are fed a common prefix, then COPIED, then fed DIFFERENT suffixes. A copy sharing one
+     * engine authenticates the interleaving of both suffixes and returns two MACs that are equal to each
+     * other and to nothing else in the world -- plausible, stable and wrong. Comparing each against a
+     * freshly computed MAC of its own whole message is what catches it.
+     */
+    private static void hmacCopyIsDeep()
+    {
+        java.util.Random rnd = new java.util.Random(20260923L);
+        int bad = 0;
+        int compared = 0;
+        for (int alg = Digest.MD5; alg <= Digest.SHA512; alg++)
+        {
+            byte[] key = new byte[24];
+            rnd.nextBytes(key);
+            byte[] prefix = new byte[70];        // longer than one block for MD5..SHA-256, shorter for 384/512
+            byte[] tailA = new byte[33];
+            byte[] tailB = new byte[91];
+            rnd.nextBytes(prefix);
+            rnd.nextBytes(tailA);
+            rnd.nextBytes(tailB);
+
+            Hmac base = new Hmac(alg, key, key.length);
+            base.update(prefix, 0, prefix.length);
+            Hmac forked = base.copy();
+            base.update(tailA, 0, tailA.length);
+            forked.update(tailB, 0, tailB.length);
+
+            byte[] wantA = new byte[Digest.lengthOf(alg)];
+            byte[] wantB = new byte[Digest.lengthOf(alg)];
+            Hmac.mac(alg, key, key.length, join(prefix, tailA), prefix.length + tailA.length, wantA);
+            Hmac.mac(alg, key, key.length, join(prefix, tailB), prefix.length + tailB.length, wantB);
+
+            compared += 2;
+            bad += same(wantA, base.doFinal()) ? 0 : 1;
+            bad += same(wantB, forked.doFinal()) ? 0 : 1;
+        }
+        T.eq("Hmac.copy: branches compared", 12, compared);
+        T.eq("Hmac.copy is a DEEP copy", 0, bad);
+    }
+
+    /** {@return {@code a} followed by {@code b}} */
+    private static byte[] join(byte[] a, byte[] b)
+    {
+        byte[] out = new byte[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     /** {@return the JDK's own MAC} The independent oracle: a different implementation, not a second copy. */

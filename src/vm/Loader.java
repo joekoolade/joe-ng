@@ -5772,6 +5772,19 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/SecureRandom"))
                 // Digest{Input,Output}Stream are STOCK: pure java.io filter streams over a MessageDigest,
                 // no natives and nothing to overlay.
+                // javax/crypto/Mac is OVERLAID (see guestsrc/javax/crypto). javax/ is not denied, but three
+                // PURE INTERFACES it needs sit under the java/security/ blanket: Key (what init() takes),
+                // KeySpec (what SecretKeySpec is) and AlgorithmParameterSpec (an empty marker). None has a
+                // native, a field or an implementation closure.
+                //
+                // EXACT matches, not prefixes, and "java/security/Key" is why: as a PREFIX it would also
+                // open KeyFactory, KeyStore, KeyPairGenerator and KeyRep -- the java.math-dependent half of
+                // java.security that this file records as deliberately out of reach. The entries above use
+                // prefix matching on purpose (BasicPermission catches BasicPermissionCollection); here the
+                // same technique would quietly admit a subsystem.
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/Key"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/KeySpec"))
+                || utf8IsAtBase(base, off, Magic.bytes("java/security/spec/AlgorithmParameterSpec"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestInputStream"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/security/DigestOutputStream"))
                 // NARROWED OUT of the sun/security/ denial, which exists for JAR SIGNATURE VERIFICATION

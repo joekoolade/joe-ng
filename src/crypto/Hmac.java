@@ -162,6 +162,33 @@ public final class Hmac
         reset();
     }
 
+    /**
+     * A COPY with the same key and the same fed-so-far state, so the caller can finish one branch and keep
+     * feeding the other -- {@code Mac.clone()}.
+     *
+     * <p>The two {@link Digest}s are deep-copied. The PADS are SHARED, deliberately: they are final, are
+     * written only by the constructor, and nothing mutates them -- so sharing is safe, and it keeps ONE
+     * copy of the key-derived material in the heap instead of two.
+     *
+     * <p>This method exists because {@code Object.clone()} is SHALLOW, which would leave a cloned
+     * {@code Mac} sharing one engine with its original: both would then authenticate the interleaving of
+     * two messages and BOTH answers would look exactly like MACs. The digest overlay already paid for that
+     * lesson once.
+     */
+    public Hmac copy()
+    {
+        return new Hmac(this);
+    }
+
+    private Hmac(Hmac src)
+    {
+        inner = src.inner.copy();
+        outer = src.outer.copy();
+        ipadKey = src.ipadKey;
+        opadKey = src.opadKey;
+        macLen = src.macLen;
+    }
+
     /** {@return a fresh array holding the finished MAC} Resets, as {@link #doFinal(byte[], int)} does. */
     public byte[] doFinal()
     {

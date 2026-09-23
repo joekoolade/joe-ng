@@ -115,6 +115,87 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`javax.crypto.Mac` RUNS ON THE METAL -- HMAC through the stock API, over joe-ng's own engine
+  (2026-09-22, QEMU; NOT YET PI-VALIDATED).** `Mac`, `MacSpi` and `SecretKeySpec` are overlaid over the
+  streaming `crypto/Hmac` from the increment below.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/MacProbe` on QEMU | **36 arms, `failures=0 divergences-unmet=0`** |
+  | the same source as a HOST CONTROL | `failures=0 divergences-unmet=3` -- and the MAC hex is byte-identical |
+  | demo suite | 40 programs, batch 70, every standing gate, **closure identity EXACT** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 87, zip 91, `overlay-check 0 new` |
+
+  - **THE HOST CONTROL IS THE ORACLE, AND IT IS THE SAME FILE.** Run on a host the probe's calls reach the
+    JDK's own SunJCE `Mac`, so every arm is an independent known answer; run on metal they reach the
+    overlay. The SHA-256 MACs come out byte-identical in both worlds (`3939a28a…`, and the two clone
+    branches `807c52e1…` / `6640d0c6…`). Only the provider NAME and the two algorithms we refuse differ,
+    and those are `diverge()` arms so **`failures=0` means the same thing in both worlds**.
+  - **AND THE CONTROL CORRECTED TWO ARMS BEFORE THEY SHIPPED, which is the third time it has earned its
+    keep on a probe.** I wrote "HmacSHA3-256 is refused" and "HmacSHA512/256 is refused" as `say()`. A
+    stock JVM SUPPORTS both, so as written they would have read as a permanent regression on every host
+    run. They are divergences, not failures -- our refusal is joe-ng's answer, not a universal one.
+  - **OVERLAID FOR A MEASURED REASON, not a stylistic one:** stock `Mac.getInstance` goes through
+    `sun.security.jca.GetInstance` and **`JceSecurity`, which VERIFIES THE PROVIDER'S JAR SIGNATURE** --
+    signature verification being the whole of why `sun/security/` is denied here. No faithful copy could
+    work whatever its shape. Same stated exception `MessageDigest` and `ServiceLoader` already take.
+  - **`Mac.clone()` DEEP-COPIES, and that needed a new `Hmac.copy()`.** `Object.clone()` is shallow, so an
+    inherited clone leaves two `Mac`s driving ONE engine: both then authenticate the interleaving of two
+    messages and return MACs that are plausible, stable, equal to each other and wrong. The digest overlay
+    paid for this lesson once already. **Negative control: with `Hmac.copy` made shallow, all 12 branches
+    of `hmacCopyIsDeep` fail and NOTHING else does** -- the 3,432 JDK comparisons and every vector still
+    pass, because they never clone.
+  - **THE DENIAL HAD TO BE NARROWED BY EXACT NAME, AND "java/security/Key" IS WHY.** Three PURE INTERFACES
+    the overlay needs sit under the `java/security/` blanket: `Key`, `spec/KeySpec`,
+    `spec/AlgorithmParameterSpec`. The entries around them use PREFIX matching on purpose (BasicPermission
+    catches BasicPermissionCollection) -- here that would also admit `KeyFactory`, `KeyStore` and
+    `KeyPairGenerator`, the java.math-dependent half this file records as deliberately out of reach. Exact
+    matches, mirrored in `writer/ReachScan`.
+  - **`javax/` HAD TO BECOME DEMAND-LOADABLE, AND THE BLANKET WAS MEASURED AND REJECTED -- 36x.** `"java/"`
+    does NOT prefix-match `javax/` (the `x` sees to that), so without an entry the overlay compiles into
+    `out/` and is simply ABSENT from the classDir. Three options, measured rather than argued:
+
+    | admits | image cost |
+    |---|---|
+    | blanket `javax/` | **+450,176 B (+1.34%)** |
+    | package prefixes (`javax/crypto/spec/`, `javax/security/auth/`) | +156,968 B |
+    | **the six exact names needed** | **+12,464 B** |
+
+    The blanket's other 669 classes are `Cipher`, `JceSecurity` and `CryptoPolicyParser` -- exactly the
+    provider machinery this overlay exists to route AROUND, which cannot work here and can only end in a
+    trap. **That is a different situation from the `java/` blanket, where most of what ships does work**, so
+    copying that shape would have been reasoning from appearance rather than from what the classes do.
+  - **THE ORACLE IS NOW ASSERTED TO BE THE JDK'S, which it was not before.** `guestsrc` puts overlays of
+    `MessageDigest` AND `Mac` into `out/`, which is `CryptoTest`'s classpath. Today they cannot shadow the
+    real ones -- both packages belong to java.base, a NAMED module, so the boot loader wins (MEASURED:
+    `getClassLoader()` is null, module is java.base, providers read `SUN`/`SunJCE`). But under
+    `--patch-module java.base=out` the oracle would silently BECOME the implementation under test, and 756
+    digest plus 3,432 MAC comparisons would all pass while comparing the engine to ITSELF. That is the most
+    expensive vacuous test available here, so `oracleIsTheJdk` checks it instead of reasoning about it --
+    and it retroactively hardens the digest cross-check too.
+  - **REGRESSION IS CLOSURE IDENTITY, not "it looks clean":** the suite's batch 70 reads
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` --
+    **byte-identical to the figures already in this file** -- with 40 programs, `churnMB=625 live=32
+    intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`,
+    `finish HML` 20/20/20, `sum20=210`, and every digest vector exact.
+  - **A MARKER GREP OF MINE CRIED WOLF, AND THE FIX IS TO ANCHOR IT.** `FAULT` read 1 on that suite boot --
+    and it is `demo/SecureRandomDemo`'s OWN OUTPUT, `CTRL=FAULT STATUS=FAULT …`, the correct QEMU reading
+    of an unmapped RNG window. It will fire on every QEMU suite boot since the RNG driver landed. Anchored
+    (`^ *FAULT |esr=0x|ESR EC`) it reads 0. **A marker that matches a demo's own value strings is an
+    instrument that cries wolf**, which this file rates worse than no instrument.
+  - **THE Makefile PURGE LIST GAINED `javax` AND `sun`, and `sun` was a LATENT instance of the trap that
+    list's own comment is about.** It purges the guest output packages before recompiling so a RETIRED
+    overlay cannot leave a stale `.class` that keeps getting embedded -- and the comment records that `org/`
+    being missing "cost exactly that". `sun/` was missing too, and `out/sun` is guestsrc-only (verified 8
+    sources for 8 classes), so the same hole was open for `sun/nio/cs/StreamEncoder` and its seven siblings.
+  - **STILL TO DO: a Pi boot.** `crypto/Hmac` is BAKED (the WPA2 supplicant calls it) and the image layout
+    moved, and this file records latent bugs surfacing from layout movement alone twice. The static
+    `Hmac.sha1` is byte-for-byte unchanged so WPA2 is untouched by CONSTRUCTION -- but that is an argument,
+    and the 4-way handshake reaching HTTP 200 OK is the measurement.
+  - **NEXT, and it is now cheap:** `Mac` is what PBKDF2 sits on, and `crypto/Pbkdf2` already exists --
+    so `SecretKeyFactory` with `PBKDF2WithHmacSHA256` is mostly wiring, with RFC 6070 vectors already in
+    `CryptoTest`.
+
 - **HMAC IS GENERIC AND STREAMING OVER `crypto/Digest` -- the engine half of `javax.crypto.Mac`
   (2026-09-22, HOST-GATED; no boot, and the symmap says why).** `crypto/Hmac` gains an INSTANCE side --
   MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512, fed incrementally -- while the static `sha1` that backs WPA2 is
