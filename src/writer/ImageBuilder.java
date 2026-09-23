@@ -2099,6 +2099,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     // the obvious package prefixes are not small -- "javax/crypto/spec/" is twenty spec
                     // classes and "javax/security/auth/" is the whole JAAS login tree.
                     || n.startsWith("javax/crypto/Mac")
+                    // SecretKeyFactory is OVERLAID (prefix catches its nested Impl); the SPI and PBEKeySpec
+                    // ship STOCK, which is why they are named rather than overlaid.
+                    || n.startsWith("javax/crypto/SecretKeyFactory")
+                    || n.equals("javax/crypto/spec/PBEKeySpec")
                     || n.equals("javax/crypto/SecretKey")
                     || n.equals("javax/crypto/ShortBufferException")
                     || n.equals("javax/crypto/spec/SecretKeySpec")
