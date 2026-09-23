@@ -142,7 +142,7 @@ defines the minimum the assembler must encode.
     the filter deciding what the metal can load.
 
 - **THE PER-CORE IDLE STACKS ARE GC ROOTS -- AND THE COLLECTION THAT PROVES IT IS THE FIRST THIS SUITE HAS
-  EVER RUN WITH FOUR CORES LIVE (2026-09-23, NOT YET PI-VALIDATED).** The 2026-09-20 root-scan card left
+  EVER RUN WITH FOUR CORES LIVE (2026-09-23, PI-VALIDATED).** The 2026-09-20 root-scan card left
   this open and both halves are closed: the three secondaries' idle tasks have `taskStackBase == 0` like
   task 0, so the same hole applied to them, and a collector running ON an idle task got a nonsense bracket.
 
@@ -217,6 +217,38 @@ defines the minimum the assembler must encode.
     needed today. Four independent mechanisms keep a guest reference off an idle stack, and `marked=0` says
     none arrived. What the increment buys is that the hole is closed, the park path is covered, and both are
     measured every boot instead of argued once.
+  - **PI-VALIDATED, AND THE NEW LINE IS EXACT ON SILICON: `smp gc: collected with the secondaries
+    scheduling -- idleRoots=3/3 marked=0 idleGc=0`** -- identical to QEMU, on the hardware the park path was
+    written for. **`STW TIMEOUT` is ABSENT, and that is the half QEMU could not gate**: four cores live,
+    three parked against the `gcParked` generation, the collection completed. Closure identity EXACT at
+    batch 70 (`rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36
+    clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`), 40 programs to `self-build retired`,
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's
+    seven-frame trace, `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, and
+    WPA2 -> HTTP 200 OK, 828 bytes. Plus the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`**,
+    `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`. Every failure marker zero, and only the seven
+    known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, each labelled DENYLISTED.
+  - **AND ONE FIGURE MOVED ON HARDWARE FOR THE FIRST TIME: THE LISP FINALE READ `gc: collections=56`, WHERE
+    THIS FILE RECORDS SILICON AT 55 A DOZEN TIMES.** The churn figure -- the one the census established as
+    the gate -- is **46, identical**. Two readings fit and ONE BOOT CANNOT SEPARATE THEM, so both are on the
+    record:
+    - **the forced collection perturbs the free list.** `launchMain` shares heap and loader state across the
+      suite's 40 programs, so an extra collection in `smpThreadsDemo` changes the allocation state every
+      later program starts from, and the lisp demo's own pressure collections then fire at a different
+      point. The QEMU A/B already measured exactly this shape -- the batch-line `gc=` +1 in 8 of 70 batches,
+      converging and diverging again. **This mechanism is credible**, unlike the classDir one the census
+      dismissed.
+    - **or the finale is noisy on hardware too**, and "many boots at 55" simply never sampled the other
+      value. The census was explicit that it had NOT established hardware noise -- "a single run cannot
+      prove stability, it can only fail to show noise" -- and this is the first hardware sample that differs.
+    - **THE CONTROL IS CHEAP AND IS NOT RUN YET, WHICH IS WHY THIS IS AN OPEN QUESTION RATHER THAN A
+      FINDING.** The previous PI-VALIDATED binary was saved off the card before flashing; booting it on the
+      same Pi in the same session reads its finale against this one. That is the "run the same image twice"
+      control this file calls its cheapest, and it separates the two readings in one boot.
+    - **WHAT IS NOT IN DOUBT:** `gc: collections=46` at the churn demo is unchanged on both harnesses, and
+      that is the figure the cards quote beside `churnMB=625`.
 
 - **AN OPERAND LIVE ACROSS A `Magic.call*` IS SPILLED NOW -- the intrinsic path never had the call discipline
   (2026-09-23, PI-VALIDATED).** Four arms of `lowerIntrinsic` emit a call and none of them spilled the
