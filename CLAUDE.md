@@ -181,6 +181,30 @@ defines the minimum the assembler must encode.
     is whether that counter is deterministic at all**; a second QEMU run of the IDENTICAL image is the test,
     and if one binary yields both 55 and 56 then twelve cards have been treating a noisy counter as an
     identity gate. Stated as an open question because it is one.
+  - **ANSWERED BY THAT RUN, AND IT IS THE MORE USEFUL HALF OF THIS INCREMENT: THE LISP-FINALE `gc:
+    collections` IS NOT DETERMINISTIC ON QEMU.** The IDENTICAL binary read **57** on the second run:
+
+    | run | harness | binary | `gc: collections` |
+    |---|---|---|---|
+    | control | QEMU | previous image | 46 / **55** |
+    | 1 | QEMU | this image | 46 / **56** |
+    | 2 | QEMU | **identical to run 1** | 46 / **57** |
+    | Pi | hardware | this image | 46 / **55** |
+
+    - **SO THE 55 -> 56 WAS NEVER ATTRIBUTABLE TO THE CHANGE**, and the mechanism was never credible anyway:
+      the classDir is below the heap and the number of classes loaded is unchanged. **One binary, two QEMU
+      runs, two different answers** -- which is the definition of a counter that cannot serve as an identity
+      gate on that harness.
+    - **AND THE TWO FIGURES ON THAT LINE BEHAVE DIFFERENTLY, which is what makes this actionable rather than
+      just a caution.** The CHURN figure reads **46 in all four runs** across two binaries and two harnesses;
+      only the LISP FINALE moves. So `gc: collections=46` is a gate and the finale's count is not -- on QEMU.
+    - **WHAT IS NOT ESTABLISHED, stated rather than rounded up: that it varies on the Pi.** Hardware has
+      read `46 then 55` across many recorded boots and read it again here. The honest position is that the
+      gate is sound on SILICON and must not be quoted from a QEMU run -- not that twelve cards are wrong.
+      Nothing is retracted; what changes is which harness the figure may be cited from.
+    - **THE COST OF FINDING THIS WAS ONE RE-RUN OF A BINARY ALREADY BUILT**, and it only happened because
+      the figure was reported instead of waved through. The cheapest control in this file is running the
+      same image twice.
   - **STILL NOT DONE, and now the measured next item if image size is ever worth an increment:** nothing.
     The `Digest` split is closed at a 0.070% ceiling (see the card below), and this was the bigger half.
 
