@@ -115,6 +115,188 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`javax.crypto.Mac` RUNS ON THE METAL -- HMAC through the stock API, over joe-ng's own engine
+  (2026-09-22, PI-VALIDATED).** `Mac`, `MacSpi` and `SecretKeySpec` are overlaid over the
+  streaming `crypto/Hmac` from the increment below.
+
+  | gate | result |
+  |---|---|
+  | `test/jdk/junit/MacProbe` on QEMU | **36 arms, `failures=0 divergences-unmet=0`** |
+  | the same source as a HOST CONTROL | `failures=0 divergences-unmet=3` -- and the MAC hex is byte-identical |
+  | demo suite | **on HARDWARE**: 40 programs, batch 70, every standing gate, **closure identity EXACT** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 87, zip 91, `overlay-check 0 new` |
+
+  - **THE HOST CONTROL IS THE ORACLE, AND IT IS THE SAME FILE.** Run on a host the probe's calls reach the
+    JDK's own SunJCE `Mac`, so every arm is an independent known answer; run on metal they reach the
+    overlay. The SHA-256 MACs come out byte-identical in both worlds (`3939a28a…`, and the two clone
+    branches `807c52e1…` / `6640d0c6…`). Only the provider NAME and the two algorithms we refuse differ,
+    and those are `diverge()` arms so **`failures=0` means the same thing in both worlds**.
+  - **AND THE CONTROL CORRECTED TWO ARMS BEFORE THEY SHIPPED, which is the third time it has earned its
+    keep on a probe.** I wrote "HmacSHA3-256 is refused" and "HmacSHA512/256 is refused" as `say()`. A
+    stock JVM SUPPORTS both, so as written they would have read as a permanent regression on every host
+    run. They are divergences, not failures -- our refusal is joe-ng's answer, not a universal one.
+  - **OVERLAID FOR A MEASURED REASON, not a stylistic one:** stock `Mac.getInstance` goes through
+    `sun.security.jca.GetInstance` and **`JceSecurity`, which VERIFIES THE PROVIDER'S JAR SIGNATURE** --
+    signature verification being the whole of why `sun/security/` is denied here. No faithful copy could
+    work whatever its shape. Same stated exception `MessageDigest` and `ServiceLoader` already take.
+  - **`Mac.clone()` DEEP-COPIES, and that needed a new `Hmac.copy()`.** `Object.clone()` is shallow, so an
+    inherited clone leaves two `Mac`s driving ONE engine: both then authenticate the interleaving of two
+    messages and return MACs that are plausible, stable, equal to each other and wrong. The digest overlay
+    paid for this lesson once already. **Negative control: with `Hmac.copy` made shallow, all 12 branches
+    of `hmacCopyIsDeep` fail and NOTHING else does** -- the 3,432 JDK comparisons and every vector still
+    pass, because they never clone.
+  - **THE DENIAL HAD TO BE NARROWED BY EXACT NAME, AND "java/security/Key" IS WHY.** Three PURE INTERFACES
+    the overlay needs sit under the `java/security/` blanket: `Key`, `spec/KeySpec`,
+    `spec/AlgorithmParameterSpec`. The entries around them use PREFIX matching on purpose (BasicPermission
+    catches BasicPermissionCollection) -- here that would also admit `KeyFactory`, `KeyStore` and
+    `KeyPairGenerator`, the java.math-dependent half this file records as deliberately out of reach. Exact
+    matches, mirrored in `writer/ReachScan`.
+  - **`javax/` HAD TO BECOME DEMAND-LOADABLE, AND THE BLANKET WAS MEASURED AND REJECTED -- 36x.** `"java/"`
+    does NOT prefix-match `javax/` (the `x` sees to that), so without an entry the overlay compiles into
+    `out/` and is simply ABSENT from the classDir. Three options, measured rather than argued:
+
+    | admits | image cost |
+    |---|---|
+    | blanket `javax/` | **+450,176 B (+1.34%)** |
+    | package prefixes (`javax/crypto/spec/`, `javax/security/auth/`) | +156,968 B |
+    | **the six exact names needed** | **+12,464 B** |
+
+    The blanket's other 669 classes are `Cipher`, `JceSecurity` and `CryptoPolicyParser` -- exactly the
+    provider machinery this overlay exists to route AROUND, which cannot work here and can only end in a
+    trap. **That is a different situation from the `java/` blanket, where most of what ships does work**, so
+    copying that shape would have been reasoning from appearance rather than from what the classes do.
+  - **THE ORACLE IS NOW ASSERTED TO BE THE JDK'S, which it was not before.** `guestsrc` puts overlays of
+    `MessageDigest` AND `Mac` into `out/`, which is `CryptoTest`'s classpath. Today they cannot shadow the
+    real ones -- both packages belong to java.base, a NAMED module, so the boot loader wins (MEASURED:
+    `getClassLoader()` is null, module is java.base, providers read `SUN`/`SunJCE`). But under
+    `--patch-module java.base=out` the oracle would silently BECOME the implementation under test, and 756
+    digest plus 3,432 MAC comparisons would all pass while comparing the engine to ITSELF. That is the most
+    expensive vacuous test available here, so `oracleIsTheJdk` checks it instead of reasoning about it --
+    and it retroactively hardens the digest cross-check too.
+  - **REGRESSION IS CLOSURE IDENTITY, not "it looks clean":** the suite's batch 70 reads
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` --
+    **byte-identical to the figures already in this file** -- with 40 programs, `churnMB=625 live=32
+    intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`,
+    `finish HML` 20/20/20, `sum20=210`, and every digest vector exact.
+  - **A MARKER GREP OF MINE CRIED WOLF, AND THE FIX IS TO ANCHOR IT.** `FAULT` read 1 on that suite boot --
+    and it is `demo/SecureRandomDemo`'s OWN OUTPUT, `CTRL=FAULT STATUS=FAULT …`, the correct QEMU reading
+    of an unmapped RNG window. It will fire on every QEMU suite boot since the RNG driver landed. Anchored
+    (`^ *FAULT |esr=0x|ESR EC`) it reads 0. **A marker that matches a demo's own value strings is an
+    instrument that cries wolf**, which this file rates worse than no instrument.
+  - **THE Makefile PURGE LIST GAINED `javax` AND `sun`, and `sun` was a LATENT instance of the trap that
+    list's own comment is about.** It purges the guest output packages before recompiling so a RETIRED
+    overlay cannot leave a stale `.class` that keeps getting embedded -- and the comment records that `org/`
+    being missing "cost exactly that". `sun/` was missing too, and `out/sun` is guestsrc-only (verified 8
+    sources for 8 classes), so the same hole was open for `sun/nio/cs/StreamEncoder` and its seven siblings.
+  - **PI-VALIDATED, AND THE WiFi FINALE IS THE GATE THAT MATTERED -- not the demos.** `crypto/Hmac` is
+    BAKED and backs the WPA2 supplicant, and the image layout moved; the static `Hmac.sha1` is byte-for-byte
+    unchanged so the handshake is untouched BY CONSTRUCTION, but this file records latent bugs surfacing
+    from layout movement alone twice, so construction is an argument and the handshake is the measurement.
+    On silicon: `wifi: eapol msg2 sent` -> `msg3 MIC ok` -> `GTK unwrapped` -> `eapol msg4 sent` ->
+    `keys installed` -> DHCP 192.168.1.247 -> DNS -> **`HTTP/1.1 200 OK`, 828 bytes**. Every HMAC-SHA1 in
+    that exchange is computed by the class this increment rewrote.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: the suite never calls `javax.crypto.Mac`.**
+    So hardware proves NO REGRESSION at 40 programs with a moved layout and a rewritten baked engine --
+    `MacProbe`'s 36 arms against a byte-identical host control are what prove the OVERLAY, and those ran on
+    QEMU. Different claims.
+  - **THE CLOSURE IS IDENTICAL TO THE QEMU ARM TO THE DIGIT:** batch 70, `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`, plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `sched: 89 preemptions`,
+    `jobs/core 6/6/6/6`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace, and every digest
+    vector exact including `sha256 clone = .../fork-ok`.
+  - **THE FAILURE MARKERS ARE THE ASSERTION, because a layout-shift bug here is a WILD BRANCH rather than a
+    wrong answer:** no `FAULT`, `ESR EC=0`, `BOOT RE-ENTERED`, `unclaimed pc`, `LINK FAILED`,
+    `JIT unsupported`, `LOCALS UNDERSIZED`, `heap OOM`, `STW TIMEOUT`, `Exception in thread`, `BADPATCH`,
+    `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, parity `DIFF`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `DISPATCH ON UNREGISTERED`, `PENDING-INIT`, `REACH LIST FULL`, `PEND LIST FULL` or `MAXLAZY`. The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the seven KNOWN ones, every one labelled DENYLISTED.
+  - **AND THE MARKER THAT CRIED WOLF ON QEMU IS SILENT HERE, WHICH CONFIRMS THE DIAGNOSIS RATHER THAN
+    MERELY PASSING.** The bare `FAULT` was `demo/SecureRandomDemo` printing the correct QEMU reading of an
+    unmapped RNG window; on silicon that same line reads `CTRL=7fff STATUS=0 bcm2835DATA=0
+    rng200FIFOCNT=40001010` and the string does not occur at all. A marker that matches a demo's own value
+    strings fires exactly where the value is interesting, which is the worst place for it.
+  - **A THIRD CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `fe58dde1 d9eb7aee 39f56fea`,
+    distinct from BOTH previous boots (`98e058ca 334b29a7 fa8b9e16` and `a77bf507 f2077214 65f887c6`), with
+    `count 16 -> 13` again. Its popcount is **63 of 96** against an ideal of 48, where the two earlier boots
+    read 51 and 47 -- about 3 sigma high on a 96-bit sample. **That is noted, not diagnosed: 96 bits is a
+    liveness check and NOT a randomness test**, and three samples of three words cannot support a conclusion
+    in either direction. What it does rule out is unchanged -- a constant, a counter, and a count that does
+    not follow reads.
+  - **NEXT, and it is now cheap:** `Mac` is what PBKDF2 sits on, and `crypto/Pbkdf2` already exists --
+    so `SecretKeyFactory` with `PBKDF2WithHmacSHA256` is mostly wiring, with RFC 6070 vectors already in
+    `CryptoTest`.
+
+- **HMAC IS GENERIC AND STREAMING OVER `crypto/Digest` -- the engine half of `javax.crypto.Mac`
+  (2026-09-22, HOST-GATED; no boot, and the symmap says why).** `crypto/Hmac` gains an INSTANCE side --
+  MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512, fed incrementally -- while the static `sha1` that backs WPA2 is
+  left byte-for-byte alone.
+
+  | gate | result |
+  |---|---|
+  | `crypto: 39 -> 83 checks` | incl. **3,432 comparisons against the JDK's own `javax.crypto.Mac`** |
+  | published vectors | RFC 2202 (MD5, SHA-1) + RFC 4231 (SHA-224..512), 20 cases, **each asserted TWICE** |
+  | `generic HMAC-SHA1 == the WPA2 one-shot` | **99 of 99 pairs**, two independent SHA-1s through two HMACs |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, zip 91, `overlay-check 0 new` |
+
+  - **STREAMING IS THE POINT, not a nicety.** `Mac.update()`/`doFinal()` is the stock contract, and the
+    existing one-shot allocates `block + msgLen` -- which makes a MAC's memory cost its MESSAGE SIZE. The
+    instance form holds two `Digest`s and two pads, ~200 bytes whatever it authenticates. Same argument
+    that made `crypto/Digest` streaming rather than `crypto/Sha1`-shaped.
+  - **THE WPA2 PATH IS UNTOUCHED ON PURPOSE, AND THE REASON IS WHAT IT WOULD COST TO GATE.** Collapsing
+    `Hmac.sha1` onto the instance path switches the 4-way handshake -- the most hardware-validated code in
+    this tree -- onto a DIFFERENT SHA-1 implementation, buys WPA2 nothing, and can only be gated by a flash.
+    So it is not done here; instead `hmacAgreesWithWpa2` MEASURES the two as byte-identical across 99
+    key/message pairs, which turns that collapse from a guess into a change whose evidence already stands.
+  - **EVERY PUBLISHED CONSTANT IS ASSERTED TWICE -- against our engine AND against the JDK -- and that is
+    not redundancy.** The constants are TRANSCRIBED rather than read from an RFC in this tree, and this file
+    already records what a recalled constant costs. If one is wrong BOTH arms fail together and the engine
+    is exonerated; if only the first fails, the engine is wrong. **The negative control proved the split
+    works:** with the opad byte flipped one bit, all 20 engine arms failed and **all 20 "is the CONSTANT
+    right?" arms passed** -- the test said "engine wrong, constants right" without anyone having to reason
+    about it. (All 20 recalled constants were in fact correct on the first run.)
+  - **AND THE SECOND CONTROL LANDED ON EXACTLY ONE ARM, which is what says that arm earns its place.**
+    Deleting `doFinal`'s reset failed **858 of 3,432** comparisons -- precisely a quarter, i.e. the REUSE
+    pattern alone (6 algs x 11 keys x 13 messages), with one-shot/byte-wise/ragged all still passing. A
+    `doFinal` that did not reset authenticates the CONCATENATION of two messages and returns a perfectly
+    plausible MAC; no other arm can see it.
+  - **THE KEY LENGTHS STRADDLE BOTH BLOCK SIZES, because "hash the key first" turns on at the BLOCK and the
+    block differs by algorithm** -- 64 for MD5/SHA-1/224/256, 128 for SHA-384/512. A 100-byte key is SHORT
+    for SHA-512 and LONG for SHA-256, so one length cannot exercise both branches.
+  - **THE COMPARISON COUNTS ARE ASSERTED, not merely printed.** `0 mismatches` also passes when the loop
+    never ran, which is the "an instrument that cannot fire looks exactly like a condition that never
+    happens" trap this file records four times. The expected count is derived from the loop dimensions and
+    checked (`3432`, `99`).
+  - **NO BOOT GATES THIS, AND THE SYMBOL MAP IS WHY -- I PREDICTED THE IMAGE WOULD BARELY MOVE AND IT GREW
+    6,592 BYTES.** `JOENG_SYMMAP=1` shows only `crypto/Hmac.sha1` and `crypto/Hmac.copy` compiled into the
+    image: **not one of the new members is baked**, because nothing references them yet. So the prediction
+    was right about the MECHANISM and wrong about the SIZE, and checking it is what found the next item.
+  - **A HOST TEST SHIPS IN EVERY `kernel8.img`, and it is three quarters of that growth. FOUND, RECORDED,
+    DELIBERATELY NOT FIXED HERE.** `demandLoadable` takes everything under `crypto/` -- correct for the
+    dual-world engine -- and `out/crypto/CryptoTest.class` matches that prefix, so the host test's BYTES are
+    in the classDir of every image. The account closes to 5 bytes (8-alignment):
+
+    | | HEAD | now | delta |
+    |---|---|---|---|
+    | `crypto/Hmac.class` (the engine, intended) | 807 | 2,483 | **+1,676** |
+    | `crypto/CryptoTest.class` (a HOST TEST) | 10,429 | 15,340 | **+4,911** |
+    | image | 33,595,124 | 33,601,716 | **+6,592** |
+
+    ~15 KB of host-only code -- `java.util.Random`, `javax.crypto`, JDK exceptions -- reachable by name from
+    guest code via `Class.forName`. **Not bundled:** excluding tests from the classDir is a WRITER change
+    that alters every image and deserves its own gate, and this file records what putting two unvalidated
+    changes on one card costs.
+  - **THE OVERLAY LANDED AND IS PI-VALIDATED -- see the card above.** It is the
+    `ServiceLoader`/`MessageDigest` exception again and for the same measured reason: stock
+    `Mac.getInstance` goes through `JceSecurity` provider VERIFICATION, i.e. jar signing under
+    `sun/security/`, which is denied here, so no faithful copy can work whatever its shape.
+    **The header's claim stands even after that boot, which is the point of stating it by symmap rather
+    than by reasoning:** the suite never calls `javax.crypto.Mac`, so the INSTANCE side is still exercised
+    only on QEMU, and what hardware runs of this file is the untouched static `sha1` inside the WPA2
+    handshake.
+
 - **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22,
   PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
   `java.security.SecureRandom` seeds itself from it and **still refuses on a board that has none**.

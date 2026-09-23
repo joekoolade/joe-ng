@@ -2081,6 +2081,29 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                     // VM's WPA2 supplicant, and the SAME source is demand-loaded into the guest world so the
                     // java.security.MessageDigest overlay can delegate to it. Ordinary bytecode, no intrinsics.
                     || n.startsWith("crypto/")
+                    // javax/* is java.base too ("java/" does NOT prefix-match it -- the 'x' sees to that),
+                    // and javax/crypto/{Mac,MacSpi,spec/SecretKeySpec} are OVERLAID. Without these the
+                    // overlay compiles into out/ and is simply absent from the classDir, so the metal
+                    // resolves nothing at all rather than resolving the wrong thing.
+                    //
+                    // NAMED rather than a blanket "javax/", and the reason is MEASURED: a blanket ships the
+                    // whole JCE -- 673 classes, +450,176 bytes, +1.34% -- and the 669 that are not these are
+                    // Cipher, JceSecurity and CryptoPolicyParser, i.e. exactly the provider machinery this
+                    // overlay exists to route AROUND. They cannot work here (sun/security is denied), so
+                    // demand-loading them can only end in a trap. That is a different situation from the
+                    // "java/" blanket above, where most of what ships does work, so copying that shape here
+                    // would be reasoning from appearance rather than from what the classes do.
+                    //
+                    // Prefix ONLY where the extra names are wanted: "javax/crypto/Mac" catches Mac,
+                    // Mac$Impl and MacSpi, which are exactly the three. Everything else is EXACT, because
+                    // the obvious package prefixes are not small -- "javax/crypto/spec/" is twenty spec
+                    // classes and "javax/security/auth/" is the whole JAAS login tree.
+                    || n.startsWith("javax/crypto/Mac")
+                    || n.equals("javax/crypto/SecretKey")
+                    || n.equals("javax/crypto/ShortBufferException")
+                    || n.equals("javax/crypto/spec/SecretKeySpec")
+                    || n.equals("javax/security/auth/Destroyable")
+                    || n.equals("javax/security/auth/DestroyFailedException")
                     || !n.contains("/"))
             {
                 out.add(n);

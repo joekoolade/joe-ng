@@ -41,7 +41,7 @@ public class Provider extends Properties
      * an imitation of "SUN", for the reason {@code os.name} says joe-ng -- code that branches on the
      * provider should not be told something false.
      */
-    public static final Provider JOENG = new Provider("joe-ng", "1.0", "joe-ng built-in digests (MD5, SHA-1, SHA-2)");
+    public static final Provider JOENG = new Provider("joe-ng", "1.0", "joe-ng built-in digests (MD5, SHA-1, SHA-2), HMACs and SHA1PRNG");
 
     private final String name;
     private final String versionStr;

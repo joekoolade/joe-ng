@@ -116,6 +116,12 @@ public final class ReachScan
                 || c.startsWith("java/security/Provider")
                 // SecureRandom + SecureRandomSpi: overlaid over crypto.Sha1Prng.
                 || c.startsWith("java/security/SecureRandom")
+                // Mirrors Loader.isDenylisted: three PURE INTERFACES the javax/crypto/Mac overlay needs.
+                // EXACT (equals, not startsWith) -- "java/security/Key" as a prefix would also open
+                // KeyFactory/KeyStore/KeyPairGenerator, the java.math-dependent half.
+                || c.equals("java/security/Key")
+                || c.equals("java/security/spec/KeySpec")
+                || c.equals("java/security/spec/AlgorithmParameterSpec")
                 || c.startsWith("java/security/DigestInputStream")
                 || c.startsWith("java/security/DigestOutputStream")
                 || c.startsWith("sun/security/util/SecurityConstants"))
