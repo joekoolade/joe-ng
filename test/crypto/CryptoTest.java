@@ -33,10 +33,6 @@ public final class CryptoTest
         sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",   // 56 bytes -> two blocks
                 "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
 
-        // HMAC-SHA1 (RFC 2202).
-        hmac(rep((byte) 0x0b, 20), "Hi There", "b617318655057264e28bc0b6fb378c8ef146be00");
-        hmac(ascii("Jefe"), "what do ya want for nothing?", "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
-
         // PRF self-consistency: each 20-byte block must equal HMAC-SHA1(K, A || 0x00 || B || i). HMAC is
         // already RFC-validated above, so this confirms the PRF's input construction + counter across blocks
         // (the full PTK is ultimately proven by the on-metal 4-way handshake).
@@ -60,7 +56,6 @@ public final class CryptoTest
         oracleIsTheJdk();
         hmacVectors();
         hmacAgainstJdk();
-        hmacAgreesWithWpa2();
         hmacCopyIsDeep();
 
         // PBKDF2 (crypto.Pbkdf2), which backs javax.crypto.SecretKeyFactory AND the WPA2 PMK.
@@ -385,46 +380,6 @@ public final class CryptoTest
     }
 
     /**
-     * The generic HMAC-SHA1 against the WPA2 one-shot it does not yet replace.
-     *
-     * <p>This exists so that collapsing {@link Hmac#sha1} onto the instance path is later a change with its
-     * evidence already standing rather than a guess gated by a flash. It compares two INDEPENDENT SHA-1
-     * implementations ({@link Digest} and {@link Sha1}) through two independent HMAC constructions, so a
-     * disagreement names a real defect in one of them rather than a refactor risk.
-     */
-    private static void hmacAgreesWithWpa2()
-    {
-        int[] keyLens = { 1, 16, 20, 32, 63, 64, 65, 100, 200 };
-        int[] msgLens = { 0, 1, 20, 55, 56, 63, 64, 65, 127, 128, 500 };
-        java.util.Random rnd = new java.util.Random(20260922L);
-        int compared = 0;
-        int bad = 0;
-
-        for (int ki = 0; ki < keyLens.length; ki++)
-        {
-            byte[] key = new byte[keyLens[ki]];
-            rnd.nextBytes(key);
-            for (int mi = 0; mi < msgLens.length; mi++)
-            {
-                byte[] data = new byte[msgLens[mi]];
-                rnd.nextBytes(data);
-
-                byte[] wpa2 = new byte[Sha1.DIGEST];
-                Hmac.sha1(key, key.length, data, data.length, wpa2);
-
-                byte[] generic = new byte[Digest.lengthOf(Digest.SHA1)];
-                Hmac.mac(Digest.SHA1, key, key.length, data, data.length, generic);
-
-                compared += 1;
-                bad += same(wpa2, generic) ? 0 : 1;
-            }
-        }
-
-        T.eq("generic vs WPA2 HMAC-SHA1: pairs compared", keyLens.length * msgLens.length, compared);
-        T.eq("generic HMAC-SHA1 == the WPA2 one-shot, over " + compared + " pairs", 0, bad);
-    }
-
-    /**
      * The oracle is the JDK's, not ours -- asserted rather than assumed.
      *
      * <p>{@code guestsrc} puts overlays of {@code java.security.MessageDigest} and {@code javax.crypto.Mac}
@@ -689,8 +644,8 @@ public final class CryptoTest
         for (int blk = 0; blk < 3; blk++)
         {
             in[in.length - 1] = (byte) blk;
-            byte[] mac = new byte[Sha1.DIGEST];
-            Hmac.sha1(key, key.length, in, in.length, mac);
+            byte[] mac = new byte[Digest.lengthOf(Digest.SHA1)];
+            Hmac.mac(Digest.SHA1, key, key.length, in, in.length, mac);
             int n = Math.min(20, 48 - blk * 20);
             T.eqStr("prf block " + blk, hex(mac, n), hexSlice(prf, blk * 20, n));
         }
@@ -873,15 +828,6 @@ public final class CryptoTest
         byte[] s = new byte[len];
         System.arraycopy(b, off, s, 0, len);
         return hex(s, len);
-    }
-
-    private static void hmac(byte[] key, String msg, String expect)
-    {
-        byte[] m = ascii(msg);
-        byte[] out = new byte[Sha1.DIGEST];
-        Hmac.sha1(key, key.length, m, m.length, out);
-        String label = msg.length() > 12 ? msg.substring(0, 12) + "..." : msg;
-        T.eqStr("hmac(\"" + label + "\")", expect, hex(out, out.length));
     }
 
     private static byte[] ascii(String s)
