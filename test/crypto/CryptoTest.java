@@ -72,6 +72,11 @@ public final class CryptoTest
         hmacAgreesWithWpa2();
         hmacCopyIsDeep();
 
+        // PBKDF2 (crypto.Pbkdf2's generic side), which backs javax.crypto.SecretKeyFactory.
+        pbkdf2Vectors();
+        pbkdf2AgainstJdk();
+        pbkdf2GenericMatchesWpa2();
+
         // The SHA1PRNG DRBG behind java.security.SecureRandom.
         prngAgainstJdk();
 
@@ -449,10 +454,14 @@ public final class CryptoTest
         {
             String mdProvider = java.security.MessageDigest.getInstance("SHA-256").getProvider().getName();
             String macProvider = javax.crypto.Mac.getInstance("HmacSHA256").getProvider().getName();
+            String skfProvider = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                    .getProvider().getName();
             T.check("digest oracle is NOT joe-ng's overlay (got " + mdProvider + ")",
                     !"joe-ng".equals(mdProvider));
             T.check("MAC oracle is NOT joe-ng's overlay (got " + macProvider + ")",
                     !"joe-ng".equals(macProvider));
+            T.check("SecretKeyFactory oracle is NOT joe-ng's overlay (got " + skfProvider + ")",
+                    !"joe-ng".equals(skfProvider));
         }
         catch (java.security.GeneralSecurityException e)
         {
@@ -695,6 +704,205 @@ public final class CryptoTest
             int n = Math.min(20, 48 - blk * 20);
             T.eqStr("prf block " + blk, hex(mac, n), hexSlice(prf, blk * 20, n));
         }
+    }
+
+    /**
+     * PUBLISHED PBKDF2 vectors -- RFC 6070 (HMAC-SHA1) and RFC 7914 section 11 (HMAC-SHA256).
+     *
+     * <p><b>Every constant is asserted TWICE, against our engine AND against the JDK's own
+     * SecretKeyFactory, and that is not redundancy.</b> These are TRANSCRIBED rather than read from an RFC
+     * in this tree, and this project has already paid once for a recalled constant. If one is wrong BOTH
+     * arms fail together and the engine is exonerated; if only the first fails, the engine is wrong. The
+     * negative control for that split is recorded on the HMAC vectors, which share the technique.
+     */
+    private static void pbkdf2Vectors()
+    {
+        // RFC 6070. The embedded-NUL arm is the one that discriminates: a password handled as a C string
+        // stops at the NUL and still produces a perfectly plausible key.
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "salt", 1, 20,
+                "0c60c80f961f0e71f3a9b524af6012062fe037a6");
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "password", "salt", 4096, 20,
+                "4b007901b765489abead49d926f721d065a429c1");
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1",
+                "passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25,
+                "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038");
+        pbkdf2Vector(Digest.SHA1, "PBKDF2WithHmacSHA1", "pass\u0000word", "sa\u0000lt", 4096, 16,
+                "56fa6aa75548099dcc37d7f03425e0c3");
+
+        // RFC 7914 section 11. The 64-byte outputs are TWO blocks for SHA-256, so they also pin the block
+        // counter -- a derivation that restarted the counter, or reused block 1, agrees on the first 32
+        // bytes and disagrees on the rest.
+        pbkdf2Vector(Digest.SHA256, "PBKDF2WithHmacSHA256", "passwd", "salt", 1, 64,
+                "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
+                        + "49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783");
+        pbkdf2Vector(Digest.SHA256, "PBKDF2WithHmacSHA256", "Password", "NaCl", 80000, 64,
+                "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56"
+                        + "a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d");
+    }
+
+    /** One published vector, checked against the engine and then against the JDK. */
+    private static void pbkdf2Vector(int alg, String jdkName, String pw, String salt, int iters,
+            int dkLen, String expect)
+    {
+        byte[] p = utf8(pw);
+        byte[] s = utf8(salt);
+        byte[] out = new byte[dkLen];
+        Pbkdf2.derive(alg, p, p.length, s, s.length, iters, out, dkLen);
+        String label = jdkName + "(" + pw.length() + "-char pw, " + iters + ", " + dkLen + ")";
+        T.eqStr("pbkdf2 " + label, expect, hex(out, dkLen));
+        T.eqStr("pbkdf2 CONSTANT is what the JDK says: " + label, expect,
+                hex(jdkPbkdf2(jdkName, pw.toCharArray(), s, iters, dkLen * 8), dkLen));
+    }
+
+    /**
+     * The generic PBKDF2 against the JDK's own {@code SecretKeyFactory}, swept over every dimension that
+     * can be silently wrong.
+     *
+     * <p>The PASSWORD LENGTHS are the point: HMAC replaces a key longer than the BLOCK by its own hash, and
+     * the block is 64 for SHA-1/224/256 and 128 for SHA-384/512 -- so 63/64/65 and 127/128/129 straddle
+     * both, and one length cannot exercise both branches. The DERIVED LENGTHS are the other point: 1, 20,
+     * 32, 64 and 100 bytes cross each algorithm's own output size, so the block counter and the final
+     * partial copy are exercised rather than assumed.
+     *
+     * <p>MD5 is absent because the JDK ships no {@code PBKDF2WithHmacMD5} -- there is no oracle for it, and
+     * inventing one here would be the recalled constant this file already warns about. The engine accepts
+     * it; nothing asserts what it produces.
+     *
+     * <p>Passwords are ASCII so the {@code char[]} the JDK takes encodes to exactly the {@code byte[]} the
+     * engine takes. That the JDK encodes UTF-8 rather than Latin-1 or UTF-16 was MEASURED, not recalled.
+     */
+    private static void pbkdf2AgainstJdk()
+    {
+        int[] algs = { Digest.SHA1, Digest.SHA224, Digest.SHA256, Digest.SHA384, Digest.SHA512 };
+        String[] names = { "PBKDF2WithHmacSHA1", "PBKDF2WithHmacSHA224", "PBKDF2WithHmacSHA256",
+                "PBKDF2WithHmacSHA384", "PBKDF2WithHmacSHA512" };
+        int[] pwLens = { 0, 1, 8, 63, 64, 65, 127, 128, 129 };
+        int[] saltLens = { 1, 8, 32 };
+        int[] iterCounts = { 1, 2, 17 };
+        int[] dkLens = { 1, 20, 32, 64, 100 };
+
+        java.util.Random rnd = new java.util.Random(20260924L);
+        int bad = 0;
+        int compared = 0;
+        for (int a = 0; a < algs.length; a++)
+        {
+            for (int pi = 0; pi < pwLens.length; pi++)
+            {
+                byte[] pw = asciiBytes(rnd, pwLens[pi]);
+                char[] pwChars = new char[pw.length];
+                for (int i = 0; i < pw.length; i++)
+                {
+                    pwChars[i] = (char) (pw[i] & 0xFF);
+                }
+                for (int si = 0; si < saltLens.length; si++)
+                {
+                    byte[] salt = new byte[saltLens[si]];
+                    rnd.nextBytes(salt);
+                    for (int ii = 0; ii < iterCounts.length; ii++)
+                    {
+                        for (int di = 0; di < dkLens.length; di++)
+                        {
+                            int dkLen = dkLens[di];
+                            byte[] mine = new byte[dkLen];
+                            Pbkdf2.derive(algs[a], pw, pw.length, salt, salt.length,
+                                    iterCounts[ii], mine, dkLen);
+                            byte[] theirs = jdkPbkdf2(names[a], pwChars, salt, iterCounts[ii], dkLen * 8);
+                            compared = compared + 1;
+                            if (!hex(mine, dkLen).equals(hex(theirs, dkLen)))
+                            {
+                                bad = bad + 1;
+                                if (bad <= 3)
+                                {
+                                    System.out.println("  pbkdf2 MISMATCH " + names[a] + " pwLen="
+                                            + pw.length + " saltLen=" + salt.length + " iters="
+                                            + iterCounts[ii] + " dkLen=" + dkLen);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The COUNT is asserted because "0 mismatches" also passes when the loop never ran -- the
+        // instrument-that-cannot-fire trap this file records four times.
+        T.eq("pbkdf2 vs jdk: comparisons made",
+                algs.length * pwLens.length * saltLens.length * iterCounts.length * dkLens.length, compared);
+        T.eq("pbkdf2 vs jdk: mismatches over " + compared + " comparisons", 0, bad);
+    }
+
+    /**
+     * The generic path and the WPA2 one-shot must agree BYTE FOR BYTE for SHA-1.
+     *
+     * <p>This is what turns "collapse {@link Pbkdf2#deriveSha1} onto the generic path" from a guess into a
+     * change whose evidence already stands. The WPA2 derivation is the most hardware-validated code in this
+     * tree and its only gate is a flash, so it is left alone and MEASURED against its replacement instead.
+     */
+    private static void pbkdf2GenericMatchesWpa2()
+    {
+        int[] pwLens = { 0, 1, 8, 63, 64, 65, 100 };
+        int[] saltLens = { 1, 6, 32 };
+        int[] dkLens = { 16, 20, 32, 40 };
+        java.util.Random rnd = new java.util.Random(20260925L);
+        int bad = 0;
+        int compared = 0;
+        for (int pi = 0; pi < pwLens.length; pi++)
+        {
+            byte[] pw = new byte[pwLens[pi]];
+            rnd.nextBytes(pw);
+            for (int si = 0; si < saltLens.length; si++)
+            {
+                byte[] salt = new byte[saltLens[si]];
+                rnd.nextBytes(salt);
+                for (int di = 0; di < dkLens.length; di++)
+                {
+                    int dkLen = dkLens[di];
+                    byte[] generic = new byte[dkLen];
+                    byte[] wpa2 = new byte[dkLen];
+                    Pbkdf2.derive(Digest.SHA1, pw, pw.length, salt, salt.length, 37, generic, dkLen);
+                    Pbkdf2.deriveSha1(pw, pw.length, salt, salt.length, 37, wpa2, dkLen);
+                    compared = compared + 1;
+                    if (!hex(generic, dkLen).equals(hex(wpa2, dkLen)))
+                    {
+                        bad = bad + 1;
+                    }
+                }
+            }
+        }
+        T.eq("generic vs WPA2 PBKDF2-SHA1: pairs compared",
+                pwLens.length * saltLens.length * dkLens.length, compared);
+        T.eq("generic PBKDF2-SHA1 == the WPA2 one-shot, over " + compared + " pairs", 0, bad);
+    }
+
+    /** The JDK's own PBKDF2, the oracle. {@code keyBits} is in BITS, as {@code PBEKeySpec} counts. */
+    private static byte[] jdkPbkdf2(String name, char[] pw, byte[] salt, int iters, int keyBits)
+    {
+        try
+        {
+            return javax.crypto.SecretKeyFactory.getInstance(name)
+                    .generateSecret(new javax.crypto.spec.PBEKeySpec(pw, salt, iters, keyBits))
+                    .getEncoded();
+        }
+        catch (java.security.GeneralSecurityException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** {@code len} printable-ASCII bytes, so the char[] the JDK takes encodes back to exactly these. */
+    private static byte[] asciiBytes(java.util.Random rnd, int len)
+    {
+        byte[] b = new byte[len];
+        for (int i = 0; i < len; i++)
+        {
+            b[i] = (byte) (0x21 + rnd.nextInt(0x5E));
+        }
+        return b;
+    }
+
+    /** UTF-8 bytes of a String, which is how PBEKeySpec's char[] password is encoded (MEASURED). */
+    private static byte[] utf8(String s)
+    {
+        return s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static String hexSlice(byte[] b, int off, int len)
