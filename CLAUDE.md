@@ -115,6 +115,149 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **PBKDF2 IS ONE DERIVATION NOW -- THE WPA2 PMK IS COLLAPSED ONTO THE GENERIC PATH (2026-09-23,
+  PI-VALIDATED).** `Pbkdf2.deriveSha1` -- the WPA2-private one-shot over the static `Hmac.sha1` --
+  is DELETED, and `Cyw43.setupWpa2` calls `Pbkdf2.derive(Digest.SHA1, ...)` like every other caller.
+  127 deletions, 40 insertions.
+
+  | gate | result |
+  |---|---|
+  | **Pi, the WPA2 handshake** | **`pmk ready` -> `ptk derived` -> `msg3 MIC ok` -> `keys installed` -> HTTP 200 OK, 828 bytes** |
+  | `crypto: 87 -> 104 checks` | the count is unchanged by this increment; WHICH checks changed |
+  | negative control | a corrupted block counter fails **9 engine arms and 0 of the 9 JDK-constant arms** |
+  | demo suite | **on HARDWARE**: 40 programs, batch 70 **closure identity EXACT**, 21 markers zero |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 104, zip 91, `overlay-check 0 new` |
+
+  - **THE EVIDENCE STOOD BEFORE THE CHANGE WAS WRITTEN, WHICH IS THE ONLY REASON IT IS A CHANGE RATHER THAN
+    A GUESS.** The previous increment measured the two paths as byte-identical over 84 key/salt/length
+    combinations spanning the WPA2 envelope -- passphrase lengths straddling HMAC's 64-byte key-hashing
+    branch, SSID lengths 1..32, a 32-byte output. That is what this card is cashing in.
+  - **AND THAT TEST HAD TO DIE WITH THE CODE IT COMPARED -- which is the part worth recording.** With one
+    implementation left, `generic == one-shot` compares the survivor to ITSELF: it passes for ever, cannot
+    fail, and looks exactly like coverage. That is the "an instrument that cannot fire looks exactly like a
+    condition that never happens" trap this file records five times, and it would have been introduced by
+    KEEPING a test rather than by deleting one.
+  - **WHAT REPLACED IT IS DIFFERENT IN KIND, not a smaller version of it.** The WPA2 shape is now TWO
+    published IEEE 802.11i vectors -- `"password"`/`"IEEE"`/4096/32 and `"ThisIsAPassword"`/`"ThisIsASSID"`
+    /4096/32 -- each asserted TWICE, against the engine AND against the JDK's own `SecretKeyFactory`.
+    **Agreement was never correctness:** the old arm could only say two of OUR implementations produced the
+    same bytes, and a known-answer vector says what the bytes ARE. The honest accounting of the trade:
+
+    | the WPA2 shape | before | after |
+    |---|---|---|
+    | published constant vs our engine | 1 vector | **2 vectors** |
+    | the same constant vs an INDEPENDENT oracle | **none** | 2 vectors |
+    | our generic path vs our one-shot | 84 pairs | n/a -- one path |
+  - **THE SECOND CONSTANT WAS RECALLED, AND THE DOUBLE ASSERTION IS WHAT MAKES THAT SAFE.**
+    `ThisIsAPassword`/`ThisIsASSID` was transcribed from memory and passed BOTH arms on the first run, so it
+    is an independently confirmed vector rather than one back-filled from the oracle. **The rule that made
+    that decidable, stated because it is the trap:** a recalled constant that fails both arms gets DROPPED,
+    never copied from the JDK's answer -- a back-filled constant tests nothing the 2,025-comparison sweep
+    does not already test, while looking exactly like a published vector.
+  - **THE NEGATIVE CONTROL LANDS ON THE WPA2 ARMS, and that is the coverage statement.** Flipping one bit of
+    the block counter's top byte fails **9 of 9 engine vectors, both WPA2 arms among them**, and **none of
+    the 9 "CONSTANT is what the JDK says" arms** -- the split reports "engine wrong, constants right"
+    without anyone reasoning about it. **Before this change the same corruption could not have touched the
+    PMK AT ALL**, because the PMK had its own copy; the WPA2 arms firing is what says the supplicant is now
+    guarded by the crypto suite rather than only by a flash.
+  - **A SELF-INFLICTED NEAR-MISS ON THAT CONTROL, recorded because it is this file's own rule:** the first
+    run of it compiled with a bare `javac` and no `-cp out`, so the compile FAILED and the test ran the
+    STALE class -- `104 checks, 0 failures`, which reads exactly like a control proving the change is
+    harmless. An A/B whose arms are the same binary looks exactly like a change that does nothing, for the
+    fourth recorded time. Caught by reading the compiler's exit, not the test's.
+  - **THE COST IS MEASURED AND IT IS NOT FREE: +34,564 BYTES, +0.103%.** The baked crypto surface goes from
+    17 methods / 26,128 B to 48 / 53,212 B, and that accounts for 78% of the image delta:
+
+    | baked | before | after | delta |
+    |---|---|---|---|
+    | `crypto/Digest` | **0 / 0 methods** | 23,724 B / 21 | **+23,724** |
+    | `crypto/Hmac` (instance side) | 1,112 / 2 | 3,808 / 12 | +2,696 |
+    | `crypto/Pbkdf2` | 1,144 / 1 | 1,808 / 1 | +664 |
+    | `Aes`/`KeyWrap`/`Prf`/`Sha1` | 23,872 / 14 | 23,872 / 14 | 0 |
+    | image | 33,649,876 | 33,684,440 | **+34,564** |
+  - **SO THE WiFi PATH NOW PAYS FOR FIVE ALGORITHMS IT DOES NOT USE, and the reason is structural rather
+    than careless.** `Digest` is ONE class whose `compress` switches on the algorithm, so RTA marks all six
+    compression functions once anything instantiates it -- MD5, SHA-224, SHA-256, SHA-384 and SHA-512 are
+    baked into an image whose only baked consumer is a SHA-1 PMK. `Digest.<clinit>` alone is **8,812 B**,
+    which is the K256/K512/MD5_S/MD5_K tables materialised as fill code. **The lever, if it ever matters:
+    split `Digest` per algorithm.** Not done -- that is a refactor of the class every digest in the VM goes
+    through, and it would need its own gate rather than an argument.
+  - **AND IT DOES NOT REMOVE THE OTHER SHA-1 -- the image carries TWO on the WiFi path now where it carried
+    one.** `crypto/Sha1` (3,716 B) stays baked because `Hmac.sha1` still backs the WPA2 PRF (the PTK) and
+    both EAPOL-Key MICs; only the PMK moved. Those are a separate collapse with a separate flash, and
+    `hmacAgreesWithWpa2`'s 99 pairs are the evidence already standing for it -- exactly the position this
+    increment was in.
+  - **THE WRITER COMPILED THE WHOLE GENERIC PATH, MEASURED RATHER THAN ASSUMED.** That was the one
+    structural risk: this file records that the bake domain **cannot** carry `DoubleToDecimal`'s `<clinit>`
+    (an `ldc` class literal the host writer refuses), so a `<clinit>` with four large constant tables was
+    not obviously bakeable. **ZERO `bake-stub` lines name `crypto/`** -- `Digest.<clinit>`, all six
+    compression functions, the `Hmac` instance side and `derive` are real baked bodies.
+  - **IT IS ALSO MUCH CHEAPER AT RUN TIME, AND THIS IS A DERIVATION FROM COUNTING `new` SITES RATHER THAN A
+    MEASUREMENT.** `Hmac.sha1` allocates 4 arrays per call and calls `Sha1.hash` twice, which allocates 4
+    more each -- ~12 short-lived arrays PER ITERATION. A 32-byte PMK is two blocks x 4096 iterations =
+    8,192 calls, so **~98,000 arrays**. The generic path builds ONE `Hmac` (~10 arrays) and allocates one
+    per `doFinal`, so **~8,200**. That matters on this specific path rather than in general: the PMK is
+    deliberately hoisted pre-association because the AP restarts the 4-way with a fresh ANonce about once a
+    second and silently drops a stale reply, and the old form re-padded the key on all 8,192 of those calls.
+  - **QEMU STRUCTURALLY CANNOT GATE THE THING THIS CHANGE DOES, and the two claims are kept apart.** The
+    WiFi path is HW-gated on `Uart.coreHz`, so the emulator never runs the baked `Pbkdf2.derive` at all.
+    What QEMU proves is NO REGRESSION at 40 programs across a **34 KB layout shift** -- and this file
+    records latent bugs surfacing from layout movement alone twice -- with batch 70 reading
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`,
+    byte-identical to the figures already recorded, plus `churnMB=625 live=32 intact=32`,
+    `gc: collections=46` then `55`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `smp sched: 4 of 4`,
+    `steps/core 60/60/60/60`, `sum20=210 weighted20=2870`, every digest vector exact including
+    `sha256 clone = .../fork-ok`, and **twenty-one failure markers zero** (the `FAULT` grep ANCHORED, since
+    this file records it matching `demo/SecureRandomDemo`'s own value strings). **What proves the collapse is the Pi**, and the gate is
+    named in advance: `wifi: pmk ready` -> `msg3 MIC ok`. A wrong PMK is a wrong PTK is a wrong MIC, and the
+    AP drops msg2 without saying why -- so the handshake completing is the PMK being right, and nothing
+    short of a boot can say so.
+  - **A COMMENT-ONLY EDIT CHANGED THE IMAGE AGAIN, AND IT WAS RE-RUN RATHER THAN WAVED THROUGH -- SECOND
+    RECORDED INSTANCE.** A one-line javadoc fix landed AFTER the suite run, and the image then differed in
+    **116 bytes spread over 27 MB** -- LineNumberTable pairs, not the jar's DOS timestamps, because
+    `crypto/CryptoTest.class` SHIPS IN EVERY IMAGE (this file already records that, and that it is most of
+    the crypto arc's growth), so shifting its line table shifts the classDir after it. The suite was re-run
+    on the byte-exact image to be flashed and reproduces every figure above; only `steps/core` moves
+    (60/60/60/60 -> 60/59/61/60), which this file already records as varying on the SAME binary. **The
+    reason to re-run rather than reason about it is that the first run's binary was not the one that would
+    be flashed**, and a card quoting suite figures for an image nobody booted is the shape of a citation
+    rather than a measurement.
+  - **THE ~27 KB THIS BAKES HAS EXACTLY ONE CONSUMER, AND IT RAN.** Baked `Digest`, the baked `Hmac`
+    instance side and baked `derive` are reachable from the PMK path and from nothing else in the image --
+    the guest-world copies are separately exercised by `DigestProbe`, `MacProbe`, `SecretKeyFactoryProbe`
+    and `demo/DigestDemo`, but those go through the METAL JIT, not the writer. **So the WiFi finale is the
+    only thing in this VM that runs this code as the writer compiled it**, and it is also the first time
+    `Digest.<clinit>` -- 8,812 bytes of constant-table fill code -- has executed in the baked world at all.
+    "Zero `bake-stub` lines name `crypto/`" said the writer COMPILED it; this boot is what says it RUNS.
+  - **PI-VALIDATED, AND THE GATE IS THE ANSWER RATHER THAN THE RUNNING.** `wifi: pmk ready` alone would
+    only have established that `Digest.<clinit>`, `Hmac.<init>` and `derive` executed without faulting --
+    real, and weaker, and it is what a join timeout would have left (this file records the WiFi finale
+    failing ENVIRONMENTALLY twice, the SSID simply absent from the scan). The handshake went further:
+    `pmk ready` -> `eapol msg1` -> `ptk derived` -> `eapol msg2 sent` -> **`msg3 MIC ok`** -> `GTK
+    unwrapped` -> `eapol msg4 sent` -> `keys installed` -> DHCP 192.168.1.247 -> DNS -> **`HTTP/1.1 200
+    OK`, 828 bytes**. The MIC derives from the PTK, which derives from that PMK, so a wrong PMK is a wrong
+    MIC and the AP drops msg2 in silence -- there is no intermediate failure mode, which is precisely why
+    this one line is the whole claim.
+  - **CLOSURE IDENTITY EXACT, AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT:** batch 70 reads
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` --
+    byte-identical to the figures already recorded -- with 40 programs, `churnMB=625 live=32 intact=32`,
+    `gc: collections=46` then `55`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `lisp evals=600 result=610 stable=1`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`,
+    ExcDemo's seven-frame trace, every digest vector exact including `sha256 clone = .../fork-ok`, plus
+    the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, and `hw rng: RNG200 at 0xFE104000, live`.
+  - **TWENTY-ONE MARKERS ZERO**, and only the SEVEN known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, every one
+    labelled DENYLISTED (`CodingErrorAction.REPLACE`, `Normalizer$Form.NFD`/`NFC`, `CharBuffer.wrap`,
+    `Grapheme.nextBoundary`, `Normalizer.normalize`, `sun/text/Normalizer.getCombiningClass`).
+  - **A FIFTH CROSS-BOOT RNG SAMPLE, AND THE OUTLIER IS NOW COMFORTABLY RETIRED.** `0c461596 4c44da6a
+    e71094ad`, distinct from all four previous boots, `count 16 -> 13` again. Popcount **41 of 96** against
+    an ideal of 48, so the series reads 51, 47, **63**, 50, 41 -- **mean 50.4**, and the 63 I once flagged
+    as "about 3 sigma high" now sits inside an ordinary spread. **Still not a randomness test:** five
+    samples of three words cannot support a conclusion either way, and what is ruled out is unchanged -- a
+    constant, a counter, and a count that does not follow reads.
+
 - **`javax.crypto.SecretKeyFactory` RUNS ON THE METAL -- PBKDF2 through the stock API, over joe-ng's own
   engine (2026-09-23, PI-VALIDATED).** `PBKDF2WithHmacSHA1/224/256/384/512`.
 
@@ -207,7 +350,8 @@ defines the minimum the assembler must encode.
   - **NEXT, and it is a real decision rather than wiring:** `deriveSha1` can now be collapsed onto the
     generic path -- `pbkdf2GenericMatchesWpa2` measures the two as byte-identical over 84 pairs, so the
     evidence already stands. It buys WPA2 nothing and its only gate is a flash, which is exactly why it has
-    not been done.
+    not been done. **DONE the same day -- see the card at the top of this file, which also records why that
+    84-pair measurement had to be DELETED by the change it justified.**
 
 - **PBKDF2 IS GENERIC OVER `crypto/Hmac` -- the engine half of `javax.crypto.SecretKeyFactory`
   (2026-09-23, HOST-GATED; no boot, and the symmap says why).** `crypto/Pbkdf2` gains `derive`, generic over
@@ -230,7 +374,9 @@ defines the minimum the assembler must encode.
     this tree -- onto a different HMAC, buys WPA2 nothing, and can only be gated by a flash. So it is not
     done; `pbkdf2GenericMatchesWpa2` MEASURES the two as byte-identical instead, which turns that collapse
     from a guess into a change whose evidence already stands. Same argument the HMAC arc made, reused
-    deliberately.
+    deliberately. **DONE -- see the collapse card at the top of this file, which also records that this
+    84-pair measurement had to be DELETED by the change it justified, because with one implementation left
+    it compares the survivor to itself.**
   - **EVERY PUBLISHED CONSTANT IS ASSERTED TWICE -- against our engine AND against the JDK -- and the
     NEGATIVE CONTROL PROVES THE SPLIT WORKS.** They are TRANSCRIBED rather than read from an RFC in this
     tree. With the XOR accumulation broken, **all four discriminating ENGINE arms failed and all six "is the

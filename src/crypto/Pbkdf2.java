@@ -14,78 +14,35 @@ package crypto;
 /**
  * PBKDF2 (RFC 2898 / PKCS#5 v2.1), JDK-free.
  *
- * <p>Two entry points, and the split is deliberate rather than tidy:
- * <ul>
- * <li>{@link #deriveSha1} is the WPA2 path -- {@code PMK = PBKDF2(passphrase, ssid, 4096, 32)} -- and is
- *     left BYTE-FOR-BYTE alone over the static {@link Hmac#sha1}. It is the most hardware-validated code in
- *     this tree, collapsing it onto the generic path below buys WPA2 nothing, and the only gate for that
- *     change is a flash. {@code CryptoTest.pbkdf2GenericMatchesWpa2} measures the two as byte-identical
- *     instead, so the collapse is a change whose evidence already stands rather than a guess.
- * <li>{@link #derive} is generic over {@link Digest}'s algorithms and backs
- *     {@code javax.crypto.SecretKeyFactory}.
- * </ul>
+ * <p>ONE derivation, generic over {@link Digest}'s algorithms. It backs {@code javax.crypto.SecretKeyFactory}
+ * AND the WPA2 PMK -- {@code PBKDF2(passphrase, ssid, 4096, 32)} -- which until this class was collapsed had
+ * its own one-shot copy over the static {@link Hmac#sha1}.
+ *
+ * <p><b>THE COLLAPSE WAS NOT MADE ON THE GROUNDS THAT THE TWO LOOK EQUIVALENT.</b> Before it, 84 key/salt/
+ * length combinations measured the two paths as byte-identical, so the change had its evidence standing
+ * before it was written. That comparison is necessarily GONE now -- with one implementation left there is
+ * nothing to compare it to, and a test that compares the survivor to itself passes for ever and means
+ * nothing. What replaced it is stronger and different in kind: the WPA2 shape is a KNOWN-ANSWER vector
+ * (IEEE 802.11i, {@code "password"}/{@code "IEEE"}/4096/32) asserted against this engine AND against the
+ * JDK's own {@code SecretKeyFactory}, so it pins what the answer IS rather than that two of our own
+ * implementations agree on it. Agreement was never correctness.
  *
  * <p><b>ONE {@link Hmac} IS BUILT AND REUSED, and that is the whole reason the streaming HMAC exists.</b>
  * Every iteration re-MACs under the SAME key, so a fresh {@code Hmac} per iteration would re-derive the two
  * pads -- and re-HASH the key when it is longer than the block -- once per iteration. At PBKDF2's whole
- * point, a high iteration count, that is the dominant cost and it is pure waste: 4096 iterations means 4096
- * redundant key schedules. {@code reset()} replays the ipad and nothing else.
+ * point, a high iteration count, that is the dominant cost and it is pure waste: the WPA2 PMK's 4096
+ * iterations would mean 4096 redundant key schedules. {@code reset()} replays the ipad and nothing else.
+ *
+ * <p>The one-shot it replaced could not do that: {@link Hmac#sha1} re-padded the key on every one of those
+ * 4096 calls, and buffered {@code block + msgLen} bytes each time. So the collapse makes the PMK cheaper as
+ * well as singular -- which matters on the path it sits on, where the derivation is deliberately hoisted
+ * pre-association because the AP restarts the 4-way with a fresh ANonce about once a second and silently
+ * drops a stale reply.
  */
 public final class Pbkdf2
 {
     private Pbkdf2()
     {
-    }
-
-    /** PBKDF2-HMAC-SHA1({@code pw}, {@code salt}, {@code iters}) → {@code dkLen} bytes into {@code out}. */
-    public static void deriveSha1(byte[] pw, int pwLen, byte[] salt, int saltLen, int iters, byte[] out, int dkLen)
-    {
-        byte[] u = new byte[Sha1.DIGEST];
-        byte[] t = new byte[Sha1.DIGEST];
-        byte[] block = new byte[saltLen + 4];            // salt || INT_BE(blockIndex)
-        int outPos = 0;
-        int b = 1;
-        while (outPos < dkLen)
-        {
-            int i = 0;
-            while (i < saltLen)
-            {
-                block[i] = salt[i];
-                i = i + 1;
-            }
-            block[saltLen] = (byte) (b >>> 24);
-            block[saltLen + 1] = (byte) (b >>> 16);
-            block[saltLen + 2] = (byte) (b >>> 8);
-            block[saltLen + 3] = (byte) b;
-
-            Hmac.sha1(pw, pwLen, block, saltLen + 4, u);  // U1
-            i = 0;
-            while (i < Sha1.DIGEST)
-            {
-                t[i] = u[i];
-                i = i + 1;
-            }
-            int c = 1;
-            while (c < iters)                             // U2..Uc, XOR-accumulated into T
-            {
-                Hmac.sha1(pw, pwLen, u, Sha1.DIGEST, u);
-                i = 0;
-                while (i < Sha1.DIGEST)
-                {
-                    t[i] = (byte) (t[i] ^ u[i]);
-                    i = i + 1;
-                }
-                c = c + 1;
-            }
-            i = 0;
-            while (i < Sha1.DIGEST && outPos < dkLen)
-            {
-                out[outPos] = t[i];
-                outPos = outPos + 1;
-                i = i + 1;
-            }
-            b = b + 1;
-        }
     }
 
     /**
