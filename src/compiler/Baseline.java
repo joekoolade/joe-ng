@@ -2613,6 +2613,11 @@ public final class Baseline
     /** Magic.gc(): spill x19..x28 (+LR) so live refs are scannable, call the collector, restore. */
     private void lowerGc(CodeBuffer cb)
     {
+        // SPILL BEFORE THE FRAME IS BUILT, because spillLive's offsets are relative to the CURRENT SP.
+        // Two things ride on it: the collector call clobbers x9.., and the conservative root scan starts
+        // at the gc frame's SP and runs up through this method's frame -- so a reference whose only copy
+        // was an operand register is both destroyed AND invisible to the trace without this.
+        spillLive(cb);
         int frame = 96;                                          // 10 locals (80) + LR (8), 16-aligned
         cb.emit(A64Enc.subImm(31, 31, frame));
         cb.emit(A64Enc.strx(30, 31, 80));                          // save LR (we make a call)
@@ -2628,6 +2633,7 @@ public final class Baseline
         }
         cb.emit(A64Enc.ldrx(30, 31, 80));
         cb.emit(A64Enc.addImm(31, 31, frame));
+        reloadLive(cb);                                          // SP is this method's again: offsets line up
     }
 
     /** A real call: args to x0.. (receiver first if any), BL to a cp method, result from x0. */
@@ -3163,9 +3169,16 @@ public final class Baseline
             lowerGc(cb);
         }
         else if (id == Intrinsics.CALL0)
+        // A BLR CLOBBERS x9.., WHICH IS THE OPERAND STACK, so these three arms need the same spill/reload an
+        // ordinary call has always had (emitCall) -- and never had it. An operand still live below the
+        // intrinsic's own arguments came back destroyed: `scStr(sb, Magic.call2(..))` appended through a
+        // wrecked `sb` with no null, no trap and no fault. spillLive emits NOTHING at depth 0, so a site with
+        // nothing live compiles byte-for-byte as before.
         {
             int addr = popReg();
+            spillLive(cb);
             cb.emit(A64Enc.blr(addr));
+            reloadLive(cb);
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }
         else if (id == Intrinsics.CALL2)
@@ -3174,10 +3187,12 @@ public final class Baseline
             int b = popReg();
             int a = popReg();
             int addr = popReg();
-            cb.emit(A64Enc.movReg(16, addr));
-            cb.emit(A64Enc.movReg(0, a));
-            cb.emit(A64Enc.movReg(1, b));
+            cb.emit(A64Enc.movReg(16, addr));               // args to x0/x1/x16 BEFORE the spill: spillLive
+            cb.emit(A64Enc.movReg(0, a));                   //   writes the OPERAND registers to their frame
+            cb.emit(A64Enc.movReg(1, b));                   //   homes and touches neither x0/x1 nor x16
+            spillLive(cb);
             cb.emit(A64Enc.blr(16));
+            reloadLive(cb);
             cb.emit(A64Enc.movReg(pushReg(), 0));
         }
         else if (id == Intrinsics.CALL_N)
@@ -3191,7 +3206,9 @@ public final class Baseline
             {
                 cb.emit(A64Enc.ldrx(r, argsPtr, r * 8));    // xr <- [argsPtr + r*8]
             }
+            spillLive(cb);                                  // after the loads: they read argsPtr, an x9.. reg
             cb.emit(A64Enc.blr(16));
+            reloadLive(cb);
             cb.emit(A64Enc.movReg(pushReg(), 0));           // result x0
         }
         else if (id == Intrinsics.ERET)

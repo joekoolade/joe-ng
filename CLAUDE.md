@@ -115,6 +115,119 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **AN OPERAND LIVE ACROSS A `Magic.call*` IS SPILLED NOW -- the intrinsic path never had the call discipline
+  (2026-09-23, NOT YET PI-VALIDATED).** Four arms of `lowerIntrinsic` emit a call and none of them spilled the
+  operand stack, which lives in x9..x15 -- caller-saved. The recorded LATENT bug is closed, its workaround
+  deleted, and the defect it was found by is now the standing regression for the fix.
+
+  | gate | result |
+  |---|---|
+  | CONTROL (HEAD, nested form) | **all 11 `dbl`/`flt` arms EMPTY**, `dbl vs int = [427]` |
+  | fix, same source | **all 11 exact**, `dbl vs int = [1.5420.17]` |
+  | negative control | **11 arms fail, the 10 null/bool arms UNCHANGED** |
+  | audit: baked methods whose codegen moved | **0 of 1,943** (three source files' own bodies aside) |
+  | image | 33,646,196 -> **33,646,444 (+248 B)**, and 56 + 168 + 24 = **248 EXACTLY** |
+  | demo suite, QEMU | 40 programs, 24 markers zero, batch 70 identity EXACT |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE DISCIPLINE EXISTED AND FOUR ARMS WALKED PAST IT, which is what the old card could not name.**
+    `lowerInvokeStatic` routes an intrinsic straight to `lowerIntrinsic` with no spill -- correct for the
+    sixty-odd arms that are ONE INSTRUCTION (`mrs`/`msr`/`ldr`/`str`), and wrong for the four that are not:
+    `CALL0`/`CALL2`/`CALL_N` hand-emit a `blr` and `lowerGc` a `bl`. Their SIBLINGS in the same method were
+    right the whole time -- `SPAWN`/`SEM_WAIT`/`SEM_POST`/`SLEEP_MS`/`NEW_SEM`/`REPORT`/`PRINT_STR` go
+    through `emitCall`, which spills. So this was never "something about the intrinsic path does not honour
+    the discipline": it is four hand-written arms that never asked for it.
+  - **THE SYMPTOM IS WORSE THAN "AN EMPTY STRING", AND READING THE TWO CALLEES IS WHAT SAYS SO.** `scChar`
+    is baked VM code, so `implicitChecks()` is false and it carries no null or bounds check: it does
+    `load64(sb+16)`, `load64(sb+24)`, then **`store8(buf+24+count, c)` and `store64(sb+24, count+1)`**. With
+    `sb` clobbered those are RAW STORES through whatever `Double.toString` left in x9. No fault fired on any
+    control boot, so that address was readable AND writable -- every double concat in the suite was writing
+    ~20 bytes and an 8-byte counter into memory nobody owns. **The destination was never identified and this
+    does not claim to know it**; what is established is that the stores happened and nothing noticed.
+  - **`dbl vs int = [427]` IS THE DISCRIMINATOR, and it came free with the control.** The ints land and the
+    doubles vanish from the SAME builder in the SAME expression -- so the builder is intact and only the
+    appends made through a clobbered register are lost. That separates "the formatter is broken" from "the
+    receiver is destroyed" in one line, which is the trick the original arc needed bracketing appends for.
+  - **THE AUDIT THE OLD CARD ASKED FOR IS A SYMMAP DIFF, NOT A READING -- and the answer is ZERO.** Every
+    `Magic.call0/call2/callN/gc` caller lives in `src/vm` (`VM`, `Loader`, `VMConcat`, `SelfBuild`; nothing
+    under `guestsrc/` or `demo/` uses them, measured). `spillLive` emits NOTHING at depth 0, so a site with
+    no live operand compiles byte-for-byte as before -- which makes the diff of `JOENG_SYMMAP=1` before and
+    after an exact census of the sites that were broken. **Of 1,943 baked methods exactly three changed, and
+    all three are the edited sources' own compiled bodies** (`Baseline.lowerGc` +56, `Baseline.lowerIntrinsic`
+    +168, `MetalSymbols.intrinsicEmitsCall` +24 -- the compiler is baked, being metacircular). Not one
+    emitted spill anywhere. **`VMConcat.scDouble` was the only site in the VM with a live operand across a
+    call-emitting intrinsic**, and it already had its workaround. The account closes to the byte: 248.
+  - **THE WORKAROUND IS DELETED ON PURPOSE, because a gate that cannot fail is not a gate.** With the result
+    hoisted into a local, NOTHING in the demo suite would have a live operand across an intrinsic call and
+    the fix would ship untested for ever. `scDouble`/`scFloat` are written back in the natural nested form,
+    so ConcatDemo's eleven arms ARE the regression -- and the comment at the site says so rather than
+    telling the next reader to keep using a local.
+  - **THE NEGATIVE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT.** Removing ONLY the six spill/reload lines
+    from the three CALL arms of the final tree fails **all 11 double/float arms** and leaves **all 10 null and
+    boolean arms untouched** -- those go through `SC_STR`/`SC_BOOL`, i.e. `emitCall`, which always spilled.
+    Arms that move in one state and not the other are the control; the ten that pass in both are the built-in
+    comparison.
+  - **`MetalSymbols.intrinsicEmitsCall` WAS MISSING `CALL_N`, and fixing it is a PRECONDITION rather than
+    scope creep.** `spillWords` is 0 for a leaf, so a method the compiler wrongly calls a leaf has no spill
+    area and `spillLive` would write OUTSIDE its frame -- the hazard the synchronized-method comment already
+    records. It was independently broken anyway: `callN` emits a `blr`, which overwrites x30, so such a method
+    saved no LR and its own `ret` returned into the middle of itself. **Latent, and measured as latent:**
+    `Loader.magicId` maps `callN` for guest code and nothing under `guestsrc/` or `demo/` calls it.
+    `gc`/`call0`/`call2` are deliberately NOT added -- that world does not map them at all.
+  - **THE `lowerGc` SPILL IS PROVEN NOT TO CHANGE ANYTHING, NOT PROVEN TO WORK, and that is stated rather
+    than glossed.** Both `Magic.gc()` sites sit at operand depth 0, so it emits zero instructions today (the
+    symmap says so). It is there because the collector call clobbers x9.. like any other, and because the
+    conservative root scan starts at the gc frame's SP and runs up through this method's frame -- so a
+    reference whose only copy is an operand register is both destroyed AND invisible to the trace. That
+    second half is a reading of the scan's range, not a demonstration.
+  - **NO REGRESSION, AND THE BASELINE NOISE WAS MEASURED RATHER THAN ASSUMED -- the census from one day
+    earlier is what made the diff readable.** Four QEMU suite runs: the control image TWICE (A/A), and the
+    fix twice (two builds a comment apart).
+
+    | pair | differing lines of 920 | batch lines of 70 | fields |
+    |---|---|---|---|
+    | **A/A, control twice** | 12 | **0** | -- |
+    | control vs fix (final tree) | **14** | **2** | `rfs:type` |
+    | control vs fix (earlier build) | 102 | 45 | `ac:n scan`, `rfs:type` |
+
+    **The A/A pair is the yardstick and it is 12 lines**: `smp jobs`, `jobs/core`, `per-core tasks`, `sched`,
+    `steps/core` -- the SMP interleaving this file already records as differing on the SAME binary. Against
+    that, the fix adds TWO lines, both a single `rfs:type` field. **Batch 70 is fully identical**, with
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, and every `rfs:clos`/`fill`, `sd:*`, `ps:*`, `rb:*`,
+    `sy:*`, `pb:*`, `fp:*`, `un:*`, `dbs`/`probe`/`hcls`/`hnam`/`chain`, `pcCalls`/`pcHits`/`pcSteps`,
+    `lk:*`. Outside the batch lines: 40 programs, `churnMB=625 live=32 intact=32`, `gc: collections=46`
+    then `56`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`, `finish HML` 20/20/20, every
+    ConcatDemo arm, and 24 failure markers zero.
+  - **AND THE TWO FIX BUILDS ARE WHAT RETIRE `ac:n scan` AS A CANDIDATE, which no amount of argument could.**
+    They differ only by a COMMENT, so any behavioural difference between them is noise by construction -- and
+    one differs from the control in `scan` on 45 batches while the other differs on NONE. A field that moves
+    45 times and 0 times for the same change is not an effect of the change. The finale `gc: collections`
+    tracked it exactly (55 on the build where `scan` moved, 56 on the build where it did not, against the
+    control's 56), which is the shared cause the census states, now seen from a second direction.
+  - **AND THE SUITE'S 39-OF-40 GC READING HELD ACROSS ALL FOUR RUNS, which is the census earning its keep on
+    its first real use.** `gc: collections=46` at the churn demo is identical in every one; only the finale
+    ever moves, and on the final tree it does not. Without that card this diff would have read as two
+    possible regressions.
+  - **ONE CORRECTION TO THAT CENSUS, from the A/A pair rather than from argument: `steps/core` DOES vary**
+    (`58/59/62/61` against `64/47/66/63` on the IDENTICAL binary). The census recorded it as identical in its
+    one pair and said so as a single observation; this pair refutes it and restores the file's older record.
+    One A/A pair was not enough, exactly as that entry warned.
+  - **AND `rfs:type` IS NOT A CLOSURE INVARIANT AT ALL -- it is keyed on a HEAP ADDRESS.** `ctProbe` hashes
+    `typeHashOf(type)`, and a Type is an allocation, so bucket occupancy moves with any layout shift: stable
+    under A/A (same addresses), free to wobble across binaries. It differs in 2 of 70 batches here and
+    **converges to the identical 7k at batch 70**. The census listed it as STABLE, which was true of the
+    pair it was measured on and is the wrong CATEGORY -- it belongs with `cur`/`peak`, not with `memo`.
+  - **A COMMENT-ONLY EDIT CHANGED THE IMAGE AGAIN AND THE SUITE WAS RE-RUN RATHER THAN WAVED THROUGH --
+    THIRD RECORDED INSTANCE.** Making one comment self-contained left the image the SAME SIZE and **675 bytes
+    different** -- LineNumberTable pairs, the shape this file already records twice. Every figure above is
+    from the byte-exact tree that the diff and the PR carry, because a card quoting suite figures for an
+    image nobody booted is a citation rather than a measurement.
+  - **WHAT IS NOT ESTABLISHED: no Pi boot.** QEMU proves the arms and the identity; what hardware still has
+    to answer is a 248-byte layout shift, which this file records surfacing latent bugs twice. The gate is
+    named in advance and is the suite's own ConcatDemo block -- eleven arms that print `[]` the moment the
+    spill is not emitted.
+
 - **TWO HOST TESTS SHIPPED IN EVERY `kernel8.img` -- 28,944 BYTES, MORE THAN ALL OF BAKED `crypto/Digest`
   (2026-09-23, PI-VALIDATED).** `CryptoTest` declared `package crypto;` and `ZipTest` `package zip;`, and
   `ImageBuilder.demandLoadable` ships those prefixes, so both rode into the classDir of every image -- and
@@ -1477,7 +1590,10 @@ defines the minimum the assembler must encode.
     ten-minute suite.
 
 - **AN OPERAND LIVE ACROSS A `Magic.call2` COMES BACK CLOBBERED -- LATENT, FOUND BY THE CONCAT ARC, NOT
-  FIXED (2026-09-20).** Written as `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` sits on the
+  FIXED (2026-09-20). FIXED 2026-09-23 -- see the card at the top of this file, which also records that the
+  audit asked for below came back ZERO: `scDouble` was the ONLY site in the VM with a live operand across a
+  call-emitting intrinsic, measured by a symmap diff rather than by reading, and that the workaround this
+  card describes has been DELETED so the suite exercises the fixed path.** Written as `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` sits on the
   OPERAND STACK across the intrinsic call and is destroyed: every double concat printed an EMPTY string,
   with no null, no trap, no fault, while the callee was returning the right bytes the whole time. Hoisting
   the result into a LOCAL fixes it, which is what `VMConcat.scDouble` now does.
