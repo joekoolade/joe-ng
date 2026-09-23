@@ -22,7 +22,8 @@ package crypto;
  * reason {@code zip/} is: the baked copy serves VM code and the SAME source is pulled into the guest world
  * so the overlay can delegate to it.
  *
- * <p>STREAMING rather than one-shot, and that is the whole point of a separate class from {@link Sha1}:
+ * <p>STREAMING rather than one-shot, and that is what eventually retired the separate one-shot SHA-1
+ * this VM used to carry:
  * {@code MessageDigest.update} is incremental, and buffering an entire input to hash it at the end would
  * make a digest's memory cost its message size -- wrong for {@code DigestInputStream} over a large file, and
  * wrong for the stock tests that feed 6 MB one byte at a time. State is one partial block plus the chaining

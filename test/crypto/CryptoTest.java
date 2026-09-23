@@ -26,13 +26,6 @@ public final class CryptoTest
 {
     public static void main(String[] args)
     {
-        // SHA-1 (FIPS 180-1 examples + the RFC 3174 boundary case).
-        sha1("", "da39a3ee5e6b4b0d3255bfef95601890afd80709");
-        sha1("abc", "a9993e364706816aba3e25717850c26c9cd0d89d");
-        sha1("The quick brown fox jumps over the lazy dog", "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
-        sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",   // 56 bytes -> two blocks
-                "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
-
         // PRF self-consistency: each 20-byte block must equal HMAC-SHA1(K, A || 0x00 || B || i). HMAC is
         // already RFC-validated above, so this confirms the PRF's input construction + counter across blocks
         // (the full PTK is ultimately proven by the on-metal 4-way handshake).
@@ -82,6 +75,14 @@ public final class CryptoTest
         dig(Digest.MD5, "abc", "900150983cd24fb0d6963f7d28e17f72");
         dig(Digest.SHA1, "", "da39a3ee5e6b4b0d3255bfef95601890afd80709");
         dig(Digest.SHA1, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d");
+        // FIPS 180-1's longer example, and the RFC 3174 BOUNDARY case: 56 bytes is exactly where the
+        // 64-bit length field stops fitting in the first block, so it is the one input length that
+        // separates a correct pad from one that overwrites its own message. Inherited from the retired
+        // crypto/Sha1 vectors -- the other two it carried are the two lines above.
+        dig(Digest.SHA1, "The quick brown fox jumps over the lazy dog",
+                "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
+        dig(Digest.SHA1, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
         dig(Digest.SHA224, "", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f");
         dig(Digest.SHA224, "abc", "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7");
         dig(Digest.SHA256, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
@@ -843,15 +844,6 @@ public final class CryptoTest
             b[i] = v;
         }
         return b;
-    }
-
-    private static void sha1(String msg, String expect)
-    {
-        byte[] m = msg.getBytes(StandardCharsets.US_ASCII);
-        byte[] out = new byte[Sha1.DIGEST];
-        Sha1.hash(m, m.length, out);
-        String label = msg.length() > 12 ? msg.substring(0, 12) + "..." : msg;
-        T.eqStr("sha1(\"" + label + "\")", expect, hex(out, out.length));
     }
 
     static String hex(byte[] b, int len)
