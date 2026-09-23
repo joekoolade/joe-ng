@@ -115,6 +115,141 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`java.math` RUNS ON THE METAL, AND THE BUG THAT WAS BLOCKING IT WAS A FIVE-INSTRUCTION INFINITE LOOP
+  (2026-09-23, NOT YET PI-VALIDATED).** BigInteger and BigDecimal work: `BigMathProbe`'s 38 arms are
+  byte-identical to a host control, and four unmodified OpenJDK jtreg tests pass under one runner.
+
+  | gate | result |
+  |---|---|
+  | **stock jtreg `java/math`** | **`math jtreg: ran 4, failures 0` / `ALL PASSED`**, identical on host and metal |
+  | `BigMathProbe` | **38 arms BYTE-IDENTICAL to the host control** |
+  | `SbProbe` | **28/28**, identical to the host control |
+  | demo suite | 40 programs, batch 70 closure identity **EXACT**, every marker zero (anchored) |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE STALL WAS `isNonLeaf` NOT KNOWING THAT A GUARDED STATIC ACCESS IS A CALL.** `getstatic`/`putstatic`
+    emit the JVMS 5.5 trigger -- a `bl` to `VM.ensureInitByName` -- so a method whose ONLY call is that guard
+    **saves no LR, and its own `ret` returns to the instruction after the `bl`.** The overlay's
+    `MethodHandles.lookup()` is `getstatic INSTANCE; areturn`, five instructions with no prologue:
+
+    ```
+    0x024a91e8  mov  x0, #0x59dfc7        ; "java/lang/invoke/MethodHandles$Lookup"
+    0x024a91f0  bl   VM.ensureInitByName  ; clobbers x30
+    0x024a91f4  mov  x9, #0x4216750       ; getstatic INSTANCE
+    0x024a9204  ret                       ; -> x30 == 0x024a91f4
+    ```
+
+    It spins there FOR EVER -- no fault, no output, no marker. `SharedThreadContainer.<clinit>` calls it, and
+    every java.math closure reaches that class, so the whole subsystem hung on a method with no bytecode call
+    in it at all.
+  - **`X30 == PC` IS THE SIGNATURE, AND IT IS WHAT CRACKED IT.** Sampling the PC over the QEMU monitor gave
+    the same address three times; that address ALSO being the link register cannot happen in ordinary
+    execution -- it says the last `bl` executed was the one immediately above, and we are back at its return
+    point. `JOENG_SYMMAP=1` then named `0x9c078` as `VM.ensureInitByName`, and reading the five words around
+    the PC showed no `str x30`. **The recorded technique for an unnameable PC earned its keep for the third
+    time.**
+  - **THREE WRONG MODELS DIED FIRST, and the instrument that killed each is the reusable part.** A
+    `warnClinitUnderLock` list of eight initializers looked like the stall point and is **CAPPED AT 8** -- so
+    the last name printed is not the last class entered, and reading it as one is the same mistake as reading
+    a truncated log as a completed run. Bracketing `<clinit>` entry AND exit made the unmatched entry
+    explicit; `LAZY_TRACE` then showed **no `jitc` line after `MethodHandles.lookup()`**, which is what said
+    the hang is before the next compile rather than inside one.
+  - **`new` AND A REAL `invokestatic` ALREADY ANSWERED TRUE, so this closes the set rather than one case** --
+    those are the only other sites `initGuardAt` is reached from, checked rather than assumed.
+  - **THE PREDICATE IS THE ONE THE EMIT USES, and it is MONOTONE in the safe direction.** `needsInitGuard` is
+    consulted per compile against the same memo, so the size and emit passes cannot disagree; and a class can
+    only go from needing a guard to not needing one, so the worst outcome is an LR saved unnecessarily.
+    **`compiler: 40 checks` holding is the assertion**: the writer's seam defaults to false, so its codegen --
+    and the byte-for-byte self-hosting fixpoint -- is untouched.
+
+  - **AND UNDERNEATH IT, A `<clinit>` RE-ENTRANCY ARM THAT VIOLATED JVMS 5.5 STEP 3.** With the spin gone,
+    all six stock tests failed with NPEs inside java.math. `runPendingClinit` has a second, separate
+    `Magic.call0` for the case where a class is re-entered **during its own dep/compile phase**, and it RAN
+    THE BODY there -- before the dependencies the outer frame was still initializing -- then marked it RAN so
+    the outer frame skipped it for ever. The spec says a recursive request must "complete normally", i.e.
+    RETURN; it does now.
+    - **MEASURED, NOT ARGUED: the second call0 site was UNBRACKETED, which is why the first instrument lied.**
+      Bracketing both printed `>RE java/math/BigInteger` and `>RE java/math/BigDecimal`, each ENTERED and
+      never returned, while the trace read `BigDecimal.<clinit>` -> `BigInteger.valueOf` -> **`posConst`
+      NULL**. BigInteger's body had been started from that arm and had not reached its own array assignments.
+    - **THE OLD COMMENT'S PREMISE WAS TRUE AND ITS CONCLUSION DID NOT FOLLOW.** "A real JVM would already
+      have run this body (it never starts a dependency first), so the least-wrong thing is to run it NOW
+      rather than hand the caller null" -- the first half is right, and the fix for it is not to run the body
+      from the middle of the dep phase. Returning keeps the ORDER the outer frame was establishing.
+    - **`clinitEntryAddr` EXISTED ONLY FOR THAT ARM AND IS DELETED WITH IT.** Left in place it would have
+      been a write-only field whose comment claimed live machinery -- the stale-comment defect this file
+      records against itself.
+    - **THE RISK THIS CARRIES IS THE ONE QEMU CANNOT PRICE.** The arm was added during the `fb799a9` clinit
+      arc, and the shape it was written for (picocli's `GroupValidationResult`) is exercised by the LAUNCHER,
+      not the suite. The suite is clean -- 40 programs, closure identity exact, `CLINIT REJECTED` zero -- and
+      that is NO REGRESSION at suite scale and nothing more.
+
+  - **THEN A STUB THAT ANSWERED A PLAUSIBLE VALUE, which is exactly what rule 3 forbids.**
+    `MetalJavaLangAccess.uncheckedNewStringWithLatin1Bytes` returned **null**, and `BigDecimal.layoutChars`
+    has a **scale-2 "currency fast path"** that lays the digits out itself and hands the buffer to it. So
+    `multiply`, `setScale`, `stripTrailingZeros` and `valueOf(long,int)` all printed `null` while `0.1+0.2`,
+    `divide HALF_UP` and `toBigInteger` were exact -- **it read as a formatting quirk of four particular
+    values rather than as one missing member**, and only the fact that every failing arm had scale 2 named it.
+  - **AND FIFTEEN DROPPED OVERLAY MEMBERS, BOTH FAMILIES TAKEN IN ONE PASS.** `overlaycheck-deep` is what
+    names them, and it reports **0 remaining** for both classes:
+
+    | class | members restored |
+    |---|---|
+    | `jdk/internal/util/DecimalDigits` | `getChars`, `putPair`, `uncheckedPutPairLatin1`, `appendQuad`, `uncheckedGetCharsUTF16` x2 |
+    | `java/lang/StringBuilder` | `repeat` x2, `replace`, `setCharAt`, `ensureCapacity`, `offsetByCodePoints`, `insert` x3, `append(float)`, `append(StringBuffer)` |
+
+    `StringBuilder.repeat` is how the family showed: `BigDecimal.toPlainString` builds its zero run with it,
+    so the stock `ToPlainStringTests` died in java.math with no hint the gap was in StringBuilder.
+  - **THE DecimalDigits HOST CONTROL CAUGHT A REAL DIVERGENCE BEFORE ANY BOOT, AND IT IS THE KIND OF ODDITY
+    AN OVERLAY MUST COPY.** Stock builds `DIGITS` with a `0..9 x 0..9` double loop, so **entries 100..127 keep
+    the `short[]`'s zero fill** and an out-of-range pair writes two NUL characters. Computing `'0' + n/10`
+    there instead yields `'<'`..`'?'` -- **56 of 398 comparisons against the JDK's own `DecimalDigits`**. My
+    own comment had already stated the rule ("the table's 100..127 entries are zero") while the code did not
+    implement it; the control is what noticed. 398/398 after.
+  - **AND THE UTF16 BYTE ORDER WAS DECIDED BY THIS VM RATHER THAN CHOSEN.** `StringUTF16.LO_BYTE_SHIFT` is
+    SEEDED to 8 here (its initializer asks Unsafe and cannot run on metal), so `HI_BYTE_SHIFT` is 0 and the
+    low byte goes at the even index. Writing them the other way round reads back as a character whose low
+    byte is its high byte -- the euro-sign failure this file already records, a wrong STRING rather than an
+    error.
+  - **TWO STOCK TESTS ARE NOT HOSTABLE, AND BOTH WERE RUN BEFORE BEING REMOVED rather than judged by name.**
+    `ModPowPowersof2` **EXECS A SECOND JVM** -- its body builds a `bin/java` command line and calls
+    `Runtime.getRuntime().exec`, dying eight frames deep in `ProcessBuilder.start`; there is no OS beneath
+    this VM, so nothing about java.math is exercised before that point. `ExtremeShiftingTests` is tagged
+    **`-Xmx512m`** and does `ONE.shiftLeft(Integer.MIN_VALUE)`, a magnitude 2^31 bits = 256 MiB wide; the boot
+    ended in `large region OOM`, the allocator correctly refusing. Both reasons are recorded in the runner,
+    which is what stops them being re-added and re-chased.
+  - **ONE RUNNER, ONE IMAGE, for the reason the zip suite already records:** a program touching BigDecimal
+    demand-loads BigInteger, MathContext, RoundingMode, ForkJoinPool and the whole ThreadContainer family,
+    and load time here is super-linear -- paying that closure once instead of four times is the difference
+    between a run that finishes and four that do not. **Measured incidentally: removing the two unhostable
+    tests took the run from 560s to 10s**, because `Runtime.exec` was pulling ProcessBuilder/File/Runtime
+    behind it.
+  - **AN UNPLANNED A/A PAIR FELL OUT OF THE GATING, AND IT REPRODUCES THE CENSUS.** Adding the four stock
+    tests to `JDKTESTS` left the suite image **BYTE-IDENTICAL** (default-package test classes match no
+    `demandLoadable` prefix, so they cost zero image bytes), so the two suite runs either side of it are the
+    same binary -- and they differ ONLY in the lisp-finale `gc: collections`, 55 against 56, with the churn
+    figure 46 in both. **That is the census's own claim, arrived at by accident: on QEMU the finale is not a
+    gate and `46` is.**
+  - **DEMO SUITE, ON THE BYTE-EXACT FINAL TREE** (re-run after the dead field was deleted, because that moved
+    the image): 40 programs to `self-build retired`, batch 70 `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305` -- byte-identical to the recorded figures -- with
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `smp sched: 4 of 4`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, `sha256 clone = .../fork-ok`, `smp gc: ... idleRoots=3/3`, the
+    `[1.5420.17]` and `[true42false7]` concat arms, and **every failure marker zero** with the `FAULT` grep
+    ANCHORED (the one bare `FAULT` is `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string, which this
+    file already records as an instrument that cries wolf).
+  - **NOT PI-VALIDATED, and the reason is specific rather than routine.** QEMU cannot gate the `<clinit>`
+    re-entrancy change: the collector, the SMP park handshake and cold DRAM all want silicon, and this moves
+    every image. **The gate to name in advance is the launcher**, not the suite -- that is where the
+    `GroupValidationResult` shape the removed arm was written for actually runs.
+  - **STILL OPEN, stated rather than rounded away:** `java.math` is reachable now, but nothing has measured
+    what it COSTS. The recorded landmine (`BigInteger.<clinit>` -> `squareToomCook3` -> `RecursiveOp` ->
+    `ForkJoinPool.getCommonPoolParallelism`) did not fire in any of these boots, and no card should claim it
+    is gone -- what is established is that four stock tests and 38 probe arms run correctly, not that the
+    parallel path is safe.
+
 - **A 321-BYTE jtreg TEST-LIBRARY CLASS COSTS 27,984 IMAGE BYTES, AND WHICH `make` TARGET RAN LAST DECIDES
   WHETHER IT IS THERE (2026-09-23, MEASURED, NOT FIXED).** Found while building a control: an image from
   `make build` was **27,984 bytes smaller** than the one flashed the day before from the same commit and a
