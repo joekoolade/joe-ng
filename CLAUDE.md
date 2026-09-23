@@ -116,14 +116,14 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`javax.crypto.Mac` RUNS ON THE METAL -- HMAC through the stock API, over joe-ng's own engine
-  (2026-09-22, QEMU; NOT YET PI-VALIDATED).** `Mac`, `MacSpi` and `SecretKeySpec` are overlaid over the
+  (2026-09-22, PI-VALIDATED).** `Mac`, `MacSpi` and `SecretKeySpec` are overlaid over the
   streaming `crypto/Hmac` from the increment below.
 
   | gate | result |
   |---|---|
   | `test/jdk/junit/MacProbe` on QEMU | **36 arms, `failures=0 divergences-unmet=0`** |
   | the same source as a HOST CONTROL | `failures=0 divergences-unmet=3` -- and the MAC hex is byte-identical |
-  | demo suite | 40 programs, batch 70, every standing gate, **closure identity EXACT** |
+  | demo suite | **on HARDWARE**: 40 programs, batch 70, every standing gate, **closure identity EXACT** |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 87, zip 91, `overlay-check 0 new` |
 
   - **THE HOST CONTROL IS THE ORACLE, AND IT IS THE SAME FILE.** Run on a host the probe's calls reach the
@@ -188,10 +188,43 @@ defines the minimum the assembler must encode.
     overlay cannot leave a stale `.class` that keeps getting embedded -- and the comment records that `org/`
     being missing "cost exactly that". `sun/` was missing too, and `out/sun` is guestsrc-only (verified 8
     sources for 8 classes), so the same hole was open for `sun/nio/cs/StreamEncoder` and its seven siblings.
-  - **STILL TO DO: a Pi boot.** `crypto/Hmac` is BAKED (the WPA2 supplicant calls it) and the image layout
-    moved, and this file records latent bugs surfacing from layout movement alone twice. The static
-    `Hmac.sha1` is byte-for-byte unchanged so WPA2 is untouched by CONSTRUCTION -- but that is an argument,
-    and the 4-way handshake reaching HTTP 200 OK is the measurement.
+  - **PI-VALIDATED, AND THE WiFi FINALE IS THE GATE THAT MATTERED -- not the demos.** `crypto/Hmac` is
+    BAKED and backs the WPA2 supplicant, and the image layout moved; the static `Hmac.sha1` is byte-for-byte
+    unchanged so the handshake is untouched BY CONSTRUCTION, but this file records latent bugs surfacing
+    from layout movement alone twice, so construction is an argument and the handshake is the measurement.
+    On silicon: `wifi: eapol msg2 sent` -> `msg3 MIC ok` -> `GTK unwrapped` -> `eapol msg4 sent` ->
+    `keys installed` -> DHCP 192.168.1.247 -> DNS -> **`HTTP/1.1 200 OK`, 828 bytes**. Every HMAC-SHA1 in
+    that exchange is computed by the class this increment rewrote.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: the suite never calls `javax.crypto.Mac`.**
+    So hardware proves NO REGRESSION at 40 programs with a moved layout and a rewritten baked engine --
+    `MacProbe`'s 36 arms against a byte-identical host control are what prove the OVERLAY, and those ran on
+    QEMU. Different claims.
+  - **THE CLOSURE IS IDENTICAL TO THE QEMU ARM TO THE DIGIT:** batch 70, `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`, plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `sched: 89 preemptions`,
+    `jobs/core 6/6/6/6`, `smp sched: 4 of 4`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`,
+    `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, ExcDemo's seven-frame trace, and every digest
+    vector exact including `sha256 clone = .../fork-ok`.
+  - **THE FAILURE MARKERS ARE THE ASSERTION, because a layout-shift bug here is a WILD BRANCH rather than a
+    wrong answer:** no `FAULT`, `ESR EC=0`, `BOOT RE-ENTERED`, `unclaimed pc`, `LINK FAILED`,
+    `JIT unsupported`, `LOCALS UNDERSIZED`, `heap OOM`, `STW TIMEOUT`, `Exception in thread`, `BADPATCH`,
+    `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, parity `DIFF`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `DISPATCH ON UNREGISTERED`, `PENDING-INIT`, `REACH LIST FULL`, `PEND LIST FULL` or `MAXLAZY`. The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the seven KNOWN ones, every one labelled DENYLISTED.
+  - **AND THE MARKER THAT CRIED WOLF ON QEMU IS SILENT HERE, WHICH CONFIRMS THE DIAGNOSIS RATHER THAN
+    MERELY PASSING.** The bare `FAULT` was `demo/SecureRandomDemo` printing the correct QEMU reading of an
+    unmapped RNG window; on silicon that same line reads `CTRL=7fff STATUS=0 bcm2835DATA=0
+    rng200FIFOCNT=40001010` and the string does not occur at all. A marker that matches a demo's own value
+    strings fires exactly where the value is interesting, which is the worst place for it.
+  - **A THIRD CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `fe58dde1 d9eb7aee 39f56fea`,
+    distinct from BOTH previous boots (`98e058ca 334b29a7 fa8b9e16` and `a77bf507 f2077214 65f887c6`), with
+    `count 16 -> 13` again. Its popcount is **63 of 96** against an ideal of 48, where the two earlier boots
+    read 51 and 47 -- about 3 sigma high on a 96-bit sample. **That is noted, not diagnosed: 96 bits is a
+    liveness check and NOT a randomness test**, and three samples of three words cannot support a conclusion
+    in either direction. What it does rule out is unchanged -- a constant, a counter, and a count that does
+    not follow reads.
   - **NEXT, and it is now cheap:** `Mac` is what PBKDF2 sits on, and `crypto/Pbkdf2` already exists --
     so `SecretKeyFactory` with `PBKDF2WithHmacSHA256` is mostly wiring, with RFC 6070 vectors already in
     `CryptoTest`.
@@ -255,11 +288,14 @@ defines the minimum the assembler must encode.
     guest code via `Class.forName`. **Not bundled:** excluding tests from the classDir is a WRITER change
     that alters every image and deserves its own gate, and this file records what putting two unvalidated
     changes on one card costs.
-  - **NEXT, and it is what needs a boot:** the `javax.crypto.Mac`/`MacSpi`/`SecretKeySpec` overlay. It is
-    the `ServiceLoader`/`MessageDigest` exception again and for the same measured reason -- stock
+  - **THE OVERLAY LANDED AND IS PI-VALIDATED -- see the card above.** It is the
+    `ServiceLoader`/`MessageDigest` exception again and for the same measured reason: stock
     `Mac.getInstance` goes through `JceSecurity` provider VERIFICATION, i.e. jar signing under
-    `sun/security/`, which is denied here -- so no faithful copy can work whatever its shape. That increment
-    is what first makes the engine above reachable on metal.
+    `sun/security/`, which is denied here, so no faithful copy can work whatever its shape.
+    **The header's claim stands even after that boot, which is the point of stating it by symmap rather
+    than by reasoning:** the suite never calls `javax.crypto.Mac`, so the INSTANCE side is still exercised
+    only on QEMU, and what hardware runs of this file is the untouched static `sha1` inside the WPA2
+    handshake.
 
 - **THE BCM2711 HARDWARE RNG IS DRIVEN, AND `SecureRandom` SELF-SEEDS FROM IT (2026-09-22,
   PI-VALIDATED).** `board/bcm2711/Rng` drains the RNG200 FIFO behind a liveness check;
