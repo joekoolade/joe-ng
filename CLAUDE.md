@@ -115,16 +115,17 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **PBKDF2 IS ONE DERIVATION NOW -- THE WPA2 PMK IS COLLAPSED ONTO THE GENERIC PATH (2026-09-22,
-  NOT YET PI-VALIDATED).** `Pbkdf2.deriveSha1` -- the WPA2-private one-shot over the static `Hmac.sha1` --
+- **PBKDF2 IS ONE DERIVATION NOW -- THE WPA2 PMK IS COLLAPSED ONTO THE GENERIC PATH (2026-09-23,
+  PI-VALIDATED).** `Pbkdf2.deriveSha1` -- the WPA2-private one-shot over the static `Hmac.sha1` --
   is DELETED, and `Cyw43.setupWpa2` calls `Pbkdf2.derive(Digest.SHA1, ...)` like every other caller.
   127 deletions, 40 insertions.
 
   | gate | result |
   |---|---|
+  | **Pi, the WPA2 handshake** | **`pmk ready` -> `ptk derived` -> `msg3 MIC ok` -> `keys installed` -> HTTP 200 OK, 828 bytes** |
   | `crypto: 87 -> 104 checks` | the count is unchanged by this increment; WHICH checks changed |
   | negative control | a corrupted block counter fails **9 engine arms and 0 of the 9 JDK-constant arms** |
-  | demo suite on QEMU | 40 programs, batch 70 closure **byte-identical to the recorded figures** |
+  | demo suite | **on HARDWARE**: 40 programs, batch 70 **closure identity EXACT**, 21 markers zero |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 104, zip 91, `overlay-check 0 new` |
 
   - **THE EVIDENCE STOOD BEFORE THE CHANGE WAS WRITTEN, WHICH IS THE ONLY REASON IT IS A CHANGE RATHER THAN
@@ -222,17 +223,40 @@ defines the minimum the assembler must encode.
     reason to re-run rather than reason about it is that the first run's binary was not the one that would
     be flashed**, and a card quoting suite figures for an image nobody booted is the shape of a citation
     rather than a measurement.
-  - **THE ~27 KB THIS BAKES HAS EXACTLY ONE CONSUMER, WHICH IS WHY THE BOOT MATTERS MORE THAN USUAL.**
-    Baked `Digest`, the baked `Hmac` instance side and baked `derive` are reachable from the PMK path and
-    from nothing else in the image -- the guest-world copies are separately exercised by `DigestProbe`,
-    `MacProbe`, `SecretKeyFactoryProbe` and `demo/DigestDemo`, but those run through the METAL JIT, not the
-    writer. So the WiFi finale is the only thing that runs this code as the writer compiled it.
-  - **AND THE TWO OUTCOMES ARE WORTH SEPARATING IN ADVANCE, because this file records the WiFi finale
-    failing ENVIRONMENTALLY twice** (the configured SSID simply absent from the scan list). `wifi: pmk
-    ready` prints BEFORE association, so even a join timeout establishes that `Digest.<clinit>`,
-    `Hmac.<init>` and `derive` all ran in the baked world without faulting -- real, and weaker. Only
-    `msg3 MIC ok` establishes the ANSWER. The discriminator for an environmental failure is unchanged and
-    is on the record: whether the configured SSID appears in the scan.
+  - **THE ~27 KB THIS BAKES HAS EXACTLY ONE CONSUMER, AND IT RAN.** Baked `Digest`, the baked `Hmac`
+    instance side and baked `derive` are reachable from the PMK path and from nothing else in the image --
+    the guest-world copies are separately exercised by `DigestProbe`, `MacProbe`, `SecretKeyFactoryProbe`
+    and `demo/DigestDemo`, but those go through the METAL JIT, not the writer. **So the WiFi finale is the
+    only thing in this VM that runs this code as the writer compiled it**, and it is also the first time
+    `Digest.<clinit>` -- 8,812 bytes of constant-table fill code -- has executed in the baked world at all.
+    "Zero `bake-stub` lines name `crypto/`" said the writer COMPILED it; this boot is what says it RUNS.
+  - **PI-VALIDATED, AND THE GATE IS THE ANSWER RATHER THAN THE RUNNING.** `wifi: pmk ready` alone would
+    only have established that `Digest.<clinit>`, `Hmac.<init>` and `derive` executed without faulting --
+    real, and weaker, and it is what a join timeout would have left (this file records the WiFi finale
+    failing ENVIRONMENTALLY twice, the SSID simply absent from the scan). The handshake went further:
+    `pmk ready` -> `eapol msg1` -> `ptk derived` -> `eapol msg2 sent` -> **`msg3 MIC ok`** -> `GTK
+    unwrapped` -> `eapol msg4 sent` -> `keys installed` -> DHCP 192.168.1.247 -> DNS -> **`HTTP/1.1 200
+    OK`, 828 bytes**. The MIC derives from the PTK, which derives from that PMK, so a wrong PMK is a wrong
+    MIC and the AP drops msg2 in silence -- there is no intermediate failure mode, which is precisely why
+    this one line is the whole claim.
+  - **CLOSURE IDENTITY EXACT, AND SILICON AGREES WITH THE EMULATOR TO THE DIGIT:** batch 70 reads
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28` --
+    byte-identical to the figures already recorded -- with 40 programs, `churnMB=625 live=32 intact=32`,
+    `gc: collections=46` then `55`, `bakeMemosDropped=11`, `sync: static seen=18 nomonitor=0`,
+    `lisp evals=600 result=610 stable=1`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`,
+    ExcDemo's seven-frame trace, every digest vector exact including `sha256 clone = .../fork-ok`, plus
+    the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, and `hw rng: RNG200 at 0xFE104000, live`.
+  - **TWENTY-ONE MARKERS ZERO**, and only the SEVEN known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, every one
+    labelled DENYLISTED (`CodingErrorAction.REPLACE`, `Normalizer$Form.NFD`/`NFC`, `CharBuffer.wrap`,
+    `Grapheme.nextBoundary`, `Normalizer.normalize`, `sun/text/Normalizer.getCombiningClass`).
+  - **A FIFTH CROSS-BOOT RNG SAMPLE, AND THE OUTLIER IS NOW COMFORTABLY RETIRED.** `0c461596 4c44da6a
+    e71094ad`, distinct from all four previous boots, `count 16 -> 13` again. Popcount **41 of 96** against
+    an ideal of 48, so the series reads 51, 47, **63**, 50, 41 -- **mean 50.4**, and the 63 I once flagged
+    as "about 3 sigma high" now sits inside an ordinary spread. **Still not a randomness test:** five
+    samples of three words cannot support a conclusion either way, and what is ruled out is unchanged -- a
+    constant, a counter, and a count that does not follow reads.
 
 - **`javax.crypto.SecretKeyFactory` RUNS ON THE METAL -- PBKDF2 through the stock API, over joe-ng's own
   engine (2026-09-23, PI-VALIDATED).** `PBKDF2WithHmacSHA1/224/256/384/512`.
