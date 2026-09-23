@@ -312,8 +312,16 @@ final class MetalSymbols implements Symbols
     {
         // The memory/bytes intrinsics emit no BL/BLR; the scheduler ops (spawn/sem*/sleep/newSem/report)
         // lower to a BL to a VM helper, so a caller using them must be treated as non-leaf.
+        //
+        // CALL_N BELONGS HERE AND WAS MISSING, and the consequence is not a missed optimisation. It emits a
+        // BLR, so a method whose ONLY call is Magic.callN was compiled as a LEAF: it saved no LR -- the BLR
+        // overwrites x30, so its own `ret` returns into the middle of itself -- and got NO operand spill
+        // area, which is where lowerIntrinsic's spill must write. Latent rather than live: `magicId` maps
+        // callN for guest code, and nothing under guestsrc/ or demo/ calls it today (MEASURED, not assumed).
+        // gc/call0/call2 are deliberately absent because `magicId` does not map them at all in this world.
         int id = Loader.magicId(methodCp);
-        return id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
+        return id == Intrinsics.CALL_N
+            || id == Intrinsics.SPAWN || id == Intrinsics.SEM_WAIT || id == Intrinsics.SEM_POST
             || id == Intrinsics.SLEEP_MS || id == Intrinsics.NEW_SEM || id == Intrinsics.REPORT
             || id == Intrinsics.PRINT_STR
             || id == Intrinsics.MON_WAIT || id == Intrinsics.MON_NOTIFY

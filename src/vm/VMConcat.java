@@ -108,13 +108,15 @@ final class VMConcat
             appendNoFormatter(sb, 'D');
             return;
         }
-        // THE RESULT GOES IN A LOCAL FIRST, and that is load-bearing rather than style. Written as the
-        // obvious `scStr(sb, Magic.call2(buf, bits, 0L))`, the builder `sb` is live ON THE OPERAND STACK
-        // ACROSS the call and comes back clobbered: every arm printed an EMPTY string -- no null, no trap,
-        // no fault -- while the formatter was returning the right bytes all along. Bracketing the call with
-        // literal appends is what separated the two: `[XY1.5Z]` with a local, `[]` nested.
-        long s = Magic.call2(buf, bits, 0L);           // (D)->String takes ONE arg; x1 is ignored by it
-        scStr(sb, s);
+        // THE NESTED FORM IS DELIBERATE, and it is this file's regression test for a COMPILER fix. `sb` is
+        // live ON THE OPERAND STACK across the call, and the operand stack is x9.. (caller-saved), so the
+        // BLR used to destroy it: every arm printed an EMPTY string -- no null, no trap, no fault -- while
+        // the formatter returned the right bytes all along. The workaround was to hoist the result into a
+        // local; the fix is that Baseline now spills the operand stack around Magic.call0/call2/callN/gc
+        // exactly as it always has around an ordinary call. Written back nested ON PURPOSE: with a local
+        // here, nothing in the demo suite would exercise a live operand across an intrinsic call, and a
+        // gate that cannot fail is not a gate. Revert the spill and ConcatDemo's eleven arms go empty.
+        scStr(sb, Magic.call2(buf, bits, 0L));         // (D)->String takes ONE arg; x1 is ignored by it
     }
 
     /** The float half of {@link #scDouble} -- its own shortest string, never the widened double's. */
@@ -126,8 +128,7 @@ final class VMConcat
             appendNoFormatter(sb, 'F');
             return;
         }
-        long s = Magic.call2(buf, bits & 0xFFFFFFFFL, 0L);   // a local, for scDouble's reason
-        scStr(sb, s);
+        scStr(sb, Magic.call2(buf, bits & 0xFFFFFFFFL, 0L));  // nested, for scDouble's reason
     }
 
     /**
