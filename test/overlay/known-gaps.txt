@@ -17,7 +17,6 @@ java/lang/Class#toGenericString()Ljava/lang/String;
 java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;
 java/lang/IllegalArgumentException#<init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-java/lang/RuntimeException#<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V
 java/lang/StringBuilder#append(D)Ljava/lang/StringBuilder;
 java/lang/Thread#getState()Ljava/lang/Thread$State;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
@@ -53,8 +52,6 @@ supertype#java/lang/Class#java/lang/invoke/TypeDescriptor$OfField
 supertype#java/lang/Class#java/lang/reflect/AnnotatedElement
 supertype#java/lang/Class#java/lang/reflect/GenericDeclaration
 supertype#java/lang/ClassNotFoundException#java/io/Serializable
-supertype#java/lang/Error#java/io/Serializable
-supertype#java/lang/Exception#java/io/Serializable
 supertype#java/lang/IllegalAccessException#java/io/Serializable
 supertype#java/lang/IllegalArgumentException#java/io/Serializable
 supertype#java/lang/IllegalThreadStateException#java/io/Serializable
@@ -67,7 +64,6 @@ supertype#java/lang/NoSuchMethodException#java/io/Serializable
 supertype#java/lang/NullPointerException#java/io/Serializable
 supertype#java/lang/Number#java/io/Serializable
 supertype#java/lang/ReflectiveOperationException#java/io/Serializable
-supertype#java/lang/RuntimeException#java/io/Serializable
 supertype#java/lang/Short#java/io/Serializable
 supertype#java/lang/Short#java/lang/constant/Constable
 supertype#java/lang/StackTraceElement#java/io/Serializable
@@ -100,6 +96,7 @@ supertype#java/nio/ByteOrder#java/lang/Comparable
 supertype#java/nio/ByteOrder#java/lang/Enum
 supertype#java/nio/ByteOrder#java/lang/constant/Constable
 supertype#java/nio/charset/Charset#java/lang/Comparable
+supertype#java/security/SecureRandom#java/util/random/RandomGenerator
 supertype#java/text/BreakIterator#java/lang/Cloneable
 supertype#java/time/Duration#java/io/Serializable
 supertype#java/time/Duration#java/lang/Comparable
@@ -115,7 +112,6 @@ supertype#java/util/Locale$Category#java/lang/Enum
 supertype#java/util/Locale$Category#java/lang/constant/Constable
 supertype#java/util/Random#java/io/Serializable
 supertype#java/util/Random#java/util/random/RandomGenerator
-supertype#java/security/SecureRandom#java/util/random/RandomGenerator
 supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
 supertype#java/util/concurrent/ConcurrentSkipListMap#java/util/concurrent/ConcurrentNavigableMap
 supertype#java/util/concurrent/Semaphore#java/io/Serializable
