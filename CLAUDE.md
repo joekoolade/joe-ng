@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE BAKED WRAPPER CACHES ARE LIVE AT LAST, AND THE MECHANISM WAS NOT THE ONE THIS FILE PREDICTED
-  (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** Every `Integer`/`Long` in [-128,127] now comes back at
+  (2026-09-24, PI-VALIDATED).** Every `Integer`/`Long` in [-128,127] now comes back at
   an IMAGE address. The fix is a DELETION: `Loader.seedIntegerCache` and `seedLongCache` are gone.
 
   | gate | before | after |
@@ -190,11 +190,46 @@ defines the minimum the assembler must encode.
   - **DETERMINISM HOLDS: a rebuild differs in exactly 20 bytes**, ten pairs at `/lib/app.jar`'s `META-INF/`
     local headers -- the regenerated jar's DOS timestamps, which this file already records as the one benign
     source of image churn.
-  - **NOT PI-VALIDATED, and the gate is named in advance.** Every small `Integer` and `Long` the VM hands out
-    now comes from the IMAGE rather than the heap, which changes what the collector traces and what the boot
-    battery reads through `VM.integerCacheSlotAddr`. On cold DRAM where the emulator hands out ZEROED memory,
-    a wrong box would be a null static or a wild branch rather than a wrong number -- so the ABSENCES are the
-    assertion, and the battery's own `IntegerCache`/`valueOf`/`equals` probes are the arm to read first.
+  - **PI-VALIDATED, AND THE BOOT BATTERY IS THE ARM THAT ANSWERS IT DIRECTLY.** It runs BEFORE `launch`,
+    reads the baked array through `VM.integerCacheSlotAddr`, and checks IDENTITY rather than value:
+    **`IntegerCache.cache[170].intValue()=* PASS`** and **`Integer.valueOf(42)==cache[170], valueOf(200)
+    .intValue()=200 PASS`**. A `valueOf` handing back anything but the baked element fails that second arm,
+    so it is the tightest single check this change has. The suite's own boxing demo agrees at the other end
+    of the boot: **`Boxing.valueOf(5)==valueOf(5) cached = 1`** with **`valueOf(1000)==valueOf(1000) new = 0`**
+    -- interning inside the cache, a fresh object above it -- and `Boxing.hashCode(box -100) = -100`.
+  - **THE RISK WAS LAYOUT AND THE ASSERTION IS A SET OF ABSENCES**, because a wrong box on cold DRAM (where
+    the emulator hands out ZEROED memory) is a null static or a wild branch rather than a wrong number.
+    **None of `BOOT RE-ENTERED`, `FAULT`, `ESR EC=`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`,
+    `DISPATCH ON UNREGISTERED`, `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`,
+    `PENDING-INIT` or parity `DIFF` appears**, across 40 programs to `self-build retired`, and the only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each labelled
+    DENYLISTED.
+  - **CLOSURE IDENTITY IS EXACT TO THE DIGIT against the previous Pi boot**, which is what a change that
+    deletes 2,144 bytes of code has to show: batch 70 reads `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2514 unres=2235`, `n:imap=78 synth=36 clinits=28`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`, `sy:chg=0`, `+240blob`. Plus the gates
+    QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`, `sched: 89 preemptions`,
+    `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`,
+    `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `churnMB=625 live=32 intact=32`, **`gc: collections=46` at the churn demo -- the gate, unmoved**,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    ExcDemo's seven-frame trace, `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`,
+    `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> `pmk ready` -> `ptk derived` ->
+    `msg3 MIC ok` -> HTTP 200 OK, 828 bytes.
+  - **AND THE LISP FINALE MOVED TO 56, WHICH IS THE SENSITIVITY-DETECTOR READING EARNING ITS KEEP RATHER
+    THAN A REGRESSION.** The three preceding Pi boots read 55. This increment is the LARGEST
+    allocation-sequence perturbation in the arc -- **20,480 boxes and 80 arrays no longer allocated per
+    boot** -- so if that counter detects upstream allocation change at all, this is where it must move.
+    **The gate did not: `gc: collections=46` at the churn demo is identical**, and that is the figure the
+    census established. Recorded as the third independent perturbation to move the finale, after the forced
+    collection and the layout shift; it remains unusable as a signature, and citing it from QEMU remains
+    forbidden.
+  - **`bakeMemosDropped` READ 10 ON SILICON, exactly as predicted**, and hardware reading the same figure as
+    QEMU is what settles it as layout rather than noise -- the two harnesses share no timing and no DRAM
+    behaviour. That is the same evidence the 11 -> 9 move was settled by.
+  - **A NINTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `a78efa2 cb2b7d20 db8d28f`,
+    distinct from every previous boot, `count 16 -> 13`. **Still not a randomness test** -- what stays ruled
+    out is a constant, a counter, and a count that does not follow reads.
 
 - **`ImmutableCollections.<clinit>` TAKES STOCK'S ADOPT BRANCH NOW -- THE `EMPTY_*` TWO-WRITERS HAZARD IS
   CLOSED, AND "ONE WRITER" IS PROVEN BY ADDRESS (2026-09-24, PI-VALIDATED).** The
