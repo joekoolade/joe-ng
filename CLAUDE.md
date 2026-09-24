@@ -115,6 +115,80 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE IMAGE BUILD IS DETERMINISTIC AGAIN, AND THE FIX IS STOCK'S OWN HOOK RATHER THAN A SPECIAL CASE
+  (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** `jdk/internal/misc/CDS.getRandomSeedForDumping()` --
+  which stock declares NATIVE and whose ONE caller in all of java.base is `ImmutableCollections.<clinit>` --
+  returned a hardcoded `0L` in our overlay. That is stock's "not dumping" signal, so the initializer fell
+  through to `System.nanoTime()`. The writer supplies the seed now.
+
+  | gate | result |
+  |---|---|
+  | **two builds of an IDENTICAL tree** | **BYTE-IDENTICAL** (they differed in 5 bytes before) |
+  | baked `SALT32L` vs the formula re-derived independently | `0x11298039` both ways, `REVERSE` 0 both ways |
+  | `VM.cdsDumpSeed` / `cdsSeedAddr` | `-1154710810` / `0x9cd50`, matching the symmap body exactly |
+  | **demo suite, COMPLETE run** | **40 programs to `self-build retired`**, batch-70 closure EXACT on every
+    recorded counter, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `56`,
+    `lisp evals=600 result=610 stable=1`, `finish HML`, `smp sched: 4 of 4`, `sum20 = 210`,
+    `sha256 clone`, `YNW`, `attributes forEach ok`, **28 failure markers zero** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **I PROPOSED `clinitBlocked` AND IT WAS WRONG, on a checkable fact.** I argued that blocking the metal
+    initializer and taking the baked objects "is stock's archived path". It is the opposite:
+    **`CDS.initializeFromArchive(...)` is called FROM `<clinit>`**, and the archived case is the initializer
+    taking its `else` branch and ADOPTING. Stock never skips it. Blocking would have been a divergence
+    dressed up as fidelity, and the correction came from being told to just run the clinit -- then reading
+    the source instead of my own summary of it.
+  - **SO THE INITIALIZER RUNS, EXACTLY AS ON OpenJDK, and only the seed it reads changed.** No entry on
+    `clinitBlocked`, no per-field logic in the writer beyond the substitution below.
+  - **THE OVERLAY ALONE COULD NOT HAVE FIXED IT, and that is the half worth remembering.** `StaticSnapshot`
+    reads the HOST's already-initialized class through `Class.forName`, and java.base is a NAMED module, so
+    the boot loader wins and the writer reflects on the REAL `ImmutableCollections` and the REAL `CDS` --
+    the same measurement `oracleIsTheJdk` records. The host is not dumping, so its seed is 0 and its
+    initializer used the clock. **The overlay fixes METAL; the snapshot had to be fixed separately**, and
+    `SALT32L` is `private static final` on an initialized class, so nothing can rewrite it after the fact.
+    The writer therefore COMPUTES the value the seed implies, with stock's own formula, at the one
+    chokepoint (`primitiveBits`) both cells pass through.
+  - **BOTH SIDES DERIVE THE SAME VALUE, which is what makes this better than merely pinning.** The writer
+    bakes `f(seed)`; the metal initializer computes `f(seed)` from the same writer-filled seed. They AGREE
+    rather than both being separately valid -- so the recorded "two writers" hazard is retired for these
+    two cells instead of being made deterministic on one side only.
+  - **THE WIRING WAS VERIFIED RATHER THAN ASSUMED, BECAUSE `fillStatic` IS SILENT ON A MISS.** It is
+    `if (w >= 0) { write }` with no else -- the `if (room) { record it }` shape this file calls its most
+    expensive failure mode. A missed static would have left the seed 0 and sent metal straight back to
+    `nanoTime`, looking exactly like a working fix. Read out of the image: `cdsDumpSeed` is
+    `"joe-ng".hashCode()`, and `cdsSeedAddr` is `0x9cd50` against a symmap line of
+    `0009cd50 0009cd64 vm/VMNatives.cdsRandomSeedForDumping()J`.
+  - **AN ALARM OF MINE THAT WAS WRONG, killed by attributing lines to classes rather than grepping.** The
+    symmap shows `List12.forEach` and `List12.get` BAKED, and baked code emits no init guard -- so I read
+    that as baked readers of `REVERSE` seeing a different value before and after the metal initializer.
+    **Every `SALT32L`/`REVERSE` read is in `Set12`/`SetN`/`MapN` and NONE is in a List**, which is the
+    specification working as intended: a List's order is specified, a Set's is not. And none of those three
+    classes is baked in the suite image, so **no baked method reads the salt today** -- measured.
+  - **THE NEW SALT IS ODD WHERE THE OLD WAS EVEN, so `REVERSE` flips `true -> false` and immutable
+    set/map iteration ORDER changes VM-wide.** That is the visible behavioural consequence and it is
+    sanctioned -- the order is unspecified, and randomising it is what stock does to stop callers depending
+    on it. **The suite cannot see it**, and that is stated rather than read as a pass: its map/set arms
+    assert COUNTS and MEMBERSHIP (`keySet=3 values=3 entrySet=3 pairsOk=1`, `iter=2`,
+    `immutable forEach ok`), never order.
+  - **AND PER-BUILD IS THE STRONGEST FORM AVAILABLE HERE, which is why a constant is not a cop-out.** The
+    value is BAKED, so within one image it is constant however it is chosen -- a per-run draw could never
+    have served the purpose. Bumping `StaticSnapshot.BUILD_ID` reshuffles it, which mirrors HotSpot's
+    `JVM_GetRandomSeedForDumping` hashing the version strings (its never-zero guard is mirrored too).
+  - **NOT FIXED HERE, and named rather than left to be re-found: the `EMPTY_*` cells still have TWO
+    WRITERS.** `initializeFromArchive` is still a no-op, so `archivedObjects` stays null and the initializer
+    BUILDS fresh singletons over the baked ones. The faithful close is to bake `archivedObjects` so the
+    initializer takes stock's adopt branch -- the same mechanism, stock's own code path, its own increment
+    and its own gate.
+  - **TWO HARNESS FAILURES ON THE WAY, both recorded shapes walked into again.** A suite run was scored
+    nothing-found when it had been CUT OFF mid-finale -- a TIMEOUT, not a failure, and an all-zero marker
+    sweep over a truncated log is indistinguishable from a clean one. And a re-run got LESS far (25 batches
+    against 70) because **two orphaned emulators were still running at ~350% CPU each**, saturating an
+    8-core host: a contaminated arm, exactly as the loader-lock card records. Reap `qemu-system-aarch64`
+    and check the load BEFORE reading any QEMU result. **The gate above is the run taken AFTER reaping
+    them** -- one emulator, 220 s, terminal marker present. A third pattern of mine then read `sum20=210`
+    as MISSING; the literal output is `sum20 = 210`, so the shorthand in these cards is not a grep
+    pattern -- the instrument was wrong, not the VM, for the second time in one increment.
+
 - **THE IMAGE BUILD STOPPED BEING DETERMINISTIC, AND THE INCREMENT THAT DID IT PREDICTED THE MECHANISM AND
   NOT THE CONSEQUENCE (2026-09-23, MEASURED).** Two builds of an IDENTICAL tree now differ. The delta is
   four bytes plus a flag, and the `statmap` names them outright:

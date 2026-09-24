@@ -71,6 +71,22 @@ final class VMNatives
         return ticks / freq * 1000000000L + ticks % freq * 1000000000L / freq;
     }
 
+    /**
+     * {@code jdk/internal/misc/CDS.getRandomSeedForDumping()} — the seed this IMAGE was built with.
+     *
+     * <p>Stock declares this native and HotSpot answers a value derived from the JVM build so a CDS archive
+     * is reproducible for a given build; it answers 0 when not dumping, which is the signal to fall back to
+     * {@code System.nanoTime()}. A joe-ng image IS a dumped archive, so the writer supplies the seed and
+     * this hands it back — which makes {@code ImmutableCollections.SALT32L} a function of the build rather
+     * than of the clock, and makes the value the metal {@code <clinit>} computes equal the one the writer
+     * baked. The class's initializer still RUNS, exactly as it does on OpenJDK; only the seed it reads is
+     * ours.
+     */
+    static long cdsRandomSeedForDumping()
+    {
+        return VM.cdsDumpSeed;
+    }
+
     /** {@code java/lang/System.currentTimeMillis()} — ms since boot (no wall clock on bare metal). */
     static long currentTimeMillis()
     {

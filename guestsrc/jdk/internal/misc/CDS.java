@@ -52,10 +52,17 @@ public final class CDS
         return false;
     }
 
-    public static long getRandomSeedForDumping()
-    {
-        return 0L;
-    }
+    /**
+     * NATIVE, as stock declares it -- wired in {@code Loader.nativeBufAt} to the writer-baked build seed.
+     *
+     * <p>It returned a hardcoded {@code 0L} here, which is stock's "not dumping" signal, so
+     * {@code ImmutableCollections.<clinit>} fell through to {@code System.nanoTime()} and computed a salt
+     * that differed on every boot -- while the writer had separately baked a salt that differed on every
+     * BUILD, from the host's clock. A joe-ng image IS a dumped archive, and this is the hook stock provides
+     * for exactly that case, so the writer supplies the seed and both sides now derive the same value.
+     * ImmutableCollections's initializer still runs normally; only the seed it reads changed.
+     */
+    public static native long getRandomSeedForDumping();
 
     public static void logLambdaFormInvoker(String line)
     {

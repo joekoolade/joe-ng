@@ -11427,6 +11427,13 @@ public final class Loader
      */
     static long nativeBufAt(long clsBase, int clsOff, long nameBase, int nameOff)
     {
+        // jdk/internal/misc/CDS.getRandomSeedForDumping() -- stock declares it NATIVE, and its ONE caller in
+        // all of java.base is ImmutableCollections.<clinit>. Answering the writer-baked build seed (rather
+        // than the overlay's old hardcoded 0) is what stops that initializer falling through to nanoTime.
+        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/misc/CDS")))
+        {
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("getRandomSeedForDumping"))) { return VM.cdsSeedAddr; }
+        }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/System")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("nanoTime")))          { return VM.nanoTimeAddr; }

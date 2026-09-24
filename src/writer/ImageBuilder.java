@@ -1236,6 +1236,10 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                         addr(staticWord.valAt(i)), staticWord.keyAt(i)));
             }
         }
+        // The seed jdk/internal/misc/CDS.getRandomSeedForDumping() answers on metal. It is the SAME value
+        // StaticSnapshot used when it baked ImmutableCollections.SALT32L, so the baked cell and the value
+        // that class's own <clinit> computes on metal AGREE -- the initializer still runs, as on OpenJDK.
+        fillStatic(image, staticWord, "vm/VM.cdsDumpSeed", StaticSnapshot.CDS_DUMP_SEED);
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));
         fillStatic(image, staticWord, "vm/VM.imageSymCount", symCount);
         fillStatic(image, staticWord, "vm/VM.frameTable",   addr(frameTableWord));
@@ -1371,6 +1375,8 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VM.recordToString(J)J", "vm/VM.recordToStringAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VM.denylistTrap()V",   "vm/VM.denylistTrapAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.nanoTime()J",       "vm/VM.nanoTimeAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.cdsRandomSeedForDumping()J",
+                    "vm/VM.cdsSeedAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.currentTimeMillis()J", "vm/VM.currentTimeMillisAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.identity(J)J",      "vm/VM.identityAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.declaredCtorCount(J)J", "vm/VM.declCtorCountAddr");
