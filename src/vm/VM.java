@@ -1805,6 +1805,7 @@ public final class VM
         if (scFloatAddr == 0L) { VMConcat.scFloat(0L, 0); }
         if (printStrAddr == 0L) { printStr(0L); }
         if (nanoTimeAddr == 0L) { long u = VMNatives.nanoTime(); }              // provided java.base natives (guest-called)
+        if (cdsSeedAddr == 0L) { long u = VMNatives.cdsRandomSeedForDumping(); }
         if (currentTimeMillisAddr == 0L) { long u = VMNatives.currentTimeMillis(); }
         if (identityAddr == 0L) { long u = VMNatives.identity(0L); }
         if (availProcsAddr == 0L) { int u = VMNatives.availableProcessors(); }
@@ -3251,8 +3252,17 @@ public final class VM
     static long scFloatAddr;           // VMConcat.scFloat(JI)V  — ... and a float (its OWN shortest string)
     static long printStrAddr;          // VM.printStr(J)V
     static long denylistTrapAddr;      // VM.denylistTrap()V — patchRelocs points calls into pruned classes here (#43)
+    /**
+     * The seed {@code jdk.internal.misc.CDS.getRandomSeedForDumping()} answers on metal -- WRITER-FILLED,
+     * so it is a property of the BUILD and not of the clock. It is the same value the writer used when it
+     * baked {@code ImmutableCollections.SALT32L}, which is what makes the baked cell and the value the
+     * metal {@code <clinit>} independently computes AGREE rather than merely both being valid.
+     */
+    static long cdsDumpSeed;
+
     // Provided java.base natives the on-metal Loader wires guest calls to (Loader.nativeBuf).
     static long nanoTimeAddr;          // VM.nanoTime()J
+    static long cdsSeedAddr;           // VMNatives.cdsRandomSeedForDumping()J
     static long currentTimeMillisAddr; // VM.currentTimeMillis()J
     static long identityAddr;          // VM.identity(J)J — the *Bits* pass-throughs
     static long availProcsAddr;        // VMNatives.availableProcessors()I — Runtime.availableProcessors()

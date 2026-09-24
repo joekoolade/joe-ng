@@ -34,6 +34,52 @@ final class StaticSnapshot
     }
 
     /**
+     * The seed {@code jdk.internal.misc.CDS.getRandomSeedForDumping()} answers for THIS build.
+     *
+     * <p>Stock uses that hook for exactly this problem, and its javadoc says so: "the VM will supply a
+     * 'random' seed that's derived from the JVM build/version, so can we generate the exact same CDS
+     * archive for the same JDK build." A joe-ng image IS a dumped archive, so the writer is the dumper
+     * and supplies the seed. HotSpot's {@code JVM_GetRandomSeedForDumping} hashes the version strings
+     * and guards the result against zero (zero means "not dumping"); this mirrors both halves.
+     *
+     * <p>BUMP {@link #BUILD_ID} to reshuffle immutable-set/map iteration order. That is the discipline the
+     * randomisation exists for -- code must not depend on that order -- and per-BUILD is the strongest
+     * form available here, because the value is baked: within one image it is constant however it is
+     * chosen, so a per-run draw could never have served the purpose anyway.
+     */
+    private static final String BUILD_ID = "joe-ng";
+
+    static final long CDS_DUMP_SEED = dumpSeed();
+
+    private static long dumpSeed()
+    {
+        long seed = BUILD_ID.hashCode();
+        if (seed == 0L)
+        {
+            seed = 0x87654321L;            // HotSpot's own guard: never hand back "not dumping"
+        }
+        return seed;
+    }
+
+    /**
+     * {@code java/util/ImmutableCollections.SALT32L} as that class's own initializer would compute it
+     * from {@link #CDS_DUMP_SEED} -- stock's formula, copied rather than approximated.
+     *
+     * <p>WHY THE WRITER COMPUTES IT INSTEAD OF READING IT. The snapshot reads the HOST's already-
+     * initialized class, and on the host {@code getRandomSeedForDumping()} is the REAL native, which
+     * answers 0 because the host is not dumping -- so the host's initializer fell through to
+     * {@code System.nanoTime()} and the writer baked a CLOCK READING. That is what made two builds of an
+     * identical tree differ. The field is {@code private static final} on an already-initialized class,
+     * so nothing can rewrite it after the fact; computing the value the seed implies is the only way to
+     * bake what the metal initializer will independently arrive at.
+     */
+    private static long salt32L()
+    {
+        long color = 0x243F_6A88_85A3_08D3L;                       // slice of pi, stock's constant
+        return (int) ((color * CDS_DUMP_SEED) >> 16) & 0xFFFF_FFFFL;
+    }
+
+    /**
      * The seed JVM's value of the static field {@code fieldKey} ("owner/Class.name") as raw 64-bit
      * slot bits (booleans as 0/1, floats/doubles as their IEEE bits), or {@code null} for a
      * reference-typed field (baked separately — see {@link #reference}). Loading the owner triggers
@@ -42,6 +88,16 @@ final class StaticSnapshot
      */
     static Long primitiveBits(String fieldKey)
     {
+        // The two cells the host cannot answer deterministically -- see salt32L(). Substituted BEFORE the
+        // reflection, so the host's clock-derived value is never even read.
+        if (fieldKey.equals("java/util/ImmutableCollections.SALT32L"))
+        {
+            return salt32L();
+        }
+        if (fieldKey.equals("java/util/ImmutableCollections.REVERSE"))
+        {
+            return (salt32L() & 1L) == 0L ? 1L : 0L;     // stock: REVERSE = (SALT32L & 1) == 0
+        }
         try
         {
             Field f = field(fieldKey);
