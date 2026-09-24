@@ -1041,9 +1041,7 @@ public final class VM
                 // core is scheduling" fast path: the park handshake, the gcParked generation, and the
                 // per-core idle stacks (which exist only inside this window) were covered by NOTHING.
                 collected = 1;
-                // CONTROL ARM: the forced collection is REVERTED here and NOTHING else is. `collected = 1`
-                // stays so the guard short-circuits exactly as it does in the fix arm -- the two images
-                // differ in the collection and in no other control flow.
+                Magic.gc();
             }
             VMScheduler.taskYield();                       // task 0 keeps offering core 0 to the queue
         }
