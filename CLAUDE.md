@@ -115,10 +115,10 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE LEAK IT
-  CAUSED IS REPRODUCED AND GONE (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** The launcher blocker
-  named one card above is closed at its root: `java/util/ImmutableCollections.EMPTY` existed in an IMAGE
-  cell AND a GUEST cell, so `e1 != EMPTY` could never hold and the sentinel escaped as an ELEMENT of a
+- **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE REAL
+  JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** The
+  launcher blocker named one card above is closed at its root:
+  `java/util/ImmutableCollections.EMPTY` existed in an IMAGE cell AND a GUEST cell, so `e1 != EMPTY` could never hold and the sentinel escaped as an ELEMENT of a
   one-element `List.of`.
 
   | gate | before | after |
@@ -127,12 +127,34 @@ defines the minimum the assembler must encode.
   | 2-element control, same run | clean | clean |
   | demo suite | -- | 40 programs, batch 70 identity EXACT, every marker zero |
   | `math jtreg` / `sb-probe` / `SynthNameProbe` | -- | `ran 4, failures 0` / `28 checks, 0 failures` / 3 distinct names |
+  | **the REAL JUnit ConsoleLauncher** | **batch 70, 2 NPEs, exit `0xFFFFFFFF`, usage dump** | **batch 139, 0 NPEs, `[2 tests successful]` / `[0 tests failed]`, exit 0** |
   | image | 33,715,864 | **33,719,344 (+3,480 B, +0.010%)** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
 
   - **THE GATE IS THE WHOLE POINT OF THE PREVIOUS INCREMENT: a defect that cost a twenty-minute launcher
     boot is now a seconds-long probe that FAILS before and PASSES after**, with the two-element control
     clean on both sides. The fix was written against a reproduction rather than against a reading.
+  - **AND THE LAUNCHER A/B IS SINGLE-VARIABLE AND CLEAN, which is what turns this from a probe result into
+    the blocker being closed.** The control is HEAD with ONLY the 19-line `ImageBuilder` change reverted --
+    same tree, same instruments (all disarmed), same script:
+
+    | | control | fix |
+    |---|---|---|
+    | last batch | **70** (`+2371blob`) | **139** (`+2494blob`) |
+    | `NullPointerException` | **2** | **0** |
+    | exit status | **`0xFFFFFFFF`** | **`0x0`** |
+    | outcome | picocli's USAGE dump | `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]` |
+
+    **Both control NPEs are the two this arc has been chasing** -- `ClassSelector.hashCode` under
+    `NestedClassSelector.hashCode`, and `Arrays.asList` under `pruneStackTrace` with
+    `ImmutableCollections$List12.forEach` in its own frame list. Both are gone, and the run finishes:
+    `% % JUnit Platform Suite` / `% % JUnit Jupiter` / `SleepSanity` with `testMillisNanos() 49021 ms` and
+    `testMillis() 17514 ms`, both green.
+  - **THE EARLIER INSTRUMENTED RUNS WERE NOT USED AS THE CONTROL, and the reason is worth keeping.** Three
+    pre-fix logs already showed the same two NPEs and the same `exit=0xFFFFFFFF` -- but every one of them
+    carried armed watches (`fieldoff` lines are in them), so they differ from the fix by more than the fix.
+    A control that differs in two things cannot attribute either. The clean one cost twenty minutes and is
+    the only arm quoted.
   - **ROOT CAUSE, ONE LINE OF POLICY: the dense static block is gated on having a TYPE NODE.** A dense
     per-class block -- the thing `adoptStatics` adopts, giving ONE home per field across both worlds -- is
     emitted only for a class in `typeClasses` AND `bakeDomain`. A class that is never instantiated and
