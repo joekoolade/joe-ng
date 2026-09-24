@@ -125,7 +125,7 @@ defines the minimum the assembler must encode.
   |---|---|---|
   | **`EmptySentinelProbe`, varargs arm** | **`size=2`, element `java.lang.Object@16bc90`** | **`size=1`, element `java.lang.String`** |
   | 2-element control, same run | clean | clean |
-  | demo suite | -- | 40 programs, batch 70 identity EXACT, every marker zero |
+  | demo suite (on the byte-exact flash candidate) | -- | 40 programs, batch 70 identity EXACT, every marker zero |
   | `math jtreg` / `sb-probe` / `SynthNameProbe` | -- | `ran 4, failures 0` / `28 checks, 0 failures` / 3 distinct names |
   | **the REAL JUnit ConsoleLauncher** | **batch 70, 2 NPEs, exit `0xFFFFFFFF`, usage dump** | **batch 139, 0 NPEs, `[2 tests successful]` / `[0 tests failed]`, exit 0** |
   | image | 33,715,864 | **33,719,344 (+3,480 B, +0.010%)** |
@@ -306,6 +306,29 @@ defines the minimum the assembler must encode.
     but no Type node, or add a per-field baked-static table the loader adopts cell by cell. **What is NOT
     the fix is dropping the metal `<clinit>`:** only 2 of the 6 statics are snapshotted, so `SALT32L` would
     read 0 and `MapN`'s probe loop would spin.
+  - **THE FIRST DEMO-SUITE GATE FOR THIS CARD WAS RUN ON THE WRONG BINARY, AND THE SIZE IS WHAT CAUGHT IT
+    -- FIFTH INSTANCE OF THE STALE-CLASS TRAP, ALL IN ONE SESSION.** Building the control for the statmap
+    diff left `out/writer/ImageBuilder.class` at the CONTROL version (a `git stash pop` restores the SOURCE,
+    not the build), and `suite.sh` compiles nothing -- it runs `BuildRuntimeImage` straight off `out/`. So
+    the suite that gated this card was a control image. **Caught before flashing by arithmetic, not by
+    output:** a fresh no-manifest build differed from it by **+3,480 bytes -- exactly the fix's measured
+    delta**, and the jar-timestamp churn this file records is ~20. Two no-manifest images differing by
+    precisely the change's own delta is one image with the fix and one without.
+    - **RE-RUN ON THE BYTE-EXACT FLASH CANDIDATE, and the result is unchanged where it matters:** 40
+      programs, every marker zero, batch 70 `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+      `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+      `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
+      stable=1`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`, `finish HML` 20/20/20, inversion
+      `HIGH blocked 61ms`, `sum20=210`, `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`.
+    - **ONE FIGURE MOVED AND IT IS ATTRIBUTABLE RATHER THAN NOISE: `bakeMemosDropped` 11 -> 9.** That
+      counter is the reclaim dropping image-side bake memos that point into code it just rewound, so it is a
+      function of LAYOUT -- and this change moves every static cell and adds four Type nodes. It is reported
+      because this file records 11 repeatedly; it is not called a regression, because nothing about it
+      indicates a lost or stale memo (the marker for that, a wild branch, is absent).
+    - **THE LESSON IS THE CHECK, not the trap: compare the SIZE of the artifact you are about to gate
+      against the one you measured the change with.** Three instances of this trap in one session each
+      presented differently -- a missing arm, a byte-identical image, and a passing gate on the wrong binary
+      -- and the passing one is the dangerous shape, because nothing about it looks wrong.
   - **AND THE STALE-CLASS TRAP CAUGHT ME A FOURTH TIME, IN THE HELPER I HAD JUST FIXED IT IN.** The first
     boot of the new arm printed NOTHING for it -- reading exactly like an arm that cannot fire -- because
     `make build` does not compile `test/jdk/junit`, and `make build`'s `guest` rule PURGES what `make
