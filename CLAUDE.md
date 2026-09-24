@@ -115,6 +115,75 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE IMAGE BUILD STOPPED BEING DETERMINISTIC, AND THE INCREMENT THAT DID IT PREDICTED THE MECHANISM AND
+  NOT THE CONSEQUENCE (2026-09-23, MEASURED).** Two builds of an IDENTICAL tree now differ. The delta is
+  four bytes plus a flag, and the `statmap` names them outright:
+
+  ```
+  statmap 0016c788 java/util/ImmutableCollections.SALT32L    <- differs on every build
+  statmap 0016c790 java/util/ImmutableCollections.REVERSE    <- derived from it, so it differs too
+  ```
+
+  - **STOCK DERIVES THE SALT FROM `System.nanoTime()`**, and the writer SNAPSHOTS it off the seed JVM -- so
+    each build bakes a different one. `REVERSE` is `(SALT32L & 1) == 0`, so it follows.
+  - **THE DENSE-BLOCK FIX IS THE CAUSE, AND ITS OWN CARD SAYS SO ONE SENTENCE BEFORE THE CONSEQUENCE.** That
+    card records "with a dense block all ten statics are snapshotted, which retires the objection ... that
+    `SALT32L` would read 0" -- correct, and the unremarked half is that a snapshotted `nanoTime` salt is
+    NOT a constant. Before the fix `ImmutableCollections` had 2 individually-baked cells, `SALT32L` was not
+    among them, it read 0, and the build was reproducible.
+  - **WHAT IT COSTS, stated rather than left to be re-found:**
+    - **`cmp` BEFORE FLASHING IS NO LONGER AN EQUALITY TEST.** This file records that check three times, and
+      it caught a real stale-binary bug two increments ago. A rebuild of the SAME tree now always shows five
+      differing bytes, so the check has to be "five bytes, at the two salt offsets" rather than "identical"
+      -- and a check whose pass condition is "a few bytes differ" is one nobody will read carefully.
+    - **IT IS A CONFOUND FOR ANY GC-COUNT EXPERIMENT.** Randomising immutable-collection iteration order is
+      the salt's entire PURPOSE, and a different iteration order is a different allocation sequence, which
+      moves when a pressure collection fires. That is the quantity the open lisp-finale question is about.
+    - **SEVERAL CARDS STATE "the build is deterministic (two runs byte-identical)" AND THAT IS NOW FALSE**
+      for any image carrying `ImmutableCollections`, which is every image.
+  - **NOT FIXED HERE, and the options are a real choice rather than an omission:** seed the salt to a
+    constant in the writer (reproducible images, and iteration order stops being randomised at all -- which
+    is what the salt exists to prevent callers depending on); snapshot it from a build-stable source; or
+    accept it and change the flashing check. The first is what a CDS archive does (`getRandomSeedForDumping`
+    exists in stock for exactly this reason), which is a point in its favour.
+  - **FOUND BY ARITHMETIC ON A CONTROL, not by looking for it:** a rebuild of main differed from the
+    Pi-validated binary by 27,984 bytes -- the recorded `RandomFactory` figure to the byte, so the
+    jdktests-state trap again -- and once that was corrected the residue was 25 bytes, of which 20 are the
+    recorded jar DOS timestamps and FIVE were not recorded by anything.
+
+- **THE SINGLE-VARIABLE LISP-FINALE ARM IS BUILT, AND ITS GATE IS NAMED BEFORE THE BOOT (2026-09-23, NOT YET
+  BOOTED).** The control is the idle-roots tree with ONLY the forced `Magic.gc()` reverted; `collected = 1`
+  stays, so the loop's control flow is identical and the two images differ in the collection alone.
+
+  | | fix arm | control arm |
+  |---|---|---|
+  | binary | `sdcard/kernel8-suite-pi-validated.img` -- **already Pi-booted at 46 / 56** | `sdcard/kernel8.img` |
+  | `vm/VM.smpThreadsDemo()V` | 916 B | **812 B (-104)** |
+  | every OTHER baked method, of 1,976 | -- | **identical size, none added or removed** |
+  | `ImmutableCollections.SALT32L` / `REVERSE` | `0x675e8388` / true | **PINNED to the same values** |
+
+  - **THE SALT HAD TO BE PINNED OR THE PAIR WOULD DIFFER IN TWO THINGS** -- the confound found one card
+    above. It is patched into the control image at its own `statmap` offset (the two arms lay the statics
+    region out 104 bytes apart, so the offsets are not the same), and the patched pair was CHECKED to be a
+    state a real build could produce: `0x675e8388 & 1 == 0`, so stock's `REVERSE = true` is consistent with
+    the baked byte rather than an impossible combination.
+  - **THE CENSUS IS THE SINGLE-VARIABLE CLAIM, measured rather than asserted:** a `JOENG_SYMMAP` diff over
+    all 1,976 baked methods reports exactly ONE changed size and no method present in only one arm.
+  - **ONLY ONE BOOT IS NEEDED, because the fix arm is already on the record** at `46 / 56`, twice.
+  - **THE GATE, and both outcomes are worth having:**
+    - **control reads 55** -> the forced collection IS the cause. The recorded mechanism (it resets the
+      volume trigger, so the free list every later program starts from differs) is confirmed, the 55/56
+      split is explained, and `gc: collections` at the finale is restored as a gate for pre-idle-roots
+      images.
+    - **control reads 56** -> the forced collection is NOT the cause, and the free-list reading is refuted.
+      Two candidates then remain and are named now rather than after the fact: the idle-stack ROOT SCAN the
+      same commit added (adding a root can only retain MORE, and `marked=0` is measured only at the forced
+      collection, not at the lisp demo's own collections); or the finale is genuinely noisy on hardware and
+      twelve boots at 55 never sampled the other value.
+  - **WHAT IS NOT CLAIMED: that a 56 would indict the idle-root scan.** It would make it the next thing to
+    measure, and the measurement is a counter on the finale's collections rather than another boot of this
+    pair.
+
 - **THE LISP-FINALE CONTROL RAN, AND THE DECISIVE OUTCOME DID NOT OCCUR: THE SAME BINARY READ 56 TWICE
   (2026-09-24, PI).** The idle-roots suite image was re-flashed from `sdcard/kernel8-prev-flashed.img` and
   booted a second time on the same Pi. `gc: collections=46` at the churn demo -- the gate -- and **56** at
