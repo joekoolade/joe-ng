@@ -201,8 +201,40 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     // Nothing else is needed: the fixpoint below deep-bakes the array, each element's class joins
     // tibClasses by the baked-scalar rule (which is how SetN/MapN get real TIBs -- nothing in the
     // compiled closure ever `new`s one), and the array's component pulls its canonical array TIB.
+    //
+    // The WRAPPER CACHES are here too, and they are NOT the same mechanism -- I predicted they were and
+    // the boot refuted it, which is the half worth recording. Their `cache` cells are baked correctly
+    // (BAKE_STATICS above) and post-<clinit> the host has archivedCache == cache, so both cells
+    // snapshot the SAME array and the deep-bake memo gives them one address. What overwrote the baked
+    // boxes was neither writer nor initializer: it was `Loader.seedIntegerCache`/`seedLongCache`, a
+    // joe-ng special case that built a fresh Integer[256]/Long[256] ON THE HEAP and stored it over the
+    // baked array at every launch. Those are DELETED; the image carries the cache, so nothing needs to
+    // build one.
+    //
+    // SO THESE TWO ENTRIES ARE INERT TODAY, stated rather than implied: with the seeds gone, an image
+    // with them and an image without give BYTE-IDENTICAL box addresses, because IntegerCache is
+    // clinitBlocked (its <clinit> reads a saved system property) and nothing else reads the field. They
+    // are kept because rule 2's direction of travel is that every <clinit> runs, and on the day these
+    // are unblocked a NULL archivedCache sends stock straight to its BUILD arm -- silently re-creating
+    // the bug just fixed, with no seed left to mask it. Baking it now makes that unblocking a deletion
+    // rather than a new defect. That is an argument about the future, not a measurement of today.
+    //
+    // IntegerCache is also the ODD ONE for that future: it MERGES rather than adopting wholesale,
+    // because `high` is settable -- `if (archivedCache == null || size > archivedCache.length) { copy
+    // the archived boxes, build the rest }`. At the default high=127 the baked array is exactly `size`
+    // so the build arm is skipped outright, and had `high` been raised stock COPIES the archived boxes
+    // in first, which is exactly the identity-preserving behaviour its own comment demands: "if archive
+    // has Integer cache, we must use all instances from it. Otherwise, the identity checks between
+    // archived Integers and runtime-cached Integers would fail."
+    //
+    // Character/Byte/Short are DELIBERATELY absent. All three are overlaid here and each overlay DROPS
+    // the cache ("valueOf just boxes"), because the stock <clinit> sets TYPE through a native the
+    // loader blocks -- so there is no second cell, no split, and nothing to retire. Adding them would
+    // bake boxes no code can reach.
     private static final String[] ARCHIVED_SUBGRAPHS = {
         "java/util/ImmutableCollections.archivedObjects",
+        "java/lang/Integer$IntegerCache.archivedCache",
+        "java/lang/Long$LongCache.archivedCache",
     };
 
     private final ClassRegistry registry;
