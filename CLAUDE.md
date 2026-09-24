@@ -115,6 +115,87 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE BAKED WRAPPER CACHES ARE LIVE AT LAST, AND THE MECHANISM WAS NOT THE ONE THIS FILE PREDICTED
+  (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** Every `Integer`/`Long` in [-128,127] now comes back at
+  an IMAGE address. The fix is a DELETION: `Loader.seedIntegerCache` and `seedLongCache` are gone.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`BoxCacheProbe`, four cache arms** | **all HEAP** (`0x42ec2b8`, `0x42eb640`, `0x42ece28`, `0x42ee2d0`) | **all IMAGE** (`0x16ab10`, `0x169e98`, `0x16b680`, `0x16cb28`) |
+  | Character/Byte/Short controls | heap | **heap -- unmoved** |
+  | above-cache controls (`valueOf(1000)`) | heap | **heap -- unmoved** |
+  | values at both array ends | `-128/-1/0/127`, `-128/127` | **identical** |
+  | interning + autobox identity | true | **true** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, batch-70 closure **EXACT**, markers zero |
+  | image | 33,724,428 | **33,722,284 (-2,144 B)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE CARD BELOW PREDICTED A ONE-LINE REMEDY AND THE BOOT REFUTED IT, WHICH IS THE HALF WORTH KEEPING.**
+    It said the wrapper caches "have the identical gap on `archivedCache`" with a "one-line remedy
+    (`ARCHIVED_SUBGRAPHS` += `archivedCache`)". Adding exactly that line changed **NOTHING**: every arm still
+    read HEAP. The cells were baked correctly -- read out of the image, `IntegerCache.cache` and
+    `archivedCache` BOTH hold `0x169c58`, `LongCache` both hold `0x16bc70`, `high` is `0x7f`, `low` is `-128`
+    -- so the writer had done its job and something else was overwriting the result.
+  - **IT WAS A joe-ng SPECIAL CASE, NOT STOCK'S INITIALIZER: `seedIntegerCache` BUILT A FRESH `Integer[256]`
+    ON THE HEAP AND STORED IT OVER THE BAKED ARRAY.** 256 `Heap.alloc`s and a `Magic.store64(cacheSlot, arr)`,
+    at **every launch** (`resetLoader` clears its one-shot flag), which on the 40-program suite is
+    **20,480 boxes and 80 arrays rebuilt per boot** over an array the image already carried. `seedLongCache`
+    is its twin. Both are DELETED.
+  - **THE DECISIVE EXPERIMENT WAS ONE BOOT WITH BOTH SEEDS DISABLED**, and it answered two questions at once:
+    all four arms went IMAGE while the five controls stayed put. That is what turned a wrong model into a
+    named cause, after reading had produced a confident and incorrect one.
+  - **THEIR OWN COMMENT STATED THE PREMISE, AND IT HAD EXPIRED:** *"Its real `<clinit>` is CDS/system-property
+    driven (unrunnable), so we build the table directly."* True when written; the class is still
+    `clinitBlocked` (its initializer reads `VM.getSavedProperty`), but the WRITER bakes the cache now, so
+    nothing needs to build one. Same shape as the `MethodHandles.lookup()` spin and the ctor-init mechanism:
+    **a comment recording why a special case exists is what lets a later reader notice its premise is gone.**
+  - **AND IT RETIRES AN OPEN QUESTION THIS FILE RECORDED AGAINST ITSELF.** The seeds' javadoc says a re-seed
+    "does not in fact replace the cache the running program reads. WHY it does not is not established."
+    With the seeds deleted the question disappears rather than being answered: there is ONE writer (the
+    image) and no per-launch replacement at all.
+  - **THE `archivedCache` BAKE IS INERT TODAY, AND THAT IS MEASURED RATHER THAN GLOSSED.** A control with the
+    seeds gone and the two entries REMOVED gives **byte-identical box addresses**, because `IntegerCache` is
+    `clinitBlocked` and nothing else reads the field. **It is kept anyway, and the reason is an argument
+    about the future rather than a measurement of today:** rule 2's direction of travel is that every
+    `<clinit>` runs, and on the day these are unblocked a NULL `archivedCache` sends stock straight to its
+    BUILD arm -- silently re-creating the bug just fixed, with no seed left to mask it. Baking it now makes
+    that unblocking a deletion instead of a new defect.
+  - **AND IT COSTS EXACTLY NOTHING, which is why keeping it is cheap rather than speculative.** `cmp` of the
+    two control images: **6 differing bytes at two 8-byte cells, 0 bytes added** -- the array is already
+    baked, so the entries add a second pointer to it and nothing else.
+  - **`IntegerCache` IS THE ODD ONE AND WILL MATTER WHEN IT IS UNBLOCKED: it MERGES rather than adopting.**
+    `if (archivedCache == null || size > archivedCache.length) { copy the archived boxes, build the rest }`,
+    because `high` is settable. At the default 127 the baked array is exactly `size` so the build arm is
+    skipped outright; had `high` been raised, stock COPIES the archived boxes in first -- which is precisely
+    the identity-preserving behaviour its own comment demands.
+  - **CHARACTER/BYTE/SHORT ARE DELIBERATELY EXCLUDED, and the reason is stronger than "not baked yet".** All
+    three are OVERLAID here and each overlay DROPS the cache outright ("valueOf just boxes"), because the
+    stock `<clinit>` sets `TYPE` through a native the loader blocks. So there is no second cell, no split and
+    nothing to retire -- and that makes them the right controls: they cannot move for ANY reason, so an arm
+    that moved would mean the change reached somewhere it has no business being.
+  - **THE PROBE WALKED INTO A PRE-EXISTING GAP, RECORDED RATHER THAN BUNDLED: `"x" + anObject` DOES NOT CALL
+    `toString()`.** `Baseline.appendArg` routes ANY reference argument to `SC_STR`, which reads it as a
+    String (`strBytes` -> `Magic.load64(arr + 16)`), so a non-String reference reads its first FIELD as a
+    byte[] pointer. For an `Integer` that is the int value, and the raw load faults into an NPE at
+    `VMConcat.scStr`. JLS 15.18.1 requires `String.valueOf(obj)`. **On UNMODIFIED main**, so it is nobody's
+    regression -- the probe's value arms use `intValue()`/`longValue()` instead, which tests the same thing.
+  - **AND IT EXPOSED A READING ERROR OF MINE IN THE CARD BELOW.** `ArchiveProbe`'s `toString` arm prints
+    `toString = <values> (want [][]{})`; the values are EMPTY (the same concat gap) and I read the trailing
+    want-string as the answer. **An arm whose expected value is printed on the same line can be mis-read as
+    passing** -- the arm is coverage, not a check, and the four address arms are what that card rests on.
+  - **ONE FIGURE MOVED AND IT IS ATTRIBUTABLE: `bakeMemosDropped` 9 -> 10.** That counter is the reclaim
+    dropping image-side bake memos pointing into code it just rewound, so it is a function of LAYOUT -- and
+    this deletes 2,144 bytes of code. Reported because this file records 9; not called a regression, because
+    nothing indicates a lost or stale memo (the marker for that, a wild branch, is absent).
+  - **DETERMINISM HOLDS: a rebuild differs in exactly 20 bytes**, ten pairs at `/lib/app.jar`'s `META-INF/`
+    local headers -- the regenerated jar's DOS timestamps, which this file already records as the one benign
+    source of image churn.
+  - **NOT PI-VALIDATED, and the gate is named in advance.** Every small `Integer` and `Long` the VM hands out
+    now comes from the IMAGE rather than the heap, which changes what the collector traces and what the boot
+    battery reads through `VM.integerCacheSlotAddr`. On cold DRAM where the emulator hands out ZEROED memory,
+    a wrong box would be a null static or a wild branch rather than a wrong number -- so the ABSENCES are the
+    assertion, and the battery's own `IntegerCache`/`valueOf`/`equals` probes are the arm to read first.
+
 - **`ImmutableCollections.<clinit>` TAKES STOCK'S ADOPT BRANCH NOW -- THE `EMPTY_*` TWO-WRITERS HAZARD IS
   CLOSED, AND "ONE WRITER" IS PROVEN BY ADDRESS (2026-09-24, PI-VALIDATED).** The
   initializer is `if (archivedObjects == null) { build five singletons } else { adopt them }`. The field read
@@ -200,7 +281,9 @@ defines the minimum the assembler must encode.
     **Stock's own comment states the consequence** -- "If archive has Integer cache, we must use all
     instances from it. Otherwise, the identity checks between archived Integers and runtime-cached Integers
     would fail." That is the `Integer$IntegerCache` latent instance the statics card NAMED, now with a
-    mechanism and a one-line remedy (`ARCHIVED_SUBGRAPHS` += `archivedCache`). **Deliberately NOT bundled:**
+    mechanism -- **and the proposed "one-line remedy (`ARCHIVED_SUBGRAPHS` += `archivedCache`)" IS WRONG,
+    measured: that line alone changes nothing, because the overwriter is `Loader.seedIntegerCache`, not the
+    initializer. See the card at the top of this file.** **Deliberately NOT bundled:**
     it changes which `Integer` objects the VM hands out, which is user-visible, so it wants its own
     box-identity probe and its own gate. All fifteen stock `initializeFromArchive` callers share the same
     `if (archived == null) { build } else { adopt }` shape, so the mechanism generalises.

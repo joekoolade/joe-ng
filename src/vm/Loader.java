@@ -1026,7 +1026,7 @@ public final class Loader
     /**
      * True if the current class's {@code <clinit>} must NOT be run — it calls natives / reads system properties
      * / needs JVM services absent on metal. We run every other class's initializer by default and seed only
-     * these (provideKnownStatics / seedIntegerCache). Grows as new unrunnable stock initializers surface.
+     * these (provideKnownStatics). Grows as new unrunnable stock initializers surface.
      */
     /** Entry addresses of this batch's compiled {@code <clinit>}s, in load order (run after patchRelocs). */
     private static long[] clinitEntry;   // compiled entry of initializer i, or 0 until clinitEntryOf compiles it
@@ -3432,8 +3432,6 @@ public final class Loader
         sdVmLock = false;
         sdJio = false;
         sdJla = false;
-        sdIntCache = false;
-        sdLongCache = false;
         sdPrim = false;
         sdPrimMask = 0;
         relocRecording = 0;
@@ -8774,10 +8772,6 @@ public final class Loader
         seedJavaLangAccess();                           // SharedSecrets.javaLangAccess (EnumMap.getKeyUniverse)
         seedJavaIOAccess();                             // SharedSecrets.javaIOAccess (System.console() -> null)
         seedVmInitLock();                               // jdk.internal.misc.VM.lock (System.exit -> VM.shutdown)
-        seedIntegerCache();                             // the [-128,127] Integer cache valueOf uses (clinit skipped:
-                                                        //   low=high=0 would index the NULL cache -> NPE); no-op if
-                                                        //   Integer isn't in this batch
-        seedLongCache();                                // same for Long$LongCache (fixed -128..127, no `high`)
         seedPrimitiveTypes();                           // Integer.TYPE etc: int.class is a getstatic, not an ldc
         long tSeed = Magic.readCNTPCT_EL0();
         cumSeeds += tSeed - tRf3;
@@ -9441,75 +9435,6 @@ public final class Loader
         return 0L;
     }
 
-    /**
-     * Seed {@code Integer$IntegerCache} (call after loadAll, once Integer is loaded): build the real
-     * {@code Integer[256]} for -128..127 (each a boxed Integer with its {@code value}) and set {@code cache}
-     * + {@code high}=127. Its real {@code <clinit>} is CDS/system-property driven (unrunnable), so we build
-     * the table directly — the way {@code valueOf} expects it, so small-int boxing returns cached instances.
-     */
-    static void seedIntegerCache()
-    {
-        if (sdIntCache)
-        {
-            return;
-        }
-        long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("cache"));
-        long highSlot = staticSlotOf(Magic.bytes("java/lang/Integer$IntegerCache"), Magic.bytes("high"));
-        int ii = classIndexByName(Magic.bytes("java/lang/Integer"));
-        if (cacheSlot == 0L || highSlot == 0L || ii < 0)
-        {
-            return;
-        }
-        long itib = clTab[ii].tib;
-        int isize = 16 + clTab[ii].fieldCount * 8;          // Integer: header + its instance fields (value)
-        long arr = Heap.allocArray(256, 8);             // Integer[256] (8-byte reference elements)
-        int k = 0;
-        while (k < 256)
-        {
-            long box = Heap.alloc(isize);
-            Magic.store64(box + 0L, itib);              // TIB
-            Magic.store64(box + 16L, (long) (k - 128)); // value (Integer's first/only instance field, offset 16)
-            Magic.store64(arr + 24L + k * 8L, box);
-            k += 1;
-        }
-        Magic.store64(cacheSlot, arr);
-        Magic.store64(highSlot, 127L);
-        sdIntCache = true;
-    }
-
-    /**
-     * Seed {@code Long$LongCache} like {@link #seedIntegerCache}: a {@code Long[256]} for -128..127 (each a
-     * boxed Long with its {@code value} at offset 16). LongCache is fixed-range (no {@code high} field), and
-     * its {@code <clinit>} is skipped with the wrapper's (native TYPE), so {@code Long.valueOf} in that range
-     * would index a null cache. No-op if Long isn't in this batch.
-     */
-    static void seedLongCache()
-    {
-        if (sdLongCache)
-        {
-            return;
-        }
-        long cacheSlot = staticSlotOf(Magic.bytes("java/lang/Long$LongCache"), Magic.bytes("cache"));
-        int li = classIndexByName(Magic.bytes("java/lang/Long"));
-        if (cacheSlot == 0L || li < 0)
-        {
-            return;
-        }
-        long ltib = clTab[li].tib;
-        int lsize = 16 + clTab[li].fieldCount * 8;          // Long: header + its instance field (value)
-        long arr = Heap.allocArray(256, 8);             // Long[256] (8-byte reference elements)
-        int k = 0;
-        while (k < 256)
-        {
-            long box = Heap.alloc(lsize);
-            Magic.store64(box + 0L, ltib);              // TIB
-            Magic.store64(box + 16L, (long) (k - 128)); // value (Long's first/only instance field, offset 16)
-            Magic.store64(arr + 24L + k * 8L, box);
-            k += 1;
-        }
-        Magic.store64(cacheSlot, arr);
-        sdLongCache = true;
-    }
 
 
     /**
@@ -9904,10 +9829,17 @@ public final class Loader
     /**
      * ONE-SHOT FLAGS FOR THE SEEDS, and they are the whole fix for the largest item in the clinit phase.
      *
-     * <p>Every seed below is IDEMPOTENT and its result IMMUTABLE -- a boxed Integer for -128..127, a
-     * field-free access object, a bare monitor, a primitive mirror. Re-running them per batch therefore
-     * cannot change an answer, and it cost fifteen linear walks of the static registry per batch plus 512
-     * allocations, over ~209 batches of a launcher boot.
+     * <p>Every seed below is IDEMPOTENT and its result IMMUTABLE -- a field-free access object, a bare
+     * monitor, a primitive mirror. Re-running them per batch therefore cannot change an answer, and it cost
+     * fifteen linear walks of the static registry per batch plus 512 allocations, over ~209 batches of a
+     * launcher boot.
+     *
+     * <p>THE TWO BOX-CACHE SEEDS ARE GONE (2026-09-24), and with them the question the next paragraph
+     * leaves open. {@code seedIntegerCache}/{@code seedLongCache} built an {@code Integer[256]}/
+     * {@code Long[256]} on the HEAP and stored it over the array the WRITER had already baked -- a joe-ng
+     * special case standing where stock's own archived-subgraph path belongs. The image carries the cache,
+     * so nothing needs to build one: with both seeds deleted every box in [-128,127] comes back at an IMAGE
+     * address, measured rather than argued.
      *
      * <p>I ALSO CLAIMED RE-RUNNING BROKE SMALL-INTEGER BOX IDENTITY, AND A NEGATIVE CONTROL REFUTED IT. Four
      * of these allocate, so re-running looked like it must REPLACE the object the static already held, making
@@ -9918,12 +9850,11 @@ public final class Loader
      * control, and leaving it in the suite would read as evidence to the next person.
      *
      * <p>A flag is set only on SUCCESS, because a seed legitimately cannot run until its class is registered
-     * (`seedIntegerCache` returns early while `java/lang/Integer` is absent), and it must be retried until
-     * then. THEY RESET IN `resetLoader` BESIDE `sgCount = 0` -- a flag that outlived the static registry it
+     * (a seed returns early while the class it fills is absent), and it must be retried until then. THEY RESET IN `resetLoader` BESIDE `sgCount = 0` -- a flag that outlived the static registry it
      * guards would skip the seed for a whole launch and leave the statics null, which is the same
      * watermark-outliving-its-table trap already recorded twice here.
      */
-    private static boolean sdVmLock, sdJio, sdJla, sdIntCache, sdLongCache, sdPrim;
+    private static boolean sdVmLock, sdJio, sdJla, sdPrim;
     private static int sdPrimMask;                      // one bit per wrapper TYPE already seeded (see seedPrimType)
 
     static void seedVmInitLock()
