@@ -55,6 +55,19 @@ public final class EmptySentinelProbe
             System.out.println("    entry key=" + cls(e.getKey()) + " value=" + cls(e.getValue()));
         }
 
+        // THE ARM THE OTHERS CANNOT REACH: the VARARGS List.of. Measured from the image, the one-arg
+        // List.of(E) is NOT baked while List.of(E...) IS -- a real body, and not an <init>, so it is in
+        // the baked-LINK table and a guest call LINKS to it. Inside it, `new List12<>(e0)` runs the BAKED
+        // constructor, which stores the IMAGE ImmutableCollections.EMPTY; the guest-compiled size()/
+        // forEach/get then test `e1 != EMPTY` against the GUEST cell. Two cells, so the test cannot hold
+        // and the sentinel escapes AS an element. Every other arm above stays inside one world -- <init>
+        // is deliberately excluded from the baked-link table ("init semantics stay per-world") -- which is
+        // why they pass, and why their passing is a theorem rather than luck.
+        Object[] one = new Object[] { "a" };
+        listArm("List.of(Object[1]) VARARGS", (List<String>) (List<?>) List.of(one), 1);
+        Object[] two = new Object[] { "a", "b" };
+        listArm("List.of(Object[2]) VARARGS control", (List<String>) (List<?>) List.of(two), 2);
+
         System.out.println("EmptySentinelProbe done");
     }
 

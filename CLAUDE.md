@@ -115,14 +115,17 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
-- **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AT LAST:
+- **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AND NOW REPRODUCED:
   `ImmutableCollections.EMPTY` (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** Two findings, one arc; the
-  second was located WITHOUT a boot, by reading the image file.
+  second was located WITHOUT a boot, by reading the image file, and then cut from a twenty-minute launcher
+  boot to a seconds-long probe by predicting WHICH call shape reaches it.
 
   | gate | result |
   |---|---|
   | `SynthNameProbe` | 5 arms, **every one matching the host's semantics** |
   | `CLASS NAME UNRESOLVED` (new report) | **1 on the suite before the fix, 0 after** |
+  | `EmptySentinelProbe`, varargs arm | **the leak REPRODUCED**: `size=2` for a ONE-element list, element at an IMAGE address; 2-element control clean |
+  | `TraceProbe` | 4 arms, `getStackTrace()` **never null** -- the recorded second open item REFUTED |
   | demo suite | 40 programs, every marker zero, batch 70 identity EXACT |
   | java.math, re-run on this tree | `math jtreg: ran 4, failures 0`, `sb-probe: 28 checks, 0 failures` |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
@@ -151,23 +154,64 @@ defines the minimum the assembler must encode.
     element is exactly what a failed identity test looks like -- and `Class.getName`'s vtable slot indexed
     into a bare Object's vtable returns whatever sits there, **0 on one boot and 1 on another, which is why
     the symptom read as noise**.
-  - **ONE CELL, TWO WRITERS -- read out of both sites, not inferred.** The writer STUBS
-    `ImmutableCollections.<clinit>` (it `ldc`s a class literal the host writer refuses), so its statics come
-    from a seed-JVM snapshot and `EMPTY` is deep-baked into the image; and `Loader.clinitCompilable`
-    EXPLICITLY allows that same `<clinit>` to RUN on metal, where it assigns `EMPTY = new Object()` on the
-    heap. **The general rule: a class must not have BOTH a seed-JVM static snapshot AND a metal `<clinit>`
-    that reassigns those statics** -- the snapshot exists precisely because the initializer cannot run.
-  - **NOT FIXED HERE, and the reason is scope rather than doubt:** that is an initialization-policy change
-    for the class every immutable collection depends on, and it deserves its own increment and gate.
-  - **AND THE PROBE REFUTES THE LEAK IN A SMALL CLOSURE, which is stated rather than buried.**
-    `EmptySentinelProbe` is byte-identical to the host across List/Set/Map in one- and two-element forms
-    (the two-element form being the built-in control). **So the identification is from the image, not from a
-    reproduction** -- the leak needs the launcher's closure, and no probe here produces it.
-  - **A SECOND OPEN ITEM, MEASURED RATHER THAN ASSUMED: `getStackTrace()` ANSWERS NULL.**
-    `ExceptionUtils.pruneStackTrace` is `Arrays.asList(t.getStackTrace())` and line 130 is bytecode 14, so
-    the array was null where stock answers a ZERO-LENGTH array. `TraceProbe` pins the three states a caller
-    can be handed -- NULL, 0 and n -- plus the CROSS-METHOD arm, which is the condition rather than the shape
-    (the VM fills `bt0..bt7` inside `VM.unwind`, so a same-method catch is a different path).
+  - **CORRECTION, SAME DAY: IT IS TWO CELLS IN SPACE, NOT ONE CELL WRITTEN TWICE IN TIME -- AND THE LEAK IS
+    REPRODUCED IN A PROBE NOW.** The first cut of this card said "one cell, two writers". Four readings of
+    the writer say the two writers never touch the same memory at all:
+    - **The `statmap` lists exactly TWO `ImmutableCollections` statics** -- `EMPTY` and `EMPTY_LIST` --
+      where stock declares six. A DENSE BLOCK keys EVERY declared static (`ImageBuilder` ~667), so two of
+      six means there is no block: those are individually-baked cells, minted because baked code names them.
+    - **A dense block is emitted only for a class in `typeClasses` AND `bakeDomain`** -- i.e. one with a
+      baked TYPE NODE. `ImmutableCollections` is a holder class, never instantiated, so it has no Type and
+      therefore no block.
+    - **`adoptStatics` returns early unless there is one.** `gAdoptStatics` is read from the vtSig entry's
+      `staticsAddr` and from nowhere else, so the loader allocates a FRESH guest block instead.
+    - **There is no per-field baked-static tier** -- `bakedTable` is the baked-LINK METHOD table, checked
+      rather than assumed from its name.
+    **So the general defect is bigger than this class: ANY `bakeDomain` class that has baked statics but NO
+    Type node gets cells the loader can never adopt**, and baked code then reads the image cell while guest
+    code reads the guest one.
+  - **THE REPRODUCTION IS ONE ARM, AND WHICH ARM IT IS WAS PREDICTED FROM THE IMAGE BEFORE IT WAS RUN.**
+    `List.of(E...)` is a REAL baked body (`symmap`, 364 bytes) and is not an `<init>`, so it IS in the
+    baked-LINK table and a guest call LINKS to it; `List.of(E)` is not baked at all. Inside the varargs
+    form, `new List12<>(e0)` runs the BAKED constructor and stores the IMAGE sentinel, which the
+    guest-compiled `size`/`get`/`forEach`/`toArray` then test against the GUEST cell:
+
+    ```
+    List.of(Object[1]) VARARGS: size=2 (want 1)
+        get(1) = [java.lang.Object@16bc90] java.lang.Object     <- an IMAGE address, below the heap
+    List.of(Object[2]) VARARGS control: size=2 (want 2)         <- clean
+    ```
+
+    **The two-element control is clean in the same run**, which is what says this is the unused-slot
+    identity test and not a broken list.
+  - **AND IT EXPLAINS WHY EVERY OTHER ARM PASSES -- a theorem, not luck, which is the part worth keeping.**
+    `<init>` and `<clinit>` are EXPLICITLY excluded from the baked-link table ("init semantics stay
+    per-world"), so a guest `new List12` compiles its own constructor against the GUEST cell and every
+    guest reader agrees with it. A leak needs a BAKED constructor to run, and only a baked-and-linked
+    factory gets you one. The earlier cut of this card recorded the probe's passing as an unexplained
+    loose end; it is now the control that localises the bug.
+  - **SO THE LAUNCHER'S TWO FAILURES ARE ONE BUG, and the second one's own trace says so.**
+    `pruneStackTrace` <- `lambda$executionFinished$0` <- **`ImmutableCollections$List12.forEach`** <-
+    `executionFinished`. Stock's `forEach` is `action.accept(e0); if (e1 != EMPTY) { action.accept(e1); }`,
+    so a one-element list whose guard cannot hold hands the SENTINEL to the action -- which calls
+    `getStackTrace()` on a bare `Object` and indexes Throwable's vtable slot into Object's vtable.
+  - **SO THE "SECOND OPEN ITEM" IS RETIRED RATHER THAN CARRIED: `getStackTrace()` IS NOT BROKEN.**
+    `TraceProbe` answers `len=8` across a call, `len=6` for a same-method catch, `len=0` for a never-thrown
+    throwable and `len=1` after `setStackTrace` -- **never null**, against a host control of 4/2/1/1. The
+    one divergence is the never-thrown arm (0 here, 1 on stock) and this file already records why: the VM
+    fills `bt0..bt7` in `VM.unwind` at THROW time, so a throwable that was never thrown truthfully has no
+    frames. **The null was INFERRED from reading `pruneStackTrace`'s bytecode and is refuted by running
+    it** -- which is the rule this file states most often, applied to my own reading.
+  - **NOT FIXED HERE, and the fix is now a WRITER/LOADER change rather than an initialization-policy one:**
+    either emit a dense block (and a vtSig-style adoption entry) for a bakeDomain class with baked statics
+    but no Type node, or add a per-field baked-static table the loader adopts cell by cell. **What is NOT
+    the fix is dropping the metal `<clinit>`:** only 2 of the 6 statics are snapshotted, so `SALT32L` would
+    read 0 and `MapN`'s probe loop would spin.
+  - **AND THE STALE-CLASS TRAP CAUGHT ME A FOURTH TIME, IN THE HELPER I HAD JUST FIXED IT IN.** The first
+    boot of the new arm printed NOTHING for it -- reading exactly like an arm that cannot fire -- because
+    `make build` does not compile `test/jdk/junit`, and `make build`'s `guest` rule PURGES what `make
+    jdktests` put there. **A missing arm looks identical to a passing one**; `grep -c VARARGS
+    out/EmptySentinelProbe.class` is what settled it in one command.
   - **FOUR INSTRUMENTS THAT COULD NOT FIRE, EACH FIXED WHERE IT WAS BROKEN -- three of this arc's five
     ~20-minute launcher boots went on instruments rather than on the VM.**
     - **`scripts/run-launcher.sh` NEVER COMPILED.** It went straight to `BuildRuntimeImage`, which READS
