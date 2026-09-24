@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE IMAGE BUILD IS DETERMINISTIC AGAIN, AND THE FIX IS STOCK'S OWN HOOK RATHER THAN A SPECIAL CASE
-  (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** `jdk/internal/misc/CDS.getRandomSeedForDumping()` --
+  (2026-09-24, PI-VALIDATED).** `jdk/internal/misc/CDS.getRandomSeedForDumping()` --
   which stock declares NATIVE and whose ONE caller in all of java.base is `ImmutableCollections.<clinit>` --
   returned a hardcoded `0L` in our overlay. That is stock's "not dumping" signal, so the initializer fell
   through to `System.nanoTime()`. The writer supplies the seed now.
@@ -130,6 +130,8 @@ defines the minimum the assembler must encode.
     recorded counter, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `56`,
     `lisp evals=600 result=610 stable=1`, `finish HML`, `smp sched: 4 of 4`, `sum20 = 210`,
     `sha256 clone`, `YNW`, `attributes forEach ok`, **28 failure markers zero** |
+  | **Pi, the SAME binary** | **40 programs, closure EXACT (`memo=1672 res=2514 unres=2235 pc:n=111`),
+    `46` then **`55`**, every marker zero** |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **I PROPOSED `clinitBlocked` AND IT WAS WRONG, on a checkable fact.** I argued that blocking the metal
@@ -188,6 +190,48 @@ defines the minimum the assembler must encode.
     them** -- one emulator, 220 s, terminal marker present. A third pattern of mine then read `sum20=210`
     as MISSING; the literal output is `sum20 = 210`, so the shorthand in these cards is not a grep
     pattern -- the instrument was wrong, not the VM, for the second time in one increment.
+  - **PI-VALIDATED, AND THE CLOSURE IS EXACT AGAINST THE ARM THAT READ 56.** On silicon: 40 programs to
+    `self-build retired`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2514 unres=2235`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`,
+    `bakeMemosDropped=9`, `sy:chg=0` -- **every one identical to the statics-image Pi boot recorded below**,
+    which is what says this increment moved no closure decision. Plus the gates QEMU cannot show:
+    **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/59/60/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    ExcDemo's seven-frame trace, `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with
+    `two instances differ`, and WPA2 -> `ptk derived` -> `msg3 MIC ok` -> HTTP 200 OK, 828 bytes. Every
+    failure marker zero, and only the seven known `UNRESOLVED STATIC`/`TRAP-WIRED` lines, each labelled
+    DENYLISTED.
+  - **THE RISK THE BOOT HAD TO PRICE WAS LAYOUT, NOT ARITHMETIC.** A new native, two new VM statics and
+    every static cell moved, on cold DRAM where the emulator hands out ZEROED memory -- the shape this file
+    records latent bugs surfacing from twice. And a wrong seed would not announce itself either, because
+    `fillStatic` is silent on a miss: the failure shape is a null static or a wild branch, which makes the
+    ABSENCES the assertion rather than any printed number.
+  - **AND THE LISP FINALE READ 55 WITH THE FORCED COLLECTION PRESENT -- A COUNTEREXAMPLE TO READING 56 AS
+    ITS SIGNATURE, AND THE TIGHTEST ONE THIS FILE HAS.** `smp gc: idleRoots=3/3` says the forced collection
+    RAN (the control arm reads `0/0`), and the closure matches the arm that read 56 to the digit:
+
+    | Pi, same 40 programs, same closure `2514 / 2235 / 111` | churn | finale |
+    |---|---|---|
+    | statics image (forced collection) | 46 | **56** |
+    | single-variable control (collection REVERTED) | 46 | **55** |
+    | **this image (forced collection AND the CDS seed)** | **46** | **55** |
+
+    - **THE SINGLE-VARIABLE ATTRIBUTION BELOW IS NOT RETRACTED:** within that pair the forced collection was
+      the only difference, so removing it moved the count. What this refutes is the INVERSE -- that a 56
+      identifies the forced collection, or that the dozen recorded 55s are explained by its absence. **A
+      third binary now reads 55 with it present.**
+    - **SO THE FINALE IS A SENSITIVITY DETECTOR, NOT A SIGNATURE.** It moves for at least two INDEPENDENT
+      allocation-sequence perturbations, while **`gc: collections=46` at the churn demo -- the figure the
+      census established as the gate -- is 46 in all three.** **The QEMU row in the table above reads 56 on
+      this same binary, and that is the recorded rule holding rather than a discrepancy:** that harness
+      produced 56 and 57 from an IDENTICAL image, so its finale may not be cited at all.
+    - **WHAT MOVED IT IS NOT ISOLATED, AND ONE BOOT CANNOT ISOLATE IT.** The credible candidate is the
+      LAYOUT shift; the salt is the other, and the record argues against it -- BEFORE this fix the metal
+      initializer drew `SALT32L` from metal `nanoTime`, so iteration order was already random PER BOOT and
+      the finale still read 56 twice on one binary. **Stated as a reading rather than a measurement:** n=2
+      is thin, and nothing here separates the two.
 
 - **THE IMAGE BUILD STOPPED BEING DETERMINISTIC, AND THE INCREMENT THAT DID IT PREDICTED THE MECHANISM AND
   NOT THE CONSEQUENCE (2026-09-23, MEASURED).** Two builds of an IDENTICAL tree now differ. The delta is
@@ -229,6 +273,10 @@ defines the minimum the assembler must encode.
   (2026-09-24, PI-VALIDATED).** The control is current main with ONLY the forced `Magic.gc()` reverted --
   `collected = 1` stays, so the loop's control flow is identical -- and the salt PINNED, so the two images
   differ in the collection and in nothing else. The open question three cards have carried is closed.
+  **READ WITH THE LIMIT FOUND THE NEXT DAY, recorded at the top of this file: a 56 is NOT the collection's
+  SIGNATURE.** A third binary -- the same closure, the forced collection present -- reads **55**. So this
+  attribution is sound in the direction it was MEASURED (remove the collection, the count moves) and does
+  NOT invert: the counter has other causes, and 55 does not imply the collection is absent.
 
   | | fix arm (main) | control (main minus one line) |
   |---|---|---|
