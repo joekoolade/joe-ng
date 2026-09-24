@@ -115,6 +115,46 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE LISP-FINALE CONTROL RAN, AND THE DECISIVE OUTCOME DID NOT OCCUR: THE SAME BINARY READ 56 TWICE
+  (2026-09-24, PI).** The idle-roots suite image was re-flashed from `sdcard/kernel8-prev-flashed.img` and
+  booted a second time on the same Pi. `gc: collections=46` at the churn demo -- the gate -- and **56** at
+  the lisp finale, identical to its first boot.
+
+  | the idle-roots suite image | churn demo | lisp finale |
+  |---|---|---|
+  | boot 1 (recorded) | 46 | **56** |
+  | boot 2 (this control) | **46** | **56** |
+
+  - **WHAT IT SETTLES AND WHAT IT DOES NOT.** The outcome that would have been decisive -- any value but 56
+    -- did not happen, so **"one binary, two answers" is NOT demonstrated on silicon**. What is established
+    is narrower and still worth having: this binary is **REPEATABLE at 56 on hardware**, where the recorded
+    QEMU A/A pair gave 56 and 57 from an IDENTICAL binary. **Two samples cannot prove determinism**, and a
+    noisy counter skewed toward 56 produces exactly this picture -- stated rather than rounded away.
+  - **THE RECORD NOW READS 15 HARDWARE BOOTS WITH NO COUNTEREXAMPLE, and the pattern favours one reading.**
+    About twelve boots at 55 across many DIFFERENT binaries, then three at 56 across two binaries -- and
+    every one of the latter carries the forced collection. If the finale were as noisy on silicon as on
+    QEMU, the dozen pre-change boots (themselves different binaries) should have shown spread, and none
+    did. So the free-list reading is **SUPPORTED, not proven**, and the question stays open.
+  - **THE BOOT CONFIRMED ITS OWN PROVENANCE, independently of the grep that selected it:**
+    `bakeMemosDropped=11`, `res=2651 unres=2372`, `pc:n=114` -- the idle-roots-era figures, against the
+    statics image's 9 / 2514 / 2235 / 111. Plus `rounds=4 pend=180 reach=16`, `memo=1672`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `smp gc: idleRoots=3/3 marked=0 idleGc=0`. **NOT claimed: a
+    full marker sweep** -- the log quoted here is the churn/lisp FRAGMENT, and reading a truncated log as a
+    completed run is a trap this file already records twice.
+  - **THE CONTROL THE IDLE-ROOTS CARD PROMISED NO LONGER EXISTS, and that was found by checking the ARTIFACT
+    rather than the label.** That card said the saved binary was the previous PI-VALIDATED one -- i.e. a
+    PRE-forced-collection image, which would have been a true A/B on the mechanism. **The statics flash
+    OVERWROTE that save:** `kernel8-prev-flashed.img` greps clean for `$$Lambda/` and `CLASS NAME
+    UNRESOLVED` while carrying `idleRoots`, so it is the idle-roots image itself. A same-image-twice control
+    is what was actually available, and for this question it is the weaker of the two.
+  - **WHAT WOULD SETTLE IT IS ONE BUILD AND ONE BOOT: the idle-roots commit with ONLY the forced collection
+    reverted**, booted on the same Pi in the same session. That is single-variable -- the shape this file
+    demands -- and a 55 on the control against 56 on the fix is the pairing. **Merely rebuilding an older
+    binary is NOT it:** a 55 there is what BOTH readings predict, so it discriminates nothing.
+  - **AND THE CHURN FIGURE IS NOW 46 ACROSS FOUR HARDWARE BOOTS OF THREE BINARIES.** That is the half the
+    census called a gate, and it has never moved. The finale's count still may not be cited from a QEMU run.
+
 - **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE REAL
   JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, PI-VALIDATED).** The
   launcher blocker named one card above is closed at its root:
