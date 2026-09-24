@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`ImmutableCollections.<clinit>` TAKES STOCK'S ADOPT BRANCH NOW -- THE `EMPTY_*` TWO-WRITERS HAZARD IS
-  CLOSED, AND "ONE WRITER" IS PROVEN BY ADDRESS (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** The
+  CLOSED, AND "ONE WRITER" IS PROVEN BY ADDRESS (2026-09-24, PI-VALIDATED).** The
   initializer is `if (archivedObjects == null) { build five singletons } else { adopt them }`. The field read
   null, so it took the BUILD arm and constructed fresh objects over the cells the writer had baked. The
   writer fills the field now, and the initializer adopts.
@@ -128,6 +128,7 @@ defines the minimum the assembler must encode.
   | **negative control** (`ImageBuilder` stashed) | **all four arms HEAP**, and the image delta reproduces exactly |
   | **cell vs array, read out of `kernel8.img`** | `EMPTY` == `archivedObjects[0]` and `EMPTY_LIST` == `[1]`, **byte-identical** |
   | **demo suite, COMPLETE run** | **40 programs to `self-build retired`**, batch-70 closure **EXACT**, **28 failure markers zero** |
+  | **Pi, the SAME binary** | **40 programs, closure EXACT to the digit (`memo=1672 res=2514 unres=2235 pc:n=111`), every marker zero** |
   | determinism | a rebuild of the restored tree is **BYTE-IDENTICAL** to the gated image |
   | image | 33,722,324 -> **33,749,228 (+26,904 B, +0.080%)** |
   | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
@@ -203,11 +204,40 @@ defines the minimum the assembler must encode.
     it changes which `Integer` objects the VM hands out, which is user-visible, so it wants its own
     box-identity probe and its own gate. All fifteen stock `initializeFromArchive` callers share the same
     `if (archived == null) { build } else { adopt }` shape, so the mechanism generalises.
-  - **NOT PI-VALIDATED, and the gate is named in advance.** This moves every static cell, adds five Type
-    nodes and deep-bakes an object graph, on cold DRAM where the emulator hands out ZEROED memory -- the
-    layout-movement shape this file records latent bugs surfacing from twice. **A wrong adopt would not
-    announce itself either:** the failure shape is a null static or a wild branch through a stub vtable slot,
-    which makes the ABSENCES the assertion rather than any printed number.
+  - **PI-VALIDATED, AND THE PREDICTION THAT THE CLOSURE WOULD NOT MOVE IS THE HALF WORTH KEEPING.** I said
+    in advance that the five new classes are BAKED rather than demand-loaded, so the guest closure should not
+    shift by one counter, and that a move in `pc:n` or `res`/`unres` would be the interesting result. Batch
+    70 on silicon reads `rounds=4 pend=180 reach=16`, `memo=1672 res=2514 unres=2235`, `pc:n=111`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `sy:chg=0`,
+    `bakeMemosDropped=9` -- **every one identical to the statics-era Pi boot**, so an image carrying four new
+    Type nodes and ~40 new baked vtable stubs moved no closure decision at all.
+  - **THE RISK THE BOOT HAD TO PRICE WAS LAYOUT, AND THE ASSERTION IS A SET OF ABSENCES.** Every static cell
+    moved, five Type nodes appeared and an object graph was deep-baked, on cold DRAM where the emulator hands
+    out ZEROED memory -- and a wrong adopt does not announce itself: the failure shape is a null static or a
+    wild branch through one of the new stub slots. **None of `BOOT RE-ENTERED`, `FAULT`, `ESR EC=`,
+    `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`, `BADPATCH`, `VIRTUALRESOLVE
+    FAILED`, `CAP EXCEEDED`, `LINK FAILED`, parity `DIFF` or `CLASS NAME UNRESOLVED` appears**, and the only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each labelled
+    DENYLISTED. Plus the gates QEMU cannot show: **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`,
+    `sched: 89 preemptions`, `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no
+    `STW TIMEOUT`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
+    stable=1`, `sum20 = 210`, `sha256 clone = .../fork-ok`, ExcDemo's seven-frame trace, `hw rng: RNG200
+    live` with `two instances differ`, and WPA2 -> `ptk derived` -> `msg3 MIC ok` -> HTTP 200 OK, 829 bytes.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight.** The suite's map/set arms assert COUNTS and
+    MEMBERSHIP (`keySet=3 values=3 entrySet=3 pairsOk=1`, `immutable forEach ok`, `attributes forEach ok`)
+    and never ORDER or IDENTITY, so **it cannot see the adopt directly** -- hardware proves NO REGRESSION
+    across the layout shift, and `ArchiveProbe`'s image-vs-heap addresses on QEMU are what prove the feature.
+    Different claims.
+  - **AND THE LISP FINALE READ 55 AGAIN WITH THE FORCED COLLECTION PRESENT, which is a SECOND binary doing
+    so and tightens yesterday's counterexample rather than repeating it.** `smp gc: idleRoots=3/3` says the
+    forced collection ran, `gc: collections=46` at the churn demo is the gate and is unmoved, and the finale
+    reads 55 on an image whose closure is identical to the arm that read 56. **So the record now stands at
+    two binaries reading 55 WITH the collection**, against the single-variable pair that established it moves
+    when the collection is removed. The attribution is unchanged in the direction it was measured and still
+    does not invert; what this adds is that 56 is even less usable as a signature than one counterexample
+    suggested. **Stated as a reading, not a measurement:** nothing here separates the layout shift from the
+    salt, and n is still small.
 
 - **THE IMAGE BUILD IS DETERMINISTIC AGAIN, AND THE FIX IS STOCK'S OWN HOOK RATHER THAN A SPECIAL CASE
   (2026-09-24, PI-VALIDATED).** `jdk/internal/misc/CDS.getRandomSeedForDumping()` --
