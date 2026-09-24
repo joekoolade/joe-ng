@@ -115,6 +115,136 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE IMAGE BUILD STOPPED BEING DETERMINISTIC, AND THE INCREMENT THAT DID IT PREDICTED THE MECHANISM AND
+  NOT THE CONSEQUENCE (2026-09-23, MEASURED).** Two builds of an IDENTICAL tree now differ. The delta is
+  four bytes plus a flag, and the `statmap` names them outright:
+
+  ```
+  statmap 0016c788 java/util/ImmutableCollections.SALT32L    <- differs on every build
+  statmap 0016c790 java/util/ImmutableCollections.REVERSE    <- derived from it, so it differs too
+  ```
+
+  - **STOCK DERIVES THE SALT FROM `System.nanoTime()`**, and the writer SNAPSHOTS it off the seed JVM -- so
+    each build bakes a different one. `REVERSE` is `(SALT32L & 1) == 0`, so it follows.
+  - **THE DENSE-BLOCK FIX IS THE CAUSE, AND ITS OWN CARD SAYS SO ONE SENTENCE BEFORE THE CONSEQUENCE.** That
+    card records "with a dense block all ten statics are snapshotted, which retires the objection ... that
+    `SALT32L` would read 0" -- correct, and the unremarked half is that a snapshotted `nanoTime` salt is
+    NOT a constant. Before the fix `ImmutableCollections` had 2 individually-baked cells, `SALT32L` was not
+    among them, it read 0, and the build was reproducible.
+  - **WHAT IT COSTS, stated rather than left to be re-found:**
+    - **`cmp` BEFORE FLASHING IS NO LONGER AN EQUALITY TEST.** This file records that check three times, and
+      it caught a real stale-binary bug two increments ago. A rebuild of the SAME tree now always shows five
+      differing bytes, so the check has to be "five bytes, at the two salt offsets" rather than "identical"
+      -- and a check whose pass condition is "a few bytes differ" is one nobody will read carefully.
+    - **IT IS A CONFOUND FOR ANY GC-COUNT EXPERIMENT.** Randomising immutable-collection iteration order is
+      the salt's entire PURPOSE, and a different iteration order is a different allocation sequence, which
+      moves when a pressure collection fires. That is the quantity the open lisp-finale question is about.
+    - **SEVERAL CARDS STATE "the build is deterministic (two runs byte-identical)" AND THAT IS NOW FALSE**
+      for any image carrying `ImmutableCollections`, which is every image.
+  - **NOT FIXED HERE, and the options are a real choice rather than an omission:** seed the salt to a
+    constant in the writer (reproducible images, and iteration order stops being randomised at all -- which
+    is what the salt exists to prevent callers depending on); snapshot it from a build-stable source; or
+    accept it and change the flashing check. The first is what a CDS archive does (`getRandomSeedForDumping`
+    exists in stock for exactly this reason), which is a point in its favour.
+  - **FOUND BY ARITHMETIC ON A CONTROL, not by looking for it:** a rebuild of main differed from the
+    Pi-validated binary by 27,984 bytes -- the recorded `RandomFactory` figure to the byte, so the
+    jdktests-state trap again -- and once that was corrected the residue was 25 bytes, of which 20 are the
+    recorded jar DOS timestamps and FIVE were not recorded by anything.
+
+- **THE FORCED COLLECTION IS THE CAUSE: THE SINGLE-VARIABLE CONTROL READS 55 AGAINST THE FIX ARM'S 56
+  (2026-09-24, PI-VALIDATED).** The control is current main with ONLY the forced `Magic.gc()` reverted --
+  `collected = 1` stays, so the loop's control flow is identical -- and the salt PINNED, so the two images
+  differ in the collection and in nothing else. The open question three cards have carried is closed.
+
+  | | fix arm (main) | control (main minus one line) |
+  |---|---|---|
+  | churn demo | 46 | **46** -- the gate, unmoved |
+  | **lisp finale** | **56** | **55** |
+  | `idleRoots` | 3/3 | **0/0** |
+  | batch 70 `memo` / `res` / `unres` / `pc:n` | 1672 / 2514 / 2235 / 111 | **identical** |
+  | `rounds` / `pend` / `reach` / `rf:*` / `n:*` | -- | **identical** |
+  | `vm/VM.smpThreadsDemo()V` | 916 B | 812 B (-104) |
+  | every OTHER baked method, of 1,976 | -- | identical size, none added or removed |
+
+  - **THE CLOSURE BEING BYTE-IDENTICAL IS WHAT RULES OUT THE ALTERNATIVE, and it is the half that makes this
+    a measurement rather than a coincidence.** A one-line revert inside a demo body cannot move a closure
+    decision, and the counters confirm it did not: `memo`/`reach` -- the pair this file established for
+    telling removed waste from lost marking -- are identical to the digit. So the 55/56 difference cannot be
+    a closure difference, and the only thing left that moved is WHEN memory was reclaimed.
+  - **AND THE LOG CONFIRMS THE REVERT TOOK, independently of the grep that selected the image: `idleRoots=0/0`
+    at both the churn demo and the finale**, where the fix arm reads `3/3`. That counter is non-zero only for
+    a collection taken while the secondaries are scheduling, which is exactly the window the forced
+    collection occupied. Its absence is the change, visible in the VM's own output.
+  - **THE MECHANISM THE IDLE-ROOTS CARD PROPOSED IS CONFIRMED RATHER THAN MERELY CONSISTENT.** `launchMain`
+    shares heap and loader state across the suite's 40 programs, so an extra collection inside
+    `smpThreadsDemo` resets the volume trigger and changes the allocation state every later program starts
+    from; the lisp demo's own PRESSURE collections then fire at a different point. The QEMU A/B had already
+    measured that shape -- the batch-line `gc=` +1 in 8 of 70 batches, converging and diverging again -- and
+    this is the same effect surviving to the finale on silicon.
+  - **THE RECORD IS NOW 16 HARDWARE BOOTS WITH NO COUNTEREXAMPLE, and the split is total:** every binary
+    WITHOUT the forced collection has read 55 (about thirteen boots, across many different binaries); every
+    binary WITH it has read 56 (three boots, two binaries). **n=1 on this control arm**, stated rather than
+    rounded up -- what makes it decisive is that it is the single-variable pairing the previous two boots
+    could not supply, and that it falls on the side the twelve older boots predict.
+  - **SO THE FINALE COUNTER IS SENSITIVE, NOT NOISY -- ON SILICON, which is a more useful conclusion than
+    "it is a gate".** Two binaries have each read the same value twice on hardware, and the value MOVES when
+    allocation timing upstream changes. That makes it an instrument for detecting upstream perturbation, and
+    it is why it moved here. **On QEMU it remains unusable**: the recorded A/A pair gave 56 and 57 from an
+    IDENTICAL binary, and nothing here disturbs that.
+  - **THIS RETIRES TWO HEDGES THIS FILE CARRIES.** The idle-roots card says "two readings fit and ONE BOOT
+    CANNOT SEPARATE THEM" and offers "the finale is noisy on hardware too" as the alternative; the
+    same-image control card says "the question stays open". Both are answered: the alternative is refuted on
+    hardware, and the mechanism is named. What is NOT retracted is either card's caution -- both were right
+    that the evidence they had could not decide it.
+  - **WHAT IS NOT CLAIMED: a full marker sweep.** The log quoted here is the batch-70/churn/lisp FRAGMENT
+    plus the closing counters, so it establishes the closure, both GC figures and `[main returned normally]`
+    -- and reading a truncated log as a completed run is a trap this file already records three times.
+  - **THE ARC COST FOUR BOOTS AND THE ACCOUNTING IS WORTH KEEPING.** One to notice the 56, one control that
+    reproduced 56 on the same image (non-decisive, because the recorded save had been overwritten by a later
+    flash and was not the pre-change binary its card promised), one to find the build is no longer
+    deterministic, and this one. **The cheap control was cheap and the DECISIVE control was one line** -- and
+    the difference between them is that the first varied the binary while the second varied the change.
+
+- **THE LISP-FINALE CONTROL RAN, AND THE DECISIVE OUTCOME DID NOT OCCUR: THE SAME BINARY READ 56 TWICE
+  (2026-09-24, PI).** The idle-roots suite image was re-flashed from `sdcard/kernel8-prev-flashed.img` and
+  booted a second time on the same Pi. `gc: collections=46` at the churn demo -- the gate -- and **56** at
+  the lisp finale, identical to its first boot.
+
+  | the idle-roots suite image | churn demo | lisp finale |
+  |---|---|---|
+  | boot 1 (recorded) | 46 | **56** |
+  | boot 2 (this control) | **46** | **56** |
+
+  - **WHAT IT SETTLES AND WHAT IT DOES NOT.** The outcome that would have been decisive -- any value but 56
+    -- did not happen, so **"one binary, two answers" is NOT demonstrated on silicon**. What is established
+    is narrower and still worth having: this binary is **REPEATABLE at 56 on hardware**, where the recorded
+    QEMU A/A pair gave 56 and 57 from an IDENTICAL binary. **Two samples cannot prove determinism**, and a
+    noisy counter skewed toward 56 produces exactly this picture -- stated rather than rounded away.
+  - **THE RECORD NOW READS 15 HARDWARE BOOTS WITH NO COUNTEREXAMPLE, and the pattern favours one reading.**
+    About twelve boots at 55 across many DIFFERENT binaries, then three at 56 across two binaries -- and
+    every one of the latter carries the forced collection. If the finale were as noisy on silicon as on
+    QEMU, the dozen pre-change boots (themselves different binaries) should have shown spread, and none
+    did. So the free-list reading is **SUPPORTED, not proven**, and the question stays open.
+  - **THE BOOT CONFIRMED ITS OWN PROVENANCE, independently of the grep that selected it:**
+    `bakeMemosDropped=11`, `res=2651 unres=2372`, `pc:n=114` -- the idle-roots-era figures, against the
+    statics image's 9 / 2514 / 2235 / 111. Plus `rounds=4 pend=180 reach=16`, `memo=1672`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `smp gc: idleRoots=3/3 marked=0 idleGc=0`. **NOT claimed: a
+    full marker sweep** -- the log quoted here is the churn/lisp FRAGMENT, and reading a truncated log as a
+    completed run is a trap this file already records twice.
+  - **THE CONTROL THE IDLE-ROOTS CARD PROMISED NO LONGER EXISTS, and that was found by checking the ARTIFACT
+    rather than the label.** That card said the saved binary was the previous PI-VALIDATED one -- i.e. a
+    PRE-forced-collection image, which would have been a true A/B on the mechanism. **The statics flash
+    OVERWROTE that save:** `kernel8-prev-flashed.img` greps clean for `$$Lambda/` and `CLASS NAME
+    UNRESOLVED` while carrying `idleRoots`, so it is the idle-roots image itself. A same-image-twice control
+    is what was actually available, and for this question it is the weaker of the two.
+  - **WHAT WOULD SETTLE IT IS ONE BUILD AND ONE BOOT: the idle-roots commit with ONLY the forced collection
+    reverted**, booted on the same Pi in the same session. That is single-variable -- the shape this file
+    demands -- and a 55 on the control against 56 on the fix is the pairing. **Merely rebuilding an older
+    binary is NOT it:** a 55 there is what BOTH readings predict, so it discriminates nothing.
+  - **AND THE CHURN FIGURE IS NOW 46 ACROSS FOUR HARDWARE BOOTS OF THREE BINARIES.** That is the half the
+    census called a gate, and it has never moved. The finale's count still may not be cited from a QEMU run.
+
 - **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE REAL
   JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, PI-VALIDATED).** The
   launcher blocker named one card above is closed at its root:
