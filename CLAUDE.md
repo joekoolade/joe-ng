@@ -127,7 +127,7 @@ defines the minimum the assembler must encode.
   | 2-element control, same run | clean | clean |
   | demo suite (on the byte-exact flash candidate) | -- | 40 programs, batch 70 identity EXACT, every marker zero |
   | `math jtreg` / `sb-probe` / `SynthNameProbe` | -- | `ran 4, failures 0` / `28 checks, 0 failures` / 3 distinct names |
-  | **the REAL JUnit ConsoleLauncher** | **batch 70, 2 NPEs, exit `0xFFFFFFFF`, usage dump** | **batch 139, 0 NPEs, `[2 tests successful]` / `[0 tests failed]`, exit 0** |
+  | **the REAL JUnit ConsoleLauncher (QEMU, then PI)** | **batch 70, 2 NPEs, exit `0xFFFFFFFF`, usage dump** | **batch 139, 0 NPEs, `[2 tests successful]` / `[0 tests failed]`, exit 0 -- on BOTH harnesses, closure EXACT** |
   | image | 33,715,864 | **33,719,344 (+3,480 B, +0.010%)** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
 
@@ -220,6 +220,61 @@ defines the minimum the assembler must encode.
     `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
     stable=1`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, `sha256 clone = .../fork-ok`,
     `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> `msg3 MIC ok` -> HTTP 200 OK, 829 bytes.
+  - **AND THE LAUNCHER ITSELF IS PI-VALIDATED, WHICH IS THE CLAIM THIS WHOLE ARC WAS AFTER: `Test run
+    finished after 100906 ms`, `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]`,
+    exit 0, batch 139 `+2494blob`, and ZERO `NullPointerException` anywhere in the boot.** The two NPEs the
+    control arm dies on -- `ClassSelector.hashCode` and `pruneStackTrace` under
+    `ImmutableCollections$List12.forEach` -- are absent on silicon as they are on the emulator.
+    `SleepSanity` runs green (`testMillisNanos() 50558 ms`, `testMillis() 17378 ms`).
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES ON THE SAME BINARY -- EVERY COUNTER, INCLUDING THE THREE THE
+    SUITE DIFFERS ON.** The flashed card was `cmp`-confirmed against the QEMU-gated image first, so this is
+    one binary on two machines rather than two builds:
+
+    | batch 139, `launcher-flash.img` | QEMU | **Pi** |
+    |---|---|---|
+    | blobs | +2494blob | **+2494blob** |
+    | `rounds` / `pend` / `reach` | 3 / 4 / 10 | **3 / 4 / 10** |
+    | `n:imap` / `synth` / `clinits` | 1250 / 2242 / 533 | **1250 / 2242 / 533** |
+    | `memo` / `res` / `unres` | 27286 / 48400 / 8155 | **27286 / 48400 / 8155** |
+    | `rf:skip` / `visit` / `clos` / `holeEnd` | 125714 / 40420 / 40420 / 39469 | **identical** |
+    | `sy:n` / `chg` | 2242 / **0** | 2242 / **0** |
+    | `pc:n` | 776 | **776** |
+    | `clinitLk` | 186 | 185 |
+    | `lk:wait` / `rel` | 26 / 16920 | 5 / 16904 |
+
+  - **AND THAT EXACTNESS NARROWS THE OPEN QUESTION ONE BULLET BELOW, WHICH IS WORTH MORE THAN THE PASS.**
+    The suite boot differs from its QEMU arm on `res`/`unres`/`pc:n` by 3/3/1 and on nothing else; I
+    recorded the hardware RNG as the credible mechanism and said plainly that nothing isolated it. This
+    boot is the nearest thing to isolation available without a new instrument: **the launcher image never
+    probes the RNG** -- there is no `hw rng:` line in the log, because that path belongs to the suite's
+    `SecureRandomDemo` and to `VM.boot`'s report, neither of which a launched program reaches -- and it is
+    **EXACT on precisely those three counters**, at nine times the suite's blob count. So "these three are
+    simply harness-sensitive" is out; what is left is something the suite does and the launcher does not.
+    **Still consistent-with rather than proven** -- the two images differ in far more than the RNG -- but
+    the candidate set is smaller than it was, and it got smaller for free.
+  - **`sy:chg=0` AT 2242 SYNTHESISED TIBs ON SILICON, FOR THE SECOND TIME.** That counter is on the batch
+    line expressly so a later boot can refute the synth-latch soundness argument; this change gives four
+    classes a Type node they did not have and moves every static cell, so if anything were going to disturb
+    the shared Object vtable prefix it would show here. Not one write was ever necessary.
+  - **`clinitLk` 186 QEMU / 185 Pi -- one apart, reproducing the recorded shape exactly.** This file
+    records `233`/`234` for the same pair on an older closure and reads the near-identity as the number
+    being a property of the CLOSURE rather than of the machine. It is, again. **`lk:wait` and `rel` are the
+    two that move** (26/5 and 16920/16904), which is the separation the loader-lock arc established:
+    counters that repeat to the digit across arms measure the program, counters that do not measure the
+    interleaving.
+  - **THE `ProcessImpl` DENYLIST TRAP FIRED AT BATCH 21 AND THE BOOT RAN ON TO 139 -- proof by PRESENCE for
+    the eighth consecutive hardware boot**, bringing the run's only `LINK FAILED` and its only
+    `unclaimed pc` inside its own trace. Its ABSENCE would have been as suspicious as a new failure. Eight
+    `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines print (the cap) against a total of 185, and the set
+    spans both worlds -- `java/lang/String`, `java/lang/Boolean`, `java/util/Locale`, `java/lang/Module`
+    beside picocli's `CommandLine` and JUnit's `CustomClassLoaderCloseStrategy`.
+  - **THE BOOT IS FLAT: 100,906 ms** against the 100,056 / 100,195 / 100,261 / 100,786 ms this file records
+    for the four preceding PI-VALIDATED launcher boots -- 120 ms above that range, on a closure that has
+    gained java.math and lost three exception overlays since. **What the hardware adds over the emulator is
+    the part QEMU structurally cannot supply**: a 3,480-byte layout shift on cold DRAM (the emulator hands
+    out ZEROED memory), four cores under real preemption, and an incoherent I-cache -- the shape of the
+    `IC IALLU` bug this project found only on silicon with SMP on -- at 2,494 blobs rather than the suite's
+    ~190.
   - **`bakeMemosDropped=9` ON SILICON TOO, WHICH IS WHAT SETTLES THAT FIGURE.** The QEMU card reported the
     move from 11 as attributable-to-layout rather than noise; hardware reading the same 9 is the evidence
     for that, since the two harnesses share no timing and no DRAM behaviour.
