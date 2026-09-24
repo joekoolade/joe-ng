@@ -185,6 +185,26 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         { "java/lang/Long$LongCache.cache",       "vm/VM.longCacheSlotAddr" },
     };
 
+    // A CDS-style ARCHIVED OBJECT SUBGRAPH: a static whose object graph the IMAGE carries, so the
+    // class's own <clinit> ADOPTS it rather than building a second copy over the top. This is stock's
+    // mechanism, not a joe-ng one -- HotSpot archives a named subgraph per class and
+    // CDS.initializeFromArchive restores the pointer; our image IS the mapped archive, so the writer
+    // fills the field and initializeFromArchive stays the no-op it already is.
+    //
+    // ImmutableCollections is the case. Its initializer is `if (archivedObjects == null) { build five
+    // singletons } else { adopt them }`, and with the field null it took the BUILD arm and overwrote
+    // the cells the writer had baked -- TWO WRITERS for EMPTY/EMPTY_LIST/EMPTY_LIST_NULLS/EMPTY_SET/
+    // EMPTY_MAP. Coherent since statics unified (one cell), but ORDER-DEPENDENT: baked code carries no
+    // init guard, so a baked reader that touched EMPTY before the guest <clinit> ran held the snapshot
+    // object while the cell moved on. Baking the array retires that -- the cell never changes.
+    //
+    // Nothing else is needed: the fixpoint below deep-bakes the array, each element's class joins
+    // tibClasses by the baked-scalar rule (which is how SetN/MapN get real TIBs -- nothing in the
+    // compiled closure ever `new`s one), and the array's component pulls its canonical array TIB.
+    private static final String[] ARCHIVED_SUBGRAPHS = {
+        "java/util/ImmutableCollections.archivedObjects",
+    };
+
     private final ClassRegistry registry;
     private final Vec<Blob> blobs = new Vec<>();
     private final Vec<RFile> files = new Vec<>();     // M3: embedded RAMFS files
@@ -262,6 +282,11 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         {
             statics.add(BAKE_STATICS[bs][0]);
             use(ownerOf(BAKE_STATICS[bs][0]), usedClasses, clinitOrder, worklist);
+        }
+        for (int as = 0; as < ARCHIVED_SUBGRAPHS.length; as++)
+        {
+            statics.add(ARCHIVED_SUBGRAPHS[as]);
+            use(ownerOf(ARCHIVED_SUBGRAPHS[as]), usedClasses, clinitOrder, worklist);
         }
         // M8 real vtables for baked classes: the deep-snapshot object graphs are discovered INSIDE
         // the compile fixpoint (not at layout), so every baked scalar's class can still join

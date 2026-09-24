@@ -115,6 +115,100 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`ImmutableCollections.<clinit>` TAKES STOCK'S ADOPT BRANCH NOW -- THE `EMPTY_*` TWO-WRITERS HAZARD IS
+  CLOSED, AND "ONE WRITER" IS PROVEN BY ADDRESS (2026-09-24, QEMU-GATED -- NOT YET PI-VALIDATED).** The
+  initializer is `if (archivedObjects == null) { build five singletons } else { adopt them }`. The field read
+  null, so it took the BUILD arm and constructed fresh objects over the cells the writer had baked. The
+  writer fills the field now, and the initializer adopts.
+
+  | gate | result |
+  |---|---|
+  | **`ArchiveProbe`, the three adopt arms** | `List.of()` / `Set.of()` / `Map.of()` all at **IMAGE** addresses (`0x16dcd8` / `0x16dd18` / `0x16dd38`) |
+  | one-element control, same run | `List.of(a)` at a **HEAP** address -- unmoved, as it must be |
+  | **negative control** (`ImageBuilder` stashed) | **all four arms HEAP**, and the image delta reproduces exactly |
+  | **cell vs array, read out of `kernel8.img`** | `EMPTY` == `archivedObjects[0]` and `EMPTY_LIST` == `[1]`, **byte-identical** |
+  | **demo suite, COMPLETE run** | **40 programs to `self-build retired`**, batch-70 closure **EXACT**, **28 failure markers zero** |
+  | determinism | a rebuild of the restored tree is **BYTE-IDENTICAL** to the gated image |
+  | image | 33,722,324 -> **33,749,228 (+26,904 B, +0.080%)** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THIS IS STOCK'S OWN MECHANISM RATHER THAN A joe-ng SPECIAL CASE, which is the whole reason it is
+    small.** HotSpot archives a named object subgraph per class and `CDS.initializeFromArchive` restores the
+    pointer; **a joe-ng image IS a mapped archive**, so the writer fills the field and
+    `initializeFromArchive` stays the no-op it already is. No new entry on `clinitBlocked`, no per-field
+    logic, and the initializer runs exactly as on a CDS-enabled HotSpot -- the same correction the seed card
+    one increment ago had to make about its own proposal.
+  - **"ONE WRITER" IS A MEASUREMENT, NOT AN ARGUMENT, and it is the half worth keeping.** Read straight out
+    of the image: `archivedObjects` -> `0x16dc88`, length 5, elements `0x16dcc8 / 0x16dcd8 / 0x16dcf8 /
+    0x16dd18 / 0x16dd38`; the `EMPTY` cell holds `0x16dcc8` and `EMPTY_LIST` holds `0x16dcd8` -- **the same
+    addresses**. The deep-bake INTERNED them, so the metal `EMPTY = archivedObjects[0]` writes back the value
+    already there and the assignment is a no-op. Those two were the ONLY cells that ever had two writers, so
+    the order-dependent hazard the statics card recorded is retired rather than merely made coherent.
+  - **THE OTHER THREE CELLS ARE STILL BAKED 0, stated rather than rounded away.** `EMPTY_LIST_NULLS`,
+    `EMPTY_SET` and `EMPTY_MAP` are referenced by no compiled code, so the writer's object-static fill never
+    touched them. They go from built-fresh-on-the-heap to adopted-from-the-image, which is the point -- but
+    the CELL still starts 0, so a baked reader touching one BEFORE the guest initializer ran still gets null.
+    **Unchanged by this increment, and an NPE rather than a silent wrong answer.**
+  - **ALMOST NO NEW MACHINERY, AND THAT IS THE DESIGN CLAIM: one static key.** The existing deep-bake
+    fixpoint bakes the array, and each element's class joins `tibClasses` by the **BAKED-SCALAR RULE** --
+    which is how `SetN`/`MapN` get real TIBs at all, since nothing in the compiled closure ever `new`s one.
+    Verified rather than assumed: all five elements carry real, DISTINCT TIBs. Cost: five new classes
+    (`AbstractMap`, `AbstractImmutableMap`, `AbstractImmutableSet`, `MapN`, `SetN`) and baked methods
+    1,977 -> 2,017, **every one of the new ones a vtable STUB** (`bake-stub ... (vtable slot, not reached)`).
+  - **THE NEGATIVE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT.** With ONLY `ImageBuilder` stashed, the
+    three adopt arms move image -> heap and **the one-element control does NOT**. Arms that move in one state
+    and not the other are the control; the arm that passes in both is the built-in comparison -- the shape
+    this file has had to ask for repeatedly.
+  - **THE CLOSURE DID NOT MOVE, which is what a writer/layout change has to show.** Batch 70 is EXACT
+    against the previous QEMU arm: `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+    `sy:chg=0`, `+240blob`, `gc=46`. **Five classes were added to the IMAGE, not to the guest closure.**
+    Plus `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `smp gc: idleRoots=3/3`,
+    `lisp evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`,
+    `smp sched: 4 of 4`, `sum20 = 210`, `sha256 clone`, `YNW`, `attributes forEach ok`,
+    `immutable forEach ok`, `keySet=3 values=3 entrySet=3 pairsOk=1`, `bakeMemosDropped=9`,
+    `sync: static seen=18 nomonitor=0`, and only the SEVEN known `UNRESOLVED STATIC`/`TRAP-WIRED` lines
+    (eight occurrences -- `CodingErrorAction.REPLACE` reports twice), every one labelled DENYLISTED.
+  - **DETERMINISM SURVIVED, AND THAT WAS A REAL QUESTION RATHER THAN A FORMALITY.** The previous increment
+    had just restored a byte-identical build; deep-baking an OBJECT GRAPH is exactly where a host-clock or
+    identity-hash-derived value could have re-entered. A rebuild of the restored tree is byte-identical to
+    the image that was gated.
+  - **THE IMAGE DELTA HAD TO BE MEASURED AGAINST A SAME-BUILD-PATH CONTROL, and the first reading was
+    wrong.** A cross-path comparison read **+57,512**; a control built through the IDENTICAL target chain
+    reads **+26,904**, and the 30,608 residue is the recorded `RandomFactory`/jdktests-state trap. The
+    feature delta then agrees to the byte across two independent pairs.
+  - **TWO HARNESS FAILURES, BOTH MINE, BOTH SHAPES THIS FILE ALREADY RECORDS.** (1) A suite was launched
+    with a tracked background task AND a trailing `&`, so the task reported completion instantly while the
+    emulator kept running and was orphaned when the shell exited. (2) That orphan then ran at ~350% CPU
+    against the NEXT suite on an 8-core host -- the contaminated-arm trap -- and the run **STALLED mid-lisp
+    at 121,474 bytes**, reading exactly like a hang. **Reaping it produced the terminal marker in 75
+    SECONDS**, which is what says both "timeouts" were contention and not the VM. Check the load and reap
+    `qemu-system-aarch64` BEFORE reading any QEMU result, and never pair `&` with a tracked task.
+  - **NOT FIXED HERE, AND NOW MEASURED RATHER THAN READ: THE WRAPPER CACHES HAVE THE SAME GAP.**
+    `Integer$IntegerCache` and `Long$LongCache` branch on **`archivedCache`**, not on `cache` -- and joe-ng's
+    `BAKE_STATICS` bakes `cache` while `archivedCache` reads **0**:
+
+    | statics cell | baked value |
+    |---|---|
+    | `java/lang/Integer$IntegerCache.cache` | `0x169c58` (a real array) |
+    | `java/lang/Integer$IntegerCache.archivedCache` | **`0x0`** |
+    | `java/lang/Long$LongCache.cache` | `0x16bc70` |
+    | `java/lang/Long$LongCache.archivedCache` | **`0x0`** |
+
+    So both initializers take the BUILD arm and **overwrite the baked array with fresh guest boxes**.
+    **Stock's own comment states the consequence** -- "If archive has Integer cache, we must use all
+    instances from it. Otherwise, the identity checks between archived Integers and runtime-cached Integers
+    would fail." That is the `Integer$IntegerCache` latent instance the statics card NAMED, now with a
+    mechanism and a one-line remedy (`ARCHIVED_SUBGRAPHS` += `archivedCache`). **Deliberately NOT bundled:**
+    it changes which `Integer` objects the VM hands out, which is user-visible, so it wants its own
+    box-identity probe and its own gate. All fifteen stock `initializeFromArchive` callers share the same
+    `if (archived == null) { build } else { adopt }` shape, so the mechanism generalises.
+  - **NOT PI-VALIDATED, and the gate is named in advance.** This moves every static cell, adds five Type
+    nodes and deep-bakes an object graph, on cold DRAM where the emulator hands out ZEROED memory -- the
+    layout-movement shape this file records latent bugs surfacing from twice. **A wrong adopt would not
+    announce itself either:** the failure shape is a null static or a wild branch through a stub vtable slot,
+    which makes the ABSENCES the assertion rather than any printed number.
+
 - **THE IMAGE BUILD IS DETERMINISTIC AGAIN, AND THE FIX IS STOCK'S OWN HOOK RATHER THAN A SPECIAL CASE
   (2026-09-24, PI-VALIDATED).** `jdk/internal/misc/CDS.getRandomSeedForDumping()` --
   which stock declares NATIVE and whose ONE caller in all of java.base is `ImmutableCollections.<clinit>` --
@@ -180,7 +274,9 @@ defines the minimum the assembler must encode.
     WRITERS.** `initializeFromArchive` is still a no-op, so `archivedObjects` stays null and the initializer
     BUILDS fresh singletons over the baked ones. The faithful close is to bake `archivedObjects` so the
     initializer takes stock's adopt branch -- the same mechanism, stock's own code path, its own increment
-    and its own gate.
+    and its own gate. **DONE the same day -- see the card at the top of this file, which also
+    records that `EMPTY` and `EMPTY_LIST` were the ONLY two cells with two writers (the other three were
+    baked 0), and that the wrapper caches have the identical gap on `archivedCache`.**
   - **TWO HARNESS FAILURES ON THE WAY, both recorded shapes walked into again.** A suite run was scored
     nothing-found when it had been CUT OFF mid-finale -- a TIMEOUT, not a failure, and an all-zero marker
     sweep over a truncated log is indistinguishable from a clean one. And a re-run got LESS far (25 batches
