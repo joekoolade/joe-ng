@@ -115,6 +115,83 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE LEAK IT
+  CAUSED IS REPRODUCED AND GONE (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** The launcher blocker
+  named one card above is closed at its root: `java/util/ImmutableCollections.EMPTY` existed in an IMAGE
+  cell AND a GUEST cell, so `e1 != EMPTY` could never hold and the sentinel escaped as an ELEMENT of a
+  one-element `List.of`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`EmptySentinelProbe`, varargs arm** | **`size=2`, element `java.lang.Object@16bc90`** | **`size=1`, element `java.lang.String`** |
+  | 2-element control, same run | clean | clean |
+  | demo suite | -- | 40 programs, batch 70 identity EXACT, every marker zero |
+  | `math jtreg` / `sb-probe` / `SynthNameProbe` | -- | `ran 4, failures 0` / `28 checks, 0 failures` / 3 distinct names |
+  | image | 33,715,864 | **33,719,344 (+3,480 B, +0.010%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
+
+  - **THE GATE IS THE WHOLE POINT OF THE PREVIOUS INCREMENT: a defect that cost a twenty-minute launcher
+    boot is now a seconds-long probe that FAILS before and PASSES after**, with the two-element control
+    clean on both sides. The fix was written against a reproduction rather than against a reading.
+  - **ROOT CAUSE, ONE LINE OF POLICY: the dense static block is gated on having a TYPE NODE.** A dense
+    per-class block -- the thing `adoptStatics` adopts, giving ONE home per field across both worlds -- is
+    emitted only for a class in `typeClasses` AND `bakeDomain`. A class that is never instantiated and
+    never type-tested has no Type, so its baked statics stay INDIVIDUAL cells, nothing is adopted, and the
+    loader allocates a fresh guest block. **The condition was never "is this class's state shared?" -- it
+    was "does this class happen to be an object".** Holder classes are exactly the ones that fail that test
+    and exactly the ones whose entire contribution IS static state.
+  - **THE FIX IS TO STOP TREATING THEM AS A SPECIAL CASE, NOT TO ADD ONE.** A bake-domain class that owns a
+    baked static now gets a Type node like any other, and the existing dense-block -> vtSig -> adoption
+    path carries it with **no new code anywhere downstream**: `findVtSig`/`adoptStatics`/`typeadopt` are
+    untouched, and every consumer of the entry was already `!= 0`-guarded (checked, not assumed -- a
+    Type-less entry would carry `slotsAddr = 0`, which the parity check already reads as "not baked").
+    `ImmutableCollections` goes from 2 individually-baked cells to **10 contiguous ones**.
+  - **IT WAS FOUR CLASSES, NOT ONE, AND THREE OF THEM ARE LATENT INSTANCES OF SHAPES THIS FILE ALREADY
+    RECORDS AS EXPENSIVE.** Measured by diffing the `statmap` owner sets of a control build against the fix
+    -- 14 cells across four classes:
+
+    | class | cells before | after | the shape if it ever bit |
+    |---|---|---|---|
+    | `java/util/ImmutableCollections` | 2 | **10** | MEASURED: the sentinel leak |
+    | `java/lang/Integer$IntegerCache` | 2 | 5 | small-integer BOX IDENTITY across the two worlds |
+    | `java/lang/Long$LongCache` | 1 | 3 | the same, for `Long` |
+    | `java/lang/StringUTF16` | 3 | 4 | `LO_BYTE_SHIFT`, which this file records as SEEDED -- a wrong byte order is a wrong STRING, not an error |
+
+    **NOT CLAIMED: that the other three were broken.** What is established is that they had the same SPLIT;
+    whether a baked writer and a guest reader ever met on those particular cells is a different question and
+    no boot here asks it. They are listed because a latent instance of a recorded failure mode is worth
+    naming, and because the fix closes them whether or not they were live.
+  - **THE COST IS 0.010% AND IT WAS MEASURED AGAINST A CONTROL BUILD RATHER THAN ESTIMATED** -- the same
+    tree with only `ImageBuilder` stashed, so the delta is four Type nodes plus fourteen static cells plus
+    their vtSig entries and nothing else.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION THAT MATTERS FOR A WRITER CHANGE.** This moves LAYOUT,
+    not codegen, so the byte-for-byte self-hosting fixpoint cannot have shifted -- and a writer change that
+    did shift it would show there first.
+  - **CLOSURE IDENTITY IS EXACT AGAINST CURRENT HEAD, which is worth stating precisely because the recorded
+    figures moved one increment ago.** Batch 70 reads `rounds=4 pend=180 reach=16`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `memo=1672`,
+    `pc:n=112` -- and `res=2517 unres=2238`, which is the recorded 2651/2372 **less the 134 each that the
+    exception-overlay deletion took**, exactly as that card predicted. Plus `churnMB=625 live=32 intact=32`,
+    `gc: collections=46` at the churn demo (the gate), `lisp evals=600 result=610 stable=1`,
+    `smp sched: 4 of 4`, `smp gc: idleRoots=3/3`, `steps/core 60/60/60/60`, `finish HML` 20/20/20,
+    inversion `HIGH blocked 61ms`, `sha256 clone = .../fork-ok`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, and **`staticadopt DIFF` zero** -- the line a count mismatch would
+    print, and the reason the probe passing IS evidence the adoption happened rather than evidence of
+    something else.
+  - **WHAT IS NOT CLOSED, stated rather than rounded away: the class still has TWO WRITERS, and now they
+    share a cell.** The seed-JVM snapshot fills the block, and `Loader.clinitCompilable` still lets the
+    metal `<clinit>` RUN and overwrite it. That is now coherent -- both worlds read whatever the last writer
+    left -- but it is ORDER-DEPENDENT: baked code that read the cell before the metal initializer ran would
+    hold the snapshot object while the cell moved on. **No boot here shows that happening**, and the
+    deterministic form (drop the metal `<clinit>`, let the snapshot be the single writer) is only viable
+    BECAUSE of this change -- with a dense block all ten statics are snapshotted, which retires the
+    objection recorded one card above that `SALT32L` would read 0. It is left for its own increment and its
+    own gate.
+  - **NOT PI-VALIDATED.** This moves every static cell in the image and gives four classes a Type node they
+    did not have, so it wants silicon for the reason this file records twice: latent bugs surfacing from
+    layout movement alone. The whole java.math + exception-overlay + lambda-naming arc is unflashed with it.
+
+
 - **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AND NOW REPRODUCED:
   `ImmutableCollections.EMPTY` (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** Two findings, one arc; the
   second was located WITHOUT a boot, by reading the image file, and then cut from a twenty-minute launcher
