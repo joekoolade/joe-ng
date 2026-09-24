@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE REAL
-  JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** The
+  JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, PI-VALIDATED).** The
   launcher blocker named one card above is closed at its root:
   `java/util/ImmutableCollections.EMPTY` existed in an IMAGE cell AND a GUEST cell, so `e1 != EMPTY` could never hold and the sentinel escaped as an ELEMENT of a
   one-element `List.of`.
@@ -209,9 +209,45 @@ defines the minimum the assembler must encode.
     BECAUSE of this change -- with a dense block all ten statics are snapshotted, which retires the
     objection recorded one card above that `SALT32L` would read 0. It is left for its own increment and its
     own gate.
-  - **NOT PI-VALIDATED.** This moves every static cell in the image and gives four classes a Type node they
-    did not have, so it wants silicon for the reason this file records twice: latent bugs surfacing from
-    layout movement alone. The whole java.math + exception-overlay + lambda-naming arc is unflashed with it.
+  - **PI-VALIDATED, AND THE BOOT GATES FOUR UNFLASHED ARCS AT ONCE** -- java.math, the deleted exception
+    overlays, the lambda naming, and this. It moves every static cell and gives four classes a Type node
+    they did not have, which is the layout-movement risk this file records latent bugs surfacing from twice.
+    On silicon: 40 programs to `self-build retired`, every failure marker zero, and only the seven known
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines, each labelled DENYLISTED. Plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `jobs/core 6/6/6/6`,
+    `sched: 89 preemptions`, `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no
+    `STW TIMEOUT`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
+    stable=1`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, `sha256 clone = .../fork-ok`,
+    `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> `msg3 MIC ok` -> HTTP 200 OK, 829 bytes.
+  - **`bakeMemosDropped=9` ON SILICON TOO, WHICH IS WHAT SETTLES THAT FIGURE.** The QEMU card reported the
+    move from 11 as attributable-to-layout rather than noise; hardware reading the same 9 is the evidence
+    for that, since the two harnesses share no timing and no DRAM behaviour.
+  - **THE CLOSURE DISCRIMINATORS ARE EXACT ACROSS HARNESSES AND THREE PATCH COUNTERS ARE NOT, and that is
+    reported rather than rounded to "identical".** Batch 70 on the Pi reads `rounds=4 pend=180 reach=16`,
+    `memo=1672`, `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305` --
+    byte-identical to QEMU, and those are the marked-set counters this file established as the gate. But
+    **`res=2514 unres=2235 pc:n=111` against QEMU's `2517 / 2238 / 112`.**
+    - **The one STRUCTURAL harness difference before batch 70 is the hardware RNG**, and it is visible in
+      the log: silicon self-seeds (`unseeded = self-seeded from hardware, two instances differ`) where the
+      emulator faults on the window and refuses, so `require()` -> `hwEntropy0` -> `Rng.fill` -> `Sha1Prng`
+      is three reloc sites' worth of code that only one harness ever compiles. **Stated as the credible
+      mechanism, NOT as a measurement** -- nothing here isolates it, and the direction of a patch-site count
+      is not predictable from "ran more code".
+    - **What it does NOT indicate is a closure difference**, because `memo` and `reach` -- the pair this
+      file established for telling removed waste from lost marking -- are identical to the digit.
+  - **AND THE LISP FINALE READ 56 FOR THE SECOND TIME ON HARDWARE**, where this file records 55 a dozen
+    times and 56 once (the idle-roots card, which flagged it as an open question with two readings and no
+    way to separate them in one boot). This is a second sample at 56 and it does not settle the question
+    either. **`gc: collections=46` at the churn demo -- the figure the census established as the gate -- is
+    identical on both harnesses**, which is the half that is load-bearing. The cheap control that separates
+    the two readings is still available and still unrun: the previously-flashed binary was saved off the
+    card as `sdcard/kernel8-prev-flashed.img` before this flash.
+  - **AN EIGHTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `a6e15ca1 a16ff3b6 dc771c6b`,
+    distinct from every previous boot, `count 16 -> 13`. Popcount **54 of 96** against an ideal of 48, so
+    the series reads 51, 47, 63, 50, 41, 46, 45, 54. **Still not a randomness test** -- eight samples of
+    three words cannot support a conclusion either way; what stays ruled out is a constant, a counter, and a
+    count that does not follow reads.
 
 
 - **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AND NOW REPRODUCED:
