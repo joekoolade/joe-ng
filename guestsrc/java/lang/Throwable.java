@@ -65,7 +65,36 @@ public class Throwable
     }
 
     /**
-     * The cause, and the two methods that reach it.
+     * The PROTECTED four-argument constructor -- and it is what lets {@code Exception}, {@code Error} and
+     * {@code RuntimeException} be STOCK rather than overlaid.
+     *
+     * <p>Each of those three was a hand-written shell here whose whole body delegated to {@code super}, with
+     * no native and no state of its own. They are deleted: an overlay wins the name, so what such a shell
+     * drops CEASES TO EXIST, and this one dropped exactly this constructor. The launcher found it --
+     * {@code JUnitException.<init>} -> {@code RuntimeException.<init>(String,Throwable,ZZ)} read
+     * {@code LINK FAILED ... class OK but no body for that name+descriptor} and then halted in a DENYLIST
+     * TRAP naming a list RuntimeException is not on. **The VM was halting while REPORTING a failure**, which
+     * is the worst place to lose a member. Using the stock classes closes the whole family at once rather
+     * than the one constructor that happened to be reached.
+     *
+     * <p>{@code enableSuppression} IS HONOURED, because ignoring it is observable: {@code getSuppressed()}
+     * would answer a non-empty array where stock answers an empty one, and JUnit reads it.
+     *
+     * <p>{@code writableStackTrace} IS NOT, and that is a stated divergence rather than an oversight. This
+     * VM captures the backtrace into {@code bt0..bt7} inside {@code VM.unwind} at THROW time, not here, so
+     * honouring it needs VM work rather than a field. What it costs precisely: an exception stock would
+     * leave traceless carries a trace here -- MORE information than stock, never less -- and
+     * {@code setStackTrace} is permitted where stock would ignore it.
+     */
+    protected Throwable(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace)
+    {
+        detailMessage = message;
+        this.cause = cause;
+        suppressionEnabled = enableSuppression;
+    }
+
+    /**
+     * The cause, and the three methods that reach it.
      *
      * <p>The constructors above USED to take a cause and silently drop it, with neither accessor declared --
      * so `initCause` was not in the vtable at all. Stock code that chains exceptions then dispatched through
@@ -76,7 +105,16 @@ public class Throwable
      *
      * <p>`cause == this` is stock's "not yet initialised" sentinel, kept so getCause() answers null for an
      * exception that never had one.
+     *
+     * <p>{@code setCause} is stock's package-private setter, {@code final} as stock declares it:
+     * {@code ResourceBundle}, {@code System} and {@code PrivilegedActionException} all set a cause through
+     * it rather than through {@code initCause}, which refuses a second call.
      */
+    final void setCause(Throwable t)
+    {
+        this.cause = t;
+    }
+
     public Throwable initCause(Throwable cause)
     {
         this.cause = cause;
@@ -132,6 +170,12 @@ public class Throwable
     // detailMessage at +80, so any new field must land after those.
     private StackTraceElement[] stackTrace;   // non-null only once setStackTrace has overridden the inline one
 
+    /** The four-argument constructor's {@code enableSuppression}. TRUE for every other constructor, which is
+     *  stock's default -- and it must be a field rather than ignored, because the difference is READABLE
+     *  through {@code getSuppressed()} and JUnit reads it. Declared after the hardcoded offsets, like the
+     *  fields above. */
+    private boolean suppressionEnabled = true;
+
     public final void addSuppressed(Throwable exception)
     {
         if (exception == this)
@@ -141,6 +185,10 @@ public class Throwable
         if (exception == null)
         {
             throw new NullPointerException();
+        }
+        if (!suppressionEnabled)
+        {
+            return;                          // stock drops it silently; the ARGUMENT CHECKS above still run
         }
         if (suppressed == null)
         {

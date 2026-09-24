@@ -535,6 +535,25 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
             String c = typeRefClasses.at(_s2);
             addTypeClass(c, typeClasses);
         }
+        // M8 statics unification, the TYPE-LESS HOLDER case. A dense per-class static block -- the
+        // thing the loader ADOPTS, giving one home per field across both worlds -- is emitted only
+        // for a class that has a writer Type node (see the vtSigClasses filter below). A bake-domain
+        // class that is never instantiated and never type-tested has none, so its baked statics stay
+        // INDIVIDUAL cells, nothing is adopted, and the loader allocates a fresh guest block: the
+        // class's statics then exist TWICE. Baked code reads the image cell and guest code the guest
+        // one, so any `x == SENTINEL` identity test across the two is false when it should be true.
+        // MEASURED, not hypothetical: java/util/ImmutableCollections is exactly this shape (a holder
+        // class), and its EMPTY sentinel escaped as an ELEMENT of a one-element List.of -- see the
+        // card in CLAUDE.md and test/jdk/junit/EmptySentinelProbe. Giving such a class a Type puts it
+        // on the ordinary dense-block + vtSig + adoption path, with no special case downstream.
+        for (int _s2d = 0; _s2d < statics.size(); _s2d++)
+        {
+            String owner = ownerOf(statics.at(_s2d));
+            if (bakeDomain(owner))
+            {
+                addTypeClass(owner, typeClasses);
+            }
+        }
         StrIntTable typeWord = new StrIntTable();
         for (int _s3 = 0; _s3 < typeClasses.size(); _s3++)
         {
@@ -1201,6 +1220,20 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
                 int base = wordOffset.get(k);
                 System.out.println(String.format("  symmap %08x %08x %s",
                         addr(base), addr(base + sizeWords.get(k)), k));
+            }
+        }
+        // ... and every STATIC's cell address beside them. A bare image address is the only evidence a
+        // corrupt reference leaves, and the symmap names CODE only -- so an address above the code ceiling
+        // could be named as "somewhere in the data region" and no further. That cost a whole arc: a
+        // Class.getName() answering 1 was traced to a receiver at 0x0016C300, read out of the image file by
+        // hand as a bare `new Object()` with Object's own vtable, and the statics cell holding it could only
+        // be found by scanning the image for the word. This prints the map that search reconstructed.
+        if (System.getenv("JOENG_SYMMAP") != null)
+        {
+            for (int i = 0; i < staticWord.size(); i++)
+            {
+                System.out.println(String.format("  statmap %08x %s",
+                        addr(staticWord.valAt(i)), staticWord.keyAt(i)));
             }
         }
         fillStatic(image, staticWord, "vm/VM.imageSymTable", addr(symTableWord));

@@ -223,9 +223,19 @@ public final class MetalJavaLangAccess implements JavaLangAccess
     {
         return 0;
     }
+    /**
+     * Wrap LATIN1 bytes as a String -- IMPLEMENTED, not stubbed, because a null here is a SILENT WRONG
+     * ANSWER rather than a visible gap.
+     *
+     * <p>{@code BigDecimal.layoutChars} has a scale-2 "currency fast path" that lays the digits out itself
+     * and hands the buffer to this method; answering null made {@code new BigDecimal("1.5").multiply(...)
+     * .toString()} return null while every OTHER scale printed correctly -- so it looked like a formatting
+     * quirk of four particular values rather than one missing member. Stock takes ownership of the array;
+     * the ISO-8859-1 decode copies it, which is the same String and costs one array.
+     */
     @Override public String uncheckedNewStringWithLatin1Bytes(byte[] bytes)
     {
-        return null;
+        return new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
     }
     @Override public String uncheckedNewStringOrThrow(byte[] bytes, Charset cs) throws CharacterCodingException
     {

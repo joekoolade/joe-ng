@@ -1917,6 +1917,12 @@ public final class Baseline
             return;
         }
         int nargs = paramCount(cpIndex) + 1;    // receiver + params
+        // DEBUG (off unless Loader.RECV_WATCH_ON). Wired here as well as into the interface path, which is
+        // where it was born: armed on an `invokevirtual` it used to print NOTHING, which reads exactly like
+        // a receiver that is always fine. An instrument that CANNOT FIRE looks exactly like a condition that
+        // never happens -- this file's most-repeated lesson, paid again while chasing a Class.getName() that
+        // answered 1. Before marshalling, for the reason watchReceiver's own doc gives.
+        watchReceiver(cpIndex, cb);
         if (deepStack)
         {
             marshalArgsFromMemory(cb, nargs);   // receiver -> x0
@@ -3483,6 +3489,28 @@ public final class Baseline
                 return true;    // frem/drem emit a BL to VM.drem; multianewarray one to VM.multiNewArray.
             }                   //   Missing this, a method whose ONLY call is one of them saves no LR and
                                 //   returns to junk -- the trap a synchronized-method monitor hits too.
+            // A GUARDED STATIC ACCESS IS A CALL. getstatic/putstatic emit the JVMS 5.5 trigger (a BL to
+            // VM.ensureInitByName) when the seam says the target is not yet initialized -- so a method whose
+            // ONLY call is that guard saves no LR, and its own `ret` returns to the instruction after the BL:
+            // a silent infinite loop over its own tail, not a fault. MEASURED: the overlay's
+            // MethodHandles.lookup() is `getstatic INSTANCE; areturn`, and it span there for ever, which is
+            // what stalled every java.math closure (SharedThreadContainer.<clinit> calls it).
+            //
+            // `new` (0xBB) and a real invokestatic (0xB8) already answer true above, and those are the only
+            // other sites initGuardAt is reached from -- so this closes the set rather than one case.
+            //
+            // The predicate is the SAME ONE THE EMIT USES and is consulted per compile with the same memo, so
+            // the two passes cannot disagree. It is also MONOTONE in the safe direction: a class can only go
+            // from needing a guard to not needing one as it initializes, so the worst this can do is save an
+            // LR that turns out unnecessary. The writer's seam defaults to false, so its codegen -- and the
+            // byte-for-byte self-hosting fixpoint -- is untouched.
+            if (op == 0xB2 || op == 0xB3)                        // getstatic/putstatic
+            {
+                if (symbols.needsInitGuard(u2(code, pos + 1)))
+                {
+                    return true;
+                }
+            }
             // With implicit checks on, a deref/index emits a BL to newNpe/newAioobe on its throw path — so a
             // method with getfield/putfield/arraylength/array-load/store is non-leaf and must save LR (else a
             // cross-method unwind can't read its return address). Image code (checks off) is unaffected.

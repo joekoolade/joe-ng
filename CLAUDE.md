@@ -115,6 +115,492 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A BAKE-DOMAIN CLASS WITH BAKED STATICS AND NO TYPE NODE HAD ITS STATICS TWICE -- FIXED, AND THE REAL
+  JUnit CONSOLE LAUNCHER RUNS ITS TESTS AGAIN (2026-09-23, PI-VALIDATED).** The
+  launcher blocker named one card above is closed at its root:
+  `java/util/ImmutableCollections.EMPTY` existed in an IMAGE cell AND a GUEST cell, so `e1 != EMPTY` could never hold and the sentinel escaped as an ELEMENT of a
+  one-element `List.of`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`EmptySentinelProbe`, varargs arm** | **`size=2`, element `java.lang.Object@16bc90`** | **`size=1`, element `java.lang.String`** |
+  | 2-element control, same run | clean | clean |
+  | demo suite (on the byte-exact flash candidate) | -- | 40 programs, batch 70 identity EXACT, every marker zero |
+  | `math jtreg` / `sb-probe` / `SynthNameProbe` | -- | `ran 4, failures 0` / `28 checks, 0 failures` / 3 distinct names |
+  | **the REAL JUnit ConsoleLauncher (QEMU, then PI)** | **batch 70, 2 NPEs, exit `0xFFFFFFFF`, usage dump** | **batch 139, 0 NPEs, `[2 tests successful]` / `[0 tests failed]`, exit 0 -- on BOTH harnesses, closure EXACT** |
+  | image | 33,715,864 | **33,719,344 (+3,480 B, +0.010%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
+
+  - **THE GATE IS THE WHOLE POINT OF THE PREVIOUS INCREMENT: a defect that cost a twenty-minute launcher
+    boot is now a seconds-long probe that FAILS before and PASSES after**, with the two-element control
+    clean on both sides. The fix was written against a reproduction rather than against a reading.
+  - **AND THE LAUNCHER A/B IS SINGLE-VARIABLE AND CLEAN, which is what turns this from a probe result into
+    the blocker being closed.** The control is HEAD with ONLY the 19-line `ImageBuilder` change reverted --
+    same tree, same instruments (all disarmed), same script:
+
+    | | control | fix |
+    |---|---|---|
+    | last batch | **70** (`+2371blob`) | **139** (`+2494blob`) |
+    | `NullPointerException` | **2** | **0** |
+    | exit status | **`0xFFFFFFFF`** | **`0x0`** |
+    | outcome | picocli's USAGE dump | `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]` |
+
+    **Both control NPEs are the two this arc has been chasing** -- `ClassSelector.hashCode` under
+    `NestedClassSelector.hashCode`, and `Arrays.asList` under `pruneStackTrace` with
+    `ImmutableCollections$List12.forEach` in its own frame list. Both are gone, and the run finishes:
+    `% % JUnit Platform Suite` / `% % JUnit Jupiter` / `SleepSanity` with `testMillisNanos() 49021 ms` and
+    `testMillis() 17514 ms`, both green.
+  - **THE EARLIER INSTRUMENTED RUNS WERE NOT USED AS THE CONTROL, and the reason is worth keeping.** Three
+    pre-fix logs already showed the same two NPEs and the same `exit=0xFFFFFFFF` -- but every one of them
+    carried armed watches (`fieldoff` lines are in them), so they differ from the fix by more than the fix.
+    A control that differs in two things cannot attribute either. The clean one cost twenty minutes and is
+    the only arm quoted.
+  - **ROOT CAUSE, ONE LINE OF POLICY: the dense static block is gated on having a TYPE NODE.** A dense
+    per-class block -- the thing `adoptStatics` adopts, giving ONE home per field across both worlds -- is
+    emitted only for a class in `typeClasses` AND `bakeDomain`. A class that is never instantiated and
+    never type-tested has no Type, so its baked statics stay INDIVIDUAL cells, nothing is adopted, and the
+    loader allocates a fresh guest block. **The condition was never "is this class's state shared?" -- it
+    was "does this class happen to be an object".** Holder classes are exactly the ones that fail that test
+    and exactly the ones whose entire contribution IS static state.
+  - **THE FIX IS TO STOP TREATING THEM AS A SPECIAL CASE, NOT TO ADD ONE.** A bake-domain class that owns a
+    baked static now gets a Type node like any other, and the existing dense-block -> vtSig -> adoption
+    path carries it with **no new code anywhere downstream**: `findVtSig`/`adoptStatics`/`typeadopt` are
+    untouched, and every consumer of the entry was already `!= 0`-guarded (checked, not assumed -- a
+    Type-less entry would carry `slotsAddr = 0`, which the parity check already reads as "not baked").
+    `ImmutableCollections` goes from 2 individually-baked cells to **10 contiguous ones**.
+  - **IT WAS FOUR CLASSES, NOT ONE, AND THREE OF THEM ARE LATENT INSTANCES OF SHAPES THIS FILE ALREADY
+    RECORDS AS EXPENSIVE.** Measured by diffing the `statmap` owner sets of a control build against the fix
+    -- 14 cells across four classes:
+
+    | class | cells before | after | the shape if it ever bit |
+    |---|---|---|---|
+    | `java/util/ImmutableCollections` | 2 | **10** | MEASURED: the sentinel leak |
+    | `java/lang/Integer$IntegerCache` | 2 | 5 | small-integer BOX IDENTITY across the two worlds |
+    | `java/lang/Long$LongCache` | 1 | 3 | the same, for `Long` |
+    | `java/lang/StringUTF16` | 3 | 4 | `LO_BYTE_SHIFT`, which this file records as SEEDED -- a wrong byte order is a wrong STRING, not an error |
+
+    **NOT CLAIMED: that the other three were broken.** What is established is that they had the same SPLIT;
+    whether a baked writer and a guest reader ever met on those particular cells is a different question and
+    no boot here asks it. They are listed because a latent instance of a recorded failure mode is worth
+    naming, and because the fix closes them whether or not they were live.
+  - **THE COST IS 0.010% AND IT WAS MEASURED AGAINST A CONTROL BUILD RATHER THAN ESTIMATED** -- the same
+    tree with only `ImageBuilder` stashed, so the delta is four Type nodes plus fourteen static cells plus
+    their vtSig entries and nothing else.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION THAT MATTERS FOR A WRITER CHANGE.** This moves LAYOUT,
+    not codegen, so the byte-for-byte self-hosting fixpoint cannot have shifted -- and a writer change that
+    did shift it would show there first.
+  - **CLOSURE IDENTITY IS EXACT AGAINST CURRENT HEAD, which is worth stating precisely because the recorded
+    figures moved one increment ago.** Batch 70 reads `rounds=4 pend=180 reach=16`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `memo=1672`,
+    `pc:n=112` -- and `res=2517 unres=2238`, which is the recorded 2651/2372 **less the 134 each that the
+    exception-overlay deletion took**, exactly as that card predicted. Plus `churnMB=625 live=32 intact=32`,
+    `gc: collections=46` at the churn demo (the gate), `lisp evals=600 result=610 stable=1`,
+    `smp sched: 4 of 4`, `smp gc: idleRoots=3/3`, `steps/core 60/60/60/60`, `finish HML` 20/20/20,
+    inversion `HIGH blocked 61ms`, `sha256 clone = .../fork-ok`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, and **`staticadopt DIFF` zero** -- the line a count mismatch would
+    print, and the reason the probe passing IS evidence the adoption happened rather than evidence of
+    something else.
+  - **WHAT IS NOT CLOSED, stated rather than rounded away: the class still has TWO WRITERS, and now they
+    share a cell.** The seed-JVM snapshot fills the block, and `Loader.clinitCompilable` still lets the
+    metal `<clinit>` RUN and overwrite it. That is now coherent -- both worlds read whatever the last writer
+    left -- but it is ORDER-DEPENDENT: baked code that read the cell before the metal initializer ran would
+    hold the snapshot object while the cell moved on. **No boot here shows that happening**, and the
+    deterministic form (drop the metal `<clinit>`, let the snapshot be the single writer) is only viable
+    BECAUSE of this change -- with a dense block all ten statics are snapshotted, which retires the
+    objection recorded one card above that `SALT32L` would read 0. It is left for its own increment and its
+    own gate.
+  - **PI-VALIDATED, AND THE BOOT GATES FOUR UNFLASHED ARCS AT ONCE** -- java.math, the deleted exception
+    overlays, the lambda naming, and this. It moves every static cell and gives four classes a Type node
+    they did not have, which is the layout-movement risk this file records latent bugs surfacing from twice.
+    On silicon: 40 programs to `self-build retired`, every failure marker zero, and only the seven known
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines, each labelled DENYLISTED. Plus the gates QEMU cannot show --
+    **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive timers), `jobs/core 6/6/6/6`,
+    `sched: 89 preemptions`, `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no
+    `STW TIMEOUT`, `steps/core 61/60/59/60`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
+    stable=1`, `sum20=210 weighted20=2870 tally17=1153 wide=7000000155`, `sha256 clone = .../fork-ok`,
+    `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> `msg3 MIC ok` -> HTTP 200 OK, 829 bytes.
+  - **AND THE LAUNCHER ITSELF IS PI-VALIDATED, WHICH IS THE CLAIM THIS WHOLE ARC WAS AFTER: `Test run
+    finished after 100906 ms`, `[3 containers successful]` / `[2 tests successful]` / `[0 tests failed]`,
+    exit 0, batch 139 `+2494blob`, and ZERO `NullPointerException` anywhere in the boot.** The two NPEs the
+    control arm dies on -- `ClassSelector.hashCode` and `pruneStackTrace` under
+    `ImmutableCollections$List12.forEach` -- are absent on silicon as they are on the emulator.
+    `SleepSanity` runs green (`testMillisNanos() 50558 ms`, `testMillis() 17378 ms`).
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES ON THE SAME BINARY -- EVERY COUNTER, INCLUDING THE THREE THE
+    SUITE DIFFERS ON.** The flashed card was `cmp`-confirmed against the QEMU-gated image first, so this is
+    one binary on two machines rather than two builds:
+
+    | batch 139, `launcher-flash.img` | QEMU | **Pi** |
+    |---|---|---|
+    | blobs | +2494blob | **+2494blob** |
+    | `rounds` / `pend` / `reach` | 3 / 4 / 10 | **3 / 4 / 10** |
+    | `n:imap` / `synth` / `clinits` | 1250 / 2242 / 533 | **1250 / 2242 / 533** |
+    | `memo` / `res` / `unres` | 27286 / 48400 / 8155 | **27286 / 48400 / 8155** |
+    | `rf:skip` / `visit` / `clos` / `holeEnd` | 125714 / 40420 / 40420 / 39469 | **identical** |
+    | `sy:n` / `chg` | 2242 / **0** | 2242 / **0** |
+    | `pc:n` | 776 | **776** |
+    | `clinitLk` | 186 | 185 |
+    | `lk:wait` / `rel` | 26 / 16920 | 5 / 16904 |
+
+  - **AND THAT EXACTNESS NARROWS THE OPEN QUESTION ONE BULLET BELOW, WHICH IS WORTH MORE THAN THE PASS.**
+    The suite boot differs from its QEMU arm on `res`/`unres`/`pc:n` by 3/3/1 and on nothing else; I
+    recorded the hardware RNG as the credible mechanism and said plainly that nothing isolated it. This
+    boot is the nearest thing to isolation available without a new instrument: **the launcher image never
+    probes the RNG** -- there is no `hw rng:` line in the log, because that path belongs to the suite's
+    `SecureRandomDemo` and to `VM.boot`'s report, neither of which a launched program reaches -- and it is
+    **EXACT on precisely those three counters**, at nine times the suite's blob count. So "these three are
+    simply harness-sensitive" is out; what is left is something the suite does and the launcher does not.
+    **Still consistent-with rather than proven** -- the two images differ in far more than the RNG -- but
+    the candidate set is smaller than it was, and it got smaller for free.
+  - **`sy:chg=0` AT 2242 SYNTHESISED TIBs ON SILICON, FOR THE SECOND TIME.** That counter is on the batch
+    line expressly so a later boot can refute the synth-latch soundness argument; this change gives four
+    classes a Type node they did not have and moves every static cell, so if anything were going to disturb
+    the shared Object vtable prefix it would show here. Not one write was ever necessary.
+  - **`clinitLk` 186 QEMU / 185 Pi -- one apart, reproducing the recorded shape exactly.** This file
+    records `233`/`234` for the same pair on an older closure and reads the near-identity as the number
+    being a property of the CLOSURE rather than of the machine. It is, again. **`lk:wait` and `rel` are the
+    two that move** (26/5 and 16920/16904), which is the separation the loader-lock arc established:
+    counters that repeat to the digit across arms measure the program, counters that do not measure the
+    interleaving.
+  - **THE `ProcessImpl` DENYLIST TRAP FIRED AT BATCH 21 AND THE BOOT RAN ON TO 139 -- proof by PRESENCE for
+    the eighth consecutive hardware boot**, bringing the run's only `LINK FAILED` and its only
+    `unclaimed pc` inside its own trace. Its ABSENCE would have been as suspicious as a new failure. Eight
+    `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines print (the cap) against a total of 185, and the set
+    spans both worlds -- `java/lang/String`, `java/lang/Boolean`, `java/util/Locale`, `java/lang/Module`
+    beside picocli's `CommandLine` and JUnit's `CustomClassLoaderCloseStrategy`.
+  - **THE BOOT IS FLAT: 100,906 ms** against the 100,056 / 100,195 / 100,261 / 100,786 ms this file records
+    for the four preceding PI-VALIDATED launcher boots -- 120 ms above that range, on a closure that has
+    gained java.math and lost three exception overlays since. **What the hardware adds over the emulator is
+    the part QEMU structurally cannot supply**: a 3,480-byte layout shift on cold DRAM (the emulator hands
+    out ZEROED memory), four cores under real preemption, and an incoherent I-cache -- the shape of the
+    `IC IALLU` bug this project found only on silicon with SMP on -- at 2,494 blobs rather than the suite's
+    ~190.
+  - **`bakeMemosDropped=9` ON SILICON TOO, WHICH IS WHAT SETTLES THAT FIGURE.** The QEMU card reported the
+    move from 11 as attributable-to-layout rather than noise; hardware reading the same 9 is the evidence
+    for that, since the two harnesses share no timing and no DRAM behaviour.
+  - **THE CLOSURE DISCRIMINATORS ARE EXACT ACROSS HARNESSES AND THREE PATCH COUNTERS ARE NOT, and that is
+    reported rather than rounded to "identical".** Batch 70 on the Pi reads `rounds=4 pend=180 reach=16`,
+    `memo=1672`, `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305` --
+    byte-identical to QEMU, and those are the marked-set counters this file established as the gate. But
+    **`res=2514 unres=2235 pc:n=111` against QEMU's `2517 / 2238 / 112`.**
+    - **The one STRUCTURAL harness difference before batch 70 is the hardware RNG**, and it is visible in
+      the log: silicon self-seeds (`unseeded = self-seeded from hardware, two instances differ`) where the
+      emulator faults on the window and refuses, so `require()` -> `hwEntropy0` -> `Rng.fill` -> `Sha1Prng`
+      is three reloc sites' worth of code that only one harness ever compiles. **Stated as the credible
+      mechanism, NOT as a measurement** -- nothing here isolates it, and the direction of a patch-site count
+      is not predictable from "ran more code".
+    - **What it does NOT indicate is a closure difference**, because `memo` and `reach` -- the pair this
+      file established for telling removed waste from lost marking -- are identical to the digit.
+  - **AND THE LISP FINALE READ 56 FOR THE SECOND TIME ON HARDWARE**, where this file records 55 a dozen
+    times and 56 once (the idle-roots card, which flagged it as an open question with two readings and no
+    way to separate them in one boot). This is a second sample at 56 and it does not settle the question
+    either. **`gc: collections=46` at the churn demo -- the figure the census established as the gate -- is
+    identical on both harnesses**, which is the half that is load-bearing. The cheap control that separates
+    the two readings is still available and still unrun: the previously-flashed binary was saved off the
+    card as `sdcard/kernel8-prev-flashed.img` before this flash.
+  - **AN EIGHTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `a6e15ca1 a16ff3b6 dc771c6b`,
+    distinct from every previous boot, `count 16 -> 13`. Popcount **54 of 96** against an ideal of 48, so
+    the series reads 51, 47, 63, 50, 41, 46, 45, 54. **Still not a randomness test** -- eight samples of
+    three words cannot support a conclusion either way; what stays ruled out is a constant, a counter, and a
+    count that does not follow reads.
+
+
+- **A LAMBDA'S `getClass().getName()` ANSWERED NULL, AND THE LAUNCHER'S BLOCKER IS NAMED AND NOW REPRODUCED:
+  `ImmutableCollections.EMPTY` (2026-09-23, QEMU-GATED -- NOT YET PI-VALIDATED).** Two findings, one arc; the
+  second was located WITHOUT a boot, by reading the image file, and then cut from a twenty-minute launcher
+  boot to a seconds-long probe by predicting WHICH call shape reaches it.
+
+  | gate | result |
+  |---|---|
+  | `SynthNameProbe` | 5 arms, **every one matching the host's semantics** |
+  | `CLASS NAME UNRESOLVED` (new report) | **1 on the suite before the fix, 0 after** |
+  | `EmptySentinelProbe`, varargs arm | **the leak REPRODUCED**: `size=2` for a ONE-element list, element at an IMAGE address; 2-element control clean |
+  | `TraceProbe` | 4 arms, `getStackTrace()` **never null** -- the recorded second open item REFUTED |
+  | demo suite | 40 programs, every marker zero, batch 70 identity EXACT |
+  | java.math, re-run on this tree | `math jtreg: ran 4, failures 0`, `sb-probe: 28 checks, 0 failures` |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91 |
+
+  - **`classNameLen` ANSWERED 0 FOR ANY TYPE THE CLASS REGISTRY DOES NOT HOLD, AND `classNameString` TURNED
+    THAT INTO A NULL STRING.** A synthesised lambda/annotation Type is never registered -- a hidden class has
+    no binary name BY CONSTRUCTION -- so `getClass().getName()` on a lambda returned NULL. **Stock never
+    returns null**, so it flows into library code and NPEs somewhere unrelated.
+  - **THE FIX IS A NAME, NOT A MUTED REPORT: `$$Lambda/0x<16 hex>`**, stock's own shape for a hidden class.
+    **The TYPE ADDRESS is what makes it distinct, and that is the whole design decision**: one constant name
+    would pass every non-null check while making every lambda compare EQUAL BY NAME -- a silent wrong answer
+    that looks exactly like a working one. The probe asserts distinctness and stability, not just non-nullness.
+    **STATED LIMIT:** stock prefixes the outer class (`Foo$$Lambda/0x...`); a Type here does not record its
+    origin, so the prefix is bare.
+  - **THE REPORT FOUND IT ON ITS FIRST BOOT, AND WAS THEN CHECKED AGAINST A PASSING ONE.** `CLASS NAME
+    UNRESOLVED` fires where a name genuinely cannot be derived and says WHICH case it is -- an array whose
+    ELEMENT never resolved, or a Type not in the registry -- because the two want opposite investigations.
+    One line on the suite; silent across all 40 programs afterwards.
+  - **THE LAUNCHER'S BLOCKER, NAMED FROM THE IMAGE FILE RATHER THAN FROM A BOOT.**
+    `ClassSelector.<init>(Class)` runs four times in nested-class discovery and the fourth receives
+    `0x0016C300` -- an IMAGE address, below the heap. Read out of `kernel8.img` by hand, that object has
+    instance size 16 (header only) and a vtable EVERY slot of which is `java/lang/Object`'s own method; there
+    is exactly ONE such object in the image, held by exactly one statics cell. The new `statmap` dump names
+    it: **`java/util/ImmutableCollections.EMPTY`**. `List12`/`Set12` keep that sentinel in the slot a
+    one-element collection does not use and test `e1 != EMPTY` BY IDENTITY, so a sentinel escaping AS an
+    element is exactly what a failed identity test looks like -- and `Class.getName`'s vtable slot indexed
+    into a bare Object's vtable returns whatever sits there, **0 on one boot and 1 on another, which is why
+    the symptom read as noise**.
+  - **CORRECTION, SAME DAY: IT IS TWO CELLS IN SPACE, NOT ONE CELL WRITTEN TWICE IN TIME -- AND THE LEAK IS
+    REPRODUCED IN A PROBE NOW.** The first cut of this card said "one cell, two writers". Four readings of
+    the writer say the two writers never touch the same memory at all:
+    - **The `statmap` lists exactly TWO `ImmutableCollections` statics** -- `EMPTY` and `EMPTY_LIST` --
+      where stock declares six. A DENSE BLOCK keys EVERY declared static (`ImageBuilder` ~667), so two of
+      six means there is no block: those are individually-baked cells, minted because baked code names them.
+    - **A dense block is emitted only for a class in `typeClasses` AND `bakeDomain`** -- i.e. one with a
+      baked TYPE NODE. `ImmutableCollections` is a holder class, never instantiated, so it has no Type and
+      therefore no block.
+    - **`adoptStatics` returns early unless there is one.** `gAdoptStatics` is read from the vtSig entry's
+      `staticsAddr` and from nowhere else, so the loader allocates a FRESH guest block instead.
+    - **There is no per-field baked-static tier** -- `bakedTable` is the baked-LINK METHOD table, checked
+      rather than assumed from its name.
+    **So the general defect is bigger than this class: ANY `bakeDomain` class that has baked statics but NO
+    Type node gets cells the loader can never adopt**, and baked code then reads the image cell while guest
+    code reads the guest one.
+  - **THE REPRODUCTION IS ONE ARM, AND WHICH ARM IT IS WAS PREDICTED FROM THE IMAGE BEFORE IT WAS RUN.**
+    `List.of(E...)` is a REAL baked body (`symmap`, 364 bytes) and is not an `<init>`, so it IS in the
+    baked-LINK table and a guest call LINKS to it; `List.of(E)` is not baked at all. Inside the varargs
+    form, `new List12<>(e0)` runs the BAKED constructor and stores the IMAGE sentinel, which the
+    guest-compiled `size`/`get`/`forEach`/`toArray` then test against the GUEST cell:
+
+    ```
+    List.of(Object[1]) VARARGS: size=2 (want 1)
+        get(1) = [java.lang.Object@16bc90] java.lang.Object     <- an IMAGE address, below the heap
+    List.of(Object[2]) VARARGS control: size=2 (want 2)         <- clean
+    ```
+
+    **The two-element control is clean in the same run**, which is what says this is the unused-slot
+    identity test and not a broken list.
+  - **AND IT EXPLAINS WHY EVERY OTHER ARM PASSES -- a theorem, not luck, which is the part worth keeping.**
+    `<init>` and `<clinit>` are EXPLICITLY excluded from the baked-link table ("init semantics stay
+    per-world"), so a guest `new List12` compiles its own constructor against the GUEST cell and every
+    guest reader agrees with it. A leak needs a BAKED constructor to run, and only a baked-and-linked
+    factory gets you one. The earlier cut of this card recorded the probe's passing as an unexplained
+    loose end; it is now the control that localises the bug.
+  - **SO THE LAUNCHER'S TWO FAILURES ARE ONE BUG, and the second one's own trace says so.**
+    `pruneStackTrace` <- `lambda$executionFinished$0` <- **`ImmutableCollections$List12.forEach`** <-
+    `executionFinished`. Stock's `forEach` is `action.accept(e0); if (e1 != EMPTY) { action.accept(e1); }`,
+    so a one-element list whose guard cannot hold hands the SENTINEL to the action -- which calls
+    `getStackTrace()` on a bare `Object` and indexes Throwable's vtable slot into Object's vtable.
+  - **SO THE "SECOND OPEN ITEM" IS RETIRED RATHER THAN CARRIED: `getStackTrace()` IS NOT BROKEN.**
+    `TraceProbe` answers `len=8` across a call, `len=6` for a same-method catch, `len=0` for a never-thrown
+    throwable and `len=1` after `setStackTrace` -- **never null**, against a host control of 4/2/1/1. The
+    one divergence is the never-thrown arm (0 here, 1 on stock) and this file already records why: the VM
+    fills `bt0..bt7` in `VM.unwind` at THROW time, so a throwable that was never thrown truthfully has no
+    frames. **The null was INFERRED from reading `pruneStackTrace`'s bytecode and is refuted by running
+    it** -- which is the rule this file states most often, applied to my own reading.
+  - **NOT FIXED HERE, and the fix is now a WRITER/LOADER change rather than an initialization-policy one:**
+    either emit a dense block (and a vtSig-style adoption entry) for a bakeDomain class with baked statics
+    but no Type node, or add a per-field baked-static table the loader adopts cell by cell. **What is NOT
+    the fix is dropping the metal `<clinit>`:** only 2 of the 6 statics are snapshotted, so `SALT32L` would
+    read 0 and `MapN`'s probe loop would spin.
+  - **THE FIRST DEMO-SUITE GATE FOR THIS CARD WAS RUN ON THE WRONG BINARY, AND THE SIZE IS WHAT CAUGHT IT
+    -- FIFTH INSTANCE OF THE STALE-CLASS TRAP, ALL IN ONE SESSION.** Building the control for the statmap
+    diff left `out/writer/ImageBuilder.class` at the CONTROL version (a `git stash pop` restores the SOURCE,
+    not the build), and `suite.sh` compiles nothing -- it runs `BuildRuntimeImage` straight off `out/`. So
+    the suite that gated this card was a control image. **Caught before flashing by arithmetic, not by
+    output:** a fresh no-manifest build differed from it by **+3,480 bytes -- exactly the fix's measured
+    delta**, and the jar-timestamp churn this file records is ~20. Two no-manifest images differing by
+    precisely the change's own delta is one image with the fix and one without.
+    - **RE-RUN ON THE BYTE-EXACT FLASH CANDIDATE, and the result is unchanged where it matters:** 40
+      programs, every marker zero, batch 70 `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+      `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+      `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo, `lisp evals=600 result=610
+      stable=1`, `smp sched: 4 of 4`, `steps/core 61/60/60/59`, `finish HML` 20/20/20, inversion
+      `HIGH blocked 61ms`, `sum20=210`, `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`.
+    - **ONE FIGURE MOVED AND IT IS ATTRIBUTABLE RATHER THAN NOISE: `bakeMemosDropped` 11 -> 9.** That
+      counter is the reclaim dropping image-side bake memos that point into code it just rewound, so it is a
+      function of LAYOUT -- and this change moves every static cell and adds four Type nodes. It is reported
+      because this file records 11 repeatedly; it is not called a regression, because nothing about it
+      indicates a lost or stale memo (the marker for that, a wild branch, is absent).
+    - **THE LESSON IS THE CHECK, not the trap: compare the SIZE of the artifact you are about to gate
+      against the one you measured the change with.** Three instances of this trap in one session each
+      presented differently -- a missing arm, a byte-identical image, and a passing gate on the wrong binary
+      -- and the passing one is the dangerous shape, because nothing about it looks wrong.
+  - **AND THE STALE-CLASS TRAP CAUGHT ME A FOURTH TIME, IN THE HELPER I HAD JUST FIXED IT IN.** The first
+    boot of the new arm printed NOTHING for it -- reading exactly like an arm that cannot fire -- because
+    `make build` does not compile `test/jdk/junit`, and `make build`'s `guest` rule PURGES what `make
+    jdktests` put there. **A missing arm looks identical to a passing one**; `grep -c VARARGS
+    out/EmptySentinelProbe.class` is what settled it in one command.
+  - **FOUR INSTRUMENTS THAT COULD NOT FIRE, EACH FIXED WHERE IT WAS BROKEN -- three of this arc's five
+    ~20-minute launcher boots went on instruments rather than on the VM.**
+    - **`scripts/run-launcher.sh` NEVER COMPILED.** It went straight to `BuildRuntimeImage`, which READS
+      `out/` and does not build it, so an edit that was never compiled produced an image BYTE-IDENTICAL to
+      the previous run's -- reading exactly like a change that does nothing. **That is the trap this file
+      records three times, walked into while diagnosing.** It runs `make build` now.
+    - **`watchReceiver` was wired into `lowerInvokeInterface` ONLY.** Armed on an `invokevirtual` it printed
+      NOTHING, which reads exactly like a receiver that is always fine. Wired into the virtual path too.
+    - **`isWatchedField` matched the field NAME alone while its line prints only the cp INDEX.** `className`
+      matched three unrelated classes and index 7 is not unique across them: an AMBIGUOUS line is an
+      instrument that invites the wrong conclusion. Class-qualified now.
+    - **The symbol map named CODE only**, so an address above the code ceiling could be called "somewhere in
+      the data region" and no further. `JOENG_SYMMAP` now prints a `statmap` line per static cell -- which is
+      what named `ImmutableCollections.EMPTY` in one command, after a hand-written scan had reconstructed it.
+
+- **`Exception`, `RuntimeException` AND `Error` RUN STOCK -- THE OVERLAYS ARE DELETED (2026-09-23,
+  QEMU-GATED).** All three were hand-written shells whose whole bodies delegated to `super`, with no native
+  and no state, and all three DROPPED the protected `(String, Throwable, boolean, boolean)` constructor.
+  - **THE VM WAS HALTING WHILE REPORTING A FAILURE, which is the worst place to lose a member.**
+    `JUnitException.<init>` -> `RuntimeException.<init>(String,Throwable,ZZ)` read `LINK FAILED ... class OK
+    but no body for that name+descriptor` and then trapped in a DENYLIST TRAP naming a list RuntimeException
+    is not on -- replacing a nameable defect with a mystery. **Tenth instance of the overlay-drops-members
+    trap.**
+  - **`java/lang/Throwable` KEEPS its overlay, and that is not inconsistent:** the VM HARDCODES `bt0..bt7` at
+    obj+16..+72 and `detailMessage` at obj+80, so its layout is VM-visible. It gains the 4-arg constructor
+    and the package-private `setCause`.
+  - **`enableSuppression` IS HONOURED because ignoring it is OBSERVABLE** through `getSuppressed()`, which
+    JUnit reads. **`writableStackTrace` is NOT, stated as a divergence:** this VM captures the backtrace in
+    `VM.unwind` at THROW time, not in the constructor, so an exception stock would leave traceless carries
+    one here -- MORE information than stock, never less.
+  - **`overlay-check` 28 -> 27 gaps and 103 -> 100 dropped supertypes**, the supertype count moving because
+    three overlaid classes stopped dropping `java.io.Serializable`. Suite: 40 programs, every marker zero,
+    and the exception demos `YNW` / `E` / `U` with `printStackTrace` walking to `vm/VM.boot` -- the assertion
+    for this change.
+  - **ONE CLOSURE COUNTER MOVED AND THE DISCRIMINATOR DID NOT.** Batch 70 `res`/`unres` each fell 134 while
+    `memo`, **`reach=16`**, `rounds`, `pend`, `n:imap/synth/clinits` and every `rf:*` were byte-identical,
+    with `+240blob` and `rb:cl=240` unchanged -- so the closure SIZE and the marked set did not move, `reach`
+    being the discriminator this file established for telling removed waste from lost marking. `pc:n` falls
+    114 -> 112: two of the three deleted overlays are no longer PARSED into the guest world. **The exact
+    magnitude is NOT attributed and is not claimed to be.**
+
+- **`java.math` RUNS ON THE METAL, AND THE BUG THAT WAS BLOCKING IT WAS A FIVE-INSTRUCTION INFINITE LOOP
+  (2026-09-23, NOT YET PI-VALIDATED).** BigInteger and BigDecimal work: `BigMathProbe`'s 38 arms are
+  byte-identical to a host control, and four unmodified OpenJDK jtreg tests pass under one runner.
+
+  | gate | result |
+  |---|---|
+  | **stock jtreg `java/math`** | **`math jtreg: ran 4, failures 0` / `ALL PASSED`**, identical on host and metal |
+  | `BigMathProbe` | **38 arms BYTE-IDENTICAL to the host control** |
+  | `SbProbe` | **28/28**, identical to the host control |
+  | demo suite | 40 programs, batch 70 closure identity **EXACT**, every marker zero (anchored) |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE STALL WAS `isNonLeaf` NOT KNOWING THAT A GUARDED STATIC ACCESS IS A CALL.** `getstatic`/`putstatic`
+    emit the JVMS 5.5 trigger -- a `bl` to `VM.ensureInitByName` -- so a method whose ONLY call is that guard
+    **saves no LR, and its own `ret` returns to the instruction after the `bl`.** The overlay's
+    `MethodHandles.lookup()` is `getstatic INSTANCE; areturn`, five instructions with no prologue:
+
+    ```
+    0x024a91e8  mov  x0, #0x59dfc7        ; "java/lang/invoke/MethodHandles$Lookup"
+    0x024a91f0  bl   VM.ensureInitByName  ; clobbers x30
+    0x024a91f4  mov  x9, #0x4216750       ; getstatic INSTANCE
+    0x024a9204  ret                       ; -> x30 == 0x024a91f4
+    ```
+
+    It spins there FOR EVER -- no fault, no output, no marker. `SharedThreadContainer.<clinit>` calls it, and
+    every java.math closure reaches that class, so the whole subsystem hung on a method with no bytecode call
+    in it at all.
+  - **`X30 == PC` IS THE SIGNATURE, AND IT IS WHAT CRACKED IT.** Sampling the PC over the QEMU monitor gave
+    the same address three times; that address ALSO being the link register cannot happen in ordinary
+    execution -- it says the last `bl` executed was the one immediately above, and we are back at its return
+    point. `JOENG_SYMMAP=1` then named `0x9c078` as `VM.ensureInitByName`, and reading the five words around
+    the PC showed no `str x30`. **The recorded technique for an unnameable PC earned its keep for the third
+    time.**
+  - **THREE WRONG MODELS DIED FIRST, and the instrument that killed each is the reusable part.** A
+    `warnClinitUnderLock` list of eight initializers looked like the stall point and is **CAPPED AT 8** -- so
+    the last name printed is not the last class entered, and reading it as one is the same mistake as reading
+    a truncated log as a completed run. Bracketing `<clinit>` entry AND exit made the unmatched entry
+    explicit; `LAZY_TRACE` then showed **no `jitc` line after `MethodHandles.lookup()`**, which is what said
+    the hang is before the next compile rather than inside one.
+  - **`new` AND A REAL `invokestatic` ALREADY ANSWERED TRUE, so this closes the set rather than one case** --
+    those are the only other sites `initGuardAt` is reached from, checked rather than assumed.
+  - **THE PREDICATE IS THE ONE THE EMIT USES, and it is MONOTONE in the safe direction.** `needsInitGuard` is
+    consulted per compile against the same memo, so the size and emit passes cannot disagree; and a class can
+    only go from needing a guard to not needing one, so the worst outcome is an LR saved unnecessarily.
+    **`compiler: 40 checks` holding is the assertion**: the writer's seam defaults to false, so its codegen --
+    and the byte-for-byte self-hosting fixpoint -- is untouched.
+
+  - **AND UNDERNEATH IT, A `<clinit>` RE-ENTRANCY ARM THAT VIOLATED JVMS 5.5 STEP 3.** With the spin gone,
+    all six stock tests failed with NPEs inside java.math. `runPendingClinit` has a second, separate
+    `Magic.call0` for the case where a class is re-entered **during its own dep/compile phase**, and it RAN
+    THE BODY there -- before the dependencies the outer frame was still initializing -- then marked it RAN so
+    the outer frame skipped it for ever. The spec says a recursive request must "complete normally", i.e.
+    RETURN; it does now.
+    - **MEASURED, NOT ARGUED: the second call0 site was UNBRACKETED, which is why the first instrument lied.**
+      Bracketing both printed `>RE java/math/BigInteger` and `>RE java/math/BigDecimal`, each ENTERED and
+      never returned, while the trace read `BigDecimal.<clinit>` -> `BigInteger.valueOf` -> **`posConst`
+      NULL**. BigInteger's body had been started from that arm and had not reached its own array assignments.
+    - **THE OLD COMMENT'S PREMISE WAS TRUE AND ITS CONCLUSION DID NOT FOLLOW.** "A real JVM would already
+      have run this body (it never starts a dependency first), so the least-wrong thing is to run it NOW
+      rather than hand the caller null" -- the first half is right, and the fix for it is not to run the body
+      from the middle of the dep phase. Returning keeps the ORDER the outer frame was establishing.
+    - **`clinitEntryAddr` EXISTED ONLY FOR THAT ARM AND IS DELETED WITH IT.** Left in place it would have
+      been a write-only field whose comment claimed live machinery -- the stale-comment defect this file
+      records against itself.
+    - **THE RISK THIS CARRIES IS THE ONE QEMU CANNOT PRICE.** The arm was added during the `fb799a9` clinit
+      arc, and the shape it was written for (picocli's `GroupValidationResult`) is exercised by the LAUNCHER,
+      not the suite. The suite is clean -- 40 programs, closure identity exact, `CLINIT REJECTED` zero -- and
+      that is NO REGRESSION at suite scale and nothing more.
+
+  - **THEN A STUB THAT ANSWERED A PLAUSIBLE VALUE, which is exactly what rule 3 forbids.**
+    `MetalJavaLangAccess.uncheckedNewStringWithLatin1Bytes` returned **null**, and `BigDecimal.layoutChars`
+    has a **scale-2 "currency fast path"** that lays the digits out itself and hands the buffer to it. So
+    `multiply`, `setScale`, `stripTrailingZeros` and `valueOf(long,int)` all printed `null` while `0.1+0.2`,
+    `divide HALF_UP` and `toBigInteger` were exact -- **it read as a formatting quirk of four particular
+    values rather than as one missing member**, and only the fact that every failing arm had scale 2 named it.
+  - **AND FIFTEEN DROPPED OVERLAY MEMBERS, BOTH FAMILIES TAKEN IN ONE PASS.** `overlaycheck-deep` is what
+    names them, and it reports **0 remaining** for both classes:
+
+    | class | members restored |
+    |---|---|
+    | `jdk/internal/util/DecimalDigits` | `getChars`, `putPair`, `uncheckedPutPairLatin1`, `appendQuad`, `uncheckedGetCharsUTF16` x2 |
+    | `java/lang/StringBuilder` | `repeat` x2, `replace`, `setCharAt`, `ensureCapacity`, `offsetByCodePoints`, `insert` x3, `append(float)`, `append(StringBuffer)` |
+
+    `StringBuilder.repeat` is how the family showed: `BigDecimal.toPlainString` builds its zero run with it,
+    so the stock `ToPlainStringTests` died in java.math with no hint the gap was in StringBuilder.
+  - **THE DecimalDigits HOST CONTROL CAUGHT A REAL DIVERGENCE BEFORE ANY BOOT, AND IT IS THE KIND OF ODDITY
+    AN OVERLAY MUST COPY.** Stock builds `DIGITS` with a `0..9 x 0..9` double loop, so **entries 100..127 keep
+    the `short[]`'s zero fill** and an out-of-range pair writes two NUL characters. Computing `'0' + n/10`
+    there instead yields `'<'`..`'?'` -- **56 of 398 comparisons against the JDK's own `DecimalDigits`**. My
+    own comment had already stated the rule ("the table's 100..127 entries are zero") while the code did not
+    implement it; the control is what noticed. 398/398 after.
+  - **AND THE UTF16 BYTE ORDER WAS DECIDED BY THIS VM RATHER THAN CHOSEN.** `StringUTF16.LO_BYTE_SHIFT` is
+    SEEDED to 8 here (its initializer asks Unsafe and cannot run on metal), so `HI_BYTE_SHIFT` is 0 and the
+    low byte goes at the even index. Writing them the other way round reads back as a character whose low
+    byte is its high byte -- the euro-sign failure this file already records, a wrong STRING rather than an
+    error.
+  - **TWO STOCK TESTS ARE NOT HOSTABLE, AND BOTH WERE RUN BEFORE BEING REMOVED rather than judged by name.**
+    `ModPowPowersof2` **EXECS A SECOND JVM** -- its body builds a `bin/java` command line and calls
+    `Runtime.getRuntime().exec`, dying eight frames deep in `ProcessBuilder.start`; there is no OS beneath
+    this VM, so nothing about java.math is exercised before that point. `ExtremeShiftingTests` is tagged
+    **`-Xmx512m`** and does `ONE.shiftLeft(Integer.MIN_VALUE)`, a magnitude 2^31 bits = 256 MiB wide; the boot
+    ended in `large region OOM`, the allocator correctly refusing. Both reasons are recorded in the runner,
+    which is what stops them being re-added and re-chased.
+  - **ONE RUNNER, ONE IMAGE, for the reason the zip suite already records:** a program touching BigDecimal
+    demand-loads BigInteger, MathContext, RoundingMode, ForkJoinPool and the whole ThreadContainer family,
+    and load time here is super-linear -- paying that closure once instead of four times is the difference
+    between a run that finishes and four that do not. **Measured incidentally: removing the two unhostable
+    tests took the run from 560s to 10s**, because `Runtime.exec` was pulling ProcessBuilder/File/Runtime
+    behind it.
+  - **AN UNPLANNED A/A PAIR FELL OUT OF THE GATING, AND IT REPRODUCES THE CENSUS.** Adding the four stock
+    tests to `JDKTESTS` left the suite image **BYTE-IDENTICAL** (default-package test classes match no
+    `demandLoadable` prefix, so they cost zero image bytes), so the two suite runs either side of it are the
+    same binary -- and they differ ONLY in the lisp-finale `gc: collections`, 55 against 56, with the churn
+    figure 46 in both. **That is the census's own claim, arrived at by accident: on QEMU the finale is not a
+    gate and `46` is.**
+  - **DEMO SUITE, ON THE BYTE-EXACT FINAL TREE** (re-run after the dead field was deleted, because that moved
+    the image): 40 programs to `self-build retired`, batch 70 `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2651 unres=2372`, `n:imap=78 synth=36 clinits=28`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305` -- byte-identical to the recorded figures -- with
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` then `55`, `lisp evals=600 result=610 stable=1`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 61ms`, `smp sched: 4 of 4`, `bakeMemosDropped=11`,
+    `sync: static seen=18 nomonitor=0`, `sha256 clone = .../fork-ok`, `smp gc: ... idleRoots=3/3`, the
+    `[1.5420.17]` and `[true42false7]` concat arms, and **every failure marker zero** with the `FAULT` grep
+    ANCHORED (the one bare `FAULT` is `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string, which this
+    file already records as an instrument that cries wolf).
+  - **NOT PI-VALIDATED, and the reason is specific rather than routine.** QEMU cannot gate the `<clinit>`
+    re-entrancy change: the collector, the SMP park handshake and cold DRAM all want silicon, and this moves
+    every image. **The gate to name in advance is the launcher**, not the suite -- that is where the
+    `GroupValidationResult` shape the removed arm was written for actually runs.
+  - **STILL OPEN, stated rather than rounded away:** `java.math` is reachable now, but nothing has measured
+    what it COSTS. The recorded landmine (`BigInteger.<clinit>` -> `squareToomCook3` -> `RecursiveOp` ->
+    `ForkJoinPool.getCommonPoolParallelism`) did not fire in any of these boots, and no card should claim it
+    is gone -- what is established is that four stock tests and 38 probe arms run correctly, not that the
+    parallel path is safe.
+
 - **A 321-BYTE jtreg TEST-LIBRARY CLASS COSTS 27,984 IMAGE BYTES, AND WHICH `make` TARGET RAN LAST DECIDES
   WHETHER IT IS THERE (2026-09-23, MEASURED, NOT FIXED).** Found while building a control: an image from
   `make build` was **27,984 bytes smaller** than the one flashed the day before from the same commit and a
