@@ -227,14 +227,45 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     // has Integer cache, we must use all instances from it. Otherwise, the identity checks between
     // archived Integers and runtime-cached Integers would fail."
     //
-    // Character/Byte/Short are DELIBERATELY absent. All three are overlaid here and each overlay DROPS
-    // the cache ("valueOf just boxes"), because the stock <clinit> sets TYPE through a native the
-    // loader blocks -- so there is no second cell, no split, and nothing to retire. Adding them would
-    // bake boxes no code can reach.
+    // Character/Byte/Short ARE here now, and the comment they replace is the reason they were not: it
+    // said they are "DELIBERATELY absent ... each overlay DROPS the cache (\"valueOf just boxes\") ...
+    // so there is no second cell, no split, and nothing to retire". Every clause was true when written
+    // and the first one EXPIRED -- the overlays intern per JLS 5.1.7 now -- which is the
+    // comment-outlives-its-premise shape this tree records against seedIntegerCache and
+    // MethodHandles.lookup(). The three overlays carry stock's nested Character$CharacterCache /
+    // Byte$ByteCache / Short$ShortCache, so there IS an archivedCache cell to fill and an initializer
+    // to hand it to.
+    //
+    // I CLAIMED THESE THREE WERE NOT INERT AND THE NEGATIVE CONTROL REFUTED IT, which is the half worth
+    // recording. The argument was that Character$CharacterCache is a DIFFERENT class from the blocked
+    // java/lang/Character, and JVMS 5.5 makes reading CharacterCache.cache an active use of the NESTED
+    // class -- so its <clinit> would run in both worlds and read this cell. The reading is right and the
+    // conclusion does not follow: with these three entries REMOVED (same tree otherwise) archivedCache
+    // bakes 0, and BoxCacheProbe still reports the three boxes at IMAGE addresses that match the baked
+    // array's own elements. A <clinit> that ran would have found archivedCache null, taken the BUILD arm
+    // and handed out HEAP boxes. It did not, so on that image the initializer does not run at all and
+    // the baked `cache` cell is simply read.
+    //
+    // SO THEY ARE INERT TODAY, exactly like the two entries above, and kept for the same forward-looking
+    // reason: on the day that initializer DOES run (rule 2's direction of travel), a null archivedCache
+    // sends stock straight to its BUILD arm and silently replaces the array the image carries -- the
+    // seedIntegerCache bug re-created, with nothing left to mask it. Baked non-null it adopts instead,
+    // which is two idempotent writers rather than two arrays.
+    //
+    // AND THE OLD COMMENT'S CLOSING CLAUSE WAS RIGHT, measured: "adding them would bake boxes no code can
+    // reach". With the LAZY overlays still in place these three entries cost +23,492 bytes of exactly
+    // that -- the writer resolves the name to the REAL JDK nested class and bakes 640 unreachable boxes.
+    // What changed is not that clause but its premise: the overlays carry the nested cache now, so the
+    // arrays are baked and REACHED whether these entries are here or not, and the entries themselves add
+    // ZERO bytes (two images, with and without, are byte-identical in size and differ only in these
+    // cells and the layout the use() pulls shift).
     private static final String[] ARCHIVED_SUBGRAPHS = {
         "java/util/ImmutableCollections.archivedObjects",
         "java/lang/Integer$IntegerCache.archivedCache",
         "java/lang/Long$LongCache.archivedCache",
+        "java/lang/Character$CharacterCache.archivedCache",
+        "java/lang/Byte$ByteCache.archivedCache",
+        "java/lang/Short$ShortCache.archivedCache",
     };
 
     private final ClassRegistry registry;

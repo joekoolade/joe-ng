@@ -2031,14 +2031,19 @@ public final class Loader
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
                 // NOTE: java/lang/Boolean is NOT blocked -- the metal OVERLAY replaces the stock class, and its
                 // <clinit> only sets TRUE/FALSE (no native primitive TYPE), so it is safe (and needed) to run.
-                // NOTE: Character/Byte/Short ARE OVERLAID TOO, and the overlays have NO <clinit> at all (TYPE is
-                // seeded by seedPrimType, MIN/MAX are inlined constants), so these three entries are INERT today
-                // -- they describe the stock classes the overlays replace. They are still load-bearing as
-                // policy: each overlay's JLS 5.1.7 valueOf cache is filled LAZILY precisely because an
-                // initializer added there would be SKIPPED here and read back null. Un-blocking them (the
-                // Boolean argument above applies verbatim) is what an eager, race-free fill needs -- along with
-                // ImageBuilder.use scheduling the new <clinit> into VM.initClasses, i.e. a second writer for a
-                // static cell the loader adopts. Its own increment.
+                // NOTE: Character/Byte/Short ARE OVERLAID TOO, and the overlays have NO <clinit> of their own
+                // (TYPE is seeded by seedPrimType, MIN/MAX are inlined constants), so these three entries are
+                // INERT today -- they describe the stock classes the overlays replace.
+                //
+                // AND THE QUESTION THIS NOTE USED TO POSE IS ANSWERED BY NOT NEEDING TO BE ASKED. It said the
+                // JLS 5.1.7 valueOf cache is filled LAZILY "precisely because an initializer added HERE would
+                // be SKIPPED", and that un-blocking these three was what an eager, race-free fill needed. The
+                // eager fill landed without touching this list, because stock does not put the cache on the
+                // wrapper at all: it nests Character$CharacterCache / Byte$ByteCache / Short$ShortCache, and
+                // JVMS 5.5 makes reading CharacterCache.cache an active use of the NESTED class. A nested
+                // class is a different name, and these entries match by EXACT name -- so the cache's
+                // initializer was never blocked by them in the first place. The premise was true of the shape
+                // the lazy fill chose, not of the problem.
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Byte"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Short"))
                 // M3 sockets: these <clinit>s call natives (initIDs/poll consts/SharedSecrets/iovMax). Skipping

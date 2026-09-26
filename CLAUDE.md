@@ -115,6 +115,119 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE WRAPPER CACHES ARE STOCK'S OWN NESTED `XCache` NOW, AND THE NEGATIVE CONTROL REFUTED THE HALF I HAD
+  CLAIMED WAS LOAD-BEARING (2026-09-26, QEMU-GATED -- NOT YET PI-VALIDATED).** `Character`/`Byte`/`Short`
+  carry stock's `CharacterCache`/`ByteCache`/`ShortCache` -- an eagerly filled array that ADOPTS a
+  writer-baked one -- in place of the lazy fill one increment ago, and the writer bakes their
+  `archivedCache`. Every `char`/`byte`/`short` box in [-128,127] is an IMAGE object now.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`BoxCacheProbe`, the three wrapper arms** | **heap (built fresh)** | **image (ADOPTED)** |
+  | ... and the address is the BAKED ELEMENT | -- | **`0x16edb8`/`0x170830`/`0x172848`, cross-read from `kernel8.img`** |
+  | four above-cache negatives | heap | **heap -- unmoved** |
+  | `BoxingDemo`, the eleven JLS 5.1.7 arms | pass | **pass -- unmoved** |
+  | boxes allocated on metal per launch | ~640 | **0** |
+  | batch-70 closure | -- | **EXACT but `clinits` 28 -> 31, the three new initializers** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, thirty markers zero |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved** |
+  | image (same-manifest `BoxCacheProbe` A/B) | 33,760,584 | **33,781,808 (+21,224 B, +0.063%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE THREE FACTS THAT FORCED THE LAZY FILL WERE EACH TRUE OF THE SHAPE IT CHOSE RATHER THAN OF THE
+    PROBLEM, and stock nests the cache precisely so none of them applies.** My own card one increment ago
+    recorded them as "three measured facts" and they were -- about a flat `Character.cache` on the outer
+    class:
+    - **"`java/lang/Character` is on `clinitBlocked`, so an initializer would be SKIPPED."** True of THAT
+      class. `Character$CharacterCache` is a DIFFERENT class, `clinitBlocked` matches by EXACT name, and
+      JVMS 5.5 makes reading `CharacterCache.cache` an active use of the NESTED class -- so the cache's
+      initializer was never blocked by that list at all.
+    - **"`StaticSnapshot` reflects the HOST's class, which has no field of this name."** True of a flat
+      `Character.cache`; the real JDK `Character$CharacterCache` declares `cache` AND `archivedCache`, so
+      the snapshot has real fields to read. **This one INVERTS rather than merely not applying.**
+    - **"a baked class with a `<clinit>` is scheduled into `VM.initClasses`, so the fill would run in the
+      BAKED world too -- a second writer."** Answered by the control below, and not the way I predicted.
+  - **THE NEGATIVE CONTROL IS SPECIFIC AND IT REFUTED MY OWN CLAIM, which is the half worth keeping.** I
+    wrote into `ImageBuilder` that "UNLIKE THE TWO ENTRIES ABOVE, THESE THREE ARE NOT INERT", reasoning that
+    the nested initializer runs in both worlds and reads the cell. With ONLY the three `ARCHIVED_SUBGRAPHS`
+    entries removed -- same tree otherwise -- `archivedCache` bakes **0** and the probe STILL reports the
+    three boxes at image addresses that match that build's own baked elements. An initializer finding
+    `archivedCache` null MUST take the BUILD arm and hand out heap boxes. It did not, so on that image the
+    initializer does not run and the baked `cache` cell is simply read. **The claim is corrected at the site
+    rather than quietly dropped.**
+  - **SO THE INCREMENT HAS TWO HALVES WITH DIFFERENT STANDING, and the control is what separates them.**
+    Three arms, one variable each:
+
+    | arm | the three wrapper boxes |
+    |---|---|
+    | lazy overlay + writer entries | **heap** |
+    | **eager overlay, writer entries REMOVED** | **image** |
+    | eager overlay + writer entries (the fix) | **image** |
+
+    **The OVERLAY rewrite is what moves them**; the writer entries are INERT today, exactly like the
+    `IntegerCache`/`LongCache` entries beside them, and kept for the same forward-looking reason: on the day
+    rule 2 makes that initializer run, a null `archivedCache` sends stock straight to its BUILD arm and
+    silently replaces the array the image carries -- `seedIntegerCache` re-created with nothing left to mask
+    it.
+  - **AND THE OLD COMMENT'S CLOSING CLAUSE WAS RIGHT, measured: "adding them would bake boxes no code can
+    reach."** With the LAZY overlays still in place those three entries cost **+23,492 bytes** of exactly
+    that -- the writer resolves the name to the REAL JDK nested class and bakes 640 unreachable boxes. What
+    expired was the PREMISE ("each overlay DROPS the cache"), not the conclusion; with the nested cache
+    present the arrays are baked and REACHED either way and the entries add **ZERO bytes**. Fourth recorded
+    instance of a comment outliving its premise, and the first where reading the conclusion carefully saved
+    getting the attribution backwards.
+  - **`cache == archivedCache` BY ADDRESS, read out of the image rather than argued** -- `0x16e388` /
+    `0x16f3a0` / `0x1713b8`, lengths 128/256/256, elements `-128`..`127` with the byte/short ends stored
+    sign-extended (`0xFFFF_FFFF_FFFF_FF80`). The deep-bake INTERNED the two cells, so the metal
+    `cache = archivedCache` writes back the value already there and the assignment is a no-op. Same
+    measurement the `ImmutableCollections.EMPTY` increment rests on.
+  - **THE SMP WINDOW THE LAZY FILL STATED IS CLOSED RATHER THAN NARROWED.** That card recorded a real
+    divergence: two cores that both miss can each hand out a box for one value. The array is baked complete
+    before any reader exists, so there is no miss to race -- and **no box is allocated on metal at all**,
+    where the lazy form allocated up to 640 per launch that touched these classes.
+  - **ONE CLOSURE COUNTER MOVED AND IT IS ATTRIBUTABLE TO THE DIGIT: `clinits` 28 -> 31.** Three new
+    initializers, one per nested cache class. Everything else at batch 70 is byte-identical --
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`, `n:imap=78 synth=36`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`, `sy:n=50 chg=0`, `+240blob`, `gc=46`.
+  - **THE PROBE LOST ITS CONTROLS AND GAINED REPLACEMENTS, said rather than re-based.** `BoxCacheProbe`'s
+    javadoc had `Character`/`Byte`/`Short` as arms that "cannot move for ANY reason"; they move here, which
+    is the third time a control in that file has had its stated reason expire. The negatives are now the
+    ABOVE-CACHE arms, one per cached type -- `valueOf(1000)`, `(char) 200`, `(short) 1000` -- which must read
+    `heap` in every state, because JLS 5.1.7 mandates nothing above 127 and a baked array indexed out of
+    range shows only there.
+  - **AND A `Byte` ABOVE-CACHE ARM WAS WRITTEN AND DELETED BEFORE IT SHIPPED.** Every `byte` is inside
+    [-128,127], so there is no above-cache value to ask for: the arm printed `image` under a heading that
+    said "must be heap". An arm whose label contradicts its own correct answer is precisely the line this
+    file records being mis-read twice.
+  - **TWO DEPARTURES FROM THE STOCK TEXT, both stated.** `@Stable` is dropped (a hint for a constant-folding
+    optimiser this VM does not have), and stock's closing `assert cache.length == size` is dropped because
+    `assert` compiles to a read of the synthetic `$assertionsDisabled` static and re-checks a length the two
+    lines above it just established. **Visible in the `statmap`**: `IntegerCache`/`LongCache` carry a
+    `$assertionsDisabled` cell and the three new blocks do not.
+  - **A CORRECTION TO THE OVERLAYS' OWN CLASS JAVADOCS, found while reading them rather than by a failure.**
+    Both `Byte` and `Short` claimed the stock `valueOf` "reads a nested `XCache` that never initializes on
+    metal (the wrapper's `<clinit>` sets a native TYPE and is blocked)". That does not follow, for the reason
+    above -- the nested class has its own initializer and is not on the list. So these overlays exist because
+    they are JDK-free and minimal, and the interning gap was a member they had DROPPED, not something the
+    stock class could not have done here. An unchecked assertion, corrected at both sites.
+  - **THE SUITE GATE IS ON THE BYTE-EXACT TREE, re-run after the comment corrections moved the image** --
+    the recorded rule, because a card quoting figures for an image nobody booted is a citation. 40 programs
+    to `self-build retired`, batch 70 `+240blob`, `churnMB=625 live=32 intact=32`, `gc: collections=46` at
+    the churn demo then `55`, `lisp: evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `smp sched: 4 of 4`, `steps/core 61/59/60/60`, `sum20 = 210`,
+    `sha256 clone = .../fork-ok`, `bakeMemosDropped=10`, `sync: static seen=18 nomonitor=0`, and
+    **THIRTY FAILURE MARKERS ZERO** with the anchored `FAULT` grep at 0 -- the only `UNRESOLVED STATIC` /
+    `TRAP-WIRED` lines are the SEVEN known ones (eight occurrences, `CodingErrorAction.REPLACE` twice), each
+    labelled DENYLISTED.
+  - **NOT PI-VALIDATED, and the gate to name in advance is COLD DRAM plus the baked-world reader.** Two
+    things QEMU structurally cannot price. The emulator hands out ZEROED memory, so a `cache` cell that
+    failed to bake reads 0 there and NPEs loudly, where a Pi at power-on holds firmware leftovers and a
+    garbage array pointer is a wild read at `arr + 24 + 8*idx`. And the BAKED world reads this array with no
+    init guard at all (`implicitChecks()` is false for the writer), so the boot battery's
+    `String.valueOf(true)`-style arms touch it before `launch` -- which is where a wrong bake would show
+    first. The arms to read are `BoxingDemo`'s eleven plus the absence of `FAULT`/`ESR EC=`/`BOOT
+    RE-ENTERED`.
+
 - **`Character`/`Byte`/`Short`.valueOf INTERN AT LAST -- JLS 5.1.7 WAS BEING VIOLATED IN AUTOBOXING, SILENTLY
   (2026-09-26, PI-VALIDATED).** All three overlays carried NO cache
   ("valueOf just boxes"), so `Character.valueOf('A') == Character.valueOf('A')` answered **false** where the

@@ -11,12 +11,22 @@
  */
 package java.lang;
 
+import jdk.internal.misc.CDS;
+
 /**
- * A JDK-free, minimal {@code java/lang/Byte} overlay -- like {@link Short}, the stock {@code valueOf} reads a
- * nested {@code ByteCache} that never initializes on metal (the wrapper's {@code <clinit>} sets a native TYPE
- * and is blocked). {@code valueOf} interns per JLS 5.1.7 from a LAZILY filled array -- this overlay has no
- * {@code <clinit>} (MIN/MAX inlined), and could not have one, which is what makes the fill lazy rather than
- * eager like stock's; see the cache field's javadoc.
+ * A JDK-free, minimal {@code java/lang/Byte} overlay -- it shadows the stock class entirely (overlay wins by
+ * name), so a stock member it does not declare CEASES TO EXIST. {@code valueOf} interns per JLS 5.1.7 from the
+ * nested {@code ByteCache} below, which is stock's own shape: an eagerly filled array that adopts a
+ * writer-baked one.
+ *
+ * <p>A CORRECTION TO THIS COMMENT'S OWN EARLIER CLAIM, recorded rather than quietly replaced. It used to say
+ * the stock {@code valueOf} "reads a nested {@code ByteCache} that never initializes on metal (the wrapper's
+ * {@code <clinit>} sets a native TYPE and is blocked)". That does not follow: a nested class has its OWN
+ * {@code <clinit>}, and JVMS 5.5 makes reading {@code ByteCache.cache} an active use of {@code ByteCache},
+ * not of {@code Byte} -- {@code Byte$ByteCache} is not on {@code Loader.clinitBlocked}, so stock's cache
+ * would have initialized. The blocked {@code Byte.<clinit>} only costs {@code TYPE}, which the VM seeds.
+ * So this overlay exists because it is JDK-free and minimal, and the interning gap was simply a member it had
+ * DROPPED -- not something the stock class could not have done here.
  */
 public final class Byte extends Number implements Comparable<Byte>
 {
@@ -44,49 +54,73 @@ public final class Byte extends Number implements Comparable<Byte>
     }
 
     /**
-     * The JLS 5.1.7 cache. THIS OVERLAY USED TO HAVE NO CACHE ("valueOf just boxes"), so
-     * {@code valueOf((byte) 5) == valueOf((byte) 5)} answered FALSE where the specification says it must answer
-     * true -- a silent wrong answer in a language feature, since autoboxing goes through here. JLS 5.1.7
-     * requires two boxing conversions of ANY {@code byte} (every value is in [-128, 127]) to yield the SAME reference.
+     * The JLS 5.1.7 cache, in STOCK'S OWN SHAPE: a nested holder whose {@code <clinit>} fills the array
+     * eagerly and ADOPTS a writer-baked one when there is one. JLS 5.1.7 requires two boxing conversions of
+     * ANY {@code byte} (every value is in [-128, 127]) to yield the SAME reference, and autoboxing goes
+     * through {@code valueOf}, so a missing cache is a silent wrong answer in a language feature.
      *
-     * <p>FILLED LAZILY, WHICH IS A DIVERGENCE FROM STOCK'S SHAPE, AND THE REASON IS MEASURED RATHER THAN
-     * stylistic. Stock nests a {@code ByteCache} class whose {@code <clinit>} fills the whole array eagerly
-     * (consulting {@code archivedCache} for CDS). joe-ng cannot copy that here, three ways:
-     * <p>(1) {@code java/lang/Byte} is on {@code Loader.clinitBlocked}, so an initializer added to THIS class
-     *     would be SKIPPED and the array would read null -- trading a mild divergence for an NPE, which is
-     *     the "a skipped initializer is a silent wrong answer" failure this VM records more than any other.
-     * <p>(2) a baked class that HAS a {@code <clinit>} is scheduled into {@code VM.initClasses} by
-     *     {@code ImageBuilder.use}, so the fill would ALSO run at boot in the BAKED world -- a second writer
-     *     for a static cell the loader adopts, which is exactly the {@code ImmutableCollections.EMPTY}
-     *     hazard.
-     * <p>(3) the snapshot route cannot substitute: {@code StaticSnapshot} reflects the HOST's class, and
-     *     java.base is a NAMED module, so the writer sees the REAL JDK {@code Byte}, which has no such
-     *     field at all.
+     * <p>THIS REPLACES A LAZY FILL, AND THE THREE FACTS THAT FORCED THE LAZY ONE WERE EACH TRUE OF THE SHAPE
+     * IT CHOSE RATHER THAN OF THE PROBLEM -- which is why stock nests this class instead of putting a field on
+     * {@code Byte}:
+     * <p>(1) "{@code java/lang/Byte} is {@code clinitBlocked}, so an initializer here would be SKIPPED".
+     *     True of THIS class, and this initializer is not on it: {@code Byte$ByteCache} is a different
+     *     class with its own {@code <clinit>}, and it is not on that list.
+     * <p>(2) "a baked class with a {@code <clinit>} is scheduled into {@code VM.initClasses}, so the fill
+     *     would also run in the BAKED world -- a second writer". MEASURED, and the answer is that it runs in
+     *     NEITHER: with {@code archivedCache} baked 0 (a control with only the writer's three
+     *     {@code ARCHIVED_SUBGRAPHS} entries removed) the boxes still come back at the BAKED array's own
+     *     element addresses, where an initializer finding {@code archivedCache} null would have taken the
+     *     BUILD arm and handed out heap boxes. So this array is baked complete and simply read, and the
+     *     writer entries are insurance for the day rule 2 makes the initializer run -- at which point a null
+     *     {@code archivedCache} would silently replace the image's array. I predicted the opposite and the
+     *     control said so; see the note at {@code ImageBuilder.ARCHIVED_SUBGRAPHS}.
+     * <p>(3) "{@code StaticSnapshot} reflects the HOST's class, which has no such field". True of a flat
+     *     {@code Byte.cache}; the real JDK {@code Byte$ByteCache} declares {@code cache} AND
+     *     {@code archivedCache}, so the snapshot has real fields to read.
      *
-     * <p>STATED DIVERGENCE, not glossed: a lazy fill has an SMP window. Two cores that both miss can each
-     * hand out a box for one value, and {@code ==} is then false for it. That is strictly NARROWER than the
-     * behaviour it replaces (always false) rather than a new failure mode, and nothing in the tree boxes a
-     * byte on two cores. The race-free form is stock's eager initializer, which needs the three wrappers
-     * un-blocked and the baked-world question above answered -- its own increment, with its own gate.
+     * <p>SO THE SMP WINDOW THE LAZY FILL STATED IS CLOSED rather than narrowed: the array is complete before
+     * any reader sees it, and no box is allocated on metal at all -- where the lazy form allocated up to 256
+     * per launch that first touched this class.
+     *
+     * <p>Two departures from the stock text, both stated rather than silent. The {@code @Stable} annotation is
+     * dropped: it is a JIT hint for a constant-folding optimiser this VM does not have. And stock's closing
+     * {@code assert cache.length == size} is dropped because {@code assert} compiles to a read of the
+     * synthetic {@code $assertionsDisabled} static -- which nothing here snapshots -- and it re-checks a
+     * length the two lines above it just established.
      */
-    private static Byte[] cache;
+    private static final class ByteCache
+    {
+        private ByteCache()
+        {
+        }
+
+        static final Byte[] cache;
+        static Byte[] archivedCache;
+
+        static
+        {
+            final int size = -(-128) + 127 + 1;
+
+            // Load and use the archived cache if it exists
+            CDS.initializeFromArchive(ByteCache.class);
+            if (archivedCache == null)
+            {
+                Byte[] c = new Byte[size];
+                byte value = (byte) -128;
+                for (int i = 0; i < size; i++)
+                {
+                    c[i] = new Byte(value++);
+                }
+                archivedCache = c;
+            }
+            cache = archivedCache;
+        }
+    }
 
     public static Byte valueOf(byte b)
     {
-        Byte[] k = cache;
-        if (k == null)
-        {
-            k = new Byte[256];
-            cache = k;
-        }
-        int i = b + 128;
-        Byte r = k[i];
-        if (r == null)
-        {
-            r = new Byte(b);
-            k[i] = r;
-        }
-        return r;
+        final int offset = 128;
+        return ByteCache.cache[(int) b + offset];
     }
 
     public byte byteValue()
