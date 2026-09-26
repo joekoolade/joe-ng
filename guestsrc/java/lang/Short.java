@@ -14,8 +14,9 @@ package java.lang;
 /**
  * A JDK-free, minimal {@code java/lang/Short} overlay. The stock class's {@code valueOf} reads a nested
  * {@code ShortCache} array, and its {@code <clinit>} sets {@code TYPE = Class.getPrimitiveClass("short")} (a
- * native) so the loader blocks it -- leaving the cache null (NPE). This overlay drops the cache
- * ({@code valueOf} just boxes) and has no {@code <clinit>} (MIN/MAX are inlined constants).
+ * native) so the loader blocks it -- leaving the cache null (NPE). This overlay keeps a cache of its own and
+ * fills it LAZILY, because it has no {@code <clinit>} (MIN/MAX are inlined constants) and could not have
+ * one; {@code valueOf} interns per JLS 5.1.7. See the cache field's javadoc for why lazy rather than eager.
  */
 public final class Short extends Number implements Comparable<Short>
 {
@@ -42,9 +43,54 @@ public final class Short extends Number implements Comparable<Short>
         this.value = v;
     }
 
+    /**
+     * The JLS 5.1.7 cache. THIS OVERLAY USED TO HAVE NO CACHE ("valueOf just boxes"), so
+     * {@code valueOf((short) 5) == valueOf((short) 5)} answered FALSE where the specification says it must answer
+     * true -- a silent wrong answer in a language feature, since autoboxing goes through here. JLS 5.1.7
+     * requires two boxing conversions of a {@code short} in [-128, 127] to yield the SAME reference.
+     *
+     * <p>FILLED LAZILY, WHICH IS A DIVERGENCE FROM STOCK'S SHAPE, AND THE REASON IS MEASURED RATHER THAN
+     * stylistic. Stock nests a {@code ShortCache} class whose {@code <clinit>} fills the whole array eagerly
+     * (consulting {@code archivedCache} for CDS). joe-ng cannot copy that here, three ways:
+     * <p>(1) {@code java/lang/Short} is on {@code Loader.clinitBlocked}, so an initializer added to THIS class
+     *     would be SKIPPED and the array would read null -- trading a mild divergence for an NPE, which is
+     *     the "a skipped initializer is a silent wrong answer" failure this VM records more than any other.
+     * <p>(2) a baked class that HAS a {@code <clinit>} is scheduled into {@code VM.initClasses} by
+     *     {@code ImageBuilder.use}, so the fill would ALSO run at boot in the BAKED world -- a second writer
+     *     for a static cell the loader adopts, which is exactly the {@code ImmutableCollections.EMPTY}
+     *     hazard.
+     * <p>(3) the snapshot route cannot substitute: {@code StaticSnapshot} reflects the HOST's class, and
+     *     java.base is a NAMED module, so the writer sees the REAL JDK {@code Short}, which has no such
+     *     field at all.
+     *
+     * <p>STATED DIVERGENCE, not glossed: a lazy fill has an SMP window. Two cores that both miss can each
+     * hand out a box for one value, and {@code ==} is then false for it. That is strictly NARROWER than the
+     * behaviour it replaces (always false) rather than a new failure mode, and nothing in the tree boxes a
+     * short on two cores. The race-free form is stock's eager initializer, which needs the three wrappers
+     * un-blocked and the baked-world question above answered -- its own increment, with its own gate.
+     */
+    private static Short[] cache;
+
     public static Short valueOf(short s)
     {
-        return new Short(s);
+        if (s < -128 || s > 127)
+        {
+            return new Short(s);
+        }
+        Short[] k = cache;
+        if (k == null)
+        {
+            k = new Short[256];
+            cache = k;
+        }
+        int i = s + 128;
+        Short r = k[i];
+        if (r == null)
+        {
+            r = new Short(s);
+            k[i] = r;
+        }
+        return r;
     }
 
     public short shortValue()

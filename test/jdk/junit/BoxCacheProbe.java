@@ -31,13 +31,15 @@
  * makes reading it a measurement rather than an analogy.
  *
  * <p>CONTROLS, and they are the point. {@code Character}/{@code Byte}/{@code Short} must report
- * {@code heap} in BOTH states, and the reason is stronger than "not baked yet": those three ARE
- * overlaid, and each overlay DROPS the cache outright ("this overlay drops the cache -- valueOf just
- * boxes"), because the stock {@code <clinit>} sets {@code TYPE} through a native the loader blocks.
- * So they allocate fresh every call and cannot move for any reason; an arm that moved would mean the
- * change reached somewhere it has no business being. The above-cache arms ({@code valueOf(1000)}) must
- * stay {@code heap} in both states too: JLS 5.1.7 only mandates interning within [-128,127], and a
- * cache that had quietly widened would show there.
+ * {@code heap} in BOTH states. THE REASON CHANGED on 2026-09-26 AND THE CONTROL DID NOT, which is
+ * worth stating rather than silently re-basing: those three overlays used to carry no cache at all
+ * ("valueOf just boxes"), and they now intern per JLS 5.1.7 -- but LAZILY, from an array the overlay
+ * allocates on the heap, because {@code java/lang/Character}/{@code Byte}/{@code Short} are on
+ * {@code Loader.clinitBlocked} and an initializer there would be skipped. So the boxes are still heap
+ * boxes and the image-vs-heap arms still cannot move for any reason; what is no longer true of them is
+ * "allocates fresh every call". The above-cache arms ({@code valueOf(1000)}) must stay {@code heap} in
+ * both states too: JLS 5.1.7 only mandates interning within [-128,127], and a cache that had quietly
+ * widened would show there.
  */
 public final class BoxCacheProbe
 {
@@ -45,7 +47,7 @@ public final class BoxCacheProbe
 
     public static void main(String[] args)
     {
-        System.out.println("-- cached+baked: Integer, Long.  overlaid with NO cache: Character, Byte, Short --");
+        System.out.println("-- baked cache: Integer, Long.  overlaid, heap cache, lazy: Character, Byte, Short --");
         where("Integer.valueOf(5)   ", Integer.valueOf(5));
         where("Integer.valueOf(-128)", Integer.valueOf(-128));
         where("Integer.valueOf(127) ", Integer.valueOf(127));
