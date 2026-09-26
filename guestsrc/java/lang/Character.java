@@ -21,7 +21,8 @@ package java.lang;
  * LITERAL {@code String.split} -- all pure bit arithmetic (the stock bodies route case/type queries through the
  * big {@code CharacterData} tables, which stay cold for a literal ASCII match). The boxing members
  * ({@code valueOf}/{@code compareTo}/{@code compare}/{@code MIN_VALUE}/{@code MAX_VALUE}) back {@code Compare}.
- * Values inlined as literals/constant casts so the overlay needs no {@code <clinit>} / static fields on metal.
+ * Values inlined as literals/constant casts so the overlay needs no {@code <clinit>} on metal -- and the JLS
+ * 5.1.7 {@code valueOf} cache below is LAZY for that same reason, not for economy (see its javadoc).
  */
 public final class Character implements Comparable<Character>
 {
@@ -46,9 +47,53 @@ public final class Character implements Comparable<Character>
         this.value = v;
     }
 
+    /**
+     * The JLS 5.1.7 cache. THIS OVERLAY USED TO HAVE NO CACHE ("valueOf just boxes"), so
+     * {@code valueOf('A') == valueOf('A')} answered FALSE where the specification says it must answer
+     * true -- a silent wrong answer in a language feature, since autoboxing goes through here. JLS 5.1.7
+     * requires two boxing conversions of a {@code char} in [0, 127] to yield the SAME reference.
+     *
+     * <p>FILLED LAZILY, WHICH IS A DIVERGENCE FROM STOCK'S SHAPE, AND THE REASON IS MEASURED RATHER THAN
+     * stylistic. Stock nests a {@code CharacterCache} class whose {@code <clinit>} fills the whole array eagerly
+     * (consulting {@code archivedCache} for CDS). joe-ng cannot copy that here, three ways:
+     * <p>(1) {@code java/lang/Character} is on {@code Loader.clinitBlocked}, so an initializer added to THIS class
+     *     would be SKIPPED and the array would read null -- trading a mild divergence for an NPE, which is
+     *     the "a skipped initializer is a silent wrong answer" failure this VM records more than any other.
+     * <p>(2) a baked class that HAS a {@code <clinit>} is scheduled into {@code VM.initClasses} by
+     *     {@code ImageBuilder.use}, so the fill would ALSO run at boot in the BAKED world -- a second writer
+     *     for a static cell the loader adopts, which is exactly the {@code ImmutableCollections.EMPTY}
+     *     hazard.
+     * <p>(3) the snapshot route cannot substitute: {@code StaticSnapshot} reflects the HOST's class, and
+     *     java.base is a NAMED module, so the writer sees the REAL JDK {@code Character}, which has no such
+     *     field at all.
+     *
+     * <p>STATED DIVERGENCE, not glossed: a lazy fill has an SMP window. Two cores that both miss can each
+     * hand out a box for one value, and {@code ==} is then false for it. That is strictly NARROWER than the
+     * behaviour it replaces (always false) rather than a new failure mode, and nothing in the tree boxes a
+     * char on two cores. The race-free form is stock's eager initializer, which needs the three wrappers
+     * un-blocked and the baked-world question above answered -- its own increment, with its own gate.
+     */
+    private static Character[] cache;
+
     public static Character valueOf(char c)
     {
-        return new Character(c);
+        if (c > 127)
+        {
+            return new Character(c);
+        }
+        Character[] k = cache;
+        if (k == null)
+        {
+            k = new Character[128];
+            cache = k;
+        }
+        Character r = k[c];
+        if (r == null)
+        {
+            r = new Character(c);
+            k[c] = r;
+        }
+        return r;
     }
 
     public char charValue()

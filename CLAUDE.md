@@ -115,6 +115,175 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Character`/`Byte`/`Short`.valueOf INTERN AT LAST -- JLS 5.1.7 WAS BEING VIOLATED IN AUTOBOXING, SILENTLY
+  (2026-09-26, PI-VALIDATED).** All three overlays carried NO cache
+  ("valueOf just boxes"), so `Character.valueOf('A') == Character.valueOf('A')` answered **false** where the
+  specification says it must answer true. Every `char`/`byte`/`short` autobox went through it.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`BoxingDemo`, three interning arms** | **`char`/`byte`/`short` = 0, 0, 0** | **1, 1, 1** |
+  | **the three autobox-reaches-the-cache arms** | **0, 0, 0** | **1, 1, 1** |
+  | out-of-range controls (`char 200`, `short 1000`) | fresh | **fresh -- unmoved** |
+  | both ENDS of each range | 127 / -1 / -1 | **identical** |
+  | the seven pre-existing Integer arms | pass | **pass -- unmoved in BOTH states** |
+  | host control, same eleven expressions | -- | **byte-identical to stock, 11 of 11** |
+  | **demo suite, COMPLETE run** | -- | **batch-70 closure EXACT**, thirty markers zero |
+  | **Pi, the SAME binary** | -- | **eleven arms EXACT**, closure exact to the digit, 30 markers zero |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved** |
+  | image (same-manifest `BoxingDemo` A/B) | 33,758,472 | **33,760,584 (+2,112 B)** |
+  | determinism | -- | **rebuild byte-identical, 0 differing bytes** |
+
+  - **`Boolean` WAS ALREADY CORRECT, AND THAT IS THE PRECEDENT THIS RESTS ON RATHER THAN A FOURTH GAP.** Its
+    overlay declares `TRUE`/`FALSE` as real `static final` fields and `valueOf` returns them, so it interns
+    exactly as the spec requires -- and `javap` shows it therefore HAS a `<clinit>` that ALLOCATES two objects,
+    which runs on metal every boot. **So "an overlay initializer that allocates works here" is measured, not
+    hoped.** Its own class javadoc claiming it "has no `<clinit>`" is stale, and reading the bytecode is what
+    said so. (I had this backwards at first, from the overlay's comment describing the STOCK class's null
+    `TRUE`/`FALSE` as though it described the overlay's own state.)
+  - **THE FILL IS LAZY, AND THAT IS FORCED BY THREE MEASURED FACTS RATHER THAN CHOSEN FOR ECONOMY.** Stock
+    nests a `CharacterCache`/`ByteCache`/`ShortCache` whose `<clinit>` fills the array eagerly (consulting
+    `archivedCache` for CDS -- the very field whose absence caused the Integer/Long bug one increment ago).
+    joe-ng cannot copy that shape here:
+    - **`java/lang/Character`, `Byte` and `Short` are on `Loader.clinitBlocked`**, so an initializer added to
+      the overlay would be SKIPPED and the array would read null -- trading a mild divergence for an NPE,
+      which is the failure mode this file records more than any other.
+    - **`ImageBuilder.use` schedules a baked class's `<clinit>` into `VM.initClasses`**, so an eager fill
+      would ALSO run at boot in the BAKED world, beside the guest one -- a SECOND WRITER for a static cell
+      the loader adopts, i.e. the `ImmutableCollections.EMPTY` hazard this file spent an increment closing.
+    - **and the snapshot route cannot substitute**, for the reason the CDS-seed card already records:
+      `StaticSnapshot` reflects the HOST's class, and java.base is a NAMED module, so the writer sees the
+      REAL JDK `Character` -- which has no field of this name at all, and would bake 0.
+    **All three were read out of the tree before any code was written, which is what kept this to one file
+    each plus a comment.**
+  - **STATED DIVERGENCE, not glossed: a lazy fill has an SMP WINDOW.** Two cores that both miss can each hand
+    out a box for one value, and `==` is then false for it. It is **strictly NARROWER than the behaviour it
+    replaces** -- which was false ALWAYS -- rather than a new failure mode, and nothing in the tree boxes a
+    `char`/`byte`/`short` on two cores. The race-free form is stock's eager initializer, and **the analysis it
+    needs is recorded AT `clinitBlocked`** (un-block the three, then answer the `VM.initClasses` question) so
+    the next reader inherits it instead of re-deriving it.
+  - **THE NEGATIVE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT: SIX ARMS MOVE AND TWELVE DO NOT.** With
+    ONLY the three `valueOf` bodies reverted -- same tree, same chain, same manifest -- the three interning
+    arms and the three autobox arms read **0** while every other arm is byte-identical. Arms that move in one
+    state and not the other are the control; the twelve that pass in both are the built-in comparison.
+  - **AND TWO OF THOSE TWELVE ARE THERE TO CATCH A FIX THAT LOOKS RIGHT.** The out-of-range arms
+    (`char 200`, `short 1000`) must stay FRESH, because JLS 5.1.7 mandates nothing above 127 and a cache that
+    had quietly widened would show only there. And **both ENDS of each range** are asserted because the slot
+    is `value + 128`: an off-by-one in that offset is an **AIOOBE at an end**, not a wrong number, so the
+    interning arms would pass straight through it.
+  - **THE HOST CONTROL IS THE ORACLE AND IT RAN FIRST.** All eleven new expressions were run on a stock JVM
+    before the metal ones, so every `want` in the demo is stock's OWN answer rather than my expectation --
+    including the two that must be false.
+  - **THE FIGURE AT RISK WAS THE GC GATE, AND IT DID NOT MOVE.** The cache adds ~640 boxes per launch that
+    touches these classes, across a 40-program suite -- the same shape as the 20,480-box `seedIntegerCache`
+    that was DELETED one increment ago for costing exactly this. **`gc: collections=46` at the churn demo is
+    identical**, with `churnMB=625 live=32 intact=32`, so lazily filling only what a program uses costs
+    nothing measurable where eagerly rebuilding a baked array cost a great deal.
+  - **CLOSURE IDENTITY IS EXACT, which is what a change adding no class has to show.** Batch 70 reads
+    `+240blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+    `sy:chg=0`, `gc=46` -- every one identical to the recorded QEMU figures. Plus
+    `lisp: evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion `HIGH blocked 61ms`,
+    `smp sched: 4 of 4`, `steps/core 60/60/60/60`, `sum20 = 210`, `sha256 clone = .../fork-ok`,
+    `bakeMemosDropped=10`, `sync: static seen=18 nomonitor=0`, the `[1.5420.17]` and `[true42false7]` concat
+    arms, and **thirty failure markers zero** -- with the eight `UNRESOLVED STATIC`/`TRAP-WIRED` lines all
+    labelled DENYLISTED (the SEVEN known ones).
+  - **THE CONTROLS THE WRAPPER-CACHE CARD LEANS ON SURVIVE, AND THE REASON CHANGED RATHER THAN THE READING.**
+    That card uses `Character`/`Byte`/`Short` as arms that "cannot move for ANY reason" because each overlay
+    dropped its cache. They still report **heap** -- the array is heap-allocated by the overlay, not baked --
+    so the image-vs-heap dimension is untouched and the control still holds. What is no longer true of them
+    is "allocates fresh every call". **`BoxCacheProbe`'s javadoc says so explicitly rather than being quietly
+    re-based**, because a control whose stated reason has expired is the shape this file has been bitten by
+    twice (the seeds' own comment, and these three overlays' comments).
+  - **A HARNESS ERROR OF MINE, AND IT PRODUCED AN ARM THAT PROVED NOTHING WHILE LOOKING FINE.** The first
+    "fix" image was built by a compound command beginning `make ... | grep ... | head -5`; the `head` closed
+    the pipe, the rest of the command list never ran, and the image was built with **whatever manifest was
+    already there** -- so it booted `BoxCacheProbe` and printed no `Boxing.` line at all. **Caught because
+    the log's FIRST line names the program**, which is the check this file already prescribes ("check which
+    program the log ran before reading it as a regression result"), now earned a second time. Every image
+    after it was built with the manifest echoed back immediately before the writer ran.
+  - **AND FOUR ORPHANED EMULATORS WERE RUNNING AT LOAD 26.89 BEFORE THE SUITE RUN.** `perl -e 'alarm N; exec
+    @ARGV'` did NOT bound them -- so the recorded portable-timeout recipe is not sufficient on its own, and
+    the explicit `sleep N; kill $PID` pattern the `scripts/run-*.sh` harnesses use is. They were reaped and
+    the host allowed to settle to load < 6 before the run that is quoted, which is the recorded rule
+    (check the load and reap `qemu-system-aarch64` BEFORE reading any QEMU result) applied rather than
+    re-learned.
+  - **PI-VALIDATED, AND THE GATE THIS CARD NAMED IN ADVANCE IS WHAT THE BOOT ANSWERED.** The stated risk was
+    COLD DRAM, which QEMU structurally cannot price: the lazy fill branches on a static reading null, and the
+    emulator hands out ZEROED memory where a Pi at power-on does not, so a cell holding firmware leftovers
+    would make `k != null` true and index arbitrary memory -- a wild branch or a wrong box rather than an
+    error. On silicon **all eleven arms are EXACT**: the three interning arms and the three autobox arms read
+    **1** where the control reads 0, the out-of-range controls (`char 200`, `short 1000`) stay **fresh**, and
+    both ENDS of each range read **127 / -1 / -1**. The seven pre-existing Integer arms are unmoved beside
+    them (`valueOf(5)==valueOf(5) cached = 1`, `valueOf(1000)==valueOf(1000) new = 0`, `hashCode(box -100) =
+    -100`).
+  - **AND THE `ends` ARMS ARE WHAT HARDWARE ADDS MOST, which is why they were written rather than assumed.**
+    The slot is `value + 128`, so an off-by-one in that offset is an **AIOOBE at an end** rather than a wrong
+    number, and the interning arms pass straight through it. The array is allocated on cold DRAM here, which
+    is the one harness where a wrong index reads something other than zeroes.
+  - **CLOSURE IDENTITY IS EXACT TO THE DIGIT, which is what a change adding no class has to show.** Batch 70
+    reads `+240blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2514 unres=2235`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`,
+    `sy:n=50 chg=0`, `bakeMemosDropped=10`.
+  - **AND THE RECORDED 3/3/1 CROSS-HARNESS SPLIT REPRODUCES EXACTLY, which is a check rather than a
+    curiosity.** QEMU read `res=2517 unres=2238 pc:n=112` against silicon's `2514 / 2235 / 111` -- the same
+    three counters, the same three magnitudes, as the launcher card records and attributes to the hardware
+    RNG path being compiled on one harness and not the other. A change that perturbed patch-site counts
+    would have moved that difference; it did not.
+  - **THE GATE IS UNMOVED: `gc: collections=46` at the churn demo**, with `churnMB=625 live=32 intact=32`,
+    then `55` at the lisp finale -- and the QEMU arm of this same binary also read 46 then 55, so the
+    sensitivity detector did not move either. That figure was the one genuinely at risk: the cache adds ~640
+    boxes per launch that touches these classes, across a 40-program suite, and it is the same shape as the
+    20,480-box `seedIntegerCache` that was DELETED one increment ago for costing exactly this.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, and `hw rng: RNG200 live` with
+    `two instances differ`.
+  - **THIRTY MARKERS ZERO**, and the anchored `FAULT` grep reads 0 on silicon for the reason this file
+    records: `demo/SecureRandomDemo` prints `CTRL=7fff STATUS=0 bcm2835DATA=0 rng200FIFOCNT=40001010` on
+    hardware, so the value strings that make that pattern cry wolf on QEMU do not occur at all. None of
+    `BOOT RE-ENTERED`, `ESR EC=`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`,
+    `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity `DIFF`,
+    `JIT unsupported`, `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `REACH LIST FULL`, `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`,
+    `SYSTEM PROPERTIES NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`,
+    `UNREGISTERED SUPER` or `NO toString` appears, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are
+    the SEVEN known ones (eight occurrences -- `CodingErrorAction.REPLACE` reports twice), each labelled
+    DENYLISTED.
+  - **THE WiFi FINALE FAILED ON THE FIRST BOOT AND SUCCEEDED COMPLETELY ON THE SECOND -- SAME CARD, SAME
+    BINARY -- SO IT IS INTERMITTENT, AND BOTH CANDIDATES I HAD NAMED ARE REFUTED.** Boot 2 runs the whole
+    chain: `event 16 status 0 flags=0x1` (E_LINK with the link flag) -> `wifi: JOINED` ->
+    `mac e4:5f:01:69:a6:c5` -> `eapol msg1` -> `ptk derived` -> `eapol msg2 sent` -> `msg3 MIC ok` ->
+    `GTK unwrapped` -> `eapol msg4 sent` -> `keys installed` -> DHCP 10.0.0.164 ->
+    `ping reply from 10.0.0.1` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`, 828 bytes**.
+    - **THAT RULES OUT WHAT I HAD WRITTEN, recorded rather than quietly replaced.** I named a
+      deauth-on-policy AP (band steering, PMF required, a client allow-list) and an msg1 the RX path missed.
+      **Both would RECUR, and neither did.** A PSK mismatch is out for the same reason and for a second,
+      positive one: `msg3 MIC ok` means the AP accepted a MIC derived from that PMK.
+    - **AND THE RECORDED DISCRIMINATOR IS STILL INSUFFICIENT FOR THIS SHAPE, which is the durable half.** The
+      three previous WiFi failures were settled by the configured SSID being ABSENT from a completed scan;
+      here it was PRESENT (four times, multiple BSSIDs/bands) and the join still failed, so that test cannot
+      classify this one. What settled it is the cheapest control this file records: **boot the same card
+      again.** Fourth environmental WiFi failure, first one this file could not classify by the scan list.
+    - **THE EVENT READING STANDS, read out of the tree rather than recalled, and it is what makes the two
+      boots comparable.** `Cyw43.setEvt` names them: `0 = E_SET_SSID`, `1 = E_JOIN`, `3 = E_AUTH`,
+      `6 = E_DEAUTH_IND`, `7 = E_ASSOC`, `16 = E_LINK`, and `joinWait` returns true ONLY on `E_LINK` with the
+      link flag set. **Boot 1** read `3 / 7 / 1 / 0` all status 0 then **`6`, a DEAUTH indication**, with no
+      `eapol msg1` at all -- the association torn down before EAPOL began. **Boot 2** read `3 / 7 / 16` and
+      joined.
+    - **NEITHER BOOT IS THIS INCREMENT'S DOING, and boot 2 makes that positive rather than an alibi:** the
+      full WPA2 handshake is computed by `Digest`, `Hmac`, `Pbkdf2` and `Prf` on silicon, and this change is
+      three `valueOf` bodies that the WiFi path never calls.
+    - **WHAT BOOT 2 DOES NOT CLAIM, kept straight: it is the WiFi TAIL only.** The suite figures, the eleven
+      arms and the marker sweep above are boot 1's; boot 2 adds the finale and nothing else.
+  - **A TENTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `f85f572 3e9598f9 1894436f`,
+    distinct from every previous boot, `count 16 -> 13`, popcount **49 of 96** against an ideal of 48 (the
+    series reads 51, 47, 63, 50, 41, 46, 45, 54, --, 49). **Still not a randomness test** -- what stays ruled
+    out is a constant, a counter, and a count that does not follow reads.
+
 - **`"x" + aBoxedWrapper` CALLS `toString()` AT LAST -- AND THE REACH OF THE GAP IS EIGHT TYPES, MEASURED,
   NOT "ANY REFERENCE" (2026-09-25, PI-VALIDATED).** The card below recorded
   `"x" + anObject` reading a non-String's first FIELD as a byte[] pointer and faulting. Fixed at the one
@@ -187,6 +356,27 @@ defines the minimum the assembler must encode.
     descriptor is `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)`, so javac had already called
     `String.valueOf` on each collection and it never reaches the concat helper at all. **An unexplained
     emptiness was given the cause that happened to be standing next to it.** Still open, now named.
+  - **RETIRED THE SAME DAY, AND THE DEFECT WAS IN MY READING RATHER THAN IN THE TREE: `ArchiveProbe`'s
+    `toString` ARM PASSES, ON BOTH BINARIES.** This bullet said the arm's values were EMPTY with the cause
+    "still open, now named"; a single-variable A/B settles it -- the PRE-CHANGE tree (`21832a7`, built in a
+    worktree, `grep` confirming it carries neither `isStringLike` nor `objToString`) and current HEAD both
+    print **`toString = [][]{} (want [][]{})`**, with every other arm identical. So there was never an
+    emptiness to explain, the `javap` correction below stands, and my concat fix is correctly exonerated by
+    it rather than credited with this.
+  - **WHY THE MISREADING SURVIVED TWO CARDS, AND IT IS THE REUSABLE PART: THE LINE PRINTS THE ANSWER AND THE
+    WANT IN THE SAME FORMAT.** `toString = [][]{} (want [][]{})` contains `[][]{}` TWICE, so a reader who
+    splits it wrong gets a self-consistent story either way -- the first card read the want-string AS the
+    answer (scored a pass), the correction read the answer as ABSENT (scored an empty value). **Both
+    readings came from the same line and neither was measured.** The rule this file already states --
+    "an arm whose expected value is printed on the same line can be mis-read as passing" -- is
+    stronger than recorded: it can be mis-read as FAILING too, and was. **The fix is the arm's SHAPE, not
+    more care: print a LENGTH** (`len=0` is an empty answer, `len=4` is the word "null", `len=6` is right),
+    which makes the three outcomes textually distinct.
+  - **AND THE PROBE I WROTE TO LOCALISE IT WAS DELETED RATHER THAN WIRED IN.** `CollToStringProbe` put
+    `toString()`, `String.valueOf(Object)` and the concat expression side by side with lengths, and passed
+    byte-identically on the host AND on QEMU -- i.e. it cannot fail, which by this file's own rule is not a
+    control. `ArchiveProbe` already carries the expression; a second arm that can only pass would read as
+    evidence.
   - **THE SUITE GATE IS ON THE BYTE-EXACT FLASH CANDIDATE, and the closure did not move by one counter.**
     Batch 70 reads `+240blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
     `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
@@ -325,9 +515,12 @@ defines the minimum the assembler must encode.
     want-string as the answer. **THE CAUSE I GAVE FOR THE EMPTINESS -- "the same concat gap" -- IS WRONG,
     and `javap` says so: that arm's descriptor is `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)`,
     i.e. javac had ALREADY called `String.valueOf` on each collection, so it never reaches the concat helper
-    at all. An unexplained emptiness was given a cause that happened to be next to it. Still open, and now
-    named rather than absorbed.** **An arm whose expected value is printed on the same line can be mis-read as
-    passing** -- the arm is coverage, not a check, and the four address arms are what that card rests on.
+    at all. An unexplained emptiness was given a cause that happened to be next to it.** **RETIRED -- SEE THE
+    CARD AT THE TOP OF THIS FILE: THERE WAS NO EMPTINESS. The arm prints `toString = [][]{} (want [][]{})`
+    on the PRE-CHANGE binary and on HEAD alike, so "the values are EMPTY" was a THIRD misreading of the same
+    line, which carries `[][]{}` twice.** **An arm whose expected value is printed on the same line can be
+    mis-read as passing -- and, as this one proves, as FAILING** -- the arm is coverage, not a check, and the
+    four address arms are what that card rests on.
   - **ONE FIGURE MOVED AND IT IS ATTRIBUTABLE: `bakeMemosDropped` 9 -> 10.** That counter is the reclaim
     dropping image-side bake memos pointing into code it just rewound, so it is a function of LAYOUT -- and
     this deletes 2,144 bytes of code. Reported because this file records 9; not called a regression, because
