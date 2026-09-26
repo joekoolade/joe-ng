@@ -3415,6 +3415,8 @@ public final class Loader
         litAnchor = null;                               // per-batch GC anchor for interned literals: the rewind
         litAnchorN = 0;                                 //   reclaimed both the literals and the anchor array
         VM.byteArrayTibCache = 0L;                      // the batch's [B TIB was just reclaimed with its heap
+        VM.stringTypeCache = 0L;                        // ... and so was the Type it is paired with: a STALE one
+                                                        //   could be matched by a later Type at the same address
         rgTab = new RVMMethod[MAXREG];
         rgCount = 0;
         rgIndexed = 0;                                   // the index is keyed by registry INDEX, so it must
@@ -8853,6 +8855,7 @@ public final class Loader
         }
         VM.byteArrayTibCache = byteArrayTib();          // type concat results ([B TIB) so stock getBytes can
                                                         //   checkcast/clone a concat String's value
+        VM.stringTypeCache = stringTypeAddr();          // tell a String from any other object at a concat site
         markActive = 0;                                 // don't leak the reachability state past this batch
         gEntryBlob = 0L;
         gRootBlob = 0L;
@@ -18131,12 +18134,7 @@ public final class Loader
      */
     private static long callOnObject(long obj, byte[] name, byte[] desc, long arg1, int argc)
     {
-        int reg = regOfObject(obj);
-        if (reg < 0)
-        {
-            return 0L;
-        }
-        long code = resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name), utf8Blob(desc));
+        long code = resolveOn(obj, name, desc);
         if (code == 0L)
         {
             return 0L;
@@ -18148,6 +18146,41 @@ public final class Loader
         {
             Magic.store64(argBase + 8L, arg1);
         }
+        return Magic.callN(code, argBase);
+    }
+
+    /** The compiled body of {@code name desc} for {@code obj}'s class, or 0 (null, a raw array, unresolvable). */
+    private static long resolveOn(long obj, byte[] name, byte[] desc)
+    {
+        int reg = regOfObject(obj);
+        if (reg < 0)
+        {
+            return 0L;
+        }
+        return resolveLinkTarget(clTab[reg].base + clTab[reg].nameOff, utf8Blob(name), utf8Blob(desc));
+    }
+
+    /**
+     * {@code obj.toString()} on an arbitrary guest object, as a raw String/byte[] reference -- the call
+     * {@code String.valueOf(Object)} makes, reached the way {@link #recordToString} already reaches a
+     * component's own {@code toString}.
+     *
+     * <p>THE TWO FAILURE ANSWERS ARE KEPT APART, and that is the whole reason this is not just
+     * {@link #callOnObject}. {@code 0} is a {@code toString} that RETURNED null, which JLS 15.18.1 renders
+     * as the word "null"; {@code -1} is one that could not be RESOLVED, which is a gap in this VM. One
+     * sentinel for both would print a plausible "null" exactly where the dispatch is the broken thing --
+     * the shape this project pays for most.
+     */
+    static long objToString(long obj)
+    {
+        long code = resolveOn(obj, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"));
+        if (code == 0L)
+        {
+            return -1L;
+        }
+        long[] slots = new long[2];                     // fresh per call: the callee may re-enter this
+        long argBase = Magic.addrOf(slots) + 24L;
+        Magic.store64(argBase, obj);
         return Magic.callN(code, argBase);
     }
 
@@ -21213,6 +21246,21 @@ public final class Loader
     static long byteArrayTib()
     {
         return primArrayTib(8);
+    }
+
+    /**
+     * The Type of {@code java/lang/String}, or 0 if it is not registered. Read ONCE per batch into
+     * {@link VM#stringTypeCache} rather than per ask: the caller is a concat argument, and a
+     * {@code classIndexByName} scan there is a linear walk of a table that grows all boot.
+     *
+     * <p>An EXACT compare against this is complete because {@code String} is final, and unambiguous because
+     * the two worlds share one Type -- the loader ADOPTS the writer's node, so a writer-baked String object
+     * and a guest-built one carry the same address.
+     */
+    static long stringTypeAddr()
+    {
+        int i = classIndexByName(Magic.bytes("java/lang/String"));
+        return i < 0 ? 0L : clTab[i].type;
     }
 
     /** JVMS field-descriptor char -> newarray atype (Z/B/C/S/I/J/F/D), or -1 for a reference/array element. */

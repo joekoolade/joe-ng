@@ -1177,6 +1177,10 @@ public final class VM
     // (elem-size-header) arrays, which used to halt the first System.out print of a concat string.
     static long byteArrayTibCache;
 
+    // The current batch's java/lang/String Type (Loader-set after each loadAll; 0 between batches).
+    // isStringLike below compares against it; see Loader.stringTypeAddr for why once-per-batch and why exact.
+    static long stringTypeCache;
+
     /**
      * The byte[] behind a "string" ref: a raw byte[] (array TIB = 0) is itself; a mini java/lang/String
      * (TIB != 0) yields its {@code value} field (offset 16). Lets literals (interned byte[]) and concat
@@ -1197,6 +1201,42 @@ public final class VM
             return ref;                                 // typed byte[] (TIB[0]=array Type, Type[0] tagged)
         }
         return Magic.load64(ref + 16L);                 // a String object -> value field
+    }
+
+    /**
+     * Is {@code ref} something {@link #strBytes} can read -- a byte[] carrier or a {@code java/lang/String}?
+     *
+     * <p>WHY THIS EXISTS. {@code strBytes}'s last arm is "not an array, therefore a String", and for any
+     * OTHER object that reads its first FIELD as a byte[] pointer. For an {@code Integer} that field is the
+     * int value, so {@code "x" + Integer.valueOf(5)} loaded address 21 and faulted -- JLS 15.18.1 wants
+     * {@code String.valueOf(obj)} there. {@code strBytes} itself is NOT changed: it is shared with the
+     * reflective and record paths, whose callers have already established what they hold.
+     *
+     * <p>ARRAYS STAY ON THE OLD PATH, and for this VM that is not a compromise: a writer-interned literal
+     * IS a raw byte[], so a byte[] here means "a string", and javac cannot deliver any other array -- it
+     * emits {@code String.valueOf(Object)} itself for every array argument (measured with {@code javap};
+     * {@code VMConcat.scStr} records the same finding for the eight boxed wrappers). So the arm is
+     * reachable only by non-javac bytecode, where a {@code char[]} would append its bytes rather than
+     * render {@code [C@...}. Recorded as a separate and unmeasured gap rather than bundled -- what changes
+     * here is the object case, which is the one that faults.
+     *
+     * <p>UNKNOWN ANSWERS TRUE. Between batches the Type cache is 0 and nothing can be told apart, so this
+     * keeps today's behaviour rather than diverting on a guess. The window is the baked boot battery, whose
+     * concat arguments are interned literals and so take the array arm regardless.
+     */
+    static boolean isStringLike(long ref)
+    {
+        long tib = Magic.load64(ref + 0L);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return true;                                // raw byte[] (element size in @0)
+        }
+        long type = Magic.load64(tib);                  // TIB[0] = Type
+        if ((Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) == ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return true;                                // a typed array
+        }
+        return stringTypeCache == 0L || type == stringTypeCache;
     }
 
     // ----- provided java.base natives (called by loaded guest code via Loader.nativeBuf) -----

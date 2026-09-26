@@ -115,6 +115,145 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`"x" + aBoxedWrapper` CALLS `toString()` AT LAST -- AND THE REACH OF THE GAP IS EIGHT TYPES, MEASURED,
+  NOT "ANY REFERENCE" (2026-09-25, PI-VALIDATED).** The card below recorded
+  `"x" + anObject` reading a non-String's first FIELD as a byte[] pointer and faulting. Fixed at the one
+  place that can see what the object actually IS.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`ConcatDemo`, eleven new box arms** | **`box Integer = []`, then NPE at `VMConcat.scStr`** | **all eleven EXACT** |
+  | the 21 pre-existing arms (null/bool/dbl/flt) | pass | **pass -- unmoved in BOTH states** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, batch-70 closure **EXACT**, markers zero |
+  | **Pi, the SAME binary** | -- | **40 programs, eleven arms EXACT, closure exact to the digit (`memo=1672 res=2514 unres=2235 pc:n=111`), 30 markers zero** |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved** |
+  | image (ConcatDemo-only A/B) | 33,752,500 | **33,754,400 (+1,900 B)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE FIRST CUT OF THE REGRESSION ARMS TESTED NOTHING, AND `javap` IS WHAT SAID SO BEFORE THEY
+    SHIPPED.** I wrote five arms around a user class with its own `toString`. **javac emits
+    `invokestatic String.valueOf(Object)` ITSELF for every reference type except `String` and the eight
+    boxed wrappers** -- measured on a throwaway class taking all fourteen shapes -- so those arms pass on an
+    UNFIXED VM and discriminate nothing. They were DELETED, not demoted. Same trap as the constant folding
+    this demo already records twice, one layer out: **verify the arm emits the instruction it claims to
+    test.**
+  - **SO THE DEFECT IS NARROWER THAN THIS FILE STATED, AND THAT EXPLAINS WHY IT SURVIVED.** Only BOXING can
+    reach the helper with a non-String, and joe-ng's own demos concatenate primitives -- measured, not
+    assumed: **no baked VM class concatenates a wrapper at all** (a `javap` sweep of every class under
+    `out/vm`, `out/board`, `out/net`, `out/crypto`, `out/zip` finds zero), and of the ~100 demos only
+    `ConcatDemo` now does. The bug needed a probe that boxed, which is exactly how it was found.
+  - **THE FIX IS DYNAMIC, NOT STATIC, AND THAT IS THE DESIGN CLAIM.** `Baseline.appendArg` sees only the
+    call site's DECLARED type, which is routinely `Object` for a value that IS a String; `VM.isStringLike`
+    reads the RECEIVER's own TIB. So a String appends its bytes directly however it was declared, only a
+    genuine non-String pays a dispatch, and non-javac bytecode is covered by the same arm. **No compiler
+    change, no new helper id, no writer stash, and not one byte of emitted code changes in either world** --
+    which is why `compiler: 40 checks` holding is meaningful here rather than incidental.
+  - **`strBytes` IS DELIBERATELY NOT CHANGED.** Its last arm is "not an array, therefore a String", and that
+    is what read an `Integer`'s int field as a byte[] pointer -- but it is SHARED with the reflective and
+    record paths, whose callers have already established what they hold. The new predicate sits beside it
+    and the concat path is its only caller.
+  - **THE MECHANISM WAS ALREADY IN THE TREE AND PI-VALIDATED: `Loader.recordToString` ALREADY CALLS
+    `toString()` ON AN ARBITRARY OBJECT.** `callOnObject` resolves `toString()Ljava/lang/String;` against
+    the receiver's registered class and `Magic.callN`s it. The resolve is factored out (`resolveOn`) and
+    reused; `callOnObject` is otherwise untouched, because the record path is validated and this had no
+    business perturbing it.
+  - **THE TWO FAILURE ANSWERS ARE KEPT APART, and that is the whole reason `objToString` is not just
+    `callOnObject`.** `0` is a `toString` that RETURNED null, which JLS renders as the word "null"; `-1` is
+    one that could not be RESOLVED, which is a gap in this VM and prints a marker with a loud line once
+    (`appendNoFormatter`'s shape, for `appendNoFormatter`'s reason). **One sentinel for both would print a
+    plausible "null" exactly where the dispatch is the broken thing** -- the `tableValueIn` defect this file
+    already records, avoided rather than re-found.
+  - **THE NEGATIVE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT.** With ONLY the object arm disabled, the
+    box arms FAIL -- `box Integer = []` (the int read as a byte[] whose length happened to be 0) and then an
+    **NPE at `VMConcat.scStr`** on the next one -- while **all 21 null/bool/dbl/flt arms are UNCHANGED**.
+    Arms that move in one state and not the other are the control; the 21 that pass in both are the built-in
+    comparison. The demo DIES at the first box arm in the control, and that is stated rather than glossed:
+    the pre-fix behaviour IS a crash, so the remaining ten are not reached.
+  - **THE TYPE IS CACHED ONCE PER BATCH, NOT ASKED PER ARGUMENT.** `classIndexByName` is a linear walk of a
+    table that grows all boot, and a concat argument is the wrong place for one -- the defect this file
+    names more than any other. `VM.stringTypeCache` follows `byteArrayTibCache` exactly: Loader-set at the
+    end of `loadAll`, **and cleared in `resetLoader` beside it**, because a Type address outliving its table
+    can be matched by a LATER Type allocated at the same address. (`thrTypeCache` next door is NOT reset --
+    noted, not fixed, and not copied.)
+  - **AN UNKNOWN ANSWERS "STRING", i.e. today's behaviour.** Between batches the cache is 0 and nothing can
+    be told apart, so the fix declines to divert on a guess. The window is the baked boot battery, whose
+    concat arguments are writer-interned literals and take the array arm regardless.
+  - **ARRAYS STAY ON THE OLD PATH, and for this VM that is not a compromise:** a writer-interned literal IS
+    a raw byte[], so a byte[] here means "a string" -- and javac cannot deliver any other array, because it
+    pre-converts those too. The arm is reachable only by non-javac bytecode, where a `char[]` would append
+    its bytes rather than render `[C@...`. **Recorded as a separate, unmeasured gap rather than bundled.**
+  - **A CORRECTION TO MY OWN CARD BELOW, found while writing this one.** It says `ArchiveProbe`'s empty
+    `toString` values were "the same concat gap". **They were not, and `javap` settles it:** that arm's
+    descriptor is `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)`, so javac had already called
+    `String.valueOf` on each collection and it never reaches the concat helper at all. **An unexplained
+    emptiness was given the cause that happened to be standing next to it.** Still open, now named.
+  - **THE SUITE GATE IS ON THE BYTE-EXACT FLASH CANDIDATE, and the closure did not move by one counter.**
+    Batch 70 reads `+240blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+    `n:imap=78 synth=36 clinits=28`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+    `sy:chg=0`, `gc=46` -- **every one identical to the recorded QEMU figures**, which is what a change that
+    adds no class and emits no new code has to show. Plus 40 programs to `self-build retired`,
+    `churnMB=625 live=32 intact=32`, `gc: collections=46` at the churn demo then `55`,
+    `lisp evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion `HIGH blocked 62ms`,
+    `sum20 = 210`, `sha256 clone = .../fork-ok`, `bakeMemosDropped=10`, and **THIRTY failure markers zero**
+    -- `NO toString` among them, which is the one this change adds and the one whose silence means the
+    dispatch resolved every time. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones
+    (eight occurrences), each labelled DENYLISTED.
+  - **AND THE FLASH CANDIDATE WAS VERIFIED AGAINST THE TREE BY ARITHMETIC, WHICH CAUGHT THE RECORDED TRAP
+    AGAIN.** A rebuild after a comment rewrap came out **27,984 bytes** smaller -- the
+    `RandomFactory`/jdktests-state figure this file records to the byte, because a bare `make build` purges
+    `out/jdk/test/lib/RandomFactory.class` while the gated image came through the `make image` chain. Built
+    through the IDENTICAL chain (`make build jdktests plugins`) the rebuild is **byte-identical, 0 differing
+    bytes**, so the rewrap moved no LineNumberTable entry and the gated binary IS the tree. **Sixth
+    instance, and the check that caught it was a size comparison rather than an output one.**
+  - **PI-VALIDATED, AND THE NAMED GATE IS WHAT THE BOOT ANSWERED.** I said in advance that the arms to read
+    are ConcatDemo's eleven plus the ABSENCE of `NO toString`, because this adds a call from BAKED VM code
+    into a demand-loaded `toString` -- the compiler running from inside a concat. On silicon: **all eleven
+    exact** (`[42]`, `[1234567890123]`, `[true]`, `[A]`, `[7]`, `[42]`, `[0.1]`, `[0.1]`, `[-42]`, `[4200]`,
+    `[val=42427]`) and **`NO toString` never prints**. The two float arms are worth naming separately: they
+    route a boxed `Float`/`Double` through `Float.toString`/`Double.toString`, so the dispatch reaches the
+    Schubfach formatter this file records as unbakeable -- resolved late, on the metal, correctly.
+  - **AND THIS BOOT PROVES THE FEATURE RATHER THAN ONLY NO-REGRESSION, which is unusual for this suite.**
+    Most increments here are gated by hardware for absence and by a QEMU probe for presence; `ConcatDemo` is
+    IN the suite, so the eleven arms are the feature running on silicon. Different from the recorded shape of
+    the `Mac`/`SecretKeyFactory`/`getDeclaredClasses` cards, and stated because the distinction is usually
+    the other way round.
+  - **CLOSURE IDENTITY IS EXACT TO THE DIGIT against the recorded Pi figures:** batch 70 reads `+240blob`,
+    `rounds=4 pend=180 reach=16`, `memo=1672 res=2514 unres=2235`, `n:imap=78 synth=36 clinits=28`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`, `sy:n=50 chg=0`, `bakeMemosDropped=10`.
+    **Every one identical**, which is what a change that adds no class and emits no new code has to show.
+  - **AND THE RECORDED 3/3/1 CROSS-HARNESS SPLIT REPRODUCES EXACTLY, which is a check rather than a
+    curiosity.** QEMU read `res=2517 unres=2238 pc:n=112` against silicon's `2514 / 2235 / 111` -- the same
+    three counters, the same three magnitudes, as the launcher card records and attributes to the hardware
+    RNG path being compiled on one harness and not the other. A change that perturbed patch-site counts
+    would have moved that difference; it did not.
+  - **THE GATE IS UNMOVED: `gc: collections=46` at the churn demo**, with `churnMB=625 live=32 intact=32`,
+    then `55` at the lisp finale -- and the QEMU arm of this same binary also read 46 then 55, so the
+    sensitivity detector did not move either. Plus the gates QEMU cannot show:
+    **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/59/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, and `hw rng: RNG200 live` with
+    `two instances differ`.
+  - **THIRTY MARKERS ZERO, and the anchored `FAULT` grep reads 0 on silicon for the reason this file
+    records:** `demo/SecureRandomDemo` prints `CTRL=7fff STATUS=0 bcm2835DATA=0 rng200FIFOCNT=40001010` on
+    hardware, so the value strings that make that pattern cry wolf on QEMU do not occur at all. None of
+    `BOOT RE-ENTERED`, `ESR EC=`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`,
+    `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity `DIFF`,
+    `JIT unsupported`, `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `REACH LIST FULL`, `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`,
+    `SYSTEM PROPERTIES NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`,
+    `UNREGISTERED SUPER` or **`NO toString`** appears, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines
+    are the SEVEN known ones (eight occurrences -- `CodingErrorAction.REPLACE` reports twice), each labelled
+    DENYLISTED.
+  - **THE WiFi FINALE FAILED AND IT IS ENVIRONMENTAL, checked by the recorded discriminator rather than
+    assumed -- THIRD instance.** `wifi: join timeout` on `ATTGh4ybVc`, and **the scan COMPLETED and lists 29
+    networks, not one of which is that SSID** (`HANEY`, `KaiaBernie`, `xfinitywifi`, `AT_101_2REF12EICD...`,
+    `Doersam Household`). So SDIO, the firmware upload, the CLM load and the scan path all worked, and the
+    configured AP is simply not in range -- the same test that settled it twice before. **`wifi: pmk ready`
+    printed**, so `Digest.<clinit>`, `Hmac` and the collapsed `Pbkdf2.derive` all ran on silicon and produced
+    a PMK; what is missing is an AP to hand it to. Nothing in this increment touches the WiFi path.
+
 - **THE BAKED WRAPPER CACHES ARE LIVE AT LAST, AND THE MECHANISM WAS NOT THE ONE THIS FILE PREDICTED
   (2026-09-24, PI-VALIDATED).** Every `Integer`/`Long` in [-128,127] now comes back at
   an IMAGE address. The fix is a DELETION: `Loader.seedIntegerCache` and `seedLongCache` are gone.
@@ -174,14 +313,20 @@ defines the minimum the assembler must encode.
     nothing to retire -- and that makes them the right controls: they cannot move for ANY reason, so an arm
     that moved would mean the change reached somewhere it has no business being.
   - **THE PROBE WALKED INTO A PRE-EXISTING GAP, RECORDED RATHER THAN BUNDLED: `"x" + anObject` DOES NOT CALL
-    `toString()`.** `Baseline.appendArg` routes ANY reference argument to `SC_STR`, which reads it as a
+    `toString()`. FIXED the next day -- see the card at the top of this file, which also narrows this
+    bullet: the reach is the EIGHT BOXED WRAPPERS, not "ANY reference argument", because javac emits
+    `String.valueOf(Object)` ITSELF for every other reference type.** `Baseline.appendArg` routes ANY reference argument to `SC_STR`, which reads it as a
     String (`strBytes` -> `Magic.load64(arr + 16)`), so a non-String reference reads its first FIELD as a
     byte[] pointer. For an `Integer` that is the int value, and the raw load faults into an NPE at
     `VMConcat.scStr`. JLS 15.18.1 requires `String.valueOf(obj)`. **On UNMODIFIED main**, so it is nobody's
     regression -- the probe's value arms use `intValue()`/`longValue()` instead, which tests the same thing.
   - **AND IT EXPOSED A READING ERROR OF MINE IN THE CARD BELOW.** `ArchiveProbe`'s `toString` arm prints
-    `toString = <values> (want [][]{})`; the values are EMPTY (the same concat gap) and I read the trailing
-    want-string as the answer. **An arm whose expected value is printed on the same line can be mis-read as
+    `toString = <values> (want [][]{})`; the values are EMPTY and I read the trailing
+    want-string as the answer. **THE CAUSE I GAVE FOR THE EMPTINESS -- "the same concat gap" -- IS WRONG,
+    and `javap` says so: that arm's descriptor is `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)`,
+    i.e. javac had ALREADY called `String.valueOf` on each collection, so it never reaches the concat helper
+    at all. An unexplained emptiness was given a cause that happened to be next to it. Still open, and now
+    named rather than absorbed.** **An arm whose expected value is printed on the same line can be mis-read as
     passing** -- the arm is coverage, not a check, and the four address arms are what that card rests on.
   - **ONE FIGURE MOVED AND IT IS ATTRIBUTABLE: `bakeMemosDropped` 9 -> 10.** That counter is the reclaim
     dropping image-side bake memos pointing into code it just rewound, so it is a function of LAYOUT -- and

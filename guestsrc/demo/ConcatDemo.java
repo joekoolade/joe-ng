@@ -113,5 +113,39 @@ public class ConcatDemo
         // CONSTANT and javac folds it into the recipe TEXT, so it never reaches SC_LONG -- said here rather
         // than left implied, because that is exactly the mistake the boolean arm made and had to correct.
         System.out.println("dbl vs int   = [" + d15 + n + dp1 + 7L + "] (want [1.5420.17])");
+
+        // A BOXED WRAPPER CONCATENATES THROUGH ITS OWN toString (JLS 15.18.1: every reference argument is
+        // String.valueOf(obj)). `Baseline.appendArg` collapses every reference to ONE helper, which read
+        // whatever it was handed AS a String -- so a non-String's first FIELD became its byte[] pointer.
+        // For an Integer that field is the int, so `"x" + Integer.valueOf(5)` loaded ADDRESS 21 and faulted
+        // inside the VM's own concat helper, naming nothing the program had done. Found by BoxCacheProbe
+        // walking into it while measuring something else, on unmodified main.
+        //
+        // THE EIGHT WRAPPERS ARE THE WHOLE OF THE REACHABLE GAP, and that is MEASURED with javap rather
+        // than assumed: javac hands the indy a reference only for String and the eight boxes, and emits
+        // `invokestatic String.valueOf(Object)` ITSELF for every other reference type -- Number, Object,
+        // CharSequence, an array, a user class. So arms built from a user class with its own toString pass
+        // on an unfixed VM and discriminate NOTHING; a first cut of this block had five of them, and
+        // `javap -c` is what said so. Same trap as the constant folding two blocks up, one layer out.
+        //
+        // EVERY VALUE IS RUNTIME-DERIVED for that same reason: `Integer.valueOf(42)` written as a literal
+        // would still box, but `n` keeps the arm honest against any later folding.
+        System.out.println("box Integer  = [" + Integer.valueOf(n) + "] (want [42])");
+        System.out.println("box Long     = [" + Long.valueOf(big) + "] (want [1234567890123])");
+        System.out.println("box Boolean  = [" + Boolean.valueOf(bt) + "] (want [true])");
+        System.out.println("box Character= [" + Character.valueOf((char) (n + 23)) + "] (want [A])");
+        System.out.println("box Byte     = [" + Byte.valueOf((byte) k) + "] (want [7])");
+        System.out.println("box Short    = [" + Short.valueOf((short) n) + "] (want [42])");
+        // The two that reach a FORMATTER through the box's own toString rather than through SC_DOUBLE.
+        System.out.println("box Float    = [" + Float.valueOf(fp1) + "] (want [0.1])");
+        System.out.println("box Double   = [" + Double.valueOf(dp1) + "] (want [0.1])");
+        // A NEGATIVE box, so an arm cannot pass by reading a plausible small positive out of the object.
+        System.out.println("box negative = [" + Integer.valueOf(0 - n) + "] (want [-42])");
+        // ABOVE THE CACHE: a heap box rather than an image one, so the fix cannot depend on where it lives.
+        System.out.println("box uncached = [" + Integer.valueOf(n * 100) + "] (want [4200])");
+
+        // AND THE OTHER KINDS MUST STILL WORK BESIDE ONE: a String, an int and a box in one recipe, so a
+        // fix that sent EVERY reference through toString would be caught here rather than passing quietly.
+        System.out.println("box vs rest  = [" + label + n + Integer.valueOf(k) + "] (want [val=42427])");
     }
 }

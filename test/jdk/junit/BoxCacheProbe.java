@@ -66,15 +66,17 @@ public final class BoxCacheProbe
         System.out.println("  int  1000 fresh = " + (Integer.valueOf(1000) != Integer.valueOf(1000)) + " (want true)");
 
         // A merge/copy bug shows up as a wrong VALUE at an array END, not as a wrong address.
-        // UNBOXED deliberately: joe-ng's concat lowering routes ANY reference argument to SC_STR,
-        // which reads it as a String rather than calling toString (JLS 15.18.1) -- a pre-existing gap
-        // this probe walked into and must not depend on. intValue()/longValue() test the same thing.
-        System.out.println("  values -128/-1/0/127 = " + Integer.valueOf(-128).intValue()
-                           + "/" + Integer.valueOf(-1).intValue()
-                           + "/" + Integer.valueOf(0).intValue()
-                           + "/" + Integer.valueOf(127).intValue() + " (want -128/-1/0/127)");
-        System.out.println("  long   -128/127      = " + Long.valueOf(-128L).longValue()
-                           + "/" + Long.valueOf(127L).longValue() + " (want -128/127)");
+        //
+        // BOXED, and that is a change: these arms were written `.intValue()`/`.longValue()` because
+        // concatenating the BOX faulted -- joe-ng read any non-String reference AS a String, so an
+        // Integer's int field became its byte[] pointer. This probe is what walked into that, and with
+        // it fixed the natural form is also a second, independent exercise of the fix.
+        System.out.println("  values -128/-1/0/127 = " + Integer.valueOf(-128)
+                           + "/" + Integer.valueOf(-1)
+                           + "/" + Integer.valueOf(0)
+                           + "/" + Integer.valueOf(127) + " (want -128/-1/0/127)");
+        System.out.println("  long   -128/127      = " + Long.valueOf(-128L)
+                           + "/" + Long.valueOf(127L) + " (want -128/127)");
 
         // Autoboxing must reach the SAME cache a direct valueOf does -- a second cache would show here.
         Integer boxed = 5;
