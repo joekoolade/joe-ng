@@ -115,6 +115,212 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/util/concurrent/TimeUnit` OVERLAY IS DELETED AND STOCK RUNS -- `convert` MULTIPLIED THEN
+  DIVIDED WITH NO SATURATION, SO THE LARGEST POSSIBLE TIMEOUT CAME BACK NEGATIVE (2026-09-28,
+  PI-VALIDATED).** 125 hand-written lines shadowing a 496-line stock class, and the defect is one
+  expression:
+
+  ```java
+  public long convert(long sourceDuration, TimeUnit sourceUnit)
+  {
+      return sourceDuration * sourceUnit.nanosPerUnit / this.nanosPerUnit;
+  }
+  ```
+
+  Multiply first and the product overflows in silence, where stock's `cvt` CLAMPS. So
+  **`NANOSECONDS.convert(Long.MAX_VALUE, SECONDS)` answered `-1000000000`** -- a NEGATIVE nanosecond
+  duration, i.e. "expire immediately", for a caller asking "effectively never".
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`TimeUnitProbe`, 69 arms against the HOST ORACLE** | **11 WRONG, then a HARD STOP** | **69 of 69 BYTE-IDENTICAL** |
+  | `NANOSECONDS.convert(MAX_VALUE, SECONDS)` | **-1000000000** | `9223372036854775807` |
+  | `MICROSECONDS.convert(MIN_VALUE, HOURS)` | **0** | `-9223372036854775808` |
+  | `NANOSECONDS.convert(-9223372037, SECONDS)` | **+9223372036709551616** | `-9223372036854775808` |
+  | `NANOSECONDS.convert(10000000000, SECONDS)` | **-8446744073709551616** | `9223372036854775807` |
+  | `DAYS.toNanos(MAX)` / `(MIN)` / `SECONDS.toMillis(MAX)` | **-86400000000000 / 0 / -1000** | all three SATURATE |
+  | the +-9223372036 clamp-boundary pair | correct | **correct -- UNMOVED** |
+  | `convert(Duration)` | **VIRTUALRESOLVE FAILED, then a DENYLIST TRAP** | exact, both signs |
+  | `compareTo` | **absent** | -1 / 6 |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, ALL 32 markers zero |
+  | closure, batch 2 / batch 63 | -- | **`+324blob` / `+387blob` -- EXACT, ZERO classes added** |
+  | `gc: collections` churn / finale | -- | **46 / 56 -- the gate, unmoved** |
+  | `DENYLIST TRAP` (the arm for the new denial) | -- | **0** |
+  | **Pi, the SAME binary** | -- | **40 programs, all five named ABSENCES hold, `46` / `56`, closure EXACT, WiFi -> HTTP 200 OK** |
+  | image (same-build-path control) | 33,834,004 | **33,838,268 (+4,264 B, +0.013%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE OVERLAY'S STATED REASON WAS ONE TEST, WHICH IS THE NARROWEST JUSTIFICATION IN THIS FAMILY YET.**
+    Its javadoc: "enough of the unit constants + `convert` for the JoinWithDuration test's `millisTime()`".
+    A minimum written for a single test, winning the name of the class every timeout, sleep and duration
+    conversion in the VM goes through. `Formatter` was justified by a closure argument and `Character` by a
+    cold-path one; this one by a test that no longer defines the requirement.
+  - **THE WRONGNESS IS A SIGN FLIP, NOT A ROUNDING ERROR, AND THAT IS WHAT MAKES IT DANGEROUS.** Every
+    failing arm returns a perfectly plausible `long`: the largest positive request becomes a small negative,
+    the largest negative becomes `0`, and `convert(-9223372037, SECONDS)` becomes **+9223372036709551616** --
+    a ~292-year POSITIVE timeout where the caller asked for a large negative one. Nothing downstream can
+    tell a wrapped duration from a real one.
+  - **AND IT WAS INVISIBLE BY CONSTRUCTION, which is why it survived.** The conversion joe-ng's own timing
+    tests call -- `MILLISECONDS.convert(nanos, NANOSECONDS)` -- divides rather than multiplies and cannot
+    overflow at any realistic value, and it is exactly the arm the overlay was written for. Same shape as
+    `Character.isLetter` being correct on ASCII: the defect needs a value the existing tests never use.
+  - **THE CLAMP BOUNDARY IS THE BUILT-IN COMPARISON AND IT IS SHARP TO THE UNIT.** `+-9223372036` seconds --
+    the LAST values that do not overflow -- are UNMOVED in the control, while `+-9223372037`, the FIRST that
+    do, both move. So the overlay was right up to the last representable value and wrong from the first one
+    past it; a "fix" that clamped too eagerly would pass every saturation arm and fail these two.
+  - **NO SINGLE PROBE SOURCE COMPILES AGAINST BOTH, AND THAT IS ITSELF THE OVERLAY-DROPS-MEMBERS FINDING.**
+    The overlay declares neither `convert(Duration)` nor `compareTo`, so a probe written against stock does
+    not compile against it and vice versa. The control is therefore a probe class compiled against STOCK
+    meeting the OVERLAY on the metal -- which is not artificial, it is precisely what every stock java.base
+    caller does on this VM, since joe-ng resolves by name+descriptor at link time rather than at javac time.
+    It gives **11 wrong answers and then a HARD STOP**: `VIRTUALRESOLVE FAILED java/util/concurrent/
+    TimeUnit.convert(Ljava/time/Duration;)J` and a `DENYLIST TRAP` with `TRAPWIRE index=-1` -- the recorded
+    signature of a LATE-RESOLUTION failure rather than a denied class. The 30 Duration and enum arms never
+    ran at all, which is stated rather than counted as passing.
+  - **AND THE CONTROL WAS RE-BUILT DELIBERATELY AFTER THE FIRST ONE CAME OUT RIGHT BY ACCIDENT.** The first
+    attempt restored the overlay AND the original probe source, `make jdktests` FAILED (the original probe
+    does not compile against the overlay either -- `compareTo` is missing), and the image was built from the
+    STALE `out/TimeUnitProbe.class` left by the previous build. The result was correct and its provenance was
+    not, so it was re-run as an explicit sequence. **SEVENTH INSTANCE of the stale-class trap, and the first
+    where it lands in the DEFAULT PACKAGE** -- `make build`'s guest purge covers `java/ javax/ jdk/ sun/
+    demo/ org/` and cannot reach a bare `out/Foo.class`.
+  - **joe-ng's OWN 64-BIT ARITHMETIC REPRODUCES THE HOST RECONSTRUCTION TO THE DIGIT, and that was worth
+    checking rather than assuming.** The overlay's formula was first run on the HOST against stock's
+    `convert` over the probe's own arms: 8 of 22 `convert` arms and all 3 `toXxx` arms differ, **11 in
+    total**. The metal control then produced the SAME ELEVEN with the SAME VALUES. This file records int
+    arithmetic failing to stay sign-extended on overflow and breaking `idiv`/`irem`, so "the host says the
+    formula wraps to X, therefore the metal does" is an inference this VM has earned the right to have
+    checked.
+  - **THE NAME-BASED PULL WAS PRICED BEFORE ANY BOOT, AND THE CLOSURE THEN MOVED BY ZERO CLASSES.** Stock
+    `TimeUnit` names FOURTEEN `CONSTANT_Class` entries and every one is already present or already denied:
+    `AssertionError`, `IllegalArgumentException`, `InterruptedException`, `Long`, `Object`, `String`,
+    `StringBuilder`, `Thread`, `java/util/Objects` (in every closure); `java/lang/Enum` (stock, un-overlaid,
+    un-denied -- `java/math/RoundingMode` already runs on it); `java/time/Duration` (overlaid, deliberately
+    NOT denied per the Formatter card); `java/time/temporal/ChronoUnit` (DENIED); the `[Ljava/util/concurrent
+    /TimeUnit;` array type; and `TimeUnit$1`, denied below. Batch 2 reads `+324blob` and batch 63 `+387blob`
+    -- identical to the previous increment.
+  - **`java/util/concurrent/TimeUnit$1` IS DENIED IN BOTH LISTS, AND WHAT IT HOLDS WAS MEASURED RATHER THAN
+    READ OFF A COMMENT.** Reflection on the seed JDK gives it exactly one field,
+    `$SwitchMap$java$time$temporal$ChronoUnit` -- so its `<clinit>` is `new int[ChronoUnit.values().length]`
+    plus one ordinal store per constant, and under rule 2 pulling it RUNS that, straight into the denied
+    `java/time/temporal/`. Its only readers are `TimeUnit.of(ChronoUnit)` and `toChronoUnit()`, which nothing
+    here calls. Denied in `Loader.isDenylisted` AND `writer/ReachScan.DENY` -- a denial in one and not the
+    other is a class the writer prunes and the metal pulls, or the reverse -- and **`DENYLIST TRAP` reads 0
+    across the whole suite AND the probe boot**, which is the measurement that says nothing reaches it.
+  - **DELETING THE OVERLAY ARMED A SECOND TRAP, AND `overlaycheck-deep` IS WHAT NAMED IT.** Stock
+    `convert(Duration)` opens `duration.getSeconds()` / `duration.getNano()`, and joe-ng's
+    `java/time/Duration` OVERLAY declared neither -- so shipping stock TimeUnit would have made that call
+    resolve nowhere. Invisible to the shallow check by construction (the only caller is stock java.base),
+    which is the blind spot `overlaycheck-deep` exists for. Both added.
+  - **AND THEIR DIVISION FLOORS RATHER THAN TRUNCATING, which is the same defect one class along.**
+    `getNano()` is the nano-of-second and is always 0..999,999,999, so a negative duration BORROWS from the
+    seconds: `ofNanos(-1)` is seconds `-1`, nano `999999999`. Java's `/` truncates toward zero, so the
+    obvious expression is wrong for exactly the negative half while being right for every positive value
+    anyone would try first. The probe asserts both accessors directly as well as through `convert`, so a
+    wrong answer names the accessor rather than the conversion.
+  - **ONE GAP REMAINS AND IT IS RECORDED RATHER THAN BUNDLED: `java/lang/Thread.join(J I)V`,** the sole
+    member stock TimeUnit references that an overlay still drops (deep-scan only). It is reached from
+    `TimeUnit.timedJoin(Thread, long)`, which nothing in this tree calls. Implementing it means adding
+    `join(long)` and `join(long,int)` to `Thread` -- the class whose field offsets the VM HARDCODES -- which
+    widens its vtable and wants its own timing probe and its own gate. Stated rather than faked, the same way
+    `Semaphore.tryAcquire` is.
+  - **THE BASELINE CARRIED TWO STALE LINES THAT ARE NOT THIS INCREMENT'S, AND THE CHECK IS STRUCTURALLY
+    UNABLE TO SEE THEM.** `known-gaps.txt` still listed `supertype#java/lang/Character#java/io/Serializable`
+    and `#java/lang/constant/Constable` for a class whose overlay was DELETED one increment ago. Measured:
+    the FILE held **97** supertype lines and the tool matched **95**, while reporting `0 new -- OK` -- it
+    fails only on a NEW gap, so a stale entry is silent for ever. The Formatter increment deleted its three
+    such lines by hand; the Character one did not, and nothing noticed. Regenerating for this increment
+    removes all six (4 TimeUnit + those 2), **and the two Character ones are named here so the delta is not
+    credited to this card**.
+  - **A NEW DIRECTION ON THE `RandomFactory` TRAP, AND IT IS THE TARGET YOU RUN RIGHT BEFORE GATING:
+    `make test` PURGES THE jdktests STATE.** `test: build`, and `build`'s `guest` rule does
+    `rm -rf $(OUT)/jdk` -- which takes `out/jdk/test/lib/RandomFactory.class` with the guestsrc `jdk/`
+    overlays. **MEASURED, not read: the class is present, `make test` runs, the class is gone**, and a
+    no-manifest image built either side of it differs by **27,984 bytes** -- the recorded figure to the byte.
+    This file already records that `make build` alone purges it and that `make image` depends on `jdktests`;
+    it does not record that the test target does too. The suite figures above are from the BYTE-EXACT flash
+    candidate, built through the `jdktests` chain `sdcard.sh` uses, and the earlier run on the smaller image
+    was discarded rather than quoted.
+  - **`arrayadopt` IS ONLY PARTLY `LOAD_LOG`-GATED -- 1 SITE OF 3**, so it interleaves into probe output on a
+    quiet boot and this file's list of gated lines overstates it. It is what makes the raw probe diff read
+    `70` lines against the oracle's `69`; the extra line is a loader diagnostic, not an answer, and the gate
+    above is the 69 arms with it filtered out.
+  - **A COMMENT OUTLIVING ITS PREMISE, CORRECTED AT THE SITE -- SIXTH RECORDED INSTANCE.**
+    `Locale.Category`'s javadoc said it is a plain class "for the same reason `java.util.concurrent.TimeUnit`
+    is: joe-ng has no enum machinery here and the stock nested enum's `<clinit>` is unrunnable". Both halves
+    are false: `java/lang/Enum` is stock, un-overlaid and un-denied, `java/math/RoundingMode` is a stock enum
+    this VM runs PI-VALIDATED, and the TimeUnit overlay it cited is now deleted. **Each claim was checked
+    before the correction was written, not after.** What survives is the LAYOUT half -- it is nested so it
+    compiles to `java/util/Locale$Category`, the name stock callers reference.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, and here the split is wider than usual: THE SUITE NEVER
+    TOUCHES `TimeUnit` AT ALL.** Measured -- `grep -ac TimeUnit` over the whole 936-line boot log reads
+    **0**. So the suite proves NO REGRESSION and the closure identity proves the change caused no collateral
+    movement; `TimeUnitProbe`'s 69 arms against a byte-identical host oracle are what prove the feature.
+    Unlike the `Character` increment, where the suite exercised the class heavily, nothing here would have
+    caught a wrong answer.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- ALL FIVE ABSENCES
+    HOLD.** This card said before the boot that the arms to read are the ABSENCES plus `gc: collections=46`
+    and the batch-line closure. On the Pi: none of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc` or
+    **`DENYLIST TRAP`** appears anywhere, across 40 programs to `self-build retired` -- and that last one is
+    the single arm this increment added, the measurement that says nothing reached the denied `TimeUnit$1`.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, then `56` at the lisp finale -- **and the QEMU arm of this same
+    binary read 46 then 56 as well**, so the sensitivity detector did not move either. Batch 2 `+324blob`
+    and batch 63 `+387blob`, with `rounds=4 pend=180 reach=17`, `memo=1060 res=2509 unres=2275`,
+    `n:imap=121 synth=36 clinits=93`, `rf:skip=4397 visit=2571 clos=2571 holeEnd=2334`, `pc:n=95`,
+    `sy:n=50 chg=0`, `bakeMemosDropped=14`, `sync: static seen=18 nomonitor=0`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    and `char isPrimitive=true name=char`.
+  - **A CORRECTION TO THIS CARD'S OWN GATE SENTENCE, AND IT NARROWS WHAT SILICON CLAIMS.** I wrote that
+    hardware is being asked a **4,264-byte layout shift on cold DRAM PLUS a real `java/lang/Enum` subclass
+    with seven constants where a plain class stood**. **Only the first half was asked.** The suite names
+    `TimeUnit` nowhere, so its `<clinit>` has no route to run -- MEASURED rather than assumed: the only
+    things in `out/` carrying a `CONSTANT_Class` for it are the two probes (`TimeUnitProbe`, `EnumDiag`),
+    the three jtreg timing tests, the `java/util/concurrent/locks/ReentrantLock` overlay (which nothing in
+    `out/` and no demo names, and which reaches the metal only down the stock `Socket` path), and the TWO
+    DENIAL LISTS themselves. So hardware answered the LAYOUT SHIFT across 40 programs on cold DRAM, and the
+    seven-constant Enum subclass is QEMU's -- proven by `TimeUnitProbe`'s enum surface (`values().length =
+    7`, ordinal round-trip, `valueOf`, `compareTo`) against a byte-identical host oracle.
+  - **AND THE LOG STRUCTURALLY CANNOT SETTLE IT EITHER WAY, which is stated rather than rounded to
+    "absent".** A stock java.base class in the closure could still NAME `TimeUnit` and pull it, and `load`
+    lines are `LOAD_LOG`-gated, so a silently pulled class prints nothing. What the boot does establish is
+    that IF it was pulled, its initializer neither faulted nor reached `TimeUnit$1` -- the weaker claim, and
+    the one to make.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/59/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, the seventeen-arm boot
+    battery all PASS (incl. `IntegerCache.cache[170].intValue()=*` and `Integer.valueOf(42)==cache[170]`),
+    and WiFi running the whole chain -> `wifi: JOINED` -> `pmk ready` -> `ptk derived` -> `msg3 MIC ok` ->
+    `GTK unwrapped` -> `keys installed` -> DHCP 192.168.1.247 -> `ping reply` -> DNS 104.20.23.154 -> TCP ->
+    **`HTTP/1.1 200 OK`**.
+  - **THE ONLY `UNRESOLVED STATIC`/`TRAP-WIRED` LINES ARE THE SEVEN KNOWN ONES (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED**, and the marker
+    sweep is otherwise clean: no `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`, `VIRTUALRESOLVE
+    FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity `DIFF`, `JIT unsupported`,
+    `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`, `REACH LIST FULL`,
+    `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`, `SYSTEM PROPERTIES
+    NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`, `UNREGISTERED SUPER`,
+    `NO toString` or `ENUM CONSTANTS UNREADABLE`. **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off
+    the pasted console capture rather than grepped on disk**, which is weaker than an anchored grep -- a
+    marker in a region I skimmed would not have been caught, and the batch lines are dense.
+  - **TWO LINES THAT READ LIKE FAILURES WERE RECOGNISED FROM THE RECORD INSTEAD OF RE-CHASED, which is this
+    file earning its keep rather than a finding.** `P5 EATS` in the middle of the LAMBDA demo is
+    `LambdaDemo`'s own capturing arm borrowing the philosophers' report helper, and the bare `F` before
+    `wifi: bring-up` is `jitUnwindReady()` PASSING (the letter to worry about is `n`). Both were named on
+    the previous card; neither cost a minute here.
+  - **ONE FIGURE MOVED AND IT IS THE REMOTE PAGE RATHER THAN THE VM, stated rather than glossed:
+    `HTTP/1.1 200 OK` carries 996 bytes where this file records 828/829.** The body's own
+    `Last-Modified: Mon, 28 Sep 2026 16:19:23 GMT` is 21 minutes before the request and the HTML visibly
+    differs (a new `color-scheme` `<style>` block), so example.com changed under us. The all-Java net stack
+    delivered whatever the origin served, which is the property that arm tests.
+  - **THE SIXTEENTH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `68122b00 eaf2c6fa ac5ef925`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **47 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47. **Still not a randomness test**: what stays ruled out is a
+    constant, a counter, and a count that does not follow reads.
+
 - **A LAZILY-COMPILED STATIC WAS REGISTERED WITH `access_flags = 0`, SO A `public` METHOD READ AS
   PACKAGE-PRIVATE AND REFLECTION REFUSED IT (2026-09-28, PI-VALIDATED).**
   `rememberLazyBody` passed a literal `0` for the access word whenever the method had no registry entry yet.

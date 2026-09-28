@@ -5946,6 +5946,15 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/CharacterName"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeBlock"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeScript"))
+                // THE SWITCH-MAP HOLDER OF stock java/util/concurrent/TimeUnit, and it is the SAME mechanism
+                // as the three Character entries above one class along. TimeUnit NAMES TimeUnit$1, whose
+                // sole field is `$SwitchMap$java$time$temporal$ChronoUnit` (MEASURED by reflection on the
+                // seed JDK, not read off a comment) -- so its <clinit> is `new int[ChronoUnit.values().length]`
+                // plus one ordinal store per constant, and under rule 2 pulling it RUNS that, calling straight
+                // into java/time/temporal/, denied on the very next line. Its only readers are
+                // TimeUnit.of(ChronoUnit) and toChronoUnit(), which nothing in this closure calls; denied so
+                // it is trap-wired and unreached, and DENYLIST TRAP reading 0 is what says so.
+                || utf8HasPrefix(base, off, Magic.bytes("java/util/concurrent/TimeUnit$1"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/chrono/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/temporal/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/zone/"))

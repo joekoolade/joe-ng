@@ -71,6 +71,8 @@ public final class ReachScan
         // no copy of. Reached only from UnicodeBlock.of / UnicodeScript.of / Character.getName -- nothing on
         // the classification, case or digit paths. (Keep in sync with Loader.isDenylisted.)
         "java/lang/CharacterName", "java/lang/Character$UnicodeBlock", "java/lang/Character$UnicodeScript",
+        // stock TimeUnit's switch-map holder: its <clinit> calls ChronoUnit.values(). (Loader.isDenylisted.)
+        "java/util/concurrent/TimeUnit$1",
         "java/time/chrono/", "java/time/temporal/", "java/time/zone/",
         "java/time/Zone", "java/time/Instant", "java/time/DateTimeException",
         // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
