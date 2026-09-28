@@ -115,6 +115,201 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/util/Collections` OVERLAY IS DELETED AND STOCK RUNS -- `unmodifiableList` RETURNED THE BACKING
+  LIST, SO A CALLER THAT MUTATED THE "VIEW" CORRUPTED THE ORIGINAL (2026-09-28, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** 297 hand-written lines shadowing a 6,282-line stock class, and the defect is one shape
+  repeated EIGHT times -- four `unmodifiableXxx` and four `synchronizedXxx`:
+
+  ```java
+  public static <T> List<T> unmodifiableList(List<T> l) { return l; }
+  ```
+
+  So **`Collections.unmodifiableList(list).add(x)` SUCCEEDED**, and the element landed in `list` -- the object
+  the caller still holds and believes nobody else can change.
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`CollectionsProbe`, 57 arms against the HOST ORACLE** | **35 WRONG** | **57 of 57 BYTE-IDENTICAL** |
+  | `unmodifiableList` .add / .set / .remove / .clear | **all four SUCCEEDED** | **all four THROW** |
+  | ... and the BACKING list after those four | **`[a,b]` -> `[a,b,z]` -> `[z,b,z]` -> `[b,z]` -> `[]`** | **`[a,b]` -- UNMOVED** |
+  | `unmodifiableSet`/`Map`/`Collection` mutation | **SUCCEEDED, backing moved** | **THROW, backing unmoved** |
+  | `emptyList() == emptyList()` | **false** | `true` |
+  | `emptyList().add` / `emptySet().add` / `emptyMap().put` | **all three SUCCEEDED** | **all three THROW** |
+  | `singletonList("one")` after `.add`+`.set` | **`size=2 [z,z]`** | **`size=1 [one]`** |
+  | `singleton("one")` after `.add` | **`size=2 [one,z]`** | **`size=1 [one]`** |
+  | `singletonMap` size after `.put` | **2** | **1** |
+  | `synchronizedList/Set/Map/Collection` is the backing object | **true -- NO LOCK AT ALL** | **false (a real wrapper)** |
+  | the 22 read-through/ordering arms | correct | **correct -- UNMOVED** |
+  | `shuffle(list, Random(12345))` | `[6,0,1,4,5,3,7,2]` | **`[6,0,1,4,5,3,7,2]` -- identical** |
+  | **demo suite, COMPLETE run** | 40 programs to `self-build retired` | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | `gc: collections` at the lisp finale | 56 | **55 -- see the note below; QEMU's finale is not citable** |
+  | `churnMB live intact` | 625 / 32 / 32 | **625 / 32 / 32 -- identical** |
+  | `lisp evals result stable` | 600 / 610 / 1 | **600 / 610 / 1 -- identical** |
+  | closure, batch 2 / batch 63 | +324blob / +387blob | **+334blob / +397blob (+10 classes at both)** |
+  | `rounds` / `pend` / `reach` | 4 / 180 / 17 | **4 / 180 / 17 -- IDENTICAL** |
+  | `memo` / `res` / `unres` | 1060 / 2512 / 2278 | **1060 / 2512 / 2278 -- IDENTICAL** |
+  | `n:imap` / `synth` / `clinits` | 121 / 36 / 93 | **131 / 36 / 96 (+10 / 0 / +3)** |
+  | image (same-build-path control) | 33,855,100 | **33,914,932 (+59,832 B, +0.177%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE OVERLAY'S STATED REASON WAS A MINIMUM, WHICH IS THE FOURTH DISTINCT NON-NATIVES JUSTIFICATION IN
+    FOUR INCREMENTS.** Its javadoc: "the handful of statics stock code on metal actually reaches". `Formatter`
+    was justified by a closure argument, `Character` by a cold-path one, `TimeUnit` by a single test, and this
+    one by a guess about which members would be called. **None of the four is a natives argument**, which is
+    the only reason an overlay may exist at all -- and stock `Collections` has **ZERO natives in 6,282 lines**
+    (measured: the sole `grep` hit for `native ` is the word "alternative" in a comment).
+  - **AND THE GUESS WAS WRONG THREE TIMES ON THE RECORD, EACH COSTING A BOOT.** This file already records
+    `Collections.enumeration` trapping from `GZIPInputStream` -> `SequenceInputStream` (the zip arc),
+    `Collections.singletonSpliterator` trapping from `ImmutableCollections$List12.spliterator` (the launcher
+    arc), and `unmodifiableList`/`unmodifiableCollection`/`unmodifiableMap`/`emptyList`/`emptyMap`/
+    `singletonList` trapping from picocli. **A minimum written against a guess is a guess that gets re-made
+    every time a new caller arrives**, and each re-make is a `DENYLIST TRAP` naming a list this class is not
+    on.
+  - **AND THIS FILE ALREADY SANCTIONED THE DEFECT IN WRITING, WHICH IS THE PART WORTH READING TWICE.** The
+    launcher card of 2026-09-09 records the decision: *"Returning the backing collection is exact wherever
+    the result is only READ, which is every path joe-ng runs; a mutating caller would silently succeed
+    instead of throwing, and that is documented rather than quietly aliased."* **The first clause is true,
+    the second is an UNMEASURED claim about every caller present and future, and the third calls a silent
+    wrong answer documented.** Nothing had asked what a mutating caller does; the probe does, and the answer
+    is not "succeeds" but "corrupts the object the owner is holding". A divergence recorded in a comment is
+    still a divergence, and recording it is not the same as pricing it.
+
+  - **THE WRONGNESS IS A CORRUPTION, NOT A PERMISSION, AND THAT IS WHAT THE PROBE'S BACKING ARMS EXIST TO
+    SHOW.** "The mutation succeeded" would be a divergence; what actually happens is that the write lands in
+    the CALLER'S OWN LIST. Measured, one arm after another on the same object: `[a,b]` -> add -> `[a,b,z]` ->
+    set -> `[z,b,z]` -> remove -> `[b,z]` -> clear -> `[]`. A caller that handed out an "unmodifiable" view
+    to keep its own list safe got the opposite of what it asked for, silently. **An arm that only asked "did
+    it throw" could not tell those two apart**, and they want different fixes.
+  - **THE EMPTY CONSTANTS ARE A SECOND, QUIETER SHAPE.** Stock's `emptyList()` hands back the shared
+    immutable `EMPTY_LIST`; the overlay returned `new ArrayList()` -- a FRESH MUTABLE list per call. So
+    `emptyList() == emptyList()` answered **false**, and a caller treating the result as a safe shared
+    constant could append to it. Same for `emptySet`/`emptyMap`. **The identity arm and the mutation arm are
+    both needed**: a fix that returned a shared MUTABLE singleton would pass the first and fail the second,
+    and is strictly worse than what was there.
+  - **AND THE SINGLETONS WERE NOT SINGLETONS.** `singletonList("one")` after an `add` and a `set` reads
+    `size=2 [z,z]`; `singleton("one")` after an `add` reads `size=2 [one,z]`; `singletonMap` reaches size 2.
+    A collection whose whole contract is its size answering 2 is the shape this family of defect keeps
+    taking: a perfectly plausible value that contradicts the method's name.
+  - **THE SYNCHRONIZED WRAPPERS PROVIDED NO MUTUAL EXCLUSION AT ALL, ON A FOUR-CORE VM.** All four returned
+    their argument, so `Collections.synchronizedList(l)` was `l` and every "guarded" call was unguarded --
+    with the scheduler running on all four A72s. Stock's wrappers hold a `mutex` and wrap every method body
+    in `synchronized (mutex) { ... }`.
+  - **AND THE ONE STRUCTURAL QUESTION I RAISED ABOUT THAT TURNED OUT TO BE ALREADY ANSWERED, WHICH IS WORTH
+    RECORDING AGAINST MYSELF.** I started to write that stock's use of `synchronized` BLOCKS rather than
+    `ACC_SYNCHRONIZED` METHODS is what makes this work here, citing this file's "ACC_SYNCHRONIZED IS
+    IMPLEMENTED AND STASHED, NOT MERGED". **That card is superseded two cards later** -- the GC root-scan
+    increment records that its fix "is also what unblocked ACC_SYNCHRONIZED", with `demo/SyncMethodDemo`
+    running IN THE SUITE at 18 arms -- and `Baseline.java` plainly carries `emitSyncEnter`/`emitSyncExit`
+    today. So BOTH forms work and the distinction is not load-bearing. **I read the older card and stopped**;
+    the check that caught it was grepping the COMPILER rather than re-reading the file.
+  - **THE NAME-BASED PULL WAS PRICED BEFORE ANY BOOT, and the answer is that nothing in it is denied.** Stock
+    `Collections` names **93 `CONSTANT_Class` entries: itself, 62 of its own nested classes, and 30 external names**, and
+    every external one is already present, already overlaid, or a pure interface -- `Collection`, `List`,
+    `Map`, `Set`, `Iterator`, `ListIterator`, `Enumeration`, `Comparator`, `Deque`, `NavigableMap`,
+    `NavigableSet`, `SortedMap`, `SortedSet`, `SequencedCollection`, `SequencedMap`, `SequencedSet`,
+    `RandomAccess`, `Comparable`, `RandomGenerator`, plus `Comparators`, `ArrayList`, `Objects`,
+    `StringBuilder`, `Random` (overlaid) and `java/lang/reflect/Array` (overlaid AND narrow-allowed out of
+    the `java/lang/reflect/` denial -- checked at both lists, not assumed).
+  - **AND ITS `<clinit>` IS THREE ALLOCATIONS, which matters because under rule 2 every pulled class's
+    initializer RUNS.** `EMPTY_SET`/`EMPTY_LIST`/`EMPTY_MAP`, one `new` each; every other static is a
+    compile-time `int` constant and inlines per JLS 4.12.4. Of the 62 nested classes **eight have an
+    initializer at all**, and all eight were read rather than assumed: six are a single `new X(); putstatic`
+    singleton (`EmptyIterator`, `EmptyListIterator`, `EmptyEnumeration`, `ReverseComparator`,
+    `UnmodifiableNavigableMap`, `UnmodifiableNavigableSet`) and two (`CopiesList`, `ReverseComparator2`) are
+    the pure `$assertionsDisabled` idiom. **Nothing pulls a subsystem.**
+  - **A FOURTH DROPPED MEMBER FELL OUT AND javac IS WHAT FOUND IT: the no-arg `reverseOrder()`.** The overlay
+    declares only `reverseOrder(Comparator)`, so the probe refused to compile against `guestsrc` until the
+    arm was rewritten. **That is the LUCKY case** -- the same gap reached from a stock class that already
+    compiles is a denylist trap on the metal instead, which is exactly how the other three were found.
+  - **DELETING THIS OVERLAY ARMS NO SECOND TRAP, AND THAT WAS CHECKED RATHER THAN HOPED.** The TimeUnit
+    deletion one increment ago armed one (stock `convert(Duration)` reaching `Duration.getSeconds`/`getNano`,
+    which that overlay dropped), so the same question was asked here: `overlaycheck-deep` goes
+    **968 -> 943 gaps**, and the lines naming `java/util/Collections` go **47 -> 0**. It only ever FELL. The
+    shallow check goes 27 -> 22 with `0 new`.
+  - **THE PROBE CARRIES NO EXPECTED VALUES AT ALL, and unlike `TimeUnitProbe` one source compiles against
+    BOTH worlds -- so the control runs every arm instead of hard-stopping.** Compiled against the real JDK
+    the arms reach stock; compiled against `guestsrc` they reached the overlay; the gate is a **byte-for-byte
+    diff of the two runs**: **35 of 57 differing before, 0 after**. That is strictly better evidence than the
+    TimeUnit increment could get, where 30 arms never ran at all, and it cost only the discipline of naming
+    no stock-only member.
+  - **THE 22 ARMS THAT PASS IN BOTH STATES ARE THE BUILT-IN COMPARISON, stated because an arm that passes in
+    both is not a control.** Read-through (`get`/`size`/`contains`/iteration through a view), `sort(List)`,
+    `sort(List,Comparator)`, `reverse`, `enumeration`, `list(Enumeration)`, `addAll` -- all correct under the
+    overlay, which is what its javadoc was written for. **`shuffle(list, Random(12345))` is the sharpest of
+    them**: both worlds answer `[6,0,1,4,5,3,7,2]`, so the overlay's hand-written Fisher-Yates really was
+    stock's algorithm over stock's `Random` sequence.
+  - **NO ANONYMOUS OR NESTED CLASS ANYWHERE IN THE PROBE, deliberately, and the first cut had two.** A probe
+    lives in the DEFAULT PACKAGE, which matches no `demandLoadable` prefix, so whether a nested
+    `CollectionsProbe$1` reaches the image's classDir is a claim nothing here has measured -- and **an arm
+    that cannot load looks exactly like an arm that passed**, the trap this file records five times. The
+    `Runnable` wrappers became inline `try`/`catch` and the `Comparator` became
+    `Comparator.reverseOrder()`; `javac` emitting exactly one class file is the check.
+  - **THE COMPARISON IS AGAINST A SAME-MACHINE CONTROL, NOT AGAINST THIS FILE'S RECORDED FIGURES, AND THE
+    CONTROL REPRODUCES THEM EXACTLY.** The overlay image was built through the identical `make image` chain
+    and booted on the same host: 40 programs, `churnMB=625 live=32 intact=32`, `gc: collections=46` then
+    `56`, `lisp evals=600 result=610 stable=1`, batch 2 `+324blob`, batch 63 `+387blob`,
+    `rounds=4 pend=180 reach=17`, `n:imap=121 synth=36 clinits=93` -- every one matching the TimeUnit card.
+    **The one figure that does NOT match the record is `res`/`unres`, 2512/2278 against the recorded
+    2509/2275 -- and it is +3 in BOTH ARMS**, so it belongs to `CollectionsProbe` being added to the image
+    and not to the deletion. Building the control is what separates those two, and this file records a
+    quoted-not-measured figure being read as a regression once already.
+
+  - **THE CLOSURE COST IS +10 CLASSES AND +3 INITIALIZERS, MEASURED, NOT THE 62 THE NAME LIST SUGGESTS.**
+    Batch 2 goes `+324blob` -> `+334blob` and batch 63 `+387blob` -> `+397blob` -- the same +10 at both ends
+    -- with `n:imap` 121 -> 131 and `clinits` 93 -> 96. **The discriminators do not move**: `rounds=4
+    pend=180 reach=17` and `memo=1060` are byte-identical, and `reach` is the marked set, which is the
+    counter this file established for telling removed waste from lost marking. So the image carries all 63
+    Collections classes (+59,832 bytes of classDir) and the metal pulls ten of them.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS A `Collections` WRAPPER.** So the suite
+    proves NO REGRESSION across a +10-class closure and a 59,832-byte layout shift, and `CollectionsProbe`'s
+    57 arms against a byte-identical host oracle are what prove the feature. Different claims, and the same
+    split the `Character` and `TimeUnit` cards make.
+  - **A HARNESS OBSERVATION THAT IS NOT A REGRESSION, CHECKED WITH A CONTROL RATHER THAN ASSUMED.** The lisp
+    finale on this machine runs at **~75 s per progress dot** (one dot per 60 evals, ten dots), so a full
+    QEMU suite run is ~14 minutes rather than the ~220 s this file records from an earlier era. **The
+    CONTROL image -- the overlay restored -- runs at the same rate**, so the cost is the emulator and this
+    host, not the closure change. Worth recording because a 14-minute suite reads exactly like a hang, and
+    this file already records one truncated run being scored as a completed one.
+  - **AND I TRUNCATED A RUN MYSELF, which is the recorded trap reached from a new direction.** The first
+    suite boot was launched as a tracked background task that owned the emulator; stopping the task's
+    watchdog **killed the emulator with it**, mid-finale. The re-run is `nohup`'d and disowned, so the
+    poller owns nothing and can be stopped freely. A log that stops at the finale is indistinguishable from
+    one that hung there.
+  - **THE FINALE MOVED 56 -> 55 AND THAT MAY NOT BE CITED FROM THIS HARNESS, WHICH THIS FILE ALREADY
+    ESTABLISHED AGAINST ITSELF.** The recorded QEMU A/A pair produced **56 and 57 from an IDENTICAL binary**,
+    and the rule drawn from it is explicit: "on QEMU, do not cite the finale `gc: collections`". A one-count
+    move sits inside that spread. **What IS the gate is `gc: collections=46` at the churn demo -- identical
+    in both arms** -- which is the figure the census established and the one the cards quote beside
+    `churnMB=625`. The finale is a sensitivity detector, and this increment perturbs the allocation sequence
+    by ten classes, which is exactly what it detects. **Stated rather than rounded to "unmoved", and stated
+    rather than read as a regression.**
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK, not read off a capture.** 31 markers zero -- no
+    `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `heap OOM`, `STW TIMEOUT`, `DISPATCH ON
+    UNREGISTERED`, `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity
+    `DIFF`, `JIT unsupported`, `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `REACH LIST FULL`, `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`,
+    `SYSTEM PROPERTIES NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`,
+    `UNREGISTERED SUPER`, `NO toString` or `ENUM CONSTANTS UNREADABLE`. The only `UNRESOLVED STATIC`/
+    `TRAP-WIRED` lines are the SEVEN known ones (eight occurrences -- `CodingErrorAction.REPLACE` twice),
+    each labelled DENYLISTED, and the **anchored** `FAULT` grep reads 0 (the one bare `FAULT` is
+    `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string, which QEMU produces because it has no RNG).
+  - **THE BASELINE IS REGENERATED RATHER THAN LEFT TO ROT, WHICH THE PREVIOUS INCREMENT HAD TO LEARN THE
+    HARD WAY.** `overlaycheck` fails only on a NEW gap, so a line for a deleted overlay is silent for ever --
+    the TimeUnit card records finding two such lines from the Character increment that nothing had noticed.
+    `make overlaycheck-update` removes exactly **five**, all of them this increment's
+    (`emptyNavigableMap`/`emptyNavigableSet`/`emptySortedMap`/`emptySortedSet`/`unmodifiableSortedSet`), with
+    no collateral -- 27 gaps -> 22, supertypes unchanged at 91.
+
+  - **NOT PI-VALIDATED, AND THE GATE TO READ IS NAMED IN ADVANCE.** The wrapper logic is object and interface
+    arithmetic in the guest world and QEMU has already diffed all 57 arms byte-for-byte against stock, so
+    cold DRAM cannot change whether `unmodifiableList.add` throws. **What hardware is being asked is the +10
+    classes in every batch and a 59,832-byte layout shift** -- the arms to read are the ABSENCES (`FAULT`,
+    `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`), plus `gc: collections=46` at the churn
+    demo and the batch-2/batch-63 closure. **`CollectionsProbe` IS NOT IN THE SUITE**, so a hardware boot
+    proves NO REGRESSION and the probe is what proves the feature -- different claims, the same split the
+    `Character` and `TimeUnit` cards make.
+
 - **THE `java/util/concurrent/TimeUnit` OVERLAY IS DELETED AND STOCK RUNS -- `convert` MULTIPLIED THEN
   DIVIDED WITH NO SATURATION, SO THE LARGEST POSSIBLE TIMEOUT CAME BACK NEGATIVE (2026-09-28,
   PI-VALIDATED).** 125 hand-written lines shadowing a 496-line stock class, and the defect is one

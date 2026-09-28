@@ -29,7 +29,8 @@ import java.util.Map;
  *
  * where both maps are a {@code LinkedHashMap} behind picocli's {@code CaseAwareLinkedMap} (case-SENSITIVE by
  * default, so {@code containsKey} delegates straight to it) reached through {@code
- * Collections.unmodifiableMap} -- which joe-ng overlays.
+ * Collections.unmodifiableMap} -- STOCK here since 2026-09-28, where it used to be a joe-ng overlay that
+ * returned the backing map unchanged.
  *
  * <p>The keys are the crux and are why this is not simply a map test: an option name is an element of
  * {@code @Option(names = {"-h", "--help"})}, so it is a String the ANNOTATION RUNTIME built, not a literal
@@ -105,7 +106,8 @@ public class DupOptionProbe
         }
         System.out.println("anno keySet n    = " + n);
 
-        // --- through Collections.unmodifiableMap, which joe-ng overlays ------------------------------
+        // --- through Collections.unmodifiableMap, which is STOCK here now (it used to be an overlay
+        // --- that returned this very map, so the wrapper below was the same object) -------------------
         Map<String, Object> um = java.util.Collections.unmodifiableMap(byAnno);
         int un = 0;
         for (String k : um.keySet())
