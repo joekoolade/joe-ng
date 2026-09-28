@@ -5738,6 +5738,14 @@ public final class Loader
                 // call site is trap-wired at PATCH TIME and the overlay is never reached: a denied class is
                 // denied before any link stub gets a chance to resolve it.
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/BreakIterator"))
+                // NARROWED OUT of the same denial, and for the same reason one layer along: stock
+                // java/util/Formatter is 5,036 lines of PURE LOGIC with ZERO natives, so it runs STOCK (the
+                // 539-line overlay that used to shadow it is deleted) -- and the ONLY denied class its
+                // numeric conversions reach is DecimalFormatSymbols, for the four ASCII symbols. That one IS
+                // overlaid, because its whole job is reading locale data through LocaleProviderAdapter ->
+                // ResourceBundle -> the module/service machinery. Without this line the call site is
+                // trap-wired at PATCH TIME and the overlay is never consulted.
+                || utf8HasPrefix(base, off, Magic.bytes("java/text/DecimalFormatSymbols"))
                 // NARROWED OUT of the java/lang/reflect/ denial: `Type` is an empty MARKER INTERFACE with one
                 // default method and no natives, so the stock class loads as-is -- no overlay needed, which is
                 // the right shape (guestsrc is for classes that need natives). It is denied only by the broad
@@ -5906,6 +5914,22 @@ public final class Loader
                 // (NOT java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/icu/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/text/"))
+                // THE DATE/TIME HALF OF stock java/util/Formatter, which is pulled by NAME and never RUN.
+                // The loader's dependency pass takes every CONSTANT_Class a blob NAMES, not just what RTA
+                // reaches. Formatter$FormatSpecifier NAMES ten java/time classes (the six prefixes below) for
+                // its %t conversions while method-level RTA reaches NONE of them -- ReachScan reports the same
+                // 110 classes and the same one trap site with these denied as without.
+                // MEASURED: leaving them loadable put +357 classes into
+                // EVERY demand-load batch of every program (batch 2 of the demo suite went 159 -> 516 blobs)
+                // for code that needs a Calendar/Date/TemporalAccessor argument nothing here passes. That is
+                // exactly what this list is for: a cold subtree a big class names, trapped loudly if reached.
+                // java/time/Duration is deliberately NOT here -- it is used, and no %t path names it.
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/chrono/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/temporal/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/zone/"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/Zone"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/Instant"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/time/DateTimeException"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/text/"))
                 // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray in its <clinit>; a
                 // literal split never matches graphemes, so this whole subtree is cold.

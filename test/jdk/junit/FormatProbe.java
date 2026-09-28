@@ -20,13 +20,18 @@
  * same line as its answer twice, once as passing and once as failing, and an oracle that cannot be typed
  * wrong removes the whole failure mode.
  *
- * <p>FIVE arms are the STATED DIVERGENCE and are the only lines expected to differ -- the four under
- * "illegal", where stock throws an {@code IllegalFormatException} subclass and joe-ng formats instead (see
- * the {@code Formatter} javadoc for why those classes are not pulled into the printing path), plus
- * {@code %q}, an unknown conversion, which stock throws on and this emits verbatim. {@code %q} sits up in the
- * first group rather than with the other four because it long predates them; it is named here because an
- * unlabelled difference in a diff is indistinguishable from a regression, and a count of "four" against five
- * differing lines would send the next reader looking for a fifth bug.
+ * <p>THERE IS NO LONGER ANY STATED DIVERGENCE, AND THAT IS THE POINT OF THIS FILE NOW. It used to record
+ * FIVE arms that had to differ -- four illegal format strings that stock throws on and the overlay formatted,
+ * plus {@code %q}. The overlay is DELETED and stock {@code java.util.Formatter} runs on the metal, so
+ * **every arm must match byte for byte**, throws included: a {@code THREW} line must name the same exception
+ * class in both worlds. An expected-divergence list is a place for a real regression to hide, and this file
+ * no longer has one.
+ *
+ * <p>The float, {@code %h} and argument-index arms exist because they were UNREACHABLE before. The overlay
+ * knew nine conversions and emitted anything else VERBATIM WHILE CONSUMING NO ARGUMENT -- so
+ * {@code String.format("value=%.2f ok=%s", 3.14159, "yes")} answered {@code value=%.2f ok=3.14159}, silently
+ * shifting every later argument by one. Those arms are the ones that discriminate; a fix that merely
+ * recognised {@code %f} without consuming its argument would still fail them.
  */
 public class FormatProbe
 {
@@ -108,9 +113,56 @@ public class FormatProbe
         show("%o|", Integer.valueOf(-1));
         show("%X|", Integer.valueOf(-255));
 
-        // ILLEGAL: stock THROWS, joe-ng formats. The one stated divergence, and the only lines a
-        // host-vs-metal diff is expected to show.
-        System.out.println("  -- illegal in stock: the stated divergence --");
+        // FLOATING POINT -- UNREACHABLE before this increment. `%f` defaults to precision 6, and 2.675 is
+        // the arm that pins WHICH value gets rounded: the double nearest 2.675 is 2.674999999999999822...,
+        // so rounding HALF_UP on the EXACT value gives 2.67 -- and stock answers **2.68**, because
+        // jdk.internal.math.FormattedFPDecimal rounds the SHORTEST decimal that round-trips ("2.675") rather
+        // than the exact one. I wrote 2.67 into this comment and the host oracle said otherwise; it is
+        // recorded because it is precisely the rule a from-scratch implementation would get wrong while
+        // looking careful, and a BigDecimal-exact one would get wrong while looking rigorous.
+        System.out.println("  -- floating point --");
+        show("%f|", Double.valueOf(1.5));
+        show("%f|", Double.valueOf(-1.5));
+        show("%.2f|", Double.valueOf(3.14159));
+        show("%.0f|", Double.valueOf(2.5));
+        show("%.2f|", Double.valueOf(2.675));
+        show("%.3f|", Double.valueOf(0.0005));
+        show("%10.2f|", Double.valueOf(3.14159));
+        show("%-10.2f|", Double.valueOf(3.14159));
+        show("%010.2f|", Double.valueOf(-3.14159));
+        show("%+.2f|", Double.valueOf(3.14159));
+        show("%,.2f|", Double.valueOf(1234567.891));
+        show("%(.2f|", Double.valueOf(-1234.5));
+        show("%f|", Double.valueOf(0.0));
+        show("%f|", Double.valueOf(-0.0));
+        show("%f|", Double.valueOf(Double.NaN));
+        show("%f|", Double.valueOf(Double.POSITIVE_INFINITY));
+        show("%f|", Double.valueOf(Double.NEGATIVE_INFINITY));
+        show("%f|", Float.valueOf(1.5f));
+        show("%e|", Double.valueOf(1234.5));
+        show("%E|", Double.valueOf(1234.5));
+        show("%.2e|", Double.valueOf(0.000123));
+        show("%g|", Double.valueOf(1234.5));
+        show("%g|", Double.valueOf(0.000012345));
+        show("%a|", Double.valueOf(1.5));
+
+        // THE ARGUMENT-SHIFT ARM, which is what the defect actually was: an unrecognised conversion consumed
+        // no argument, so everything after it was off by one. One line, and it is the whole bug.
+        System.out.println("  -- argument alignment across a float --");
+        show("value=%.2f ok=%s", Double.valueOf(3.14159), "yes");
+        show("%s %f %s|", "a", Double.valueOf(1.0), "b");
+
+        // %h is hashCode-as-hex, and ARGUMENT INDEXES (%1$s) -- both unreachable before.
+        System.out.println("  -- %h and argument indexes --");
+        show("%h|", "abc");
+        show("%h|", (Object) null);
+        show("%1$s %1$s %2$s|", "x", "y");
+        show("%2$s %1$s|", "first", "second");
+
+        // ILLEGAL FORMAT STRINGS. These used to be the stated divergence -- stock throws four different
+        // IllegalFormatException subclasses and the overlay formatted instead. With stock running they must
+        // THROW HERE TOO, and `show` prints the exception's class name, so the diff checks WHICH exception.
+        System.out.println("  -- illegal: must throw the SAME exception in both worlds --");
         show("%.2d|", Integer.valueOf(42));
         show("%#d|", Integer.valueOf(42));
         show("%+x|", Integer.valueOf(255));

@@ -184,6 +184,54 @@ public final class Locale
         return DEFAULT;
     }
 
+    /**
+     * VALUE equality over language/country/variant, which is stock's semantics and was a DROPPED MEMBER here
+     * until stock {@code java.util.Formatter} started running on the metal and walked into it.
+     *
+     * <p>WHAT THE ABSENCE COST, because it is bigger than the one caller that found it. An overlay wins the
+     * name, so a stock member it does not declare CEASES TO EXIST -- and for {@code equals} the fallback is
+     * not a trap but {@code Object}'s IDENTITY comparison, which answers plausibly and wrongly.
+     * {@code Locale.getDefault().equals(Locale.ENGLISH)} was FALSE on this VM (both are {@code new
+     * Locale("en")}, distinct objects), and a Locale used as a {@code HashMap} key could never be found
+     * again. Silent, in the way this project has recorded ten times.
+     *
+     * <p>THE CALLER THAT FOUND IT is stock {@code Formatter.localizedMagnitude}, whose grouping path is
+     * {@code if (l == null || l.equals(Locale.US)) grpSize = 3; else <the java/text + sun/util provider
+     * machinery>}. With identity equality {@code %,d} took the ELSE branch and halted in a denylist trap on
+     * {@code NumberFormat.getNumberInstance}; with value equality it takes stock's own fast path and the
+     * denied classes stay trap-wired-but-unreached, which is exactly what the denylist is designed for.
+     *
+     * <p>{@code hashCode} comes with it and is not optional: two objects that are equal must hash equally, and
+     * a class that overrides one without the other is broken in every hash container.
+     *
+     * <p>BOTH GO THROUGH THE GETTERS RATHER THAN THE FIELDS, which is not a style choice: the constructors
+     * accept and STORE null for country/variant ({@code new Locale("en", null, null)} is legal here), and the
+     * getters are what normalise null to {@code ""}. Comparing the fields directly would NPE on a Locale this
+     * class itself can build. Going through them also makes equality agree with what the accessors REPORT, by
+     * construction -- two Locales that answer the same language, country and variant are equal, which is the
+     * only definition a caller can check.
+     */
+    public boolean equals(Object obj)
+    {
+        if (this == obj)
+        {
+            return true;
+        }
+        if (!(obj instanceof Locale))
+        {
+            return false;
+        }
+        Locale other = (Locale) obj;
+        return getLanguage().equals(other.getLanguage())
+                && getCountry().equals(other.getCountry())
+                && getVariant().equals(other.getVariant());
+    }
+
+    public int hashCode()
+    {
+        return getLanguage().hashCode() * 31 * 31 + getCountry().hashCode() * 31 + getVariant().hashCode();
+    }
+
     public String getLanguage()
     {
         return language;

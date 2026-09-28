@@ -61,6 +61,13 @@ public final class ReachScan
         // cold ICU/normalizer/break-iterator, pulled by Pattern but never run for a literal match. (NOT
         // java/util/concurrent -- the philosophers demand-load java/util/concurrent/Semaphore.)
         "jdk/internal/icu/", "java/text/", "sun/text/",
+        // The date/time half of stock java/util/Formatter: Formatter$FormatSpecifier NAMES these for its
+        // %t conversions and method-level RTA reaches none of them, but the loader's dependency pass pulls
+        // every class a blob NAMES -- measured at +357 classes in every batch (suite batch 2: 159 -> 516
+        // blobs) for a path needing a Calendar/Date/TemporalAccessor argument nothing here passes.
+        // java/time/Duration is NOT denied: it is used, and no %t path names it.
+        "java/time/chrono/", "java/time/temporal/", "java/time/zone/",
+        "java/time/Zone", "java/time/Instant", "java/time/DateTimeException",
         // grapheme-boundary tables (\b{g}): a 15x15 [[Z built via multianewarray; cold for a literal match.
         "jdk/internal/util/regex/Grapheme",
         // jdk/internal/lang/CaseFolding is NOT here any more: it was denied as "only CASE_INSENSITIVE regex
@@ -81,6 +88,16 @@ public final class ReachScan
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays): java.net.Socket uses a
         // VarHandle for its state/in/out fields. These specific java/lang/invoke classes are allowed; the rest
         // of java/lang/invoke stays denied.
+        //
+        // And a narrow ALLOW out of the java/text/ deny above: stock java/util/Formatter runs STOCK (5,036
+        // lines, ZERO natives, pure logic -- the overlay that shadowed it is deleted), and the only denied
+        // class its numeric conversions reach is DecimalFormatSymbols, for four ASCII symbols. That one IS
+        // overlaid, because its whole job is reading locale data through LocaleProviderAdapter ->
+        // ResourceBundle. (Keep in sync with Loader.isDenylisted.)
+        if (c.startsWith("java/text/DecimalFormatSymbols"))
+        {
+            return false;
+        }
         if (c.startsWith("java/lang/invoke/VarHandle")
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("jdk/internal/invoke/MhUtil")
