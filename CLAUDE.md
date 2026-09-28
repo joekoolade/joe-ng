@@ -117,7 +117,7 @@ defines the minimum the assembler must encode.
 
 - **THE `java/util/Formatter` OVERLAY IS DELETED AND STOCK RUNS -- 539 LINES OF APPROXIMATION REPLACED BY THE
   REAL IMPLEMENTATION, AND THE STATED DIVERGENCE IS GONE RATHER THAN DOCUMENTED (2026-09-28, QEMU-GATED --
-  NOT YET PI-VALIDATED).** The overlay knew nine conversions and emitted anything else **VERBATIM WHILE
+  PI-VALIDATED).** The overlay knew nine conversions and emitted anything else **VERBATIM WHILE
   CONSUMING NO ARGUMENT**, so `String.format("value=%.2f ok=%s", 3.14159, "yes")` answered
   **`value=%.2f ok=3.14159`** -- silently shifting every later argument by one, in the commonest conversion
   after `%s`/`%d`.
@@ -130,6 +130,7 @@ defines the minimum the assembler must encode.
   | the four ILLEGAL format strings | formatted (a documented divergence) | **THROW, and the SAME four exception classes** |
   | `Formatter` is `Closeable`/`Flushable`/`AutoCloseable` | **no -- all three DROPPED** | yes |
   | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, THIRTY-ONE markers zero |
+  | **Pi, the SAME binary** | -- | **closure EXACT to QEMU, `DENYLIST TRAP` 0, WiFi -> HTTP 200 OK** |
   | `gc: collections` churn / finale | 46 / 55 | **46 / 55 -- both restored (see the A/B)** |
   | guest closure, suite batch 2 | 159 blob | **317 blob (+158)** |
   | image (same manifest, same chain) | 33,786,128 | **33,792,440 (+6,312 B, +0.019%)** |
@@ -232,6 +233,45 @@ defines the minimum the assembler must encode.
   - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS `String.format`** -- measured, a grep of
     `demo/` finds none. So the suite proves NO REGRESSION across a 3x closure change, and `FormatProbe`'s 103
     arms against the host oracle prove the feature. Different claims.
+  - **PI-VALIDATED, AND THE BOOT IS A SAME-SESSION HARDWARE A/B because the previous flash was still in the
+    terminal's scrollback.** Two boots of the same Pi, one variable -- the overlay image against this one:
+
+    | | boot 1: overlay | boot 2: stock |
+    |---|---|---|
+    | batch-2 blobs / last batch | 159 / 70 `+243blob` | **317 / 63 `+380blob`** |
+    | **`gc: collections` churn / finale** | **46 / 55** | **46 / 55** |
+    | `churnMB live intact` | 625 / 32 / 32 | **625 / 32 / 32** |
+    | `bakeMemosDropped` | 10 | **14** |
+
+    **The gate is unmoved on silicon as well as on the emulator**, which is what the date-subtree denial
+    exists to protect -- and the 2x closure change is visible right beside it, so the two are not confounded.
+  - **AND THE CLOSURE IS EXACT ACROSS HARNESSES ON THE SAME BINARY: batch 2 `+317blob` and batch 63
+    `+380blob` on BOTH QEMU and the Pi.** A change that perturbed the demand-load closure would have moved
+    that; it did not.
+  - **THE NAMED GATE IS AN ABSENCE AND IT HELD: `DENYLIST TRAP` reads 0 across the whole boot.** That is the
+    one arm this increment added, and it is what says nothing reaches the ten `java/time` classes the denial
+    prunes -- on cold DRAM, where the emulator's zeroed memory cannot stand in. None of `FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED` or `unclaimed pc` appears either, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines
+    are the SEVEN known ones (eight occurrences, `CodingErrorAction.REPLACE` twice), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`**, `jobs/core 6/6/6/6`,
+    `sched: 89 preemptions`, `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no
+    `STW TIMEOUT`, `steps/core 61/60/60/59`, `finish HML` 20/20/20, inversion `HIGH blocked 60ms`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    ExcDemo's seven-frame trace, `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, and
+    `hw rng: RNG200 live` with `two instances differ`.
+  - **AND THE WiFi FINALE RAN THE WHOLE CHAIN, which is a broader check than it looks.** `pmk ready` ->
+    `JOINED` -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` -> DHCP 192.168.1.247
+    -> `ping reply` -> DNS 172.66.147.243 -> TCP -> **`HTTP/1.1 200 OK`, 828 bytes**. That exercises
+    `Digest`/`Hmac`/`Pbkdf2`/`Prf` and the all-Java net stack ACROSS the closure change -- a large body of
+    board and crypto code this increment never touched but could have disturbed through layout.
+  - **`bakeMemosDropped` 10 -> 14, reported rather than rounded away.** That counter is the reclaim dropping
+    image-side bake memos pointing into code it just rewound, so it is a function of LAYOUT -- and this moves
+    every static cell and adds a demand-loadable class. Not called a regression: the marker for a lost or
+    stale memo is a wild branch, and none appears.
+  - **A THIRTEENTH CROSS-BOOT RNG SAMPLE:** `b0d6979c b6f7ca42 43fbc123`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **51 of 96** against an ideal of 48 (the series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 51). **Still not a randomness test** -- what stays ruled out is a constant, a
+    counter, and a count that does not follow reads.
 
 - **`String.format` HONOURS FLAGS, WIDTH AND PRECISION -- AND THE ORACLE FOUND A SECOND DEFECT IT WAS NOT
   POINTED AT (2026-09-27, PI-VALIDATED).** `java/util/Formatter` PARSED the whole format
