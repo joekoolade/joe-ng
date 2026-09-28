@@ -115,6 +115,125 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/lang/Character` OVERLAY IS DELETED AND STOCK RUNS -- `isLetter` WAS AN A-Z/a-z RANGE TEST, SO
+  EVERY LETTER ABOVE U+007F ANSWERED FALSE (2026-09-28, PI-VALIDATED).** 624 hand-written lines shadowing a
+  12,359-line stock class, and the defect is one line of it:
+
+  ```java
+  public static boolean isLetter(char ch)
+  {
+      return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+  }
+  ```
+
+  So **`Character.isLetter('é')` answered `false`** where stock answers `true`, and the same for every
+  accented letter, every Greek/Cyrillic/CJK character, and `isLetterOrDigit`/`isAlphabetic`/`isUpperCase`/
+  `isLowerCase`/`isSpaceChar` beside it.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`CharProbe`, 59 arms against the HOST ORACLE** | **24 WRONG** | **0 -- all 59 byte-identical** |
+  | ... `isLetter('é')` / `('π')` / `('中')` | **false / false / false** | **true / true / true** |
+  | ... `digit('9',16)` / `getNumericValue('Ⅷ')` | wrong | **exact** |
+  | ... `isLetter(0x1D400)` (supplementary) | **false** | **true** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, thirty markers zero |
+  | `DENYLIST TRAP` (the arm for the three new denials) | -- | **0, on BOTH harnesses** |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved on BOTH harnesses** |
+  | batch 2 closure | +317blob | **+324blob (+7 classes)** |
+  | image (suite, same manifest) | 33,792,440 | **33,822,120 (+29,680 B, +0.088%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE OVERLAY'S STATED REASON WAS A CLOSURE ARGUMENT, NOT A NATIVES ONE -- THE SECOND SUCH CASE IN TWO
+    INCREMENTS.** Its javadoc says the hand-written bodies exist because "the stock bodies route case/type
+    queries through the big `CharacterData` tables, which stay cold for a literal ASCII match". That is a
+    statement about what a PARTICULAR path costs, not about a native this VM cannot provide -- and the
+    standing rule is that `guestsrc` is for classes that need natives. `Formatter` fell to the identical
+    reading one increment ago. **The pattern worth naming: an overlay justified by what it AVOIDS pulling
+    will always look cheap, because the cost it hides is a wrong ANSWER rather than a missing one.**
+  - **AND THE WRONGNESS WAS INVISIBLE BY CONSTRUCTION, which is why it survived.** Every demo in the suite
+    feeds Character ASCII -- `"HeLLo".toUpperCase()`, `split("a,b,c")`, WordCount over English -- and on ASCII
+    the range test is CORRECT. The suite passed with this bug in it for the life of the project. It took an
+    arm that asks about a character the demos never use.
+  - **THE PROBE CARRIES NO EXPECTED VALUES AT ALL, same design as `FormatProbe`.** Compiled against the real
+    JDK the arms reach stock `Character`; compiled against `guestsrc` they reached the overlay; the gate is a
+    **byte-for-byte diff of the two runs** -- 24 differing lines before, **0** after, RE-MEASURED off the
+    saved captures rather than carried forward. (I first wrote "61 arms" here from my own count of the
+    source; the oracle prints **59** comparable lines, and a stated count that does not match the
+    measurement is a trap this file already records twice.) They span classification, case mapping,
+    `digit`/`getNumericValue`/`forDigit`, and the surrogate/code-point cluster.
+  - **TWO CLAIMS IN MY OWN PROBE JAVADOC WERE FALSIFIED BY RUNNING IT, and both are corrected at the site
+    rather than dropped.** (1) I wrote that the ASCII arms "cannot fail, they are coverage" -- **`U+0000
+    isJavaIdentifierPart` discriminates**, because the overlay got that one wrong too. (2) I wrote that the
+    code-point cluster is pure regression cover -- it is only half: `isLetter(int)`/`isDigit(int)` route
+    through `CharacterData`, so one supplementary arm moved. **An arm asserted to be non-discriminating is a
+    claim, and running the control is what checks it.**
+  - **THE NAME-BASED PULL WAS PRICED BEFORE THE BOOT THIS TIME, and it is what kept the cost to +7 classes.**
+    The loader pulls every `CONSTANT_Class` a blob NAMES -- not what method-level RTA reaches -- and under
+    rule 2 a pulled class's `<clinit>` RUNS. Stock `Character` names three expensive cold classes, so all
+    three are DENIED: **`Character$UnicodeBlock`**, whose `<clinit>` constructs **347 blocks**;
+    **`Character$UnicodeScript`**; and **`CharacterName`**, which reads a `uniName.dat` resource joe-ng's
+    classDir does not carry. Nothing in the closure calls `UnicodeBlock.of`, `UnicodeScript.of` or
+    `getName`, and **`DENYLIST TRAP` reads 0 on both harnesses** -- which is the measurement that says so
+    rather than the reading.
+  - **THE DENIAL LIVES IN TWO PLACES AND BOTH WERE UPDATED, because they are independently consulted:**
+    `Loader.isDenylisted` (metal, patch time) and `writer/ReachScan.DENY` (host, image build). A denial in
+    one and not the other is a class the writer prunes and the metal pulls, or the reverse.
+  - **ONE COMMENT'S PREMISE EXPIRED AND IS CORRECTED AT THE SITE -- the fifth recorded instance.**
+    `clinitBlocked`'s note read "Character/Byte/Short ARE OVERLAID TOO ... so these three entries are INERT".
+    Character is stock now, so its entry is **LIVE** -- and it still costs nothing, MEASURED: stock's OUTER
+    `Character` declares exactly ONE non-constant static (`TYPE = getPrimitiveClass("char")`) and
+    `seedPrimType` fills that cell anyway; the 347 UnicodeBlock constants belong to the NESTED class, which
+    is a different name and is denied. **The boot arm that proves it is `char isPrimitive=true name=char`**
+    -- javac compiles `char.class` to a `getstatic` of that very field, so a null `TYPE` fails there and
+    nowhere else.
+  - **A HARNESS FIX, because the probe silently did not exist:** `launchMain: class not found: CharProbe`.
+    `JDKTESTS` is an EXPLICIT list in the Makefile, not a glob, so a new probe compiles into `out/` and is
+    simply absent from the image. **An absent arm looks exactly like a passing one**, which is the trap this
+    file records repeatedly.
+  - **BOTH HARNESSES AGREE TO THE DIGIT, and the QEMU arm is the one grepped ON DISK.** Batch 2 `+324blob`,
+    batch 63 `+387blob`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `56`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=14`. Thirty markers
+    zero with the anchored `FAULT` grep at 0, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the
+    SEVEN known ones (eight occurrences, `CodingErrorAction.REPLACE` twice), each labelled DENYLISTED.
+  - **THE LISP FINALE MOVED 55 -> 56 ON BOTH HARNESSES, AND THAT IS THE RECORDED SENSITIVITY DETECTOR RATHER
+    THAN A REGRESSION.** This adds ~70 classes to the closure (317 -> 387 at the last batch), which is an
+    allocation-sequence perturbation of exactly the kind that card says moves the finale while leaving the
+    gate alone -- and **`gc: collections=46` at the churn demo is identical on both harnesses**, which is the
+    figure the census established. A cross-harness pair moving together is what separates this from noise:
+    the recorded QEMU A/A spread produced 56 and 57 from an IDENTICAL binary, so agreement across two
+    machines is the stronger reading.
+  - **PI-VALIDATED, AND THE GATES QEMU CANNOT SHOW ARE ALL PRESENT:** `ticks/core c1=50 c2=50 c3=50`,
+    `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 60/60/61/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace, `hw rng: RNG200 live`
+    with `two instances differ`, and WiFi running the whole chain -> `wifi: JOINED` -> `msg3 MIC ok` ->
+    `GTK unwrapped` -> `keys installed` -> DHCP -> `ping reply` -> DNS -> TCP -> **`HTTP/1.1 200 OK`,
+    828 bytes**.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: `CharProbe` IS NOT IN THE SUITE.** So
+    hardware proves NO REGRESSION across a 29,680-byte layout shift on cold DRAM, with every
+    Character-exercising demo exact (`Str."HeLLo".toUpperCase() = HELLO`, `Str.split[0..2] = a/b/c`,
+    `WordCount words=25 distinct=16`, every `parseInt`/`parseLong` PASS, the `é`/`€` charset arms); the 59
+    probe arms against a byte-identical host oracle are QEMU's. Different claims.
+  - **A STATED HARNESS LIMIT THAT DID NOT BITE, recorded because it could have: I FLASHED WHILE THE QEMU
+    SUITE WAS STILL MID-FINALE.** The card's regression gate and its hardware gate were therefore in flight
+    at the same time, which is the wrong order -- the control comes first. **The QEMU arm has since
+    completed and agrees with the Pi to the digit** (same `+387blob`, same `46`/`56`, same thirty-marker
+    sweep), so the risk did not materialise; it was still a risk taken.
+  - **AND A COMMENT-ONLY EDIT MOVED THE IMAGE AFTER THE Pi BOOT, WHICH IS STATED RATHER THAN WAVED THROUGH
+    -- FOURTH RECORDED INSTANCE.** Correcting the `clinitBlocked` note above left the image the SAME SIZE and
+    **9,132 bytes different** -- LineNumberTable entries, the shape this file already records twice. So the
+    **Pi ran a binary differing from the committed tree in exactly those bytes**, and the QEMU suite was
+    RE-RUN on the byte-exact final tree rather than the figures being carried over: it reproduces batch 63
+    `+387blob`, `churnMB=625 live=32 intact=32`, `gc: collections=46` then `56`, and the thirty-marker sweep.
+    **What is NOT claimed is a hardware boot of these exact bytes** -- the bytecode is identical and only the
+    line tables moved, which is an argument rather than a measurement, and this file records latent bugs
+    surfacing from layout movement alone twice. The next Pi boot carries it.
+  - **A TWELFTH CROSS-BOOT RNG SAMPLE:** `c331a38b a48fb498 e1158f76`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **48 of 96** against an ideal of 48 (the series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 48). **Still not a randomness test** -- what stays ruled out is a constant, a
+    counter, and a count that does not follow reads.
+
 - **THE `java/util/Formatter` OVERLAY IS DELETED AND STOCK RUNS -- 539 LINES OF APPROXIMATION REPLACED BY THE
   REAL IMPLEMENTATION, AND THE STATED DIVERGENCE IS GONE RATHER THAN DOCUMENTED (2026-09-28, QEMU-GATED --
   PI-VALIDATED).** The overlay knew nine conversions and emitted anything else **VERBATIM WHILE
