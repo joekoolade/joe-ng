@@ -115,6 +115,129 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Arrays.sort` COULD NOT SORT A `byte[]`, `char[]` OR `short[]` AT ALL -- THREE OF THE SEVEN PRIMITIVE
+  TYPES TRAPPED (2026-09-28, QEMU-GATED -- NOT YET PI-VALIDATED).** The `java/util/DualPivotQuicksort`
+  overlay declared four overloads where stock's callers reference seven, so
+  `java/util/Arrays.sort(byte[])` resolved NOWHERE:
+
+  ```
+  LINK FAILED: java/util/DualPivotQuicksort.sort([BII)V -- class OK but no body for that name+descriptor
+  DENYLIST TRAP: denied callee: java/util/DualPivotQuicksort.sort
+      at java/util/Arrays.sort(Arrays.java:251)
+  ```
+
+  | gate | 4 overloads | 7 overloads |
+  |---|---|---|
+  | **`SortPrimProbe`, 26 arms against the HOST ORACLE** | **8 ran, 1 wrong, 18 NEVER RAN -- a HARD STOP at the first `byte[]`** | **26 ran, 1 wrong -- and that one is NOT about sorting (see below)** |
+  | `Arrays.sort(byte[])` / `(char[])` / `(short[])` | **`LINK FAILED` + `DENYLIST TRAP`** | **exact** |
+  | `byte` SIGNED: `{-1,1,-128,127,0}` | -- | **`[-128,-1,0,1,127]`** |
+  | `short` SIGNED: `{-1,1,-32768,32767,0}` | -- | **`[-32768,-1,0,1,32767]`** |
+  | `char` UNSIGNED: `{0xFFFF,'a',0x8000,1,'z'}` | -- | **`[1,97,122,32768,65535]`** |
+  | `double`/`float` IEEE-754 TOTAL ORDER | correct | **`[-Infinity,-2.5,-0.0,0.0,3.5,Infinity,NaN]`, both** |
+  | ... `-0.0` strictly below `+0.0`, by RAW BITS | correct | **true, both** |
+  | the seven RANGE forms, outside elements | 4 of 7 | **7 of 7, outside elements unmoved** |
+  | `int`/`long` arms (the built-in comparison) | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | `gc: collections` churn / finale | 46 / 56 | **46 / 56 -- BOTH unmoved** |
+  | `churnMB` / `lisp evals result stable` | 625 32 32 / 600 610 1 | **identical** |
+  | closure, batch 2 / batch 63 | +334blob / +397blob | **+334blob / +397blob -- IDENTICAL** |
+  | `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **every one IDENTICAL** |
+  | image (same-build-path control) | 33,921,068 | **33,921,588 (+520 B)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE THREE ADDED OVERLOADS ARE A DIFFERENT SIGNATURE SHAPE, AND THAT IS THE TRAP IN EXTENDING THIS
+    CLASS.** `Arrays.sort(int[]/long[]/float[]/double[])` calls `sort(a, parallelism, low, high)` -- FOUR
+    arguments -- because those have a parallel variant; `Arrays.sort(byte[]/char[]/short[])` calls
+    `sort(a, low, high)` -- THREE -- because stock sorts those with a COUNTING sort, which has none.
+    **Declaring the four-argument shape for a byte array leaves `sort([BII)V` resolving nowhere exactly as
+    before, while looking fixed.** Read off `javap -c` on stock `Arrays` rather than guessed, and the
+    emitted descriptors were checked afterwards (`([BII)V`, `([CII)V`, `([SII)V`).
+  - **THE CONTROL HARD-STOPS AND THE 18 ARMS IT NEVER REACHED ARE STATED RATHER THAN COUNTED AS PASSING**
+    -- the same accounting the TimeUnit card had to make. It printed 8 arms (the `int[]` and `long[]`
+    sections), one of them wrong for an unrelated reason, and then trapped; every `byte`/`short`/`char`,
+    float, double and range arm is simply absent from its output.
+
+  - **`overlaycheck-deep` IS WHAT NAMED ALL THREE, AND THE SHALLOW CHECK STRUCTURALLY CANNOT.** Each is
+    reported "referenced by `java/util/Arrays`" -- stock java.base is the only caller, which is precisely
+    the population the shallow scan does not walk. Three lines, no boot, and the deep count for this class
+    goes to 0 afterwards.
+  - **WHY THE OVERLAY STAYS, MEASURED RATHER THAN READ OFF ITS OWN COMMENT.** Its javadoc said stock "trips
+    an unsupported `invokedynamic` (0xBA) somewhere in the ForkJoin machinery", which invited retiring it
+    the way `Formatter`/`Character`/`TimeUnit`/`Collections` were retired. Checked instead of accepted:
+    - **Stock's own blob names 25 `CONSTANT_Class` entries and NOT ONE is a ForkJoin class** -- six nested,
+      the seven primitive array types, six wrappers, `Arrays`, `Unsafe`, and the `java/lang/invoke` trio.
+    - **The ForkJoin dependency is in the NESTED classes**: `Sorter` and `Merger` extend
+      `CountedCompleter`, `RunMerger` extends `RecursiveTask`.
+    - **And its three `invokedynamic` sites are ORDINARY `LambdaMetafactory.metafactory` lambdas** -- method
+      references to `mixedInsertionSort` and `insertionSort` -- which this VM synthesises perfectly well. So
+      "an unsupported 0xBA" was never this class's own bytecode.
+    - **`ForkJoinPool`, `ForkJoinTask` and `CountedCompleter` are all PRESENT in the image classDir** --
+      measured by scanning `kernel8.img`. What is genuinely absent is a scheduler-backed COMMON POOL, the
+      same absence that made `BigInteger.<clinit>` -> `RecursiveOp` ->
+      `ForkJoinPool.getCommonPoolParallelism` a landmine this project backed out of once.
+    **That is a subsystem-absence argument, which is the sanctioned reason for an overlay** -- the same
+    standing `ServiceLoader` and `MessageDigest` have. It is now recorded AT THE CLASS as a measurement
+    rather than as a recollection.
+  - **THE PROBE CARRIES NO EXPECTED VALUES, AND HERE THE ORACLE IS DOING MORE WORK THAN USUAL.** Stock is a
+    dual-pivot quicksort for int/long/float/double and a COUNTING sort for byte/char/short; the overlay is
+    an insertion sort for all seven. **Those are different ALGORITHMS, so agreeing on every arm is a real
+    claim about the ORDER they produce, not a tautology** -- unlike a probe where both sides run the same
+    code and only the data differs.
+  - **THE SIGNEDNESS ARMS ARE CHOSEN SO THE PLAUSIBLE WRONG IMPLEMENTATION FAILS.** `char` is UNSIGNED, so
+    `0xFFFF` must sort ABOVE `'a'` -- an implementation that sign-extended puts it first. `byte` and `short`
+    are SIGNED and are meant to be, so `-128` must sort BELOW `127` -- one that read them the way `char` is
+    read gives exactly the reverse. Java promotes `char` to int by ZERO-extension, so a plain `>` is already
+    the unsigned compare; the arm proves that rather than assuming it.
+  - **AND THE FLOAT ARMS CHECK A CLAIM THE OVERLAY ONLY ASSERTED.** Its javadoc said the double/float
+    overloads sort in IEEE-754 total order via `Double.compare`/`Float.compare` -- NaN greatest, `-0.0`
+    below `+0.0` -- and nothing tested it. A naive `>` insertion sort mis-orders BOTH (NaN compares false
+    against everything so it never moves; `-0.0 > +0.0` is false so the pair never swaps). Both arms match
+    the host, and the `-0.0` arm compares **RAW BITS** rather than values, because `-0.0 == 0.0` is true and
+    a value comparison would pass over a wrong answer.
+  - **THE RANGE FORMS PRINT THE ELEMENTS OUTSIDE THE RANGE, deliberately.** A sort that ignored its bounds
+    and sorted the whole array would satisfy "the range is ordered" perfectly; the sentinels at index 0 and
+    4 are what catch it. All seven.
+  - **STATED LIMIT, UNCHANGED BY THIS INCREMENT: the overlay is O(n^2) for all seven types**, where stock is
+    O(n log n) for four and O(n + range) counting sort for the other three. `Arrays.sort` is public API a
+    guest program may call with any array, so a large array is far slower here than on a real JVM. **It is a
+    cost, not a wrong answer**, and it is now written at the class rather than implied by "fine for the
+    small arrays metal demos sort".
+  - **THE PROBE FOUND A SEPARATE, PRE-EXISTING SILENT WRONG ANSWER, AND IT IS DELIBERATELY NOT FIXED HERE.**
+    The int MIN/MAX arm prints **`[-,-1,0,1,2147483647]`** against the host's `-2147483648`: a BARE MINUS
+    SIGN for `Integer.MIN_VALUE`. `StringBuilder.append(int)` hand-rolls its digits and does `v = -v`, and
+    `-Integer.MIN_VALUE` is still `Integer.MIN_VALUE`, so the `v > 0` loop writes NO digits.
+    - **It is the FOURTH site of a defect this file already records fixing on 2026-09-19** in
+      `VMConcat.scInt`, `scLong` and `VM.printDec` -- `scInt`'s own comment describes this exact shape, word
+      for word. `append(long)` survives only because it delegates to `Long.toString`.
+    - **It is present in BOTH ARMS of this increment's A/B**, so it is demonstrably pre-existing and not the
+      sort change. **The arm is left FAILING rather than removed**, because deleting it would hide a live
+      silent wrong answer; it gets its own increment, and that increment deletes this paragraph.
+    - **One fix per card, and these are separable** -- different subsystems, different failure signatures
+      (a trap against a truncated number), different probe arms. This file records what bundling two
+      unvalidated changes cost.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what adding three METHODS to an already-pulled class
+    has to show.** Batch 2 `+334blob`, batch 63 `+397blob`, `rounds=4 pend=180 reach=17`,
+    `memo=1060 res=2512 unres=2278`, `n:imap=131 synth=36 clinits=96` -- every one byte-identical to the
+    Collections gate one increment earlier. **And `gc: collections` reads 46 then 56, with the FINALE back at
+    56 where that increment's gate read 55** -- on a binary whose closure is identical, which is one more
+    sample saying the QEMU finale wobbles and may not be cited.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: it sorts `int[]` AND NOTHING ELSE.** Measured --
+    `demo/ArraysDemo` is the only demo calling `Arrays.sort`, twice, both on `int[]`, and
+    `demo/SortProbe` (the `Object[]`/TimSort one) is not in the suite at all. So the boot proves NO
+    REGRESSION on the four types that already worked, and `SortPrimProbe`'s 26 arms against a byte-identical
+    host oracle are what prove the three new ones. Different claims.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK.** 31 markers zero -- notably **`DENYLIST TRAP` 0 and
+    `LINK FAILED` 0**, which are the two the control arm produces and therefore the two that matter here.
+    The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each
+    labelled DENYLISTED, and the anchored `FAULT` grep reads 0 (the one bare `FAULT` is
+    `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string on a harness with no RNG).
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** Three insertion sorts over primitive arrays are
+    integer arithmetic in the guest world and QEMU has already diffed all 26 arms against stock, so cold DRAM
+    cannot change whether `-128` sorts below `127`. What hardware is being asked is a **520-byte layout
+    shift** and nothing else -- the arms to read are the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`,
+    `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`) plus `gc: collections=46` at the churn demo and the
+    batch-2/batch-63 closure.
+
 - **THE `java/util/Collections` OVERLAY IS DELETED AND STOCK RUNS -- `unmodifiableList` RETURNED THE BACKING
   LIST, SO A CALLER THAT MUTATED THE "VIEW" CORRUPTED THE ORIGINAL (2026-09-28, QEMU-GATED -- NOT YET
   PI-VALIDATED).** 297 hand-written lines shadowing a 6,282-line stock class, and the defect is one shape
