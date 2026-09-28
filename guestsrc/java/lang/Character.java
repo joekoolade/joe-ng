@@ -11,6 +11,8 @@
  */
 package java.lang;
 
+import jdk.internal.misc.CDS;
+
 /**
  * A JDK-free, minimal {@code java/lang/Character} overlay. It shadows the stock class entirely (overlay wins by
  * name), so it must carry every {@code Character} method a reached path calls -- otherwise the missing method is
@@ -21,8 +23,12 @@ package java.lang;
  * LITERAL {@code String.split} -- all pure bit arithmetic (the stock bodies route case/type queries through the
  * big {@code CharacterData} tables, which stay cold for a literal ASCII match). The boxing members
  * ({@code valueOf}/{@code compareTo}/{@code compare}/{@code MIN_VALUE}/{@code MAX_VALUE}) back {@code Compare}.
- * Values inlined as literals/constant casts so the overlay needs no {@code <clinit>} on metal -- and the JLS
- * 5.1.7 {@code valueOf} cache below is LAZY for that same reason, not for economy (see its javadoc).
+ * Values inlined as literals/constant casts so THIS class needs no {@code <clinit>} on metal (it is on
+ * {@code Loader.clinitBlocked}, so one would be skipped). The JLS 5.1.7 {@code valueOf} cache lives in the
+ * nested {@code CharacterCache}, which is stock's own shape and works here for a reason worth stating: a
+ * nested class has its OWN {@code <clinit>}, and JVMS 5.5 makes reading {@code CharacterCache.cache} an active
+ * use of {@code CharacterCache} rather than of {@code Character} -- {@code Character$CharacterCache} is not on
+ * {@code clinitBlocked}, so the fill runs.
  */
 public final class Character implements Comparable<Character>
 {
@@ -48,52 +54,75 @@ public final class Character implements Comparable<Character>
     }
 
     /**
-     * The JLS 5.1.7 cache. THIS OVERLAY USED TO HAVE NO CACHE ("valueOf just boxes"), so
-     * {@code valueOf('A') == valueOf('A')} answered FALSE where the specification says it must answer
-     * true -- a silent wrong answer in a language feature, since autoboxing goes through here. JLS 5.1.7
-     * requires two boxing conversions of a {@code char} in [0, 127] to yield the SAME reference.
+     * The JLS 5.1.7 cache, in STOCK'S OWN SHAPE: a nested holder whose {@code <clinit>} fills the array
+     * eagerly and ADOPTS a writer-baked one when there is one. JLS 5.1.7 requires two boxing conversions of a
+     * {@code char} in [0, 127] to yield the SAME reference, and autoboxing goes through {@code valueOf}, so a
+     * missing cache is a silent wrong answer in a language feature.
      *
-     * <p>FILLED LAZILY, WHICH IS A DIVERGENCE FROM STOCK'S SHAPE, AND THE REASON IS MEASURED RATHER THAN
-     * stylistic. Stock nests a {@code CharacterCache} class whose {@code <clinit>} fills the whole array eagerly
-     * (consulting {@code archivedCache} for CDS). joe-ng cannot copy that here, three ways:
-     * <p>(1) {@code java/lang/Character} is on {@code Loader.clinitBlocked}, so an initializer added to THIS class
-     *     would be SKIPPED and the array would read null -- trading a mild divergence for an NPE, which is
-     *     the "a skipped initializer is a silent wrong answer" failure this VM records more than any other.
-     * <p>(2) a baked class that HAS a {@code <clinit>} is scheduled into {@code VM.initClasses} by
-     *     {@code ImageBuilder.use}, so the fill would ALSO run at boot in the BAKED world -- a second writer
-     *     for a static cell the loader adopts, which is exactly the {@code ImmutableCollections.EMPTY}
-     *     hazard.
-     * <p>(3) the snapshot route cannot substitute: {@code StaticSnapshot} reflects the HOST's class, and
-     *     java.base is a NAMED module, so the writer sees the REAL JDK {@code Character}, which has no such
-     *     field at all.
+     * <p>THIS REPLACES A LAZY FILL, AND THE THREE FACTS THAT FORCED THE LAZY ONE WERE EACH TRUE OF THE SHAPE
+     * IT CHOSE RATHER THAN OF THE PROBLEM -- which is why stock nests this class instead of putting a field on
+     * {@code Character}:
+     * <p>(1) "{@code java/lang/Character} is {@code clinitBlocked}, so an initializer here would be SKIPPED".
+     *     True of THIS class, and this initializer is not on it: {@code Character$CharacterCache} is a
+     *     different class with its own {@code <clinit>}, and it is not on that list.
+     * <p>(2) "a baked class with a {@code <clinit>} is scheduled into {@code VM.initClasses}, so the fill
+     *     would also run in the BAKED world -- a second writer". MEASURED, and the answer is that it runs in
+     *     NEITHER: with {@code archivedCache} baked 0 (a control with only the writer's three
+     *     {@code ARCHIVED_SUBGRAPHS} entries removed) the boxes still come back at the BAKED array's own
+     *     element addresses, where an initializer finding {@code archivedCache} null would have taken the
+     *     BUILD arm and handed out heap boxes. So this array is baked complete and simply read, and the
+     *     writer entries are insurance for the day rule 2 makes the initializer run -- at which point a null
+     *     {@code archivedCache} would silently replace the image's array. I predicted the opposite and the
+     *     control said so; see the note at {@code ImageBuilder.ARCHIVED_SUBGRAPHS}.
+     * <p>(3) "{@code StaticSnapshot} reflects the HOST's class, which has no such field". True of a flat
+     *     {@code Character.cache}; the real JDK {@code Character$CharacterCache} declares {@code cache} AND
+     *     {@code archivedCache}, so the snapshot has real fields to read.
      *
-     * <p>STATED DIVERGENCE, not glossed: a lazy fill has an SMP window. Two cores that both miss can each
-     * hand out a box for one value, and {@code ==} is then false for it. That is strictly NARROWER than the
-     * behaviour it replaces (always false) rather than a new failure mode, and nothing in the tree boxes a
-     * char on two cores. The race-free form is stock's eager initializer, which needs the three wrappers
-     * un-blocked and the baked-world question above answered -- its own increment, with its own gate.
+     * <p>SO THE SMP WINDOW THE LAZY FILL STATED IS CLOSED rather than narrowed: the array is complete before
+     * any reader sees it, and no box is allocated on metal at all -- where the lazy form allocated up to 128
+     * per launch that first touched this class.
+     *
+     * <p>Two departures from the stock text, both stated rather than silent. The {@code @Stable} annotation is
+     * dropped: it is a JIT hint for a constant-folding optimiser this VM does not have. And stock's closing
+     * {@code assert cache.length == size} is dropped because {@code assert} compiles to a read of the
+     * synthetic {@code $assertionsDisabled} static -- which nothing here snapshots -- and it re-checks a
+     * length the two lines above it just established.
      */
-    private static Character[] cache;
+    private static final class CharacterCache
+    {
+        private CharacterCache()
+        {
+        }
+
+        static final Character[] cache;
+        static Character[] archivedCache;
+
+        static
+        {
+            int size = 127 + 1;
+
+            // Load and use the archived cache if it exists
+            CDS.initializeFromArchive(CharacterCache.class);
+            if (archivedCache == null)
+            {
+                Character[] c = new Character[size];
+                for (int i = 0; i < size; i++)
+                {
+                    c[i] = new Character((char) i);
+                }
+                archivedCache = c;
+            }
+            cache = archivedCache;
+        }
+    }
 
     public static Character valueOf(char c)
     {
-        if (c > 127)
+        if (c <= 127)
         {
-            return new Character(c);
+            return CharacterCache.cache[(int) c];
         }
-        Character[] k = cache;
-        if (k == null)
-        {
-            k = new Character[128];
-            cache = k;
-        }
-        Character r = k[c];
-        if (r == null)
-        {
-            r = new Character(c);
-            k[c] = r;
-        }
-        return r;
+        return new Character(c);
     }
 
     public char charValue()

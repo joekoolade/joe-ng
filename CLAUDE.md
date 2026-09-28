@@ -115,6 +115,184 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE WRAPPER CACHES ARE STOCK'S OWN NESTED `XCache` NOW, AND THE NEGATIVE CONTROL REFUTED THE HALF I HAD
+  CLAIMED WAS LOAD-BEARING (2026-09-26, PI-VALIDATED).** `Character`/`Byte`/`Short` carry stock's
+  `CharacterCache`/`ByteCache`/`ShortCache` -- an eagerly filled array that ADOPTS a
+  writer-baked one -- in place of the lazy fill one increment ago, and the writer bakes their
+  `archivedCache`. Every `char`/`byte`/`short` box in [-128,127] is an IMAGE object now.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`BoxCacheProbe`, the three wrapper arms** | **heap (built fresh)** | **image (ADOPTED)** |
+  | ... and the address is the BAKED ELEMENT | -- | **`0x16edb8`/`0x170830`/`0x172848`, cross-read from `kernel8.img`** |
+  | four above-cache negatives | heap | **heap -- unmoved** |
+  | `BoxingDemo`, the eleven JLS 5.1.7 arms | pass | **pass -- unmoved** |
+  | boxes allocated on metal per launch | ~640 | **0** |
+  | batch-70 closure | -- | **EXACT but `clinits` 28 -> 31 and `+240blob` -> `+243blob`, the three new classes** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, thirty markers zero |
+  | **Pi, the SAME binary** | -- | **eleven arms EXACT, closure exact to the digit, 30 markers zero, WiFi -> HTTP 200 OK** |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved on BOTH harnesses** |
+  | image (same-manifest `BoxCacheProbe` A/B) | 33,760,584 | **33,781,808 (+21,224 B, +0.063%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE THREE FACTS THAT FORCED THE LAZY FILL WERE EACH TRUE OF THE SHAPE IT CHOSE RATHER THAN OF THE
+    PROBLEM, and stock nests the cache precisely so none of them applies.** My own card one increment ago
+    recorded them as "three measured facts" and they were -- about a flat `Character.cache` on the outer
+    class:
+    - **"`java/lang/Character` is on `clinitBlocked`, so an initializer would be SKIPPED."** True of THAT
+      class. `Character$CharacterCache` is a DIFFERENT class, `clinitBlocked` matches by EXACT name, and
+      JVMS 5.5 makes reading `CharacterCache.cache` an active use of the NESTED class -- so the cache's
+      initializer was never blocked by that list at all.
+    - **"`StaticSnapshot` reflects the HOST's class, which has no field of this name."** True of a flat
+      `Character.cache`; the real JDK `Character$CharacterCache` declares `cache` AND `archivedCache`, so
+      the snapshot has real fields to read. **This one INVERTS rather than merely not applying.**
+    - **"a baked class with a `<clinit>` is scheduled into `VM.initClasses`, so the fill would run in the
+      BAKED world too -- a second writer."** Answered by the control below, and not the way I predicted.
+  - **THE NEGATIVE CONTROL IS SPECIFIC AND IT REFUTED MY OWN CLAIM, which is the half worth keeping.** I
+    wrote into `ImageBuilder` that "UNLIKE THE TWO ENTRIES ABOVE, THESE THREE ARE NOT INERT", reasoning that
+    the nested initializer runs in both worlds and reads the cell. With ONLY the three `ARCHIVED_SUBGRAPHS`
+    entries removed -- same tree otherwise -- `archivedCache` bakes **0** and the probe STILL reports the
+    three boxes at image addresses that match that build's own baked elements. An initializer finding
+    `archivedCache` null MUST take the BUILD arm and hand out heap boxes. It did not, so on that image the
+    initializer does not run and the baked `cache` cell is simply read. **The claim is corrected at the site
+    rather than quietly dropped.**
+  - **SO THE INCREMENT HAS TWO HALVES WITH DIFFERENT STANDING, and the control is what separates them.**
+    Three arms, one variable each:
+
+    | arm | the three wrapper boxes |
+    |---|---|
+    | lazy overlay + writer entries | **heap** |
+    | **eager overlay, writer entries REMOVED** | **image** |
+    | eager overlay + writer entries (the fix) | **image** |
+
+    **The OVERLAY rewrite is what moves them**; the writer entries are INERT today, exactly like the
+    `IntegerCache`/`LongCache` entries beside them, and kept for the same forward-looking reason: on the day
+    rule 2 makes that initializer run, a null `archivedCache` sends stock straight to its BUILD arm and
+    silently replaces the array the image carries -- `seedIntegerCache` re-created with nothing left to mask
+    it.
+  - **AND THE OLD COMMENT'S CLOSING CLAUSE WAS RIGHT, measured: "adding them would bake boxes no code can
+    reach."** With the LAZY overlays still in place those three entries cost **+23,492 bytes** of exactly
+    that -- the writer resolves the name to the REAL JDK nested class and bakes 640 unreachable boxes. What
+    expired was the PREMISE ("each overlay DROPS the cache"), not the conclusion; with the nested cache
+    present the arrays are baked and REACHED either way and the entries add **ZERO bytes**. Fourth recorded
+    instance of a comment outliving its premise, and the first where reading the conclusion carefully saved
+    getting the attribution backwards.
+  - **`cache == archivedCache` BY ADDRESS, read out of the image rather than argued** -- `0x16e388` /
+    `0x16f3a0` / `0x1713b8`, lengths 128/256/256, elements `-128`..`127` with the byte/short ends stored
+    sign-extended (`0xFFFF_FFFF_FFFF_FF80`). The deep-bake INTERNED the two cells, so the metal
+    `cache = archivedCache` writes back the value already there and the assignment is a no-op. Same
+    measurement the `ImmutableCollections.EMPTY` increment rests on.
+  - **THE SMP WINDOW THE LAZY FILL STATED IS CLOSED RATHER THAN NARROWED.** That card recorded a real
+    divergence: two cores that both miss can each hand out a box for one value. The array is baked complete
+    before any reader exists, so there is no miss to race -- and **no box is allocated on metal at all**,
+    where the lazy form allocated up to 640 per launch that touched these classes.
+  - **TWO CLOSURE COUNTERS MOVED AND BOTH ARE THE SAME THREE CLASSES: `clinits` 28 -> 31 and blobs
+    `+240` -> `+243`.** Three new nested cache classes, so three new initializers and three new blobs.
+    Everything else at batch 70 is byte-identical -- `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2517 unres=2238`, `n:imap=78 synth=36`, `rf:skip=2031 visit=2419 clos=2419
+    holeEnd=2305`, `pc:n=112`, `sy:n=50 chg=0`, `gc=46`.
+    - **THE FIRST CUT OF THIS BULLET LISTED `+240blob` AMONG THE BYTE-IDENTICAL COUNTERS, AND THAT WAS A
+      FIGURE CARRIED FORWARD RATHER THAN READ -- CAUGHT BY HARDWARE DISAGREEING WITH A NUMBER I HAD
+      WRITTEN.** The Pi read `+243blob`, and re-reading the QEMU log that gated this card, **it reads
+      `+243blob` too**. `+240blob` is the PRE-CHANGE tree's figure (checked: three pre-change suite logs all
+      read `batch 70: +240blob clinits=28`), so this is not a mis-read batch -- it is an unchanged number
+      quoted from the previous increment's recorded suite figures instead of read off this increment's own
+      run, in a list whose whole purpose is to say which counters did not move.
+    - **AND THE CARD WAS INTERNALLY INCONSISTENT, which is what should have caught it without a boot:**
+      three new initializers CANNOT arrive without three new classes, so `clinits` +3 two lines above
+      `+240blob` unchanged is not a possible pair. **The rule this file already states -- a cited result is
+      not a measured one -- applied to my own card**, and the check that catches it is arithmetic across the
+      counters in one line rather than a second harness.
+  - **THE PROBE LOST ITS CONTROLS AND GAINED REPLACEMENTS, said rather than re-based.** `BoxCacheProbe`'s
+    javadoc had `Character`/`Byte`/`Short` as arms that "cannot move for ANY reason"; they move here, which
+    is the third time a control in that file has had its stated reason expire. The negatives are now the
+    ABOVE-CACHE arms, one per cached type -- `valueOf(1000)`, `(char) 200`, `(short) 1000` -- which must read
+    `heap` in every state, because JLS 5.1.7 mandates nothing above 127 and a baked array indexed out of
+    range shows only there.
+  - **AND A `Byte` ABOVE-CACHE ARM WAS WRITTEN AND DELETED BEFORE IT SHIPPED.** Every `byte` is inside
+    [-128,127], so there is no above-cache value to ask for: the arm printed `image` under a heading that
+    said "must be heap". An arm whose label contradicts its own correct answer is precisely the line this
+    file records being mis-read twice.
+  - **TWO DEPARTURES FROM THE STOCK TEXT, both stated.** `@Stable` is dropped (a hint for a constant-folding
+    optimiser this VM does not have), and stock's closing `assert cache.length == size` is dropped because
+    `assert` compiles to a read of the synthetic `$assertionsDisabled` static and re-checks a length the two
+    lines above it just established. **Visible in the `statmap`**: `IntegerCache`/`LongCache` carry a
+    `$assertionsDisabled` cell and the three new blocks do not.
+  - **A CORRECTION TO THE OVERLAYS' OWN CLASS JAVADOCS, found while reading them rather than by a failure.**
+    Both `Byte` and `Short` claimed the stock `valueOf` "reads a nested `XCache` that never initializes on
+    metal (the wrapper's `<clinit>` sets a native TYPE and is blocked)". That does not follow, for the reason
+    above -- the nested class has its own initializer and is not on the list. So these overlays exist because
+    they are JDK-free and minimal, and the interning gap was a member they had DROPPED, not something the
+    stock class could not have done here. An unchecked assertion, corrected at both sites.
+  - **THE SUITE GATE IS ON THE BYTE-EXACT TREE, re-run after the comment corrections moved the image** --
+    the recorded rule, because a card quoting figures for an image nobody booted is a citation. 40 programs
+    to `self-build retired`, batch 70 `+240blob`, `churnMB=625 live=32 intact=32`, `gc: collections=46` at
+    the churn demo then `55`, `lisp: evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion
+    `HIGH blocked 61ms`, `smp sched: 4 of 4`, `steps/core 61/59/60/60`, `sum20 = 210`,
+    `sha256 clone = .../fork-ok`, `bakeMemosDropped=10`, `sync: static seen=18 nomonitor=0`, and
+    **THIRTY FAILURE MARKERS ZERO** with the anchored `FAULT` grep at 0 -- the only `UNRESOLVED STATIC` /
+    `TRAP-WIRED` lines are the SEVEN known ones (eight occurrences, `CodingErrorAction.REPLACE` twice), each
+    labelled DENYLISTED.
+  - **PI-VALIDATED, AND THE GATE THIS CARD NAMED IN ADVANCE IS WHAT THE BOOT ANSWERED: COLD DRAM PLUS THE
+    BAKED-WORLD READER.** Two things QEMU structurally cannot price. The emulator hands out ZEROED memory, so
+    a `cache` cell that failed to bake reads 0 there and NPEs loudly, where a Pi at power-on holds firmware
+    leftovers and a garbage array pointer is a wild read at `arr + 24 + 8*idx`. And the BAKED world reads
+    this array with no init guard at all (`implicitChecks()` is false for the writer), so the boot battery
+    touches it BEFORE `launch`. On silicon the battery's seventeen arms all read `PASS` --
+    `String.valueOf(true)=true`, `IntegerCache.cache[170].intValue()=*`, and
+    `Integer.valueOf(42)==cache[170]` -- and **none of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED` or
+    `unclaimed pc` appears anywhere in the boot.** Both halves of the named gate, answered.
+  - **ALL ELEVEN JLS 5.1.7 ARMS EXACT ON HARDWARE.** The three interning arms and the three autobox arms
+    read **1** where the pre-fix control reads 0; the out-of-range controls (`char 200`, `short 1000`) stay
+    **fresh**; and both ENDS of each range read **127 / -1 / -1** -- the arms that exist because the slot is
+    `value + 128`, so an off-by-one in that offset is an AIOOBE at an end rather than a wrong number, and the
+    interning arms pass straight through it. The array is allocated nowhere on metal now, so what the ends
+    exercise here is the BAKED array's own bounds. The seven pre-existing Integer arms are unmoved beside
+    them (`valueOf(5)==valueOf(5) cached = 1`, `valueOf(1000)==valueOf(1000) new = 0`,
+    `hashCode(box -100) = -100`).
+  - **THE GATE IS UNMOVED ON BOTH HARNESSES: `gc: collections=46` at the churn demo**, with
+    `churnMB=625 live=32 intact=32`, then `55` at the lisp finale -- and the QEMU arm of this same binary
+    read 46 then 55 as well, so the sensitivity detector did not move either. That figure was the one
+    genuinely at risk one increment ago and is now structurally safe: with the array baked complete, this
+    change allocates NO box on metal at all where the lazy form allocated up to 640 per launch.
+  - **CLOSURE IDENTITY IS EXACT TO THE DIGIT, and the cross-harness split is what makes that a check.**
+    Batch 70 on silicon reads `+243blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2514 unres=2235`,
+    `n:imap=78 synth=36 clinits=31`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`,
+    `sy:n=50 chg=0`, `bakeMemosDropped=10`. **The recorded 3/3/1 split reproduces EXACTLY** -- QEMU's
+    `2517 / 2238 / 112` against silicon's `2514 / 2235 / 111`, the same three counters and the same three
+    magnitudes the launcher card attributes to the hardware RNG path being compiled on one harness and not
+    the other. A change that perturbed patch-site counts would have moved that difference; it did not.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, and `hw rng: RNG200 live` with
+    `two instances differ`. WiFi runs the whole chain: `event 3 / 7 / 16` -> `wifi: JOINED` -> `pmk ready` ->
+    `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` -> DHCP 10.0.0.164 ->
+    `ping reply from 10.0.0.1` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`, 828 bytes**.
+  - **THIRTY MARKERS ZERO, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones**
+    (eight occurrences -- `CodingErrorAction.REPLACE` reports twice), every one labelled DENYLISTED. None of
+    `BOOT RE-ENTERED`, `ESR EC=`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`,
+    `VIRTUALRESOLVE FAILED`, `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity `DIFF`,
+    `JIT unsupported`, `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`,
+    `REACH LIST FULL`, `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`,
+    `SYSTEM PROPERTIES NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`,
+    `UNREGISTERED SUPER` or `NO toString` appears -- and the bare `FAULT` does not occur at all, for the
+    reason this file records: `demo/SecureRandomDemo` prints `CTRL=7fff STATUS=0 bcm2835DATA=0
+    rng200FIFOCNT=40001010` on hardware, so the value strings that make that pattern cry wolf on QEMU are
+    absent. **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than the recorded anchored grep -- a marker in a region I skimmed
+    would not have been caught, and the batch lines are dense.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: `BoxCacheProbe` IS NOT IN THE SUITE.** So the
+    image-vs-heap ADDRESS dimension -- the arms that prove the boxes are adopted rather than built -- is
+    QEMU's, and hardware proves the ELEVEN JLS arms plus no regression across a 21,224-byte layout shift on
+    cold DRAM. Different claims, and the distinction is the same one the `Mac`/`SecretKeyFactory` cards make.
+  - **AN ELEVENTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `78953bed dc55593f b998ed47`,
+    distinct from every previous boot, `count 16 -> 13`, popcount **56 of 96** against an ideal of 48 (the
+    series reads 51, 47, 63, 50, 41, 46, 45, 54, --, 49, 56). **Still not a randomness test** -- what stays
+    ruled out is a constant, a counter, and a count that does not follow reads.
+
 - **`Character`/`Byte`/`Short`.valueOf INTERN AT LAST -- JLS 5.1.7 WAS BEING VIOLATED IN AUTOBOXING, SILENTLY
   (2026-09-26, PI-VALIDATED).** All three overlays carried NO cache
   ("valueOf just boxes"), so `Character.valueOf('A') == Character.valueOf('A')` answered **false** where the

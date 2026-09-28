@@ -30,16 +30,18 @@
  * either -- so the JDK 26 source quoted above is the source that EXECUTES on the metal. That is what
  * makes reading it a measurement rather than an analogy.
  *
- * <p>CONTROLS, and they are the point. {@code Character}/{@code Byte}/{@code Short} must report
- * {@code heap} in BOTH states. THE REASON CHANGED on 2026-09-26 AND THE CONTROL DID NOT, which is
- * worth stating rather than silently re-basing: those three overlays used to carry no cache at all
- * ("valueOf just boxes"), and they now intern per JLS 5.1.7 -- but LAZILY, from an array the overlay
- * allocates on the heap, because {@code java/lang/Character}/{@code Byte}/{@code Short} are on
- * {@code Loader.clinitBlocked} and an initializer there would be skipped. So the boxes are still heap
- * boxes and the image-vs-heap arms still cannot move for any reason; what is no longer true of them is
- * "allocates fresh every call". The above-cache arms ({@code valueOf(1000)}) must stay {@code heap} in
- * both states too: JLS 5.1.7 only mandates interning within [-128,127], and a cache that had quietly
- * widened would show there.
+ * <p>{@code Character}/{@code Byte}/{@code Short} USED TO BE THE CONTROLS HERE AND THEY ARE ARMS NOW --
+ * stated rather than silently re-based, because this file has twice recorded a control whose stated reason
+ * expired. The history in one line: those three overlays carried NO cache ("valueOf just boxes"), then a
+ * LAZY one filled on the heap (so they read {@code heap}, which is what made them controls), and now
+ * stock's own nested {@code XCache} whose array the writer bakes -- so they read {@code image}, and an
+ * arm that moved is no longer an arm that cannot move.
+ *
+ * <p>WHAT REPLACES THEM: the ABOVE-CACHE arms, one per cached type. JLS 5.1.7 mandates interning only
+ * within [-128,127] ([0,127] for {@code char}), so {@code valueOf(1000)} / {@code (char) 200} /
+ * {@code (short) 1000} must report {@code heap} in every state -- a cache that had quietly widened, or a
+ * baked array being indexed out of range, shows up only there. Those five are the negatives; the seven
+ * in-cache arms are the feature.
  */
 public final class BoxCacheProbe
 {
@@ -47,7 +49,7 @@ public final class BoxCacheProbe
 
     public static void main(String[] args)
     {
-        System.out.println("-- baked cache: Integer, Long.  overlaid, heap cache, lazy: Character, Byte, Short --");
+        System.out.println("-- baked caches, all five: Integer, Long, Character, Byte, Short --");
         where("Integer.valueOf(5)   ", Integer.valueOf(5));
         where("Integer.valueOf(-128)", Integer.valueOf(-128));
         where("Integer.valueOf(127) ", Integer.valueOf(127));
@@ -56,9 +58,11 @@ public final class BoxCacheProbe
         where("Byte.valueOf(5)      ", Byte.valueOf((byte) 5));
         where("Short.valueOf(5)     ", Short.valueOf((short) 5));
 
-        System.out.println("-- above the cache: must be heap in BOTH states (JLS 5.1.7 stops at 127) --");
+        System.out.println("-- above the cache: must be heap in EVERY state (JLS 5.1.7 stops at 127) --");
         where("Integer.valueOf(1000)", Integer.valueOf(1000));
         where("Long.valueOf(1000)   ", Long.valueOf(1000L));
+        where("Character.valueOf(200)", Character.valueOf((char) 200));
+        where("Short.valueOf(1000)  ", Short.valueOf((short) 1000));
 
         // Interning WITHIN a world holds whichever arm ran, so these pass in both states and are
         // coverage rather than discrimination -- said plainly, because an arm that cannot fail is
