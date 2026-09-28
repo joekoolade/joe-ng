@@ -43,8 +43,6 @@ supertype#java/lang/Boolean#java/io/Serializable
 supertype#java/lang/Boolean#java/lang/constant/Constable
 supertype#java/lang/Byte#java/io/Serializable
 supertype#java/lang/Byte#java/lang/constant/Constable
-supertype#java/lang/Character#java/io/Serializable
-supertype#java/lang/Character#java/lang/constant/Constable
 supertype#java/lang/Class#java/io/Serializable
 supertype#java/lang/Class#java/lang/constant/Constable
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor
@@ -112,10 +110,6 @@ supertype#java/util/Random#java/util/random/RandomGenerator
 supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent/ConcurrentHashMap$CollectionView
 supertype#java/util/concurrent/ConcurrentSkipListMap#java/util/concurrent/ConcurrentNavigableMap
 supertype#java/util/concurrent/Semaphore#java/io/Serializable
-supertype#java/util/concurrent/TimeUnit#java/io/Serializable
-supertype#java/util/concurrent/TimeUnit#java/lang/Comparable
-supertype#java/util/concurrent/TimeUnit#java/lang/Enum
-supertype#java/util/concurrent/TimeUnit#java/lang/constant/Constable
 supertype#java/util/concurrent/atomic/AtomicBoolean#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicInteger#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicIntegerArray#java/io/Serializable

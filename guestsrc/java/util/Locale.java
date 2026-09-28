@@ -82,10 +82,21 @@ public final class Locale
     }
 
     /**
-     * {@code Locale.Category} -- a plain class, not an enum, for the same reason {@link
-     * java.util.concurrent.TimeUnit} is: joe-ng has no enum machinery here and the stock nested enum's
-     * {@code <clinit>} is unrunnable. Declared INSIDE Locale so it compiles to {@code java/util/Locale$Category},
-     * the name stock callers reference; without it the overlay drops the nested type as well as the method.
+     * {@code Locale.Category} -- a plain class, not an enum.
+     *
+     * <p>THE REASON THIS COMMENT USED TO GIVE HAS EXPIRED, and it is corrected here rather than quietly
+     * dropped. It read "for the same reason {@code java.util.concurrent.TimeUnit} is: joe-ng has no enum
+     * machinery here and the stock nested enum's {@code <clinit>} is unrunnable". Both halves are false now:
+     * {@code java/lang/Enum} is stock, un-overlaid and un-denied, {@code java/math/RoundingMode} is a stock
+     * enum this VM runs (PI-VALIDATED, in {@code BigMathProbe}'s {@code divide HALF_UP} arm), and the
+     * {@code TimeUnit} overlay this cited is DELETED -- stock's enum runs on the metal.
+     *
+     * <p>SO THE PLAIN CLASS IS WHAT IS HERE, NOT WHAT IS NECESSARY, and nothing has measured the difference.
+     * What IS still true is the layout half: it is declared INSIDE Locale so it compiles to
+     * {@code java/util/Locale$Category}, the name stock callers reference; without it the overlay drops the
+     * nested type as well as the method. Whether stock's nested enum would run here is a question for its
+     * own increment -- the whole reason {@code Locale} is overlaid is locale DATA, which is a separate
+     * argument from this nested type's shape.
      */
     public static final class Category
     {
