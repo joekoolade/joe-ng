@@ -460,6 +460,18 @@ public final class Class<T> implements java.lang.reflect.Type
         }
         catch (Exception e)
         {
+            // NOT A SILENT NULL. Returning null here is stock's answer for a class that is not an enum --
+            // but isEnum() has already said this one IS, so reaching this catch means the reflective route
+            // to values() failed, and every caller downstream reads that as "this enum has no constants":
+            // Enum.valueOf then throws "No enum constant X.Y" for a constant that plainly exists.
+            //
+            // That silence hid a real VM defect for the life of the lazy-compile arc -- rememberLazyBody
+            // registered a celled static with access_flags 0, which reads as package-private, so invoking
+            // a public values() from java.lang was refused with IllegalAccessException. The exception was
+            // caught here and discarded, so the failure surfaced as a wrong ANSWER in Enum.valueOf rather
+            // than as the access error it was. It says what it caught now.
+            System.err.println("ENUM CONSTANTS UNREADABLE: " + getName() + " is an enum, but values() threw "
+                               + e.getClass().getName() + " -- Enum.valueOf on it will report no such constant");
             return null;
         }
     }

@@ -16074,7 +16074,50 @@ public final class Loader
             }
             i += 1;
         }
-        register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc[0], 0);
+        register(lzTab[idx].blob, gThisNameOff, nameOff, lzTab[idx].descOff, buf, mLine[0], mSrc[0],
+                 accessInContext(lzTab[idx].blob, nameOff, lzTab[idx].descOff));
+    }
+
+    /**
+     * The real {@code access_flags} of the method {@code blob} declares as {@code nameOff}+{@code descOff},
+     * read from the methods table ALREADY IN THE COMPILE CONTEXT, or 0 if it declares no such method.
+     *
+     * <p>THIS EXISTS BECAUSE {@link #rememberLazyBody} USED TO PASS A LITERAL 0, and a registry entry's access
+     * word is what {@code Method.getModifiers} answers and what {@code AccessibleObject.checkAccess} tests. A
+     * 0 there reads as PACKAGE-PRIVATE -- no {@code ACC_PUBLIC} bit -- so a reflective call on a method that
+     * is plainly {@code public} was refused with {@code IllegalAccessException} whenever the caller sat in a
+     * different package. It reached only methods registered HERE, i.e. a celled static whose body compiled on
+     * first call, which is why it survived: a method already registered by {@code registerAll} has the real
+     * flags and {@code rememberLazyBody} only updates its buffer.
+     *
+     * <p>NO RE-PARSE, deliberately. {@code methodInfoPos} answers the same question by calling
+     * {@code parseForMethods}, which moves the {@code g*} cursor -- and this runs INSIDE a lazy compile, whose
+     * context that would clobber. The walk is the one {@link #registerAll} already does per method, over the
+     * table this compile is standing on; it is guarded on the blob matching so a caller in some other context
+     * gets 0 (today's answer) rather than another class's flags.
+     */
+    private static int accessInContext(long blob, int nameOff, int descOff)
+    {
+        if (blob != gbase || gMethodsStart == 0L)
+        {
+            return 0;
+        }
+        long p = gMethodsStart;
+        int mcount = u2(p);
+        p += 2;
+        int m = 0;
+        while (m < mcount)
+        {
+            int attrs = u2(p + 6);
+            if (utf8EqAt(gbase, gcp[u2(p + 2)], gbase, nameOff)
+                    && utf8EqAt(gbase, gcp[u2(p + 4)], gbase, descOff))
+            {
+                return u2(p);
+            }
+            p = skipAttributes(p + 8, attrs);
+            m += 1;
+        }
+        return 0;
     }
 
     /** Re-establish the g* compile context for an already-structure-registered class (loadBodies' preamble). */
