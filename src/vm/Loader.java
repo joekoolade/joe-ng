@@ -2031,9 +2031,19 @@ public final class Loader
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Character"))
                 // NOTE: java/lang/Boolean is NOT blocked -- the metal OVERLAY replaces the stock class, and its
                 // <clinit> only sets TRUE/FALSE (no native primitive TYPE), so it is safe (and needed) to run.
-                // NOTE: Character/Byte/Short ARE OVERLAID TOO, and the overlays have NO <clinit> of their own
-                // (TYPE is seeded by seedPrimType, MIN/MAX are inlined constants), so these three entries are
-                // INERT today -- they describe the stock classes the overlays replace.
+                // NOTE: Byte/Short ARE OVERLAID, and those overlays have NO <clinit> of their own (TYPE is
+                // seeded by seedPrimType, MIN/MAX are inlined constants), so those two entries are INERT
+                // today -- they describe the stock classes the overlays replace.
+                //
+                // java/lang/Character IS THE STOCK CLASS NOW (its overlay is deleted), so this entry is LIVE
+                // rather than inert -- and it still costs nothing, MEASURED rather than assumed: stock's
+                // OUTER Character declares exactly ONE non-constant static, TYPE = getPrimitiveClass("char"),
+                // and seedPrimType fills that cell anyway. Everything else on the outer class is a
+                // compile-time constant (JLS 4.12.4), and the 347 UnicodeBlock constants belong to the NESTED
+                // Character$UnicodeBlock, which is a different name and is DENIED outright. The boot arm that
+                // says so is the class-literal demo's `char isPrimitive=true name=char` -- javac compiles
+                // char.class to a getstatic of this very field, so a null TYPE would fail there and nowhere
+                // else.
                 //
                 // AND THE QUESTION THIS NOTE USED TO POSE IS ANSWERED BY NOT NEEDING TO BE ASKED. It said the
                 // JLS 5.1.7 valueOf cache is filled LAZILY "precisely because an initializer added HERE would
@@ -5924,6 +5934,18 @@ public final class Loader
                 // for code that needs a Calendar/Date/TemporalAccessor argument nothing here passes. That is
                 // exactly what this list is for: a cold subtree a big class names, trapped loudly if reached.
                 // java/time/Duration is deliberately NOT here -- it is used, and no %t path names it.
+                // THE NAME-ONLY HALF OF stock java/lang/Character, which is the java/time situation one
+                // class along. The loader pulls every CONSTANT_Class a blob NAMES, and under rule 2 a pulled
+                // class's <clinit> RUNS -- so naming these costs running them:
+                //   Character$UnicodeBlock  -- a <clinit> that constructs 347 blocks and maps their names
+                //   Character$UnicodeScript -- the same shape for scripts
+                //   CharacterName           -- reads a "uniName.dat" RESOURCE this VM's classDir has no copy of
+                // All three are reached ONLY from UnicodeBlock.of / UnicodeScript.of / Character.getName, and
+                // nothing on the classification, case or digit paths touches them. Denied here so they are
+                // trap-wired-but-unreached, which is what this list is for.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/CharacterName"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeBlock"))
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/Character$UnicodeScript"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/chrono/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/temporal/"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/time/zone/"))
