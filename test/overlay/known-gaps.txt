@@ -24,11 +24,6 @@ java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
 java/time/Duration#between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;
 java/time/Duration#of(JLjava/time/temporal/TemporalUnit;)Ljava/time/Duration;
 java/time/Duration#parse(Ljava/lang/CharSequence;)Ljava/time/Duration;
-java/util/Collections#emptyNavigableMap()Ljava/util/NavigableMap;
-java/util/Collections#emptyNavigableSet()Ljava/util/NavigableSet;
-java/util/Collections#emptySortedMap()Ljava/util/SortedMap;
-java/util/Collections#emptySortedSet()Ljava/util/SortedSet;
-java/util/Collections#unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;
 java/util/concurrent/Semaphore#availablePermits()I
 java/util/concurrent/Semaphore#tryAcquire()Z
 java/util/jar/JarFile#<init>(Ljava/io/File;)V
