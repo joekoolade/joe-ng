@@ -101,9 +101,6 @@ supertype#java/text/BreakIterator#java/lang/Cloneable
 supertype#java/time/Duration#java/io/Serializable
 supertype#java/time/Duration#java/lang/Comparable
 supertype#java/time/Duration#java/time/temporal/TemporalAmount
-supertype#java/util/Formatter#java/io/Closeable
-supertype#java/util/Formatter#java/io/Flushable
-supertype#java/util/Formatter#java/lang/AutoCloseable
 supertype#java/util/Locale#java/io/Serializable
 supertype#java/util/Locale#java/lang/Cloneable
 supertype#java/util/Locale$Category#java/io/Serializable

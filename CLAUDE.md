@@ -115,6 +115,124 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/util/Formatter` OVERLAY IS DELETED AND STOCK RUNS -- 539 LINES OF APPROXIMATION REPLACED BY THE
+  REAL IMPLEMENTATION, AND THE STATED DIVERGENCE IS GONE RATHER THAN DOCUMENTED (2026-09-28, QEMU-GATED --
+  NOT YET PI-VALIDATED).** The overlay knew nine conversions and emitted anything else **VERBATIM WHILE
+  CONSUMING NO ARGUMENT**, so `String.format("value=%.2f ok=%s", 3.14159, "yes")` answered
+  **`value=%.2f ok=3.14159`** -- silently shifting every later argument by one, in the commonest conversion
+  after `%s`/`%d`.
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`FormatProbe`, 103 arms against the HOST ORACLE** | 9 conversions, **5 arms had to differ** | **103 of 103 IDENTICAL, ZERO stated divergence** |
+  | `%f %e %E %g %a` (24 arms) | **emitted verbatim, argument not consumed** | **every one EXACT** |
+  | `%h`, `%1$s` argument indexes | absent | exact |
+  | the four ILLEGAL format strings | formatted (a documented divergence) | **THROW, and the SAME four exception classes** |
+  | `Formatter` is `Closeable`/`Flushable`/`AutoCloseable` | **no -- all three DROPPED** | yes |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, THIRTY-ONE markers zero |
+  | `gc: collections` churn / finale | 46 / 55 | **46 / 55 -- both restored (see the A/B)** |
+  | guest closure, suite batch 2 | 159 blob | **317 blob (+158)** |
+  | image (same manifest, same chain) | 33,786,128 | **33,792,440 (+6,312 B, +0.019%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE RULE IS NATIVES, AND THE OVERLAY'S OWN REASON WAS A CLOSURE ARGUMENT.** Its javadoc said it existed
+    for "none of what the real one drags in (Locale, Calendar, java.time, java.util.regex, ResourceBundle)".
+    Measured against the JDK 26 source, stock `Formatter` has **ZERO natives, no `<clinit>` and no regex** in
+    5,036 lines -- it is pure logic, so it runs stock however big it is. Size is not a reason to shadow a
+    class; needing a native, or a subsystem this VM deliberately lacks, is.
+  - **READING THE SOURCE PINNED THE ENTIRE DENIED SURFACE TO ONE CLASS AND ONE EQUALITY TEST, before any
+    boot.** Stock's symbol accessors are `locale == null ? '0' : getDecimalFormatSymbols(locale)
+    .getZeroDigit()` and its grouping branch is `if (l == null || l.equals(Locale.US)) grpSize = 3; else
+    <the java/text + sun/util provider machinery>`. So the whole `java/text`/`sun/util` closure is a COLD
+    path by stock's own construction, and `DecimalFormatSymbols` is the only denied class the numeric
+    conversions touch. **And `MethodHandle` is imported and NEVER USED** -- a stale import, so that denied
+    class was never a blocker at all.
+  - **SO `java/text/DecimalFormatSymbols` IS OVERLAID AND THAT IS THE DISTINCTION, not an exception to it.**
+    Its whole job is READING LOCALE DATA, through `LocaleProviderAdapter` -> `ResourceBundle` -> the
+    module/service machinery this VM denies -- the same stated exception `MessageDigest` and `ServiceLoader`
+    already take. The answer is the truthful one: this VM has one locale and its symbols are ASCII
+    (`'0' '.' ',' '-'`), which are exactly the characters stock falls back to on its OWN null-locale branch.
+    Surface is five members, narrow-allowed out of the `java/text/` deny in BOTH lists -- **an overlay cannot
+    rescue a DENIED class, because a denied class is trap-wired at PATCH TIME and no link stub ever runs.**
+  - **`java/util/Locale` HAD DROPPED `equals`/`hashCode`, AND THAT IS A SILENT WRONG ANSWER ON ITS OWN.** An
+    overlay wins the name, so a member it omits CEASES TO EXIST -- and for `equals` the fallback is not a trap
+    but `Object`'s IDENTITY comparison, which answers plausibly and wrongly.
+    **`Locale.getDefault().equals(Locale.ENGLISH)` was FALSE** (both are `new Locale("en")`, distinct
+    objects), and a Locale used as a `HashMap` key could never be found again. Eleventh instance of the
+    overlay-drops-stock-members trap.
+  - **IT WAS FOUND BY STOCK FORMATTER WALKING INTO IT, AND THAT BOOT IS THE NEGATIVE CONTROL.** With only
+    `Locale.equals` absent, `%,d` took the ELSE branch of the grouping test and **halted in a DENYLIST TRAP at
+    `NumberFormat.getNumberInstance`**, with the VM's own trace naming
+    `Formatter$FormatSpecifier.localizedMagnitude(Formatter.java:4705)` -- while every one of the 30 arms
+    before it passed. Specific, and disjoint from everything else here.
+  - **THE COST WAS REAL AND IS MEASURED RATHER THAN WAVED AT: +357 CLASSES IN EVERY DEMAND-LOAD BATCH.** The
+    loader's dependency pass pulls every `CONSTANT_Class` a blob NAMES, not just what RTA reaches, and
+    `Formatter$FormatSpecifier` names ten `java/time` classes for its `%t` conversions. Suite batch 2 went
+    **159 -> 516 blobs** and its mark phase 320ms -> 3,279ms.
+  - **SO THE COLD DATE SUBTREE IS DENIED, WHICH IS WHAT THIS LIST IS FOR -- and the A/B is single-variable.**
+    Six prefixes (`java/time/chrono/`, `temporal/`, `zone/`, `Zone`, `Instant`, `DateTimeException`).
+    **`java/time/Duration` is deliberately NOT denied**: it is used, and no `%t` path names it.
+
+    | suite arm | batch-2 blobs | gc at churn | gc at finale |
+    |---|---|---|---|
+    | overlay (the record) | 159 | 46 | 55 |
+    | stock, `java/time` LOADABLE | **516** | **47** | **57** |
+    | stock, date subtree DENIED | **317** | **46** | **55** |
+
+    **Both GC figures return to the recorded values**, so the denial is not a size trim -- it is what keeps
+    the gate unmoved. `DENYLIST TRAP` reads **0** across the whole suite, so nothing reaches what was denied.
+  - **AND ReachScan SAYS THE DENIAL COSTS NO REACHABILITY: 110 classes and the SAME single pre-existing trap
+    site (`java/lang/reflect/Type`) with these denied as without.** Method-level RTA never reached them; only
+    the name-based pull did. That is the measurement that separates "pruning a cold subtree" from "removing
+    something the program uses".
+  - **`java/math` IS DELIBERATELY LEFT LOADABLE, stated because it is the obvious next cut and would be
+    wrong.** `FormatSpecifier` names `BigDecimal`/`BigInteger`/`MathContext`/`RoundingMode`, and those ARE
+    reachable -- `%d` of a `BigInteger` and `%f` of a `BigDecimal` are specified behaviour, and java.math is a
+    working Pi-validated subsystem here. It is part of the residual +158, and paying it is correct.
+  - **THE HOST ORACLE CORRECTED ME ON THE ONE RULE I THOUGHT I KNEW.** I wrote into the probe that `%.2f` of
+    2.675 gives `2.67` -- HALF_UP on the double's exact value, which is 2.674999999999999822... Stock answers
+    **2.68**, because `jdk.internal.math.FormattedFPDecimal` rounds the SHORTEST decimal that round-trips
+    ("2.675") rather than the exact one. Corrected at the site, and recorded because it is precisely the rule
+    a from-scratch implementation gets wrong while looking careful -- **and a `BigDecimal`-exact one gets
+    wrong while looking rigorous**, which was the design I had been about to reach for.
+  - **THE PROBE'S EXPECTED-DIVERGENCE LIST IS DELETED RATHER THAN UPDATED, and that is the point.** It used to
+    name five arms that HAD to differ; with stock running, every arm must match byte for byte, throws
+    included -- the four illegal format strings now raise the same four `IllegalFormatException` subclasses
+    stock raises. An expected-divergence list is a place for a real regression to hide, and this file no
+    longer has one.
+  - **THE BASELINE CARRIED THREE STALE LINES AND REMOVING THEM NAMED A REAL LOSS.**
+    `test/overlay/known-gaps.txt` recorded that the overlay dropped `Closeable`, `Flushable` and
+    `AutoCloseable` -- so `try (Formatter f = ...)` could not bind and `f instanceof Closeable` was false.
+    Stock restores all three; the entries are deleted, because a baseline recording a deliberate decision
+    about a class that no longer has an overlay is a comment outliving its premise.
+  - **THE SUPERTYPE DIFF CAUGHT MY NEW OVERLAY ON ITS FIRST RUN**, which is the check earning its keep again:
+    `DecimalFormatSymbols is missing java/io/Serializable` and `java/lang/Cloneable`. Both are free markers
+    stock declares, so they are DECLARED rather than baselined. `clone()` itself is not overridden -- nothing
+    reaches it, and `Object.clone`'s shallow copy would be correct for one final field.
+  - **A NULL I WAS ABOUT TO SHIP, caught by reading the class I was editing.** `Locale`'s constructors STORE
+    null for country/variant (`new Locale("en", null, null)` is legal here) and only the GETTERS normalise to
+    `""`. My first `equals` compared the fields and would have NPE'd on a Locale this class itself can build;
+    both it and `hashCode` go through the getters now, which also makes equality agree with what the
+    accessors REPORT, by construction.
+  - **THREE HARNESS ERRORS OF MINE, all the same family, and the third is the one worth keeping.**
+    (1) I ran `JOENG_SYMMAP=1 make image` while a QEMU run was in flight against `$PWD/kernel8.img` and
+    **overwrote the image underneath it** -- the recorded "check which image the log ran" trap from a new
+    direction: I invalidated my own experiment. Every later arm runs from a SAVED copy that no build can
+    touch. (2) My `until ! pgrep -f qemu-system-aarch64` waiters matched THEIR OWN command line, so each
+    poller saw itself and waited for ever; `pgrep -x` matches the process name only. (3) **`grep` treats a
+    UART log as BINARY and silently prints NOTHING** -- this file already records that, and I walked into it
+    anyway and concluded from the empty output that the emulator had restarted and the image was wrong. Both
+    conclusions were fabrications of a lying instrument. `grep -a`, every time.
+  - **THE PI GATE IS NAMED IN ADVANCE AND IT IS THE CLOSURE, NOT THE FORMATTING.** The formatting is integer
+    and string arithmetic in the guest world and QEMU has already diffed it byte-for-byte against stock, so
+    cold DRAM cannot change `%.2f`. What hardware is being asked is the **+158 classes in every batch and a
+    6,312-byte layout shift**: the arms to read are the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`,
+    `unclaimed pc`, and `DENYLIST TRAP`, which must stay 0 or something reaches the denied date subtree),
+    plus `gc: collections=46` at the churn demo and the batch-line closure.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS `String.format`** -- measured, a grep of
+    `demo/` finds none. So the suite proves NO REGRESSION across a 3x closure change, and `FormatProbe`'s 103
+    arms against the host oracle prove the feature. Different claims.
+
 - **`String.format` HONOURS FLAGS, WIDTH AND PRECISION -- AND THE ORACLE FOUND A SECOND DEFECT IT WAS NOT
   POINTED AT (2026-09-27, PI-VALIDATED).** `java/util/Formatter` PARSED the whole format
   specifier and then dropped everything but the conversion, so **`String.format("%5d", 42)` answered `"42"`** --
