@@ -115,6 +115,142 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAZILY-COMPILED STATIC WAS REGISTERED WITH `access_flags = 0`, SO A `public` METHOD READ AS
+  PACKAGE-PRIVATE AND REFLECTION REFUSED IT (2026-09-28, PI-VALIDATED).**
+  `rememberLazyBody` passed a literal `0` for the access word whenever the method had no registry entry yet.
+  That word is what `Method.getModifiers()` ANSWERS and what `AccessibleObject.checkAccess` TESTS, and a 0
+  carries no `ACC_PUBLIC` bit -- so `Method.invoke` on a plainly public method threw
+  `IllegalAccessException` for any caller in another package.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`LazyModsProbe`, 16 arms against the HOST ORACLE** | **4 WRONG** | **0 -- byte-identical to a stock JVM** |
+  | ... `pub` modifiers / isPublic / isStatic | **0x0 / false / false** | **0x9 / true / true** |
+  | ... `pub` reflective invoke, no `setAccessible` | **THREW `IllegalAccessException`** | **42** |
+  | the `pkg` NEGATIVE (genuinely package-private) | refused | **refused -- unmoved** |
+  | `inst` (instance method) | 0x1 | **0x1 -- unmoved** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, thirty markers zero |
+  | closure, batch 2 / batch 63 | -- | **`+324blob` / `+387blob` -- EXACT** |
+  | `gc: collections` churn / finale | 46 / 56 | **46 / 56 -- the gate, unmoved** |
+  | `ENUM CONSTANTS UNREADABLE` (the new report) | -- | **0 on a passing boot** |
+  | image (same-build-path control) | 33,832,296 | **33,833,692 (+1,396 B for the fix)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **PRE-EXISTING SINCE THE STAGE-5 LAZY-COMPILE ARC, and `git log -S` says so rather than my reading:
+    the `register(..., 0)` line arrives in `91ea66e` ("eagerKept down to one class").** So this is not a
+    regression of anything recent -- it is a silent wrong answer that has been in every boot since bodies
+    started compiling on first call.
+  - **THE NEGATIVE CONTROL MEASURED THE REACH AND IT IS NARROWER THAN THE FIX SITE SUGGESTS: 4 of 16 arms
+    move, and all four are the same method.** Both other targets look like they should move and do not, for
+    reasons worth keeping:
+    - **`inst` reads `0x1` in BOTH states** -- an instance method gets a DEFERRAL STUB, so `registerAll`
+      already gave it a registry entry with the real flags and `rememberLazyBody` only updates its buffer.
+    - **`pkg` reads `0x8` in BOTH** -- it is never called directly, so `methodResolve` misses the registry
+      and takes the `compileMethodOnDemand` fork, which records the flags correctly.
+    So the whole defect is ONE shape: **a STATIC method, called directly first, reflected on second** -- and
+    the same method answers `0x9` or `0x0` depending on the ORDER, which is exactly what makes a defect look
+    like a flake.
+  - **AND THE `pkg` ARM IS WHY "FIXED" DOES NOT MEAN "ALLOWS EVERYTHING".** It stays REFUSED after the fix
+    and succeeds only after `setAccessible(true)`; without that arm, a repaired access word and a disabled
+    access check are indistinguishable.
+  - **IT WAS FOUND THROUGH `Class.getEnumConstants`, WHOSE SILENT `catch` IS WHAT HID IT -- and that catch is
+    the half of this increment worth reading twice.** Its body was `catch (Exception e) { return null; }`.
+    Returning null is stock's answer for a class that is NOT an enum -- but `isEnum()` has already said this
+    one IS, so reaching that catch means the reflective route to `values()` failed, and every caller
+    downstream reads null as "this enum has no constants". `Enum.valueOf` then throws
+    **`No enum constant java.util.concurrent.TimeUnit.SECONDS`** for a constant that plainly exists: a
+    missing-capability error re-labelled as a wrong ANSWER, in a class whose constants the probe had just
+    printed correctly two lines above. It says what it caught now, and **that report reads 0 across the whole
+    suite**, checked against a PASSING boot before being trusted.
+  - **THREE WRONG MODELS DIED TO INSTRUMENTS, NOT TO ARGUMENT, and each was cheap because the question was
+    always "print what you MEASURED".** (1) "the map lookup misses" -- refuted: `fromName.equals(literal)`,
+    both hashes `-1606887841`, `containsKey` true, and `enumConstantDirectory()` invoked REFLECTIVELY returns
+    `size=7` with `get("SECONDS")` non-null. (2) "the class literal or the mirror is wrong" -- refuted:
+    `TimeUnit.class == SECONDS.getClass()`, and the thrown message names the right canonical class. (3) "it
+    is a cold-start ordering problem" -- refuted by making the failing call the FIRST thing the program does:
+    `COLD TimeUnit.valueOf = SECONDS`, it WORKS cold. **That third refutation is what named the fork**, since
+    cold takes `compileMethodOnDemand` and warm takes the registry.
+  - **THE DECISIVE LINE WAS ONE PRINT INSIDE THE SWALLOWING CATCH**, and it named the cause in one boot after
+    three rounds of reading had not: `getEnumConstants CAUGHT java.lang.IllegalAccessException msg=Class
+    java.lang.Class can not access a package-private member of class java.util.concurrent.TimeUnit`. A second
+    print gave `values mods=0x0 name=values decl=java.util.concurrent.TimeUnit` -- the RIGHT method with the
+    WRONG word, which is what separated "resolved the wrong method" from "resolved the right one and lost its
+    flags".
+  - **NO RE-PARSE, DELIBERATELY, and that is the one design decision here.** `methodInfoPos` answers the same
+    question by calling `parseForMethods`, which moves the `g*` cursor -- and `rememberLazyBody` runs INSIDE a
+    lazy compile, whose context that would clobber (the hazard this file records for `buildLambdaTib`).
+    `accessInContext` walks the methods table THIS COMPILE IS ALREADY STANDING ON -- the same walk
+    `registerAll` does per method -- and is guarded on the blob matching `gbase`, so a caller in some other
+    context gets 0 (today's answer) rather than another class's flags.
+  - **THE STALE-CLASS TRAP CAUGHT ME AGAIN, AND `make test` IS WHAT CAUGHT IT.** Moving a probe's SOURCE out
+    of the tree leaves its compiled class in `out/`, and `overlaycheck` scans `out/` -- so it reported a
+    genuine gap (`TimeUnit.compareTo`) against a probe the tree no longer contains, and the image I had just
+    built was shipping that stale class in its classDir. Purged and re-gated. **A source file removed is not
+    a class file removed**, for the sixth recorded time.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, kept straight: `LazyModsProbe` IS NOT IN THE SUITE.** So the
+    suite proves NO REGRESSION -- closure EXACT at both batches, the GC gate unmoved, thirty markers zero --
+    and the 16 arms against a byte-identical host oracle are what prove the fix. Different claims.
+  - **THE TIMEUNIT WORK THAT FOUND THIS IS DELIBERATELY NOT BUNDLED, and the reason is on the record.**
+    Deleting the `java/util/concurrent/TimeUnit` overlay is measured and ready -- its `convert` multiplies
+    then divides with NO saturation where stock clamps, so `NANOSECONDS.convert(Long.MAX_VALUE, SECONDS)`
+    answered **-1000000000** and `convert(-9223372037, SECONDS)` answered **+9223372036709551616**, a
+    ~292-year POSITIVE timeout where the caller asked for a large negative one (11 of 47 host-oracle lines
+    differ). It needs stock's `Enum.valueOf`, i.e. this fix, so the two would have shipped together -- and
+    this file records that two unvalidated changes on one card is what forced a bisect. They are separable
+    here (different subsystems, different probes, different failure signatures), so they are separated.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- ALL FIVE ABSENCES
+    HOLD.** I said the arithmetic cannot differ on silicon (the access word is read from the classfile the
+    compile is already parsing) and that what hardware is being asked is a **1,396-byte layout shift on cold
+    DRAM** plus a registry entry now carrying a non-zero word where every boot of this VM has written 0.
+    On the Pi: none of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc` or **`ENUM CONSTANTS
+    UNREADABLE`** appears anywhere, across 40 programs to `self-build retired`.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, then `56` at the lisp finale -- **and the QEMU arm of this same
+    binary read 46 then 56 as well**, so the sensitivity detector did not move either. Batch 2 `+324blob`
+    and batch 63 `+387blob`, `lisp evals=600 result=610 stable=1`, `bakeMemosDropped=14`,
+    `sync: static seen=18 nomonitor=0`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `char isPrimitive=true name=char`, and `DENYLIST TRAP` 0 -- every one identical to the QEMU figures.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 60/61/59/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, the seventeen-arm boot
+    battery all PASS (incl. `IntegerCache.cache[170].intValue()=*` and `Integer.valueOf(42)==cache[170]`),
+    and WiFi running the whole chain -> `wifi: JOINED` -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped`
+    -> `keys installed` -> DHCP 192.168.1.247 -> `ping reply` -> DNS 172.66.147.243 -> TCP ->
+    **`HTTP/1.1 200 OK`, 829 bytes**.
+  - **THE ONLY `UNRESOLVED STATIC`/`TRAP-WIRED` LINES ARE THE SEVEN KNOWN ONES (eight occurrences --
+    `CodingErrorAction.REPLACE` reports twice), each labelled DENYLISTED**, and the marker sweep is otherwise
+    clean: no `heap OOM`, `STW TIMEOUT`, `DISPATCH ON UNREGISTERED`, `VIRTUALRESOLVE FAILED`,
+    `CAP EXCEEDED`, `BADPATCH`, `LINK FAILED`, `PENDING-INIT`, parity `DIFF`, `JIT unsupported`,
+    `LOCALS UNDERSIZED`, `Exception in thread`, `BAD ARRAY LENGTH`, `SCRATCH MAP`, `REACH LIST FULL`,
+    `PEND LIST FULL`, `MAXLAZY`, `CLASS NAME UNRESOLVED`, `CLINIT REJECTED`, `BROKEN`,
+    `SYSTEM PROPERTIES NOT SEEDED`, `JIT UNWIND TABLE FULL`, `LOADER LOCK stuck`, `aliases slot 0`,
+    `UNREGISTERED SUPER` or `NO toString`. **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off the
+    pasted console capture rather than grepped on disk**, which is weaker than an anchored grep -- a marker
+    in a region I skimmed would not have been caught, and the batch lines are dense.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: `LazyModsProbe` IS NOT IN THE SUITE.** So
+    hardware proves NO REGRESSION across the layout shift and the non-zero registry word on cold DRAM, and
+    the 16 arms against a byte-identical host oracle are QEMU's. Different claims -- the same split the
+    `CharProbe` and `FormatProbe` cards make.
+  - **ONE LINE I DID NOT RECOGNISE, CHECKED RATHER THAN WAVED THROUGH, AND IT IS THE DEMO'S OWN OUTPUT.**
+    `P5 EATS` prints in the middle of the LAMBDA demo, where the philosophers are P0..P4 and all five have
+    already printed `done`. It is `LambdaDemo`'s capturing arm: `int who = 5; Runnable b = () ->
+    Magic.report(who, 2);`, whose source comment says `// captures who -> "P5 EATS"` -- it reuses the
+    philosophers' report helper, so a sixth ordinal is the POINT of the arm rather than a stray task. Worth
+    one grep, and worth recording: **a demo arm that borrows another demo's print helper produces output
+    that reads like the other demo's**, which is the shape of a false alarm.
+  - **THE FIFTEENTH DISTINCT CROSS-BOOT RNG SAMPLE -- AND THIS FILE'S ORDINALS ARE OFF BY ONE, WHICH IS
+    STATED RATHER THAN QUIETLY RENUMBERED.** `aad85b41 cb655c05 39ecf0f7`, distinct from every previous
+    boot, `count 16 -> 13`, popcount **50 of 96** against an ideal of 48. The series reads 51, 47, 63, 50,
+    41, 46, 45, 54, --, 49, 56, 47, 48, 51 -- **fourteen samples carrying thirteen ordinals, because TWO
+    cards both claim "A TWELFTH"** (`d66ee68e` at 47 on the `String.format` card and `c331a38b` at 48 on the
+    `Character` card). Neither figure is wrong; the LABELS collided, which is the same shape as the stated
+    count that did not match the measurement this file already records twice. The historical cards are left
+    verbatim -- renumbering a record of what a boot printed is worse than an off-by-one -- and this sample
+    is named by its position in the series instead. **Still not a randomness test**: what stays ruled out is
+    a constant, a counter, and a count that does not follow reads.
+
 - **THE `java/lang/Character` OVERLAY IS DELETED AND STOCK RUNS -- `isLetter` WAS AN A-Z/a-z RANGE TEST, SO
   EVERY LETTER ABOVE U+007F ANSWERED FALSE (2026-09-28, PI-VALIDATED).** 624 hand-written lines shadowing a
   12,359-line stock class, and the defect is one line of it:
