@@ -115,6 +115,130 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/util/DualPivotQuicksort` OVERLAY IS DELETED AND STOCK RUNS -- `Arrays.sort` COULD NOT SORT A
+  `byte[]`, `char[]` OR `short[]` AT ALL, AND THE FIX IS A DELETION RATHER THAN THE THREE MISSING OVERLOADS
+  (2026-09-28, QEMU-GATED -- NOT YET PI-VALIDATED).** 107 hand-written lines shadowing a 4,429-line stock
+  class, declaring four overloads where stock's callers reference seven, so three of the seven primitive
+  types trapped:
+
+  ```
+  LINK FAILED: java/util/DualPivotQuicksort.sort([BII)V -- class OK but no body for that name+descriptor
+  DENYLIST TRAP: denied callee: java/util/DualPivotQuicksort.sort
+      at java/util/Arrays.sort(Arrays.java:251)
+  ```
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`SortPrimProbe`, 26 arms against the HOST ORACLE** | **8 ran, 18 NEVER RAN -- a HARD STOP at the first `byte[]`** | **26 ran, 1 differs (a PRE-EXISTING defect, below)** |
+  | `Arrays.sort(byte[])` / `(char[])` / `(short[])` | **`LINK FAILED` + `DENYLIST TRAP`** | **exact** |
+  | `byte` SIGNED `{-1,1,-128,127,0}` | -- | **`[-128,-1,0,1,127]`** |
+  | `short` SIGNED | -- | **`[-32768,-1,0,1,32767]`** |
+  | `char` UNSIGNED `{0xFFFF,'a',0x8000,1,'z'}` | -- | **`[1,97,122,32768,65535]`** |
+  | `double`/`float` IEEE-754 TOTAL ORDER | correct | **`[-Infinity,-2.5,-0.0,0.0,3.5,Infinity,NaN]`** |
+  | ... `-0.0` below `+0.0`, by RAW BITS | correct | **true** |
+  | the seven RANGE forms | 4 of 7 | **7 of 7, outside elements unmoved** |
+  | **complexity** | **O(n^2) for all seven** | **O(n log n), and O(n + range) counting sort for byte/char/short** |
+  | `ForkJoinTask` / `CountedCompleter` / `ForkJoinTask$Aux` `<clinit>` | never loaded | **all three RUN, cleanly** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | `gc: collections` at the lisp finale | 56 | **57 -- inside the recorded QEMU A/A pair; not citable** |
+  | `churnMB` / `lisp evals result stable` | 625 32 32 / 600 610 1 | **identical** |
+  | closure, batch 2 | +334blob | **+334blob -- IDENTICAL** |
+  | last batch | 63: +397blob | **64: +400blob (one more batch, +3 blobs)** |
+  | `rounds` / `pend` / `reach` | 4 / 180 / 17 | **4 / 180 / 17 -- IDENTICAL** |
+  | `n:imap` / `synth` / `clinits` | 132 / 36 / 96 | **132 / 60 / 96 (synth +24)** |
+  | image (same-build-path control) | 33,921,068 | **33,931,388 (+10,320 B)** -- and ZERO new classes |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **I EXTENDED THE OVERLAY FIRST, AND THAT WAS THE WRONG FIX -- CORRECTED ON REVIEW, NOT BY A FAILURE.**
+    The previous attempt added the three missing overloads and kept the overlay, on the reasoning that its
+    ForkJoin dependency is a subsystem this VM lacks. **The standing rule is NATIVES, and stock
+    `DualPivotQuicksort` has ZERO of them in 4,429 lines -- I MEASURED that and then argued past it.** A
+    subsystem-absence argument is a sanctioned exception for a class that cannot WORK here; it is not a
+    licence to keep an overlay whose stock counterpart runs. The measurement that mattered was one I had
+    already made and not followed.
+  - **AND THE SUBSYSTEM WAS NEVER ABSENT AT EXECUTION TIME -- THE PARALLELISM ARGUMENT IS ALWAYS ZERO.**
+    `Arrays.sort(int[])` compiles to `sort(a, 0, 0, a.length)` and stock opens with
+    `if (parallelism > 1)`, jumping past the entire ForkJoin block. So the sequential path is the only one
+    `Arrays.sort` can ever take, and the ForkJoin classes are REFERENCED but never RUN. **Every ramification
+    of the deletion is about LOADING, not executing** -- which is a far smaller question than the one the
+    overlay's comment posed.
+  - **THE LOADING RAMIFICATION IS REAL AND IT WORKS, MEASURED ON A BOOT.** `Sorter` and `Merger` extend
+    `CountedCompleter` and `RunMerger` extends `RecursiveTask`, so pulling stock drags the ForkJoin
+    supertype chain in, and under rule 2 every pulled class's initializer RUNS. The boot prints
+    `ForkJoinTask$Aux`, `CountedCompleter` and `ForkJoinTask` initializing (under the loader lock, which is
+    the standing hazard this file already records and not an event) and then sorts correctly. **The three
+    nested classes have NO `<clinit>` of their own** -- checked, not assumed -- so what runs is the ForkJoin
+    supertypes' own initialization: `Unsafe.getUnsafe()`, several `objectFieldOffset(Class,String)` (the
+    CLASS-keyed form this VM added for the VarHandle path) and two class literals.
+  - **AND THE IMAGE GAINS NO CLASS AT ALL, which is the measurement that makes the cost small.** Stock's own
+    class file is 39,364 bytes against the overlay's, which accounts for the whole delta; scanning both
+    images for `java/util*` names finds **ZERO new ones**, because `ForkJoinPool`, `ForkJoinTask` and
+    `CountedCompleter` were ALREADY in the classDir. The overlay was never keeping them out.
+  - **`Arrays.parallelSort` IS THE ONE THING THAT STILL CANNOT WORK, AND IT IS NAMED RATHER THAN FAKED.** It
+    opens `ForkJoinPool.getCommonPoolParallelism()` -- the landmine this file records backing out of on the
+    java.math arc -- and that is what genuinely needs a scheduler-backed common pool. **Nothing in the tree
+    calls it** (measured), so it is an unreached gap and not a regression: it was equally unavailable while
+    the overlay stood, and the overlay did not make it work either.
+  - **`overlaycheck-deep` NAMED THE THREE MISSING OVERLOADS AND THE SHALLOW CHECK STRUCTURALLY CANNOT.**
+    Each is reported "referenced by `java/util/Arrays`" -- stock java.base is the only caller, which is
+    exactly the population the shallow scan does not walk. That is what started this increment; what it
+    could not say is whether the answer was three new methods or a deletion.
+  - **THE ORACLE'S CLAIM IS WEAKER THAN IT WAS AND THE PROBE SAYS SO.** While the overlay stood, the host
+    ran stock and the metal ran an insertion sort, so agreeing on every arm was a claim about two DIFFERENT
+    ALGORITHMS producing the same ORDER. With the overlay deleted it is the SAME CODE on two machines, so
+    the diff now proves that joe-ng's JIT, closure and arithmetic run stock's quicksort and counting sort
+    correctly. Both are worth having; they are not the same claim, and the weaker one is in force.
+  - **THE SIGNEDNESS ARMS ARE CHOSEN SO THE PLAUSIBLE WRONG IMPLEMENTATION FAILS.** `char` is UNSIGNED, so
+    `0xFFFF` must sort ABOVE `'a'`; `byte` and `short` are SIGNED, so `-128` must sort BELOW `127`. An
+    implementation that read one the way the other is read gives exactly the reverse.
+  - **AND THE FLOAT ARMS CHECK A CLAIM THE OVERLAY ONLY ASSERTED.** Its javadoc said the double/float
+    overloads sort in IEEE-754 total order via `Double.compare`, and nothing tested it. Stock does it in
+    three phases, read from its own source rather than assumed: count the `-0.0`s and turn them into `+0.0`
+    while moving every NaN to the END, sort what is left, then write the `-0.0`s back at the front. The
+    `-0.0` arm compares **RAW BITS**, because `-0.0 == 0.0` is true and a value comparison would pass over a
+    wrong answer.
+  - **THE CLOSURE MOVES AND THE MOVE IS SMALL AND ATTRIBUTABLE.** Batch 2 is IDENTICAL at `+334blob` and so
+    are `rounds=4 pend=180 reach=17` -- `reach` being the marked set, the counter this file established for
+    telling removed waste from lost marking. What moves is the TAIL: one extra batch (63 -> 64), `+3` blobs,
+    and **`synth` 36 -> 60**. That last is the readable one: stock carries THREE `LambdaMetafactory` sites
+    (method references to `mixedInsertionSort` and `insertionSort`) where the overlay had none, and a
+    synthesised lambda TIB is what `synth` counts.
+  - **THE SUITE'S OWN SORT ARMS ARE CORRECT AND THEY ARE THE ONLY ONES IT HAS.** `demo/ArraysDemo` prints
+    `sort[0]=0 sort[9]=9 ascending=1 sort(neg)[0]=-5 sort(neg)[4]=3`, and it is the ONLY demo calling
+    `Arrays.sort` -- twice, both on `int[]` (`demo/SortProbe`, the `Object[]`/TimSort one, is not in the
+    suite). Ten elements is below stock's own `MAX_INSERTION_SORT_SIZE` of 44, so even that arm takes
+    stock's insertion-sort path rather than the quicksort. **So the boot proves NO REGRESSION and
+    `SortPrimProbe`'s 26 arms against a byte-identical host oracle prove the feature** -- different claims,
+    and here the suite's half is narrower than usual.
+  - **WHAT THE SUITE LOG CANNOT SETTLE, stated rather than rounded to "absent": whether ForkJoin was PULLED
+    there.** `grep -ac ForkJoin` reads 0 across the whole suite boot -- but `load` lines are `LOAD_LOG`-gated
+    and the clinit-under-lock report is CAPPED AT 8 per boot, so that silence means nothing either way. The
+    PROBE boot is what shows the three initializers running; the suite shows only that nothing faulted.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK.** 31 markers zero -- notably **`DENYLIST TRAP` 0 and
+    `LINK FAILED` 0**, the two the four-overload overlay produces, and `CLINIT REJECTED` 0, which matters
+    because this increment adds three java.base initializers to the closure. The only `UNRESOLVED STATIC`/
+    `TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each labelled DENYLISTED, and the
+    anchored `FAULT` grep reads 0 (the one bare `FAULT` is `demo/SecureRandomDemo`'s own `CTRL=FAULT` value
+    string on a harness with no RNG).
+  - **THE PROBE FOUND A SEPARATE, PRE-EXISTING SILENT WRONG ANSWER, AND IT IS DELIBERATELY NOT FIXED HERE.**
+    The int MIN/MAX arm prints **`[-,-1,0,1,2147483647]`** against the host's `-2147483648`: a BARE MINUS
+    SIGN for `Integer.MIN_VALUE`. `StringBuilder.append(int)` hand-rolls its digits and does `v = -v`, and
+    `-Integer.MIN_VALUE` is still `Integer.MIN_VALUE`, so the `v > 0` loop writes NO digits. **It is the
+    FOURTH site of a defect this file records fixing on 2026-09-19** in `VMConcat.scInt`, `scLong` and
+    `VM.printDec` -- `scInt`'s own comment describes this exact shape word for word -- and `append(long)`
+    survives only because it delegates to `Long.toString`. It appears identically with the overlay, with the
+    overlay extended, and with stock, so it is demonstrably none of them. **The arm is left FAILING rather
+    than removed**, because deleting it would hide a live silent wrong answer, and `append(int)` is on the
+    hottest path in the VM -- every batch line and every diagnostic -- so it earns its own suite gate.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The sorting is integer and float arithmetic in
+    the guest world and QEMU has already diffed all 26 arms against stock, so cold DRAM cannot change
+    whether `-128` sorts below `127`. What hardware is being asked is **a 37,784-byte layout shift plus three
+    java.base initializers (`ForkJoinTask`, `CountedCompleter`, `ForkJoinTask$Aux`) running that never ran
+    before** -- the arms to read are the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`,
+    `DENYLIST TRAP`, `LINK FAILED`, `CLINIT REJECTED`) plus `gc: collections=46` at the churn demo and the
+    batch-2 closure at `+334blob`.
+
 - **THE `java/util/Collections` OVERLAY IS DELETED AND STOCK RUNS -- `unmodifiableList` RETURNED THE BACKING
   LIST, SO A CALLER THAT MUTATED THE "VIEW" CORRUPTED THE ORIGINAL (2026-09-28, QEMU-GATED -- NOT YET
   PI-VALIDATED).** 297 hand-written lines shadowing a 6,282-line stock class, and the defect is one shape
