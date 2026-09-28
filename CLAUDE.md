@@ -115,6 +115,160 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`String.format` HONOURS FLAGS, WIDTH AND PRECISION -- AND THE ORACLE FOUND A SECOND DEFECT IT WAS NOT
+  POINTED AT (2026-09-27, PI-VALIDATED).** `java/util/Formatter` PARSED the whole format
+  specifier and then dropped everything but the conversion, so **`String.format("%5d", 42)` answered `"42"`** --
+  every aligned column any caller built came out ragged, silently, with no marker. And `%x`/`%X`/`%o` widened
+  every box to `long` before formatting, so **`%x` of the `int` -1 answered `ffffffffffffffff`** where stock
+  answers `ffffffff`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`FormatProbe`, 68 arms against the HOST ORACLE** | **47 of 68 arms WRONG** | **5 -- and all five are the stated divergence** |
+  | ... what those arms printed ON METAL | `%05d` of -42 = `-42`, `%8.3s` = `abcdef`, `%+,09d` = `12345`, `%#010x` = `ff` | **every one EXACT** |
+  | ... the four `%x` arms (int/long/short/byte -1) | **all four `ffffffffffffffff`** | **`ffffffff` / `ffffffffffffffff` / `ffff` / `ff`** |
+  | negative control A (`pad` applies nothing) | -- | **21 arms move, the unsigned section UNMOVED** |
+  | negative control B (`maskOf` always -1) | -- | **exactly 5 arms move, and the `Long` arm does NOT** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, batch-70 closure EXACT, thirty markers zero |
+  | **Pi, the SAME binary** | -- | **closure EXACT to the digit, thirty markers zero, the 3/3/1 cross-harness split reproduced** |
+  | `gc: collections` at the churn demo | 46 | **46 -- the gate, unmoved on BOTH harnesses** |
+  | existing static cells whose ADDRESS moved | -- | **1,046 of 1,100** |
+  | image (same-manifest `FormatProbe` A/B) | 33,783,488 | **33,786,152 (+2,664 B, +0.008%)** |
+  | determinism | -- | **rebuild byte-identical, 0 differing bytes** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE HOST ORACLE IS THE DESIGN INPUT HERE, NOT A CHECK WRITTEN AFTERWARDS, AND THREE OF ITS RULES ARE NOT
+    WHAT A PLAUSIBLE IMPLEMENTATION WOULD CHOOSE.** Every rule was read off the real `String.format` before a
+    line was written, which is the only reason they are right:
+    - **a zero pad goes AFTER the sign or the `0x`**, so `%05d` of -42 is `-0042` and `%#010x` of 255 is
+      `0x000000ff`. A pad that ran first gives `000-42`, **which still looks like a padded number** -- so the
+      negative arms are the ones that discriminate and the positive ones pass either way.
+    - **grouping runs BEFORE padding and the pad zeros are NOT themselves grouped**: `%+,09d` of 12345 is
+      `+0012,345`, not `+00,012,345`. One arm, and it is the only one that can see that ordering.
+    - **a width SHORTER than the value does not truncate** -- `%2d` of 12345 is `12345`.
+  - **AND THE SECOND DEFECT IS THE ONE THE ORACLE FOUND RATHER THAN THE ONE IT WAS POINTED AT.** I wrote the
+    arms for width and precision; the same table answered that `%x` of -1 is FOUR DIFFERENT STRINGS depending
+    on the box (`ff`, `ffff`, `ffffffff`, `ffffffffffffffff`), because those conversions are UNSIGNED and the
+    answer depends on how many bits the argument has. `longOf` widened everything first, so joe-ng was wrong
+    for `byte`, `short` and `int` and right only for `Long` -- a silent wrong answer nothing in this tree was
+    looking for. Fixed with a mask per box width (`maskOf`); `%d` is signed and takes none.
+  - **THE PROBE CARRIES NO EXPECTED STRINGS AT ALL, AND THAT RETIRES A RECORDED FAILURE MODE RATHER THAN
+    WORKING AROUND IT.** Compiled against the real JDK the arms reach stock `String.format`; compiled against
+    `guestsrc` they reach this overlay; the gate is a **byte-for-byte diff of the two runs**. This file records
+    an arm whose expected value sat on the same line as its answer being mis-read TWICE -- once as passing and
+    once as failing -- and the fix recorded there was to print a length. An oracle that cannot be typed wrong
+    removes the whole mode: there is no `want` to mis-type, mis-read, or back-fill.
+  - **TWO NEGATIVE CONTROLS, AND THEY ARE DISJOINT -- which is what says the two halves are independent.**
+    With `pad` returning `lead + body` unconditionally, **21 arms move and the unsigned section does not**;
+    with `maskOf` always -1, **exactly 5 move and every width arm does not**. Both were run on the HOST first
+    (seconds, no image) and then confirmed on metal by the control image below.
+  - **AND CONTROL B's `Long` ARM IS THE BUILT-IN COMPARISON, stated because an arm that passes in both states
+    is not a control.** `%x` of the `long` -1 is `ffffffffffffffff` either way -- a 64-bit value needs no mask
+    -- so it is the one arm in that group that cannot discriminate, and it is there to show the mask is not
+    simply truncating everything.
+  - **THE DIVERGENCE IS BOUNDED AND COUNTED: FIVE LINES, AND I MIS-COUNTED IT IN MY OWN PROBE FIRST.** For
+    every LEGAL format string this now agrees with stock byte-for-byte; an ILLEGAL one is FORMATTED where
+    stock throws (`%.2d`, `%#d`, `%+x`, `%-05d` raise four different `IllegalFormatException` subclasses).
+    Those three classes are deliberately not pulled: this is the PRINTING path, and the same file already
+    records that **an exception raised while reporting a failure replaces the failure with itself** -- the trap
+    that hid the launcher's real error twice. **The probe's javadoc first said the four "illegal" arms were the
+    only lines expected to differ, and the diff showed FIVE**: `%q`, an unknown conversion, diverges too and
+    sits up in the first group because it long predates them. Corrected at the site, because a stated count of
+    four against five differing lines sends the next reader hunting a fifth bug.
+  - **`diff` REPORTED ALL 68 ARMS AS DIFFERENT AND EVERY ONE OF THEM WAS IDENTICAL -- the recorded UART trap,
+    from a new direction.** The metal log is CRLF (`Uart.putc` translates `\n`), so `1,68c1,68` meant one
+    invisible byte per line, not a total mismatch. This file already records that `grep` and `diff` treat a
+    UART log as binary; what it did not record is that a CR makes a diff report **maximum** difference, which
+    reads exactly like a change that did nothing at all. `tr -d '\r'` first.
+  - **MEASURED, NOT ASSUMED: THE SEVEN FLAG CONSTANTS ADDED NO `<clinit>` TO THE PRINTING PATH.** They are
+    `private static final int`, i.e. compile-time constants (JLS 4.12.4), so `javap` shows **0 `getstatic F_*`
+    sites** and **0 `<clinit>`** -- every use inlines. That mattered enough to check rather than assume: a new
+    initializer on `java/util/Formatter` would have to RUN on metal, inside the path that reports failures.
+  - **AND DECLARING THEM COSTS SEVEN STATIC CELLS THAT NOTHING READS, recorded rather than contorted around.**
+    A dense static block keys EVERY DECLARED static, so the `statmap` gains `F_LEFT`..`F_PAREN` at
+    `0x173c18`..`0x173c48` -- 56 bytes of cells no instruction ever loads. Named constants are worth 56 bytes;
+    what is worth having on the record is that the mechanism charges for a DECLARATION, not for a read.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, kept straight: NO DEMO CALLS `String.format`.** Measured, not
+    assumed -- a grep of `demo/` finds none, and the two stock jtreg tests that use it only format on FAILURE.
+    So the suite proves NO REGRESSION and `FormatProbe` is what proves the feature. Different claims.
+  - **AND THE FORMATTER IS NOT BAKED, which is why that split falls where it does.** The `symmap` shows every
+    body but `<init>()V` as `bake-stub ... (vtable slot, not reached)`, so the baked world constructs a
+    Formatter and never runs one: this code executes ONLY in the demand-loaded guest world, which is the world
+    the probe exercises.
+  - **THE PI GATE IS LAYOUT, AND IT IS NAMED IN ADVANCE RATHER THAN CLAIMED AFTERWARDS.** The seven new cells
+    sit in the middle of the statics region, so **1,046 of 1,100 existing cells move address** -- measured by
+    diffing the `statmap` against a control build, not asserted. This file records latent bugs surfacing from
+    layout movement ALONE twice, and QEMU hands out ZEROED DRAM where a Pi at power-on holds firmware
+    leftovers. The arms to read are therefore the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`,
+    `unclaimed pc`) plus `gc: collections=46` at the churn demo and the batch-70 closure. The formatting
+    itself is integer and string arithmetic in the guest world -- cold DRAM cannot change `%05d` -- so
+    hardware is being asked about the layout shift and nothing else.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what a guest-world change adding no class has to
+    show.** Batch 70 reads `+243blob`, `rounds=4 pend=180 reach=16`, `memo=1672 res=2517 unres=2238`,
+    `n:imap=78 synth=36 clinits=31`, `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=112`,
+    `sy:n=50 chg=0`, `gc=46` -- every one identical to the recorded figures. Plus `churnMB=625 live=32
+    intact=32`, `lisp evals=600 result=610 stable=1`, `finish HML` 20/20/20, inversion `HIGH blocked 62ms`,
+    `smp sched: 4 of 4`, `steps/core 60/60/60/60`, `sum20 = 210`, `sha256 clone = .../fork-ok`,
+    `bakeMemosDropped=10`, `sync: static seen=18 nomonitor=0`, and **THIRTY FAILURE MARKERS ZERO with the
+    anchored `FAULT` grep at 0, GREPPED ON DISK** -- the instrument limit the previous card had to state is
+    not present here -- with the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines being the SEVEN known ones (eight
+    occurrences, `CodingErrorAction.REPLACE` twice), each labelled DENYLISTED.
+  - **PI-VALIDATED, AND THE GATE THIS CARD NAMED IN ADVANCE IS WHAT THE BOOT ANSWERED: A 2,664-BYTE LAYOUT
+    SHIFT ON COLD DRAM.** 1,046 of 1,100 static cells moved address, and a wrong cell here does not announce
+    itself as a wrong number -- QEMU hands out ZEROED memory, so a cell reading 0 there NPEs loudly where a Pi
+    at power-on holds firmware leftovers and the same read is a wild branch. **None of `FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED` or `unclaimed pc` appears anywhere in the boot**, across 40 programs to `self-build
+    retired`.
+  - **CLOSURE IDENTITY IS EXACT TO THE DIGIT against the recorded Pi figures, which is what a guest-world
+    change adding no class has to show.** Batch 70 on silicon reads `+243blob`, `rounds=4 pend=180 reach=16`,
+    `memo=1672 res=2514 unres=2235`, `n:imap=78 synth=36 clinits=31`,
+    `rf:skip=2031 visit=2419 clos=2419 holeEnd=2305`, `pc:n=111`, `sy:n=50 chg=0`, `gc=46`,
+    `bakeMemosDropped=10` -- every one identical.
+  - **AND THE RECORDED 3/3/1 CROSS-HARNESS SPLIT REPRODUCES EXACTLY, which is a check rather than a
+    curiosity.** QEMU's `2517 / 2238 / 112` against silicon's `2514 / 2235 / 111` -- the same three counters
+    and the same three magnitudes the launcher card attributes to the hardware RNG path being compiled on one
+    harness and not the other. A change that perturbed patch-site counts would have moved that difference; it
+    did not.
+  - **THE GATE IS UNMOVED ON BOTH HARNESSES: `gc: collections=46` at the churn demo**, with
+    `churnMB=625 live=32 intact=32`, then `55` at the lisp finale -- and the QEMU arm of this same binary read
+    46 then 55 as well, so the sensitivity detector did not move either.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, ExcDemo's seven-frame trace,
+    `sha256 clone = .../fork-ok`, `sync: static seen=18 nomonitor=0`, and `hw rng: RNG200 live` with
+    `two instances differ`.
+  - **A BARE `F` SITS BESIDE THE WiFi FINALE AND IT IS A PASS, recorded because it reads exactly like a
+    failure marker.** `VM.java:4342` prints `'F'` when `jitUnwindReady()` finds a JIT'd frame in the unwind
+    table and `'n'` when it does not -- so the letter to worry about is `n`. It is named here because this
+    file's marker list is thirty strings long and a lone capital letter next to a subsystem that then timed
+    out is precisely the shape a reader chases first.
+  - **WHAT THE BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: NO DEMO CALLS `String.format`.** Measured, not
+    assumed -- a grep of `demo/` finds none. So hardware proves NO REGRESSION across the layout shift, and
+    `FormatProbe`'s 68 arms against the host oracle on QEMU are what prove the two fixes. Different claims,
+    and the same split the `Mac`/`SecretKeyFactory` cards make.
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than the QEMU arm's anchored grep -- a marker in a region I skimmed
+    would not have been caught, and the batch lines are dense. The bare `FAULT` does not occur for the reason
+    this file records: `demo/SecureRandomDemo` prints `CTRL=7fff STATUS=0 bcm2835DATA=0 rng200FIFOCNT=40001010`
+    on hardware, so the value strings that make that pattern cry wolf on QEMU are absent.
+  - **THE WiFi FINALE FAILED AND IT IS ENVIRONMENTAL, CLASSIFIED BY THE RECORDED DISCRIMINATOR RATHER THAN
+    ASSUMED -- FIFTH instance.** `wifi: join timeout` on `KaiaBernie`, and **the scan COMPLETED and lists 24
+    entries, not one of which is that SSID** (`ATTGh4ybVc`, `Donelson-Adult`, `McClarenmesh`). So SDIO, the
+    firmware upload, the CLM load and the scan path all worked across the layout shift -- a great deal of board
+    code -- and the configured AP is simply not in range. `event 0 status 3` is `E_SET_SSID` reporting failure,
+    which is what that absence looks like from the firmware. **This is the case the scan list CAN classify**,
+    unlike the 2026-09-26 failure where the SSID was PRESENT four times and the join still failed.
+  - **AND `wifi: pmk ready` PRINTED BEFORE THE JOIN, so the crypto path ran on silicon regardless.**
+    `Digest.<clinit>`, `Hmac` and the collapsed `Pbkdf2.derive` all executed and produced a PMK -- the
+    pre-association hoist this file records -- so what is missing is an AP to hand it to. Nothing in this
+    increment touches the WiFi path.
+  - **A TWELFTH CROSS-BOOT RNG SAMPLE, recorded to keep the series honest:** `d66ee68e 68305135 3774221f`,
+    distinct from every previous boot, `count 16 -> 13`, popcount **47 of 96** against an ideal of 48 (the
+    series reads 51, 47, 63, 50, 41, 46, 45, 54, --, 49, 56, 47). **Still not a randomness test** -- what stays
+    ruled out is a constant, a counter, and a count that does not follow reads.
+
 - **THE WRAPPER CACHES ARE STOCK'S OWN NESTED `XCache` NOW, AND THE NEGATIVE CONTROL REFUTED THE HALF I HAD
   CLAIMED WAS LOAD-BEARING (2026-09-26, PI-VALIDATED).** `Character`/`Byte`/`Short` carry stock's
   `CharacterCache`/`ByteCache`/`ShortCache` -- an eagerly filled array that ADOPTS a
