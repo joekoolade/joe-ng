@@ -115,8 +115,125 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A RECORD COMPONENT ABOVE U+00FF LOST DATA THREE WAYS -- `record C(char c)` AT `'€'` RENDERED AS `'¬'`,
+  AND `record S(String s)` AT `"€"` CAME BACK TWO CHARACTERS LONG (2026-09-29, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** One root: `recordToString` built its rendering in a `byte[]` and wrapped it with
+  `guestString`, which **hardcodes `coder = 0`**. So the buffer could only ever carry code points 0..255
+  however a component was appended, and three separate paths lost data:
+
+  ```java
+  out[p] = (byte) (int) v;                         // C: one byte, so '€' -> '¬'
+  out[p] = (byte) u1(arr + 24L + i);               // L: the component String's value array, VERBATIM
+  out[p] = (byte) u1(utf8Addr + 2L + i);           // the component NAME, still modified UTF-8
+  ```
+
+  | gate | before | after |
+  |---|---|---|
+  | **`RecordUtf16Probe`, 17 arms against the HOST ORACLE** | **7 WRONG** | **17 of 17 BYTE-IDENTICAL** |
+  | `record C(char)` at `'€'` | **`172`** | **`8364`** |
+  | ... at `'Ā'` | **`0` -- a NUL** | **`256`** |
+  | ... at `'￿'` | **`255`** | **`65535`** |
+  | ... at `'ÿ'` (the last that FITS a byte) | `255` | **`255` -- UNMOVED** |
+  | `record S(String)` at `"€"` | **len 7, `172,32`** | **len 6, `8364`** |
+  | ... at `"a€b"` | **len 11, `97,0,172,32,98,0`** | **len 8, `97,8364,98`** |
+  | a component NAMED `é` | **`195,169`** | **`233`** |
+  | `'é'` as a char AND as a String | correct | **correct -- UNMOVED** |
+  | the three `double` arms and every ASCII arm | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | `gc: collections` at the lisp finale | 57 | **57 -- unmoved too** |
+  | closure: batch 2, batch 64, `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **EVERY ONE BYTE-IDENTICAL to the previous increment** |
+  | image (same-build-path control) | 33,985,552 | **33,987,360 (+1,808 B, +0.005%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+  - **THE PREVIOUS CARD NAMED ONE OF THE THREE AND PREDICTED THE REMEDY EXACTLY, which is the whole value of
+    recording a measured defect instead of fixing it in a hurry.** It said: "a `char` component above 255
+    TRUNCATES ... it is not a one-line fix -- it needs the buffer to become UTF-16-capable, which is a
+    different and larger change touching every `putXxx` in the family." Both halves hold. **What it did NOT
+    name is the `String` arm, and that one is worse**: a truncated char is one wrong character, where a UTF16
+    String component came back at the WRONG LENGTH -- `"€"` is the byte pair `AC 20` and rendered as the
+    two characters `'¬'` and `' '`. Nor the component NAME, which is modified UTF-8 in the classfile and
+    was copied verbatim.
+  - **THE MECHANISM ALREADY EXISTED ONE FUNCTION OVER, AND THAT IS WHY THIS IS SMALL.** `internString` solved
+    exactly this problem for string LITERALS on 2026-09-09 -- its javadoc still records the symptom
+    (`"ÿ"` came out as its two encoded bytes, length 2, first character 195) and the picocli word-wrap
+    failure it surfaced through. Its epilogue is: measure the largest character, pick LATIN1 when every one
+    fits a byte and UTF16 otherwise, and carry the coder to the `String` object. `guestStringChars` is that
+    epilogue applied to a buffer instead of to a Utf8 source. **`guestString` could not be reused** -- it
+    hardcodes `coder = 0`, which is what made everything built through it LATIN1 whatever it held.
+  - **THE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT: 7 arms move and 10 do not.** With only
+    `Loader.java` reverted -- same probe, same Makefile, same build chain -- the three above-255 char arms,
+    the two UTF16 String arms, the mixed record and the non-ASCII component name are all wrong, while every
+    ASCII arm, the three `double` arms and `"abc"`/`null` are byte-identical.
+  - **THE TWO ARMS THAT ARE NON-ASCII AND STILL PASS IN BOTH STATES ARE THE SHARPEST LINE IN THE CONTROL.**
+    `'é'` as a char and `"é"` as a String are correct BEFORE the fix: a character that fits a byte
+    was always stored as that byte and wrapped as LATIN1, which is right. **So the defect is specifically
+    about code points above 255, and those two arms say so rather than leaving it to be assumed** -- a
+    reader who saw only "non-ASCII is broken" would look in the wrong place.
+  - **AND THE CUTOFF IS PINNED FROM BOTH SIDES BY ONE ADJACENT PAIR.** `'ÿ'` is the last character that
+    fits a byte and is UNMOVED at 255; `'Ā'` is the first that does not and moves from **0** -- a NUL,
+    the truncation of `0x0100` -- to 256. A fix that moved the boundary by one would show in that pair and
+    nowhere else.
+  - **THE PROBE PRINTS CODE POINTS IN DECIMAL RATHER THAN THE CHARACTERS, deliberately and twice over.** It
+    keeps every byte of the probe's OUTPUT in ASCII, so the host-vs-metal diff cannot be confounded by how
+    the two harnesses encode a non-ASCII character on the way to their console -- a difference with nothing
+    to do with the code under test. And it is STRICTLY SHARPER: as glyphs, `C[c=€]` and `C[c=¬]`
+    differ by one character that renders, while a LENGTH plus code points also catches a rendering of the
+    right glyph at the wrong length. **That second reason is not hypothetical -- it is exactly what the
+    String arm produced**, and a glyph-only arm would have shown `S[s=¬ ]` against `S[s=€]` and
+    invited the reader to call it a font problem.
+  - **THE SEPARATOR SCAN STAYS OVER RAW BYTES, AND THAT IS A CORRECTNESS ARGUMENT RATHER THAN AN OMISSION.**
+    `recordToString` finds the simple name by scanning the binary name for `/` and `$`. Both are below 0x80,
+    and a UTF-8 continuation byte is always in 0x80..0xBF, so neither can occur INSIDE a multi-byte
+    sequence -- a byte-wise scan cannot land in the middle of a character. Only the copy that follows it has
+    to decode.
+  - **`putUtf8Bytes` SURVIVES FOR THE BYTE PATH, and the split is named at the site.** `castFailureMessage`
+    builds a `ClassCastException` message in a `byte[]` and renders CLASS NAMES -- a diagnostic over
+    identifiers, not user data -- so it keeps the byte helper while the record family moves to `putAscii`
+    over chars. **`guestStringUtf8` has the identical latent gap** (it copies a Utf8 verbatim and never sets
+    a coder, for `StackTraceElement`'s class and method names) and is named here rather than widened: no
+    measured defect, and scope creep in a method the unwinder depends on is how this file records losing
+    boots.
+  - **THE BUDGET GREW RATHER THAN SHRANK, which is worth stating because the constant did not change.**
+    `MAXRECSTR` is 1024 and now counts CHARACTERS where it counted bytes, so a rendering holding non-ASCII
+    fits more of itself than before; the buffer costs 2 KiB instead of 1 KiB, once per `toString` call.
+  - **`char[]` IS THE FIRST IN `Loader`, AND THE COMPILER SEAM WAS CHECKED RATHER THAN ASSUMED.** The shared
+    `Baseline` lowers `caload`/`castore` and sizes `newarray` atype 5 at 2 bytes, and `src/vm/VM.java` and
+    `src/vm/VMGc.java` already carry `char[]` in the writer-BAKED world -- so the path this change needs is
+    exercised, just not from this class. **`compiler: 40 checks` holding is the assertion**: `Loader` is
+    writer-baked, so a codegen perturbation would break the byte-for-byte self-hosting fixpoint first.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what a change confined to one method family has to
+    show.** Batch 2 `+334blob`, batch 64 `+400blob`, `rounds=4 pend=180 reach=17`,
+    `memo=1146 res=3030 unres=2517`, `n:imap=132 synth=60 clinits=96` -- every one byte-identical to the
+    `RecordFpProbe` gate, and **both `gc: collections` figures are unmoved at 46 and 57**. The image moves
+    1,808 bytes. Nothing new is demand-loaded: `guestStringChars` reaches `Heap`/`Magic` and the two TIB
+    accessors `internString` already used.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, AND HERE IT IS NARROWER THAN USUAL: NEITHER PATH RUNS ON
+    IT.** No suite demo declares a record, so `recordToString` never executes -- measured, and it is the same
+    measurement the Pi card above had to make. And the CCE message path does not run either:
+    `cannot be cast to` reads **0** across the whole boot, because `demo/CastDemo`'s `W` arm is a SUCCEEDING
+    checkcast and its failing arms catch without printing. **So the suite proves NO REGRESSION across a
+    1,808-byte layout shift**, and `RecordUtf16Probe`'s 17 arms against a byte-identical host oracle are what
+    prove the feature.
+  - **THE BYTE HELPER IS THEREFORE GATED BY CONSTRUCTION RATHER THAN BY A RUN, AND THAT WAS CHECKED RATHER
+    THAN ASSERTED.** With nothing exercising `castFailureMessage`, the claim that restoring `putUtf8Bytes`
+    changed nothing rests on the code: its body diffs IDENTICAL against the pre-change original, javadoc
+    aside -- moved, not rewritten -- and its callers are untouched.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK.** Every marker zero -- notably `DENYLIST TRAP` 0 and
+    `LINK FAILED` 0 -- with the **anchored** `FAULT` grep at 0 (the one bare `FAULT` is
+    `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string on a harness with no RNG). The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), every one labelled DENYLISTED.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- WITH THE CORRECTION THE CARD ABOVE HAD TO MAKE
+    ALREADY APPLIED.** QEMU has diffed all 17 arms against stock, so cold DRAM cannot change whether
+    `'\u20ac'` renders as one character. And **hardware will NOT exercise the record path**, for the reason
+    measured above, so this asks silicon for a **1,808-byte layout shift and the first `char[]` allocation in
+    writer-baked `Loader`** -- and nothing else. The arms to read are the ABSENCES (`FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`), plus `gc: collections=46` at the churn demo and batch 2 at
+    `+334blob`. **Stating that in advance is the point**: the two cards before this one each had to correct
+    a gate sentence that claimed more than the boot could answer.
+
 - **A `float` OR `double` RECORD COMPONENT PRINTED ITS RAW BITS -- `record D(double d)` AT 1.5 RENDERED AS
-  `D[d=4609434218613702656]` (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).** `Loader.putComponent`
+  `D[d=4609434218613702656]` (2026-09-29, PI-VALIDATED).** `Loader.putComponent`
   special-cases `Z`, `C`, `L` and `[`; everything else fell through to `putDec`, which renders a DECIMAL
   INTEGER. Right for `B`/`S`/`I`/`J`, and wrong for the two that are not integers:
 
@@ -141,6 +258,7 @@ defines the minimum the assembler must encode.
   | `gc: collections` at the lisp finale | 57 | **57 -- unmoved too** |
   | `churnMB` / `lisp evals result stable` | 625 32 32 / 600 610 1 | **identical** |
   | closure: batch 2, batch 64, `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **EVERY ONE IDENTICAL to the previous increment** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, `46`/`57`, closure EXACT, WiFi -> HTTP 200 OK** |
   | image (same-build-path control) | 33,974,836 | **33,975,504 (+668 B)** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
@@ -197,13 +315,62 @@ defines the minimum the assembler must encode.
     `LINK FAILED` 0, which are what a formatter that failed to resolve from this new call site would
     produce. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences),
     each labelled DENYLISTED, and the anchored `FAULT` grep reads 0.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** QEMU has already diffed all 22 arms against
-    stock, so cold DRAM cannot change whether `1.5` prints as `1.5`. What hardware is being asked is a
-    668-byte layout shift plus **a call from VM-side `Loader` code into a DEMAND-LOADED guest formatter on
-    a path that never made one before** -- `callOnObject` in the neighbouring arm already does this, so the
-    shape is validated, but this call site is not. The arms to read are the ABSENCES (`FAULT`, `ESR EC=`,
-    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`) plus `gc: collections=46` at the
-    churn demo and the batch-2 closure at `+334blob`.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- EVERY ABSENCE HOLDS.**
+    None of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED` or
+    `CLINIT REJECTED` appears anywhere, across 40 programs to `self-build retired` -- and `DENYLIST TRAP`/
+    `LINK FAILED` are the two this increment added, being what a formatter that failed to resolve from the
+    new call site would produce.
+  - **A CORRECTION TO THIS CARD'S OWN GATE SENTENCE, AND IT NARROWS WHAT SILICON CLAIMS -- THE THIRD CARD IN
+    A ROW TO OWE ONE.** I wrote that hardware is being asked a 668-byte layout shift **PLUS a call from
+    VM-side `Loader` code into a DEMAND-LOADED guest formatter on a path that never made one before**.
+    **ONLY THE FIRST HALF WAS ASKED.** `putComponent` runs only for a record's `toString`, and **NO SUITE
+    DEMO DECLARES A RECORD** -- measured, not assumed: the three sources in the tree that declare one
+    (`RecordFpProbe`, `MinValueProbe`, `AnnoProxyProbe`) are all `JDKTESTS`, none of them a suite program.
+    So the new call site executed ZERO times on this boot, and hardware answered the LAYOUT SHIFT across 40
+    programs on cold DRAM.
+  - **WHAT SILICON DOES ESTABLISH ABOUT THE FORMATTER, which is weaker than the card claimed and stronger
+    than nothing.** `doubleToStringBuf()`/`floatToStringBuf()` have exactly three callers --
+    `VMConcat.scDouble`, `VMConcat.scFloat` and this new arm -- and `ConcatDemo` runs the first two on
+    hardware: `dbl 1.5 = [1.5]`, `dbl -0.0 = [-0.0]`, `dbl NaN = [NaN]`, `flt 0.1f = [0.1]` and
+    `flt vs dbl = [0.1|0.10000000149011612]`, all exact. **So the by-name resolution of the stock formatter,
+    and both accessors, are PI-VALIDATED -- from the concat call site.** What is QEMU's is reaching them
+    from `putComponent`, and `RecordFpProbe`'s 22 arms against a byte-identical host oracle are what prove
+    that. Different claims.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, then `57` at the lisp finale -- **the same pair the QEMU arm of
+    this binary read**, so the sensitivity detector did not move either. Batch 2 `+334blob` and batch 64
+    `+400blob`, `rounds=4 pend=180 reach=17`, `n:imap=132 synth=60 clinits=96`, `pc:n=108`,
+    `bakeMemosDropped=14`, `sync: static seen=18 nomonitor=0`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, `char isPrimitive=true name=char`.
+  - **THE RECORDED CROSS-HARNESS SPLIT REPRODUCES, WHICH IS A CHECK RATHER THAN A CURIOSITY.** Silicon reads
+    `memo=1146 res=3027 unres=2514` against QEMU's `1146 / 3030 / 2517` -- the same shape this file records
+    (`res`/`unres` three lower on hardware), attributed to the hardware RNG path being compiled on one
+    harness and not the other. **`pc:n=108` is EQUAL on both**, so it is 3/3/0 again, exactly as the
+    `DualPivotQuicksort` boot read. A change that perturbed patch-site counts would have moved `memo` too;
+    it did not.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, the
+    seventeen-arm boot battery all PASS, and WiFi running the whole chain -> `wifi: JOINED` -> `pmk ready`
+    -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` -> DHCP 192.168.1.247 ->
+    `ping reply` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`**.
+  - **THE ONLY `UNRESOLVED STATIC`/`TRAP-WIRED` LINES ARE THE SEVEN KNOWN ONES (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.**
+    **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than an anchored grep -- a marker in a region I skimmed would not
+    have been caught, and the batch lines are dense.
+  - **ONE FIGURE MOVED AND IT IS A RESPONSE HEADER RATHER THAN THE VM:** `HTTP/1.1 200 OK` carries **998
+    bytes** where the previous boot recorded 997. The body's own `Last-Modified: Mon, 28 Sep 2026 16:19:32
+    GMT` is IDENTICAL to that boot, so the page did not change -- the count covers headers too, and `Age:`
+    is a variable-length decimal that read `13432` here. **Stated as a reading rather than a measurement**,
+    but it is the one field in that response that grows a digit on its own.
+  - **THE EIGHTEENTH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `d9f6c6c2 d236b630 51354ead`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **49 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49. **Still not a randomness test**: what stays ruled out is
+    a constant, a counter, and a count that does not follow reads.
 
 - **`Integer.MIN_VALUE` APPENDED AS A BARE `-` AND `Long.MIN_VALUE` RENDERED A RECORD COMPONENT AS ONE --
   THE FOURTH AND FIFTH SITES OF A DEFECT FIXED THREE TIMES ALREADY (2026-09-28, QEMU-GATED -- NOT YET
