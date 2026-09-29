@@ -38,8 +38,11 @@ public class ArraysDemo
         showInt("binarySearch(s,10)", Arrays.binarySearch(s, 10)); // 4
         showInt("binarySearch(s,5)", Arrays.binarySearch(s, 5)); // -3 (insertion point 2 -> -(2)-1)
 
-        // sort(int[]) (#34): small arrays take DualPivotQuicksort's insertion-sort path (a plain loop, no
-        // natives / Unsafe) -- the tractable slice of the real sort. Verify order + endpoints.
+        // sort(int[]) (#34): STOCK java/util/DualPivotQuicksort since 2026-09-28, where this used to be a
+        // joe-ng overlay. Ten elements is below stock's own MAX_INSERTION_SORT_SIZE (44), so this array
+        // takes stock's insertion-sort path; a larger one takes the real dual-pivot quicksort, and
+        // test/jdk/junit/SortPrimProbe is what covers all seven primitive types against a host oracle.
+        // Verify order + endpoints.
         int[] u = { 5, 2, 8, 1, 9, 3, 7, 4, 6, 0 };
         Arrays.sort(u);
         showInt("sort[0]", u[0]);                                // 0
