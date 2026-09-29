@@ -18387,7 +18387,7 @@ public final class Loader
     private static final int MAXRECSTR = 1024;
 
     /** Append the ASCII of {@code v} (decimal, signed) at {@code p}; returns the new position. */
-    private static int putDec(byte[] out, int p, long v, boolean signed)
+    private static int putDec(char[] out, int p, long v, boolean signed)
     {
         // THE DIGITS ARE TAKEN IN THE NEGATIVE DOMAIN, for the reason {@code VMConcat.scLong} already
         // records: there is no type wider than long to borrow, and {@code -Long.MIN_VALUE} is still
@@ -18406,7 +18406,7 @@ public final class Loader
         {
             if (p < out.length)
             {
-                out[p] = (byte) '-';
+                out[p] = '-';
                 p += 1;
             }
         }
@@ -18430,38 +18430,53 @@ public final class Loader
         while (k > 0 && p < out.length)
         {
             k -= 1;
-            out[p] = tmp[k];
+            out[p] = (char) tmp[k];
             p += 1;
         }
         return p;
     }
 
-    /** Append the Utf8 at {@code utf8Addr} (u2 length, then bytes); returns the new position. */
-    private static int putUtf8(byte[] out, int p, long utf8Addr)
+    /**
+     * Append the Utf8 at {@code utf8Addr} (u2 length, then bytes), DECODED from modified UTF-8.
+     *
+     * <p>This renders a record COMPONENT NAME, and a Java identifier may hold any letter -- {@code record
+     * N(int \u00e9)} is legal -- so copying the encoded bytes verbatim is the same defect the value side
+     * carries, one field over. {@link #decodeUtf8At} is the decoder {@link #internString} already uses.
+     *
+     * <p>Its {@code decCh}/{@code decNext} statics are safe here because the name is consumed in this loop
+     * and nothing between two iterations can run guest code -- unlike {@link #putComponent}'s reference arm,
+     * which calls {@code toString} and could reach a literal intern.
+     */
+    private static int putUtf8(char[] out, int p, long utf8Addr)
     {
         int len = u2(utf8Addr);
+        long src = utf8Addr + 2L;
         int i = 0;
         while (i < len && p < out.length)
         {
-            out[p] = (byte) u1(utf8Addr + 2L + i);
+            decodeUtf8At(src, i, len);
+            out[p] = (char) decCh;
             p += 1;
-            i += 1;
+            i = decNext;
         }
         return p;
     }
 
     /** Append one component's rendered VALUE; returns the new position. */
-    private static int putComponent(byte[] out, int p, long v, int tc)
+    private static int putComponent(char[] out, int p, long v, int tc)
     {
         if (tc == 'Z')
         {
-            return putUtf8Bytes(out, p, v != 0L ? Magic.bytes("true") : Magic.bytes("false"));
+            return putAscii(out, p, v != 0L ? Magic.bytes("true") : Magic.bytes("false"));
         }
         if (tc == 'C')
         {
+            // ALL SIXTEEN BITS. This used to store one byte into a byte[] buffer, so the whole rendering
+            // could only carry code points 0..255 and a char above that came out as a DIFFERENT character --
+            // '\u20ac' rendered as '\u00ac'. A plausible wrong character is the shape rule 2 exists to remove.
             if (p < out.length)
             {
-                out[p] = (byte) (int) v;
+                out[p] = (char) v;
                 p += 1;
             }
             return p;
@@ -18470,7 +18485,7 @@ public final class Loader
         {
             if (v == 0L)
             {
-                return putUtf8Bytes(out, p, Magic.bytes("null"));
+                return putAscii(out, p, Magic.bytes("null"));
             }
             long str = callOnObject(v, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
             return putGuestString(out, p, str);
@@ -18496,7 +18511,7 @@ public final class Loader
             long buf = tc == 'D' ? doubleToStringBuf() : floatToStringBuf();
             if (buf == 0L)
             {
-                return putUtf8Bytes(out, p, Magic.bytes("?"));
+                return putAscii(out, p, Magic.bytes("?"));
             }
             long bits = tc == 'D' ? v : (v & 0xFFFFFFFFL);
             return putGuestString(out, p, Magic.call2(buf, bits, 0L));
@@ -18504,36 +18519,85 @@ public final class Loader
         return putDec(out, p, v, true);                  // B S I J
     }
 
-    /** Append a guest {@code String}'s bytes; {@code "?"} if it or its array is missing. */
-    private static int putGuestString(byte[] out, int p, long str)
+    /**
+     * Append a guest {@code String}'s characters, HONOURING ITS CODER; {@code "?"} if it or its array is
+     * missing.
+     *
+     * <p>A String's {@code value} array is its bytes in one of two encodings and the {@code coder} field at
+     * offset 24 says which -- so copying that array verbatim is right for LATIN1 and produces GARBAGE for
+     * UTF16, where each character is two little-endian bytes. A {@code record R(String s)} holding
+     * {@code "\u20ac"} rendered as the two LATIN1 characters {@code \u00ac} and {@code ' '}: the byte pair
+     * {@code AC 20} read as two characters instead of one.
+     *
+     * <p>A raw {@code byte[]} has no coder field to read, so it is detected by {@code strBytes} answering the
+     * argument ITSELF and treated as LATIN1 -- which is what a VM-side buffer is. Every caller here passes a
+     * real String, so that arm is defence rather than a live path.
+     *
+     * <p>Little-endian because {@code StringUTF16.LO_BYTE_SHIFT} is seeded to 8 for AArch64, the same reason
+     * {@link #internString} stores it that way; reading it the other way round swaps the bytes of every
+     * character.
+     */
+    private static int putGuestString(char[] out, int p, long str)
     {
         if (str == 0L)
         {
-            return putUtf8Bytes(out, p, Magic.bytes("?"));
+            return putAscii(out, p, Magic.bytes("?"));
         }
         long arr = VM.strBytes(str);
         if (arr == 0L)
         {
-            return putUtf8Bytes(out, p, Magic.bytes("?"));
+            return putAscii(out, p, Magic.bytes("?"));
         }
-        int n = (int) Magic.load64(arr + 16L);
-        int i = 0;
-        while (i < n && p < out.length)
+        int nbytes = (int) Magic.load64(arr + 16L);
+        int coder = arr == str ? 0 : (int) Magic.load64(str + 24L);
+        if (coder == 0)
         {
-            out[p] = (byte) u1(arr + 24L + i);
+            int i = 0;
+            while (i < nbytes && p < out.length)
+            {
+                out[p] = (char) u1(arr + 24L + i);
+                p += 1;
+                i += 1;
+            }
+            return p;
+        }
+        int i = 0;
+        while (i + 1 < nbytes && p < out.length)
+        {
+            out[p] = (char) (u1(arr + 24L + i) | (u1(arr + 24L + i + 1) << 8));   // LO first
             p += 1;
-            i += 1;
+            i += 2;
         }
         return p;
     }
 
-    /** Append a plain ASCII {@code byte[]}; returns the new position. */
+    /**
+     * Append a plain ASCII {@code byte[]} to a BYTE buffer; returns the new position.
+     *
+     * <p>The twin of {@link #putAscii}, kept because {@link #castFailureMessage} builds its message in a
+     * {@code byte[]} and renders CLASS NAMES rather than user data. Widening that path too would be scope
+     * with no measured defect behind it -- {@code guestStringUtf8}, which it shares the shape of, has the
+     * same latent gap and the same reason to leave it alone.
+     */
     private static int putUtf8Bytes(byte[] out, int p, byte[] b)
     {
         int i = 0;
         while (i < b.length && p < out.length)
         {
             out[p] = b[i];
+            p += 1;
+            i += 1;
+        }
+        return p;
+    }
+
+    /** Append a plain ASCII {@code byte[]} to the record buffer, widened one character per byte. */
+    private static int putAscii(char[] out, int p, byte[] b)
+    {
+        int i = 0;
+        while (i < b.length && p < out.length)
+        {
+            out[p] = (char) (b[i] & 0xFF);
             p += 1;
             i += 1;
         }
@@ -18552,7 +18616,9 @@ public final class Loader
         {
             return guestString(Magic.bytes("null"));
         }
-        byte[] out = new byte[MAXRECSTR];
+        // A UTF-16 CODE-UNIT buffer, not bytes. It was a byte[] wrapped as a LATIN1 String at the end, so
+        // the whole rendering could only carry code points 0..255 however each component was appended.
+        char[] out = new char[MAXRECSTR];
         int p = 0;
         long nm = clTab[reg].base + clTab[reg].nameOff;  // the binary name, as a Utf8
         int nlen = u2(nm);
@@ -18567,38 +18633,86 @@ public final class Loader
             }
             i += 1;
         }
+        // The separator scan above is over RAW BYTES and stays correct under UTF-8: '/' and '$' are below
+        // 0x80, and a continuation byte is 0xxx in 0x80..0xBF, so neither can occur inside a multi-byte
+        // sequence. Only the copy below has to decode.
         i = start;
         while (i < nlen && p < out.length)
         {
-            out[p] = (byte) u1(nm + 2L + i);
+            decodeUtf8At(nm + 2L, i, nlen);
+            out[p] = (char) decCh;
             p += 1;
-            i += 1;
+            i = decNext;
         }
-        p = putUtf8Bytes(out, p, Magic.bytes("["));
+        p = putAscii(out, p, Magic.bytes("["));
         int n = recordComponentCount(reg);
         int k = 0;
         while (k < n)
         {
             if (k > 0)
             {
-                p = putUtf8Bytes(out, p, Magic.bytes(", "));
+                p = putAscii(out, p, Magic.bytes(", "));
             }
             int j = recordComponent(reg, k);
             p = putUtf8(out, p, fldTab[j].base + fldTab[j].nameOff);
-            p = putUtf8Bytes(out, p, Magic.bytes("="));
+            p = putAscii(out, p, Magic.bytes("="));
             p = putComponent(out, p, Magic.load64(obj + 16L + fldTab[j].slot * 8L),
                     u1(fldTab[j].base + fldTab[j].descOff + 2L));
             k += 1;
         }
-        p = putUtf8Bytes(out, p, Magic.bytes("]"));
-        byte[] exact = new byte[p];
-        int q = 0;
-        while (q < p)
+        p = putAscii(out, p, Magic.bytes("]"));
+        return guestStringChars(out, p);
+    }
+
+    /**
+     * Wrap the first {@code n} UTF-16 code units of {@code src} as a guest {@code java/lang/String},
+     * LATIN1 when every one of them fits a byte and UTF16 otherwise.
+     *
+     * <p>This is {@link #internString}'s epilogue applied to a buffer instead of to a Utf8 source, and it is
+     * what {@link #guestString} cannot do: that one hardcodes {@code coder = 0}, so anything built through it
+     * is LATIN1 whatever it holds. Choosing the narrower coder when it fits is the same choice stock makes,
+     * and it is why an all-ASCII record renders byte-for-byte as it did before.
+     *
+     * <p>UTF16 is stored LO byte first because {@code StringUTF16.LO_BYTE_SHIFT} is seeded to 8 for AArch64.
+     */
+    private static long guestStringChars(char[] src, int n)
+    {
+        int maxCh = 0;
+        int i = 0;
+        while (i < n)
         {
-            exact[q] = out[q];
-            q += 1;
+            if (src[i] > maxCh)
+            {
+                maxCh = src[i];
+            }
+            i += 1;
         }
-        return guestString(exact);
+        int coder = maxCh < 256 ? 0 : 1;
+        long arr = Heap.allocArray(coder == 0 ? n : n * 2, 1);
+        long bt = byteArrayTib();
+        if (bt != 0L)
+        {
+            Magic.store64(arr + ObjectModel.TIB_OFFSET, bt);   // type it as [B so `checkcast [B` resolves
+        }
+        i = 0;
+        while (i < n)
+        {
+            if (coder == 0)
+            {
+                Magic.store8(arr + 24L + i, src[i]);
+            }
+            else
+            {
+                Magic.store8(arr + 24L + (i << 1), src[i] & 0xFF);
+                Magic.store8(arr + 24L + (i << 1) + 1, (src[i] >> 8) & 0xFF);
+            }
+            i += 1;
+        }
+        long obj = Heap.alloc(stringSize());
+        Magic.store64(obj + 0L, stringTib());
+        Magic.store64(obj + 16L, arr);
+        Magic.store64(obj + 24L, coder);
+        return obj;
     }
 
     /** A zero-length {@code Class[]} -- what a class declaring no member classes answers. */
