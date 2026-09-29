@@ -115,6 +115,116 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Integer.MIN_VALUE` APPENDED AS A BARE `-` AND `Long.MIN_VALUE` RENDERED A RECORD COMPONENT AS ONE --
+  THE FOURTH AND FIFTH SITES OF A DEFECT FIXED THREE TIMES ALREADY (2026-09-28, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** `-Integer.MIN_VALUE` is still `Integer.MIN_VALUE`, so an emitter that negates and then
+  loops `while (v > 0)` writes NO DIGITS AT ALL:
+
+  ```java
+  if (v < 0) { put('-'); v = -v; }
+  int start = count;
+  while (v > 0) { put('0' + v % 10); v = v / 10; }   // runs ZERO times for MIN_VALUE
+  ```
+
+  | gate | before | after |
+  |---|---|---|
+  | **`MinValueProbe`, 22 arms against the HOST ORACLE** | **5 WRONG** | **22 of 22 BYTE-IDENTICAL** |
+  | `new StringBuilder().append(Integer.MIN_VALUE)` | **`-`** | **`-2147483648`** |
+  | ... `[` + MIN + `]` / MIN + `:` + MIN | **`[-]` / `-:-`** | **exact, both** |
+  | `record Rec(long,int,String)` at `Long.MIN_VALUE` | **`Rec[l=-, i=-2147483648, s=x]`** | **`Rec[l=-9223372036854775808, ...]`** |
+  | the 17 non-extreme arms (MAX, -1, 0, 42, -2147483647) | correct | **correct -- UNMOVED** |
+  | `append(long)`, `String.valueOf`, concat, `Integer/Long.toString` | correct | **correct -- the 2026-09-19 fixes** |
+  | **`SortPrimProbe`'s red arm, left failing one increment ago** | 1 of 26 wrong | **26 of 26 -- CLOSED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | `gc: collections` at the lisp finale | 56 | **57 -- inside the recorded QEMU A/A pair; not citable** |
+  | closure: batch 2, batch 64, `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **EVERY ONE IDENTICAL to the previous increment** |
+  | image (same-build-path control) | 33,963,780 | **33,963,884 (+104 B)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE SWEEP IS THE INCREMENT, NOT THE ONE ARM THE PROBE CAUGHT.** `SortPrimProbe` found ONE site by
+    accident; this file records the same shape being fixed on 2026-09-19 in `VMConcat.scInt`,
+    `VMConcat.scLong` and `VM.printDec` and a FOURTH being missed. So the first move was to grep every
+    hand-rolled decimal emitter in the tree rather than fix the arm in front of me -- **and that found a
+    FIFTH nobody had looked at**, `Loader.putDec`, which no probe was pointing at.
+  - **THE INVENTORY, so the next sweep starts from a list rather than a grep.** Six files emit decimal
+    digits by hand (`% 10`):
+
+    | site | state | why |
+    |---|---|---|
+    | `VMConcat.scInt` | correct | widens to long (2026-09-19) |
+    | `VMConcat.scLong` | correct | negative domain (2026-09-19) |
+    | `VM.printDec` | correct | widens to long (2026-09-19) |
+    | `VM.printUnsigned` / `printSigned` | correct | unsigned; and `printSigned` widens |
+    | `jdk/internal/util/DecimalDigits` | correct | negative domain -- **stock's own idiom**, `n = val < 0 ? val : -val` |
+    | `board/bcm2711/Gpio` | n/a | `pin % 10` is a register index, not a digit |
+    | `Loader` (`us % 1000L`) | n/a | a microsecond split, no sign |
+    | **`StringBuilder.append(int)`** | **BROKEN** | negated in int |
+    | **`Loader.putDec`** | **BROKEN** | negated in long |
+  - **THE TWO REPAIRS ARE DIFFERENT AND THE DIFFERENCE IS FORCED, not stylistic.**
+    `StringBuilder.append(int)` WIDENS TO LONG, because the int range fits a long with room to negate --
+    the same repair `scInt` and `printDec` took. `Loader.putDec` takes a `long` and **there is no wider
+    type to borrow**, so it takes its digits in the NEGATIVE DOMAIN: the negative side of two's complement
+    holds one more value than the positive side, `v % 10` is then non-positive, and negating just the DIGIT
+    is always in range. That is `scLong`'s repair, and it is also what stock's own `DecimalDigits` does.
+  - **THE `putDec` CASE IS REACHABLE RATHER THAN THEORETICAL, AND THE ROUTE IS WORSE THAN A `long` FIELD.**
+    It renders one component of a record's `toString`, and `putComponent` special-cases only `Z`, `C`, `L`
+    and `[` -- so `F` and `D` FALL THROUGH TO IT BY THEIR RAW BITS. And
+    `Double.doubleToRawLongBits(-0.0)` is `0x8000000000000000`, which **IS** `Long.MIN_VALUE`. So a record
+    with a `double` field holding `-0.0` was hitting the bare-minus bug, not only one holding
+    `Long.MIN_VALUE`.
+  - **AND THAT RAW-BITS RENDERING IS A SEPARATE, PRE-EXISTING DIVERGENCE, RECORDED RATHER THAN BUNDLED.**
+    Stock prints `Rec[d=-0.0]`; joe-ng prints the raw bits. The fix here changes that component from a bare
+    `-` to `-9223372036854775808`, which is the right ANSWER for the emitter and still the wrong one for
+    the reader. **It is deliberately NOT probed**: an arm for it could not match a host oracle for reasons
+    that have nothing to do with this fix, and an expected-divergence list is a place for a real regression
+    to hide. It wants its own increment and `putComponent` is where it lives.
+  - **THE CONTROL IS SPECIFIC RATHER THAN MERELY PRESENT: 5 arms move and 17 do not.** With both repairs
+    reverted, `append(Integer.MIN_VALUE)`, the two in-context arms and the two record arms carrying
+    `Long.MIN_VALUE` are wrong, while `MAX_VALUE`, `-1`, `0`, `42`, `-2147483647`, `append(long)` and every
+    already-repaired path are byte-identical. **The int component of the record is CORRECT in both**, which
+    is the sharpest line in the control: `putDec` takes a `long`, so an `int` MIN_VALUE arrives as
+    `-2147483648` and negates to `2147483648` perfectly well. **Only the value with no positive counterpart
+    in its own width breaks**, which is the whole defect in one observation.
+  - **AND IT CLOSES AN ARM THIS FILE DELIBERATELY LEFT RED.** The `DualPivotQuicksort` increment one card
+    ago shipped `SortPrimProbe` with its int MIN/MAX arm failing and said why: removing it would hide a live
+    silent wrong answer, and `append(int)` is on the hottest path in the VM -- every batch line and every
+    diagnostic -- so it earned its own suite gate. That arm now reads `[-2147483648,-1,0,1,2147483647]` and
+    the probe is **26 of 26**. The paragraph documenting the divergence is deleted at the site rather than
+    left to rot, which is the hygiene this file has had to learn twice.
+  - **A CAUTION OF MINE IN THE LAST TWO PROBES WAS UNNECESSARY, AND THE EVIDENCE WAS ALREADY IN THE TREE.**
+    `CollectionsProbe` and `SortPrimProbe` both say they avoid nested and anonymous classes because whether
+    a default-package `Probe$1` reaches the image's classDir "is a claim nothing here has measured". It IS
+    measured: **`AnnoProxyProbe` is in `JDKTESTS`, emits 23 nested classes including two records, and its
+    record `toString` arm is validated on metal.** So this probe declares a real nested `record` and it
+    loads. The caution was reasonable and the check was one `ls` away; I wrote the constraint instead of
+    looking.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION THAT MATTERS FOR THE `append` HALF.** The writer lowers
+    string concat too, so a change that perturbed its codegen would break the byte-for-byte self-hosting
+    fixpoint first -- and `StringBuilder` is a guest overlay while `Loader.putDec` is VM-side, so neither
+    touches what the host writer emits.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what two BODY-ONLY changes have to show.** Batch 2
+    `+334blob`, batch 64 `+400blob`, `rounds=4 pend=180 reach=17`, `memo=1146 res=3030 unres=2517`,
+    `n:imap=132 synth=60 clinits=96` -- every one byte-identical to the `DualPivotQuicksort` gate. Neither
+    repair adds a class, a method or a call; `append(int)` gains a widened accumulator and `putDec` an
+    inverted loop condition. The image moves **104 bytes**.
+  - **THE SUITE'S OWN MIN_VALUE ARMS ARE CORRECT AND THEY ARE THE PATHS ALREADY REPAIRED.**
+    `concat MIN = -9223372036854775808`, `concat MAX`, `toString MIN` -- all exact, which is the 2026-09-19
+    work still holding. **The suite has NO arm for `StringBuilder.append(int)` or for a record's
+    `toString`**, so the boot proves NO REGRESSION and `MinValueProbe`'s 22 arms plus `SortPrimProbe`'s 26
+    against byte-identical host oracles are what prove the two repairs. Different claims.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK.** 31 markers zero, the only `UNRESOLVED STATIC`/
+    `TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each labelled DENYLISTED, and the
+    anchored `FAULT` grep reads 0.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** Both repairs are integer arithmetic in code QEMU
+    has already diffed against a host oracle, so cold DRAM cannot change whether `Integer.MIN_VALUE` prints
+    its digits. What hardware is being asked is a **104-byte layout shift** and one thing QEMU cannot price:
+    **`StringBuilder.append(int)` is on the hottest path in the VM** -- every batch line, every counter and
+    every diagnostic in the boot goes through it, on four cores under real preemption. **So the arm to read
+    is not a value but the LEGIBILITY OF THE WHOLE LOG**: if the widened accumulator were wrong, every
+    number the boot prints would be wrong, and the batch-line closure counters would stop matching. Plus
+    the usual ABSENCES and `gc: collections=46` at the churn demo.
+
 - **THE `java/util/DualPivotQuicksort` OVERLAY IS DELETED AND STOCK RUNS -- `Arrays.sort` COULD NOT SORT A
   `byte[]`, `char[]` OR `short[]` AT ALL, AND THE FIX IS A DELETION RATHER THAN THE THREE MISSING OVERLOADS
   (2026-09-28, PI-VALIDATED).** 107 hand-written lines shadowing a 4,429-line stock

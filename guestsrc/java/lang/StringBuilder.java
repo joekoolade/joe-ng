@@ -130,16 +130,23 @@ public final class StringBuilder implements Appendable, CharSequence
             put('0');
             return this;
         }
-        if (v < 0)
+        // WIDENED TO LONG, for the reason {@code VMConcat.scInt} and {@code VM.printDec} already record:
+        // {@code -Integer.MIN_VALUE} is still {@code Integer.MIN_VALUE}, so negating in int left the value
+        // NEGATIVE, the {@code > 0} loop ran ZERO times, and no digit was written at all --
+        // {@code Integer.MIN_VALUE} appended as a BARE "-". A silently truncated number, not a crash.
+        // The int range fits a long with room to negate, so widening once covers every value; the long
+        // overloads of this class delegate to {@code Long.toString} and were never affected.
+        long m = v;
+        if (m < 0L)
         {
             put('-');
-            v = -v;
+            m = -m;                                     // safe: |Integer.MIN_VALUE| fits a long
         }
         int start = count;
-        while (v > 0)
+        while (m > 0L)
         {
-            put('0' + v % 10);
-            v = v / 10;
+            put('0' + (int) (m % 10L));
+            m = m / 10L;
         }
         int lo = start;
         int hi = count - 1;
