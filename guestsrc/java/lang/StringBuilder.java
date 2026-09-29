@@ -460,6 +460,51 @@ public final class StringBuilder implements Appendable, CharSequence
     }
 
     /**
+     * {@code append(double)} -- the sibling of {@link #append(float)}, and the one a caller is far likelier
+     * to reach: {@code sb.append(3.14)} and every {@code StringBuilder}-lowered concat of a {@code double}
+     * land here.
+     *
+     * <p>IT WAS ABSENT UNTIL NOW, AND AN OVERLAY WINS THE NAME -- so this did not fall back to stock, it
+     * ceased to exist, and the call resolved nowhere and surfaced as a {@code DENYLIST TRAP} blaming a list
+     * {@code StringBuilder} is not on. That is the overlay-drops-stock-members trap this file records nine
+     * times over, here as a straight ASYMMETRY: {@code append(float)} was added and its more common twin
+     * was not.
+     *
+     * <p>THE REASON IT WAS LEFT OUT HAS EXPIRED, which is why it is a one-liner rather than an arc. This
+     * file recorded {@code append(double)} among the members "deliberately NOT answered, because a wrong
+     * answer is worse than a known gap: no double-to-string". There is one now -- {@code Double.toString}
+     * is the shortest decimal that round-trips (Schubfach), it is what {@code VMConcat.scDouble} and the
+     * record path already resolve BY NAME at run time, and {@code ConcatDemo} runs it on hardware.
+     *
+     * <p>NOT a widened {@code float} and not a hand-rolled formatter: both are silent wrong answers this
+     * file has already paid for -- shortest-round-trip is relative to the type's own precision, and a
+     * from-scratch formatter gets ordinary values right and NaN, the infinities and the signed zeros wrong.
+     */
+    public StringBuilder append(double d)
+    {
+        return append(Double.toString(d));
+    }
+
+    /**
+     * {@code insert(int, double)} and {@code insert(int, float)} -- taken in the SAME PASS as
+     * {@link #append(double)} rather than left for the day something calls them.
+     *
+     * <p>Neither is in the gap backlog, because nothing in the tree calls one YET -- and that is exactly the
+     * shape this file warns about: the shallow check only sees members something already references, so a
+     * half-taken surface is a trap armed for a future caller. Stock declares four float/double members and
+     * this overlay declared one; it declares all four now.
+     */
+    public StringBuilder insert(int offset, double d)
+    {
+        return insert(offset, Double.toString(d));
+    }
+
+    public StringBuilder insert(int offset, float f)
+    {
+        return insert(offset, Float.toString(f));
+    }
+
+    /**
      * {@code append(StringBuffer)} -- the descriptor is what makes this a separate member, so it has to be
      * declared even though the body is {@link #append(CharSequence)}'s.
      *

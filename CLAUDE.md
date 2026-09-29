@@ -115,6 +115,96 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`StringBuilder.append(double)` DID NOT EXIST, AND A GUEST-SOURCE PROBE STRUCTURALLY CANNOT SEE THAT --
+  THE GAP IS A DESCRIPTOR, NOT AN ANSWER (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  The overlay declared `append(float)` and not its far commoner twin, nor either
+  `insert` form; stock declares four float/double members and this overlay declared ONE. An overlay WINS the
+  name, so those three did not fall back to stock -- they ceased to exist.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`StockDescProbe` (compiled against the REAL java.base) on metal** | **`DENYLIST TRAP`, empty callee, `TRAPWIRE index=-1`, NO output at all** | **4 of 4 BYTE-IDENTICAL to the host** |
+  | `SbFpProbe`, 24 arms against the HOST ORACLE | 24 of 24 | **24 of 24 -- see below, this is COVERAGE not a control** |
+  | `javac` against the overlay, `insert(int,double)`/`insert(int,float)` | **5 errors: "no suitable method found"** | compiles |
+  | `overlaycheck` known gaps | 22 | **21** (one line removed, no collateral) |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`-`res`-`unres` / `pc:n` | -- | **`+334blob` / `+400blob` / `1146`-`3030`-`2517` / `109` -- ALL IDENTICAL** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE NEGATIVE CONTROL MOVED ZERO ARMS, AND THAT IS THE FINDING RATHER THAN A DISAPPOINTMENT.** With
+    `append(double)` removed, `SbFpProbe` still COMPILES and still prints output byte-identical to stock --
+    because `sb.append(1.5)` AUTOBOXES to `append(Object)`, which is `String.valueOf(o)`, which is
+    `Double.toString(d)`. The same formatter, the right answer, one allocation heavier. **So from guest source
+    the defect is INVISIBLE**, and all twelve `append(double)` arms are coverage, not discrimination. Saying
+    so is the point: this file's own rule is that an arm which passes in both states is not a control, and
+    twelve of them passing here would otherwise read as a gate.
+  - **WHAT THE GAP ACTUALLY IS: THE DESCRIPTOR, WHICH ONLY A PRE-COMPILED CALLER EMITS.** Every file in
+    `JDKTESTS` is compiled with `--patch-module java.base=guestsrc`, so javac resolves against the OVERLAY and
+    routes around whatever is missing. A class compiled against the REAL java.base emits
+    `invokevirtual StringBuilder.append:(D)` -- and that call resolves NOWHERE, surfacing as a `DENYLIST TRAP`
+    with an EMPTY callee and `TRAPWIRE index=-1`, the recorded signature of a late-resolution failure blaming
+    a denylist `StringBuilder` is not on. **That is this project's most-repeated defect -- this file counts instances up to a TWELFTH,
+    and nothing in the tree had ever EXECUTED one.**
+  - **SO THE INCREMENT ADDS A NEW KIND OF TEST, and `test/realjdk/` is one directory with one tiny file.**
+    `make realjdktests` compiles WITHOUT the patch-module, so its call sites carry stock descriptors; `image`
+    depends on it. It stands in for the population that actually bites: the stock java.base classes in the
+    image and every class in the RAMFS jars, none of which ever saw `guestsrc`. **`make overlaycheck` finds
+    those gaps by SCANNING; this is the first thing that RUNS one.**
+  - **THE REAL CALLER IS NAMED AND MEASURED RATHER THAN ASSUMED, and it is on a REPORTING path.** A byte scan
+    of `out/` and the RAMFS jars finds exactly one external referencer of `append:(D)`:
+    picocli's `CommandLine$Model$UsageMessageSpec`, confirmed with `javap` as a real `invokevirtual` at
+    offset 32 -- building the message `"synopsisAutoIndentThreshold must be between 0.0 and 0.9 ..."`.
+    **An exception raised while REPORTING a failure replaces the failure with itself**, which is the trap this
+    file records having hidden the launcher's real error twice. Not a hot path; the worst possible one.
+  - **THE STATED REASON FOR LEAVING IT OUT HAD EXPIRED, which is why this is a one-liner and not an arc.**
+    This file recorded `StringBuilder.append(double)` among the members "deliberately NOT answered, because a
+    wrong answer is worse than a known gap: no double-to-string". There is one now, and three call sites
+    already use it: `VMConcat.scDouble`, the record path, and `append(float)` itself -- which was added during
+    the java.math arc through `Float.toString` and whose double twin was simply never added beside it. A
+    straight ASYMMETRY, sitting in the gap backlog the whole time.
+  - **ALL FOUR STOCK MEMBERS ARE TAKEN IN ONE PASS, AND ONLY ONE WAS IN THE BACKLOG.** `append(double)` is
+    listed because something already references it; the two `insert` forms are not, because nothing does YET.
+    That is exactly the shape this file warns about -- the shallow check only sees members something already
+    calls, so a half-taken surface is a trap armed for the next caller. **Shipping half a pair is what has
+    cost a boot ten times.**
+  - **NOT A WIDENED FLOAT AND NOT A HAND-ROLLED FORMATTER, and the probe pins the difference on one line.**
+    `append(0.1f)` must render `0.1` while the same quantity widened to a double renders
+    `0.10000000149011612`; shortest-round-trip is relative to the type's OWN precision, so an implementation
+    routing either through the other's formatter passes every other arm and fails that pair. NaN, both
+    infinities and both signed zeros are the arms a from-scratch formatter fails while looking careful.
+  - **THE `insert` ARMS CARRY AN OFFSET INTO THE MIDDLE, deliberately**: an implementation that appended
+    instead of inserting, or inserted at a fixed position, passes an at-the-end arm and fails `a2.5b`.
+  - **THE BASELINE IS REGENERATED RATHER THAN LEFT TO ROT, and the diff is exactly one line** --
+    `java/lang/StringBuilder#append(D)` removed, no collateral. `overlaycheck` fails only on a NEW gap, so a
+    line for a member that now exists is silent for ever; this file records two such strays surviving a whole
+    increment unnoticed.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what three one-line guest methods have to show.**
+    Batch 2 `+334blob`, batch 64 `+400blob`, `rounds=4 pend=180 reach=17`, `memo=1146 res=3030 unres=2517`,
+    `n:imap=132 synth=60 clinits=96`, `pc:n=109` -- every one matching. **`pc:n=109` is worth naming: this
+    file records 108, and a control boot of unmodified HEAD read 109 too**, so that figure belongs to the
+    record rather than to any recent change.
+  - **THE LISP FINALE READS 56 AGAINST THE PREVIOUS RUN'S 57 AND THAT MAY NOT BE CITED, which this file
+    established against itself.** The recorded QEMU A/A pair produced 56 and 57 from an IDENTICAL binary, so a
+    one-count move sits inside that spread. **The gate is `gc: collections=46` at the churn demo, identical**,
+    which is the figure the census established and the one the cards quote beside `churnMB=625`. Stated rather
+    than rounded to "unmoved", and stated rather than read as a regression.
+  - **A THING I ASSUMED AND THEN MEASURED, because it decided whether a re-gate was owed: a DEFAULT-PACKAGE
+    probe DOES ship in the classDir.** I had taken the opposite from this file's note that such classes "cost
+    zero image bytes"; `StockDescProbe` is at `0x21da90` in the image. It mattered because a javadoc line added
+    after the gated build shifted that class's LineNumberTable -- SAME SIZE, 8 bytes, every entry +1, so no
+    layout moved -- and the suite was re-run on the byte-exact tree anyway rather than the difference being
+    argued away.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO APPENDS A `double` TO A `StringBuilder`.** So the
+    boot proves NO REGRESSION across a layout shift, and the two probes prove the feature -- `StockDescProbe`
+    that the DESCRIPTORS resolve on metal, `SbFpProbe` that the ANSWERS are stock's. Different claims, and
+    here the first is the one that matters.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** These are three one-line guest methods delegating
+    to a formatter QEMU has already diffed against stock, so cold DRAM cannot change whether `2.5` renders as
+    `2.5`. What hardware is being asked is a layout shift plus one class more in the classDir, so the arms to
+    read are the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`,
+    `LINK FAILED`) and `gc: collections=46` at the churn demo.
+
 - **A RECORD COMPONENT ABOVE U+00FF LOST DATA THREE WAYS -- `record C(char c)` AT `'€'` RENDERED AS `'¬'`,
   AND `record S(String s)` AT `"€"` CAME BACK TWO CHARACTERS LONG (2026-09-29, QEMU-GATED -- NOT YET
   PI-VALIDATED).** One root: `recordToString` built its rendering in a `byte[]` and wrapped it with

@@ -17,7 +17,6 @@ java/lang/Class#toGenericString()Ljava/lang/String;
 java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;
 java/lang/IllegalArgumentException#<init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-java/lang/StringBuilder#append(D)Ljava/lang/StringBuilder;
 java/lang/Thread#getState()Ljava/lang/Thread$State;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
