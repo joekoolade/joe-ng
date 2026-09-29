@@ -18473,26 +18473,58 @@ public final class Loader
                 return putUtf8Bytes(out, p, Magic.bytes("null"));
             }
             long str = callOnObject(v, Magic.bytes("toString"), Magic.bytes("()Ljava/lang/String;"), 0L, 1);
-            if (str == 0L)
-            {
-                return putUtf8Bytes(out, p, Magic.bytes("?"));
-            }
-            long arr = VM.strBytes(str);
-            if (arr == 0L)
-            {
-                return putUtf8Bytes(out, p, Magic.bytes("?"));
-            }
-            int n = (int) Magic.load64(arr + 16L);
-            int i = 0;
-            while (i < n && p < out.length)
-            {
-                out[p] = (byte) u1(arr + 24L + i);
-                p += 1;
-                i += 1;
-            }
-            return p;
+            return putGuestString(out, p, str);
         }
-        return putDec(out, p, v, true);                  // B S I J, and F/D by their raw bits
+        // F AND D GO THROUGH THE REAL FORMATTER, because this VM keeps a float or a double in an ORDINARY
+        // 64-BIT SLOT -- so {@code v} IS {@code Double.doubleToRawLongBits(d)}, and letting it fall through
+        // to putDec below printed a nineteen-digit integer where stock prints the number. It is also how the
+        // 2026-09-28 bare-minus defect reached a double: {@code doubleToRawLongBits(-0.0)} is
+        // {@code 0x8000000000000000}, which IS {@code Long.MIN_VALUE}.
+        //
+        // RESOLVED BY NAME AT RUNTIME rather than formatted here, which is the whole design decision.
+        // {@code Double.toString} is the SHORTEST decimal that round-trips (Schubfach), and re-deriving that
+        // by hand is a silent wrong answer waiting to happen -- it would get ordinary values right and NaN,
+        // the infinities and the signed zeros wrong. {@code VMConcat.scDouble} already reaches the stock
+        // formatter through these same two accessors; this is the same route from the record path.
+        //
+        // AND A FLOAT IS NOT A WIDENED DOUBLE, which is why there are two accessors and not one:
+        // {@code Float.toString(0.1f)} is "0.1" where {@code Double.toString((double) 0.1f)} is
+        // "0.10000000149011612". The slot holds a float's raw int SIGN-EXTENDED, so the low 32 bits are
+        // masked out before the call -- exactly what {@code VMConcat.scFloat} does.
+        if (tc == 'D' || tc == 'F')
+        {
+            long buf = tc == 'D' ? doubleToStringBuf() : floatToStringBuf();
+            if (buf == 0L)
+            {
+                return putUtf8Bytes(out, p, Magic.bytes("?"));
+            }
+            long bits = tc == 'D' ? v : (v & 0xFFFFFFFFL);
+            return putGuestString(out, p, Magic.call2(buf, bits, 0L));
+        }
+        return putDec(out, p, v, true);                  // B S I J
+    }
+
+    /** Append a guest {@code String}'s bytes; {@code "?"} if it or its array is missing. */
+    private static int putGuestString(byte[] out, int p, long str)
+    {
+        if (str == 0L)
+        {
+            return putUtf8Bytes(out, p, Magic.bytes("?"));
+        }
+        long arr = VM.strBytes(str);
+        if (arr == 0L)
+        {
+            return putUtf8Bytes(out, p, Magic.bytes("?"));
+        }
+        int n = (int) Magic.load64(arr + 16L);
+        int i = 0;
+        while (i < n && p < out.length)
+        {
+            out[p] = (byte) u1(arr + 24L + i);
+            p += 1;
+            i += 1;
+        }
+        return p;
     }
 
     /** Append a plain ASCII {@code byte[]}; returns the new position. */
