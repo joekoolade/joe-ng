@@ -117,7 +117,7 @@ defines the minimum the assembler must encode.
 
 - **THE `java/util/DualPivotQuicksort` OVERLAY IS DELETED AND STOCK RUNS -- `Arrays.sort` COULD NOT SORT A
   `byte[]`, `char[]` OR `short[]` AT ALL, AND THE FIX IS A DELETION RATHER THAN THE THREE MISSING OVERLOADS
-  (2026-09-28, QEMU-GATED -- NOT YET PI-VALIDATED).** 107 hand-written lines shadowing a 4,429-line stock
+  (2026-09-28, PI-VALIDATED).** 107 hand-written lines shadowing a 4,429-line stock
   class, declaring four overloads where stock's callers reference seven, so three of the seven primitive
   types trapped:
 
@@ -148,6 +148,7 @@ defines the minimum the assembler must encode.
   | `rounds` / `pend` / `reach` | 4 / 180 / 17 | **4 / 180 / 17 -- IDENTICAL** |
   | `n:imap` / `synth` / `clinits` | 132 / 36 / 96 | **132 / 60 / 96 (synth +24)** |
   | image (same-build-path control) | 33,921,068 | **33,931,388 (+10,320 B)** -- and ZERO new classes |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, `46`/`56`, closure EXACT, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **I EXTENDED THE OVERLAY FIRST, AND THAT WAS THE WRONG FIX -- CORRECTED ON REVIEW, NOT BY A FAILURE.**
@@ -231,13 +232,59 @@ defines the minimum the assembler must encode.
     overlay extended, and with stock, so it is demonstrably none of them. **The arm is left FAILING rather
     than removed**, because deleting it would hide a live silent wrong answer, and `append(int)` is on the
     hottest path in the VM -- every batch line and every diagnostic -- so it earns its own suite gate.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The sorting is integer and float arithmetic in
-    the guest world and QEMU has already diffed all 26 arms against stock, so cold DRAM cannot change
-    whether `-128` sorts below `127`. What hardware is being asked is **a 37,784-byte layout shift plus three
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- EVERY ABSENCE HOLDS.**
+    None of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED` or
+    `CLINIT REJECTED` appears anywhere, across 40 programs to `self-build retired` -- and the last three are
+    the arms this increment added, `DENYLIST TRAP`/`LINK FAILED` being exactly what the four-overload overlay
+    produced. `ArraysDemo` reads `sort[0]=0 sort[9]=9 ascending=1 sort(neg)[0]=-5 sort(neg)[4]=3`.
+  - **A CORRECTION TO THIS CARD'S OWN GATE SENTENCE, AND IT NARROWS WHAT SILICON CLAIMS -- THE SAME SHAPE THE
+    TimeUnit CARD HAD TO MAKE.** I wrote that hardware is being asked **a 37,784-byte layout shift PLUS three
     java.base initializers (`ForkJoinTask`, `CountedCompleter`, `ForkJoinTask$Aux`) running that never ran
-    before** -- the arms to read are the ABSENCES (`FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`,
-    `DENYLIST TRAP`, `LINK FAILED`, `CLINIT REJECTED`) plus `gc: collections=46` at the churn demo and the
-    batch-2 closure at `+334blob`.
+    before**. **ONLY THE FIRST HALF WAS ASKED.** The string `ForkJoin` does not occur anywhere in the boot,
+    no `INITIALIZER RUNNING UNDER THE LOADER LOCK` line prints, and **`clinitLk=0` on every one of the 64
+    batch lines** -- so no initializer ran under the loader lock at all, and the three the PROBE boot showed
+    did not run here. The suite sorts `int[]` twice and nothing else, which takes stock's insertion-sort path
+    and never reaches the parallel machinery. **So hardware answered the LAYOUT SHIFT across 40 programs on
+    cold DRAM, and the ForkJoin initialization is QEMU's** -- proven by the probe boot, which prints all
+    three initializing and then sorts all seven types correctly.
+  - **AND `clinitLk=0` IS A STRONGER READING THAN THE ONE THIS CARD FIRST OFFERED.** The bullet above says
+    the suite log "cannot settle whether ForkJoin was PULLED" because `load` lines are gated and the report
+    is capped at 8. That stands for PULLING. What `clinitLk=0` does settle is that nothing RAN an initializer
+    under the lock -- so whatever was pulled, those three initializers were not executed on this boot.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, then `56` at the lisp finale with
+    `lisp evals=600 result=610 stable=1`. Batch 2 `+334blob` and batch 64 `+400blob`, `rounds=4 pend=180
+    reach=17`, `n:imap=132 synth=60 clinits=96`, `pc:n=108`, `sy:n=74 chg=0`, `bakeMemosDropped=14`,
+    `sync: static seen=18 nomonitor=0`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `char isPrimitive=true name=char`.
+  - **THE RECORDED CROSS-HARNESS SPLIT REPRODUCES, WHICH IS A CHECK RATHER THAN A CURIOSITY.** Silicon reads
+    `memo=1146 res=3027 unres=2514` against QEMU's `1146 / 3030 / 2517` -- the same shape this file records
+    (`res`/`unres` three lower on hardware), attributed to the hardware RNG path being compiled on one
+    harness and not the other. **`pc:n=108` is EQUAL on both here**, where the recorded split was 3/3/1, so
+    it is 3/3/0 this time. A change that perturbed patch-site counts would have moved `memo` too; it did not.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, the
+    seventeen-arm boot battery all PASS, and WiFi running the whole chain -> `wifi: JOINED` -> `pmk ready`
+    -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` -> DHCP 192.168.1.247 ->
+    `ping reply` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`**.
+  - **THE ONLY `UNRESOLVED STATIC`/`TRAP-WIRED` LINES ARE THE SEVEN KNOWN ONES (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.**
+    **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off the pasted console capture rather than grepped
+    on disk**, which is weaker than an anchored grep -- a marker in a region I skimmed would not have been
+    caught, and the batch lines are dense.
+  - **ONE FIGURE MOVED AND IT IS THE REMOTE PAGE RATHER THAN THE VM:** `HTTP/1.1 200 OK` carries **997
+    bytes** where the previous boot recorded 996 and older ones 828/829. The body's own `Last-Modified:
+    Mon, 28 Sep 2026 16:19:32 GMT` is nine seconds later than the 16:19:23 this file recorded yesterday, so
+    example.com changed under us again. The all-Java net stack delivered whatever the origin served, which
+    is the property that arm tests.
+  - **THE SEVENTEENTH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `af7b1cf0 10f5690a 04e1a920`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **42 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42. **Still not a randomness test**: what stays ruled out is a
+    constant, a counter, and a count that does not follow reads.
 
 - **THE `java/util/Collections` OVERLAY IS DELETED AND STOCK RUNS -- `unmodifiableList` RETURNED THE BACKING
   LIST, SO A CALLER THAT MUTATED THE "VIEW" CORRUPTED THE ORIGINAL (2026-09-28, QEMU-GATED -- NOT YET
