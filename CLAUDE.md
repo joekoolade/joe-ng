@@ -115,6 +115,96 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A `float` OR `double` RECORD COMPONENT PRINTED ITS RAW BITS -- `record D(double d)` AT 1.5 RENDERED AS
+  `D[d=4609434218613702656]` (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).** `Loader.putComponent`
+  special-cases `Z`, `C`, `L` and `[`; everything else fell through to `putDec`, which renders a DECIMAL
+  INTEGER. Right for `B`/`S`/`I`/`J`, and wrong for the two that are not integers:
+
+  ```java
+  return putDec(out, p, v, true);                  // B S I J, and F/D by their raw bits
+  ```
+
+  **This VM keeps a float or a double in an ORDINARY 64-BIT SLOT**, so the slot IS
+  `Double.doubleToRawLongBits(d)` and the comment was describing the defect rather than a decision.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`RecordFpProbe`, 22 arms against the HOST ORACLE** | **16 WRONG** | **22 of 22 BYTE-IDENTICAL** |
+  | `record D(double)` at `1.5` | **`D[d=4609434218613702656]`** | **`D[d=1.5]`** |
+  | ... at `-0.0` | **`D[d=-9223372036854775808]`** | **`D[d=-0.0]`** |
+  | ... at `0.0` | **`D[d=0]`** | **`D[d=0.0]`** |
+  | ... at `NaN` / `Infinity` / `-Infinity` | **`9221120237041090560` / `9218868437227405312` / `-4503599627370496`** | **`NaN` / `Infinity` / `-Infinity`** |
+  | `record F(float)` at `1.5f` / `0.1f` | **`1069547520` / `1036831949`** | **`1.5` / `0.1`** |
+  | the 6 integral and reference arms | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | `gc: collections` at the lisp finale | 57 | **57 -- unmoved too** |
+  | `churnMB` / `lisp evals result stable` | 625 32 32 / 600 610 1 | **identical** |
+  | closure: batch 2, batch 64, `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **EVERY ONE IDENTICAL to the previous increment** |
+  | image (same-build-path control) | 33,974,836 | **33,975,504 (+668 B)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE `-0.0` ARM IS WHERE THIS DEFECT AND THE PREVIOUS ONE MET, which is why it is kept rather than
+    folded into the other float arms.** `doubleToRawLongBits(-0.0)` is `0x8000000000000000`, which IS
+    `Long.MIN_VALUE` -- so until `putDec` was repaired one increment ago, a `double` component holding
+    `-0.0` came out as a BARE `-`. The raw-bits rendering is how the bare-minus bug reached a double at all,
+    and fixing the emitter turned that arm from `-` into a correct-looking nineteen-digit integer, which is
+    a BETTER wrong answer and still a wrong one.
+  - **AND `0.0` PRINTED AS `0`, WHICH IS THE SHAPE THAT MAKES THIS FAMILY EXPENSIVE.** Stock prints `0.0`.
+    A reader scanning a record's `toString` sees a plausible number and moves on; only the arms carrying a
+    value whose raw bits are LARGE make the defect obvious. **Nineteen digits is what got this noticed;
+    `0` is what would have kept it hidden.**
+  - **THE FORMATTER IS RESOLVED BY NAME AT RUNTIME RATHER THAN WRITTEN HERE, and that is the design
+    decision.** `Double.toString` is the SHORTEST decimal that round-trips (Schubfach), and re-deriving it
+    by hand is a silent wrong answer waiting to happen: it gets ordinary values right and NaN, the two
+    infinities and the signed zeros wrong. `VMConcat.scDouble` already reaches the stock formatter through
+    `Loader.doubleToStringBuf()`/`floatToStringBuf()`; this is the same route taken from the record path,
+    so there is one formatter in the VM and not two. **The NaN and Infinity arms are what check that
+    claim** -- they are precisely the values a hand-rolled mantissa/exponent formatter gets wrong while
+    looking careful.
+  - **A FLOAT IS NOT A WIDENED DOUBLE, which is why there are two accessors and not one.**
+    `Float.toString(0.1f)` is `"0.1"` where `Double.toString((double) 0.1f)` is `"0.10000000149011612"` --
+    shortest-round-trip is relative to the type's OWN precision. The slot holds a float's raw int
+    SIGN-EXTENDED (`-0.0f` reads as `-2147483648`), so the low 32 bits are masked before the call, exactly
+    as `VMConcat.scFloat` does.
+  - **THE `L`/`[` ARM'S STRING COPY IS FACTORED OUT RATHER THAN DUPLICATED.** `putGuestString` is the
+    existing body moved, not rewritten, so the reference path and the new float path append a guest String
+    the same way -- and the two "?" fallbacks (no formatter, or a String with no backing array) keep the
+    shape the reference arm already had.
+  - **A THIRD ISSUE IN THE SAME METHOD, MEASURED AND DELIBERATELY NOT BUNDLED: a `char` component above 255
+    TRUNCATES.** The `C` arm writes ONE BYTE (`out[p] = (byte) (int) v`) and `guestString` builds a LATIN1
+    String (`coder@24 stays 0`), so the whole record-`toString` buffer can only carry code points 0..255:
+    `'€'` renders as `'¬'`. **It is not a one-line fix** -- it needs the buffer to become
+    UTF-16-capable, which is a different and larger change touching every `putXxx` in the family. The
+    probe's char arms are deliberately ASCII so this does not ship as a second red arm, and it is recorded
+    here so the next reader finds it stated rather than re-derives it.
+  - **THE PROBE'S INTEGRAL AND REFERENCE ARMS ARE THE BUILT-IN COMPARISON, stated because an arm that
+    passes in both states is not a control.** `byte`, `short`, `int`, `long`, `boolean`, a `String`, a null
+    reference and a mixed record all pass whether or not the float path is right -- including
+    `Ints[b=-128, sh=-32768, i=-2147483648, l=-9223372036854775808, z=false]`, which is the previous
+    increment's `putDec` repair still holding at every extreme.
+  - **THE CLOSURE DID NOT MOVE BY ONE COUNTER, which is what a change confined to one method body has to
+    show.** Batch 2 `+334blob`, batch 64 `+400blob`, `rounds=4 pend=180 reach=17`,
+    `memo=1146 res=3030 unres=2517`, `n:imap=132 synth=60 clinits=96` -- every one byte-identical to the
+    `MinValueProbe` gate, and **both `gc: collections` figures are unmoved at 46 and 57**. The image moves
+    668 bytes. **`Double.toString` was ALREADY in the closure** -- `VMConcat.scDouble` reaches it for every
+    double concat -- so routing the record path to the same formatter adds no class and no batch.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: IT CONSTRUCTS NO RECORD AT ALL.** So the boot proves NO
+    REGRESSION across a 668-byte layout shift and a new call from `Loader` into a demand-loaded formatter,
+    and `RecordFpProbe`'s 22 arms against a byte-identical host oracle are what prove the feature.
+    Different claims.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK.** 31 markers zero -- notably `DENYLIST TRAP` 0 and
+    `LINK FAILED` 0, which are what a formatter that failed to resolve from this new call site would
+    produce. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences),
+    each labelled DENYLISTED, and the anchored `FAULT` grep reads 0.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** QEMU has already diffed all 22 arms against
+    stock, so cold DRAM cannot change whether `1.5` prints as `1.5`. What hardware is being asked is a
+    668-byte layout shift plus **a call from VM-side `Loader` code into a DEMAND-LOADED guest formatter on
+    a path that never made one before** -- `callOnObject` in the neighbouring arm already does this, so the
+    shape is validated, but this call site is not. The arms to read are the ABSENCES (`FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`) plus `gc: collections=46` at the
+    churn demo and the batch-2 closure at `+334blob`.
+
 - **`Integer.MIN_VALUE` APPENDED AS A BARE `-` AND `Long.MIN_VALUE` RENDERED A RECORD COMPONENT AS ONE --
   THE FOURTH AND FIFTH SITES OF A DEFECT FIXED THREE TIMES ALREADY (2026-09-28, QEMU-GATED -- NOT YET
   PI-VALIDATED).** `-Integer.MIN_VALUE` is still `Integer.MIN_VALUE`, so an emitter that negates and then
