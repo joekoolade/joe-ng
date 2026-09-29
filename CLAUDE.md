@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **A `float` OR `double` RECORD COMPONENT PRINTED ITS RAW BITS -- `record D(double d)` AT 1.5 RENDERED AS
-  `D[d=4609434218613702656]` (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).** `Loader.putComponent`
+  `D[d=4609434218613702656]` (2026-09-29, PI-VALIDATED).** `Loader.putComponent`
   special-cases `Z`, `C`, `L` and `[`; everything else fell through to `putDec`, which renders a DECIMAL
   INTEGER. Right for `B`/`S`/`I`/`J`, and wrong for the two that are not integers:
 
@@ -141,6 +141,7 @@ defines the minimum the assembler must encode.
   | `gc: collections` at the lisp finale | 57 | **57 -- unmoved too** |
   | `churnMB` / `lisp evals result stable` | 625 32 32 / 600 610 1 | **identical** |
   | closure: batch 2, batch 64, `rounds`/`pend`/`reach`, `memo`/`res`/`unres`, `n:imap`/`synth`/`clinits` | -- | **EVERY ONE IDENTICAL to the previous increment** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, `46`/`57`, closure EXACT, WiFi -> HTTP 200 OK** |
   | image (same-build-path control) | 33,974,836 | **33,975,504 (+668 B)** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
@@ -197,13 +198,62 @@ defines the minimum the assembler must encode.
     `LINK FAILED` 0, which are what a formatter that failed to resolve from this new call site would
     produce. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences),
     each labelled DENYLISTED, and the anchored `FAULT` grep reads 0.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** QEMU has already diffed all 22 arms against
-    stock, so cold DRAM cannot change whether `1.5` prints as `1.5`. What hardware is being asked is a
-    668-byte layout shift plus **a call from VM-side `Loader` code into a DEMAND-LOADED guest formatter on
-    a path that never made one before** -- `callOnObject` in the neighbouring arm already does this, so the
-    shape is validated, but this call site is not. The arms to read are the ABSENCES (`FAULT`, `ESR EC=`,
-    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`) plus `gc: collections=46` at the
-    churn demo and the batch-2 closure at `+334blob`.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- EVERY ABSENCE HOLDS.**
+    None of `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED` or
+    `CLINIT REJECTED` appears anywhere, across 40 programs to `self-build retired` -- and `DENYLIST TRAP`/
+    `LINK FAILED` are the two this increment added, being what a formatter that failed to resolve from the
+    new call site would produce.
+  - **A CORRECTION TO THIS CARD'S OWN GATE SENTENCE, AND IT NARROWS WHAT SILICON CLAIMS -- THE THIRD CARD IN
+    A ROW TO OWE ONE.** I wrote that hardware is being asked a 668-byte layout shift **PLUS a call from
+    VM-side `Loader` code into a DEMAND-LOADED guest formatter on a path that never made one before**.
+    **ONLY THE FIRST HALF WAS ASKED.** `putComponent` runs only for a record's `toString`, and **NO SUITE
+    DEMO DECLARES A RECORD** -- measured, not assumed: the three sources in the tree that declare one
+    (`RecordFpProbe`, `MinValueProbe`, `AnnoProxyProbe`) are all `JDKTESTS`, none of them a suite program.
+    So the new call site executed ZERO times on this boot, and hardware answered the LAYOUT SHIFT across 40
+    programs on cold DRAM.
+  - **WHAT SILICON DOES ESTABLISH ABOUT THE FORMATTER, which is weaker than the card claimed and stronger
+    than nothing.** `doubleToStringBuf()`/`floatToStringBuf()` have exactly three callers --
+    `VMConcat.scDouble`, `VMConcat.scFloat` and this new arm -- and `ConcatDemo` runs the first two on
+    hardware: `dbl 1.5 = [1.5]`, `dbl -0.0 = [-0.0]`, `dbl NaN = [NaN]`, `flt 0.1f = [0.1]` and
+    `flt vs dbl = [0.1|0.10000000149011612]`, all exact. **So the by-name resolution of the stock formatter,
+    and both accessors, are PI-VALIDATED -- from the concat call site.** What is QEMU's is reaching them
+    from `putComponent`, and `RecordFpProbe`'s 22 arms against a byte-identical host oracle are what prove
+    that. Different claims.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, then `57` at the lisp finale -- **the same pair the QEMU arm of
+    this binary read**, so the sensitivity detector did not move either. Batch 2 `+334blob` and batch 64
+    `+400blob`, `rounds=4 pend=180 reach=17`, `n:imap=132 synth=60 clinits=96`, `pc:n=108`,
+    `bakeMemosDropped=14`, `sync: static seen=18 nomonitor=0`, `lisp evals=600 result=610 stable=1`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, `char isPrimitive=true name=char`.
+  - **THE RECORDED CROSS-HARNESS SPLIT REPRODUCES, WHICH IS A CHECK RATHER THAN A CURIOSITY.** Silicon reads
+    `memo=1146 res=3027 unres=2514` against QEMU's `1146 / 3030 / 2517` -- the same shape this file records
+    (`res`/`unres` three lower on hardware), attributed to the hardware RNG path being compiled on one
+    harness and not the other. **`pc:n=108` is EQUAL on both**, so it is 3/3/0 again, exactly as the
+    `DualPivotQuicksort` boot read. A change that perturbed patch-site counts would have moved `memo` too;
+    it did not.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `sha256 clone = .../fork-ok`, `hw rng: RNG200 live` with `two instances differ`, the
+    seventeen-arm boot battery all PASS, and WiFi running the whole chain -> `wifi: JOINED` -> `pmk ready`
+    -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` -> DHCP 192.168.1.247 ->
+    `ping reply` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`**.
+  - **THE ONLY `UNRESOLVED STATIC`/`TRAP-WIRED` LINES ARE THE SEVEN KNOWN ONES (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.**
+    **STATED LIMIT ON THE INSTRUMENT: this sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than an anchored grep -- a marker in a region I skimmed would not
+    have been caught, and the batch lines are dense.
+  - **ONE FIGURE MOVED AND IT IS A RESPONSE HEADER RATHER THAN THE VM:** `HTTP/1.1 200 OK` carries **998
+    bytes** where the previous boot recorded 997. The body's own `Last-Modified: Mon, 28 Sep 2026 16:19:32
+    GMT` is IDENTICAL to that boot, so the page did not change -- the count covers headers too, and `Age:`
+    is a variable-length decimal that read `13432` here. **Stated as a reading rather than a measurement**,
+    but it is the one field in that response that grows a digit on its own.
+  - **THE EIGHTEENTH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `d9f6c6c2 d236b630 51354ead`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **49 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49. **Still not a randomness test**: what stays ruled out is
+    a constant, a counter, and a count that does not follow reads.
 
 - **`Integer.MIN_VALUE` APPENDED AS A BARE `-` AND `Long.MIN_VALUE` RENDERED A RECORD COMPONENT AS ONE --
   THE FOURTH AND FIFTH SITES OF A DEFECT FIXED THREE TIMES ALREADY (2026-09-28, QEMU-GATED -- NOT YET
