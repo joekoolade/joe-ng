@@ -18389,6 +18389,19 @@ public final class Loader
     /** Append the ASCII of {@code v} (decimal, signed) at {@code p}; returns the new position. */
     private static int putDec(byte[] out, int p, long v, boolean signed)
     {
+        // THE DIGITS ARE TAKEN IN THE NEGATIVE DOMAIN, for the reason {@code VMConcat.scLong} already
+        // records: there is no type wider than long to borrow, and {@code -Long.MIN_VALUE} is still
+        // {@code Long.MIN_VALUE} -- negating left the value NEGATIVE, the {@code v > 0} loop ran ZERO
+        // times, the {@code v == 0} arm did not fire either, and {@code Long.MIN_VALUE} rendered as a
+        // BARE "-" with no digits at all. The negative side of two's complement holds one more value than
+        // the positive side, so working there covers every long; {@code v % 10} is then non-positive and
+        // negating just the DIGIT is always in range.
+        //
+        // REACHABLE RATHER THAN THEORETICAL, which is why it is fixed here and not merely noted: this
+        // renders one component of a record's toString, and the line below hands it B/S/I/J directly AND
+        // F/D BY THEIR RAW BITS -- and {@code Double.doubleToRawLongBits(-0.0)} is 0x8000000000000000,
+        // which IS {@code Long.MIN_VALUE}. So a record with a {@code double} field holding -0.0 hit this,
+        // as did any {@code long} field at MIN_VALUE.
         if (signed && v < 0L)
         {
             if (p < out.length)
@@ -18396,7 +18409,10 @@ public final class Loader
                 out[p] = (byte) '-';
                 p += 1;
             }
-            v = -v;
+        }
+        else if (v > 0L)
+        {
+            v = -v;                                      // magnitude, in the negative domain
         }
         byte[] tmp = new byte[24];
         int k = 0;
@@ -18405,9 +18421,9 @@ public final class Loader
             tmp[0] = (byte) '0';
             k = 1;
         }
-        while (v > 0L)
+        while (v < 0L)
         {
-            tmp[k] = (byte) ('0' + (int) (v % 10L));
+            tmp[k] = (byte) ('0' - (int) (v % 10L));
             v = v / 10L;
             k += 1;
         }

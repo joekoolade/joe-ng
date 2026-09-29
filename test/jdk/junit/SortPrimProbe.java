@@ -66,16 +66,13 @@ import java.util.Arrays;
  * passes in both states is not a control. They pass whatever the algorithm is; they are here so that a
  * change which broke the common case shows up beside the sharp arms rather than hiding behind them.
  *
- * <p>ONE ARM DIVERGES AND IT IS NOT ABOUT SORTING -- STATED RATHER THAN REMOVED. The int MIN/MAX arm prints
- * {@code [-,-1,0,1,2147483647]} on metal against the host's {@code [-2147483648,...]}: a bare minus sign for
- * {@code Integer.MIN_VALUE}. That is {@code StringBuilder.append(int)}, which hand-rolls its digits and does
- * {@code v = -v} -- and {@code -Integer.MIN_VALUE} is still {@code Integer.MIN_VALUE}, so the {@code v > 0}
- * loop writes NO digits. It is the FOURTH site of a defect this project recorded and fixed on 2026-09-19 in
- * {@code VMConcat.scInt}, {@code scLong} and {@code VM.printDec}, whose comment describes this exact shape;
- * {@code append(long)} survives only because it delegates to {@code Long.toString}. **It is present in BOTH
- * arms of this increment's A/B, so it is demonstrably pre-existing and not the sort change** -- the arm is
- * kept failing on purpose, because removing it would hide a live silent wrong answer, and it is fixed in its
- * own increment rather than bundled here.
+ * <p>THE int MIN/MAX ARM WAS RED FOR ONE INCREMENT AND IS GREEN NOW, which is worth recording rather than
+ * quietly deleting. It printed {@code [-,-1,0,1,2147483647]} -- a bare minus sign for
+ * {@code Integer.MIN_VALUE} -- because {@code StringBuilder.append(int)} negated in int and
+ * {@code -Integer.MIN_VALUE} is still {@code Integer.MIN_VALUE}, so its digit loop ran zero times. That was
+ * a PRE-EXISTING defect this probe merely walked into, present identically with the sort overlay, with the
+ * overlay extended, and with stock; it was fixed on 2026-09-28 in its own increment, and
+ * {@code test/jdk/junit/MinValueProbe} is what covers it directly.
  *
  * <p>NO ANONYMOUS OR NESTED CLASSES ANYWHERE, deliberately: a probe lives in the DEFAULT PACKAGE, which
  * matches no {@code demandLoadable} prefix, so whether a nested {@code SortPrimProbe$1} reaches the image's
