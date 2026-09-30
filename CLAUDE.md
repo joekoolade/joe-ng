@@ -115,6 +115,151 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `Boolean`, `Byte`, `Short` AND `Number` OVERLAYS ARE DELETED AND STOCK RUNS -- AND THE DELETION
+  EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** Four hand-written classes -- 114/233/215/26 lines against stock's
+  368/595/614/126 -- with **ZERO natives between them**, measured, dropping SIXTEEN referenced members.
+  `java/lang/Number`'s whole body was:
+
+  ```java
+  public abstract class Number
+  {
+      public Number() { }                              // and nothing else: no intValue, no longValue, ...
+  }
+  ```
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`WrapProbe`, 92 arms against the HOST ORACLE** | **28 arms would not COMPILE** | **92 of 92 BYTE-IDENTICAL** |
+  | `Byte.compareUnsigned(-1, 1)` vs `compare(-1, 1)` | **does not exist** / `lt` | **`gt` / `lt`** |
+  | `Short.toUnsignedInt(-1)` / `toUnsignedLong(-1)` | **do not exist** | **65535 / 65535** |
+  | `Short.reverseBytes(0x1234)` / `(0x00FF)` | **does not exist** | **13330 / -256** |
+  | `Boolean.hashCode(true)` static, and `== TRUE.hashCode()` | **does not exist** | **1231 / 1** |
+  | `logicalAnd`/`logicalOr`/`logicalXor` | **do not exist** | **0 / 1 / 0 and 1** |
+  | `Byte.shortValue()` / `Short.byteValue()` of 300 | **do not exist** | **-1 / 44 (a TRUNCATION)** |
+  | every accessor through a `Number`-typed reference | **does not exist -- NOT ONE of the six** | **all six exact** |
+  | the 64 interning/parsing/range/`TYPE` arms | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 30 markers zero |
+  | **`BoxingDemo`'s JLS 5.1.7 arms, IN THE SUITE** | -- | **`byte`/`short` interned, 1000 fresh, both ENDS, autobox -- all exact** |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `clinits` | -- | **BYTE-IDENTICAL; only `n:imap` moves, 133 -> 137** |
+  | image (same-build-path, probe excluded from BOTH) | 34,081,328 | **34,092,468 (+11,140 B, +0.033%)** |
+  | dropped supertypes | 88 | **79** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE REAL FINDING IS A BOOT FAULT THE OVERLAYS WERE HIDING, AND ITS OWN JAVADOC HAD DOCUMENTED IT.**
+    Stock `Boolean.<clinit>` is `TYPE = Class.getPrimitiveClass("boolean")` plus the `TRUE`/`FALSE`
+    singletons, and `ImageBuilder.use` schedules a BAKED class's `<clinit>` into `VM.initClasses` -- where
+    `getPrimitiveClass` reaches the native `Class.primitiveClass0`, which the baked world cannot resolve.
+    The first boot died before `launch`:
+
+    ```
+    EXCEPTION CLASS NOT LOADED (thrown object has no Type): java/lang/NullPointerException
+        at java/lang/Class.primitiveClass0
+        at java/lang/Boolean.<clinit>(Boolean.java:81)
+        at vm/VM.initClasses
+    FAULT el=4 esr=0x96000021
+    ```
+
+    **The retired overlay's own comment described the hazard exactly** -- *"Deliberately NOT `final` and
+    deliberately UNINITIALIZED: the VM fills it in ... An initializer would also run in `<clinit>` AFTER the
+    seeding and null it back out"* -- so the one part of that overlay that was NOT a minimum argument was
+    the part I removed first.
+  - **AND IT IS THE SAME FAULT, AT THE SAME NATIVE, THAT THIS FILE RECORDS SOLVING TWICE.** `Integer` and
+    `Long` are on `ImageBuilder.bakeNoClinit` for precisely this; the float/double concat arc put `Double`
+    and `Float` there for precisely this and took them out again when it was reverted. Boolean, Byte and
+    Short were missing from that list ONLY because their overlays had no such initializer -- the outer
+    classes declared `TYPE` with no assignment, so they had no `<clinit>` at all. All three are on it now.
+  - **THE FAULT MOVING IS WHAT PROVED THE FIRST ENTRY TOOK, which is worth more than the fix.** Adding
+    Boolean alone moved the fault to `java/lang/Byte.<clinit>(Byte.java:80)` -- same native, same
+    `VM.initClasses` frame. A fix that produces the identical failure is indistinguishable from one that
+    never compiled in (below); a fix that moves it one class along has demonstrably taken.
+  - **AND THE RUN BEFORE THAT ONE *WAS* THE NEVER-COMPILED CASE -- THE RECORDED HARNESS TRAP, WALKED INTO
+    AGAIN.** My probe harness went straight to `BuildRuntimeImage`, which READS `out/` and compiles nothing,
+    so a `writer/ImageBuilder` edit produced an image with the old writer and the byte-identical failure.
+    This file already records `scripts/run-launcher.sh` doing exactly this ("an edit that was never compiled
+    produced an image BYTE-IDENTICAL to the previous run's -- reading exactly like a change that does
+    nothing"). The harness runs `make build plugins` first now, with the reason at the line.
+  - **THE BAKED AND GUEST WORLDS ARE DELIBERATELY ASYMMETRIC HERE, and that is a reading of what the two
+    can do rather than a convenience.** `bakeNoClinit` stops the WRITER scheduling the initializer, because
+    the baked world cannot resolve that native; the METAL world runs stock `Boolean.<clinit>` normally,
+    because `getPrimitiveClass` demonstrably works there -- which the `Character` deletion established and
+    the probe's `TYPE == boolean.class = 1` arm re-confirms. `Byte` and `Short` were already on
+    `Loader.clinitBlocked`, so their metal initializers do not run either and `seedPrimType` fills `TYPE`.
+  - **THE SNAPSHOT DEEP-BAKES `TRUE`/`FALSE`, READ OUT OF THE IMAGE RATHER THAN ASSUMED.** With the
+    initializer deferred, `Boolean.TRUE` and `FALSE` come from the seed JVM through `StaticSnapshot` -- and
+    at their `statmap` cells they hold `0x00178b40` and `0x00178b58`, real image objects sharing one TIB
+    (`0x0015e070`) with `value@16` reading **1** and **0**. So the object-graph half of the snapshot works
+    for a class outside `ImmutableCollections`/`IntegerCache`, and `StaticSnapshot`'s own doc ("primitives
+    only so far") is a comment whose premise expired.
+  - **`TYPE` IS BAKED 0 FOR ALL THREE, WHICH IS CORRECT AND IS WHY THE SEED IS STILL LOAD-BEARING.** A host
+    `java.lang.Class` has no image representation, so the writer stores 0 -- `Boolean.TYPE`, `Byte.TYPE` and
+    `Short.TYPE` all read `0x00000000` at their cells -- and `seedPrimType` fills them. The three
+    `TYPE == <primitive>.class` arms are what say that still happens.
+  - **AND `ByteCache.cache == archivedCache`, INTERNED TO ONE BAKED ARRAY** (`0x00174ad0` at both cells),
+    exactly as the wrapper-cache card records for Integer and Long. So stock's ADOPT branch is live for
+    Byte's cache rather than its BUILD branch, and the `Boxing.byte 5 interned = 1` arm in the suite is
+    reading a baked element.
+  - **THE `Number` OVERLAY IS THE ONE WORTH SINGLING OUT, because it dropped ALL SIX accessors.** Stock
+    declares `intValue`/`longValue`/`floatValue`/`doubleValue` abstract and `byteValue`/`shortValue`
+    concrete; the overlay declared a constructor and nothing else, with its javadoc stating *"Real Number's
+    abstract accessors (intValue, ...) aren't needed here"* -- **the eighth distinct non-natives
+    justification in this arc.** The consequence is not subtle: NOTHING could be called through a
+    `Number`-typed reference, and javac says so six times. The last six probe arms exist for that and for
+    one more reason -- `((Number) Short.valueOf((short) 300)).byteValue()` is **44**, a truncation, so a
+    narrowing done at the wrong width is a wrong ANSWER rather than a missing member.
+  - **THE SIGNED/UNSIGNED PAIRS ARE THE ARMS A PLAUSIBLE WRONG IMPLEMENTATION FAILS, and nothing else
+    catches them.** `Byte.compare((byte) -1, (byte) 1)` is `lt` and `Byte.compareUnsigned` of the same pair
+    is `gt` -- 255 against 1 -- so an implementation that aliased the unsigned form to the signed one
+    differs on exactly those arms. Same for `Short.toUnsignedInt((short) -1)`, which is **65535** where a
+    sign-extending implementation answers -1, and `reverseBytes((short) 0x00FF)`, which is **-256** because
+    `0xFF00` is negative as a short. Same discriminator the `DualPivotQuicksort` deletion used for
+    `char`-unsigned against `byte`/`short`-signed.
+  - **THE CONTROL IS REPORTED AS COMPILE ERRORS, and that IS the overlay-drops-stock-members finding.** One
+    source does not compile against both worlds: **28 arms fail with 13 distinct missing symbols**, so the
+    control cannot run them at all. What remains -- 64 arms of interning, parsing, range throws, `decode`,
+    `equals`/`hashCode`/`compareTo`/`toString` and the `TYPE` identities -- passed under the overlays too,
+    which is what those overlays had been patched into being over several increments. **So the defect yield
+    here is the dropped MEMBERS and the boot fault, NOT a wrong answer in what was declared**, and that is
+    stated rather than dressed up: `hashCode`, `compare`, `equals` and the parsing bodies were all correct.
+  - **THE SUITE EXERCISES THIS FEATURE, WHICH THE LAST TWO INCREMENTS COULD NOT CLAIM.** `demo/BoxingDemo`
+    is in the suite and its JLS 5.1.7 arms are exactly what stock `Byte`/`Short`/`Boolean` must get right:
+    `byte 5 interned = 1`, `short 5 interned = 1`, `short 1000 fresh = 1`, `byte ends = -1`,
+    `short ends = -1` (the arms that exist because the cache slot is `value + 128`, so an off-by-one is an
+    exception at an END rather than a wrong number), and all three `autobox == valueOf` arms. Plus
+    `String.valueOf(true)=true PASS` in the boot battery, which runs BEFORE `launch` in the writer-baked
+    world -- the one arm that tests baked `Boolean` at all.
+  - **THE CLOSURE MOVES BY ONE COUNTER AND THE MOVE IS ATTRIBUTABLE: `n:imap` 133 -> 137.** Batch 2
+    `+335blob`, batch 64 `+401blob`, `memo=1150 res=3032 unres=2518`, `clinits=97` and
+    `rounds=4 pend=180 reach=17` are byte-identical to the previous boot. Four classes gain itables where
+    the overlays declared fewer interfaces -- which is the same four whose seven dropped-supertype lines
+    disappear below. **Stated as a reading consistent with the evidence, not a measurement**: nothing here
+    isolates the +4 to those four classes specifically.
+  - **THE BASELINE LOSES NINE SUPERTYPE LINES AND GAINS NONE -- AND TWO OF THEM ARE NOT THIS CARD'S OWN
+    CLASSES, WHICH IS WORTH GETTING RIGHT.** Seven are the deleted overlays' (`Boolean`/`Byte`/`Short` each
+    dropping `Serializable` and `Constable`, `Number` dropping `Serializable`). The other two are
+    **`AtomicInteger` and `AtomicLong`**, whose overlays still exist and `extends Number` -- so with stock
+    `Number implements Serializable` they now INHERIT it and stop dropping it. Attributable to the `Number`
+    deletion rather than collateral, and named here so the delta is not mis-credited.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK WITH THE `FAULT` GREP ANCHORED.** 30 markers zero --
+    notably **`EXCEPTION CLASS NOT LOADED` 0**, which is what the boot fault above produces, and
+    `DENYLIST TRAP`/`LINK FAILED` 0, which are what a stock member the overlays used to shadow would produce
+    if it failed to resolve. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight
+    occurrences), each labelled DENYLISTED.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** `bakeNoClinit` is a SCHEDULING
+    list, not codegen -- it decides whether a `<clinit>` is compiled into `VM.initClasses`, and emits
+    nothing -- so the byte-for-byte self-hosting fixpoint cannot have moved, and a writer change that did
+    move it would break there first.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- AND UNLIKE THE LAST TWO CARDS, A SUITE BOOT CAN
+    PROVE THE FEATURE.** The arithmetic is guest-world integer work QEMU has already diffed byte-for-byte
+    against a host oracle, so cold DRAM cannot change whether `toUnsignedInt(-1)` is 65535. What hardware is
+    being asked is an **11,140-byte layout shift PLUS a real change to the BAKED world**: three wrapper
+    `<clinit>`s no longer scheduled into `VM.initClasses`, and `Boolean.TRUE`/`FALSE` now deep-baked image
+    objects that the boot battery's `String.valueOf(true)` path runs before `launch`. The arms to read are
+    the seventeen-arm boot battery (especially `String.valueOf(true)=true` and the two `IntegerCache` arms),
+    **`BoxingDemo`'s eighteen JLS arms**, `gc: collections=46` at the churn demo, the batch-2/batch-64
+    closure, and the ABSENCES -- with `EXCEPTION CLASS NOT LOADED` the one this increment added.
+
 - **THE `java/util/Comparator` OVERLAY IS DELETED AND STOCK RUNS -- `naturalOrder()` HANDED BACK A FRESH
   LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, QEMU-GATED -- NOT YET
   PI-VALIDATED).** 97 hand-written lines shadowing a 583-line stock class with **ZERO natives in
