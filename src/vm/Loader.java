@@ -11460,6 +11460,10 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
+            // A narrow accessor must know whether it is addressing a FIELD (one 8-byte slot) or an ARRAY
+            // ELEMENT (its natural width), and the bulk moves must refuse a non-PRIMITIVE array as stock does;
+            // see VMNatives.arrayKindOf for why Class.getComponentType cannot answer either question here.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arrayKind0")))          { return VM.arrayKindAddr; } // (Object)J: 0 none, 1 primitive, 2 reference
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {

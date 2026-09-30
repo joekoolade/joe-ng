@@ -52,6 +52,21 @@ public final class Unsafe
     public static final int ARRAY_FLOAT_INDEX_SCALE;
     public static final int ARRAY_DOUBLE_INDEX_SCALE;
 
+    /** The OBJECT-array pair. Stock declares nine base/scale pairs and this overlay declared eight: a
+     *  reference element is an 8-byte pointer here (no compressed oops), and the payload still starts at 24.
+     *  Referenced by {@code java/lang/runtime/Carriers$CarrierObject} and {@code java/util/LazyCollections}. */
+    public static final long ARRAY_OBJECT_BASE_OFFSET;
+    public static final int ARRAY_OBJECT_INDEX_SCALE;
+
+    /** Reference width, stock's {@code theUnsafe.addressSize()}. Factual rather than a choice: joe-ng is
+     *  AArch64 with direct 8-byte refs. Read by {@code java/util/zip/CRC32C} and the FFM layout classes. */
+    public static final int ADDRESS_SIZE;
+
+    /** Stock reads this from {@code UnsafeConstants}; AArch64 runs little-endian here, and
+     *  {@link #isBigEndian} has always answered so. A compile-time constant, so javac folds every
+     *  {@code BIG_ENDIAN ? ... : ...} in the byte-order helpers below to its little-endian arm. */
+    private static final boolean BIG_ENDIAN = false;
+
     static
     {
         ARRAY_BOOLEAN_BASE_OFFSET = 24L;
@@ -71,6 +86,10 @@ public final class Unsafe
         ARRAY_LONG_INDEX_SCALE = 8;
         ARRAY_FLOAT_INDEX_SCALE = 4;
         ARRAY_DOUBLE_INDEX_SCALE = 8;
+
+        ARRAY_OBJECT_BASE_OFFSET = 24L;
+        ARRAY_OBJECT_INDEX_SCALE = 8;
+        ADDRESS_SIZE = 8;
 
         theUnsafe = new Unsafe();
     }
@@ -121,28 +140,28 @@ public final class Unsafe
 
     public byte getByte(Object o, long offset)
     {
-        return (byte) Magic.load8(Magic.addrOf(o) + offset);
+        return (byte) Magic.load8(at(o, offset));
     }
 
     public int getInt(Object o, long offset)
     {
-        return Magic.load32(Magic.addrOf(o) + offset);
+        return Magic.load32(at(o, offset));
     }
 
     public long getLong(Object o, long offset)
     {
-        return Magic.load64(Magic.addrOf(o) + offset);
+        return Magic.load64(at(o, offset));
     }
 
     // Normal RAM is Normal-cacheable memory, so unaligned LDR/LDRW are permitted; no split needed.
     public int getIntUnaligned(Object o, long offset)
     {
-        return Magic.load32(Magic.addrOf(o) + offset);
+        return Magic.load32(at(o, offset));
     }
 
     public long getLongUnaligned(Object o, long offset)
     {
-        return Magic.load64(Magic.addrOf(o) + offset);
+        return Magic.load64(at(o, offset));
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -600,6 +619,17 @@ public final class Unsafe
         return 24L;
     }
 
+    /**
+     * KNOWN WRONG FOR EVERY PRIMITIVE ARRAY, found while adding the accessor surface and recorded rather than
+     * fixed here: {@code Class.getComponentType()} answers NULL for a primitive array on this VM, so this
+     * falls through its {@code c == null} arm and returns 8 where {@code byte[].class} should give 1. Nothing
+     * has noticed because the {@code ARRAY_*_INDEX_SCALE} constants above are assigned directly rather than
+     * computed from it -- so the constants are right and the METHOD is not. The cause is in {@code Class}, not
+     * here: an array Type's element slot is 0 for a primitive element and the element SIZE cannot recover
+     * which primitive it is (byte[] and boolean[] are both 1), so closing it needs the per-atype TIB IDENTITY
+     * trick {@code Class.getName} already uses for array names. Its own increment; {@code arrayKind0} exists
+     * because the bulk moves could not wait for it.
+     */
     public int arrayIndexScale(Class<?> arrayClass)
     {
         Class<?> c = arrayClass == null ? null : arrayClass.getComponentType();
@@ -631,6 +661,673 @@ public final class Unsafe
     }
 
     private static native long staticFieldAddr0(Class<?> c, byte[] name);
+
+    // ================================================================================================
+    // THE TWO LAYOUTS. Everything below this line exists because joe-ng addresses memory two different
+    // ways behind ONE `(Object, long)` signature, and they disagree about WIDTH:
+    //
+    //   a FIELD          occupies a full 8-byte slot whatever its declared type (ObjectModel.fieldOffset
+    //                    is 16 + slot*8), and the compiler reads/writes it with ldrx/strx -- so a `short`
+    //                    field's slot holds the value across all 64 bits, sign-extended, and a 2-byte
+    //                    store into its low half leaves a stale high half that `getfield` reads as a
+    //                    DIFFERENT NUMBER.
+    //   an ARRAY ELEMENT occupies its NATURAL width at 24 + index*scale -- so an 8-byte store there takes
+    //                    its neighbours with it.
+    //   a NULL base      is a raw absolute address (see `at`), i.e. natural width, like an element.
+    //
+    // STATED LIMITATION, because a null base has one MORE meaning than raw memory: the
+    // staticFieldBase/staticFieldOffset PAIR answers {null, absolute address of a static's slot}, and a
+    // static slot is 8 bytes like a field's. So a NARROW write through that pair leaves the slot's high half
+    // stale, exactly as a natural-width write to an instance field would. The existing putInt/putLong keep
+    // whole-slot semantics for a null base and are therefore right for it; these narrow forms are not. What
+    // makes it unreachable rather than latent is measured: the only referrers of the narrow static path are
+    // java/lang/invoke/VarHandleXxx$FieldStaticReadWrite, a denied package. Closing it needs the statics
+    // region's own bounds (VM.staticsStart/End) as a third discriminator, which is machinery no measurement
+    // asks for yet.
+    //
+    // A READ is unambiguous: the low `width` bytes of a field's slot ARE the value on a little-endian
+    // machine, so byte-composition is exact for a field, an element and an absolute address alike.
+    // A WRITE is not, and neither the offset nor its alignment can settle it -- offset 24 is both field
+    // slot 1 and array element 0 -- so `isArrayRef` asks the OBJECT. That is the only discriminator there
+    // is, and it is why this native exists.
+    //
+    // Consequence worth stating: a narrow read/write is composed from BYTE accesses, so it is not ATOMIC
+    // the way a single ldrh/strh would be. Nothing in the *Volatile/*Acquire forms below can therefore
+    // promise single-copy atomicity at 2-byte width; they promise ORDERING (a full barrier), which is what
+    // their reached callers -- lazy holders and publish-once fields -- actually depend on.
+    // ================================================================================================
+
+    /** {@code 0} not an array, {@code 1} a PRIMITIVE array, {@code 2} a REFERENCE array -- read straight off
+     *  the array Type's element slot, with no mirror involved. Two questions are answered from it: the WIDTH
+     *  of a narrow access (any array means natural width) and stock's PRIMITIVE-array contract on the bulk
+     *  moves. See {@code VMNatives.arrayKindOf}. */
+    private static native long arrayKind0(Object o);
+
+    /** True when {@code o} is an ARRAY (element-width access), false for a scalar object (8-byte slot).
+     *  A null base is neither: {@link #at} has already made the offset absolute. */
+    private static boolean isArrayRef(Object o)
+    {
+        return o != null && arrayKind0(o) != 0L;
+    }
+
+    /** Read {@code width} bytes little-endian, ZERO-extended. Exact for all three layouts; see above. */
+    private static long getBits(Object o, long offset, int width)
+    {
+        long a = at(o, offset);
+        if (width == 1)
+        {
+            return Magic.load8(a) & 0xFFL;
+        }
+        if (width == 2)
+        {
+            return (Magic.load8(a) & 0xFFL) | ((Magic.load8(a + 1) & 0xFFL) << 8);
+        }
+        if (width == 4)
+        {
+            return Magic.load32(a) & 0xFFFFFFFFL;
+        }
+        return Magic.load64(a);
+    }
+
+    /**
+     * Write a narrow value: the WHOLE 8-byte slot for a field, {@code width} bytes for an element or an
+     * absolute address. {@code v} must arrive already extended the way the compiler would leave it
+     * (sign-extended for byte/short, zero-extended for boolean/char) -- which a Java widening of the
+     * declared parameter type does for free at every call site below.
+     */
+    private static void putBits(Object o, long offset, long v, int width)
+    {
+        long a = at(o, offset);
+        if (o != null && !isArrayRef(o))
+        {
+            Magic.store64(a, v);                 // a FIELD: one slot, exactly as putfield's strx leaves it
+            return;
+        }
+        if (width == 8)
+        {
+            Magic.store64(a, v);
+            return;
+        }
+        if (width == 4)
+        {
+            Magic.store32(a, (int) v);
+            return;
+        }
+        Magic.store8(a, (int) v);
+        if (width == 2)
+        {
+            Magic.store8(a + 1, (int) (v >>> 8));
+        }
+    }
+
+    // ----- plain (Object, long) accessors, the widths this overlay had not declared -------------------
+
+    public boolean getBoolean(Object o, long offset)
+    {
+        return getBits(o, offset, 1) != 0L;
+    }
+
+    public void putBoolean(Object o, long offset, boolean x)
+    {
+        putBits(o, offset, x ? 1L : 0L, 1);
+    }
+
+    public void putByte(Object o, long offset, byte x)
+    {
+        putBits(o, offset, x, 1);
+    }
+
+    public short getShort(Object o, long offset)
+    {
+        return (short) getBits(o, offset, 2);
+    }
+
+    public void putShort(Object o, long offset, short x)
+    {
+        putBits(o, offset, x, 2);
+    }
+
+    public char getChar(Object o, long offset)
+    {
+        return (char) getBits(o, offset, 2);
+    }
+
+    public void putChar(Object o, long offset, char x)
+    {
+        putBits(o, offset, x, 2);
+    }
+
+    /** A float lives in a GP register here as its raw bits ({@code Float.intBitsToFloat} is an identity
+     *  native), so the conversion is real on a host JVM and a pass-through on metal -- the same source is
+     *  correct in both worlds, which is what lets a host oracle check it. */
+    public float getFloat(Object o, long offset)
+    {
+        return Float.intBitsToFloat((int) getBits(o, offset, 4));
+    }
+
+    public void putFloat(Object o, long offset, float x)
+    {
+        putBits(o, offset, Float.floatToRawIntBits(x), 4);
+    }
+
+    public double getDouble(Object o, long offset)
+    {
+        return Double.longBitsToDouble(Magic.load64(at(o, offset)));
+    }
+
+    /** The one narrow-ish width that needs no discriminator: a double is 8 bytes as a field AND as an
+     *  element, so the slot write and the element write are the same instruction. */
+    public void putDouble(Object o, long offset, double x)
+    {
+        Magic.store64(at(o, offset), Double.doubleToRawLongBits(x));
+    }
+
+    // ----- memory modes for those widths ------------------------------------------------------------
+    // The *Volatile form is the root (one full barrier -- see fence0) and every Acquire/Release/Opaque
+    // form is stock's own one-line delegation to it, copied rather than re-derived. joe-ng has no one-way
+    // barrier to emit, so stronger-than-required is the only available answer and it is always correct.
+
+    public boolean getBooleanVolatile(Object o, long offset)
+    {
+        boolean v = getBoolean(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putBooleanVolatile(Object o, long offset, boolean x)
+    {
+        fence0();
+        putBoolean(o, offset, x);
+    }
+
+    public byte getByteVolatile(Object o, long offset)
+    {
+        byte v = getByte(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putByteVolatile(Object o, long offset, byte x)
+    {
+        fence0();
+        putByte(o, offset, x);
+    }
+
+    public short getShortVolatile(Object o, long offset)
+    {
+        short v = getShort(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putShortVolatile(Object o, long offset, short x)
+    {
+        fence0();
+        putShort(o, offset, x);
+    }
+
+    public char getCharVolatile(Object o, long offset)
+    {
+        char v = getChar(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putCharVolatile(Object o, long offset, char x)
+    {
+        fence0();
+        putChar(o, offset, x);
+    }
+
+    public float getFloatVolatile(Object o, long offset)
+    {
+        float v = getFloat(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putFloatVolatile(Object o, long offset, float x)
+    {
+        fence0();
+        putFloat(o, offset, x);
+    }
+
+    public double getDoubleVolatile(Object o, long offset)
+    {
+        double v = getDouble(o, offset);
+        fence0();
+        return v;
+    }
+
+    public void putDoubleVolatile(Object o, long offset, double x)
+    {
+        fence0();
+        putDouble(o, offset, x);
+    }
+
+    // Stock's delegations (Unsafe.java: getXAcquire/getXOpaque -> getXVolatile, putXRelease/putXOpaque ->
+    // putXVolatile), verbatim.
+    public final boolean getBooleanAcquire(Object o, long offset) { return getBooleanVolatile(o, offset); }
+    public final byte    getByteAcquire(Object o, long offset)    { return getByteVolatile(o, offset); }
+    public final short   getShortAcquire(Object o, long offset)   { return getShortVolatile(o, offset); }
+    public final char    getCharAcquire(Object o, long offset)    { return getCharVolatile(o, offset); }
+    public final float   getFloatAcquire(Object o, long offset)   { return getFloatVolatile(o, offset); }
+    public final double  getDoubleAcquire(Object o, long offset)  { return getDoubleVolatile(o, offset); }
+
+    public final void putBooleanRelease(Object o, long offset, boolean x) { putBooleanVolatile(o, offset, x); }
+    public final void putByteRelease(Object o, long offset, byte x)       { putByteVolatile(o, offset, x); }
+    public final void putShortRelease(Object o, long offset, short x)     { putShortVolatile(o, offset, x); }
+    public final void putCharRelease(Object o, long offset, char x)       { putCharVolatile(o, offset, x); }
+    public final void putFloatRelease(Object o, long offset, float x)     { putFloatVolatile(o, offset, x); }
+    public final void putDoubleRelease(Object o, long offset, double x)   { putDoubleVolatile(o, offset, x); }
+
+    public final boolean getBooleanOpaque(Object o, long offset) { return getBooleanVolatile(o, offset); }
+    public final byte    getByteOpaque(Object o, long offset)    { return getByteVolatile(o, offset); }
+    public final short   getShortOpaque(Object o, long offset)   { return getShortVolatile(o, offset); }
+    public final char    getCharOpaque(Object o, long offset)    { return getCharVolatile(o, offset); }
+    public final float   getFloatOpaque(Object o, long offset)   { return getFloatVolatile(o, offset); }
+    public final double  getDoubleOpaque(Object o, long offset)  { return getDoubleVolatile(o, offset); }
+    public final long    getLongOpaque(Object o, long offset)    { return getLongVolatile(o, offset); }
+    public final Object  getReferenceOpaque(Object o, long offset) { return getReferenceVolatile(o, offset); }
+
+    public final void putBooleanOpaque(Object o, long offset, boolean x) { putBooleanVolatile(o, offset, x); }
+    public final void putByteOpaque(Object o, long offset, byte x)       { putByteVolatile(o, offset, x); }
+    public final void putShortOpaque(Object o, long offset, short x)     { putShortVolatile(o, offset, x); }
+    public final void putCharOpaque(Object o, long offset, char x)       { putCharVolatile(o, offset, x); }
+    public final void putFloatOpaque(Object o, long offset, float x)     { putFloatVolatile(o, offset, x); }
+    public final void putDoubleOpaque(Object o, long offset, double x)   { putDoubleVolatile(o, offset, x); }
+    public final void putLongOpaque(Object o, long offset, long x)       { putLongVolatile(o, offset, x); }
+    public final void putReferenceOpaque(Object o, long offset, Object x) { putReferenceVolatile(o, offset, x); }
+
+    // ----- the absolute ("C heap") forms -------------------------------------------------------------
+    // Stock's own bodies: getX(null, address). A null base makes `at` treat the offset as an ABSOLUTE
+    // address, so these read and write RAW MEMORY at their natural width -- which is what every caller
+    // (sun/nio/ch/NativeObject, KQueue, NativeSocketAddress, CRC32C) means by them. They do NOT allocate;
+    // allocateMemory throws, so these serve memory the board already owns (MMIO, a firmware buffer).
+
+    public byte getByte(long address)              { return getByte(null, address); }
+    public void putByte(long address, byte x)      { putByte(null, address, x); }
+    public short getShort(long address)            { return getShort(null, address); }
+    public void putShort(long address, short x)    { putShort(null, address, x); }
+    public char getChar(long address)              { return getChar(null, address); }
+    public void putChar(long address, char x)      { putChar(null, address, x); }
+    public int getInt(long address)                { return getInt(null, address); }
+    public void putInt(long address, int x)        { putInt(null, address, x); }
+    public long getLong(long address)              { return getLong(null, address); }
+    public void putLong(long address, long x)      { putLong(null, address, x); }
+    public float getFloat(long address)            { return getFloat(null, address); }
+    public void putFloat(long address, float x)    { putFloat(null, address, x); }
+    public double getDouble(long address)          { return getDouble(null, address); }
+    public void putDouble(long address, double x)  { putDouble(null, address, x); }
+
+    /** Stock branches on {@code ADDRESS_SIZE == 4}; it is 8 here, so this is the long arm. */
+    public long getAddress(Object o, long offset)  { return getLong(o, offset); }
+    public void putAddress(Object o, long offset, long x) { putLong(o, offset, x); }
+    public long getAddress(long address)           { return getAddress(null, address); }
+    public void putAddress(long address, long x)   { putAddress(null, address, x); }
+
+    /** Reference width. Factual: AArch64, direct 8-byte refs, no compressed oops. */
+    public int addressSize()
+    {
+        return ADDRESS_SIZE;
+    }
+
+    /** Normal cacheable RAM permits unaligned LDR/STR on this core, which is what {@link #getIntUnaligned}
+     *  already relies on. Read only by {@code java/nio/Bits}, to size off-heap alignment. */
+    public final boolean unalignedAccess()
+    {
+        return true;
+    }
+
+    /** Stock's own fallback body when the intrinsic is unavailable (Unsafe.java: "fall back to storeFence"). */
+    public final void storeStoreFence()
+    {
+        storeFence();
+    }
+
+    // ----- the unaligned family ----------------------------------------------------------------------
+    // Stock branches on alignment and composes from smaller pieces when misaligned; joe-ng needs no such
+    // split (Normal cacheable RAM permits unaligned LDR/STR), so the aligned arm serves every offset. What
+    // IS taken from stock verbatim is the byte-order half: `convEndian` and its Xxx.reverseBytes calls.
+    //
+    // THE PUTS DELIBERATELY DO NOT ROUTE THROUGH putInt/putLong. Those write a whole 8-byte SLOT, which is
+    // right for a field and wrong for the byte[] region every reached caller of the unaligned forms is
+    // actually addressing (jdk/internal/classfile/impl/RawBytecodeHelper over bytecode, ScopedMemoryAccess
+    // over a segment). putBits writes the natural width there and the slot for a field.
+
+    public final char getCharUnaligned(Object o, long offset)
+    {
+        return getChar(o, offset);
+    }
+
+    public final char getCharUnaligned(Object o, long offset, boolean bigEndian)
+    {
+        return convEndian(bigEndian, getCharUnaligned(o, offset));
+    }
+
+    public final short getShortUnaligned(Object o, long offset)
+    {
+        return getShort(o, offset);
+    }
+
+    public final short getShortUnaligned(Object o, long offset, boolean bigEndian)
+    {
+        return convEndian(bigEndian, getShortUnaligned(o, offset));
+    }
+
+    public final int getIntUnaligned(Object o, long offset, boolean bigEndian)
+    {
+        return convEndian(bigEndian, getIntUnaligned(o, offset));
+    }
+
+    public final long getLongUnaligned(Object o, long offset, boolean bigEndian)
+    {
+        return convEndian(bigEndian, getLongUnaligned(o, offset));
+    }
+
+    public final void putCharUnaligned(Object o, long offset, char x)
+    {
+        putBits(o, offset, x, 2);
+    }
+
+    public final void putCharUnaligned(Object o, long offset, char x, boolean bigEndian)
+    {
+        putCharUnaligned(o, offset, convEndian(bigEndian, x));
+    }
+
+    public final void putShortUnaligned(Object o, long offset, short x)
+    {
+        putBits(o, offset, x, 2);
+    }
+
+    public final void putShortUnaligned(Object o, long offset, short x, boolean bigEndian)
+    {
+        putShortUnaligned(o, offset, convEndian(bigEndian, x));
+    }
+
+    public final void putIntUnaligned(Object o, long offset, int x)
+    {
+        putBits(o, offset, x, 4);
+    }
+
+    public final void putIntUnaligned(Object o, long offset, int x, boolean bigEndian)
+    {
+        putIntUnaligned(o, offset, convEndian(bigEndian, x));
+    }
+
+    public final void putLongUnaligned(Object o, long offset, long x)
+    {
+        putBits(o, offset, x, 8);
+    }
+
+    public final void putLongUnaligned(Object o, long offset, long x, boolean bigEndian)
+    {
+        putLongUnaligned(o, offset, convEndian(bigEndian, x));
+    }
+
+    // Stock's byte-order helpers (Unsafe.java), verbatim. BIG_ENDIAN is a compile-time false here, so javac
+    // folds each of these to its little-endian arm and nothing is emitted for the other.
+    private static char convEndian(boolean big, char n)   { return big == BIG_ENDIAN ? n : Character.reverseBytes(n); }
+    private static short convEndian(boolean big, short n) { return big == BIG_ENDIAN ? n : Short.reverseBytes(n); }
+    private static int convEndian(boolean big, int n)     { return big == BIG_ENDIAN ? n : Integer.reverseBytes(n); }
+    private static long convEndian(boolean big, long n)   { return big == BIG_ENDIAN ? n : Long.reverseBytes(n); }
+
+    // ----- bulk moves -------------------------------------------------------------------------------
+    // Byte-granular, so the field/element width question does not arise INSIDE the region -- but a scalar
+    // object has no byte-addressable region at all here (its fields are 8-byte slots), so a non-array base
+    // is REFUSED rather than silently walking across slots. Every reached caller passes an array or an
+    // absolute address: java/lang/StringUTF16 (byte[] to byte[]), jdk/internal/misc/ScopedMemoryAccess,
+    // sun/nio/ch/PollSelectorImpl.
+
+    public void copyMemory(Object srcBase, long srcOffset, Object destBase, long destOffset, long bytes)
+    {
+        copyMemoryChecks(srcBase, srcOffset, destBase, destOffset, bytes);
+        long s = at(srcBase, srcOffset);
+        long d = at(destBase, destOffset);
+        if (d > s && d < s + bytes)
+        {
+            // Overlapping and moving UP: copy downward, or the tail would be overwritten before it is read.
+            // Stock's copyMemory0 is a memmove, so this direction choice is part of the contract, not a nicety.
+            long i = bytes;
+            while (i > 0L)
+            {
+                i = i - 1L;
+                Magic.store8(d + i, Magic.load8(s + i));
+            }
+            return;
+        }
+        long i = 0L;
+        while (i < bytes)
+        {
+            Magic.store8(d + i, Magic.load8(s + i));
+            i = i + 1L;
+        }
+    }
+
+    public void copyMemory(long srcAddress, long destAddress, long bytes)
+    {
+        copyMemory(null, srcAddress, null, destAddress, bytes);
+    }
+
+    public void setMemory(Object o, long offset, long bytes, byte value)
+    {
+        setMemoryChecks(o, offset, bytes, value);
+        long a = at(o, offset);
+        long i = 0L;
+        while (i < bytes)
+        {
+            Magic.store8(a + i, value);
+            i = i + 1L;
+        }
+    }
+
+    public void setMemory(long address, long bytes, byte value)
+    {
+        setMemory(null, address, bytes, value);
+    }
+
+    // Stock's OWN validation for the bulk moves (Unsafe.java copyMemoryChecks/setMemoryChecks and the
+    // checkXxx family), verbatim -- which is how the host control turned out to be the authority here: it
+    // showed stock ALREADY refuses a non-primitive-array base with IllegalArgumentException, for the same
+    // reason joe-ng must (a scalar object has no byte-addressable region -- its fields are 8-byte slots, so a
+    // byte-granular walk across them reads and writes padding as if it were data). Copying the check instead
+    // of inventing one turned a divergence into a matching arm.
+    //
+    // This is a SEPARATE question from the one isArrayRef answers: these validate stock's CONTRACT, while
+    // isArrayRef picks the WIDTH of a single narrow access. Different jobs, so different tests -- and only
+    // this one may cost a mirror lookup, because a bulk move is not a per-access path.
+    private RuntimeException invalidInput()
+    {
+        return new IllegalArgumentException();
+    }
+
+    private boolean is32BitClean(long value)
+    {
+        return value >>> 32 == 0;
+    }
+
+    private void checkSize(long size)
+    {
+        if (ADDRESS_SIZE == 4)
+        {
+            if (!is32BitClean(size))
+            {
+                throw invalidInput();
+            }
+        }
+        else if (size < 0)
+        {
+            throw invalidInput();
+        }
+    }
+
+    private void checkNativeAddress(long address)
+    {
+        if (ADDRESS_SIZE == 4)
+        {
+            if ((((address >> 32) + 1) & ~1) != 0)
+            {
+                throw invalidInput();
+            }
+        }
+    }
+
+    private void checkOffset(Object o, long offset)
+    {
+        if (ADDRESS_SIZE == 4)
+        {
+            if (!is32BitClean(offset))
+            {
+                throw invalidInput();
+            }
+        }
+        else if (offset < 0)
+        {
+            throw invalidInput();
+        }
+    }
+
+    private void checkPointer(Object o, long offset)
+    {
+        if (o == null)
+        {
+            checkNativeAddress(offset);
+        }
+        else
+        {
+            checkOffset(o, offset);
+        }
+    }
+
+    /**
+     * Stock is {@code checkPrimitiveArray(o.getClass())}, testing
+     * {@code getComponentType() != null && isPrimitive()}. THAT CANNOT BE USED HERE, and the host control is
+     * what proved it: {@code Class.getComponentType()} answers NULL for a PRIMITIVE array on this VM (an
+     * array Type's element slot is 0 for a primitive element, and the element SIZE cannot recover which
+     * primitive it is -- byte[] and boolean[] are both 1), so stock's own check refused every {@code byte[]}.
+     * The array Type's element slot is the same fact without the mirror, which is what {@code arrayKind0}
+     * reads. Same predicate, same exception, one indirection fewer.
+     *
+     * <p>PRE-EXISTING AND NOT FIXED HERE, because it is a {@code Class} defect rather than an
+     * {@code Unsafe} one: {@code byte[].class.getComponentType()} being null also makes
+     * {@link #arrayIndexScale} answer 8 for every primitive array (it falls through its
+     * {@code c == null || !c.isPrimitive()} arm), which nothing has noticed only because the
+     * {@code ARRAY_*_INDEX_SCALE} constants are assigned directly rather than computed from it. Closing it
+     * means giving a primitive array Type a real element Type, which needs the per-atype TIB IDENTITY trick
+     * {@code Class.getName} already uses for array names -- its own increment.
+     */
+    private void checkPrimitivePointer(Object o, long offset)
+    {
+        checkPointer(o, offset);
+        if (o != null && arrayKind0(o) != 1L)
+        {
+            throw invalidInput();                            // not a primitive array: stock refuses it too
+        }
+    }
+
+    private void copyMemoryChecks(Object srcBase, long srcOffset, Object destBase, long destOffset, long bytes)
+    {
+        checkSize(bytes);
+        checkPrimitivePointer(srcBase, srcOffset);
+        checkPrimitivePointer(destBase, destOffset);
+    }
+
+    private void setMemoryChecks(Object o, long offset, long bytes, byte value)
+    {
+        checkPrimitivePointer(o, offset);
+        checkSize(bytes);
+    }
+
+    /**
+     * Stock's native throws {@code ee} without declaring it. The unchecked cast is the standard erasure
+     * trick and is exactly as safe: {@code T} erases to {@code Throwable}, so the emitted checkcast is one
+     * that always succeeds. Reached from {@code jdk/internal/vm/ScopedValueContainer}.
+     */
+    public void throwException(Throwable ee)
+    {
+        sneakyThrow(ee);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable t) throws T
+    {
+        throw (T) t;
+    }
+
+    // ----- RULE 3: no off-heap memory on bare metal, so these THROW rather than answer ---------------
+    // There is no malloc under this VM: the heap is joe-ng's own bump/free-list allocator over a fixed
+    // region and nothing hands out C memory. A plausible answer here is the worst available outcome --
+    // allocateMemory returning some address would have every later access scribble on whatever lives there
+    // -- so each one names itself the moment it is reached, which is what turns "implement everything" into
+    // a worklist the program writes for itself.
+    //
+    // MEASURED, so the throw is a statement about reach and not a shrug: of the 237 members stock declares
+    // and this overlay dropped, 182 are referenced ONLY by java/lang/invoke/VarHandle* -- a package this VM
+    // denies and shims itself -- and every referrer of the ones below is a subsystem joe-ng deliberately
+    // lacks (java/nio direct buffers, jdk/internal/foreign, sun/nio/ch channels).
+
+    public long allocateMemory(long bytes)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.allocateMemory: no off-heap memory on bare metal");
+    }
+
+    public long reallocateMemory(long address, long bytes)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.reallocateMemory: no off-heap memory on bare metal");
+    }
+
+    public void freeMemory(long address)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.freeMemory: no off-heap memory on bare metal");
+    }
+
+    public void copySwapMemory(Object srcBase, long srcOffset, Object destBase, long destOffset,
+                               long bytes, long elemSize)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.copySwapMemory: not implemented");
+    }
+
+    /** Stock reports whether the CPU has cache-line writeback (CLWB and friends). AArch64 has DC CVAC and
+     *  joe-ng drives it directly ({@code Magic.dcCVAC}); what is missing is the mapped-file machinery this
+     *  serves, so the truthful answer is that the FEATURE is absent, not that the instruction is. */
+    public boolean isWritebackEnabled()
+    {
+        return false;
+    }
+
+    public void writebackMemory(long address, long length)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.writebackMemory: no mapped files on bare metal");
+    }
+
+    public void invokeCleaner(java.nio.ByteBuffer directBuffer)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.invokeCleaner: every ByteBuffer here is heap-backed");
+    }
+
+    /** Stock answers the OS page size. joe-ng maps flat 1:1 and has no pager, and this is read only to ALIGN
+     *  off-heap allocations -- which throw -- so answering would be answering for nobody. */
+    public int pageSize()
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.pageSize: no pager on bare metal");
+    }
+
+    public Object getUncompressedObject(long address)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.getUncompressedObject: VM-internal, not implemented");
+    }
+
+    /** joe-ng initializes a class on its first ACTIVE USE (JVMS 5.5) through the loader, which guest code has
+     *  no hook into. Referenced only by java/lang/invoke, which is denied. */
+    public void ensureClassInitialized(Class<?> c)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.ensureClassInitialized: not implemented");
+    }
+
+    public boolean shouldBeInitialized(Class<?> c)
+    {
+        throw new InternalError("jdk.internal.misc.Unsafe.shouldBeInitialized: not implemented");
+    }
 
     public void park(boolean isAbsolute, long time)
     {
