@@ -115,6 +115,132 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/util/Comparator` OVERLAY IS DELETED AND STOCK RUNS -- `naturalOrder()` HANDED BACK A FRESH
+  LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** 97 hand-written lines shadowing a 583-line stock class with **ZERO natives in
+  it**, declaring ten of stock's eighteen members. Stock's factories are shared singletons:
+
+  ```java
+  static <T extends Comparable<? super T>> Comparator<T> naturalOrder()
+  {
+      return (T a, T b) -> a.compareTo(b);             // a NEW object every call
+  }
+  ```
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`CmpProbe`, 51 arms against the HOST ORACLE** | **5 WRONG, and 24 more would not COMPILE** | **51 of 51 BYTE-IDENTICAL** |
+  | `naturalOrder() == naturalOrder()` | **0** | **1** |
+  | `reverseOrder() == reverseOrder()` | **0** | **1** |
+  | `naturalOrder().reversed() == reverseOrder()` | **0** | **1** |
+  | `reverseOrder().reversed() == naturalOrder()` | **0** | **1** |
+  | `c.reversed().reversed() == c` | **0** | **1** |
+  | `naturalOrder() == reverseOrder()` (a both-states control) | 0 | **0 -- UNMOVED** |
+  | `max`/`min`, and the TIE returning the FIRST argument | **do not exist** | **`b`/`a`/`a`, and `1`/`1`** |
+  | `nullsFirst`/`nullsLast`, nine arms | **do not exist** | **exact, both orders and null-vs-null** |
+  | `nullsFirst(cmp).reversed()` -- nulls move to LAST *and* elements reverse | **does not exist** | **`gt` / `lt`** |
+  | `comparingLong`/`comparingDouble`/`thenComparingLong`/`thenComparingDouble` | **do not exist** | **exact** |
+  | the 22 ordering/`thenComparing`/`MIN_VALUE`/sort arms | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 29 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap`/`synth`/`clinits` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, probes excluded from BOTH) | 34,062,592 | **34,073,392 (+10,800 B, +0.032%)** |
+  | overlays shadowing a stock java.base class | 119 | **118** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **IT WAS BLOCKED BY A VM GAP, NOT BY A MISSING MEMBER, AND THAT IS THE INCREMENT BEFORE THIS ONE.** Stock
+    `Comparator` casts every combinator's lambda to `(Comparator<T> & Serializable)`, so its BootstrapMethods
+    table is six entries and **all six are `LambdaMetafactory.altMetafactory`** -- which the JIT could not
+    lower, so the class refused to compile outright (`JIT unsupported: reason=0 a=0xBA b=0`). Deleting the
+    overlay was impossible until that was fixed, and it is why the two shipped as separate increments with
+    separate probes.
+  - **THE OVERLAY'S STATED REASON WAS A LAMBDA-TARGET ARGUMENT, THE SEVENTH DISTINCT NON-NATIVES
+    JUSTIFICATION IN THIS ARC.** Its javadoc: *"a functional interface (single abstract method `compare`) so
+    a `(a, b) -> ...` lambda targets it ... the first two-arg reference SAM the lambda machinery drives"*.
+    That is a statement about what the VM could do WHEN IT WAS WRITTEN, and stock is also a functional
+    interface with the same SAM. `Formatter` was justified by a closure argument, `Character` by a cold-path
+    one, `TimeUnit` by a single test, `Collections` by a guess about which members would be called,
+    `DualPivotQuicksort` by a subsystem that was never absent, `StringBuilder` by a minimum. **None of the
+    seven is a natives argument** -- and stock `Comparator` has ZERO natives in 583 lines, measured.
+  - **THE DEFECT IS AN IDENTITY, NOT AN ORDER, WHICH IS WHY NOTHING HAD NOTICED.** Every ordering arm was
+    correct under the overlay; what was wrong is that stock's `naturalOrder()` is the shared enum constant
+    `Comparators.NaturalOrderComparator.INSTANCE` and its `reverseOrder()` is
+    `Collections.ReverseComparator.REVERSE_ORDER`, so each answers the SAME OBJECT every call. **This is the
+    `emptyList() == emptyList()` shape the `Collections` deletion found**, in a class used by every sort.
+  - **AND THREE MORE IDENTITIES COME WITH IT, EACH WRITTEN INTO STOCK AS AN OVERRIDE RATHER THAN FALLING OUT
+    OF A DEFAULT -- read from the source, not assumed.** `NaturalOrderComparator.reversed()` returns
+    `Comparator.reverseOrder()`; `Collections.ReverseComparator.reversed()` returns
+    `Comparator.naturalOrder()`; and `ReverseComparator2.reversed()` returns **the comparator it wraps**, so
+    `c.reversed().reversed() == c` for any other comparator. A fresh lambda cannot satisfy any of the four,
+    and no value comparison can see it.
+  - **ONE ARM IS A DROPPED OVERRIDE CHANGING AN ANSWER RATHER THAN AN IDENTITY, and it is the sharpest thing
+    in the probe.** `Comparators.NullComparator` overrides BOTH `reversed()` and `thenComparing(Comparator)`
+    to preserve its null handling: reversing flips the null PLACEMENT as well as the element order --
+    measured, `nullsFirst(nat).reversed()` answers `gt` for `(null, "a")` and `lt` for `("b", "a")` -- and
+    chaining re-wraps so the chain still tolerates a null. An implementation inheriting the plain defaults
+    would reverse the elements while leaving nulls first, and would hand a null to the chained comparator.
+  - **THE TIE ARMS ASSERT AN IDENTITY BECAUSE NO VALUE CAN SEE THEM.** Stock's `max`/`min` are `>= 0` /
+    `<= 0`, so both return the FIRST argument when the two compare equal, where the obvious `>` / `<`
+    returns the second. The two elements are equal by construction (`new String("x")` twice), so the arm
+    prints which one came back BY REFERENCE.
+  - **THE OVERLAY'S OWN COMMENT DEFENDED ITS `reversed()` AGAINST SOMETHING STOCK NEVER DID.** It read:
+    *"`compare(b, a)` rather than negating the result: negation is WRONG for a comparator that returns
+    Integer.MIN_VALUE, whose negation is itself"*. True -- and stock's `ReverseComparator2.compare` is also
+    `cmp.compare(t2, t1)` and negates nothing, so the hazard it guarded against was never in the code it was
+    being compared to. The `Integer.MIN_VALUE` arms are KEPT and pass in BOTH states, which is what says so.
+  - **THE CONTROL IS SPECIFIC AND ITS TWO HALVES ARE REPORTED SEPARATELY, because one source does NOT compile
+    against both worlds.** With the overlay restored, javac gives **13 errors naming 8 distinct dropped
+    members** (`max`, `min`, `thenComparingLong`, `thenComparingDouble`, `comparingLong`, `comparingDouble`,
+    `nullsFirst`, `nullsLast`) -- so 24 arms cannot be bound at all. A reduced control over the remaining 27
+    then runs to completion on the metal: **5 WRONG, and all five are identity arms**, with the other 22
+    byte-identical. That is strictly weaker evidence than `CollectionsProbe`'s single source, and the reason
+    is the finding itself.
+  - **AND `overlaycheck` NAMED THE SAME EIGHT INDEPENDENTLY, FROM THE SCANNER RATHER THAN FROM javac.** A
+    stale `out/CmpProbe.class` left behind by moving the probe's source made the shallow check report
+    **8 NEW gaps** -- the same eight. Two instruments agreeing on a dropped-member set is better than either
+    alone, and it arrived by accident through a trap this file already records.
+  - **THE CLOSURE MOVES BY ZERO CLASSES, AND THE REASON IS WORTH KNOWING BEFORE THE NEXT DELETION.**
+    `java/util/Comparator` is an explicitly EMBEDDED BASE BLOB (`BuildRuntimeImage` `addBlob` ->
+    `vm/VM.comparatorBytes`), so it is pulled on every boot in BOTH arms and only its BYTES differ. Stock's
+    helpers -- `Comparators`, `Comparators$NullComparator`, `Collections$ReverseComparator`/
+    `ReverseComparator2`, `ToLongFunction`, `ToDoubleFunction` -- are reachable only from methods the suite
+    never calls, so the image carries them and the metal does not pull them. Batch 2 `+335blob`, batch 64
+    `+401blob`, `memo=1150 res=3032 unres=2518`, `n:imap=133 synth=60 clinits=97`,
+    `rounds=4 pend=180 reach=17` -- every one byte-identical to the `altMetafactory` boot. Same shape the
+    `DualPivotQuicksort` card measured ("the image gains no class at all").
+  - **THE +10,800 BYTES IS A LOAD-TIME COST AS WELL AS AN IMAGE ONE, stated because a base blob is parsed on
+    every boot** -- 583 lines of classfile where 97 stood. Measured across TWO independent same-build-path
+    pairs that agree to the byte, with the probes excluded from both arms (a default-package probe DOES ship
+    in the classDir, per the `StockDescProbe` finding).
+  - **NO BASELINE LINES TO REGENERATE, AND THAT IS UNUSUAL FOR THIS ARC -- so it is stated rather than
+    assumed.** The last several deletions each removed stale `known-gaps.txt` entries; Comparator has NONE,
+    because its eight dropped members were visible only to the DEEP scan (their callers are stock java.base,
+    which the shallow scan does not walk). `make overlaycheck` reads `21 known gap(s), 88 known dropped
+    supertype(s), 0 new` before and after.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, AND HERE IT IS NARROWER THAN USUAL: NO DEMO NAMES
+    `Comparator` AT ALL.** Grepped over `guestsrc/` -- zero hits outside the VM's own blob wiring -- and the
+    suite's only sort arms are `Arrays.sort` on `int[]`, which takes `DualPivotQuicksort` and never reaches a
+    Comparator (`sort[0] = 0`, `ascending = 1`, `sort(neg)[0] = -5`, `sort(neg)[4] = 3`, all exact). So the
+    boot proves NO REGRESSION across a 10,800-byte layout shift, and `CmpProbe`'s 51 arms against a
+    byte-identical host oracle are what prove the feature. Different claims.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK WITH THE `FAULT` GREP ANCHORED.** 29 markers zero --
+    notably `DENYLIST TRAP` 0 and `LINK FAILED` 0, which are what a stock member the overlay used to shadow
+    would produce if it failed to resolve, and `LAMBDA IFACE UNRESOLVED`/`LAMBDA MARKER UNRESOLVED` 0, which
+    are the two the increment underneath this one added. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are
+    the SEVEN known ones (eight occurrences), each labelled DENYLISTED.
+  - **`gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`**, plus
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sync: static seen=18 nomonitor=0`,
+    `bakeMemosDropped=18`, `smp sched: 4 of 4`. The lisp finale reads 56 and **may not be cited from this
+    harness**, per the recorded QEMU A/A pair that produced 56 and 57 from an identical binary.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The combinators are object and interface
+    arithmetic in the guest world and QEMU has already diffed all 51 arms byte-for-byte against stock, so
+    cold DRAM cannot change whether `naturalOrder()` answers the same object twice. What hardware is being
+    asked is a **10,800-byte layout shift** and a 583-line base blob parsed on every boot where a 97-line one
+    stood -- the arms to read are the ABSENCES plus `gc: collections=46` at the churn demo and the
+    batch-2/batch-64 closure. **`CmpProbe` IS NOT IN THE SUITE**, so a hardware boot proves NO REGRESSION and
+    the probe is what proves the feature; proving it on silicon needs the probe flashed as its own image,
+    which is stated here so the next boot is chosen deliberately rather than assumed to have covered it.
+
 - **A LAMBDA CAST TO AN INTERSECTION TYPE COULD NOT BE LOWERED AT ALL, SO STOCK `java/util/Comparator` COULD
   NOT RUN -- `altMetafactory` IS SUPPORTED NOW (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
   `Loader.isLambdaIndy` matched the bootstrap name **`metafactory` EXACTLY**, and javac compiles
