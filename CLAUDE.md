@@ -116,8 +116,8 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE `java/util/Comparator` OVERLAY IS DELETED AND STOCK RUNS -- `naturalOrder()` HANDED BACK A FRESH
-  LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** 97 hand-written lines shadowing a 583-line stock class with **ZERO natives in
+  LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, PI-VALIDATED).**
+  97 hand-written lines shadowing a 583-line stock class with **ZERO natives in
   it**, declaring ten of stock's eighteen members. Stock's factories are shared singletons:
 
   ```java
@@ -146,6 +146,7 @@ defines the minimum the assembler must encode.
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap`/`synth`/`clinits` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
   | image (same-build-path, probes excluded from BOTH) | 34,062,592 | **34,073,392 (+10,800 B, +0.032%)** |
   | overlays shadowing a stock java.base class | 119 | **118** |
+  | **Pi, the SAME binary** | -- | **40 programs, closure EXACT, `46` at churn, every named ABSENCE holds, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **IT WAS BLOCKED BY A VM GAP, NOT BY A MISSING MEMBER, AND THAT IS THE INCREMENT BEFORE THIS ONE.** Stock
@@ -232,17 +233,64 @@ defines the minimum the assembler must encode.
     `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sync: static seen=18 nomonitor=0`,
     `bakeMemosDropped=18`, `smp sched: 4 of 4`. The lisp finale reads 56 and **may not be cited from this
     harness**, per the recorded QEMU A/A pair that produced 56 and 57 from an identical binary.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The combinators are object and interface
-    arithmetic in the guest world and QEMU has already diffed all 51 arms byte-for-byte against stock, so
-    cold DRAM cannot change whether `naturalOrder()` answers the same object twice. What hardware is being
-    asked is a **10,800-byte layout shift** and a 583-line base blob parsed on every boot where a 97-line one
-    stood -- the arms to read are the ABSENCES plus `gc: collections=46` at the churn demo and the
-    batch-2/batch-64 closure. **`CmpProbe` IS NOT IN THE SUITE**, so a hardware boot proves NO REGRESSION and
-    the probe is what proves the feature; proving it on silicon needs the probe flashed as its own image,
-    which is stated here so the next boot is chosen deliberately rather than assumed to have covered it.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- INCLUDING THE HALF
+    THAT SAID A SUITE BOOT CANNOT PROVE THE FEATURE.** This card said before the boot that the combinators are
+    guest-world object arithmetic QEMU has already diffed byte-for-byte, so what silicon is asked is a
+    **10,800-byte layout shift** and a 583-line base blob parsed on every boot where a 97-line one stood --
+    and that `CmpProbe` IS NOT IN THE SUITE. Both hold: 40 programs to `self-build retired` at `core 166MHz`,
+    every named ABSENCE present, and the probe's 51 arms remain QEMU's.
+  - **THE PROVENANCE CHECK IS THE FIRST THING READ, NOT THE LAST, because a boot can predate a flash.**
+    Batch 2 reads `+335blob` and batch 64 `+401blob`, with `rounds=4 pend=180 reach=17` and
+    `n:imap=133 synth=60 clinits=97` byte-identical to the QEMU gate. The card was ALSO `cmp`-confirmed
+    against that gated image before flashing: **20 differing bytes, every one verified as a DOS
+    last-modified-time field at offset +10 from a `PK` header inside the regenerated `/lib/app.jar`** -- the
+    recorded benign churn, checked rather than assumed, in a jar nothing in the suite reads.
+  - **THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES, which is a check rather than a curiosity.** Silicon
+    reads `memo=1150 res=3029 unres=2515` against QEMU's `1150 / 3032 / 2518` -- the same two counters three
+    lower, attributed to the hardware RNG path being compiled on one harness and not the other. **`memo` is
+    EQUAL**, which is what says the closure itself is identical; a change that perturbed patch-site counts
+    would have moved it too.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`,
+    `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=18`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, `sha256 clone = 44cae.../fork-ok`, and
+    the seventeen-arm boot battery all PASS through to `generation 12`. **The lisp finale reads 56 and is
+    NOT cited**, per the recorded QEMU A/A pair that produced 56 and 57 from an identical binary.
+  - **THE NAMED ABSENCES HOLD, and the last two are this arc's own.** None of `FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`, `CLINIT REJECTED`, `JIT unsupported`,
+    **`LAMBDA IFACE UNRESOLVED`** or **`LAMBDA MARKER UNRESOLVED`** appears anywhere -- and `DENYLIST TRAP`/
+    `LINK FAILED` are exactly what a stock member the overlay used to shadow would produce if it failed to
+    resolve. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `hw rng: RNG200 live` with `two instances differ`, and WiFi running the whole chain ->
+    `pmk ready` -> `JOINED` -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` ->
+    DHCP 192.168.1.247 -> `ping reply` -> DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`, 998 bytes** (the
+    previous boot recorded 997; that field covers headers and `Age:` is a variable-length decimal, which
+    read `11673` here -- a reading, not a VM figure).
+  - **THE SUITE'S OWN SORT ARMS ARE EXACT AND THEY ARE THE ONLY COMPARATOR-ADJACENT SURFACE IT HAS:**
+    `Arrays.sort[0] = 0`, `sort[9] = 9`, `ascending = 1`, `sort(neg)[0] = -5`, `sort(neg)[4] = 3`. Those go
+    through `DualPivotQuicksort` on `int[]` and never reach a Comparator, which is the measured reason the
+    boot proves NO REGRESSION and nothing more.
+  - **AND THE TWO `arrayadopt [Ljava/lang/Number;` LINES REPRODUCE AT THE RECORDED BATCHES, which is the
+    `+335blob` arm's own signature.** This file records that every `+334blob` arm adopts it ONCE after batch
+    39 and every `+335blob` arm TWICE, after batch 9 AND batch 39. Silicon does exactly that -- a second,
+    independent confirmation that the flashed image is the one that was gated.
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than an anchored grep -- a marker in a region I skimmed would not have
+    been caught, and the batch lines are dense. The closure and `arrayadopt` comparisons above are against
+    saved QEMU logs that WERE grepped.
+  - **THE TWENTIETH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `a867821f 184669b 6ed6e46`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **43 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50, 43. **Still not a randomness test**: what stays ruled
+    out is a constant, a counter, and a count that does not follow reads.
 
 - **A LAMBDA CAST TO AN INTERSECTION TYPE COULD NOT BE LOWERED AT ALL, SO STOCK `java/util/Comparator` COULD
-  NOT RUN -- `altMetafactory` IS SUPPORTED NOW (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  NOT RUN -- `altMetafactory` IS SUPPORTED NOW (2026-09-29, PI-VALIDATED).**
   `Loader.isLambdaIndy` matched the bootstrap name **`metafactory` EXACTLY**, and javac compiles
   `(Comparator<T> & Serializable) (a, b) -> ...` through **`altMetafactory`** -- so the site fell through to
   `Baseline.lowerInvokeDynamic`'s unsupported-bootstrap arm and the ENCLOSING CLASS refused to compile:
@@ -262,6 +310,7 @@ defines the minimum the assembler must encode.
   | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` | -- | **`+335blob` / `+401blob` / `1150`/`3032`/`2518` -- EXACT** |
   | image (same-build-path control) | 34,054,428 | **34,062,592 (+8,164 B, +0.024%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, every lambda arm exact, closure EXACT, `46` at churn** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **PROVEN BY `javap`, NOT INFERRED, AND THE CLASS HAS EXACTLY ONE BOOTSTRAP METHOD.** Stock
@@ -352,14 +401,34 @@ defines the minimum the assembler must encode.
     `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sync: static seen=18 nomonitor=0`,
     `bakeMemosDropped=18`, `smp sched: 4 of 4`, `steps/core c0=60 c1=60 c2=59 c3=61`, `finish HML` with
     `HIGH blocked 63ms`.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- WITH THE UNUSUAL PART BEING THAT A SUITE BOOT
-    CANNOT PROVE THE FEATURE.** The classifier is integer arithmetic over classfile bytes QEMU has already
-    diffed against a host oracle, so cold DRAM cannot change whether a flags word reads 5. What hardware is
-    being asked by the SUITE is an **8,164-byte layout shift** and nothing else, because nothing in the suite
-    closure carries an intersection-cast lambda -- so the arms to read there are the ABSENCES plus
-    `gc: collections=46` at the churn demo and the batch-2/batch-64 closure. **Proving the feature on silicon
-    needs the PROBE flashed as its own image**, which is stated here so the next boot is chosen deliberately
-    rather than assumed to have covered it.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE -- INCLUDING THE UNUSUAL PART, THAT A SUITE BOOT
+    CANNOT PROVE THE FEATURE.** This card said before the boot that the classifier is integer arithmetic over
+    classfile bytes QEMU has already diffed against a host oracle, so cold DRAM cannot change whether a flags
+    word reads 5; that what the SUITE asks of hardware is an **8,164-byte layout shift and nothing else**,
+    because nothing in its closure carries an intersection-cast lambda; and that proving the feature on
+    silicon needs the PROBE flashed as its own image. All three hold. **`SerLambdaProbe`'s 14 arms remain
+    QEMU's**, stated rather than quietly folded into the boot.
+  - **WHAT THE BOOT DOES ESTABLISH IS THE LAMBDA PATH ITSELF, WHICH IS WHERE THIS CHANGE COULD HAVE DONE
+    HARM.** `isLambdaIndy` is consulted by EVERY lambda site and by `collectBlob`'s RTA arm, so a classifier
+    that widened wrongly would break ordinary lambdas rather than only intersection-cast ones. Every arm is
+    exact on silicon: `apply(5)=105`, `deep lambda total = 168` / `total2= 1275` / `objcap= 13`,
+    `lambda thread ran = 42`, `capturing lambda ran = 105`, `reflective lambda thread = 7`, `twice`/`twice`,
+    the five Object-method-on-a-lambda arms (`equals self = 1`, `equals othr = 0`, `hash stable = 1`,
+    `toString ok = 1`, `getClass ok = 1`), `ifacelate = late-iface` and both `late-default` arms.
+  - **AND `sy:chg=0` AT 74 SYNTHESISED TIBs, which is the counter this change most plausibly disturbs.**
+    Honouring `FLAG_SERIALIZABLE` appends a directory entry to a synthesised lambda TIB; had that perturbed
+    the shared Object vtable prefix it would show there. Not one write was ever necessary.
+  - **CLOSURE IDENTITY IS EXACT AND THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** batch 2 `+335blob`,
+    batch 64 `+401blob`, `rounds=4 pend=180 reach=17`, `n:imap=133 synth=60 clinits=97` byte-identical to
+    QEMU, with `memo=1150 res=3029 unres=2515` against QEMU's `1150 / 3032 / 2518` -- `memo` EQUAL, which is
+    what says the closure is identical. `gc: collections=46` at the churn demo,
+    `churnMB=625 live=32 intact=32`, and none of the named ABSENCES appears, **`LAMBDA MARKER UNRESOLVED`
+    among them** -- so `java/io/Serializable` is registered on silicon too, and the pull this card declined
+    to add on theory is still unnecessary in fact.
+  - **BOTH THIS CARD AND THE `Comparator` DELETION WERE VALIDATED BY ONE FLASH, which is legitimate because
+    each had its own QEMU gate and its own probe before merging -- and is stated because neither card's
+    figures came from a solo boot.** They are separable by construction: this one is a JIT classifier with
+    `SerLambdaProbe`, that one a deletion with `CmpProbe`, and the deletion CANNOT compile without this one.
   - **WHAT THIS UNBLOCKS, and it is the reason it was written:** stock `java/util/Comparator` can now be
     compiled on the metal, so the `guestsrc` overlay of it -- 97 hand-written lines against 583, with ZERO
     natives in stock, dropping eight referenced members and returning a FRESH lambda where stock returns a
