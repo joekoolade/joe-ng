@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`Class.getComponentType()` ANSWERED NULL FOR EVERY PRIMITIVE ARRAY -- `byte[].class.getComponentType()` WAS
-  NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, QEMU-GATED -- NOT YET PI-VALIDATED).** An array
+  NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, PI-VALIDATED).** An array
   Type's `ARRAY_TYPE_ELEMENT_OFFSET` exists for reference-array COVARIANCE and is **0 for a primitive element by
   construction**, and `componentTypeOf` read nothing else:
 
@@ -141,6 +141,7 @@ defines the minimum the assembler must encode.
   | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
   | image (same-build-path, all three probes excluded from BOTH) | 34,119,520 | **34,120,256 (+736 B, +0.002%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, `arraytypes=127`, four `arrayadopt` lines, closure EXACT, `46` at churn, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE ELEMENT SIZE CANNOT STAND IN, which is why this was not a one-line read of a different field.**
@@ -199,16 +200,67 @@ defines the minimum the assembler must encode.
     `Arrays.sort(neg)[0] = -5`, `array aioobe caught=1`, `subList`/`keySet`/`forEach` and the three
     `arrayadopt` lines all exact), and `ComponentTypeProbe`'s 30 arms against a byte-identical host oracle are
     what prove the feature. Different claims.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The recovery is an identity comparison over a
-    table QEMU has already diffed against a host oracle, so cold DRAM cannot change which atype a TIB matches.
-    What hardware is being asked is a **736-byte layout shift** plus one thing QEMU cannot price: the
-    identity walk reads `primArrTib` entries that on a real boot may be **writer-BAKED array TIBs the loader
-    adopted** rather than metal-built ones, and the adopted case is exactly why identity was chosen over a
-    metal-side field. The arms to read are `arraytypes=127` and the `arrayadopt` lines, plus the usual
-    ABSENCES and `gc: collections=46` at the churn demo.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS.** This card said before
+    the boot that the recovery is an identity comparison over a table QEMU had already diffed against a host
+    oracle, so cold DRAM cannot change which atype a TIB matches; that what hardware is asked is a
+    **736-byte layout shift** plus the one thing QEMU cannot price -- the identity walk reading `primArrTib`
+    entries that on a real boot may be **writer-BAKED array TIBs the loader adopted**; and that the arms are
+    `arraytypes=127` and the `arrayadopt` lines. All of them hold, at `core 166MHz` across 40 programs to
+    `self-build retired`: **`arraytypes=127` exact**, and the four `arrayadopt` lines at their recorded
+    batches.
+  - **THE REFERENCE BRANCH IS PROVEN ON SILICON AND THE PRIMITIVE BRANCH IS NOT -- WHICH IS THE OPPOSITE HALF
+    TO THE ONE THAT WAS BROKEN, SO IT IS STATED RATHER THAN ROUNDED UP.** `ClassLitDemo` prints
+    **`componentType of String[]: java.lang.String`**, so `arrayComponentMirror`'s `el != 0` arm
+    (`classMirror(el)`) runs on hardware. **No suite demo asks a PRIMITIVE array for its component type** --
+    measured, that is the ONLY `componentType` line in the whole boot -- so the identity walk that IS the fix
+    executed ZERO times here. The boot proves NO REGRESSION across the layout shift and the refactored
+    array/component path; `ComponentTypeProbe`'s 30 arms against a byte-identical host oracle are what prove
+    the fix. Different claims.
+  - **AND THE ADOPTED-TIB STATE THE GATE WORRIED ABOUT IS DEMONSTRABLY PRESENT, just not read through this
+    native.** The four `arrayadopt` lines are the loader adopting writer-BAKED array TIBs --
+    `[Ljava/lang/Object;` at batches 9 and 22, `[Ljava/lang/Number;` at batches 9 AND 39 (the `+335blob`
+    signature this file records), and `[[ (nested)` twice at batch 34 -- and the boot battery's five array
+    `instanceof` arms read those TIBs in the BAKED world BEFORE `launch`, all PASS. So the condition the
+    identity comparison has to survive is on this boot; what is not on it is the comparison.
+  - **THE CLOSURE IS EXACT AND THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** batch 2 `+335blob`, batch 64
+    `+401blob`, `rounds=4 pend=180 reach=17`, `n:imap=137 synth=60 clinits=97`, `sy:n=74 chg=0`,
+    `bakeMemosDropped=18`, and `memo=1150 res=3029 unres=2515` against QEMU's `1150 / 3032 / 2518` --
+    **`memo` EQUAL**, which is what says the closure itself is identical rather than merely similar. The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `churnMB=625 live=32 intact=32` with **`gc: collections=46`** at the churn demo,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `sha256 clone = 44cae.../fork-ok`, `sync: static seen=18 nomonitor=0`, `hw rng: RNG200 live` with
+    `two instances differ`, and WiFi through to **`HTTP/1.1 200 OK`, 997 bytes**. The lisp finale reads 56 and
+    is **NOT cited**, per the recorded QEMU A/A pair.
+  - **PROVENANCE IS A `cmp`, NOT A COUNTER, AND THAT IS SAID BECAUSE THE CLOSURE DELIBERATELY DID NOT MOVE.**
+    Nothing PRINTED separates this build from the previous flash -- every closure counter,
+    `bakeMemosDropped=18` and `arraytypes=127` read the same, which is the POINT of three increments that
+    declare members and refactor a native without pulling a class. So the boot is tied to the build by the
+    pre-flash `cmp` of the mounted card against `sdcard/`, re-verified afterwards: `sdcard/kernel8.img` is
+    byte-identical to the QEMU-gated `kernel8-unsafe-arc-candidate.img` and diverges from
+    `kernel8-prev-flashed-unsafe.img` at byte 74 (+51,420 B). **A card whose closure does not move does NOT
+    get the free provenance check this file usually leans on**, and this file records a boot being scored as
+    predating its flash.
+  - **THE TWENTY-SECOND DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `6afd2427 8eff6f4d 1bc8ed71`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **56 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50, 43, 50, 56. **Still not a randomness test**: what
+    stays ruled out is a constant, a counter, and a count that does not follow reads.
+  - **ONE SPIKE, NAMED RATHER THAN CHASED:** batch 40 reads `seed=511.273ms` against ~100us for its
+    neighbours, and `gc` steps 4 -> 5 on that exact batch. That is the batch-133/188 shape this file settled
+    after four boots -- a collection landing inside whichever timer happens to be holding the stopwatch.
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture** rather than
+    grepped on disk, which is weaker than an anchored grep -- a marker in a region I skimmed would not have
+    been caught, and the batch lines are dense. The closure figures above were compared against the saved QEMU
+    log, which WAS grepped.
 
 - **THE `Unsafe` ATOMICS AT NARROW WIDTH -- `Unsafe` IS AT ZERO DEEP-SCAN GAPS, FROM 237 (2026-09-30,
-  QEMU-GATED -- NOT YET PI-VALIDATED).** The other half of the accessor increment below it: the ~140
+  PI-VALIDATED FOR NO-REGRESSION; THE LDAXR/STLXR RETRY LOOP IS STILL UNEXERCISED -- SEE THE CORRECTION).** The other half of the accessor increment below it: the ~140
   compareAndSet/compareAndExchange/weakCompareAndSet/getAndAdd/getAndBitwise/getAndSet members at
   boolean/byte/char/short/float/double width, the Acquire/Release/Plain variants the Int/Long/Reference forms
   had never declared, and `allocateInstance`.
@@ -226,6 +278,7 @@ defines the minimum the assembler must encode.
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
   | image (same-build-path, both probes excluded from BOTH arms) | 34,113,616 | **34,129,480 (+15,864 B, +0.047%)** |
   | ... across the arc | 34,101,260 | **34,129,480 (+28,220 B, +0.083%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, closure EXACT -- but NO demo calls a narrow CAS** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **EXACTLY TWO ROOTS ARE joe-ng's AND THE OTHER ~140 MEMBERS ARE STOCK'S OWN CODE, and which two is forced
@@ -308,17 +361,27 @@ defines the minimum the assembler must encode.
   - **THE `ramfs/etc/init` TRAP FIRED TWICE MORE IN THIS ARC**, both times from a probe run whose trap did not
     get to run. That file is TRACKED and a generated one left in the tree is how it gets committed by accident;
     caught by reading `git diff` before staging, both times.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The CAS arithmetic is integer masking over memory
-    QEMU has already diffed against a host oracle. What hardware is being asked is a **15,864-byte layout shift**
-    plus the one thing QEMU cannot price: **`casNarrow` runs a real LDAXR/STLXR retry loop**, and this file
-    records that an LL/SC CAS fails SPURIOUSLY on silicon (an interrupt between the load and the store clears
-    the exclusive monitor) in a way it never does under emulation -- which is what the loop exists for and what
-    only a Pi exercises. The arms to read are therefore the ABSENCES -- `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`,
-    `unclaimed pc`, `LINK FAILED` -- plus `gc: collections=46` at the churn demo and the batch-line closure.
+  - **PI-VALIDATED FOR NO-REGRESSION ONLY -- AND THAT IS A CORRECTION TO THIS CARD'S OWN GATE SENTENCE.** I
+    wrote that what hardware is asked is a **15,864-byte layout shift** PLUS `casNarrow`'s real LDAXR/STLXR
+    retry loop, "which is what the loop exists for and what only a Pi exercises". **ONLY THE FIRST HALF WAS
+    ASKED.** No demo calls a `compareAndExchangeByte`/`Short`/`Char` member -- measured, the same way this
+    card already records that no demo calls any of the 94 accessors -- so **the retry loop executed ZERO
+    times on this boot**. The gate named a genuinely hardware-only property without noticing that the SUITE
+    cannot reach it, which is the shape this file already records against three earlier cards. Naming a gate
+    the boot cannot answer is better than not naming one; scoring it as answered would not be.
+  - **WHAT THE BOOT DOES ESTABLISH, at `core 166MHz`:** 40 programs to `self-build retired` across the layout
+    shift on cold DRAM, with every named ABSENCE holding -- no `FAULT` (anchored), `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP` or `LINK FAILED` -- `gc: collections=46` at the churn
+    demo with `churnMB=625 live=32 intact=32`, and the batch-line closure byte-identical. Full figures on the
+    `getComponentType` card above; it is the same boot and the same binary.
+  - **THE RETRY LOOP HAS AN IMAGE WAITING, WHICH IS WHY THIS IS A NAMED GAP AND NOT A DEAD END.**
+    `sdcard/kernel8-unsafe-probes-candidate.img` boots `UnsafeAll` -- 148 arms, `probes-broken=0`,
+    byte-identical to a host oracle on QEMU -- and is one `cp` onto the boot partition away.
+    `UnsafeAtomicProbe`'s 74 arms include an array element at EVERY alignment in the 8-byte window
+    (`short[]` 0..3, `byte[]` 0..7), which is exactly where a spurious LL/SC failure would land.
 
 - **THE `jdk/internal/misc/Unsafe` ACCESSOR SURFACE IS IN -- 94 DROPPED MEMBERS DECLARED, AND THE FINDING IS
-  THAT joe-ng HAS TWO MEMORY LAYOUTS BEHIND ONE `(Object,long)` SIGNATURE (2026-09-30, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** An overlay wins the name, so a stock member it does not declare CEASES TO EXIST: the call
+  THAT joe-ng HAS TWO MEMORY LAYOUTS BEHIND ONE `(Object,long)` SIGNATURE (2026-09-30, PI-VALIDATED).** An overlay wins the name, so a stock member it does not declare CEASES TO EXIST: the call
   resolves nowhere and surfaces as a `DENYLIST TRAP` blaming a list `Unsafe` is not even on -- the trap this
   file records NINE times. `Unsafe` was the largest remaining instance of it.
 
@@ -335,6 +398,7 @@ defines the minimum the assembler must encode.
   | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
   | image (same-build-path, probe excluded from BOTH) | 34,101,260 | **34,113,616 (+12,356 B, +0.036%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, `arrayKindOf` callable in the BAKED world** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE SCOPE WAS DECIDED BY MEASUREMENT, NOT BY APPETITE, and the measurement is the most useful thing
@@ -448,13 +512,27 @@ defines the minimum the assembler must encode.
     `/tmp/probe.log` because the first was still alive when the second truncated it, and the interleaving ate
     the summary line -- which reads exactly like a run that never finished. Every figure above is from a run
     taken after `pgrep -x qemu-system-aarch64` came back empty.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The accessors are byte arithmetic over memory that
-    QEMU has already diffed against a host oracle, so cold DRAM cannot change whether a `short` field reads
-    back -2. What hardware is being asked is a **12,356-byte layout shift** plus one thing QEMU cannot price:
-    `arrayKindOf` dereferences an object's TIB and its Type on every narrow WRITE, and the arms to read are
-    therefore the ABSENCES -- `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`,
-    `LINK FAILED` (what the new native would produce if it failed to resolve) -- plus `gc: collections=46` at
-    the churn demo and the batch-line closure.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS.** This card said before
+    the boot that the accessors are byte arithmetic QEMU had already diffed against a host oracle, so cold
+    DRAM cannot change whether a `short` field reads back -2; that what hardware is asked is a
+    **12,356-byte layout shift** plus `arrayKindOf` dereferencing an object's TIB and Type on every narrow
+    WRITE; and that the arms are therefore the ABSENCES plus `gc: collections=46` and the batch-line closure.
+    Every one holds at `core 166MHz` across 40 programs to `self-build retired`: none of `FAULT` (anchored),
+    `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP` or `LINK FAILED` appears anywhere,
+    `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`, and the closure
+    byte-identical (full figures on the `getComponentType` card above -- same boot, same binary).
+  - **AND `arrayKindOf` IS PROVEN CALLABLE IN THE BAKED WORLD, WHICH IS A POSITIVE CLAIM RATHER THAN AN
+    ABSENCE -- by the boot-time force-compile, not by a demo.** `VM.forceCompile` calls
+    `VMNatives.arrayKindOf(0L)` on EVERY image during loader init, BEFORE `launch`, so reaching
+    `generation 12` IS that check -- the same pattern this file records for `assignable0`. Its GUEST use,
+    deciding FIELD-slot against ARRAY-element width, is still QEMU's, because **no demo calls one of the 94
+    members** and `componentTypeOf` reaches `Loader.arrayComponentMirror` directly rather than through this
+    native (read, not assumed). So the suite's claim is the layout shift and the native's resolution; the
+    width decision is `UnsafeAccessProbe`'s 44 arms.
+  - **`allocInstance0` NEEDED NO NEW NATIVE AT ALL, which is worth recording because it removes a risk this
+    card had implied.** It reuses the reflection-M2 `VM.allocInstanceAddr`, which has carried its own
+    `forceCompile` probe since that arc -- so of the two natives this increment names, exactly one
+    (`arrayKindOf`) is new, and it is the one with the probe quoted above.
 
 - **THE `Boolean`, `Byte`, `Short` AND `Number` OVERLAYS ARE DELETED AND STOCK RUNS -- AND THE DELETION
   EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, PI-VALIDATED).**
