@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE `java/lang/StringBuilder` OVERLAY IS DELETED AND STOCK RUNS -- IT COULD NOT HOLD A CHARACTER ABOVE
-  255, SO EVERY `append('€')` IN THE VM TRUNCATED TO `'¬'` (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  255, SO EVERY `append('€')` IN THE VM TRUNCATED TO `'¬'` (2026-09-29, PI-VALIDATED).**
   ~500 hand-written lines shadowing stock's 528 + `AbstractStringBuilder`'s 2,182 -- with **ZERO natives
   between them**, measured. It was a `byte[]` plus a count and NO CODER:
 
@@ -142,6 +142,7 @@ defines the minimum the assembler must encode.
   | `memo` / `res` / `unres` | 1146 / 3030 / 2517 | 1150 / 3032 / 2518 |
   | dropped supertypes | 91 | **88** |
   | image (same-build-path, probes excluded from BOTH) | 33,994,928 | **34,046,780 (+51,852 B, +0.152%)** |
+  | **Pi, the SAME binary** | -- | **64 batches, 40 programs, the WHOLE LOG legible, `46` at churn, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **I ADDED THREE MEMBERS TO THIS OVERLAY FIRST, AND THAT WAS THE WRONG FIX -- CORRECTED ON REVIEW, NOT BY
@@ -223,17 +224,81 @@ defines the minimum the assembler must encode.
     and `SbTextProbe`'s 26 arms against a byte-identical host oracle prove the path it got wrong. Different
     claims -- and here the suite's half is unusually strong, because a broken `StringBuilder` would have
     silenced the console rather than printed a wrong number.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** QEMU has diffed all 26 arms against stock, so cold
-    DRAM cannot change whether `'€'` survives. What hardware is being asked is a **51,852-byte layout
-    shift**, one more class in every demand-load batch, and -- the part QEMU cannot price -- **a wholesale
-    replacement of the class the VM's own diagnostics are built on, in the BAKED world, with a stubbed
-    `<clinit>` whose statics come from the snapshot.** So the arm to read is the LEGIBILITY OF THE WHOLE LOG:
-    if the baked `AbstractStringBuilder` were wrong, the boot would not print. Plus `gc: collections=46` at the
-    churn demo and the usual ABSENCES.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- THE ARM IS NOT A VALUE
+    BUT THE LEGIBILITY OF THE WHOLE LOG, AND THE WHOLE LOG PRINTED.** This card said before the boot that cold
+    DRAM cannot change whether `'€'` survives, and that what hardware is being asked is a **51,852-byte
+    layout shift plus a wholesale replacement of the class the VM's own diagnostics are built on, in the BAKED
+    world, with a stubbed `<clinit>` whose statics come from the snapshot.** Every counter, every batch line
+    and every demo arm is legible across **64 batches and 40 programs to `self-build retired`** at
+    `core 166MHz` -- and a baked `AbstractStringBuilder` that was wrong would not have printed the line saying
+    so. **The whole boot IS the assertion**, which is unusual and is why the gate was phrased that way.
+  - **AND THE PROVENANCE CHECK WAS NAMED IN ADVANCE TOO, WHICH IS WHAT MAKES THIS BOOT COUNT: batch 2 reads
+    `+335blob` and batch 64 `+401blob`.** The overlay image reads `+334`/`+400`. **The first hardware log of
+    this arc read `+334`/`+400`/`memo=1146` and was scored as PREDATING THE FLASH rather than as a result** --
+    the recorded "a boot can predate the flash" trap, caught from the closure counters instead of costing a
+    round of analysis. A card whose closure moves by exactly ONE class gets that check for free, and it is the
+    first thing to read in the log rather than the last.
+  - **THE RECORDED CROSS-HARNESS SPLIT REPRODUCES AT 3/3/1, which is a check rather than a curiosity.**
+    Silicon reads `memo=1150 res=3029 unres=2515` with `pc:n=109` against QEMU's `1150 / 3032 / 2518` and
+    `110` -- the same three counters and the same three magnitudes this file records, attributed to the
+    hardware RNG path being compiled on one harness and not the other. **`memo` is EQUAL**, which is what says
+    the closure itself is identical; a change that perturbed patch-site counts would have moved it too.
+  - **THE GATE IS UNMOVED AND THE CLOSURE IS EXACT TO THE DIGIT:** `gc: collections=46` at the churn demo with
+    `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, `sync: static seen=18 nomonitor=0`,
+    `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`, `sha256 clone = 44cae.../fork-ok`, and
+    the seventeen-arm boot battery all PASS through to `generation 12`.
+  - **THE NAMED ABSENCES HOLD, and the last three are the ones this increment added.** None of `FAULT`,
+    `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED` or `CLINIT REJECTED` appears
+    anywhere -- and `DENYLIST TRAP`/`LINK FAILED` are exactly what a stock member the overlay used to shadow
+    would produce if it failed to resolve, while `CLINIT REJECTED` is what a stubbed `AbstractStringBuilder`
+    initializer would produce. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight
+    occurrences -- `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no `unclaimed pc`,
+    `hw rng: RNG200 live` with `two instances differ`, and WiFi running the whole chain -> `wifi: JOINED` ->
+    `ptk derived` -> `msg3 MIC ok` -> `keys installed` -> DHCP 192.168.1.247 -> `ping reply` ->
+    DNS 104.20.23.154 -> TCP -> **`HTTP/1.1 200 OK`, 997 bytes** (the previous boot recorded 998; that field
+    covers headers, and `Age:` is a variable-length decimal -- a reading, not a VM figure).
+  - **ONE LINE APPEARED, AND I ALMOST SHIPPED A PLAUSIBLE MECHANISM FOR THE WRONG CLASS -- caught by checking
+    WHOSE code the line sits under.** A SECOND `arrayadopt [Ljava/lang/Number;`. Measured, and the A/B is
+    single-variable and agrees across machines: **every `+334blob` arm adopts it ONCE, after batch 39; every
+    `+335blob` arm adopts it TWICE, after batch 9 AND batch 39** -- the batch-39 one unmoved, on QEMU and on
+    silicon alike. I wrote that this was the deletion working, on the reasoning that stock's bounds checks go
+    through `Preconditions.outOfBoundsMessage` (which builds a `List<? extends Number>`) where the overlay
+    threw `StringIndexOutOfBoundsException` directly and built none. **Both halves of that are true of
+    `StringBuilder` and neither explains this line: the new adopt sits immediately before
+    `charAt aioobe caught=1`, whose source is `ExcDemo`'s `String.charAt(99)`** -- stock `String` in BOTH
+    arms, so the deletion cannot have changed that path.
+  - **SO THE MECHANISM IS NOT CLAIMED, AND THE HONEST READING IS BATCH COMPOSITION.** `arrayadopt` is a
+    per-BATCH loader line, and this increment adds one class to every batch -- so which demand-load batch a
+    demo falls in shifts, and an array Type adopted once can be adopted again after a reclaim. **That is a
+    reading rather than a measurement**, and it is recorded as one. The useful part is the discipline: a
+    mechanism that fits the class you just changed will fit a line belonging to some other class just as
+    neatly, and the check is one grep for the arm's SOURCE.
+  - **ONE FIGURE MOVED AND IT IS LAYOUT RATHER THAN THE VM: `bakeMemosDropped` 14 -> 18.** That counter is the
+    reclaim dropping image-side bake memos pointing into code it just rewound, so it is a function of LAYOUT --
+    and this increment moves every static cell, adds a class to every batch and shifts the image 51,852 bytes.
+    Reported rather than rounded away, and **not** called a regression: the marker for a lost or stale memo is
+    a wild branch, and none appears.
+  - **THE LISP FINALE READ 56 AND MAY NOT BE CITED FROM EITHER HARNESS HERE, which this file already
+    establishes against itself.** The recorded QEMU A/A pair produced **56 and 57 from an IDENTICAL binary**,
+    and the rule drawn from it is explicit. What IS the gate is `gc: collections=46` at the churn demo, and it
+    is identical on both arms. **Stated rather than rounded to "unmoved".**
+  - **THE NINETEENTH DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `aebf024a 5e820de9 9eccebcc`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **50 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50. **Still not a randomness test**: what stays ruled out
+    is a constant, a counter, and a count that does not follow reads.
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture rather than
+    grepped on disk**, which is weaker than an anchored grep -- a marker in a region I skimmed would not have
+    been caught, and the batch lines are dense. The `arrayadopt` and closure comparisons above WERE grepped,
+    against saved QEMU logs.
 
 - **A RECORD COMPONENT ABOVE U+00FF LOST DATA THREE WAYS -- `record C(char c)` AT `'€'` RENDERED AS `'¬'`,
-  AND `record S(String s)` AT `"€"` CAME BACK TWO CHARACTERS LONG (2026-09-29, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** One root: `recordToString` built its rendering in a `byte[]` and wrapped it with
+  AND `record S(String s)` AT `"€"` CAME BACK TWO CHARACTERS LONG (2026-09-29, PI-VALIDATED).** One
+  root: `recordToString` built its rendering in a `byte[]` and wrapped it with
   `guestString`, which **hardcodes `coder = 0`**. So the buffer could only ever carry code points 0..255
   however a component was appended, and three separate paths lost data:
 
@@ -339,14 +404,23 @@ defines the minimum the assembler must encode.
     `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string on a harness with no RNG). The only
     `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences --
     `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), every one labelled DENYLISTED.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- WITH THE CORRECTION THE CARD ABOVE HAD TO MAKE
-    ALREADY APPLIED.** QEMU has diffed all 17 arms against stock, so cold DRAM cannot change whether
-    `'\u20ac'` renders as one character. And **hardware will NOT exercise the record path**, for the reason
-    measured above, so this asks silicon for a **1,808-byte layout shift and the first `char[]` allocation in
-    writer-baked `Loader`** -- and nothing else. The arms to read are the ABSENCES (`FAULT`, `ESR EC=`,
-    `BOOT RE-ENTERED`, `unclaimed pc`), plus `gc: collections=46` at the churn demo and batch 2 at
-    `+334blob`. **Stating that in advance is the point**: the two cards before this one each had to correct
-    a gate sentence that claimed more than the boot could answer.
+  - **PI-VALIDATED, AND THE GATE HELD EXACTLY AS NAMED -- INCLUDING THE PART THAT SAID HARDWARE WOULD NOT
+    EXERCISE THE FEATURE.** This card said in advance that cold DRAM cannot change whether `'\u20ac'` renders
+    as one character, that **hardware will NOT reach the record path at all** (no suite demo declares a
+    record -- measured, not assumed), and that what silicon is therefore asked is a **1,808-byte layout shift
+    and the first `char[]` allocation in writer-baked `Loader`**, and nothing else. All four named ABSENCES
+    hold -- no `FAULT`, `ESR EC=`, `BOOT RE-ENTERED` or `unclaimed pc` -- across 40 programs to
+    `self-build retired`, with `gc: collections=46` at the churn demo and `churnMB=625 live=32 intact=32`.
+    **So the boot proves NO REGRESSION across the layout shift and the new allocation, and `RecordTextProbe`'s
+    17 arms against a byte-identical host oracle remain what prove the feature.** Different claims, and the
+    same split this card predicted for itself.
+  - **ONE FIGURE THIS CARD NAMED IN ADVANCE HAD MOVED BY THE TIME THE BOOT HAPPENED, AND IT IS THE NEXT
+    INCREMENT'S RATHER THAN A MISS: batch 2 reads `+335blob`, not the `+334blob` named here.** The
+    `StringBuilder` overlay deletion landed on top and adds exactly one class to every batch, so `+335` is
+    that card's discriminator and `+334` is this one's. **Both were validated by ONE flash**, which is
+    legitimate because each had its own QEMU gate and its own probe before merging -- but it means neither
+    card's figures came from a solo boot, and a later reader comparing against `+334` would be reading the
+    wrong image. Stated rather than quietly re-numbered.
 
 - **A `float` OR `double` RECORD COMPONENT PRINTED ITS RAW BITS -- `record D(double d)` AT 1.5 RENDERED AS
   `D[d=4609434218613702656]` (2026-09-29, PI-VALIDATED).** `Loader.putComponent`
