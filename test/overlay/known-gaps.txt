@@ -33,10 +33,6 @@ supertype#java/io/PrintStream#java/io/FilterOutputStream
 supertype#java/io/PrintStream#java/lang/Appendable
 supertype#java/lang/ArithmeticException#java/io/Serializable
 supertype#java/lang/ArrayIndexOutOfBoundsException#java/io/Serializable
-supertype#java/lang/Boolean#java/io/Serializable
-supertype#java/lang/Boolean#java/lang/constant/Constable
-supertype#java/lang/Byte#java/io/Serializable
-supertype#java/lang/Byte#java/lang/constant/Constable
 supertype#java/lang/Class#java/io/Serializable
 supertype#java/lang/Class#java/lang/constant/Constable
 supertype#java/lang/Class#java/lang/invoke/TypeDescriptor
@@ -54,10 +50,7 @@ supertype#java/lang/Module#java/lang/reflect/AnnotatedElement
 supertype#java/lang/NoSuchFieldException#java/io/Serializable
 supertype#java/lang/NoSuchMethodException#java/io/Serializable
 supertype#java/lang/NullPointerException#java/io/Serializable
-supertype#java/lang/Number#java/io/Serializable
 supertype#java/lang/ReflectiveOperationException#java/io/Serializable
-supertype#java/lang/Short#java/io/Serializable
-supertype#java/lang/Short#java/lang/constant/Constable
 supertype#java/lang/StackTraceElement#java/io/Serializable
 supertype#java/lang/ThreadGroup#java/lang/Thread$UncaughtExceptionHandler
 supertype#java/lang/Throwable#java/io/Serializable
@@ -102,9 +95,7 @@ supertype#java/util/concurrent/ConcurrentHashMap$KeySetView#java/util/concurrent
 supertype#java/util/concurrent/ConcurrentSkipListMap#java/util/concurrent/ConcurrentNavigableMap
 supertype#java/util/concurrent/Semaphore#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicBoolean#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicInteger#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicIntegerArray#java/io/Serializable
-supertype#java/util/concurrent/atomic/AtomicLong#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicLongArray#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicReference#java/io/Serializable
 supertype#java/util/concurrent/atomic/AtomicReferenceArray#java/io/Serializable

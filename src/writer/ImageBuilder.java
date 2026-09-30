@@ -1808,6 +1808,19 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
     private static boolean bakeNoClinit(String cls)
     {
         return cls.equals("java/lang/Math")
+                // java/lang/Boolean, Byte and Short: each <clinit> sets `TYPE = Class.getPrimitiveClass(...)`
+                // (Boolean's also builds the TRUE/FALSE singletons), and getPrimitiveClass reaches the
+                // native Class.primitiveClass0 --
+                // which the BAKED world cannot resolve, so scheduling it into VM.initClasses faults at boot
+                // before `launch` (EXCEPTION CLASS NOT LOADED, then a data abort in VM.bakeResolve). That is
+                // the SAME fault, at the SAME native, that put Integer and Long on this list; Boolean was the
+                // one wrapper missing from it only because its retired guestsrc overlay had deliberately
+                // dropped the initializer -- its own javadoc recorded the hazard ("an initializer would also
+                // run in <clinit> AFTER the seeding and null it back out") and deleting the overlay is what
+                // made the entry necessary.
+                || cls.equals("java/lang/Boolean")
+                || cls.equals("java/lang/Byte")
+                || cls.equals("java/lang/Short")
                 || cls.equals("java/lang/Integer")
                 || cls.equals("java/lang/StringUTF16")
                 || cls.equals("java/lang/Integer$IntegerCache")
