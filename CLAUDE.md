@@ -115,6 +115,115 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `Unsafe` ATOMICS AT NARROW WIDTH -- `Unsafe` IS AT ZERO DEEP-SCAN GAPS, FROM 237 (2026-09-30,
+  QEMU-GATED -- NOT YET PI-VALIDATED).** The other half of the accessor increment below it: the ~140
+  compareAndSet/compareAndExchange/weakCompareAndSet/getAndAdd/getAndBitwise/getAndSet members at
+  boolean/byte/char/short/float/double width, the Acquire/Release/Plain variants the Int/Long/Reference forms
+  had never declared, and `allocateInstance`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`UnsafeAtomicProbe`, 74 arms against the HOST ORACLE** | **the members do not exist** | **74 of 74 BYTE-IDENTICAL** |
+  | dropped `Unsafe` members (deep scan) | 143 | **0** |
+  | ... **across the whole arc** | **237** | **0** |
+  | total deep gaps | 820 | **677** (914 at the start of the arc) |
+  | **negative control A** (always the whole SLOT) | -- | **the array arms clobber THREE neighbours, then the run FAULTS** |
+  | **negative control B** (always the MASKED WORD) | -- | **exactly 12 FIELD arms fail, every one a SIGNED narrow width** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 38 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, both probes excluded from BOTH arms) | 34,113,616 | **34,129,480 (+15,864 B, +0.047%)** |
+  | ... across the arc | 34,101,260 | **34,129,480 (+28,220 B, +0.083%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **EXACTLY TWO ROOTS ARE joe-ng's AND THE OTHER ~140 MEMBERS ARE STOCK'S OWN CODE, and which two is forced
+    rather than chosen.** Stock builds every narrow CAS out of `getIntVolatile` + `weakCompareAndSetInt` on the
+    enclosing FOUR-byte word (`offset & ~3`, masked). joe-ng's int CAS is `Magic.cas64` over an EIGHT-byte slot,
+    so taking those two bodies verbatim would compare and write eight bytes at a four-aligned address. For a
+    byte field holding 5 it would leave the slot at `0xFF..FF05`, which `getfield` reads as **-251**. So
+    `compareAndExchangeByte` and `compareAndExchangeShort` are joe-ng's; Char via Short, Boolean via Byte, Float
+    via Int, Double via Long, every delegation and every read-modify-write loop are stock's, unchanged.
+  - **THE ~140 WERE EXTRACTED MECHANICALLY FROM THE JDK 26 SOURCE, NOT TRANSCRIBED, and that is a methodological
+    point rather than a convenience.** A hundred and forty near-identical four-line bodies is exactly where a
+    copy-paste slip lives -- the `BitwiseRmwProbe` card records the shape (an `Xor` form pasted with `|`). A
+    script pulled each named method out of stock, reformatted it to this project's Allman braces, and then
+    **verified that every method the extracted bodies CALL resolves** -- which came back naming only the two
+    roots, exactly as designed. That check is what says nothing was silently left dangling.
+  - **THE WIDTH QUESTION IS THE SAME ONE THE ACCESSORS FOUND, and the CAS answer is different from the write
+    answer.** `casNarrow` compares the VALUE in the low `width` bytes and then, for a FIELD, replaces the
+    WHOLE 8-byte slot. Replacing the whole word is what makes a sign change work: a `short` field going
+    -2 -> 5 must leave the slot `0x5`, not `0xFFFFFFFFFFFF0005`, and masking only the low two bytes leaves the
+    old extension behind for `getfield` to read. For an ARRAY ELEMENT it masks the element's bits inside the
+    enclosing 8-byte word and preserves the rest.
+  - **THE 8-BYTE WINDOW PROVABLY CANNOT LEAVE THE ARRAY, which is what makes the masked form safe rather than
+    merely convenient.** An array's payload starts at 24 -- 8-aligned -- and its allocation is
+    `align8(24 + length*scale)` (`ObjectModel.arraySize`), so the window enclosing any element lies inside the
+    array's own allocation: in its trailing padding at worst, never in the next object's header.
+  - **AND THE ELEMENT CANNOT SPAN THE WINDOW, for a reason worth keeping: STOCK'S OWN GUARD IS EXACTLY STRONG
+    ENOUGH FOR AN EIGHT-BYTE WORD.** Stock refuses a 2-byte update at `(offset & 3) == 3`, which is written
+    about its four-byte word -- and the only offsets that could span an eight-byte one are `offset & 7 == 7`,
+    every one of which has `offset & 3 == 3`. So the guard is kept VERBATIM rather than widened, and the probe
+    asserts both halves (refused at `base + 3`, accepted at `base + 2`).
+  - **THE TWO NEGATIVE CONTROLS ARE DISJOINT, the same shape the accessor increment used.** Each is the same
+    tree with one arm of `casNarrow` forced:
+    - **A, always the whole slot:** the first array arm shows THREE neighbours clobbered
+      (`cas short[0] = true/-2,-1,-1,-1,14` against `-2,11,12,13,14`) and the run then **FAULTS** at the next
+      one, where the address is 2-aligned. All 47 field arms before it pass.
+    - **B, always the masked word:** exactly **12 FIELD arms fail, every one a SIGNED narrow width**, in both
+      sign directions -- `cas short field = true/5/-65531` (`Unsafe.getShort` answers 5 while ORDINARY JAVA
+      reads -65531) and `cas short neg = true/65534` (the missing sign extension). Every ARRAY arm passes.
+    - **The char, boolean, float and double FIELD arms pass in BOTH controls**, which is the built-in
+      comparison: char and boolean are effectively unsigned, so a zero high half IS the right extension, and
+      float's high half is don't-care while double is 8 bytes either way.
+  - **THE STATED PRECONDITION IS AN ARM RATHER THAN A CLAIM, AND MEASURING IT MADE IT SHARPER THAN THE CLAIM
+    WAS -- IN joe-ng's FAVOUR.** The Int/Long/Reference/Float/Double atomics act on the whole 8-byte slot,
+    which is exact for a FIELD and wrong for an array element of scale below 8; Float and Double inherit it
+    because stock derives them from Int and Long and this takes that derivation verbatim. **I wrote that down
+    as "takes its neighbour with it", i.e. silent corruption. It is not silent.** An `int[]` element sits at a
+    4-aligned address and `LDAXR` requires EIGHT-byte alignment, so the CAS raises an alignment fault the VM
+    turns into a catchable `NullPointerException` -- and the array is left **UNTOUCHED**: the arm reads
+    `java.lang.NullPointerException -> 100,200,300` where the host reads `no-throw -> 100,-2,300`. Fail-loud
+    with no corruption is the better of the two outcomes, and only running the arm found it. The first cut of
+    that arm had no `try` and simply killed the probe before its summary, which is how it surfaced.
+  - **`allocateInstance` CLOSED THE LAST GAP, and it is not a stub.** It reuses the native the reflective
+    `Constructor.newInstance` path already runs on (`Loader.allocInstance` -- zeroed fields, the class's own TIB,
+    and `ensureClinit` first, because creating an instance is a JVMS 5.5 active use); registering the SAME
+    address under a second declaring class is how `fence0` is already shared. **Stock's refusals are in its
+    NATIVE, so there is no Java body to copy** and the four are written out: an array class, a primitive, an
+    interface and an ABSTRACT class throw `InstantiationException`. The abstract one is the only case
+    `Loader.allocInstance` would otherwise have SERVED -- it refuses an interface and an unregistered type by
+    answering 0 -- and handing back a plausible instance of an abstract class is the silent wrong answer rule 3
+    exists to remove. Referenced only by `java/lang/invoke/DirectMethodHandle`, denied: this closes a gap rather
+    than enabling anything.
+  - **A STYLE SLIP OF MINE FROM THE INCREMENT BELOW, FIXED HERE: 50 one-line methods.** The accessor increment
+    wrote the pure delegations as `... ) { return x; }`. **This project uses full Allman everywhere and the
+    pre-existing `guestsrc` contained ZERO such one-liners** -- measured, not assumed. Reformatted, which is a
+    pure whitespace change and is why it rides in this increment rather than its own: it moves the image
+    (LineNumberTable), and a comment-only or whitespace-only edit moving the image is a shape this file records
+    three times, so it wants the SAME gate rather than a second one.
+  - **THE CLOSURE DOES NOT MOVE BY ONE COUNTER.** `Unsafe` is `pullClass`ed on every boot already, so ~140 more
+    methods add no class: batch 2 `+335blob`, batch 64 `+401blob`, `memo=1150 res=3032 unres=2518`,
+    `n:imap=137 synth=60 clinits=97`, `rounds=4 pend=180 reach=17` -- byte-identical to the wrapper-deletion
+    boot and to the accessor increment.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** The only non-overlay change is one
+    `nativeBufAt` line registering an EXISTING native under a second declaring class -- no codegen, so the
+    byte-for-byte self-hosting fixpoint cannot have moved.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS ANY OF THESE MEMBERS** (measured -- `Unsafe`
+    appears in no `guestsrc/demo` source). So the boot proves NO REGRESSION across a 15,864-byte layout shift in
+    the class `ForkJoinPool`, `CompletableFuture` and `AtomicInteger` drive their atomics through, and
+    `UnsafeAtomicProbe`'s 74 arms against a byte-identical host oracle are what prove the feature. Different
+    claims.
+  - **THE `ramfs/etc/init` TRAP FIRED TWICE MORE IN THIS ARC**, both times from a probe run whose trap did not
+    get to run. That file is TRACKED and a generated one left in the tree is how it gets committed by accident;
+    caught by reading `git diff` before staging, both times.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The CAS arithmetic is integer masking over memory
+    QEMU has already diffed against a host oracle. What hardware is being asked is a **15,864-byte layout shift**
+    plus the one thing QEMU cannot price: **`casNarrow` runs a real LDAXR/STLXR retry loop**, and this file
+    records that an LL/SC CAS fails SPURIOUSLY on silicon (an interrupt between the load and the store clears
+    the exclusive monitor) in a way it never does under emulation -- which is what the loop exists for and what
+    only a Pi exercises. The arms to read are therefore the ABSENCES -- `FAULT`, `ESR EC=`, `BOOT RE-ENTERED`,
+    `unclaimed pc`, `LINK FAILED` -- plus `gc: collections=46` at the churn demo and the batch-line closure.
+
 - **THE `jdk/internal/misc/Unsafe` ACCESSOR SURFACE IS IN -- 94 DROPPED MEMBERS DECLARED, AND THE FINDING IS
   THAT joe-ng HAS TWO MEMORY LAYOUTS BEHIND ONE `(Object,long)` SIGNATURE (2026-09-30, QEMU-GATED -- NOT YET
   PI-VALIDATED).** An overlay wins the name, so a stock member it does not declare CEASES TO EXIST: the call

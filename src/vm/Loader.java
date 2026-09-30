@@ -11464,6 +11464,9 @@ public final class Loader
             // ELEMENT (its natural width), and the bulk moves must refuse a non-PRIMITIVE array as stock does;
             // see VMNatives.arrayKindOf for why Class.getComponentType cannot answer either question here.
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arrayKind0")))          { return VM.arrayKindAddr; } // (Object)J: 0 none, 1 primitive, 2 reference
+            // The same native Constructor.allocInstance0 runs on -- zeroed fields, the class's TIB, and
+            // ensureClinit first. nativeBuf keys on the DECLARING class, so it needs registering under both.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
