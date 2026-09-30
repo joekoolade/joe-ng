@@ -17,7 +17,6 @@ java/lang/Class#toGenericString()Ljava/lang/String;
 java/lang/ClassLoader#getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;
 java/lang/ClassLoader#getParent()Ljava/lang/ClassLoader;
 java/lang/IllegalArgumentException#<init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-java/lang/StringBuilder#append(D)Ljava/lang/StringBuilder;
 java/lang/Thread#getState()Ljava/lang/Thread$State;
 java/lang/reflect/Field#getDouble(Ljava/lang/Object;)D
 java/lang/reflect/Field#getFloat(Ljava/lang/Object;)F
@@ -60,9 +59,6 @@ supertype#java/lang/ReflectiveOperationException#java/io/Serializable
 supertype#java/lang/Short#java/io/Serializable
 supertype#java/lang/Short#java/lang/constant/Constable
 supertype#java/lang/StackTraceElement#java/io/Serializable
-supertype#java/lang/StringBuilder#java/io/Serializable
-supertype#java/lang/StringBuilder#java/lang/AbstractStringBuilder
-supertype#java/lang/StringBuilder#java/lang/Comparable
 supertype#java/lang/ThreadGroup#java/lang/Thread$UncaughtExceptionHandler
 supertype#java/lang/Throwable#java/io/Serializable
 supertype#java/lang/invoke/VarHandle#java/lang/constant/Constable

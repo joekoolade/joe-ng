@@ -115,6 +115,122 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/lang/StringBuilder` OVERLAY IS DELETED AND STOCK RUNS -- IT COULD NOT HOLD A CHARACTER ABOVE
+  255, SO EVERY `append('€')` IN THE VM TRUNCATED TO `'¬'` (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  ~500 hand-written lines shadowing stock's 528 + `AbstractStringBuilder`'s 2,182 -- with **ZERO natives
+  between them**, measured. It was a `byte[]` plus a count and NO CODER:
+
+  ```java
+  value[count] = (byte) b;                         // put(): anything above 255 loses its high bits
+  return new String(t, (byte) 0);                  // toString(): coder 0 = LATIN1, hardcoded
+  ```
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`SbTextProbe`, 26 arms against the HOST ORACLE** | **14 WRONG, and 5 more would not COMPILE** | **26 of 26 BYTE-IDENTICAL** |
+  | `append('Ā')` / `append('€')` / `append('￿')` | **`0` (a NUL) / `ac` / `ff`** | **`100` / `20ac` / `ffff`** |
+  | `append("a€b")` | **`61 ac 62`** | **`61 20ac 62`** |
+  | `append("中文")` / a surrogate pair | **`2d 87` / `35 0`** | **`4e2d 6587` / `d835 dc00`** |
+  | INFLATE (`"ab"` then `'€'`, and past capacity 16) | **`61 62 ac`** | **`61 62 20ac`** |
+  | `insert`/`reverse`/both ctors over UTF16 | **all truncated** | **all exact** |
+  | `sb.compareTo(sb2)`, `instanceof Comparable`/`Serializable` | **DOES NOT COMPILE -- 5 javac errors** | **`lt`/`gt`/`eq`, `1`, `1`** |
+  | the 5 ASCII/LATIN1 arms + `CharSequence`/`Appendable` | correct | **correct -- UNMOVED** |
+  | `SbFpProbe` 24 arms / `StockDescProbe` 4 arms | -- | **24 of 24 / 4 of 4** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 31 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure, batch 2 / batch 64 | +334blob / +400blob | **+335blob / +401blob -- ONE class** |
+  | `memo` / `res` / `unres` | 1146 / 3030 / 2517 | 1150 / 3032 / 2518 |
+  | dropped supertypes | 91 | **88** |
+  | image (same-build-path, probes excluded from BOTH) | 33,994,928 | **34,046,780 (+51,852 B, +0.152%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **I ADDED THREE MEMBERS TO THIS OVERLAY FIRST, AND THAT WAS THE WRONG FIX -- CORRECTED ON REVIEW, NOT BY
+    A FAILURE.** The increment before this one gave the overlay `append(double)` and both `insert` forms. **The
+    standing rule is NATIVES, and stock `StringBuilder` + `AbstractStringBuilder` have ZERO in 2,710 lines.**
+    That is the SECOND time this arc has extended an overlay whose stock counterpart runs -- the
+    `DualPivotQuicksort` card records the same correction in the same words -- and the measurement that
+    mattered was one line of `grep` away both times.
+  - **THE OVERLAY'S STATED REASON WAS A MINIMUM, the sixth distinct non-natives justification in this arc.**
+    Its javadoc: *"Fixed initial capacity (grown lazily) -- enough for demand-loaded demos."* `Formatter` was
+    justified by a closure argument, `Character` by a cold-path one, `TimeUnit` by a single test, `Collections`
+    by a guess about which members would be called, `DualPivotQuicksort` by a subsystem that was never absent.
+    **None of the six is a natives argument.**
+  - **AND IT CARRIED THE DEFECT THE PREVIOUS TWO CARDS WERE FIXING SOMEWHERE ELSE, in the hottest class in the
+    VM.** Those cards repaired a LATIN1-only buffer in the record-`toString` path; this class had the identical
+    shape -- `(byte) b` on the way in, coder 0 hardcoded on the way out -- and nothing had looked. So a `char`
+    above 255 came back as a DIFFERENT CHARACTER of the right length, which is the quietest wrong answer
+    available: `append('€')` gave `'¬'` and `append('Ā')` gave a NUL.
+  - **THE LENGTHS WERE ALL CORRECT, WHICH IS WHY IT SURVIVED.** Unlike the record buffer -- where a UTF16
+    source contributed two characters per character and the length visibly grew -- this overlay counted
+    characters correctly and only corrupted their VALUES. Nothing downstream could tell.
+  - **THE OVERLAY ALSO MADE `StringBuilder` NOT A `Comparable` AND NOT A `Serializable`, and javac states that
+    outright.** Stock is `extends AbstractStringBuilder implements Appendable, CharSequence, Serializable,
+    Comparable<StringBuilder>`; the overlay declared the first two interfaces only, so the other two CEASED TO
+    EXIST and `compareTo` could not bind at all. Compiling the probe against it gives **5 errors** -- three
+    `cannot find symbol` and two `StringBuilder cannot be converted to Comparable`/`Serializable`.
+    **A dropped SUPERTYPE is how this class once lost `Appendable` (breaking `String.replaceAll`) and how
+    `PrintStream` lost `OutputStream` (total silence from the launcher)**; the baseline had been recording all
+    three as deliberate.
+  - **THE FEARED CLOSURE EXPLOSION DID NOT HAPPEN, AND THAT WAS THE ONE THING WORTH MEASURING FIRST.** The
+    loader pulls every `CONSTANT_Class` a blob NAMES, not what RTA reaches, and `AbstractStringBuilder` names
+    `DoubleToDecimal`, `FloatToDecimal`, `IntStream`, `StreamSupport`, `Spliterator`, `CharBuffer` and
+    `Preconditions` -- the shape that cost `Formatter` **+357 classes per batch** until a cold subtree was
+    denied. Measured here: **+1 class**, batch 2 `+334blob` -> `+335blob` and batch 64 `+400blob` -> `+401blob`.
+    No denial was needed and none was added.
+  - **TWO BAKED-WORLD HAZARDS, BOTH RESOLVED BY MEASUREMENT RATHER THAN BY ARGUMENT -- and one of them
+    refuted me.** The host writer cannot compile `AbstractStringBuilder.<clinit>` (`ldc` class-literal) and
+    stubs it, which leaves both its statics to the snapshot:
+    - **I expected `$assertionsDisabled` to read 0, i.e. assertions ENABLED in the baked world**, making three
+      invariant `assert`s live on the capacity-growth path. **Read out of the image at its `statmap` cell: 1.**
+      The seed-JVM snapshot fills it from the host, where assertions are off, so the baked world matches stock.
+      **Wrong, and caught before it went into a card.**
+    - **`EMPTYVALUE` really is baked NULL** (no compiled code references it, so the object-static fill never
+      touched it -- the `EMPTY_LIST_NULLS` shape). It is nonetheless **provably unreachable**:
+      `StringBuilder()` calls `super(16)`, and the no-arg `AbstractStringBuilder()` exists only for
+      serialization of subclasses, which this VM does not do. Read at both constructors, not inferred.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION THAT MATTERS MOST HERE.** The writer lowers string concat
+    through `StringBuilder`, so a change that perturbed its codegen would break the byte-for-byte self-hosting
+    fixpoint first -- and this replaces the class wholesale.
+  - **THE PROBE REPORTS A LENGTH AND HEX CODE POINTS, NEVER THE RENDERED TEXT**, so its own output is pure
+    ASCII and a divergence can only implicate `StringBuilder`, never the console's encoding. The INFLATE arms
+    are the ones a coder-aware builder can still get wrong: append ASCII first and a character above 255
+    second, so the buffer must widen IN PLACE with what it already holds preserved -- including past the
+    initial capacity of 16.
+  - **THE BOUNDARY IS PINNED FROM BOTH SIDES AND THE BOTH-STATES ARMS ARE NAMED**, because an arm that passes
+    either way is not a control: `U+00FF` is the last character that worked and `U+0100` the first that did
+    not; and the ASCII arms, the LATIN1 arms, `CharSequence` and `Appendable` are correct under both.
+  - **THIS SUPERSEDES THE `append(double)` INCREMENT, AND ITS PROBES ARE WHY THEY SURVIVE.** Those three
+    members disappear with the overlay. What is KEPT is `test/realjdk/StockDescProbe` and its `realjdktests`
+    target -- compiled WITHOUT `--patch-module`, so its call sites carry STOCK DESCRIPTORS -- and it now gates
+    the deletion instead: `append:(D)`, `append:(F)`, `insert:(ID)` and `insert:(IF)` resolve against stock's
+    own members, 4 of 4. **That is the test this project did not have**: `make overlaycheck` finds
+    descriptor-surface gaps by SCANNING, and nothing EXECUTED one until this.
+  - **THE BASELINE IS REGENERATED AND THE DIFF IS EXACTLY FOUR LINES, all StringBuilder's, no collateral** --
+    the `append(D)` gap plus the three dropped supertypes. Overlays shadowing a stock java.base class go
+    **120 -> 119**.
+  - **THE jdktests-STATE TRAP FIRED TWICE MORE AND THE RECORDED FIGURE IS WHAT NAMED IT BOTH TIMES.** Two
+    images came out **27,984 bytes** short -- the `RandomFactory` figure to the byte -- because `make test`
+    depends on `build`, whose `guest` rule purges `out/jdk`. **And a THIRD instance is new: `make build`'s
+    purge covers `java/ javax/ jdk/ sun/ demo/ org/` and CANNOT reach a bare `out/Foo.class`**, so removing a
+    default-package probe from `JDKTESTS` left its class in the image and a control measured identical to its
+    own arm. The size comparison caught all three; the image gated here is `cmp`-confirmed against the tree.
+  - **AND A DEFAULT-PACKAGE PROBE DOES SHIP IN THE classDir, which is worth recording because this file's own
+    note reads the other way.** `StockDescProbe` sits at `0x21da90`; the note that such classes "cost zero
+    image bytes" is what sent me looking for a different explanation first. The image figures above therefore
+    exclude all three probes from BOTH arms, so the +51,852 bytes is the stock classes and nothing else.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: it exercises `StringBuilder` on EVERY LINE IT PRINTS, and
+    every one of those is ASCII.** So 40 clean programs prove no regression on the path the overlay got right,
+    and `SbTextProbe`'s 26 arms against a byte-identical host oracle prove the path it got wrong. Different
+    claims -- and here the suite's half is unusually strong, because a broken `StringBuilder` would have
+    silenced the console rather than printed a wrong number.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** QEMU has diffed all 26 arms against stock, so cold
+    DRAM cannot change whether `'€'` survives. What hardware is being asked is a **51,852-byte layout
+    shift**, one more class in every demand-load batch, and -- the part QEMU cannot price -- **a wholesale
+    replacement of the class the VM's own diagnostics are built on, in the BAKED world, with a stubbed
+    `<clinit>` whose statics come from the snapshot.** So the arm to read is the LEGIBILITY OF THE WHOLE LOG:
+    if the baked `AbstractStringBuilder` were wrong, the boot would not print. Plus `gc: collections=46` at the
+    churn demo and the usual ABSENCES.
+
 - **A RECORD COMPONENT ABOVE U+00FF LOST DATA THREE WAYS -- `record C(char c)` AT `'€'` RENDERED AS `'¬'`,
   AND `record S(String s)` AT `"€"` CAME BACK TWO CHARACTERS LONG (2026-09-29, QEMU-GATED -- NOT YET
   PI-VALIDATED).** One root: `recordToString` built its rendering in a `byte[]` and wrapped it with
