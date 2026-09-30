@@ -20222,7 +20222,124 @@ public final class Loader
         return u2(gbase + gcp[idx]);                    // invokedynamic.bootstrap_method_attr_index
     }
 
-    /** True if the invokedynamic at {@code idx} bootstraps via {@code LambdaMetafactory.metafactory}. */
+    /**
+     * {@code LambdaMetafactory}'s flag bits, as its own javadoc names them. An {@code altMetafactory} site
+     * carries a flags word as {@code bootstrap_arguments[3]}; a plain {@code metafactory} site has none.
+     */
+    private static final int LMF_SERIALIZABLE = 1;
+    private static final int LMF_MARKERS = 2;
+    private static final int LMF_BRIDGES = 4;
+
+    /** {@code bootstrap_arguments[k]} of the indy at {@code idx}, as a constant-pool index. */
+    private static int bsmArg(int idx, int k)
+    {
+        return u2(bsmEntryOff(indyBsmIndex(idx)) + 4 + k * 2);
+    }
+
+    /** {@code num_bootstrap_arguments} of the indy at {@code idx}. */
+    private static int bsmArgCount(int idx)
+    {
+        return u2(bsmEntryOff(indyBsmIndex(idx)) + 2);
+    }
+
+    /**
+     * The {@code int} value of a {@code CONSTANT_Integer} at cp index {@code c}.
+     *
+     * <p>NO {@code +1} FOR THE TAG: {@code gcp[]} holds the offset of an entry's BODY, the tag already
+     * consumed -- which is why {@code lambdaSamDescOff} reads a MethodType's descriptor_index at
+     * {@code gcp[mtIdx]} and a MethodHandle's reference_index at {@code gcp[mhIdx] + 1} (past the
+     * 1-byte reference_kind, not past a tag). Adding one here read the flags word one byte high, so every
+     * {@code altMetafactory} site was refused as if it carried unknown bits.
+     */
+    private static int cpIntAt(int c)
+    {
+        return u4(gbase + gcp[c]);
+    }
+
+    /**
+     * The {@code altMetafactory} flags word for the indy at {@code idx}, or 0 when the site has none -- a
+     * plain {@code metafactory} site, or one whose argument list is too short to carry them.
+     *
+     * <p>Callers must have established that this IS a lambda indy ({@link #isLambdaIndy}); the classifier is
+     * what refuses the flag combinations this VM cannot honour, so anything reaching here is honourable.
+     */
+    static int lambdaAltFlags(int idx)
+    {
+        if (gBsmOff == 0L || !isAltMetafactory(idx) || bsmArgCount(idx) < 4)
+        {
+            return 0;
+        }
+        return cpIntAt(bsmArg(idx, 3));
+    }
+
+    /** True if the indy at {@code idx} bootstraps through {@code LambdaMetafactory.altMetafactory}. */
+    private static boolean isAltMetafactory(int idx)
+    {
+        long e = bsmEntryOff(indyBsmIndex(idx));
+        int mrefIdx = u2(gbase + gcp[u2(e)] + 1);
+        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory"))
+            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("altMetafactory"));
+    }
+
+    /**
+     * True if the {@code altMetafactory} site at {@code idx} has a flags tail this VM can honour.
+     *
+     * <p>Its first THREE static arguments are byte-for-byte {@code metafactory}'s -- samMethodType,
+     * implMethod, instantiatedMethodType -- so the whole of {@link #buildLambdaTib} reads them unchanged and
+     * only the TAIL has to be decided:
+     *
+     * <ul>
+     * <li>{@code FLAG_SERIALIZABLE}: the function object must also implement {@code java.io.Serializable}.
+     *     HONOURED -- {@link #finishLambdaClass} adds it to the itable directory, so
+     *     {@code lambda instanceof Serializable} answers true as it does on stock. Nothing here serialises
+     *     anything ({@code java/io/ObjectStream*} is denied), so the marker's only observable is that
+     *     answer, and getting it silently wrong is the failure mode this project has paid for repeatedly.</li>
+     * <li>{@code FLAG_BRIDGES} with a bridge count of ZERO: an empty list, so nothing to do. javac emits it
+     *     alongside {@code FLAG_SERIALIZABLE} for a generic intersection cast, which is how every such site
+     *     in java.base reads.</li>
+     * <li>{@code FLAG_MARKERS}, a NON-zero bridge count, or any bit outside those two: REFUSED. Each names
+     *     extra interfaces or extra methods the function object must carry, and a directory that silently
+     *     lacked them would answer a type test wrongly or leave a dispatch with nowhere to go. Refusing
+     *     keeps today's behaviour exactly -- the classifier says no, and {@code Baseline.lowerInvokeDynamic}
+     *     reports {@code JIT unsupported ... 0xBA} naming the class. Nothing in java.base needs them
+     *     (measured: all EIGHT {@code altMetafactory} users read flags=5, bridgeCount=0), so honouring them
+     *     would be shipping code that cannot fire.</li>
+     * </ul>
+     */
+    private static boolean altFormSupported(int idx)
+    {
+        int nargs = bsmArgCount(idx);
+        if (nargs < 4)
+        {
+            return false;                               // no flags word to decide on
+        }
+        int flags = cpIntAt(bsmArg(idx, 3));
+        if ((flags & ~(LMF_SERIALIZABLE | LMF_BRIDGES)) != 0)
+        {
+            return false;                               // FLAG_MARKERS, or a bit this VM has never seen
+        }
+        if ((flags & LMF_BRIDGES) != 0)
+        {
+            // The bridge COUNT follows the flags (there is no marker list, or FLAG_MARKERS would be set).
+            if (nargs < 5 || cpIntAt(bsmArg(idx, 4)) != 0)
+            {
+                return false;                           // a real bridge list needs real bridge methods
+            }
+        }
+        return true;
+    }
+
+    /**
+     * True if the invokedynamic at {@code idx} bootstraps via {@code LambdaMetafactory} in a form this JIT
+     * lowers: {@code metafactory}, or {@code altMetafactory} with an honourable flags tail (see
+     * {@link #altFormSupported}).
+     *
+     * <p>{@code altMetafactory} is what javac emits for a lambda cast to an INTERSECTION type, and matching
+     * the name {@code metafactory} exactly is what kept stock {@code java.util.Comparator} from running at
+     * all: every one of its combinators casts its lambda to {@code (Comparator<T> & Serializable)}, so the
+     * class has exactly ONE bootstrap method and it is the alt one. The site then fell through to
+     * {@code Baseline}'s unsupported-bootstrap arm.
+     */
     static boolean isLambdaIndy(int idx)
     {
         if (gBsmOff == 0L)
@@ -20232,8 +20349,15 @@ public final class Loader
         long e = bsmEntryOff(indyBsmIndex(idx));
         int mhIdx = u2(e);                              // bootstrap_method_ref -> MethodHandle
         int mrefIdx = u2(gbase + gcp[mhIdx] + 1);       // MethodHandle.reference_index -> Methodref
-        return utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory"))
-            && utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("metafactory"));
+        if (!utf8IsStr(refClassNameOff(mrefIdx), Magic.bytes("java/lang/invoke/LambdaMetafactory")))
+        {
+            return false;
+        }
+        if (utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("metafactory")))
+        {
+            return true;
+        }
+        return utf8IsStr(mrefNameOff(mrefIdx), Magic.bytes("altMetafactory")) && altFormSupported(idx);
     }
 
     /**
@@ -21024,6 +21148,21 @@ public final class Loader
     }
 
     /** Wrap a built lambda thunk into a class: imap (SAM slot -> thunk), itable dir, Type, TIB; return the TIB. */
+    /** True if registry index {@code r} is already among the first {@code n} entries of {@code ifClosureBuf}. */
+    private static boolean inIfaceClosure(int r, int n)
+    {
+        int i = 0;
+        while (i < n)
+        {
+            if (ifClosureBuf[i] == r)
+            {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     private static long finishLambdaClass(long thunk, long ifaceType, int idx, int nc)
     {
         // M8 itables: PER-interface itables. The SAM's identity is (indy name, MethodType desc);
@@ -21034,7 +21173,34 @@ public final class Loader
         int samDesc = lambdaSamDescOff(idx);
         int fnReg = regOfType(ifaceType);
         int n = fnReg >= 0 ? ifaceClosureOf(fnReg) : 0;
-        long dir = Heap.allocData((n + 2) * 16);
+        // FLAG_SERIALIZABLE: an altMetafactory site whose lambda was cast to an INTERSECTION with
+        // java.io.Serializable (every combinator in stock java.util.Comparator is). The marker declares no
+        // method, so honouring it is one more DIRECTORY entry and nothing else -- and the entry is what makes
+        // `lambda instanceof Serializable` answer true, as it does on stock. Nothing here serialises
+        // anything (java/io/ObjectStream* is denied), so that answer is the marker's only observable; leaving
+        // it false would be a silent wrong answer of exactly the shape this VM keeps paying for.
+        //
+        // If the interface is not REGISTERED there is no Type to put in the directory. Say so rather than
+        // drop it quietly: the lambda still works (its SAM is reached through the entries above) and only the
+        // type test is wrong, which is precisely the case a silent skip would hide. MEASURED rather than
+        // pre-empted with a pull -- java/io/Serializable is named as a CONSTANT_Class by every class that
+        // declares `implements Serializable`, so it is already registered in practice.
+        int serReg = -1;
+        if ((lambdaAltFlags(idx) & LMF_SERIALIZABLE) != 0)
+        {
+            serReg = classIndexByName(Magic.bytes("java/io/Serializable"));
+            if (serReg >= 0 && (serReg == fnReg || inIfaceClosure(serReg, n)))
+            {
+                serReg = -1;                            // already in the closure: one entry, not two
+            }
+            else if (serReg < 0)
+            {
+                Uart.write(Magic.bytes("\n  LAMBDA MARKER UNRESOLVED: java/io/Serializable is not registered"));
+                Uart.write(Magic.bytes(" -- the lambda runs, `instanceof Serializable` answers false\n"));
+            }
+        }
+        int extra = serReg >= 0 ? 1 : 0;
+        long dir = Heap.allocData((n + 2 + extra) * 16);
         Magic.store64(dir + 0L, ifaceType);              // the functional interface itself
         Magic.store64(dir + 8L, lambdaItableFor(fnReg, samName, samDesc, thunk));
         int e = 1;
@@ -21045,6 +21211,14 @@ public final class Loader
             Magic.store64(dir + e * 16L + 8L, lambdaItableFor(ifClosureBuf[di], samName, samDesc, thunk));
             e += 1;
             di += 1;
+        }
+        if (serReg >= 0)
+        {
+            // Serializable declares no method, so its itable is a one-word block nothing can index: the
+            // directory entry exists to be FOUND by the type test, not to be dispatched through.
+            Magic.store64(dir + e * 16L + 0L, clTab[serReg].type);
+            Magic.store64(dir + e * 16L + 8L, lambdaItableFor(serReg, samName, samDesc, thunk));
+            e += 1;
         }
         Magic.store64(dir + e * 16L + 0L, 0L);           // sentinel: interfaceType 0 ends the directory
         Magic.store64(dir + e * 16L + 8L, 0L);
