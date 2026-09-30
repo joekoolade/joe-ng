@@ -474,7 +474,12 @@ public interface Symbols
 
     // ----- invokedynamic (lambda, M-B slice 1c) -----
 
-    /** Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code LambdaMetafactory.metafactory}. */
+    /**
+     * Whether the {@code invokedynamic} at {@code idx} bootstraps via {@code LambdaMetafactory} in a form the
+     * implementation lowers -- {@code metafactory}, or {@code altMetafactory} (a lambda cast to an
+     * INTERSECTION type) whose flags tail it can honour. A form it cannot is reported as an unsupported
+     * bootstrap by {@code Baseline.lowerInvokeDynamic} rather than lowered wrongly.
+     */
     boolean isLambdaIndy(int idx);
 
     /** Instance size (bytes) of the lambda object at {@code idx} (header + captured fields). */

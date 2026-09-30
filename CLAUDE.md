@@ -115,6 +115,130 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **A LAMBDA CAST TO AN INTERSECTION TYPE COULD NOT BE LOWERED AT ALL, SO STOCK `java/util/Comparator` COULD
+  NOT RUN -- `altMetafactory` IS SUPPORTED NOW (2026-09-29, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  `Loader.isLambdaIndy` matched the bootstrap name **`metafactory` EXACTLY**, and javac compiles
+  `(Comparator<T> & Serializable) (a, b) -> ...` through **`altMetafactory`** -- so the site fell through to
+  `Baseline.lowerInvokeDynamic`'s unsupported-bootstrap arm and the ENCLOSING CLASS refused to compile:
+
+  ```
+  JIT unsupported: reason=0 a=0x00000000000000BA b=0 in java/util/Comparator
+  ```
+
+  | gate | before | after |
+  |---|---|---|
+  | **`SerLambdaProbe`, 14 arms against the HOST ORACLE** | **the class does not compile -- ZERO arms ran** | **14 of 14 BYTE-IDENTICAL** |
+  | `(Runnable & Serializable)` -- runs / `instanceof Serializable` | **never ran** | **1 / 1** |
+  | `(Callable<String> & Serializable)`, capturing | **never ran** | **`cap:60` / 1** |
+  | `(Runnable & Serializable) Probe::bump` (a method ref) | **never ran** | **1 / 1** |
+  | a PLAIN lambda's `instanceof Serializable` (the control) | -- | **0 -- correct in BOTH worlds** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 28 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` | -- | **`+335blob` / `+401blob` / `1150`/`3032`/`2518` -- EXACT** |
+  | image (same-build-path control) | 34,054,428 | **34,062,592 (+8,164 B, +0.024%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **PROVEN BY `javap`, NOT INFERRED, AND THE CLASS HAS EXACTLY ONE BOOTSTRAP METHOD.** Stock
+    `java.util.Comparator`'s BootstrapMethods table is SIX entries and every one of them is
+    `LambdaMetafactory.altMetafactory` -- `thenComparing`, both `comparing`s, `comparingInt`,
+    `comparingLong`, `comparingDouble`. There is no `metafactory` site to fall back on, which is why the
+    failure is the whole class rather than one method.
+  - **ONLY THE TAIL HAD TO BE DECIDED, and that is why this is small.** `altMetafactory`'s first THREE static
+    arguments are byte-for-byte `metafactory`'s -- samMethodType, implMethod, instantiatedMethodType -- so
+    every reader in `buildLambdaTib` is unchanged. What follows them is a flags word and optional
+    marker/bridge lists, and all six Comparator sites read **`flags=5` (SERIALIZABLE|BRIDGES), bridgeCount=0**.
+  - **`FLAG_SERIALIZABLE` IS HONOURED RATHER THAN IGNORED, AND ITS ONLY OBSERVABLE IS A TYPE TEST.** The
+    marker declares no method, so honouring it is ONE more itable-directory entry -- and that entry is what
+    makes `lambda instanceof Serializable` answer true as it does on stock. Nothing here serialises anything
+    (`java/io/ObjectStream*` is denied), so there is no behaviour behind the marker at all; leaving the answer
+    false would be a silent wrong answer of exactly the shape this file records most often.
+  - **AND THE PLAIN-LAMBDA ARM IS WHY "HONOURED" DOES NOT MEAN "ALWAYS TRUE".** A lambda with no intersection
+    cast must answer **0**, in both worlds -- so a marker added unconditionally would fail there and nowhere
+    else. An arm that only checks the positive case cannot see that.
+  - **`FLAG_MARKERS`, A NON-ZERO BRIDGE COUNT, AND ANY UNKNOWN BIT ARE REFUSED, DELIBERATELY.** Each names
+    extra interfaces or extra methods the function object must carry, and a directory that silently lacked
+    them would answer a type test wrongly or leave a dispatch with nowhere to go. Refusing keeps today's
+    behaviour EXACTLY: the classifier says no and the JIT reports `JIT unsupported ... 0xBA` naming the class.
+    **Nothing in java.base needs them** -- measured, all EIGHT `altMetafactory` users read flags=5 /
+    bridgeCount=0 -- so honouring them would be shipping code that cannot fire, which this file rates worse
+    than a loud gap.
+  - **THE SCOPE IS MEASURED AND NARROW: 8 of 485 `LambdaMetafactory` users in java.base.**
+    `java/util/Comparator`, `java/util/Map$Entry`, `java/util/TreeMap$EntrySpliterator`,
+    `java/util/concurrent/ConcurrentSkipListMap$EntrySpliterator`, the three `java/time/chrono/Chrono*` (a
+    DENIED prefix) and `LambdaMetafactory` itself. Small, and two of them are hot.
+  - **THE FIRST BUILD OF THE FIX BEHAVED EXACTLY LIKE NO FIX, AND RE-RUNNING THE PROBE IS THE ONLY REASON
+    THAT WAS CAUGHT.** `cpIntAt` read the flags as `u4(gbase + gcp[c] + 1)`, skipping a tag byte -- but
+    **`gcp[]` holds the offset of an entry's BODY, the tag already consumed.** So the flags word came back one
+    byte high, every bit outside SERIALIZABLE|BRIDGES looked set, and `altFormSupported` refused every site.
+    The probe failed with the IDENTICAL line as the control, which is indistinguishable from an edit that did
+    not compile in. **`Loader` already reads a `CONSTANT_Integer` correctly one function over**
+    (`u4(base + gcp[idx])`, no offset), and that is what settled it in one grep.
+  - **A SECOND SITE CONSULTS THE SAME CLASSIFIER AND IS FIXED FOR FREE, which is worth naming because its
+    failure would have been silent.** `collectBlob`'s RTA arm is `op == 0xba && isLambdaIndy(...)`, and it
+    marks the lambda's IMPL BODY reachable and pulls its FUNCTIONAL INTERFACE (`pendIndyIface`) -- the one
+    thing nothing else names. For an `altMetafactory` site neither happened, so even a VM that could lower
+    the indy would have found an unmarked impl and an unresolved interface. **Not exercised by anything
+    today** (see the next bullet), so it is a hole closed rather than a repair measured.
+  - **THE WRITER IS UNTOUCHED, TWO WAYS, WHICH IS WHAT `compiler: 40 checks` ASSERTS.**
+    `WriterSymbols.isLambdaIndy` returns false unconditionally -- image code has no invokedynamic -- and
+    `writer/ReachScan` has **no indy handling at all** (grepped, not assumed), so there is no second
+    reachability scan carrying the same name match. The byte-for-byte self-hosting fixpoint therefore cannot
+    have moved, and it did not.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT, AND HERE IT IS UNUSUALLY SHARP: NOTHING IN THE TREE HAS AN
+    INTERSECTION-CAST LAMBDA EXCEPT THE PROBE.** Grepped over `guestsrc/`, `test/` and `src/`: the only two
+    hits are `SerLambdaProbe` itself and this fix's own comment text. So the changed classifier arm and the
+    Serializable directory entry execute ZERO times on the suite, and the boot proves NO REGRESSION across an
+    8,164-byte layout shift; `SerLambdaProbe`'s 14 arms against a byte-identical host oracle are what prove
+    the feature. Different claims.
+  - **TWO COUNTERS READ ONE HIGHER THAN THIS FILE RECORDS AND THEY BELONG TO THE PREVIOUS INCREMENT, NOT TO
+    THIS ONE.** The boot reads `n:imap=133 synth=60 clinits=97` where the cards say `132 / 60 / 96`. Those
+    cards quote that triple **beside `memo=1146 res=3030 unres=2517`** -- the PRE-`StringBuilder`-deletion
+    tree -- and this boot reads `memo=1150 res=3032 unres=2518`, the StringBuilder-era figure to the digit,
+    with both blob counts and `rounds=4 pend=180 reach=17` exact as well. The StringBuilder deletion adds
+    exactly ONE class to every batch and never re-quoted n:imap/clinits, so +1 imap and +1 initializer is its
+    delta surfacing, not this change's. **Stated as a reading with its evidence rather than measured with a
+    control** -- and the measurement that makes a control unnecessary is the bullet above: the changed code
+    cannot execute on this closure at all.
+  - **THE STALE-CLASS TRAP FIRED AGAIN AND `overlaycheck` IS WHAT CAUGHT IT.** Moving a probe's SOURCE out of
+    the tree leaves its class in `out/`, and `make build`'s purge covers `java/ javax/ jdk/ sun/ demo/ org/`
+    and CANNOT reach a bare `out/Foo.class`. So the check reported **8 NEW gaps** against a probe the tree no
+    longer contained. Purged and re-run to `0 new` -- and the eight it named
+    (`max`, `min`, `thenComparingLong`, `thenComparingDouble`, `comparingLong`, `comparingDouble`,
+    `nullsFirst`, `nullsLast`) INDEPENDENTLY corroborate, from the scanner rather than from javac, what the
+    `java/util/Comparator` overlay drops.
+  - **THE MARKER SWEEP IS CLEAN AND WAS GREPPED ON DISK WITH THE `FAULT` GREP ANCHORED.** 28 markers zero,
+    including the two this change could plausibly trip -- **`LAMBDA IFACE UNRESOLVED` 0** (a directory whose
+    functional interface went missing) and **`LAMBDA MARKER UNRESOLVED` 0** (the new report, below). The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences), each labelled
+    DENYLISTED. **AND MY OWN WATCHER CRIED WOLF FIRST**, on the bare `FAULT` pattern this file already records
+    as matching `demo/SecureRandomDemo`'s own `CTRL=FAULT` value string on a harness with no RNG -- a
+    recorded trap, walked into again, and the anchored grep reads 0.
+  - **`java/io/Serializable` NEEDED NO PULL, AND THAT WAS MEASURED RATHER THAN PRE-EMPTED.** If the marker is
+    not REGISTERED there is no Type to put in the directory, so the code REPORTS by name and continues (the
+    lambda still works; only the type test is wrong). Rather than add a pull to `pullIndyIfaces` on the
+    theory that one might be needed, the report was left to answer it: **it fires ZERO times**, because the
+    interface is named as a `CONSTANT_Class` by every class declaring `implements Serializable`. One fewer
+    piece of unmeasured machinery.
+  - **THE SUITE'S LAMBDA ARMS ARE ALL EXACT, which is the part that matters for a change to the lambda
+    path:** `apply(5)=105`, `deep lambda total = 168` / `total2= 1275` / `objcap= 13`, `lambda thread ran =
+    42`, `capturing lambda ran = 105`, `reflective lambda thread = 7`, `twice`/`twice`, `ifacelate =
+    late-iface`, `ifacedflt`/`ifacedfltch = late-default`. Plus `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sync: static seen=18 nomonitor=0`,
+    `bakeMemosDropped=18`, `smp sched: 4 of 4`, `steps/core c0=60 c1=60 c2=59 c3=61`, `finish HML` with
+    `HIGH blocked 63ms`.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- WITH THE UNUSUAL PART BEING THAT A SUITE BOOT
+    CANNOT PROVE THE FEATURE.** The classifier is integer arithmetic over classfile bytes QEMU has already
+    diffed against a host oracle, so cold DRAM cannot change whether a flags word reads 5. What hardware is
+    being asked by the SUITE is an **8,164-byte layout shift** and nothing else, because nothing in the suite
+    closure carries an intersection-cast lambda -- so the arms to read there are the ABSENCES plus
+    `gc: collections=46` at the churn demo and the batch-2/batch-64 closure. **Proving the feature on silicon
+    needs the PROBE flashed as its own image**, which is stated here so the next boot is chosen deliberately
+    rather than assumed to have covered it.
+  - **WHAT THIS UNBLOCKS, and it is the reason it was written:** stock `java/util/Comparator` can now be
+    compiled on the metal, so the `guestsrc` overlay of it -- 97 hand-written lines against 583, with ZERO
+    natives in stock, dropping eight referenced members and returning a FRESH lambda where stock returns a
+    shared singleton -- can be deleted. Held back as its own increment with its own probe.
+
 - **THE `java/lang/StringBuilder` OVERLAY IS DELETED AND STOCK RUNS -- IT COULD NOT HOLD A CHARACTER ABOVE
   255, SO EVERY `append('€')` IN THE VM TRUNCATED TO `'¬'` (2026-09-29, PI-VALIDATED).**
   ~500 hand-written lines shadowing stock's 528 + `AbstractStringBuilder`'s 2,182 -- with **ZERO natives
