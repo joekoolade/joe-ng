@@ -116,8 +116,8 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **THE `Boolean`, `Byte`, `Short` AND `Number` OVERLAYS ARE DELETED AND STOCK RUNS -- AND THE DELETION
-  EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** Four hand-written classes -- 114/233/215/26 lines against stock's
+  EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, PI-VALIDATED).**
+  Four hand-written classes -- 114/233/215/26 lines against stock's
   368/595/614/126 -- with **ZERO natives between them**, measured, dropping SIXTEEN referenced members.
   `java/lang/Number`'s whole body was:
 
@@ -145,6 +145,7 @@ defines the minimum the assembler must encode.
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `clinits` | -- | **BYTE-IDENTICAL; only `n:imap` moves, 133 -> 137** |
   | image (same-build-path, probe excluded from BOTH) | 34,081,328 | **34,092,468 (+11,140 B, +0.033%)** |
   | dropped supertypes | 88 | **79** |
+  | **Pi, the SAME binary** | -- | **40 programs, the boot battery PASS, BoxingDemo exact, `46` at churn, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE REAL FINDING IS A BOOT FAULT THE OVERLAYS WERE HIDING, AND ITS OWN JAVADOC HAD DOCUMENTED IT.**
@@ -250,15 +251,61 @@ defines the minimum the assembler must encode.
     list, not codegen -- it decides whether a `<clinit>` is compiled into `VM.initClasses`, and emits
     nothing -- so the byte-for-byte self-hosting fixpoint cannot have moved, and a writer change that did
     move it would break there first.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- AND UNLIKE THE LAST TWO CARDS, A SUITE BOOT CAN
-    PROVE THE FEATURE.** The arithmetic is guest-world integer work QEMU has already diffed byte-for-byte
-    against a host oracle, so cold DRAM cannot change whether `toUnsignedInt(-1)` is 65535. What hardware is
-    being asked is an **11,140-byte layout shift PLUS a real change to the BAKED world**: three wrapper
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- INCLUDING THAT,
+    UNLIKE THE LAST TWO CARDS, A SUITE BOOT *CAN* PROVE THE FEATURE.** This card said before the boot that
+    hardware is asked an **11,140-byte layout shift PLUS a real change to the BAKED world** -- three wrapper
     `<clinit>`s no longer scheduled into `VM.initClasses`, and `Boolean.TRUE`/`FALSE` now deep-baked image
-    objects that the boot battery's `String.valueOf(true)` path runs before `launch`. The arms to read are
-    the seventeen-arm boot battery (especially `String.valueOf(true)=true` and the two `IntegerCache` arms),
-    **`BoxingDemo`'s eighteen JLS arms**, `gc: collections=46` at the churn demo, the batch-2/batch-64
-    closure, and the ABSENCES -- with `EXCEPTION CLASS NOT LOADED` the one this increment added.
+    objects the boot battery reads before `launch` -- and named the arms. All of them hold.
+  - **THE BAKED-WORLD ARMS ARE THE ONES THAT MATTERED, AND THEY RUN BEFORE `launch`.** The seventeen-arm
+    bootstrap battery is entirely PASS at `core 166MHz`, including **`String.valueOf(true)=true`** (the one
+    arm that touches baked `Boolean` at all), `IntegerCache.cache[170].intValue()=*` and
+    `Integer.valueOf(42)==cache[170]`, through to `generation 12`. A snapshot that had failed to deep-bake
+    `TRUE`/`FALSE`, or a `<clinit>` still scheduled into `VM.initClasses`, is a null static or a data abort
+    on cold DRAM -- not a wrong number -- so those absences are the assertion.
+  - **AND THE FEATURE IS PROVEN ON SILICON, WHICH THE `altMetafactory` AND `Comparator` CARDS COULD NOT
+    CLAIM.** `demo/BoxingDemo` is in the suite and every one of its JLS 5.1.7 arms is exact with stock
+    `Byte`/`Short`/`Boolean`: `byte 5 interned = 1`, `short 5 interned = 1`, `char 'A' interned = 1`,
+    `short 1000 fresh = 1`, `char 200 fresh = 1`, `byte ends = -1`, `short ends = -1`, `char ends = 127`,
+    and all three `autobox == valueOf` arms. The ENDS arms are the ones that exist because the cache slot is
+    `value + 128`, so an off-by-one there is an exception at a range end rather than a wrong number.
+  - **STOCK `Number` IS PROVEN TOO, and by an arm this card had not counted.** The reflection demo reads
+    `Number.isAssignableFrom(Integer)=1 reverse=0 self=1` and
+    `Integer.getSuperclass==Number.class 1 name=java.lang.Number` -- so the deleted overlay's replacement is
+    in the hierarchy, named correctly, and answering assignability, on hardware.
+  - **THE PROVENANCE CHECK IS THIS CARD'S OWN COUNTER, WHICH IS UNUSUALLY CONVENIENT: `n:imap=137`.** That
+    figure moved from 133 in this increment and nothing else moves it, so it doubles as the flash check --
+    with batch 2 `+335blob`, batch 64 `+401blob`, `clinits=97` and `rounds=4 pend=180 reach=17` byte-identical
+    to the QEMU gate. The card was ALSO `cmp`-confirmed before flashing at **20 differing bytes, every one
+    verified by script as a zip last-modified-time field inside the regenerated `/lib/app.jar`** -- the second
+    time that check has been run rather than assumed. And the two `arrayadopt [Ljava/lang/Number;` lines land
+    at batches 9 and 39, the `+335blob` arm's signature.
+  - **THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** silicon reads `memo=1150 res=3029 unres=2515`
+    against QEMU's `1150 / 3032 / 2518` -- **`memo` EQUAL**, which is what says the closure itself is
+    identical rather than merely similar.
+  - **THE GATE IS UNMOVED:** `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=18`, `sha256 clone = 44cae.../fork-ok`. The lisp
+    finale reads 56 and is **NOT cited**, per the recorded QEMU A/A pair.
+  - **THE NAMED ABSENCES HOLD, and `EXCEPTION CLASS NOT LOADED` is the one this increment added** -- it is
+    exactly what the pre-`bakeNoClinit` boot produced, and it reads 0. Nor does `FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`, `CLINIT REJECTED` or
+    `JIT unsupported` appear. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones
+    (eight occurrences), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`**, `SMP: 4 of 4 cores up`,
+    `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace,
+    `hw rng: RNG200 live` with `two instances differ`, and WiFi through to **`HTTP/1.1 200 OK`, 997 bytes**
+    (the previous boot read 998; `Age:` is a variable-length decimal and read `6997` here against `11673` --
+    a reading, not a VM figure).
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture** rather
+    than grepped on disk, which is weaker than an anchored grep. The closure comparison above is against the
+    QEMU log, which WAS grepped.
+  - **THE TWENTY-FIRST DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals
+    are known to be off by one:** `f31e531f 8e1c1856 fe7882ea`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **50 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50, 43, 50. **Still not a randomness test**: what stays
+    ruled out is a constant, a counter, and a count that does not follow reads.
 
 - **THE `java/util/Comparator` OVERLAY IS DELETED AND STOCK RUNS -- `naturalOrder()` HANDED BACK A FRESH
   LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, PI-VALIDATED).**
