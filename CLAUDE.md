@@ -115,6 +115,98 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getComponentType()` ANSWERED NULL FOR EVERY PRIMITIVE ARRAY -- `byte[].class.getComponentType()` WAS
+  NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, QEMU-GATED -- NOT YET PI-VALIDATED).** An array
+  Type's `ARRAY_TYPE_ELEMENT_OFFSET` exists for reference-array COVARIANCE and is **0 for a primitive element by
+  construction**, and `componentTypeOf` read nothing else:
+
+  ```java
+  long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+  return elemType == 0L ? 0L : Loader.classMirror(elemType);   // primitive-element arrays have 0 elem Type
+  ```
+
+  The comment states the defect and calls it a property. **Null is not an error a caller sees -- it is stock's
+  answer for "this is not an array"** -- so every caller branching on it took the not-an-array path for a real
+  array, and then dereferenced the null somewhere else entirely.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`ComponentTypeProbe`, 30 arms against the HOST ORACLE** | **8 arms WRONG, then the probe NPEs on the null** | **30 of 30 BYTE-IDENTICAL** |
+  | `byte[].class.getComponentType() == byte.class` | **false** | **true** |
+  | ... all eight primitives | **false x8** | **true x8** |
+  | `Unsafe.arrayIndexScale(byte[].class)` | **8** | **1** |
+  | `Array.newInstance(int.class, 3).getClass()` | **a REFERENCE array of 8-byte elements** | **`[I`** |
+  | the reference / nested / non-array cases | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 38 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, all three probes excluded from BOTH) | 34,119,520 | **34,120,256 (+736 B, +0.002%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE ELEMENT SIZE CANNOT STAND IN, which is why this was not a one-line read of a different field.**
+    `byte[]` and `boolean[]` are both 1, `char[]`/`short[]` both 2, `int[]`/`float[]` both 4,
+    `long[]`/`double[]` both 8 -- so an array Type does not carry which primitive it holds anywhere. The
+    descriptor char is recovered by **IDENTITY against the per-atype array-TIB cache**, which is the same trick
+    `Class.getName` has used to render `"[I"` since the class-literal arc, and which also works for a
+    writer-BAKED array Type the loader merely adopted -- one no metal-side field would have been filled in for.
+    `primElemCharOf` already existed for the naming path; this is its second caller.
+  - **THE FIX IS TWO HELPERS IN `Loader` AND A THINNER NATIVE**, because that is where the object-model
+    knowledge already lives (`primArrTib`, `primitiveMirror`, `primArrayTib`). `VMNatives.componentTypeOf` lost
+    its own copy of the array-Type tag check as well, so there is one array-component walk rather than two.
+  - **IT WAS FOUND BY THE `Unsafe` ARC AND BY TAKING STOCK'S CODE VERBATIM.** Stock's bulk
+    `copyMemory`/`setMemory` refuse a base that is not a PRIMITIVE array, and their check is
+    `getComponentType() != null && isPrimitive()`. Copying it refused every `byte[]`. That is the second time
+    in two increments that using the JDK source unchanged located a joe-ng defect a hand-written equivalent
+    would have walked straight past.
+  - **FIXING IT OPENED A SECOND DEFECT, AND THAT WAS CHECKED BEFORE IT COULD SHIP RATHER THAN AFTER.**
+    `Array.newInstance` allocates **8-byte REFERENCE elements unconditionally** and hangs `refArrayTib` off
+    them; for a primitive component that is an array of the wrong element WIDTH under a reference TIB. It was
+    reachable-but-unreached only because `getComponentType()` answered null, and
+    `Array.newInstance(a.getClass().getComponentType(), n)` is the idiom `Class`'s own javadoc names
+    (`TimSort`/`Arrays.copyOf`/`toArray`) -- so the two belong in one increment. `newArrayOfComponent` now
+    allocates the right width and the **same interned per-atype TIB `new int[]` uses**, so a result that is
+    `checkcast`-ed to `int[]` and indexed by ordinary bytecode works.
+  - **THE PRE-FIX RUN IS THE NEGATIVE CONTROL AND IT COST NOTHING, because the probe was written first.** On
+    the unmodified tree all eight identity arms answer `false` and the probe then **NPEs at
+    `getComponentType().getName()`** -- which is the defect's own shape, a null that is not reported where it
+    is produced but where some later caller dereferences it.
+  - **THE ARMS ARE IDENTITY, NOT NON-NULLNESS.** `byte[].class.getComponentType() == byte.class` must hold,
+    because that is what callers compare against; an implementation minting a fresh mirror per call passes a
+    non-null check and fails every real use. All eight primitives are covered rather than a sample, because
+    the four pairs sharing an element size are exactly what an implementation reading the SIZE would confuse --
+    and the names are asserted beside the identities, since an identity arm alone cannot say WHICH primitive
+    came back if both sides were wrong the same way.
+  - **AND THE CONSUMERS ARE ARMS RATHER THAN A CLAIM.** `arrayIndexScale` for all eight widths;
+    `Array.newInstance` for int/byte/double asserting the LENGTH, a `set`/`get` round-trip AND the result's
+    CLASS; the javadoc's own idiom; a `checkcast` to `int[]` followed by ordinary indexing (the arm a wrong TIB
+    fails while every reflective read still looks right); and the reference case, which must not move.
+  - **ONE ARM PRINTS A COMPARISON RATHER THAN A VALUE, and the reason is worth keeping.**
+    `ARRAY_OBJECT_INDEX_SCALE` is genuinely **4 on a host JVM** (compressed oops) and **8 here** (direct 8-byte
+    refs). That is a platform fact, not a divergence -- so the arm asserts that the METHOD agrees with the
+    CONSTANT in whichever world it runs, and both worlds then print the same text so the byte-for-byte diff
+    stays a diff. The eight primitive scales need no such care: 1/1/2/2/4/4/8/8 either way. Caught by the diff
+    itself, which reported exactly one differing line on a run where both sides were correct.
+  - **AND MY FIRST IMAGE MEASUREMENT WAS BOGUS BY 10 KB, CAUGHT BY ARITHMETIC RATHER THAN BY OUTPUT.** The two
+    arms purged different probe-class sets from `out/` (`rm out/*Probe.class` in one, three named classes in the
+    other), so the "delta" carried a classDir difference: 10,696 bytes against a true **736**. `make build`'s
+    purge cannot reach a bare `out/Foo.class`, which this file records three times; the recipe is now one
+    script both arms run.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** Both new helpers are loader-side
+    and the writer's codegen is untouched, so the byte-for-byte self-hosting fixpoint cannot have moved.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT.** It never calls `getComponentType()` or
+    `Array.newInstance` -- so the boot proves NO REGRESSION across the array-TIB path every `new int[]`,
+    `instanceof int[]` and `arraycopy` in it goes through (`arraytypes=127`, `arraycopy byte[]/int[]/overlap`,
+    `Arrays.sort(neg)[0] = -5`, `array aioobe caught=1`, `subList`/`keySet`/`forEach` and the three
+    `arrayadopt` lines all exact), and `ComponentTypeProbe`'s 30 arms against a byte-identical host oracle are
+    what prove the feature. Different claims.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The recovery is an identity comparison over a
+    table QEMU has already diffed against a host oracle, so cold DRAM cannot change which atype a TIB matches.
+    What hardware is being asked is a **736-byte layout shift** plus one thing QEMU cannot price: the
+    identity walk reads `primArrTib` entries that on a real boot may be **writer-BAKED array TIBs the loader
+    adopted** rather than metal-built ones, and the adopted case is exactly why identity was chosen over a
+    metal-side field. The arms to read are `arraytypes=127` and the `arrayadopt` lines, plus the usual
+    ABSENCES and `gc: collections=46` at the churn demo.
+
 - **THE `Unsafe` ATOMICS AT NARROW WIDTH -- `Unsafe` IS AT ZERO DEEP-SCAN GAPS, FROM 237 (2026-09-30,
   QEMU-GATED -- NOT YET PI-VALIDATED).** The other half of the accessor increment below it: the ~140
   compareAndSet/compareAndExchange/weakCompareAndSet/getAndAdd/getAndBitwise/getAndSet members at

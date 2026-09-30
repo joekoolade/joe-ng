@@ -246,16 +246,8 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        long arr = Heap.allocArray((int) length, 8);       // 8-byte reference elements (raw header first)
-        if (componentMirror > 0x1000L)
-        {
-            long compType = Magic.load64(componentMirror + 16L);   // Class mirror -> its Type (@16)
-            if (compType != 0L)
-            {
-                Magic.store64(arr, Loader.refArrayTib(compType));  // typed [L<component>; TIB (interned per element)
-            }
-        }
-        return arr;
+        long compType = componentMirror > 0x1000L ? Magic.load64(componentMirror + 16L) : 0L;
+        return Loader.newArrayOfComponent(compType, (int) length);
     }
 
     /**
@@ -274,13 +266,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
-        if ((instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
-        {
-            return 0L;                                     // not an array Type
-        }
-        long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
-        return elemType == 0L ? 0L : Loader.classMirror(elemType);   // primitive-element arrays have 0 elem Type
+        return Loader.arrayComponentMirror(type);           // answers 0 for a non-array Type
     }
 
     /**
