@@ -208,20 +208,29 @@ defines the minimum the assembler must encode.
     `arraytypes=127` and the `arrayadopt` lines. All of them hold, at `core 166MHz` across 40 programs to
     `self-build retired`: **`arraytypes=127` exact**, and the four `arrayadopt` lines at their recorded
     batches.
-  - **THE REFERENCE BRANCH IS PROVEN ON SILICON AND THE PRIMITIVE BRANCH IS NOT -- WHICH IS THE OPPOSITE HALF
-    TO THE ONE THAT WAS BROKEN, SO IT IS STATED RATHER THAN ROUNDED UP.** `ClassLitDemo` prints
-    **`componentType of String[]: java.lang.String`**, so `arrayComponentMirror`'s `el != 0` arm
-    (`classMirror(el)`) runs on hardware. **No suite demo asks a PRIMITIVE array for its component type** --
-    measured, that is the ONLY `componentType` line in the whole boot -- so the identity walk that IS the fix
-    executed ZERO times here. The boot proves NO REGRESSION across the layout shift and the refactored
-    array/component path; `ComponentTypeProbe`'s 30 arms against a byte-identical host oracle are what prove
-    the fix. Different claims.
+  - **BOTH BRANCHES ARE PROVEN ON SILICON NOW, BY TWO DIFFERENT BOOTS -- AND THE SPLIT IS KEPT BECAUSE THE
+    SUITE BOOT COULD ONLY EVER ANSWER HALF OF IT.** `ClassLitDemo` prints **`componentType of String[]:
+    java.lang.String`** in the suite, so `arrayComponentMirror`'s `el != 0` arm (`classMirror(el)`) runs on
+    hardware there. **No suite demo asks a PRIMITIVE array for its component type** -- measured, that is the
+    ONLY `componentType` line in the whole boot -- so the identity walk that IS the fix executed ZERO times on
+    it, and that half stayed QEMU's.
+  - **A SECOND FLASH CLOSED IT (2026-09-30): `sdcard/kernel8-unsafe-probes-candidate.img` (`main=UnsafeAll`)
+    was flashed, and `ComponentTypeProbe`'s 30 arms are BYTE-IDENTICAL TO THE HOST ORACLE ON THE Pi.** All
+    eight `comp <prim>[]` IDENTITY arms, `comp names = byte,int,double`, the eight `arrayIndexScale` widths
+    (1/1/2/2/4/4/8/8), all six `newInst` arms (incl. the `checkcast`-to-`int[]`-then-index arm a wrong TIB
+    fails while every reflective read still looks right), and the reference / nested / non-array controls. So
+    the recovery by IDENTITY against the per-atype array-TIB cache is silicon-proven rather than
+    emulator-proven. **And that boot carries the CONDITION and the COMPARISON together**, which the suite boot
+    could not: it prints `arrayadopt [Ljava/lang/Object;` and `arrayadopt [[ (nested)` -- writer-BAKED array
+    TIBs the loader ADOPTED -- in the very sections whose arms then read `primArrTib` by identity, which is
+    the one thing QEMU structurally cannot price and which the gate named in advance.
   - **AND THE ADOPTED-TIB STATE THE GATE WORRIED ABOUT IS DEMONSTRABLY PRESENT, just not read through this
     native.** The four `arrayadopt` lines are the loader adopting writer-BAKED array TIBs --
     `[Ljava/lang/Object;` at batches 9 and 22, `[Ljava/lang/Number;` at batches 9 AND 39 (the `+335blob`
     signature this file records), and `[[ (nested)` twice at batch 34 -- and the boot battery's five array
     `instanceof` arms read those TIBs in the BAKED world BEFORE `launch`, all PASS. So the condition the
-    identity comparison has to survive is on this boot; what is not on it is the comparison.
+    identity comparison has to survive is on this boot; what is not on it is the comparison -- and the probe
+    boot above is where the two finally meet.
   - **THE CLOSURE IS EXACT AND THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** batch 2 `+335blob`, batch 64
     `+401blob`, `rounds=4 pend=180 reach=17`, `n:imap=137 synth=60 clinits=97`, `sy:n=74 chg=0`,
     `bakeMemosDropped=18`, and `memo=1150 res=3029 unres=2515` against QEMU's `1150 / 3032 / 2518` --
@@ -260,7 +269,8 @@ defines the minimum the assembler must encode.
     log, which WAS grepped.
 
 - **THE `Unsafe` ATOMICS AT NARROW WIDTH -- `Unsafe` IS AT ZERO DEEP-SCAN GAPS, FROM 237 (2026-09-30,
-  PI-VALIDATED FOR NO-REGRESSION; THE LDAXR/STLXR RETRY LOOP IS STILL UNEXERCISED -- SEE THE CORRECTION).** The other half of the accessor increment below it: the ~140
+  PI-VALIDATED, INCLUDING THE LDAXR/STLXR RETRY LOOP -- BY TWO BOOTS, SEE THE TAIL).** The other half of the
+  accessor increment below it: the ~140
   compareAndSet/compareAndExchange/weakCompareAndSet/getAndAdd/getAndBitwise/getAndSet members at
   boolean/byte/char/short/float/double width, the Acquire/Release/Plain variants the Int/Long/Reference forms
   had never declared, and `allocateInstance`.
@@ -361,24 +371,58 @@ defines the minimum the assembler must encode.
   - **THE `ramfs/etc/init` TRAP FIRED TWICE MORE IN THIS ARC**, both times from a probe run whose trap did not
     get to run. That file is TRACKED and a generated one left in the tree is how it gets committed by accident;
     caught by reading `git diff` before staging, both times.
-  - **PI-VALIDATED FOR NO-REGRESSION ONLY -- AND THAT IS A CORRECTION TO THIS CARD'S OWN GATE SENTENCE.** I
+  - **THE SUITE BOOT WAS NO-REGRESSION ONLY -- AND THAT WAS A CORRECTION TO THIS CARD'S OWN GATE SENTENCE.** I
     wrote that what hardware is asked is a **15,864-byte layout shift** PLUS `casNarrow`'s real LDAXR/STLXR
     retry loop, "which is what the loop exists for and what only a Pi exercises". **ONLY THE FIRST HALF WAS
     ASKED.** No demo calls a `compareAndExchangeByte`/`Short`/`Char` member -- measured, the same way this
     card already records that no demo calls any of the 94 accessors -- so **the retry loop executed ZERO
-    times on this boot**. The gate named a genuinely hardware-only property without noticing that the SUITE
+    times on that boot**. The gate named a genuinely hardware-only property without noticing that the SUITE
     cannot reach it, which is the shape this file already records against three earlier cards. Naming a gate
-    the boot cannot answer is better than not naming one; scoring it as answered would not be.
+    the boot cannot answer is better than not naming one; scoring it as answered would not be. **The second
+    flash below is what answered it -- the gap was named, so closing it cost one `cp` rather than a
+    re-derivation.**
   - **WHAT THE BOOT DOES ESTABLISH, at `core 166MHz`:** 40 programs to `self-build retired` across the layout
     shift on cold DRAM, with every named ABSENCE holding -- no `FAULT` (anchored), `ESR EC=`,
     `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP` or `LINK FAILED` -- `gc: collections=46` at the churn
     demo with `churnMB=625 live=32 intact=32`, and the batch-line closure byte-identical. Full figures on the
     `getComponentType` card above; it is the same boot and the same binary.
-  - **THE RETRY LOOP HAS AN IMAGE WAITING, WHICH IS WHY THIS IS A NAMED GAP AND NOT A DEAD END.**
-    `sdcard/kernel8-unsafe-probes-candidate.img` boots `UnsafeAll` -- 148 arms, `probes-broken=0`,
-    byte-identical to a host oracle on QEMU -- and is one `cp` onto the boot partition away.
-    `UnsafeAtomicProbe`'s 74 arms include an array element at EVERY alignment in the 8-byte window
-    (`short[]` 0..3, `byte[]` 0..7), which is exactly where a spurious LL/SC failure would land.
+  - **THE RETRY LOOP RAN ON SILICON -- `sdcard/kernel8-unsafe-probes-candidate.img` (`main=UnsafeAll`) WAS
+    FLASHED, AND ALL 148 MUST-MATCH ARMS ARE BYTE-IDENTICAL TO THE HOST ORACLE ON THE Pi** (`probes-broken=0
+    accessFailures=0 atomicFailures=0 componentFailures=0`, `[main returned normally]`). The arm-by-arm diff
+    against the host is EXACTLY FOUR LINES, every one a declared divergence. **The arms that close the gap are
+    the array-element CAS at EVERY alignment in the 8-byte window -- `cas short[0..3]` and `cas byte[0..7]`,
+    twelve of them, plus `cas char[2]`, `cas bool[2]`, `or short[1]`, `gaa short[2]`, `gas byte[1]`** -- which
+    is precisely where a spurious LL/SC failure lands, an interrupt between the `LDAXR` and the `STLXR`
+    clearing the exclusive monitor. Emulation never retries that loop; hardware does, and every arm is exact.
+  - **THE DECLARED DIVERGENCES ARE MET, AND THE LINE TEXTS ARE WHAT SAYS SO RATHER THAN THE COUNTER.**
+    `allocateMemory`/`pageSize` read `no-throw` on the host and **`java.lang.InternalError`** here, so rule
+    3's stubs throw by name. `isWriteback` reads `false` in BOTH worlds -- the same answer for different
+    reasons, and the one divergence arm that does NOT separate them, which is stated because an arm that
+    agrees either way proves nothing. **`divergences-unmet` reads 3 and 2 on the Pi exactly as on the host**:
+    that counter is a count of the DECLARED divergences, not a world discriminator, which this card already
+    said ("both runs read `failures=0 divergences-unmet=3`") and which I predicted wrongly as 0 before the
+    boot -- corrected here rather than quietly.
+  - **AND THE STATED PRECONDITION IS NOW MEASURED ON SILICON, WHICH WAS AN ARGUMENT BEFORE.** This card
+    reasoned that an `int[]`/`float[]` element CAS raises an alignment fault the VM turns into a catchable NPE
+    and leaves the array UNTOUCHED. On hardware: **`diff int[] element = java.lang.NullPointerException ->
+    100,200,300`** against the host's `no-throw -> 100,-2,300`, and `float[]` the same at `1.5,2.5,3.5`. The
+    array really is intact -- fail-loud with no corruption, demonstrated rather than derived.
+  - **THE PROBE BOOT'S OWN SWEEP: 33 marker patterns ALL ZERO** with the `FAULT` grep ANCHORED -- including
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`, `heap OOM`, `STW TIMEOUT`,
+    `DISPATCH ON UNREGISTERED`, `CLINIT REJECTED`, `MIRROR CACHE FULL` and `BROKEN` -- with only TWO
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines, both labelled DENYLISTED (`CodingErrorAction.REPLACE`,
+    `CharBuffer.wrap`). Plus `SMP: 4 of 4`, `smp sched: 4 of 4`, the seventeen-arm bootstrap battery all PASS
+    before `launch`, `gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`.
+  - **WHAT THE PROBE BOOT DOES NOT CLAIM, kept straight: it is not the suite.** `main=UnsafeAll` is ONE batch
+    (`+338blob`), so it says nothing about the 40 programs -- that is the suite flash recorded above, on a
+    different binary. And the seven `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines are the standing hazard
+    the report names itself; `clinitLk=0` on the batch line only because that line prints BEFORE them and
+    there is no second batch to re-total.
+  - **A LIMIT ON THE INSTRUMENT, because it is mine: the marker sweep first ran over the ARM SECTION ALONE and
+    reported `(none)` for `UNRESOLVED STATIC`** -- which reads exactly like a clean boot and was simply a
+    sweep over the wrong input. Re-run over the whole log it finds the two known DENYLISTED lines. The
+    arm-by-arm diff against the oracle is the load-bearing half and it is exact; the sweep is only as good as
+    the transcription it ran on.
 
 - **THE `jdk/internal/misc/Unsafe` ACCESSOR SURFACE IS IN -- 94 DROPPED MEMBERS DECLARED, AND THE FINDING IS
   THAT joe-ng HAS TWO MEMORY LAYOUTS BEHIND ONE `(Object,long)` SIGNATURE (2026-09-30, PI-VALIDATED).** An overlay wins the name, so a stock member it does not declare CEASES TO EXIST: the call
