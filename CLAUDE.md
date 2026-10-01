@@ -116,8 +116,8 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **STOCK `java/lang/invoke/VarHandle` RUNS ON THE METAL -- THE OVERLAY'S SIX REFERENCE-TYPED OPS WERE
-  RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30,
-  QEMU-GATED -- NOT YET PI-VALIDATED).** 122 hand-written lines shadowing a 2,467-line stock class, deleted.
+  RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30;
+  THE PI BOOT FOUND A SECOND, OLDER BUG -- FIXED 2026-10-01, RE-GATED ON QEMU, NOT YET PI-VALIDATED).** 122 hand-written lines shadowing a 2,467-line stock class, deleted.
   The implementation is now stock's own template-generated handles, and the "natives" are a DISPATCH:
 
   ```java
@@ -134,6 +134,7 @@ defines the minimum the assembler must encode.
   | the REFERENCE arms (the control the overlay got right) | correct | **correct -- UNMOVED** |
   | **`MhUtil` no-receiver form** (30 of 34 java.base sites) | field NAME only, two args ignored | **caller's frame -> declaring class** |
   | **`demo/ClqDemo`, 13 arms** (CLQ drives its WHOLE structure through VarHandles) | -- | **every arm exact, incl. `second queue = x`** |
+  | **the arm that reproduces the Pi failure** (a handle bound in a `<clinit>`) | -- | **FAIL -> pass; the other 22 UNMOVED** |
   | **`demo/NetDemo`** -- `java/net/Socket.<clinit>` binding STATE/IN/OUT | -- | **completes, 0 throws; ends in the recorded QEMU trap** |
   | demo suite, COMPLETE run | -- | **40 programs to `self-build retired`**, every marker zero |
   | `gc: collections` at the churn demo | 46 | **46 -- THE GATE, UNMOVED** |
@@ -234,14 +235,103 @@ defines the minimum the assembler must encode.
     `int.class`, so a PRIMITIVE-valued site in real java.base code -- completing with zero throws before the
     recorded healthy QEMU ending (a `DENYLIST TRAP` at the `Exceptions.filterNonSocketInfo` message
     formatter, because QEMU has no CYW43 so the connect fails).
-  - **NOT PI-VALIDATED, and the gate is named in advance.** The descriptor arithmetic is integer work over
-    classfile bytes QEMU has already diffed against a host oracle, so cold DRAM cannot change whether a
-    `short` field reads back -2. What hardware is asked is the CLOSURE: stock VarHandle plus nine generated
-    width classes plus `MethodHandleStatics` are newly demand-loadable, and `Socket`'s three handles are now
-    real generated objects where they were one hand-written shim. The arms to read are the ABSENCES
-    (`FAULT` anchored, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `UNRESOLVED NEW`, `CTOR SKIPPED`,
-    `VIRTUALRESOLVE FAILED`), `gc: collections=46` at the churn demo, the batch-line closure -- and the WiFi
-    finale, which is the only thing that runs `Socket`'s int `getAndBitwiseOr` for real.
+  - **THE GATE WAS NAMED IN ADVANCE, AND THE ONE ARM IT SINGLED OUT IS EXACTLY THE ONE THAT FIRED.** This
+    card said the arm to read is "the WiFi finale, which is the only thing that runs `Socket`'s int
+    `getAndBitwiseOr` for real". The Pi ran the whole closure -- all eight `INITIALIZER RUNNING UNDER THE
+    LOADER LOCK` lines including `java/net/Socket`, `java/lang/invoke/MethodHandles$Lookup`,
+    `java/lang/invoke/MethodHandleStatics` and `java/lang/invoke/VarHandle`, so stock VarHandle plus the nine
+    generated width classes load and initialise on silicon -- then WPA2 (`pmk ready` -> `ptk derived` ->
+    `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed`), DHCP `192.168.1.247`, `ping reply`, `SMP: 4 of 4`,
+    and died at that exact arm:
+
+    ```
+    Exception in thread "main" java/lang/ClassCastException:
+        Cannot cast java.net.Socket to jdk.internal.access.SharedSecrets
+      at java/lang/invoke/VarHandleInts$FieldInstanceReadWrite.getAndBitwiseOr(VarHandleInts.java:299)
+      at java/net/Socket.getAndBitwiseOrState(Socket.java:136)
+    ```
+
+  - **AND IT IS NOT THIS INCREMENT'S BUG -- `Loader.classMirrorAtPc` HAS BEEN ANSWERING AN ARBITRARY CLASS
+    SINCE IT WAS WRITTEN.** It took the registered method with the greatest buffer address AT OR BELOW the
+    pc, with **no upper bound** -- so a pc inside a body the method registry does not hold answered with
+    whatever registered method happened to sit nearest below it in the code arena. `Heap.codeBlockStartAt`
+    answers which block CONTAINS a pc and its own doc states the invariant ("a pc lying in a DIFFERENT block
+    cannot belong to the method registered at addr, however close the two are"); this is the same bound
+    **`printFrameAt` had to learn** during the demand-load arc, applied to the pc->class lookup beside it.
+  - **THE HALF THAT MAKES IT WORK RATHER THAN MERELY FAIL LOUDLY: AN INITIALIZER IS IN NO REGISTRY AT ALL.**
+    `clinitEntryOfLocked` compiles a `<clinit>` into its own buffer and memoizes it in `clinitEntry[]` --
+    it calls `register` **NOWHERE** (read, not assumed) -- so an initializer body could never have been found
+    by a scan of `rgTab`, bounded or not. The lookup searches `clinitEntry[]` too, which is where the owning
+    class is already recorded (`clinitBase`/`clinitNameOff`).
+  - **AND THAT IS WHY IT HAD TO BE A `<clinit>`: ALL 30 CALLERS ARE ONE.** The caller-sensitive
+    `MhUtil.findVarHandle` is reached from a class binding a handle to its OWN field from its OWN
+    initializer, every time. So the one shape that cannot be resolved is the only shape that calls.
+  - **MY OWN PROBE REPRODUCED THE SHAPE AND NOT THE CONDITION -- for the Nth time in this file, and this is
+    the cheapest instance of it to date.** `VarHandleProbe`'s MhUtil arm called the no-receiver form **from
+    `main`**, and `main` IS registered, so the unbounded scan answered correctly by GENUINELY CONTAINING the
+    pc rather than by being right. Every arm passed. A nested class binding a handle in its own `<clinit>` is
+    four lines, and it fails on QEMU in 90 seconds:
+
+    ```
+    FAIL mhutil clinit = ClassCastException: Cannot cast VarHandleProbe$Clinit to VarHandleProbe
+    ```
+
+    **The class it names is the ENCLOSING one** -- whose registered `main` buffer sits just below the nested
+    initializer's unregistered one -- which is the nearest-below behaviour stated as plainly as the hardware
+    log stated it. 22 of the 23 arms pass in that run, so the width typing was never in doubt; the control is
+    specific to the caller lookup.
+  - **AND THIS CARD'S OWN ARM COUNT WAS OFF BY ONE, caught by counting rather than by re-reading.** It claimed
+    23 arms before the new one; `grep -c 'check("'` says the probe now has **23 including it**, so it had 22.
+    Corrected in the table above. A stated count that does not match the measurement is a trap this file
+    already records twice, and the check costs one command.
+  - **THE DISCRIMINATOR IS ALREADY INSIDE THE GENERATED ACCESSOR, which is why the round trip is enough.**
+    Every template-generated instance-field body opens `handle.receiverType.cast(holder)`, so a handle bound
+    to the wrong declaring class throws **before it can touch memory**, naming both sides. The obvious way to
+    name the binding instead -- `varType()`/`coordinateTypes()` -- is NOT usable and was written and removed:
+    both read `vform`, which is null here by this card's own stated limit, so they would have NPE'd rather
+    than discriminated.
+  - **THE OTHER CONSUMER GETS STRICTLY BETTER, checked rather than assumed.** `FieldUpdaterCheck.validate`
+    consults this lookup only for a **PRIVATE** field and throws when `caller != tclass` -- so a wrong class
+    there WRONGLY REJECTED a legitimate `newUpdater` called from a `<clinit>`, and the bound fixes that too.
+    A pc in no block at all now returns 0, where `MhUtil` refuses BY NAME and the updater check reports `?`;
+    both are failures that say so.
+  - **REGRESSION IS A SINGLE-VARIABLE A/B AGAINST THE PRE-FIX SUITE RUN, AND THE CLOSURE IS BYTE-IDENTICAL:**
+    batch 2 `+357blob`, batch 64 `+423blob`, `memo=1150 res=3032 unres=2518`, `n:imap=158 synth=60
+    clinits=101`, `rounds=4 pend=180 reach=17` -- every one matching, which is what a bounded table lookup
+    over addresses has to show. 40 programs to `self-build retired`, `gc: collections=46` at the churn demo
+    with `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1`, `smp sched: 4 of 4`,
+    `finish HML` 20/20/20, `sum20 = 210`, and **36 failure markers zero with the `FAULT` grep ANCHORED,
+    GREPPED ON DISK** -- the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines being the SEVEN known ones (eight
+    occurrences, `CodingErrorAction.REPLACE` twice), each labelled DENYLISTED. Host: A64 105, object-model
+    22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new`.
+  - **AND THE NORMALISED LOG DIFF IS 30 LINES OF 939, WITH THE DIFFERING FIELD NAMED RATHER THAN ASSUMED.**
+    Eight are the SMP interleaving quartet (`smp jobs`, `jobs/core`, `per-core tasks`, `steps/core`), which
+    this file records as differing on the SAME binary. The other 22 are 11 batch lines, and parsing them
+    field by field gives a union of differing fields of **exactly `{rfs:type}`** -- the counter this file
+    records as keyed on a HEAP ADDRESS and therefore free to wobble across binaries while a layout shift
+    moves bucket occupancy. It **converges to the identical `9k` at batch 64**, which is the recorded
+    behaviour. No closure, marking or patch counter moves at all.
+  - **MY A/B NORMALISER WAS BROKEN AGAIN, THE SECOND TIME IN THIS ARC, AND IT MANUFACTURED 140 DIFFERING
+    LINES WHERE THERE ARE 30.** BSD `sed` does not support `\b`, so `s/[0-9]+(us|ms)\b/T/` collapsed
+    nothing and every sub-millisecond duration survived as a difference. A comparison whose instrument
+    over-reports looks exactly like a regression -- and the way out was to PARSE the surviving lines into
+    fields and print which one moved, rather than reading 140 lines of timing by eye.
+  - **STATED LIMIT, because a bounded lookup can now answer "I do not know": there remains a class of body
+    no table claims.** The NetDemo boot carries exactly one `unclaimed pc`, inside `java/net/Socket.<init>`,
+    on BOTH harnesses and before this change as well -- the frame printer's own report that a pc ran past the
+    nearest registered body's block end. A handle bound from such a body would now be REFUSED rather than
+    bound to the wrong class. Fail-loud is the right trade and it is stated rather than left to be
+    rediscovered.
+  - **NOT PI-VALIDATED, and the gate is unchanged from the one that worked: the WiFi finale.** The fix is a
+    bounded table lookup over addresses, so cold DRAM cannot change which block contains a pc; what hardware
+    is asked is the same closure plus `Socket`'s three handles now binding against the RIGHT class. The arms
+    are the ABSENCES (`FAULT` anchored, `ESR EC=`, `BOOT RE-ENTERED`, `UNRESOLVED NEW`, `CTOR SKIPPED`,
+    `VIRTUALRESOLVE FAILED`) plus `wifi: ... HTTP/1.1 200 OK`. **AND ONE THING THE PREVIOUS BOOT CANNOT
+    SETTLE:** the CCE fired from `closeSuppressingExceptions`, i.e. during the cleanup of a `connect` that had
+    ALREADY failed, so my bug was MASKING whatever that failure was. QEMU cannot answer it (no CYW43, so its
+    connect fails by construction and lands in the documented denylisted `Exceptions.filterNonSocketInfo`
+    formatter, which is exactly where this run lands). The next boot either completes the GET or names that
+    failure instead of hiding it.
   - **STILL OPEN, named rather than left to be re-found:** the 58 ARRAY-VIEW sites. `forInstanceField` builds
     FIELD handles only, so `ByteArray`/`ByteArrayLittleEndian`/`AbstractMemorySegmentImpl` are unreachable --
     and the descriptor rule above already covers them, so what is missing is the factory

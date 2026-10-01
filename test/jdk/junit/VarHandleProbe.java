@@ -52,6 +52,26 @@ public class VarHandleProbe
     /** An INSTANCE field of THIS class, for the MhUtil arm below: that form binds against the caller. */
     int mine;
 
+    /**
+     * THE CONDITION, not just the shape: a class that binds a handle to its OWN field from its OWN
+     * {@code <clinit>}, through MhUtil's no-receiver form. That is what all 30 java.base sites do
+     * ({@code Socket}, {@code Phaser}, {@code Exchanger}, {@code FutureTask}, {@code Striped64},
+     * {@code CompletableFuture}, {@code SubmissionPublisher}) and it is NOT what the `main`-called arm below
+     * exercises: a pc inside {@code main} lies in a code block the method registry owns, so the caller
+     * lookup answered correctly there by containing the pc rather than by being right. A pc inside a
+     * {@code <clinit>} does not -- initializer bodies are compiled into their own buffers and registered in
+     * no table -- which is how {@code java/net/Socket} got a handle whose receiverType was
+     * {@code SharedSecrets}: an arbitrary neighbouring class, and then a field offset for a field that
+     * class does not have.
+     */
+    static class Clinit
+    {
+        static final VarHandle VH =
+                jdk.internal.invoke.MhUtil.findVarHandle(MethodHandles.lookup(), "own", int.class);
+
+        int own;
+    }
+
     static int failures;
 
     static void check(String what, String got, String want)
@@ -152,6 +172,26 @@ public class VarHandleProbe
         vmine.set(self, -7);
         check("mhutil caller", Integer.toString((int) vmine.get(self)) + "/" + Integer.toString(self.mine),
                 "-7/-7");
+
+        // ---- The SAME form, called from a <clinit> (where every real site calls it) ---------------------
+        String clinitGot;
+        try
+        {
+            Clinit cl = new Clinit();
+            Clinit.VH.set(cl, -9);
+            clinitGot = Integer.toString((int) Clinit.VH.get(cl)) + "/" + Integer.toString(cl.own);
+        }
+        catch (Throwable e)
+        {
+            clinitGot = e.getClass().getName() + ": " + e.getMessage();
+        }
+        check("mhutil clinit", clinitGot, "-9/-9");
+        // WHY THE ROUND TRIP ABOVE IS THE DISCRIMINATOR, rather than needing a separate receiver arm: every
+        // generated instance-field accessor opens `handle.receiverType.cast(holder)`, so a handle bound to
+        // the wrong declaring class throws ClassCastException naming BOTH sides before it can touch memory.
+        // That is precisely the hardware failure this arm reproduces ("Cannot cast java.net.Socket to
+        // jdk.internal.access.SharedSecrets"). varType()/coordinateTypes() would have been the obvious way
+        // to name the binding and are NOT usable: both read `vform`, which is null here by design.
 
         System.out.println("VarHandleProbe done, failures=" + failures);
     }

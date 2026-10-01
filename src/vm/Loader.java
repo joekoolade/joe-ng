@@ -22388,29 +22388,70 @@ public final class Loader
 
     private static long thrTypeCache;
 
-    /** The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0. */
+    /**
+     * The Class mirror of the JIT'd method containing machine PC {@code pc} (getCallerClass), or 0.
+     *
+     * <p>THE CONTAINING CODE BLOCK IS MATCHED EXACTLY, not guessed at. This used to take the registered
+     * method with the greatest buffer address AT OR BELOW the pc, with no upper bound -- so a pc inside a
+     * body the method registry does not hold answered with whatever registered method happened to sit
+     * nearest below it in the code arena. That is a silent wrong class, and `MhUtil.findVarHandle` then
+     * built a handle against it: on hardware {@code java/net/Socket} got a handle whose receiverType was
+     * {@code jdk/internal/access/SharedSecrets}, and the generated accessor's
+     * {@code receiverType.cast(holder)} threw a ClassCastException naming two classes with nothing to do
+     * with each other. {@code Heap.codeBlockStartAt} answers which block CONTAINS the pc (its own doc:
+     * "a pc lying in a DIFFERENT block cannot belong to the method registered at addr, however close the
+     * two are"), which is the same bound {@code printFrameAt} had to learn.
+     *
+     * <p>AND INITIALIZER BODIES ARE SEARCHED TOO, which is the half that makes the common case work rather
+     * than merely fail loudly. {@code clinitEntryOfLocked} compiles a {@code <clinit>} into its own buffer
+     * and memoizes it in {@code clinitEntry[]} -- it calls {@code register} NOWHERE, so an initializer is in
+     * no method registry and the scan above could never have found it. Every one of the 30 java.base sites
+     * that reach the caller-sensitive {@code MhUtil.findVarHandle} calls it from a {@code <clinit>}, so that
+     * omission was the whole defect; a probe calling the same form from {@code main} passes either way,
+     * because {@code main} IS registered and genuinely contains the pc.
+     *
+     * <p>A miss returns 0 and the caller must REFUSE rather than guess -- image/baked code owns no code
+     * block at all, so 0 is also the honest answer for a pc that never came from JIT'd guest code.
+     */
     static long classMirrorAtPc(long pc)
     {
-        long bestBuf = 0L;
-        int bestReg = -1;
+        long blk = Heap.codeBlockStartAt(pc);
+        if (blk == 0L)
+        {
+            return 0L;                                  // not in any JIT'd block (image/baked code)
+        }
         int i = 0;
         while (i < rgCount)
         {
-            if (rgTab[i].buf != 0L && rgTab[i].buf <= pc && rgTab[i].buf > bestBuf)
+            if (rgTab[i].buf == blk)
             {
-                bestBuf = rgTab[i].buf;
-                bestReg = i;
+                return classMirrorByName(rgTab[i].base, rgTab[i].classOff);
             }
             i += 1;
         }
-        if (bestReg < 0)
+        // Not a registered method: try the initializers, which are registered nowhere.
+        if (clinitEntry != null)
         {
-            return 0L;
+            int c = 0;
+            while (c < clinitN)
+            {
+                if (clinitEntry[c] == blk)
+                {
+                    return classMirrorByName(clinitBase[c], clinitNameOff[c]);
+                }
+                c += 1;
+            }
         }
+        return 0L;
+    }
+
+    /** Class mirror of the registered class whose name Utf8 is {@code base + off}, or 0. */
+    private static long classMirrorByName(long base, int off)
+    {
         int ci = 0;
         while (ci < clCount)
         {
-            if (utf8EqAt(clTab[ci].base, clTab[ci].nameOff, rgTab[bestReg].base, rgTab[bestReg].classOff))
+            if (clTab[ci] != null && utf8EqAt(clTab[ci].base, clTab[ci].nameOff, base, off))
             {
                 return classMirror(clTab[ci].type);
             }
