@@ -117,7 +117,8 @@ defines the minimum the assembler must encode.
 
 - **STOCK `java/lang/invoke/VarHandle` RUNS ON THE METAL -- THE OVERLAY'S SIX REFERENCE-TYPED OPS WERE
   RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30;
-  THE PI BOOT FOUND A SECOND, OLDER BUG -- FIXED 2026-10-01, RE-GATED ON QEMU, NOT YET PI-VALIDATED).** 122 hand-written lines shadowing a 2,467-line stock class, deleted.
+  THE PI BOOT FOUND A SECOND, OLDER BUG -- FIXED AND PI-VALIDATED 2026-10-01, AND THAT BOOT COMPLETES THE
+  GET THE OLD ONE DIED IN).** 122 hand-written lines shadowing a 2,467-line stock class, deleted.
   The implementation is now stock's own template-generated handles, and the "natives" are a DISPATCH:
 
   ```java
@@ -331,16 +332,58 @@ defines the minimum the assembler must encode.
     closure initialising (`MethodHandles$Lookup`, `MethodHandleStatics`, `VarHandle`, `java/net/Socket`).
   - **AND IT IS A DISTINCT IMAGE FROM THE ONE THAT FAILED, which is the provenance check this file leans on:**
     +1,748 bytes, diverging at byte `0x49`, so a boot of it cannot be scored as a boot of the old flash.
-  - **NOT PI-VALIDATED, and the gate is unchanged from the one that worked: the WiFi finale.** The fix is a
-    bounded table lookup over addresses, so cold DRAM cannot change which block contains a pc; what hardware
-    is asked is the same closure plus `Socket`'s three handles now binding against the RIGHT class. The arms
-    are the ABSENCES (`FAULT` anchored, `ESR EC=`, `BOOT RE-ENTERED`, `UNRESOLVED NEW`, `CTOR SKIPPED`,
-    `VIRTUALRESOLVE FAILED`) plus `wifi: ... HTTP/1.1 200 OK`. **AND ONE THING THE PREVIOUS BOOT CANNOT
-    SETTLE:** the CCE fired from `closeSuppressingExceptions`, i.e. during the cleanup of a `connect` that had
-    ALREADY failed, so my bug was MASKING whatever that failure was. QEMU cannot answer it (no CYW43, so its
-    connect fails by construction and lands in the documented denylisted `Exceptions.filterNonSocketInfo`
-    formatter, which is exactly where this run lands). The next boot either completes the GET or names that
-    failure instead of hiding it.
+  - **PI-VALIDATED, AND THE GATE NAMED IN ADVANCE HELD IN FULL -- INCLUDING THE ARM THAT FIRED LAST TIME.**
+    The flash candidate `sdcard/kernel8-varhandle-callerfix.img` was `cmp`-confirmed onto the card first
+    (+1,748 bytes over the image that failed, diverging at byte `0x49`, so this boot cannot be scored as a
+    boot of the old flash). On silicon, at `core 166MHz` with `mmu on`: **`ClassCastException` 0**,
+    `Cannot cast` 0, `SharedSecrets` 0, `getAndBitwiseOr` 0 -- the whole signature of the old failure gone --
+    plus `FAULT` (anchored) / `ESR EC=` / `esr=0x` / `BOOT RE-ENTERED` / `UNRESOLVED NEW` / `CTOR SKIPPED` /
+    `VIRTUALRESOLVE FAILED` / `DENYLIST TRAP` / `LINK FAILED` / `unclaimed pc` all **0**, **40 marker
+    patterns zero in total**, and the bootstrap battery entirely PASS before `launch`.
+  - **AND IT ANSWERED THE ONE THING QEMU STRUCTURALLY CANNOT: THE GET COMPLETES.** `socket connected` ->
+    `GET sent` -> **`HTTP/1.1 200 OK`** -> `http done bytes=998`, from a WiFi chain that ran end to end
+    (`pmk ready` -> `JOINED` -> `ptk derived` -> `msg3 MIC ok` -> `GTK unwrapped` -> `keys installed` ->
+    DHCP `192.168.1.247` -> `ping reply`), then `[main returned normally]`. The emulator's connect fails by
+    construction (no CYW43) and lands in the denylisted `Exceptions.filterNonSocketInfo` formatter; **that
+    trap is TRAP-WIRED here and NOT REACHED**, which is the clean harness discriminator -- QEMU's documented
+    ending is that trap, and silicon never fires it.
+  - **SO THE MASKED FAILURE DID NOT REPRODUCE -- AND THE TRACE ALREADY SAID IT WAS NEVER THIS BUG'S, which is
+    worth separating rather than quietly folding into the pass.** The CCE fired from
+    `closeSuppressingExceptions`, i.e. from the FAILURE-cleanup arm of `Socket.connect`, so `impl.connect`
+    threw FIRST and the handle had not been touched on the success path at all. A broken handle on a
+    SUCCEEDING connect would have thrown at the `getAndBitwiseOrState(CONNECTED)` line instead. **So that
+    connect failure was a separate, intermittent thing** -- this file already records WiFi/connect
+    intermittency four times, with "boot the same card again" as the cheapest control. **One boot explains
+    nothing about it; what it establishes is that nothing is left MASKED.** If it recurs it is its own
+    arc, and it will now say so by name instead of being replaced by a ClassCastException.
+  - **THE CLOSURE INITIALISES ON SILICON, all eight `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines (the
+    cap) and the set is the one named in advance:** `java/lang/AbstractStringBuilder`, `java/lang/String`,
+    `java/io/FileDescriptor`, **`java/net/Socket`**, **`java/lang/invoke/MethodHandles$Lookup`**,
+    **`java/lang/invoke/MethodHandleStatics`**, `java/lang/Boolean`, **`java/lang/invoke/VarHandle`**. So
+    stock `VarHandle`, the overlaid `MethodHandleStatics`, and `Socket` binding STATE/IN/OUT through MhUtil's
+    caller-class form all run on hardware -- and `Socket`'s three handles now bind against the RIGHT
+    declaring class, which is the whole of the fix.
+  - **FIGURES, and they are a NetDemo image's rather than the suite's:** batch 1 `+411blob`,
+    `rounds=37 pend=14755 reach=2502`, `n:imap=161 synth=0 clinits=114`, `sy:chg=0`, `pb:probed=411 of=411`,
+    `SMP: 4 of 4 cores up`, `smp sched: 4 of 4`, `gc: collections=3`, `bakeMemosDropped=0`,
+    `idleRoots=9/9 idleMarked=3 idleGc=0`, and the SEVEN known `UNRESOLVED STATIC`/`TRAP-WIRED`/
+    `NULL CLASS LITERAL` lines, every one labelled DENYLISTED.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: IT IS NOT THE SUITE.** `main=demo/NetDemo`
+    is ONE program in ONE batch, so it says nothing about the 40 programs or `gc: collections=46` at the
+    churn demo -- those remain QEMU's for this increment. What it proves is the VarHandle closure plus the
+    caller-class lookup on cold DRAM, under four cores, through a real TCP session. Different claims.
+  - **STATED LIMIT ON THE INSTRUMENT: the sweep was grepped ON DISK, but on my TRANSCRIPTION of the pasted
+    capture with the dense repeats elided** (`ctrl status`, `bank info`, duplicate `SSID:`, the HTML body,
+    and the explanatory text under each initializer warning). That is weaker than grepping the raw capture --
+    a marker inside an elided region would not have been caught -- and the elided regions are mechanical
+    repeats rather than VM reports. The user's own capture is the authority.
+  - **ONE LINE NAMED RATHER THAN CHASED, for the fourth time:** a single `(skip ch=0x...0001)` after
+    `wifi: JOINED`. This file records it as `Cyw43`'s ioctl-response wait loop seeing an event frame arrive
+    while it waits -- frame timing, not a failure -- on a masked `load8` path, with a channel that MOVES
+    between boots. Channel 1 here, and the boot goes on to HTTP 200 OK.
+  - **AND THE REMOTE PAGE DID NOT MOVE:** `Last-Modified: Mon, 28 Sep 2026 16:19:32 GMT`, byte-identical to
+    the figure this file already records, with `http done bytes=998` inside the recorded 997/998 spread
+    (`Age:` is a variable-length decimal and read `13129` here -- a reading, not a VM figure).
   - **STILL OPEN, named rather than left to be re-found:** the 58 ARRAY-VIEW sites. `forInstanceField` builds
     FIELD handles only, so `ByteArray`/`ByteArrayLittleEndian`/`AbstractMemorySegmentImpl` are unreachable --
     and the descriptor rule above already covers them, so what is missing is the factory
