@@ -322,6 +322,15 @@ defines the minimum the assembler must encode.
     nearest registered body's block end. A handle bound from such a body would now be REFUSED rather than
     bound to the wrong class. Fail-loud is the right trade and it is stated rather than left to be
     rediscovered.
+  - **THE `RandomFactory` TRAP FIRED AGAIN AND THE SIZE CAUGHT IT AGAIN -- and it is the target you run right
+    before gating.** The QEMU NetDemo gate was run after `make test`, whose `build` dependency does
+    `rm -rf $(OUT)/jdk`, so that image was **27,984 bytes** smaller than the flash candidate -- the recorded
+    figure TO THE BYTE. The candidate was therefore BOOTED ON ITS OWN BYTES rather than gated by proxy, and
+    reaches the identical documented ending (same pcs, same `TRAPWIRE index=8`), with `ClassCastException`,
+    anchored `FAULT`, `BOOT RE-ENTERED`, `UNRESOLVED NEW` and `VIRTUALRESOLVE FAILED` all **0** and the whole
+    closure initialising (`MethodHandles$Lookup`, `MethodHandleStatics`, `VarHandle`, `java/net/Socket`).
+  - **AND IT IS A DISTINCT IMAGE FROM THE ONE THAT FAILED, which is the provenance check this file leans on:**
+    +1,748 bytes, diverging at byte `0x49`, so a boot of it cannot be scored as a boot of the old flash.
   - **NOT PI-VALIDATED, and the gate is unchanged from the one that worked: the WiFi finale.** The fix is a
     bounded table lookup over addresses, so cold DRAM cannot change which block contains a pc; what hardware
     is asked is the same closure plus `Socket`'s three handles now binding against the RIGHT class. The arms
