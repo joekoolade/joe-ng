@@ -246,16 +246,8 @@ final class VMNatives
         {
             return 0L;                                     // boot force-compile passes 0; guest checks negative first
         }
-        long arr = Heap.allocArray((int) length, 8);       // 8-byte reference elements (raw header first)
-        if (componentMirror > 0x1000L)
-        {
-            long compType = Magic.load64(componentMirror + 16L);   // Class mirror -> its Type (@16)
-            if (compType != 0L)
-            {
-                Magic.store64(arr, Loader.refArrayTib(compType));  // typed [L<component>; TIB (interned per element)
-            }
-        }
-        return arr;
+        long compType = componentMirror > 0x1000L ? Magic.load64(componentMirror + 16L) : 0L;
+        return Loader.newArrayOfComponent(compType, (int) length);
     }
 
     /**
@@ -274,13 +266,7 @@ final class VMNatives
         {
             return 0L;
         }
-        long instSize = Magic.load64(type + ObjectModel.TYPE_INSTANCE_SIZE_OFFSET);
-        if ((instSize & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
-        {
-            return 0L;                                     // not an array Type
-        }
-        long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
-        return elemType == 0L ? 0L : Loader.classMirror(elemType);   // primitive-element arrays have 0 elem Type
+        return Loader.arrayComponentMirror(type);           // answers 0 for a non-array Type
     }
 
     /**
@@ -969,6 +955,61 @@ final class VMNatives
         int fnLen = (int) Magic.load64(nameArrRef + 16L);    // guest byte[] length
         long fnBase = nameArrRef + 24L;                      // guest byte[] data
         return Loader.fieldOffsetOfType(typeAddr, fnBase, fnLen);
+    }
+
+    /**
+     * {@code Unsafe.arrayKind0(Object)} -> 0 not an array, 1 a PRIMITIVE array, 2 a REFERENCE array.
+     *
+     * <p>WHY AN Unsafe ACCESSOR NEEDS TO ASK. joe-ng has TWO memory layouts behind one {@code (Object,long)}
+     * signature, and they disagree about WIDTH. An instance FIELD occupies a full 8-byte slot whatever its
+     * declared type ({@code ObjectModel.fieldOffset} is {@code 16 + slot*8}) and the compiler reads and writes
+     * it with {@code ldrx}/{@code strx} -- so a {@code short} field's slot holds the value SIGN-EXTENDED
+     * across all 64 bits, and a 2-byte store into its low half leaves a stale high half that {@code getfield}
+     * then reads as a different number. An ARRAY ELEMENT occupies its NATURAL width at
+     * {@code 24 + index*scale}, so an 8-byte store there takes its neighbours with it.
+     *
+     * <p>Neither the offset nor its alignment can tell the two apart -- offset 24 is both field slot 1 and
+     * array element 0 -- so the OBJECT is the only available discriminator, and this is it.
+     *
+     * <p>Exactly {@code VM.instanceOf}'s own test, including the raw-array case: an array's TIB slot holds
+     * either a small element size (1/2/4/8 -- a writer/boot array with no Type node) or a pointer to a TIB
+     * whose {@code TIB[0]} is a Type tagged {@link ObjectModel#ARRAY_TYPE_TAG}. A zero TIB is a VM-internal
+     * {@code Heap.allocData} struct and answers 0: those never reach guest code.
+     *
+     * <p>WHY IT ALSO SEPARATES PRIMITIVE FROM REFERENCE, rather than answering a bare yes/no. Stock's bulk
+     * {@code copyMemory}/{@code setMemory} refuse a base that is not a PRIMITIVE array -- a byte-granular walk
+     * over a reference array would copy raw pointers as bytes -- and the overlay uses stock's own check for
+     * it. The obvious way to answer that is {@code o.getClass().getComponentType().isPrimitive()}, and it
+     * CANNOT be used here: {@code Class.getComponentType()} answers NULL for a primitive array on this VM
+     * (an array Type's element slot is 0 for a primitive element), so stock's check would refuse every
+     * {@code byte[]}. MEASURED -- it is what the first build of this arc failed on. The array Type's element
+     * slot is the same fact without the mirror: 0 means primitive, non-zero means reference.
+     *
+     * <p>A RAW array answers PRIMITIVE. Its TIB slot carries only an element SIZE, so a raw 8-byte-element
+     * array could in principle be a reference array; those are writer/boot arrays and do not reach guest
+     * {@code Unsafe} calls, and answering 1 keeps the width decision (natural width) right either way.
+     */
+    static long arrayKindOf(long ref)
+    {
+        if (ref <= 0x1000L)                                  // null, and the boot-time force-compile's 0
+        {
+            return 0L;
+        }
+        long tib = Magic.load64(ref + ObjectModel.TIB_OFFSET);
+        if (tib <= ObjectModel.MAX_RAW_ARRAY_TIB)
+        {
+            return tib == 0L ? 0L : 1L;                       // raw array: the TIB slot IS the element size
+        }
+        long type = Magic.load64(tib);
+        if (type == 0L)
+        {
+            return 0L;
+        }
+        if ((Magic.load64(type) & ObjectModel.ARRAY_TYPE_TAG_MASK) != ObjectModel.ARRAY_TYPE_TAG)
+        {
+            return 0L;
+        }
+        return Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET) == 0L ? 1L : 2L;
     }
 
     /**

@@ -115,9 +115,472 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Class.getComponentType()` ANSWERED NULL FOR EVERY PRIMITIVE ARRAY -- `byte[].class.getComponentType()` WAS
+  NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, PI-VALIDATED).** An array
+  Type's `ARRAY_TYPE_ELEMENT_OFFSET` exists for reference-array COVARIANCE and is **0 for a primitive element by
+  construction**, and `componentTypeOf` read nothing else:
+
+  ```java
+  long elemType = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+  return elemType == 0L ? 0L : Loader.classMirror(elemType);   // primitive-element arrays have 0 elem Type
+  ```
+
+  The comment states the defect and calls it a property. **Null is not an error a caller sees -- it is stock's
+  answer for "this is not an array"** -- so every caller branching on it took the not-an-array path for a real
+  array, and then dereferenced the null somewhere else entirely.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`ComponentTypeProbe`, 30 arms against the HOST ORACLE** | **8 arms WRONG, then the probe NPEs on the null** | **30 of 30 BYTE-IDENTICAL** |
+  | `byte[].class.getComponentType() == byte.class` | **false** | **true** |
+  | ... all eight primitives | **false x8** | **true x8** |
+  | `Unsafe.arrayIndexScale(byte[].class)` | **8** | **1** |
+  | `Array.newInstance(int.class, 3).getClass()` | **a REFERENCE array of 8-byte elements** | **`[I`** |
+  | the reference / nested / non-array cases | correct | **correct -- UNMOVED** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 38 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, all three probes excluded from BOTH) | 34,119,520 | **34,120,256 (+736 B, +0.002%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, `arraytypes=127`, four `arrayadopt` lines, closure EXACT, `46` at churn, WiFi -> HTTP 200 OK** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE ELEMENT SIZE CANNOT STAND IN, which is why this was not a one-line read of a different field.**
+    `byte[]` and `boolean[]` are both 1, `char[]`/`short[]` both 2, `int[]`/`float[]` both 4,
+    `long[]`/`double[]` both 8 -- so an array Type does not carry which primitive it holds anywhere. The
+    descriptor char is recovered by **IDENTITY against the per-atype array-TIB cache**, which is the same trick
+    `Class.getName` has used to render `"[I"` since the class-literal arc, and which also works for a
+    writer-BAKED array Type the loader merely adopted -- one no metal-side field would have been filled in for.
+    `primElemCharOf` already existed for the naming path; this is its second caller.
+  - **THE FIX IS TWO HELPERS IN `Loader` AND A THINNER NATIVE**, because that is where the object-model
+    knowledge already lives (`primArrTib`, `primitiveMirror`, `primArrayTib`). `VMNatives.componentTypeOf` lost
+    its own copy of the array-Type tag check as well, so there is one array-component walk rather than two.
+  - **IT WAS FOUND BY THE `Unsafe` ARC AND BY TAKING STOCK'S CODE VERBATIM.** Stock's bulk
+    `copyMemory`/`setMemory` refuse a base that is not a PRIMITIVE array, and their check is
+    `getComponentType() != null && isPrimitive()`. Copying it refused every `byte[]`. That is the second time
+    in two increments that using the JDK source unchanged located a joe-ng defect a hand-written equivalent
+    would have walked straight past.
+  - **FIXING IT OPENED A SECOND DEFECT, AND THAT WAS CHECKED BEFORE IT COULD SHIP RATHER THAN AFTER.**
+    `Array.newInstance` allocates **8-byte REFERENCE elements unconditionally** and hangs `refArrayTib` off
+    them; for a primitive component that is an array of the wrong element WIDTH under a reference TIB. It was
+    reachable-but-unreached only because `getComponentType()` answered null, and
+    `Array.newInstance(a.getClass().getComponentType(), n)` is the idiom `Class`'s own javadoc names
+    (`TimSort`/`Arrays.copyOf`/`toArray`) -- so the two belong in one increment. `newArrayOfComponent` now
+    allocates the right width and the **same interned per-atype TIB `new int[]` uses**, so a result that is
+    `checkcast`-ed to `int[]` and indexed by ordinary bytecode works.
+  - **THE PRE-FIX RUN IS THE NEGATIVE CONTROL AND IT COST NOTHING, because the probe was written first.** On
+    the unmodified tree all eight identity arms answer `false` and the probe then **NPEs at
+    `getComponentType().getName()`** -- which is the defect's own shape, a null that is not reported where it
+    is produced but where some later caller dereferences it.
+  - **THE ARMS ARE IDENTITY, NOT NON-NULLNESS.** `byte[].class.getComponentType() == byte.class` must hold,
+    because that is what callers compare against; an implementation minting a fresh mirror per call passes a
+    non-null check and fails every real use. All eight primitives are covered rather than a sample, because
+    the four pairs sharing an element size are exactly what an implementation reading the SIZE would confuse --
+    and the names are asserted beside the identities, since an identity arm alone cannot say WHICH primitive
+    came back if both sides were wrong the same way.
+  - **AND THE CONSUMERS ARE ARMS RATHER THAN A CLAIM.** `arrayIndexScale` for all eight widths;
+    `Array.newInstance` for int/byte/double asserting the LENGTH, a `set`/`get` round-trip AND the result's
+    CLASS; the javadoc's own idiom; a `checkcast` to `int[]` followed by ordinary indexing (the arm a wrong TIB
+    fails while every reflective read still looks right); and the reference case, which must not move.
+  - **ONE ARM PRINTS A COMPARISON RATHER THAN A VALUE, and the reason is worth keeping.**
+    `ARRAY_OBJECT_INDEX_SCALE` is genuinely **4 on a host JVM** (compressed oops) and **8 here** (direct 8-byte
+    refs). That is a platform fact, not a divergence -- so the arm asserts that the METHOD agrees with the
+    CONSTANT in whichever world it runs, and both worlds then print the same text so the byte-for-byte diff
+    stays a diff. The eight primitive scales need no such care: 1/1/2/2/4/4/8/8 either way. Caught by the diff
+    itself, which reported exactly one differing line on a run where both sides were correct.
+  - **AND MY FIRST IMAGE MEASUREMENT WAS BOGUS BY 10 KB, CAUGHT BY ARITHMETIC RATHER THAN BY OUTPUT.** The two
+    arms purged different probe-class sets from `out/` (`rm out/*Probe.class` in one, three named classes in the
+    other), so the "delta" carried a classDir difference: 10,696 bytes against a true **736**. `make build`'s
+    purge cannot reach a bare `out/Foo.class`, which this file records three times; the recipe is now one
+    script both arms run.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** Both new helpers are loader-side
+    and the writer's codegen is untouched, so the byte-for-byte self-hosting fixpoint cannot have moved.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT.** It never calls `getComponentType()` or
+    `Array.newInstance` -- so the boot proves NO REGRESSION across the array-TIB path every `new int[]`,
+    `instanceof int[]` and `arraycopy` in it goes through (`arraytypes=127`, `arraycopy byte[]/int[]/overlap`,
+    `Arrays.sort(neg)[0] = -5`, `array aioobe caught=1`, `subList`/`keySet`/`forEach` and the three
+    `arrayadopt` lines all exact), and `ComponentTypeProbe`'s 30 arms against a byte-identical host oracle are
+    what prove the feature. Different claims.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS.** This card said before
+    the boot that the recovery is an identity comparison over a table QEMU had already diffed against a host
+    oracle, so cold DRAM cannot change which atype a TIB matches; that what hardware is asked is a
+    **736-byte layout shift** plus the one thing QEMU cannot price -- the identity walk reading `primArrTib`
+    entries that on a real boot may be **writer-BAKED array TIBs the loader adopted**; and that the arms are
+    `arraytypes=127` and the `arrayadopt` lines. All of them hold, at `core 166MHz` across 40 programs to
+    `self-build retired`: **`arraytypes=127` exact**, and the four `arrayadopt` lines at their recorded
+    batches.
+  - **BOTH BRANCHES ARE PROVEN ON SILICON NOW, BY TWO DIFFERENT BOOTS -- AND THE SPLIT IS KEPT BECAUSE THE
+    SUITE BOOT COULD ONLY EVER ANSWER HALF OF IT.** `ClassLitDemo` prints **`componentType of String[]:
+    java.lang.String`** in the suite, so `arrayComponentMirror`'s `el != 0` arm (`classMirror(el)`) runs on
+    hardware there. **No suite demo asks a PRIMITIVE array for its component type** -- measured, that is the
+    ONLY `componentType` line in the whole boot -- so the identity walk that IS the fix executed ZERO times on
+    it, and that half stayed QEMU's.
+  - **A SECOND FLASH CLOSED IT (2026-09-30): `sdcard/kernel8-unsafe-probes-candidate.img` (`main=UnsafeAll`)
+    was flashed, and `ComponentTypeProbe`'s 30 arms are BYTE-IDENTICAL TO THE HOST ORACLE ON THE Pi.** All
+    eight `comp <prim>[]` IDENTITY arms, `comp names = byte,int,double`, the eight `arrayIndexScale` widths
+    (1/1/2/2/4/4/8/8), all six `newInst` arms (incl. the `checkcast`-to-`int[]`-then-index arm a wrong TIB
+    fails while every reflective read still looks right), and the reference / nested / non-array controls. So
+    the recovery by IDENTITY against the per-atype array-TIB cache is silicon-proven rather than
+    emulator-proven. **And that boot carries the CONDITION and the COMPARISON together**, which the suite boot
+    could not: it prints `arrayadopt [Ljava/lang/Object;` and `arrayadopt [[ (nested)` -- writer-BAKED array
+    TIBs the loader ADOPTED -- in the very sections whose arms then read `primArrTib` by identity, which is
+    the one thing QEMU structurally cannot price and which the gate named in advance.
+  - **AND THE ADOPTED-TIB STATE THE GATE WORRIED ABOUT IS DEMONSTRABLY PRESENT, just not read through this
+    native.** The four `arrayadopt` lines are the loader adopting writer-BAKED array TIBs --
+    `[Ljava/lang/Object;` at batches 9 and 22, `[Ljava/lang/Number;` at batches 9 AND 39 (the `+335blob`
+    signature this file records), and `[[ (nested)` twice at batch 34 -- and the boot battery's five array
+    `instanceof` arms read those TIBs in the BAKED world BEFORE `launch`, all PASS. So the condition the
+    identity comparison has to survive is on this boot; what is not on it is the comparison -- and the probe
+    boot above is where the two finally meet.
+  - **THE CLOSURE IS EXACT AND THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** batch 2 `+335blob`, batch 64
+    `+401blob`, `rounds=4 pend=180 reach=17`, `n:imap=137 synth=60 clinits=97`, `sy:n=74 chg=0`,
+    `bakeMemosDropped=18`, and `memo=1150 res=3029 unres=2515` against QEMU's `1150 / 3032 / 2518` --
+    **`memo` EQUAL**, which is what says the closure itself is identical rather than merely similar. The only
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones (eight occurrences --
+    `CodingErrorAction.REPLACE` reports at batch 3 AND batch 16), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`** (the secondaries' own preemptive
+    timers), `SMP: 4 of 4 cores up`, `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace with no
+    `unclaimed pc`, `churnMB=625 live=32 intact=32` with **`gc: collections=46`** at the churn demo,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `sha256 clone = 44cae.../fork-ok`, `sync: static seen=18 nomonitor=0`, `hw rng: RNG200 live` with
+    `two instances differ`, and WiFi through to **`HTTP/1.1 200 OK`, 997 bytes**. The lisp finale reads 56 and
+    is **NOT cited**, per the recorded QEMU A/A pair.
+  - **PROVENANCE IS A `cmp`, NOT A COUNTER, AND THAT IS SAID BECAUSE THE CLOSURE DELIBERATELY DID NOT MOVE.**
+    Nothing PRINTED separates this build from the previous flash -- every closure counter,
+    `bakeMemosDropped=18` and `arraytypes=127` read the same, which is the POINT of three increments that
+    declare members and refactor a native without pulling a class. So the boot is tied to the build by the
+    pre-flash `cmp` of the mounted card against `sdcard/`, re-verified afterwards: `sdcard/kernel8.img` is
+    byte-identical to the QEMU-gated `kernel8-unsafe-arc-candidate.img` and diverges from
+    `kernel8-prev-flashed-unsafe.img` at byte 74 (+51,420 B). **A card whose closure does not move does NOT
+    get the free provenance check this file usually leans on**, and this file records a boot being scored as
+    predating its flash.
+  - **THE TWENTY-SECOND DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals are
+    known to be off by one:** `6afd2427 8eff6f4d 1bc8ed71`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **56 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50, 43, 50, 56. **Still not a randomness test**: what
+    stays ruled out is a constant, a counter, and a count that does not follow reads.
+  - **ONE SPIKE, NAMED RATHER THAN CHASED:** batch 40 reads `seed=511.273ms` against ~100us for its
+    neighbours, and `gc` steps 4 -> 5 on that exact batch. That is the batch-133/188 shape this file settled
+    after four boots -- a collection landing inside whichever timer happens to be holding the stopwatch.
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture** rather than
+    grepped on disk, which is weaker than an anchored grep -- a marker in a region I skimmed would not have
+    been caught, and the batch lines are dense. The closure figures above were compared against the saved QEMU
+    log, which WAS grepped.
+
+- **THE `Unsafe` ATOMICS AT NARROW WIDTH -- `Unsafe` IS AT ZERO DEEP-SCAN GAPS, FROM 237 (2026-09-30,
+  PI-VALIDATED, INCLUDING THE LDAXR/STLXR RETRY LOOP -- BY TWO BOOTS, SEE THE TAIL).** The other half of the
+  accessor increment below it: the ~140
+  compareAndSet/compareAndExchange/weakCompareAndSet/getAndAdd/getAndBitwise/getAndSet members at
+  boolean/byte/char/short/float/double width, the Acquire/Release/Plain variants the Int/Long/Reference forms
+  had never declared, and `allocateInstance`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`UnsafeAtomicProbe`, 74 arms against the HOST ORACLE** | **the members do not exist** | **74 of 74 BYTE-IDENTICAL** |
+  | dropped `Unsafe` members (deep scan) | 143 | **0** |
+  | ... **across the whole arc** | **237** | **0** |
+  | total deep gaps | 820 | **677** (914 at the start of the arc) |
+  | **negative control A** (always the whole SLOT) | -- | **the array arms clobber THREE neighbours, then the run FAULTS** |
+  | **negative control B** (always the MASKED WORD) | -- | **exactly 12 FIELD arms fail, every one a SIGNED narrow width** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 38 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, both probes excluded from BOTH arms) | 34,113,616 | **34,129,480 (+15,864 B, +0.047%)** |
+  | ... across the arc | 34,101,260 | **34,129,480 (+28,220 B, +0.083%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, closure EXACT -- but NO demo calls a narrow CAS** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **EXACTLY TWO ROOTS ARE joe-ng's AND THE OTHER ~140 MEMBERS ARE STOCK'S OWN CODE, and which two is forced
+    rather than chosen.** Stock builds every narrow CAS out of `getIntVolatile` + `weakCompareAndSetInt` on the
+    enclosing FOUR-byte word (`offset & ~3`, masked). joe-ng's int CAS is `Magic.cas64` over an EIGHT-byte slot,
+    so taking those two bodies verbatim would compare and write eight bytes at a four-aligned address. For a
+    byte field holding 5 it would leave the slot at `0xFF..FF05`, which `getfield` reads as **-251**. So
+    `compareAndExchangeByte` and `compareAndExchangeShort` are joe-ng's; Char via Short, Boolean via Byte, Float
+    via Int, Double via Long, every delegation and every read-modify-write loop are stock's, unchanged.
+  - **THE ~140 WERE EXTRACTED MECHANICALLY FROM THE JDK 26 SOURCE, NOT TRANSCRIBED, and that is a methodological
+    point rather than a convenience.** A hundred and forty near-identical four-line bodies is exactly where a
+    copy-paste slip lives -- the `BitwiseRmwProbe` card records the shape (an `Xor` form pasted with `|`). A
+    script pulled each named method out of stock, reformatted it to this project's Allman braces, and then
+    **verified that every method the extracted bodies CALL resolves** -- which came back naming only the two
+    roots, exactly as designed. That check is what says nothing was silently left dangling.
+  - **THE WIDTH QUESTION IS THE SAME ONE THE ACCESSORS FOUND, and the CAS answer is different from the write
+    answer.** `casNarrow` compares the VALUE in the low `width` bytes and then, for a FIELD, replaces the
+    WHOLE 8-byte slot. Replacing the whole word is what makes a sign change work: a `short` field going
+    -2 -> 5 must leave the slot `0x5`, not `0xFFFFFFFFFFFF0005`, and masking only the low two bytes leaves the
+    old extension behind for `getfield` to read. For an ARRAY ELEMENT it masks the element's bits inside the
+    enclosing 8-byte word and preserves the rest.
+  - **THE 8-BYTE WINDOW PROVABLY CANNOT LEAVE THE ARRAY, which is what makes the masked form safe rather than
+    merely convenient.** An array's payload starts at 24 -- 8-aligned -- and its allocation is
+    `align8(24 + length*scale)` (`ObjectModel.arraySize`), so the window enclosing any element lies inside the
+    array's own allocation: in its trailing padding at worst, never in the next object's header.
+  - **AND THE ELEMENT CANNOT SPAN THE WINDOW, for a reason worth keeping: STOCK'S OWN GUARD IS EXACTLY STRONG
+    ENOUGH FOR AN EIGHT-BYTE WORD.** Stock refuses a 2-byte update at `(offset & 3) == 3`, which is written
+    about its four-byte word -- and the only offsets that could span an eight-byte one are `offset & 7 == 7`,
+    every one of which has `offset & 3 == 3`. So the guard is kept VERBATIM rather than widened, and the probe
+    asserts both halves (refused at `base + 3`, accepted at `base + 2`).
+  - **THE TWO NEGATIVE CONTROLS ARE DISJOINT, the same shape the accessor increment used.** Each is the same
+    tree with one arm of `casNarrow` forced:
+    - **A, always the whole slot:** the first array arm shows THREE neighbours clobbered
+      (`cas short[0] = true/-2,-1,-1,-1,14` against `-2,11,12,13,14`) and the run then **FAULTS** at the next
+      one, where the address is 2-aligned. All 47 field arms before it pass.
+    - **B, always the masked word:** exactly **12 FIELD arms fail, every one a SIGNED narrow width**, in both
+      sign directions -- `cas short field = true/5/-65531` (`Unsafe.getShort` answers 5 while ORDINARY JAVA
+      reads -65531) and `cas short neg = true/65534` (the missing sign extension). Every ARRAY arm passes.
+    - **The char, boolean, float and double FIELD arms pass in BOTH controls**, which is the built-in
+      comparison: char and boolean are effectively unsigned, so a zero high half IS the right extension, and
+      float's high half is don't-care while double is 8 bytes either way.
+  - **THE STATED PRECONDITION IS AN ARM RATHER THAN A CLAIM, AND MEASURING IT MADE IT SHARPER THAN THE CLAIM
+    WAS -- IN joe-ng's FAVOUR.** The Int/Long/Reference/Float/Double atomics act on the whole 8-byte slot,
+    which is exact for a FIELD and wrong for an array element of scale below 8; Float and Double inherit it
+    because stock derives them from Int and Long and this takes that derivation verbatim. **I wrote that down
+    as "takes its neighbour with it", i.e. silent corruption. It is not silent.** An `int[]` element sits at a
+    4-aligned address and `LDAXR` requires EIGHT-byte alignment, so the CAS raises an alignment fault the VM
+    turns into a catchable `NullPointerException` -- and the array is left **UNTOUCHED**: the arm reads
+    `java.lang.NullPointerException -> 100,200,300` where the host reads `no-throw -> 100,-2,300`. Fail-loud
+    with no corruption is the better of the two outcomes, and only running the arm found it. The first cut of
+    that arm had no `try` and simply killed the probe before its summary, which is how it surfaced.
+  - **`allocateInstance` CLOSED THE LAST GAP, and it is not a stub.** It reuses the native the reflective
+    `Constructor.newInstance` path already runs on (`Loader.allocInstance` -- zeroed fields, the class's own TIB,
+    and `ensureClinit` first, because creating an instance is a JVMS 5.5 active use); registering the SAME
+    address under a second declaring class is how `fence0` is already shared. **Stock's refusals are in its
+    NATIVE, so there is no Java body to copy** and the four are written out: an array class, a primitive, an
+    interface and an ABSTRACT class throw `InstantiationException`. The abstract one is the only case
+    `Loader.allocInstance` would otherwise have SERVED -- it refuses an interface and an unregistered type by
+    answering 0 -- and handing back a plausible instance of an abstract class is the silent wrong answer rule 3
+    exists to remove. Referenced only by `java/lang/invoke/DirectMethodHandle`, denied: this closes a gap rather
+    than enabling anything.
+  - **A STYLE SLIP OF MINE FROM THE INCREMENT BELOW, FIXED HERE: 50 one-line methods.** The accessor increment
+    wrote the pure delegations as `... ) { return x; }`. **This project uses full Allman everywhere and the
+    pre-existing `guestsrc` contained ZERO such one-liners** -- measured, not assumed. Reformatted, which is a
+    pure whitespace change and is why it rides in this increment rather than its own: it moves the image
+    (LineNumberTable), and a comment-only or whitespace-only edit moving the image is a shape this file records
+    three times, so it wants the SAME gate rather than a second one.
+  - **THE CLOSURE DOES NOT MOVE BY ONE COUNTER.** `Unsafe` is `pullClass`ed on every boot already, so ~140 more
+    methods add no class: batch 2 `+335blob`, batch 64 `+401blob`, `memo=1150 res=3032 unres=2518`,
+    `n:imap=137 synth=60 clinits=97`, `rounds=4 pend=180 reach=17` -- byte-identical to the wrapper-deletion
+    boot and to the accessor increment.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** The only non-overlay change is one
+    `nativeBufAt` line registering an EXISTING native under a second declaring class -- no codegen, so the
+    byte-for-byte self-hosting fixpoint cannot have moved.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS ANY OF THESE MEMBERS** (measured -- `Unsafe`
+    appears in no `guestsrc/demo` source). So the boot proves NO REGRESSION across a 15,864-byte layout shift in
+    the class `ForkJoinPool`, `CompletableFuture` and `AtomicInteger` drive their atomics through, and
+    `UnsafeAtomicProbe`'s 74 arms against a byte-identical host oracle are what prove the feature. Different
+    claims.
+  - **THE `ramfs/etc/init` TRAP FIRED TWICE MORE IN THIS ARC**, both times from a probe run whose trap did not
+    get to run. That file is TRACKED and a generated one left in the tree is how it gets committed by accident;
+    caught by reading `git diff` before staging, both times.
+  - **THE SUITE BOOT WAS NO-REGRESSION ONLY -- AND THAT WAS A CORRECTION TO THIS CARD'S OWN GATE SENTENCE.** I
+    wrote that what hardware is asked is a **15,864-byte layout shift** PLUS `casNarrow`'s real LDAXR/STLXR
+    retry loop, "which is what the loop exists for and what only a Pi exercises". **ONLY THE FIRST HALF WAS
+    ASKED.** No demo calls a `compareAndExchangeByte`/`Short`/`Char` member -- measured, the same way this
+    card already records that no demo calls any of the 94 accessors -- so **the retry loop executed ZERO
+    times on that boot**. The gate named a genuinely hardware-only property without noticing that the SUITE
+    cannot reach it, which is the shape this file already records against three earlier cards. Naming a gate
+    the boot cannot answer is better than not naming one; scoring it as answered would not be. **The second
+    flash below is what answered it -- the gap was named, so closing it cost one `cp` rather than a
+    re-derivation.**
+  - **WHAT THE BOOT DOES ESTABLISH, at `core 166MHz`:** 40 programs to `self-build retired` across the layout
+    shift on cold DRAM, with every named ABSENCE holding -- no `FAULT` (anchored), `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP` or `LINK FAILED` -- `gc: collections=46` at the churn
+    demo with `churnMB=625 live=32 intact=32`, and the batch-line closure byte-identical. Full figures on the
+    `getComponentType` card above; it is the same boot and the same binary.
+  - **THE RETRY LOOP RAN ON SILICON -- `sdcard/kernel8-unsafe-probes-candidate.img` (`main=UnsafeAll`) WAS
+    FLASHED, AND ALL 148 MUST-MATCH ARMS ARE BYTE-IDENTICAL TO THE HOST ORACLE ON THE Pi** (`probes-broken=0
+    accessFailures=0 atomicFailures=0 componentFailures=0`, `[main returned normally]`). The arm-by-arm diff
+    against the host is EXACTLY FOUR LINES, every one a declared divergence. **The arms that close the gap are
+    the array-element CAS at EVERY alignment in the 8-byte window -- `cas short[0..3]` and `cas byte[0..7]`,
+    twelve of them, plus `cas char[2]`, `cas bool[2]`, `or short[1]`, `gaa short[2]`, `gas byte[1]`** -- which
+    is precisely where a spurious LL/SC failure lands, an interrupt between the `LDAXR` and the `STLXR`
+    clearing the exclusive monitor. Emulation never retries that loop; hardware does, and every arm is exact.
+  - **THE DECLARED DIVERGENCES ARE MET, AND THE LINE TEXTS ARE WHAT SAYS SO RATHER THAN THE COUNTER.**
+    `allocateMemory`/`pageSize` read `no-throw` on the host and **`java.lang.InternalError`** here, so rule
+    3's stubs throw by name. `isWriteback` reads `false` in BOTH worlds -- the same answer for different
+    reasons, and the one divergence arm that does NOT separate them, which is stated because an arm that
+    agrees either way proves nothing. **`divergences-unmet` reads 3 and 2 on the Pi exactly as on the host**:
+    that counter is a count of the DECLARED divergences, not a world discriminator, which this card already
+    said ("both runs read `failures=0 divergences-unmet=3`") and which I predicted wrongly as 0 before the
+    boot -- corrected here rather than quietly.
+  - **AND THE STATED PRECONDITION IS NOW MEASURED ON SILICON, WHICH WAS AN ARGUMENT BEFORE.** This card
+    reasoned that an `int[]`/`float[]` element CAS raises an alignment fault the VM turns into a catchable NPE
+    and leaves the array UNTOUCHED. On hardware: **`diff int[] element = java.lang.NullPointerException ->
+    100,200,300`** against the host's `no-throw -> 100,-2,300`, and `float[]` the same at `1.5,2.5,3.5`. The
+    array really is intact -- fail-loud with no corruption, demonstrated rather than derived.
+  - **THE PROBE BOOT'S OWN SWEEP: 33 marker patterns ALL ZERO** with the `FAULT` grep ANCHORED -- including
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`, `heap OOM`, `STW TIMEOUT`,
+    `DISPATCH ON UNREGISTERED`, `CLINIT REJECTED`, `MIRROR CACHE FULL` and `BROKEN` -- with only TWO
+    `UNRESOLVED STATIC`/`TRAP-WIRED` lines, both labelled DENYLISTED (`CodingErrorAction.REPLACE`,
+    `CharBuffer.wrap`). Plus `SMP: 4 of 4`, `smp sched: 4 of 4`, the seventeen-arm bootstrap battery all PASS
+    before `launch`, `gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`.
+  - **WHAT THE PROBE BOOT DOES NOT CLAIM, kept straight: it is not the suite.** `main=UnsafeAll` is ONE batch
+    (`+338blob`), so it says nothing about the 40 programs -- that is the suite flash recorded above, on a
+    different binary. And the seven `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines are the standing hazard
+    the report names itself; `clinitLk=0` on the batch line only because that line prints BEFORE them and
+    there is no second batch to re-total.
+  - **A LIMIT ON THE INSTRUMENT, because it is mine: the marker sweep first ran over the ARM SECTION ALONE and
+    reported `(none)` for `UNRESOLVED STATIC`** -- which reads exactly like a clean boot and was simply a
+    sweep over the wrong input. Re-run over the whole log it finds the two known DENYLISTED lines. The
+    arm-by-arm diff against the oracle is the load-bearing half and it is exact; the sweep is only as good as
+    the transcription it ran on.
+
+- **THE `jdk/internal/misc/Unsafe` ACCESSOR SURFACE IS IN -- 94 DROPPED MEMBERS DECLARED, AND THE FINDING IS
+  THAT joe-ng HAS TWO MEMORY LAYOUTS BEHIND ONE `(Object,long)` SIGNATURE (2026-09-30, PI-VALIDATED).** An overlay wins the name, so a stock member it does not declare CEASES TO EXIST: the call
+  resolves nowhere and surfaces as a `DENYLIST TRAP` blaming a list `Unsafe` is not even on -- the trap this
+  file records NINE times. `Unsafe` was the largest remaining instance of it.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`UnsafeAccessProbe`, 44 arms against the HOST ORACLE** | **the members do not exist** | **44 of 44 BYTE-IDENTICAL** |
+  | dropped `Unsafe` members (deep scan) | 237 | **143** |
+  | ... of which referenced ONLY by `java/lang/invoke/VarHandle*` | 182 (77%) | **141** |
+  | ... **with a referrer OUTSIDE `java/lang/invoke/`** | **55** | **2** |
+  | total deep gaps | 914 | **820** |
+  | **negative control A** (always FIELD width) | -- | **6 ARRAY arms fail, then a NESTED FAULT -- heap corruption** |
+  | **negative control B** (always NATURAL width) | -- | **exactly 5 FIELD arms fail, every one a SIGNED narrow width** |
+  | **demo suite, COMPLETE run** | -- | **40 programs to `self-build retired`**, 38 markers zero |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL -- ZERO classes added** |
+  | image (same-build-path, probe excluded from BOTH) | 34,101,260 | **34,113,616 (+12,356 B, +0.036%)** |
+  | **Pi, the SAME binary** | -- | **40 programs, every named ABSENCE holds, `arrayKindOf` callable in the BAKED world** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE SCOPE WAS DECIDED BY MEASUREMENT, NOT BY APPETITE, and the measurement is the most useful thing
+    here.** Of the 237 members stock declares and this overlay dropped, **182 -- 77% -- are referenced ONLY by
+    `java/lang/invoke/VarHandle*`**, a package this VM DENIES and whose handle machinery joe-ng shims itself.
+    They cannot be reached. The 55 with a referrer outside that package are what this increment closes, all
+    but two of them.
+  - **THE NON-NATIVE BODIES COME FROM THE JDK 26 SOURCE, which is the standing rule and which paid twice.**
+    Stock `Unsafe` is ~70 natives and ~3,800 lines of DERIVED Java on top of them, so the absolute
+    `getX(long)` forms, every Acquire/Release/Opaque delegation, the whole unaligned family and the bulk-move
+    validation are stock's own bodies rather than anything reasoned out here. Both times a body was invented
+    instead, the HOST ORACLE refused it -- see the two corrections below.
+  - **THE FINDING: A FIELD AND AN ARRAY ELEMENT DISAGREE ABOUT WIDTH, AND `(Object,long)` CANNOT TELL THEM
+    APART.** An instance FIELD occupies a full 8-byte slot whatever its declared type
+    (`ObjectModel.fieldOffset` is `16 + slot*8`) and the compiler reads and writes it with `ldrx`/`strx`, so a
+    `short` field's slot holds the value SIGN-EXTENDED across all 64 bits. An ARRAY ELEMENT occupies its
+    NATURAL width at `24 + index*scale`. **Neither the offset nor its alignment can separate them -- offset 24
+    is both field slot 1 and array element 0** -- so the overlay asks the OBJECT, through a new native reading
+    the array Type's element slot.
+  - **READS ARE UNAMBIGUOUS AND WRITES ARE NOT, which is why the two halves are shaped differently.** On a
+    little-endian machine the low `width` bytes of a field's slot ARE the value, so one byte-composed read is
+    exact for a field, an element and an absolute address alike. A write has to choose, and each plausible
+    choice corrupts one side.
+  - **THE TWO NEGATIVE CONTROLS ARE DISJOINT, WHICH IS THE WHOLE EVIDENCE FOR ASKING THE OBJECT.** Each is the
+    same tree with one arm of `putBits` forced:
+    - **A, always the 8-byte SLOT:** 6 ARRAY arms fail with the NEIGHBOUR clobbered
+      (`array short = 111,-2,-1` against `111,-2,333`) and the boot then **CORRUPTS THE HEAP AND NESTED-FAULTS**
+      -- an 8-byte write into a `short[3]` runs past the allocation. Every FIELD arm passes.
+    - **B, always the NATURAL width:** exactly 5 FIELD arms fail, and the signature is precise --
+      **`field short = -2/65534`**: `Unsafe.getShort` reads the low bytes correctly while ORDINARY JAVA reading
+      the field sees 65534, because the slot's high half was left zero and the sign extension is gone. Every
+      ARRAY arm passes.
+    - **ONLY THE SIGNED NARROW WIDTHS CAN SEE B, and that is why the probe's byte/short arms carry NEGATIVE
+      values.** `boolean` and `char` are effectively unsigned, so a zero high half IS the correct extension and
+      they pass control B; `float`'s high half is don't-care and `double` is 8 bytes either way. A positive byte
+      would have passed both controls and tested nothing.
+  - **THE HOST ORACLE CORRECTED ME TWICE, AND THE SECOND TIME IT FOUND A PRE-EXISTING DEFECT.**
+    - I invented an `InternalError` for a bulk copy whose base is a scalar object. **Stock already refuses it,
+      with `IllegalArgumentException`, for the same reason** (`copyMemoryChecks` -> `checkPrimitivePointer`).
+      Copying stock's own checks turned one stated divergence into FOUR matching arms.
+    - Those checks are `checkPrimitiveArray(o.getClass())`, testing
+      `getComponentType() != null && isPrimitive()` -- and taking them verbatim **refused every `byte[]`**.
+      Cause: **`Class.getComponentType()` answers NULL for a PRIMITIVE array on this VM.** An array Type's
+      element slot is 0 for a primitive element, and the element SIZE cannot recover which primitive it is
+      (`byte[]` and `boolean[]` are both 1). MEASURED -- it is what the first build failed on.
+  - **THAT MAKES `Unsafe.arrayIndexScale(byte[].class)` ANSWER 8 INSTEAD OF 1, ON MAIN, TODAY.** It falls
+    through its own `c == null || !c.isPrimitive()` arm. Nothing had noticed because the
+    `ARRAY_*_INDEX_SCALE` constants are assigned directly rather than computed from it -- so the CONSTANTS are
+    right and the METHOD is wrong, which is the quietest shape available. **NOT fixed here, because it is a
+    `Class` defect rather than an `Unsafe` one**: closing it means giving a primitive array Type a real element
+    Type, which needs the per-atype TIB IDENTITY trick `Class.getName` already uses for array names. Recorded
+    at `arrayIndexScale` itself so the next reader finds it stated rather than re-derives it.
+  - **THE NATIVE ANSWERS THE ELEMENT KIND, NOT A BARE YES/NO, and that is what let stock's contract be kept
+    without a mirror.** `arrayKindOf` reads 0 / 1 / 2 (not an array / PRIMITIVE array / REFERENCE array)
+    straight off the array Type's element slot -- the same fact `getComponentType` would have given, one
+    indirection earlier. So the width decision and stock's primitive-array refusal are both exact, and the
+    reference-array arm is a MATCHING arm rather than a divergence.
+  - **RULE 3's STUBS: there is no off-heap memory under this VM, so ten members THROW BY NAME.**
+    `allocateMemory`, `reallocateMemory`, `freeMemory`, `pageSize`, `writebackMemory`, `invokeCleaner`,
+    `copySwapMemory`, `getUncompressedObject`, `ensureClassInitialized`, `shouldBeInitialized`. An
+    `allocateMemory` returning a plausible address is the worst outcome available -- every later access would
+    scribble on whatever lives there -- and an `Error` rather than a `RuntimeException` for the reason
+    `CaseFolding` already records: a broad `catch (Exception)` must not turn a missing capability into a silent
+    wrong answer.
+  - **THE ATOMICS FAMILY IS DELIBERATELY NOT HERE, AND THE REASON IS MEASURED RATHER THAN A SCOPING WHIM.**
+    Stock derives narrow-width CAS from `getIntVolatile` + `weakCompareAndSetInt` on the enclosing FOUR-BYTE
+    word (`offset & ~3`, masked). joe-ng's int CAS is `Magic.cas64` over an EIGHT-byte slot, so that derivation
+    is not merely suboptimal here, it is WRONG: for a byte field it would leave the slot holding
+    `0xFF..FF05` where `getfield` reads -251 for a field holding 5. The two reachable members left --
+    `compareAndSetBoolean` and `getAndSetBoolean`, for `java/lang/Module$EnableNativeAccess` and
+    `java/lang/VirtualThread` -- belong with that question, not with the accessors.
+  - **THE EXISTING `putInt`/`putLong` ARE NOT TOUCHED, and that is stated because it leaves the file
+    deliberately inconsistent.** They write a whole 8-byte slot for ANY base, which is right for a field and
+    wrong for an `int[]` element -- the hazard the file already documents. Making them ask the object would
+    change a path ForkJoinPool and AtomicInteger run on every boot, for a case nothing reaches, so the
+    discriminator is available to a follow-up rather than spent here.
+  - **STATED LIMITATION, because a null base has one MORE meaning than raw memory.** The
+    `staticFieldBase`/`staticFieldOffset` pair answers `{null, absolute address of a static's SLOT}`, and a
+    static slot is 8 bytes like a field's -- so a NARROW write through that pair leaves the high half stale. Its
+    only referrers are `java/lang/invoke/VarHandleXxx$FieldStaticReadWrite`, a denied package. Closing it needs
+    the statics region's own bounds as a third discriminator, which no measurement asks for yet.
+  - **TWO OF MY OWN PROBE ARMS WERE WRONG AND THE ORACLE CAUGHT BOTH.** A transcribed `want` of 0 for a byte an
+    EARLIER arm had already filled -- fixed by giving each width a FRESH array, so every edge assertion means
+    "this put wrote exactly its own bytes" rather than "something happened to leave a zero there". And
+    `freeMemory` on a fabricated address **took the host JVM down mid-run**; it is dropped, because it is the
+    same one-line throw as `allocateMemory` and probing it buys a crashed control.
+  - **MUST-MATCH AND DELIBERATELY-DIFFERENT ARE COUNTED APART, so `failures=0` travels between worlds.** The
+    off-heap stubs throw here and succeed on a host, so they print through a second counter: both runs read
+    `failures=0 divergences-unmet=3`, and the 44 must-match arms diff byte-for-byte.
+  - **NOT PROBED, and said rather than left to be assumed: the fourteen ABSOLUTE `getX(long)`/`putX(long,x)`
+    forms.** They are stock's own one-line bodies over the `(Object,long)` forms the probe does cover, and the
+    null-base arm of `at` they rest on is the one `staticFieldOffset`/`staticFieldBase` have used since they
+    were written (ForkJoinPool's `poolIds` counter, on every boot). Exercising them needs an absolute address,
+    which no single source can name in both worlds -- a host JVM cannot hand out a Java object's address and
+    metal cannot `allocateMemory`.
+  - **THE CLOSURE DOES NOT MOVE BY ONE COUNTER, which is what adding methods to an already-pulled class has to
+    show.** `Unsafe` is `pullClass`ed on every boot already, so the 94 new members add no class:
+    batch 2 `+335blob`, batch 64 `+401blob`, `memo=1150 res=3032 unres=2518`, `n:imap=137 synth=60 clinits=97`,
+    `rounds=4 pend=180 reach=17` -- every one byte-identical to the wrapper-deletion boot.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** The new native is a `stashHelper`
+    entry and a `VMNatives` body, not codegen, so the byte-for-byte self-hosting fixpoint cannot have moved --
+    and a writer change that did move it would break there first.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS ANY OF THESE 94 MEMBERS.** So the boot proves
+    NO REGRESSION across a 12,356-byte layout shift in the class `ForkJoinPool`, `CompletableFuture`,
+    `AtomicInteger` and every `<clinit>`-time field offset go through, and `UnsafeAccessProbe`'s 44 arms
+    against a byte-identical host oracle are what prove the feature. Different claims.
+  - **A HARNESS TRAP, WALKED INTO AGAIN: an interrupted probe run left the GENERATED `ramfs/etc/init` behind.**
+    That file is TRACKED, and leaving a generated one in the tree is how it gets committed by accident -- the
+    recorded reason never to `git add -A` here. Caught by reading `git diff` before staging, and restored.
+  - **AND A CONTAMINATED LOG, from the recorded orphaned-emulator shape.** Two QEMU runs wrote into the same
+    `/tmp/probe.log` because the first was still alive when the second truncated it, and the interleaving ate
+    the summary line -- which reads exactly like a run that never finished. Every figure above is from a run
+    taken after `pgrep -x qemu-system-aarch64` came back empty.
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS.** This card said before
+    the boot that the accessors are byte arithmetic QEMU had already diffed against a host oracle, so cold
+    DRAM cannot change whether a `short` field reads back -2; that what hardware is asked is a
+    **12,356-byte layout shift** plus `arrayKindOf` dereferencing an object's TIB and Type on every narrow
+    WRITE; and that the arms are therefore the ABSENCES plus `gc: collections=46` and the batch-line closure.
+    Every one holds at `core 166MHz` across 40 programs to `self-build retired`: none of `FAULT` (anchored),
+    `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP` or `LINK FAILED` appears anywhere,
+    `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`, and the closure
+    byte-identical (full figures on the `getComponentType` card above -- same boot, same binary).
+  - **AND `arrayKindOf` IS PROVEN CALLABLE IN THE BAKED WORLD, WHICH IS A POSITIVE CLAIM RATHER THAN AN
+    ABSENCE -- by the boot-time force-compile, not by a demo.** `VM.forceCompile` calls
+    `VMNatives.arrayKindOf(0L)` on EVERY image during loader init, BEFORE `launch`, so reaching
+    `generation 12` IS that check -- the same pattern this file records for `assignable0`. Its GUEST use,
+    deciding FIELD-slot against ARRAY-element width, is still QEMU's, because **no demo calls one of the 94
+    members** and `componentTypeOf` reaches `Loader.arrayComponentMirror` directly rather than through this
+    native (read, not assumed). So the suite's claim is the layout shift and the native's resolution; the
+    width decision is `UnsafeAccessProbe`'s 44 arms.
+  - **`allocInstance0` NEEDED NO NEW NATIVE AT ALL, which is worth recording because it removes a risk this
+    card had implied.** It reuses the reflection-M2 `VM.allocInstanceAddr`, which has carried its own
+    `forceCompile` probe since that arc -- so of the two natives this increment names, exactly one
+    (`arrayKindOf`) is new, and it is the one with the probe quoted above.
+
 - **THE `Boolean`, `Byte`, `Short` AND `Number` OVERLAYS ARE DELETED AND STOCK RUNS -- AND THE DELETION
-  EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** Four hand-written classes -- 114/233/215/26 lines against stock's
+  EXPOSED THAT `Boolean.<clinit>` FAULTS THE BOOT IN THE BAKED WORLD (2026-09-30, PI-VALIDATED).**
+  Four hand-written classes -- 114/233/215/26 lines against stock's
   368/595/614/126 -- with **ZERO natives between them**, measured, dropping SIXTEEN referenced members.
   `java/lang/Number`'s whole body was:
 
@@ -145,6 +608,7 @@ defines the minimum the assembler must encode.
   | closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `clinits` | -- | **BYTE-IDENTICAL; only `n:imap` moves, 133 -> 137** |
   | image (same-build-path, probe excluded from BOTH) | 34,081,328 | **34,092,468 (+11,140 B, +0.033%)** |
   | dropped supertypes | 88 | **79** |
+  | **Pi, the SAME binary** | -- | **40 programs, the boot battery PASS, BoxingDemo exact, `46` at churn, WiFi -> HTTP 200 OK** |
   | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
 
   - **THE REAL FINDING IS A BOOT FAULT THE OVERLAYS WERE HIDING, AND ITS OWN JAVADOC HAD DOCUMENTED IT.**
@@ -250,15 +714,61 @@ defines the minimum the assembler must encode.
     list, not codegen -- it decides whether a `<clinit>` is compiled into `VM.initClasses`, and emits
     nothing -- so the byte-for-byte self-hosting fixpoint cannot have moved, and a writer change that did
     move it would break there first.
-  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE -- AND UNLIKE THE LAST TWO CARDS, A SUITE BOOT CAN
-    PROVE THE FEATURE.** The arithmetic is guest-world integer work QEMU has already diffed byte-for-byte
-    against a host oracle, so cold DRAM cannot change whether `toUnsignedInt(-1)` is 65535. What hardware is
-    being asked is an **11,140-byte layout shift PLUS a real change to the BAKED world**: three wrapper
+  - **PI-VALIDATED, AND THE GATE WAS NAMED IN ADVANCE RATHER THAN CHOSEN AFTERWARDS -- INCLUDING THAT,
+    UNLIKE THE LAST TWO CARDS, A SUITE BOOT *CAN* PROVE THE FEATURE.** This card said before the boot that
+    hardware is asked an **11,140-byte layout shift PLUS a real change to the BAKED world** -- three wrapper
     `<clinit>`s no longer scheduled into `VM.initClasses`, and `Boolean.TRUE`/`FALSE` now deep-baked image
-    objects that the boot battery's `String.valueOf(true)` path runs before `launch`. The arms to read are
-    the seventeen-arm boot battery (especially `String.valueOf(true)=true` and the two `IntegerCache` arms),
-    **`BoxingDemo`'s eighteen JLS arms**, `gc: collections=46` at the churn demo, the batch-2/batch-64
-    closure, and the ABSENCES -- with `EXCEPTION CLASS NOT LOADED` the one this increment added.
+    objects the boot battery reads before `launch` -- and named the arms. All of them hold.
+  - **THE BAKED-WORLD ARMS ARE THE ONES THAT MATTERED, AND THEY RUN BEFORE `launch`.** The seventeen-arm
+    bootstrap battery is entirely PASS at `core 166MHz`, including **`String.valueOf(true)=true`** (the one
+    arm that touches baked `Boolean` at all), `IntegerCache.cache[170].intValue()=*` and
+    `Integer.valueOf(42)==cache[170]`, through to `generation 12`. A snapshot that had failed to deep-bake
+    `TRUE`/`FALSE`, or a `<clinit>` still scheduled into `VM.initClasses`, is a null static or a data abort
+    on cold DRAM -- not a wrong number -- so those absences are the assertion.
+  - **AND THE FEATURE IS PROVEN ON SILICON, WHICH THE `altMetafactory` AND `Comparator` CARDS COULD NOT
+    CLAIM.** `demo/BoxingDemo` is in the suite and every one of its JLS 5.1.7 arms is exact with stock
+    `Byte`/`Short`/`Boolean`: `byte 5 interned = 1`, `short 5 interned = 1`, `char 'A' interned = 1`,
+    `short 1000 fresh = 1`, `char 200 fresh = 1`, `byte ends = -1`, `short ends = -1`, `char ends = 127`,
+    and all three `autobox == valueOf` arms. The ENDS arms are the ones that exist because the cache slot is
+    `value + 128`, so an off-by-one there is an exception at a range end rather than a wrong number.
+  - **STOCK `Number` IS PROVEN TOO, and by an arm this card had not counted.** The reflection demo reads
+    `Number.isAssignableFrom(Integer)=1 reverse=0 self=1` and
+    `Integer.getSuperclass==Number.class 1 name=java.lang.Number` -- so the deleted overlay's replacement is
+    in the hierarchy, named correctly, and answering assignability, on hardware.
+  - **THE PROVENANCE CHECK IS THIS CARD'S OWN COUNTER, WHICH IS UNUSUALLY CONVENIENT: `n:imap=137`.** That
+    figure moved from 133 in this increment and nothing else moves it, so it doubles as the flash check --
+    with batch 2 `+335blob`, batch 64 `+401blob`, `clinits=97` and `rounds=4 pend=180 reach=17` byte-identical
+    to the QEMU gate. The card was ALSO `cmp`-confirmed before flashing at **20 differing bytes, every one
+    verified by script as a zip last-modified-time field inside the regenerated `/lib/app.jar`** -- the second
+    time that check has been run rather than assumed. And the two `arrayadopt [Ljava/lang/Number;` lines land
+    at batches 9 and 39, the `+335blob` arm's signature.
+  - **THE RECORDED 3/3 CROSS-HARNESS SPLIT REPRODUCES:** silicon reads `memo=1150 res=3029 unres=2515`
+    against QEMU's `1150 / 3032 / 2518` -- **`memo` EQUAL**, which is what says the closure itself is
+    identical rather than merely similar.
+  - **THE GATE IS UNMOVED:** `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sum20 = 210 weighted20 = 2870 tally17 = 1153 wide = 7000000155`,
+    `sync: static seen=18 nomonitor=0`, `bakeMemosDropped=18`, `sha256 clone = 44cae.../fork-ok`. The lisp
+    finale reads 56 and is **NOT cited**, per the recorded QEMU A/A pair.
+  - **THE NAMED ABSENCES HOLD, and `EXCEPTION CLASS NOT LOADED` is the one this increment added** -- it is
+    exactly what the pre-`bakeNoClinit` boot produced, and it reads 0. Nor does `FAULT`, `ESR EC=`,
+    `BOOT RE-ENTERED`, `unclaimed pc`, `DENYLIST TRAP`, `LINK FAILED`, `CLINIT REJECTED` or
+    `JIT unsupported` appear. The only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the SEVEN known ones
+    (eight occurrences), each labelled DENYLISTED.
+  - **PLUS THE GATES QEMU CANNOT SHOW:** **`ticks/core c1=50 c2=50 c3=50`**, `SMP: 4 of 4 cores up`,
+    `jobs/core 6/6/6/6`, `sched: 89 preemptions`, `smp sched: 4 of 4`,
+    `smp gc: idleRoots=3/3 marked=0 idleGc=0` with no `STW TIMEOUT`, `steps/core 61/60/60/59`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, ExcDemo's seven-frame trace,
+    `hw rng: RNG200 live` with `two instances differ`, and WiFi through to **`HTTP/1.1 200 OK`, 997 bytes**
+    (the previous boot read 998; `Age:` is a variable-length decimal and read `6997` here against `11673` --
+    a reading, not a VM figure).
+  - **STATED LIMIT ON THE INSTRUMENT: this marker sweep was READ off the pasted console capture** rather
+    than grepped on disk, which is weaker than an anchored grep. The closure comparison above is against the
+    QEMU log, which WAS grepped.
+  - **THE TWENTY-FIRST DISTINCT CROSS-BOOT RNG SAMPLE, named by its POSITION because this file's ordinals
+    are known to be off by one:** `f31e531f 8e1c1856 fe7882ea`, distinct from every previous boot,
+    `count 16 -> 13`, popcount **50 of 96** against an ideal of 48. The series reads 51, 47, 63, 50, 41, 46,
+    45, 54, --, 49, 56, 47, 48, 51, 50, 47, 42, 49, 50, 43, 50. **Still not a randomness test**: what stays
+    ruled out is a constant, a counter, and a count that does not follow reads.
 
 - **THE `java/util/Comparator` OVERLAY IS DELETED AND STOCK RUNS -- `naturalOrder()` HANDED BACK A FRESH
   LAMBDA PER CALL, SO `naturalOrder() == naturalOrder()` WAS FALSE (2026-09-29, PI-VALIDATED).**

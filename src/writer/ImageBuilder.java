@@ -1475,6 +1475,7 @@ public final class ImageBuilder implements BaselineCompiler.ClassResolver
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFieldOffset(JJ)J", "vm/VM.unsafeFieldOffsetAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.noopNative(J)V", "vm/VM.noopNativeAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.unsafeFence(J)V", "vm/VM.unsafeFenceAddr");
+        stashHelper(image, staticWord, wordOffset, "vm/VMNatives.arrayKindOf(J)J", "vm/VM.arrayKindAddr");
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setOut0(J)V",     "vm/VM.setOut0Addr");   // System.setOut
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setErr0(J)V",     "vm/VM.setErr0Addr");   // System.setErr
         stashHelper(image, staticWord, wordOffset, "vm/VMNatives.setIn0(J)V",      "vm/VM.setIn0Addr");    // System.setIn

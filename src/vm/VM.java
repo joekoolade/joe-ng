@@ -1854,6 +1854,7 @@ public final class VM
         if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(0L, 0L); }
         if (noopNativeAddr == 0L) { VMNatives.noopNative(0L); }
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
+        if (arrayKindAddr == 0L) { long u = VMNatives.arrayKindOf(0L); }
         if (setOut0Addr == 0L) { VMNatives.setOut0(0L); }                       // System.setOut0
         if (setErr0Addr == 0L) { VMNatives.setErr0(0L); }                       // System.setErr0
         if (setIn0Addr == 0L) { VMNatives.setIn0(0L); }                         // System.setIn0
@@ -3311,6 +3312,7 @@ public final class VM
     static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(JJ)J — Unsafe.objectFieldOffset(Class,String)
     static long noopNativeAddr;        // VMNatives.noopNative(J)V — a native whose C body does nothing observable here
     static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
+    static long arrayKindAddr;          // VMNatives.arrayKindOf(J)J — Unsafe: FIELD slot vs ARRAY element, and primitive vs reference
     static long setOut0Addr;           // VMNatives.setOut0(J)V — System.setOut0(PrintStream)
     static long setErr0Addr;           // VMNatives.setErr0(J)V — System.setErr0(PrintStream)
     static long setIn0Addr;            // VMNatives.setIn0(J)V  — System.setIn0(InputStream)

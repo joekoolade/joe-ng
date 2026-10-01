@@ -6464,6 +6464,67 @@ public final class Loader
         return 0;
     }
 
+    /**
+     * The {@code Class} mirror of an ARRAY Type's COMPONENT, or 0 when {@code type} is not an array (or is a
+     * reference array whose element Type never resolved).
+     *
+     * <p>THE PRIMITIVE CASE NEEDS MORE THAN THE ELEMENT SLOT, which is why this is not one load. An array
+     * Type's {@code ARRAY_TYPE_ELEMENT_OFFSET} exists for reference-array COVARIANCE and is 0 for a primitive
+     * element by construction -- so reading it alone answered NULL for every {@code byte[]}/{@code int[]}, and
+     * null is not an error a caller sees: it is the answer for "not an array", so every caller branching on it
+     * took the not-an-array path for a real array. The element SIZE cannot stand in either
+     * ({@code byte[]}/{@code boolean[]} are both 1, {@code int[]}/{@code float[]} both 4), so the descriptor
+     * char is recovered by IDENTITY against the per-atype TIB cache -- the same trick {@link #classNameLen}
+     * already uses to render {@code "[I"}, and one that also works for a writer-BAKED array Type the loader
+     * merely adopted, which no metal-side field would have been filled in for.
+     */
+    static long arrayComponentMirror(long type)
+    {
+        if (type == 0L || !isArrayType(type))
+        {
+            return 0L;
+        }
+        long el = Magic.load64(type + ObjectModel.ARRAY_TYPE_ELEMENT_OFFSET);
+        if (el != 0L)
+        {
+            return classMirror(el);                      // a REFERENCE array: the element Type is right there
+        }
+        int c = primElemCharOf(type);
+        return c == 0 ? 0L : primitiveMirror(c);         // 0 = a ref array whose element never resolved
+    }
+
+    /**
+     * A reflectively created array of {@code length} elements whose COMPONENT Type is {@code compType}:
+     * {@code java.lang.reflect.Array.newInstance}'s allocation, and {@code Arrays.copyOf}/{@code toArray}
+     * behind it.
+     *
+     * <p>THE PRIMITIVE ARM IS WHY THIS EXISTS. The caller used to allocate 8-byte REFERENCE elements
+     * unconditionally and hang {@code refArrayTib} off them, which for a primitive component gives an array of
+     * the wrong element WIDTH under a reference TIB -- the right length, reflectively readable, and wrong the
+     * moment ordinary bytecode indexes past element 0. It was unreachable only because
+     * {@code getComponentType()} answered null for a primitive array; fixing that opens the route, so the two
+     * belong together.
+     */
+    static long newArrayOfComponent(long compType, int length)
+    {
+        if (compType != 0L && isPrimitiveType(compType))
+        {
+            int atype = atypeForDescChar(primTypeChar(compType));
+            if (atype >= 0)
+            {
+                long arr = Heap.allocArray(length, arrayElemSizeOfAtype(atype));
+                Magic.store64(arr, primArrayTib(atype));  // the SAME interned TIB `new int[]` uses
+                return arr;
+            }
+        }
+        long arr = Heap.allocArray(length, ObjectModel.WORD);
+        if (compType != 0L)
+        {
+            Magic.store64(arr, refArrayTib(compType));    // typed [L<component>;, interned per element
+        }
+        return arr;                                       // else a raw untyped array: still fills and returns
+    }
+
     /** Length of {@code type}'s dotted binary name, or 0 if it has none (unregistered / unresolved element). */
     private static int classNameLen(long type)
     {
@@ -11460,6 +11521,13 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("storeFence")))         { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("loadFence")))          { return VM.unsafeFenceAddr; }
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fullFence")))          { return VM.unsafeFenceAddr; }
+            // A narrow accessor must know whether it is addressing a FIELD (one 8-byte slot) or an ARRAY
+            // ELEMENT (its natural width), and the bulk moves must refuse a non-PRIMITIVE array as stock does;
+            // see VMNatives.arrayKindOf for why Class.getComponentType cannot answer either question here.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("arrayKind0")))          { return VM.arrayKindAddr; } // (Object)J: 0 none, 1 primitive, 2 reference
+            // The same native Constructor.allocInstance0 runs on -- zeroed fields, the class's TIB, and
+            // ensureClinit first. nativeBuf keys on the DECLARING class, so it needs registering under both.
+            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("allocInstance0")))      { return VM.allocInstanceAddr; } // (Class)Object
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/String")))
         {
