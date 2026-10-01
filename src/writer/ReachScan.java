@@ -106,6 +106,9 @@ public final class ReachScan
             return false;
         }
         if (c.startsWith("java/lang/invoke/VarHandle")
+                // MethodHandleStatics is NOT matched by the "MethodHandles" prefix (it stops at the
+                // lower-case 's'); stock VarHandle.<clinit> reads its UNSAFE. See Loader.isDenylisted.
+                || c.startsWith("java/lang/invoke/MethodHandleStatics")
                 || c.startsWith("java/lang/invoke/MethodHandles")
                 || c.startsWith("jdk/internal/invoke/MhUtil")
                 || c.startsWith("java/lang/reflect/Modifier")           // reflection arc: JDK-free overlays that run
