@@ -2748,11 +2748,26 @@ public final class Unsafe
     /** The native {@code Constructor.allocInstance0} already uses; see {@link #allocateInstance}. */
     private static native Object allocInstance0(Class<?> c);
 
-    /** joe-ng initializes a class on its first ACTIVE USE (JVMS 5.5) through the loader, which guest code has
-     *  no hook into. Referenced only by java/lang/invoke, which is denied. */
+    /**
+     * A NO-OP, and that is CORRECT here rather than a stub -- the same argument, and the same wording,
+     * {@code MethodHandles.Lookup.ensureInitialized} already carries: joe-ng initializes a class on its
+     * first ACTIVE USE (JVMS 5.5), so forcing an initializer a moment earlier changes nothing observable.
+     *
+     * <p>IT USED TO THROW, on the stated premise that it is "referenced only by java/lang/invoke, which is
+     * denied". THAT PREMISE EXPIRED when stock {@code VarHandle} stopped being overlaid: its {@code <clinit>}
+     * ends in {@code UNSAFE.ensureClassInitialized(VarHandleGuards.class)}, so the throw became the second
+     * of the two reasons that initializer died. A comment recording WHY a stub throws is what let this be
+     * noticed rather than re-derived.
+     *
+     * <p>The argument is IGNORED, and nothing is lost by that: pre-initializing {@code VarHandleGuards} buys
+     * nothing here, because the guards are reached only from MethodHandle invocation, which this VM does not
+     * do. (An earlier cut of this comment asserted that class was DENIED and its literal therefore null.
+     * WRONG, and unchecked: the denial's allow-list carries the prefix {@code java/lang/invoke/VarHandle},
+     * which prefix-MATCHES {@code VarHandleGuards} -- and the probe boot's {@code NULL CLASS LITERAL} count
+     * of 0 says the literal resolves. A comment is a claim like any other.)
+     */
     public void ensureClassInitialized(Class<?> c)
     {
-        throw new InternalError("jdk.internal.misc.Unsafe.ensureClassInitialized: not implemented");
     }
 
     public boolean shouldBeInitialized(Class<?> c)

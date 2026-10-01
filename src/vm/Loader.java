@@ -2021,7 +2021,36 @@ public final class Loader
 
     private static boolean clinitBlocked()
     {
-        return utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
+        // THE TEMPLATE-GENERATED VarHandle CLASSES. Each one's <clinit> is a single statement --
+        // `FORM = new VarForm(ThisHandle.class, Object.class, <width>.TYPE, new Class[0])` -- read off the
+        // generated class with javap, not assumed. `VarForm` is DENIED, so running it halts at
+        // `UNRESOLVED NEW: java/lang/invoke/VarForm`, which is where stock VarHandle first got to.
+        //
+        // UN-DENYING VarForm IS THE EXPENSIVE ANSWER AND THIS IS THE CHEAP ONE. Its constructor allocates
+        // MethodType[] and MemberName[] and calls initMethodTypes, so it pulls the MethodType interning
+        // machinery and MemberName -- the MethodHandle runtime this VM deliberately does not carry.
+        //
+        // SKIPPING IS MEASURED-SAFE, which is the only reason it is allowed under the all-<clinit>s rule.
+        // FORM's one consumer is `super(..., FORM, exact)`, which stores it in VarHandle.vform -- and vform
+        // is read at EXACTLY THREE sites in stock VarHandle (isAccessModeSupported, getMethodHandle,
+        // updateVarForm), NONE of them on the access path. Every accessor reads only fieldOffset,
+        // receiverType and (for the Object form) fieldType. So get/set/CAS are correct with a null vform,
+        // and the three mode-reflection methods NPE LOUDLY rather than answering wrongly.
+        //
+        // Named one width at a time rather than by a bare "VarHandle" prefix, which would also catch stock
+        // java/lang/invoke/VarHandle itself -- whose <clinit> we DO want (it sets $assertionsDisabled, and
+        // leaving that false enables stock's own asserts, the AbstractStringBuilder hazard this file
+        // records) -- and VarHandle$AccessMode, whose constants a later toMethodHandle arm would want.
+        return utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBooleans"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBytes"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleChars"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleDoubles"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleFloats"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleInts"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleLongs"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleReferences"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleShorts"))
+                || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/System"))
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer$IntegerCache"))
                 // primitive wrappers: <clinit> sets TYPE = Class.getPrimitiveClass(...) (a native)
                 || utf8IsAtBase(gbase, gThisNameOff, Magic.bytes("java/lang/Integer"))
@@ -5713,6 +5742,12 @@ public final class Loader
         // prefix deny below. Everything else in java/lang/invoke stays denied.
         if (utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/VarHandle"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandles"))
+                // Stock VarHandle.<clinit> reads MethodHandleStatics.UNSAFE. NOT covered by the
+                // "MethodHandles" prefix above -- that stops at the lower-case 's', so MethodHandleStatics
+                // was DENIED and its UNSAFE read NULL, which is the NPE stock VarHandle's initializer died
+                // of. Overlaid, because its real <clinit> pulls the denied java/lang/reflect
+                // ClassFileFormatVersion and a ClassFileDumper that writes to a filesystem.
+                || utf8HasPrefix(base, off, Magic.bytes("java/lang/invoke/MethodHandleStatics"))
                 || utf8HasPrefix(base, off, Magic.bytes("jdk/internal/invoke/MhUtil"))
                 // Reflection arc: these java/lang/reflect classes are overlaid (JDK-free) and DO run on metal
                 // (Class.getModifiers/getDeclaredField*, reflective Field.get/set); the rest of java/lang/reflect
@@ -11560,11 +11595,6 @@ public final class Loader
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("open0")))             { return VM.fileOpenAddr; }   // (String)J -> RAMFS entry
         }
-        // VarHandle overlay: resolve an instance field's byte offset from the target object's class.
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/VarHandle")))
-        {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))      { return VM.vhFieldOffsetAddr; }  // (byte[],Object)J
-        }
         // Atomic*FieldUpdater overlays resolve the target field's byte offset the same way as VarHandle, and
         // resolve their caller's class (getCallerClass) for the field-access check.
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/AtomicIntegerFieldUpdater"))
@@ -11574,7 +11604,12 @@ public final class Loader
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fieldOffset0")))     { return VM.vhFieldOffsetAddr; }    // (byte[],Object)J
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/util/concurrent/atomic/FieldUpdaterCheck"))
-                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject")))
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/AccessibleObject"))
+                // MhUtil's no-receiver findVarHandle: stock resolves the field against lookup.lookupClass(),
+                // and joe-ng's Lookup carries none, so the DECLARING class comes from the caller's frame.
+                // Keyed by DECLARING CLASS like every entry here -- registering a native under one of two
+                // classes that declare it is the recorded `LINK FAILED ... no body for that name+descriptor`.
+                || utf8IsAtBase(clsBase, clsOff, Magic.bytes("jdk/internal/invoke/MhUtil")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("callerClass0")))     { return VM.classAtPcAddr; }        // (J)Class
         }
@@ -11595,10 +11630,6 @@ public final class Loader
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Field")))
         {
             if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("staticCell0")))       { return VM.staticCellAddr; }    // (Class,byte[])J
-        }
-        if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/invoke/VarHandle")))
-        {
-            if (utf8IsAtBase(nameBase, nameOff, Magic.bytes("fence0")))             { return VM.unsafeFenceAddr; } // ()V
         }
         if (utf8IsAtBase(clsBase, clsOff, Magic.bytes("java/lang/reflect/Method")))
         {
@@ -12678,6 +12709,138 @@ public final class Loader
      * the only difference is that the class name comes from the receiver rather than from the call site,
      * which is what makes it virtual dispatch.
      */
+    /**
+     * The template-generated accessor a signature-polymorphic VarHandle site resolves to, searched up the
+     * RECEIVER's class chain -- which is where it has to be searched, because the access modes are split
+     * across the generated hierarchy ({@code get} on {@code FieldInstanceReadOnly}, {@code set} on
+     * {@code FieldInstanceReadWrite}).
+     *
+     * <p>The NAME is the site's unchanged: it IS the access mode. Only the descriptor is rebuilt.
+     */
+    private static long resolveVhAccessor(int ci, int idx)
+    {
+        byte[] d = vhAccessorDesc(vsDesc[idx]);
+        if (d == null)
+        {
+            return 0L;
+        }
+        long descU = utf8Blob(d);
+        long buf = 0L;
+        int c = ci;
+        int hops = 0;
+        while (c >= 0 && buf == 0L && hops < MAXCHAIN)
+        {
+            if (clTab[c] != null)
+            {
+                buf = resolveLinkTarget(clTab[c].base + clTab[c].nameOff, vsName[idx], descU);
+            }
+            c = superRegOf(c);
+            hops += 1;
+        }
+        return buf;
+    }
+
+    /**
+     * Rebuild a polymorphic VarHandle site's descriptor as the generated accessor's. ONE uniform rule,
+     * verified against the generated classes rather than assumed: prepend the handle, generalise EVERY
+     * reference AND array to {@code Ljava/lang/Object;}, and keep primitives verbatim.
+     *
+     * <pre>
+     *   site (Lfoo/Bar;I)V  -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;I)V   field int set
+     *   site (Lfoo/Bar;)I   -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;)I    field int get
+     *   site ([II)I         -&gt;  (Ljava/lang/invoke/VarHandle;Ljava/lang/Object;I)I   int[] view get
+     * </pre>
+     *
+     * <p>THE ARRAY COORDINATE GENERALISES TOO, which is why one rule covers field and array-view handles
+     * alike -- {@code VarHandleInts$Array.get} really is {@code (LVarHandle;LObject;I)I}, read off the
+     * generated class with {@code javap -s}, not inferred from the field case.
+     *
+     * <p>KEEPING PRIMITIVES VERBATIM IS THE WHOLE POINT: it is what makes the resolve WIDTH-TYPED, so a
+     * site storing an {@code int} cannot bind to the {@code long} or reference accessor. The retired
+     * hand-written overlay resolved these by NAME ALONE, which is how one reference-typed {@code set} came
+     * to serve every width and stored an int as a reference.
+     */
+    private static byte[] vhAccessorDesc(long siteDesc)
+    {
+        int len = u2(siteDesc);
+        if (len < 3 || u1(siteDesc + 2) != 0x28)        // must start '('
+        {
+            return null;
+        }
+        byte[] out = new byte[40 + 20 * len];           // worst case: every token becomes Ljava/lang/Object;
+        int n = vhPut(out, 0, Magic.bytes("(Ljava/lang/invoke/VarHandle;"));
+        int i = 1;                                      // past the site's own '('
+        while (i < len && u1(siteDesc + 2 + i) != 0x29) // up to ')'
+        {
+            int ch = u1(siteDesc + 2 + i);
+            if (ch == 0x5B || ch == 0x4C)               // '[' or 'L' -> a reference, whatever its shape
+            {
+                i = vhSkipType(siteDesc, len, i);
+                n = vhPut(out, n, Magic.bytes("Ljava/lang/Object;"));
+            }
+            else                                        // a primitive: verbatim, which is what types the resolve
+            {
+                out[n] = (byte) ch;
+                n += 1;
+                i += 1;
+            }
+        }
+        if (i >= len)
+        {
+            return null;                                // no ')': not a method descriptor
+        }
+        out[n] = 0x29;                                  // ')'
+        n += 1;
+        i += 1;
+        int r = u1(siteDesc + 2 + i);
+        if (r == 0x5B || r == 0x4C)
+        {
+            n = vhPut(out, n, Magic.bytes("Ljava/lang/Object;"));
+        }
+        else
+        {
+            out[n] = (byte) r;                          // a primitive, or 'V'
+            n += 1;
+        }
+        byte[] res = new byte[n];
+        int k = 0;
+        while (k < n)
+        {
+            res[k] = out[k];
+            k += 1;
+        }
+        return res;
+    }
+
+    /** Index just past the type token starting at {@code i} in a descriptor ({@code [[Lfoo/Bar;}, {@code I}). */
+    private static int vhSkipType(long base, int len, int i)
+    {
+        while (i < len && u1(base + 2 + i) == 0x5B)     // '['
+        {
+            i += 1;
+        }
+        if (i < len && u1(base + 2 + i) == 0x4C)        // 'L' ... ';'
+        {
+            while (i < len && u1(base + 2 + i) != 0x3B)
+            {
+                i += 1;
+            }
+        }
+        return i + 1;
+    }
+
+    /** Append {@code src} to {@code dst} at {@code at}; returns the new end. */
+    private static int vhPut(byte[] dst, int at, byte[] src)
+    {
+        int i = 0;
+        while (i < src.length)
+        {
+            dst[at + i] = src[i];
+            i += 1;
+        }
+        return at + src.length;
+    }
+
     static long virtualResolve(long recv, int idx)
     {
         // THE LAST TRAMPOLINE WITHOUT A LOCK -- AND NOT, AS THIS COMMENT FIRST CLAIMED, THE LAST UNLOCKED
@@ -12864,6 +13027,17 @@ public final class Loader
                     Uart.putc(0x0A);
                 }
             }
+        }
+        if (buf == 0L && vsCls != null && utf8IsAtBase(vsCls[idx], 0, Magic.bytes("java/lang/invoke/VarHandle")))
+        {
+            // A SIGNATURE-POLYMORPHIC VarHandle OP. The site's declared owner is VarHandle and nothing in
+            // the receiver's chain matches its descriptor -- which is expected, not a failure: the site
+            // descriptor is the ACTUAL argument types (set:(Lfoo/Bar;I)V) while the implementation is the
+            // template-generated handle's STATIC accessor (set:(LVarHandle;LObject;I)V). In HotSpot the 31
+            // access-mode methods are natives the JVM intrinsifies and never actually invokes; here the
+            // call site is redirected to the generated static instead, which needs no argument shuffling --
+            // an invokevirtual already passes (x0=handle, x1=holder, x2=value), and that IS its signature.
+            buf = resolveVhAccessor(ci, idx);
         }
         if (buf == 0L)
         {
@@ -13208,20 +13382,6 @@ public final class Loader
 
     /** VarHandle overlay: vtable slot of an op by NAME only (its op names are unique), regardless of the
      *  signature-polymorphic call-site descriptor. Returns -1 if the VarHandle overlay isn't registered yet. */
-    private static int varHandleSlotByName(int nameOff)
-    {
-        int i = 0;
-        while (i < vtCount)
-        {
-            if (utf8IsAtBase(vtClassBase[i], vtClassOff[i], Magic.bytes("java/lang/invoke/VarHandle"))
-                    && utf8EqAt(gbase, nameOff, vtNameBase[i], vtNameOff[i]))
-            {
-                return vtSlot[i];
-            }
-            i += 1;
-        }
-        return -1;
-    }
 
     /** VarHandle shim: byte offset of instance field {@code fname} (raw bytes at {@code fnBase..+fnLen}) within
      *  the class whose TIB is {@code tib}. Uses the class registry (TIB->class) + field registry (class+name->
@@ -19671,17 +19831,16 @@ public final class Loader
     static int vtableSlotOf(int idx)
     {
         // VarHandle ops are signature-polymorphic: the call-site descriptor is the actual arg types
-        // (e.g. getAndBitwiseOr:(Ljava/net/Socket;I)I), NOT the overlay method's (Ljava/lang/Object;I)I, so
-        // the normal name+descriptor match misses. VarHandle's op names are unique, so resolve by name only
-        // against the VarHandle overlay's vtable.
-        if (utf8IsStr(refClassNameOff(idx), Magic.bytes("java/lang/invoke/VarHandle")))
-        {
-            int vs = varHandleSlotByName(mrefNameOff(idx));
-            if (vs >= 0)
-            {
-                return vs;
-            }
-        }
+        // (e.g. getAndBitwiseOr:(Ljava/net/Socket;I)I), not any declared method's. This USED to resolve by
+        // NAME ALONE against a hand-written VarHandle overlay's vtable -- which is why one reference-typed
+        // `set` served every `set` whatever its descriptor, storing an int AS A REFERENCE.
+        //
+        // Nothing is matched here now, deliberately: with stock VarHandle the implementation is the
+        // template-generated handle's STATIC method (`set(VarHandle,Object,int)`), which is not a VarHandle
+        // virtual at all, so there is no slot to answer with. Falling through means vtableSlot answers -1
+        // and lowerInvokeVirtual takes its existing late-resolve path -- whose register layout already
+        // matches, since an invokevirtual passes (x0=handle, x1=holder, x2=value) and that IS the generated
+        // static's signature. virtualResolve then resolves against the receiver's own class.
         if (utf8Eq(refClassNameOff(idx), gThisNameOff))
         {
             int s = findVtSlot(mrefNameOff(idx), mrefDescOff(idx));   // this class's flattened vtable

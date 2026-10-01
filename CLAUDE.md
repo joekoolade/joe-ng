@@ -115,6 +115,140 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **STOCK `java/lang/invoke/VarHandle` RUNS ON THE METAL -- THE OVERLAY'S SIX REFERENCE-TYPED OPS WERE
+  RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30,
+  QEMU-GATED -- NOT YET PI-VALIDATED).** 122 hand-written lines shadowing a 2,467-line stock class, deleted.
+  The implementation is now stock's own template-generated handles, and the "natives" are a DISPATCH:
+
+  ```java
+  public void set(Object obj, Object x)      // ONE reference-typed body served EVERY set, at every width
+  { Magic.store64(Magic.addrOf(obj) + fieldOffset0(fname, obj), (x == null) ? 0L : Magic.addrOf(x)); }
+  ```
+
+  | gate | overlay | stock |
+  |---|---|---|
+  | **`VarHandleProbe`, 23 arms against the HOST ORACLE** | 6 reference-typed ops, every width aliased | **23 of 23 BYTE-IDENTICAL** |
+  | handle class per width | `java.lang.invoke.VarHandle` for all | **`VarHandleInts$FieldInstanceReadWrite`, `...Longs...`, `...References...`** |
+  | `int` set/get, CAS, CAS-miss, getAndAdd, getAndSet, getVolatile, getAndBitwiseOr | **an int stored as a REFERENCE** | **-2/-2, true/7, false/7, 7/10, 10/-5, -5, -5/-5** |
+  | `long`/`boolean`/`byte`/`char`/`short`/`float`/`double` | aliased to the reference body | **-2, true, -2, 65535, -2, 1.5, 2.5 -- each its own generated handle** |
+  | the REFERENCE arms (the control the overlay got right) | correct | **correct -- UNMOVED** |
+  | **`MhUtil` no-receiver form** (30 of 34 java.base sites) | field NAME only, two args ignored | **caller's frame -> declaring class** |
+  | **`demo/ClqDemo`, 13 arms** (CLQ drives its WHOLE structure through VarHandles) | -- | **every arm exact, incl. `second queue = x`** |
+  | **`demo/NetDemo`** -- `java/net/Socket.<clinit>` binding STATE/IN/OUT | -- | **completes, 0 throws; ends in the recorded QEMU trap** |
+  | demo suite, COMPLETE run | -- | **40 programs to `self-build retired`**, every marker zero |
+  | `gc: collections` at the churn demo | 46 | **46 -- THE GATE, UNMOVED** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE "NATIVES" ARE A DISPATCH, NOT NINETY METHOD BODIES -- AND I WAS ABOUT TO WRITE THE NINETY.** My
+    first plan was per-width overloads on a hand-written overlay, which rule 3 forbids. Stock's 31
+    access-mode methods are **already `public final native`**, and HotSpot NEVER INVOKES THEM: the JVM
+    intrinsifies the call site through the handle's `VarForm`. So "implement the natives" means redirect the
+    SITE, and the real implementations are stock's own template-generated handles
+    (`VarHandleInts$FieldInstanceReadWrite` and friends) -- which have no `.java` in the JDK source tree
+    (they come from `X-VarHandle.java.template`) but DO ship as class files in java.base, so joe-ng's
+    classDir already carries them -- and the PROOF is the probe's first three arms, which print the handle's
+    own `getClass().getName()`: the retired overlay answered `java.lang.invoke.VarHandle` for every width,
+    where stock answers a DIFFERENT generated class per width, which is what makes the access typed at all.
+  - **AND THE Unsafe ARC WAS THE FOUNDATION, which is why this follows it rather than preceding it.** The
+    template is **91 `UNSAFE.*` calls** -- `get*`/`put*` (the 94 accessors) and `compareAndSet`/
+    `compareAndExchange`/`weakCompareAndSet`/`getAndSet`/`getAndAdd`/`getAndBitwise{Or,And,Xor}` (the ~140
+    atomics) -- i.e. exactly the two families whose deep-scan gap count went to ZERO one increment ago. Stock's
+    code is the implementation, WIDTH-TYPED BY CONSTRUCTION.
+  - **NO COMPILER CHANGE AT ALL, AND THAT IS WHY `compiler: 40 checks` IS AN ASSERTION BY CONSTRUCTION
+    RATHER THAN A HOPE.** Deleting the name-only arm makes `vtableSlot` MISS, return -1, and the site take
+    `lowerInvokeVirtual`'s EXISTING late-resolve path. The register layout already matches: an
+    `invokevirtual VarHandle.set:(Lfoo/Bar;I)V` passes `(x0=handle, x1=holder, x2=value)`, and that IS the
+    generated static's signature `set(VarHandle,Object,int)`. Nothing is marshalled, nothing is shuffled.
+  - **ONE UNIFORM DESCRIPTOR RULE, READ OFF THE GENERATED CLASSES WITH `javap -s` RATHER THAN INFERRED:**
+    prepend `Ljava/lang/invoke/VarHandle;`, generalise every reference AND ARRAY to `Ljava/lang/Object;`,
+    keep primitives VERBATIM. Keeping the primitives is the whole point -- it is what makes the resolve
+    width-typed, so a site storing an `int` cannot bind to the `long` or the reference accessor.
+    **The array coordinate generalises too** (`VarHandleInts$Array.get` really is `(LVarHandle;LObject;I)I`),
+    so one rule covers field and array-view handles alike -- which I expected to need two.
+  - **THE DEFECT IS MEASURED AND THE OVERLAY'S OWN DISCLAIMER WAS CLOSURE-SPECIFIC.** Its comment said a
+    primitive `set` "is the thing to fix" but that "nothing reached so far does that". Scanning java.base's
+    7,417 classes: **375 VarHandle call sites, 189 naming one of the six ops the overlay declared, and 96 of
+    those PRIMITIVE-valued against a reference-typed body** -- `Phaser` (JJ), `Exchanger` (II),
+    `FutureTask` (I), `Striped64`, `SubmissionPublisher`, plus 58 array-view sites `ofField` could not
+    express at all. What kept it latent is that the NEAREST offenders are shadowed by OTHER overlays
+    (`AtomicBoolean`, `AtomicReference`, the `Atomic*Array`s, `ConcurrentSkipListMap`), so their stock sites
+    never ran. "Nothing reached" was true of one closure, not of the code.
+  - **THREE STACKED BLOCKERS, each invisible until the one before it was fixed** -- the shape this file
+    records more than any other, and each cost one QEMU boot rather than a reading:
+    1. **Stock `VarHandle.<clinit>` NPE'd on `MethodHandleStatics.UNSAFE`.** That class is DENIED, and the
+       reason is a prefix that stops one character short: the allow-list has `java/lang/invoke/MethodHandles`,
+       which does NOT match `MethodHandleStatic`**`s`** (`s` against `S`). Its `UNSAFE` therefore read null.
+       OVERLAID rather than un-denied, because its real initializer pulls `ClassFileFormatVersion` (an enum in
+       the denied `java/lang/reflect/`) and a `ClassFileDumper` that writes class files to a filesystem this
+       VM does not have. **The surface is MEASURED: exactly SEVEN members** of it are referenced by every
+       `VarHandle*`/`MethodHandles*` class in java.base, and not one needs either.
+    2. **`Unsafe.ensureClassInitialized` threw**, which stock `VarHandle.<clinit>` calls last. A NO-OP now,
+       and that is CORRECT rather than a stub -- the same argument `MethodHandles.Lookup.ensureInitialized`
+       already carries: joe-ng initializes on first ACTIVE USE, so forcing it earlier changes nothing
+       observable. **Its comment's premise -- "referenced only by java/lang/invoke, which is denied" --
+       EXPIRED the moment VarHandle stopped being overlaid**, and recording WHY it threw is what let that be
+       noticed instead of re-derived.
+    3. **The generated handles' `<clinit>` halted at `UNRESOLVED NEW: java/lang/invoke/VarForm`.** Each is a
+       single statement, `FORM = new VarForm(...)`, and `VarForm` is denied. The nine width classes are
+       `clinitBlocked` instead of un-denying VarForm, whose constructor allocates `MethodType[]` and
+       `MemberName[]` and would pull the MethodType interning machinery -- the MethodHandle runtime this VM
+       deliberately does not carry.
+  - **SKIPPING THAT INITIALIZER IS MEASURED-SAFE, which is the only thing that licenses it under the
+    all-`<clinit>`s rule.** `FORM`'s one consumer is `super(..., FORM, exact)`, which stores it in
+    `VarHandle.vform` -- and `vform` is read at **EXACTLY THREE sites** in stock `VarHandle`
+    (`isAccessModeSupported`, `getMethodHandle`, `updateVarForm`), **none on the access path**. Every accessor
+    reads only `fieldOffset`, `receiverType` and (for the Object form) `fieldType`. So get/set/CAS are correct
+    with a null `vform`, and the three mode-reflection methods NPE LOUDLY rather than answering wrongly.
+    Blocking is strictly better than the alternative here: a `VFORM_OFFSET` of 0 would make `updateVarForm`
+    CAS at offset 0 -- the TIB -- which is silent corruption rather than a loud failure.
+  - **I GOT `MhUtil` BACKWARDS AND THE MEASUREMENT CORRECTED ME.** Its no-receiver
+    `findVarHandle(Lookup,String,Class)` is the form **30 of 34** java.base sites use -- `Socket`, `Phaser`,
+    `Exchanger`, `FutureTask`, `Striped64`, `CompletableFuture`, `SubmissionPublisher` -- against 4 for the
+    receiver-taking one, and my first cut THREW from it on the theory it was the rare one. Stock resolves it
+    through `lookup.lookupClass()`; joe-ng's Lookup is a singleton and carries none, so the declaring class
+    comes from the CALLER'S FRAME instead -- **reusing the `Magic.readLR()` + `VMNatives.classAtPc` facility
+    `AtomicIntegerFieldUpdater` already had**, rather than inventing one. `readLR()` must be the FIRST
+    statement, same requirement and same comment as that class.
+  - **AND IT REFUSES RATHER THAN GUESSING when the caller class is unresolvable.** A handle built against the
+    wrong declaring class resolves to the wrong field OFFSET and then reads and writes a NEIGHBOURING field
+    for ever -- silent, and exactly the class of wrong answer this increment exists to remove.
+  - **MY CENSUS INSTRUMENT WAS WRONG TWICE BEFORE IT WAS RIGHT, and both wrong numbers were printed.** First
+    an `awk` heuristic that looked for `[IJZBCSFD]` after stripping one parameter -- those letters occur
+    INSIDE class names (`ConcurrentLinkedQueue` has a `C`, `Deque` a `D`), so it reported 175. Then a real
+    descriptor parser that counted `compareAndSet`'s `Z` RETURN as a value, making all 72 of its sites look
+    primitive-valued -- the return is the SUCCESS FLAG. Only with per-op value positions does it read 96. The
+    first two figures are junk and are named here so neither is cited.
+  - **TWO CHECKED EXCEPTIONS RESTORED, AND javac IS WHAT CAUGHT IT.** The overlay's `findVarHandle` dropped
+    stock's `throws NoSuchFieldException, IllegalAccessException`, so a caller written against stock does not
+    compile -- the overlay-drops-stock-members trap, in its LUCKY form. They do not change the DESCRIPTOR
+    (throws is an attribute), so metal resolution is unaffected either way. `MhUtil` wraps them in an
+    `InternalError` exactly as stock does, which is the entire reason that class exists.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT -- AND HERE IT CLAIMS LESS THAN USUAL: NOT ONE OF THE 40
+    PROGRAMS USES A VarHandle.** Measured against the launch list, not assumed: `AtomicInteger`/`Long`/
+    `Reference`/`Boolean` and `ConcurrentHashMap` are all OVERLAID, there is no Socket demo, and **`ClqDemo`
+    is not in the suite**. So the suite proves NO REGRESSION across the closure and layout change and
+    nothing about the feature -- which is why the two things most at risk were given their own boots:
+    **`ClqDemo`** (CLQ drives its whole structure through VarHandles; 13 of 13 arms exact, including
+    `second queue = x`, which is the arm a stale STATIC binding fails) and **`NetDemo`**, where
+    `java/net/Socket.<clinit>` binds STATE/IN/OUT through MhUtil's caller-class form -- `state` with
+    `int.class`, so a PRIMITIVE-valued site in real java.base code -- completing with zero throws before the
+    recorded healthy QEMU ending (a `DENYLIST TRAP` at the `Exceptions.filterNonSocketInfo` message
+    formatter, because QEMU has no CYW43 so the connect fails).
+  - **NOT PI-VALIDATED, and the gate is named in advance.** The descriptor arithmetic is integer work over
+    classfile bytes QEMU has already diffed against a host oracle, so cold DRAM cannot change whether a
+    `short` field reads back -2. What hardware is asked is the CLOSURE: stock VarHandle plus nine generated
+    width classes plus `MethodHandleStatics` are newly demand-loadable, and `Socket`'s three handles are now
+    real generated objects where they were one hand-written shim. The arms to read are the ABSENCES
+    (`FAULT` anchored, `ESR EC=`, `BOOT RE-ENTERED`, `unclaimed pc`, `UNRESOLVED NEW`, `CTOR SKIPPED`,
+    `VIRTUALRESOLVE FAILED`), `gc: collections=46` at the churn demo, the batch-line closure -- and the WiFi
+    finale, which is the only thing that runs `Socket`'s int `getAndBitwiseOr` for real.
+  - **STILL OPEN, named rather than left to be re-found:** the 58 ARRAY-VIEW sites. `forInstanceField` builds
+    FIELD handles only, so `ByteArray`/`ByteArrayLittleEndian`/`AbstractMemorySegmentImpl` are unreachable --
+    and the descriptor rule above already covers them, so what is missing is the factory
+    (`VarHandles.byteArrayViewVarHandle`), not the dispatch. Also unimplemented, and deliberately: the three
+    mode-reflection methods that read `vform` (`isAccessModeSupported`, `toMethodHandle`, `accessModeType`),
+    which NPE loudly.
+
 - **`Class.getComponentType()` ANSWERED NULL FOR EVERY PRIMITIVE ARRAY -- `byte[].class.getComponentType()` WAS
   NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, PI-VALIDATED).** An array
   Type's `ARRAY_TYPE_ELEMENT_OFFSET` exists for reference-array COVARIANCE and is **0 for a primitive element by
