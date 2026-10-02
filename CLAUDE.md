@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`Math.random()` HALTED THE VM -- `Random.nextDouble()` WAS DROPPED FROM THE OVERLAY (2026-10-02,
-  QEMU-GATED -- NOT YET PI-VALIDATED).** Named by `make overlaycheck-deep` on the previous increment's own
+  PI-VALIDATED).** Named by `make overlaycheck-deep` on the previous increment's own
   card and MEASURED before a line of the fix was written. `java.lang.Math.random()` is literally
   `RandomNumberGeneratorHolder.randomNumberGenerator.nextDouble()`, and `StrictMath.random()` is the same, so
   a member a name-winning overlay does not declare took the commonest random call in Java with it.
@@ -264,9 +264,38 @@ defines the minimum the assembler must encode.
     plus the first `l2d`/`dmul`/`i2f`/`fmul` sequence this overlay has ever emitted, running on silicon where
     `CPACR_EL1.FPEN` and the FP register save/restore across the scheduler are real rather than emulated --
     and `demo/FloatDemo` is IN the suite, so the bit-exact arms are what a Pi boot would read.
+  - **PI-VALIDATED (2026-10-02, `core 166MHz`, full suite, ONE flash for this card AND the treeify card below
+    -- each had its own QEMU gate and probe, so they are separable; neither card's figures are from a solo
+    boot).** The five `demo/FloatDemo` arms are exact on silicon: `rnd d0bits = 4604728530581845079`,
+    `rnd d1bits = 4604329149490933249` (`3fe74833a06ff457` / `3fe5dcf778622e01`), `rnd f0bits = 1060782493`
+    (`3f3a419d`), `rnd steps2 = true`, `Math.random = 1 differs = 1`. The FP arms around them hold too
+    (`f2i`/`d2i` canonicalisation, `MIN/-1 >> 1 = -1073741824`), so the first `l2d`/`dmul`/`i2f`/`fmul`
+    sequence this overlay emits runs correctly with real `CPACR_EL1.FPEN` and FP state across a preemptive
+    four-core scheduler.
+  - **PROVENANCE IS THIS CARD'S OWN COUNTERS, named in advance:** batch 2 `tab=1185` (+2 cells over the
+    control's 1183), batch 6 `+356blob rounds=44 pend=13628 reach=2261 clinits=102` (control `+353`/
+    `2227`/`100`), and batch 64 `tab=1226 jf:n=889 deny=486k` (control `1224`/`883`/`482k`) -- every one
+    the fix arm's QEMU figure. Batch 22 reads `reach=2223`, the same dangerous-direction drop the QEMU A/B
+    recorded, reproducing on hardware -- and every program after it runs clean.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES with the recorded 3/3/1 split:** batch 64 `+423blob`,
+    `rounds=4 pend=180 reach=17`, `memo=1150`, `n:imap=158 synth=60 clinits=101`, and
+    `res=3057 unres=2543 pc:n=109` against QEMU's `3060 / 2546 / 110`.
+  - **THE GATE IS UNMOVED:** `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`,
+    then `55` at the lisp finale; `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sha256 clone =
+    44cae.../fork-ok`, `bakeMemosDropped=18`, `sync: static seen=18 nomonitor=0`. Plus what QEMU cannot
+    show: `SMP: 4 of 4`, `jobs/core 6/6/6/6`, **`ticks/core c1=50 c2=50 c3=50`**, `sched: 89 preemptions`,
+    `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0`, `steps/core 61/60/59/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, the seventeen-arm boot battery all PASS, ExcDemo's
+    seven-frame trace, `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> DHCP 192.168.1.247 ->
+    DNS -> **`HTTP/1.1 200 OK`, 891 bytes** (example.com changed again: `Last-Modified` 2026-10-02
+    16:11:02 GMT -- the remote page, not the VM), ending `self-build retired`.
+  - **NAMED ABSENCES HOLD:** no `FAULT`, `BOOT RE-ENTERED`, `VIRTUALRESOLVE FAILED`, `DENYLIST TRAP`,
+    `LINK FAILED` or parity `DIFF`; the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the known ones,
+    each labelled DENYLISTED. **STATED LIMIT: READ off the pasted capture, not grepped on disk.**
+  - **RNG sample, by position:** `35fc31e7 fdb8eec0 130d57ca`, `count 16 -> 13`, popcount 51 of 96.
 
 - **STOCK `java.util.HashMap` CALLS `Class.getGenericInterfaces()` WHENEVER A BIN TREEIFIES, AND THE OVERLAY
-  HAD DROPPED IT -- SO A TREEIFIED BIN HALTED THE VM (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  HAD DROPPED IT -- SO A TREEIFIED BIN HALTED THE VM (2026-10-02, PI-VALIDATED).**
   Named by `make overlaycheck-deep`, which is the only instrument that could see it: the one reachable caller
   is STOCK java.base, exactly the population the shallow scan does not walk.
   `HashMap.comparableClassFor(Object)` is reached from all three tree paths (`TreeNode.find`, `putTreeVal`,
@@ -411,6 +440,11 @@ defines the minimum the assembler must encode.
     disagreement prints UNGATED (the OK lines are `LOAD_LOG`-gated, so the absence of `DIFF` IS the
     assertion). Plus `demo/MapDemo`'s treeify arm building an identity-hash-ordered red-black tree on cold
     DRAM, under four cores.
+  - **PI-VALIDATED (2026-10-02, the same flash as the `Math.random()` card above -- full figures there):**
+    `treeify size=23 found=1 miss=1 repl=v7 read=w7 removed=1`, exact on silicon, and no parity `DIFF`
+    anywhere in the boot, so the widened `java/lang/Class` vtable agrees across both worlds on hardware.
+    Batch 13 reads `+369blob n:imap=148` (MapDemo's `Key` class, one itable), and `gc: collections=46` at
+    the churn demo is unmoved.
   - **NEXT, MEASURED RATHER THAN GUESSED, AND DELIBERATELY NOT BUNDLED: `java/util/Random.nextDouble()` is
     referenced by `java/lang/Math`** -- so `Math.random()` traps today, the same shape one class along, with
     `Random` overlaid and that member dropped. Two unvalidated changes on one card is what this file records
