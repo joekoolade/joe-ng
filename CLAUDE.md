@@ -116,9 +116,9 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **BYTE-ARRAY-VIEW VarHandles RUN -- `DataInputStream.readInt()` HAD BEEN HALTING THE VM, AND THE SURFACE IS
-  TWO METHODS RATHER THAN THE NINETY THE FIELD HANDLES NEEDED (2026-10-02, QEMU-GATED -- NOT YET
-  PI-VALIDATED).** The open item the VarHandle card left named: `forInstanceField` builds FIELD handles only,
-  so `MethodHandles.byteArrayViewVarHandle` -- a member this name-winning overlay DID NOT DECLARE -- ceased to
+  TWO METHODS RATHER THAN THE NINETY THE FIELD HANDLES NEEDED (2026-10-02, PI-VALIDATED).** The open item
+  the VarHandle card left named: `forInstanceField` builds FIELD handles only, so
+  `MethodHandles.byteArrayViewVarHandle` -- a member this name-winning overlay DID NOT DECLARE -- ceased to
   exist and every call resolved nowhere.
 
   | gate | before | after |
@@ -312,14 +312,47 @@ defines the minimum the assembler must encode.
     counters quoted here -- the closure, the marker sweep and `gc: collections=46` are load-independent -- and
     the lisp finale read **57**, which per the recorded QEMU A/A pair (56 and 57 from an IDENTICAL binary)
     **may not be cited from this harness** and is not.
-  - **NOT PI-VALIDATED, and the gate is named in advance.** The accessors are byte arithmetic QEMU has already
-    diffed against a host oracle, so cold DRAM cannot change whether `0x01020304` lands big-endian. What
-    hardware is asked is a **2,336-byte layout shift** plus one thing the emulator cannot price: the STRADDLE
-    arm's single unaligned `Magic.store64` across an 8-byte word boundary, on real Normal-cacheable memory
-    with four cores live. The arms are the ABSENCES (`FAULT` anchored, `ESR EC=`, `BOOT RE-ENTERED`,
-    `UNRESOLVED NEW`, `DENYLIST TRAP`, `VIRTUALRESOLVE FAILED`) plus `gc: collections=46` at the churn demo
-    and the batch-line closure. **`ByteViewProbe` IS NOT IN THE SUITE**, so a suite boot proves no regression
-    and the probe is what proves the feature -- the split this file makes repeatedly.
+  - **PI-VALIDATED, AND THE GATE NAMED IN ADVANCE HELD IN FULL -- 47 OF 47 ARMS BYTE-IDENTICAL TO THE HOST
+    ORACLE ON SILICON.** `ByteViewProbe done, failures=0` at `core 166MHz` with `mmu on`,
+    `SMP: 4 of 4 cores up` and `smp sched: 4 of 4`. The flash candidate was `cmp`-confirmed onto the card
+    first -- byte-identical to the QEMU-gated image, so it was **booted on its own bytes rather than gated by
+    proxy**, and +11,992 bytes from the outgoing flash (diverging at byte `0x49`) so this boot cannot be
+    scored as a boot of the old one.
+  - **THE ARM THE GATE SINGLED OUT IS THE ONE THAT MATTERS, AND IT IS EXACT:
+    `long BE @5 = 00000000000102030405060708000000`.** That element sits at offset `24 + 5 = 29` and spans
+    `[29,37)`, CROSSING the 8-byte word boundary at 32. Stock splits such a write on alignment; joe-ng issues
+    ONE unaligned `Magic.store64` and leaves the straddle to the hardware. **QEMU cannot price that** -- it
+    takes real Normal-cacheable memory with the alignment check off, which is exactly what this boot supplies,
+    with four cores live. The round-trip arm beside it reads back `102030405060708`.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES, which is one binary on two machines rather than two builds:**
+    batch 1 `+378blob`, `rounds=36 pend=14158 reach=2350`, `n:imap=160 synth=0 clinits=106`, `gc=2`,
+    `pb:probed=378 of=378` -- every counter identical to the QEMU arm, and the EIGHT
+    `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines are the same eight classes in the same order
+    (`AbstractStringBuilder`, `String`, `ByteViewProbe`, `java/nio/ByteOrder`, `DataOutputStream`,
+    `ByteArrayInputStream`, `DataInputStream`, `MethodHandleStatics`).
+  - **AND THE RECORDED 3/3/1 CROSS-HARNESS SPLIT DOES NOT APPEAR, which is stated so its ABSENCE is not read
+    as new.** This file records `res`/`unres`/`pc:n` reading three lower on silicon, attributed to the
+    hardware RNG path being compiled on one harness and not the other. Here all three read **0 on both**: a
+    probe image is ONE batch, so there is no later batch to re-patch and nothing for them to count. The split
+    has nothing to differ on rather than having gone away.
+  - **THE `clinitBlocked` FAMILY IS PROVEN ON SILICON BY TWO ABSENCES.** `UNRESOLVED NEW` reads **0**, so
+    `FORM = new VarForm(...)` never fires in any of the six `ArrayHandle`s; and **no `VarHandleByteArray*`
+    class appears in the `<clinit>`-under-lock list**, so the outer classes' `SharedSecrets.getJavaNioAccess()`
+    and `ScopedMemoryAccess` never run. The `ALIGN`-is-inlined reading that licensed blocking them is what
+    makes the access path still correct, and the 47 arms are what say it is.
+  - **39 OF 39 MARKER PATTERNS AT ZERO, GREPPED ON DISK with the `FAULT` grep ANCHORED** -- including
+    `FAIL ` (no failing arm), `ESR EC=`, `esr=0x`, `BOOT RE-ENTERED`, `DENYLIST TRAP`, `LINK FAILED`,
+    `VIRTUALRESOLVE FAILED`, `CTOR SKIPPED`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `CAP EXCEEDED`,
+    `CLINIT REJECTED` and `ClassCastException`. The only two reports are the known DENYLISTED ones
+    (`CodingErrorAction.REPLACE`, `CharBuffer.wrap`), identical to QEMU. **`TRAP-WIRED` reads 1 while
+    `DENYLIST TRAP` reads 0**, which is the pair to read together: the site was wired and never reached.
+  - **`gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`**, and the
+    seventeen-arm bootstrap battery entirely PASS before `launch`.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: IT IS NOT THE SUITE.** `main=ByteViewProbe`
+    is ONE program in ONE batch with no `net=` line, so it says nothing about the 40 programs or
+    `gc: collections=46` at the churn demo -- those remain QEMU's for this increment, on the separate
+    byte-exact suite candidate. What hardware proves is the FEATURE, which is the inverse of the usual split
+    in this file and is why the probe was the image flashed.
 
 - **STOCK `java/lang/invoke/VarHandle` RUNS ON THE METAL -- THE OVERLAY'S SIX REFERENCE-TYPED OPS WERE
   RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30;
