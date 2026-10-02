@@ -116,7 +116,7 @@ defines the minimum the assembler must encode.
 ## Current status
 
 - **`arrayElementVarHandle` RUNS, AND THE RECORDED HAZARD IT UNCOVERED WAS UNDERSTATED: AN `int[]` ELEMENT CAS
-  WAS SILENTLY WRONG AT AN EVEN INDEX, NOT LOUDLY WRONG (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  WAS SILENTLY WRONG AT AN EVEN INDEX, NOT LOUDLY WRONG (2026-10-02, PI-VALIDATED).**
   The second of the two VarHandle gaps `overlaycheck-deep` named; with it both are closed. The FACTORY is the
   small half -- nine branches, the same shape as `forInstanceField` -- and the real work is underneath it.
 
@@ -263,12 +263,40 @@ defines the minimum the assembler must encode.
     not the artifact anyone would rebuild -- so it was DISCARDED and the full-chain candidate re-gated on its
     own bytes rather than by proxy. **The lesson is the ORDER: read the host gates BEFORE the final build, not
     after**, because `make test` is the one target that silently un-does the chain.
-  - **NOT PI-VALIDATED, and the gate is named in advance.** The arithmetic is byte masking QEMU has already
-    diffed against a host oracle, so cold DRAM cannot change whether a neighbour survives a CAS. What hardware
-    is asked is a **25,232-byte layout shift** plus the one thing the emulator cannot price: `casNarrow`'s real
-    LDAXR/STLXR RETRY LOOP at width 4, on four cores where a spurious LL/SC failure actually happens --
-    the Unsafe card records that loop being closed on silicon for widths 1 and 2 and names it as emulation's
-    structural blind spot. The arms are `ArrayElemProbe`'s 52, the ABSENCES, and `gc: collections=46`.
+  - **PI-VALIDATED, AND THE GATE NAMED IN ADVANCE WAS THE LDAXR/STLXR RETRY LOOP AT WIDTH 4 -- the one thing
+    the emulator structurally cannot price.** `ArrayElemProbe done, failures=0` at `core 166MHz` with
+    `mmu on`, `SMP: 4 of 4 cores up` and `smp sched: 4 of 4`, and **52 of 52 arms BYTE-IDENTICAL to the host
+    oracle** -- and to the QEMU run. A spurious LL/SC failure (an interrupt between the load and the store
+    clearing the exclusive monitor) happens on four live cores and never under emulation, and EVERY
+    `int[]`/`float[]` atomic arm drives that loop: `cas @0`, `cas @0 nb0`, `cas @1`, `gAdd`, `gSet`, the three
+    `gOr`/`gAnd`/`gXor` forms, `cmpExch` and `weakCAS`, at both index parities. The Unsafe card records the
+    same loop being closed on silicon for widths 1 and 2; width 4 is closed now.
+  - **THE THREE ARMS THE INCREMENT TURNS ON ARE EXACT ON SILICON, which is the half that was SILENT before:**
+    `int[] cas @0 = true -2,20,30,40` (pre-fix a wrong `false` with the array untouched),
+    `int[] cas @0 nb0 = true -2,0,30,40` (pre-fix `true -2,-1,30,40`, the neighbour CLOBBERED), and
+    `int[] cas @1 = true 10,-3,30,40` (pre-fix an NPE from the alignment fault). Plus the two `putInt` arms
+    this increment also closed, `setVol = 10,-4,30,40` and `setRel = 10,20,-5,40`, which pre-fix wrote -1 over
+    the next element.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES, one binary on two machines:** batch 1 `+365blob`,
+    `rounds=34 pend=13983 reach=2297`, `n:imap=152 synth=0 clinits=102`, `gc=2`, `pb:probed=365 of=365` --
+    every counter identical to the QEMU arm, with the same EIGHT `INITIALIZER RUNNING UNDER THE LOADER LOCK`
+    classes in the same order (`AbstractStringBuilder`, `String`, `ArrayElemProbe`, `MethodHandleStatics`,
+    `Boolean`, **`java/lang/invoke/VarHandle`**, `sun/nio/cs/US_ASCII`, `sun/nio/cs/ISO_8859_1`).
+  - **AND THE `clinitBlocked` PREFIXES ARE PROVEN TO COVER THE `Array` CLASSES BY TWO ABSENCES:**
+    `UNRESOLVED NEW` reads **0**, so the `FORM = new VarForm(...)` in each of the nine never runs; and **no
+    `VarHandleInts$Array` or sibling appears in the `<clinit>`-under-lock list**, while stock
+    `java/lang/invoke/VarHandle` itself DOES -- which is exactly the split those prefixes are meant to make.
+  - **39 OF 39 MARKER PATTERNS AT ZERO, GREPPED ON DISK with the `FAULT` grep ANCHORED** -- `^FAIL ` and
+    **`NullPointerException`** among them, the latter being what the pre-fix odd-index CAS threw. The only two
+    reports are the known DENYLISTED ones (`CodingErrorAction.REPLACE`, `CharBuffer.wrap`), identical to QEMU,
+    with `TRAP-WIRED` 1 and `DENYLIST TRAP` 0 -- wired and never reached.
+  - **`gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`**, and the
+    seventeen-arm bootstrap battery entirely PASS before `launch`.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT: IT IS NOT THE SUITE.** `main=ArrayElemProbe` is ONE program
+    in ONE batch, so the 40 programs and `gc: collections=46` at the churn demo stay QEMU's for this increment
+    -- which matters more here than usual, because the FIELD path this change guards is what ForkJoinPool,
+    CompletableFuture and AtomicInteger run on, and only the suite exercises it. Hardware proves the FEATURE
+    and the retry loop; the no-regression half is the separate byte-exact suite candidate, already gated.
 
 - **BYTE-ARRAY-VIEW VarHandles RUN -- `DataInputStream.readInt()` HAD BEEN HALTING THE VM, AND THE SURFACE IS
   TWO METHODS RATHER THAN THE NINETY THE FIELD HANDLES NEEDED (2026-10-02, PI-VALIDATED).** The open item
