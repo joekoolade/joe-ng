@@ -115,6 +115,157 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **STOCK `java.util.HashMap` CALLS `Class.getGenericInterfaces()` WHENEVER A BIN TREEIFIES, AND THE OVERLAY
+  HAD DROPPED IT -- SO A TREEIFIED BIN HALTED THE VM (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  Named by `make overlaycheck-deep`, which is the only instrument that could see it: the one reachable caller
+  is STOCK java.base, exactly the population the shallow scan does not walk.
+  `HashMap.comparableClassFor(Object)` is reached from all three tree paths (`TreeNode.find`, `putTreeVal`,
+  `treeify`) and its body is:
+
+  ```java
+  if (x instanceof Comparable) {
+      if ((c = x.getClass()) == String.class) return c;     // bypass checks
+      if ((ts = c.getGenericInterfaces()) != null) { ... }
+  ```
+
+  | gate | before | after |
+  |---|---|---|
+  | **`TreeifyProbe`, 25 arms against the HOST ORACLE** | **the probe does not COMPILE -- javac refuses the member** | **25 of 25 BYTE-IDENTICAL** |
+  | **a treeified bin, Comparable non-String key** | **`VIRTUALRESOLVE FAILED` + `DENYLIST TRAP` -- THE VM HALTS at the NINTH put** | **`size=23 found=1 miss=1 repl=v7 read=w7 removed=1`** |
+  | the same bin with a NON-Comparable key | **passes** (`control size = 24 get(7) = v7`) | **passes -- UNMOVED** |
+  | `table[0]`'s class, read reflectively | -- | **`HashMap$TreeNode`, all three maps** |
+  | `LinkedHashMap` insertion order across a treeify | -- | **`0,1,...,23` exact** |
+  | erasures, in DECLARATION order | -- | `java.lang.Comparable` / `Marker,Comparable` / **empty, never null** |
+  | **demo suite, COMPLETE run** (`demo/MapDemo` gained a treeify arm) | -- | **40 programs**, **43 of 43 markers ZERO, GREPPED ON DISK** |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | deep-scan gaps / `java/lang/Class`'s share | 533 / 30 | **532 / 29** |
+  | image (same-build-path, probe excluded from BOTH arms) | 34,200,344 | **34,200,560 (+216 B, +0.0006%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE DEFECT WAS MEASURED BEFORE A LINE OF THE FIX WAS WRITTEN, and the trace names the whole path:**
+
+    ```
+      put 7 ok, size 8
+      VIRTUALRESOLVE FAILED java/lang/Class.getGenericInterfaces()[Ljava/lang/reflect/Type;
+    DENYLIST TRAP: call into a pruned (metal-absent) class
+      denied callee:                      <- EMPTY, TRAPWIRE index=-1: a LATE-RESOLUTION failure
+        at java/util/HashMap.comparableClassFor(HashMap.java:350)
+        at java/util/HashMap$TreeNode.treeify(HashMap.java:2094)
+        at java/util/HashMap.treeifyBin(HashMap.java:779)
+        at java/util/HashMap.putVal(HashMap.java:651)
+    ```
+
+    The overlay-drops-stock-members trap in a class EVERY CLOSURE CARRIES, and blaming a denylist
+    `java/lang/Class` is not on.
+  - **THE PRE-FIX MEASUREMENT HAD TO REACH THE GAP THROUGH STOCK java.base, because javac REFUSES the full
+    probe against the overlay** -- `cannot find symbol: method getGenericInterfaces()`, eight times. That is
+    the LUCKY form of this trap (the same gap reached from a pre-compiled stock caller is a halt instead),
+    and it is the `ByteViewProbe` pattern: a throwaway probe that names NO missing member, so it compiles as
+    the tree stands, gives the diagnosis outright. Deleted once the fix landed.
+  - **THAT PRE-FIX LOG IS THE NEGATIVE CONTROL AND THE DIAGNOSIS AT ONCE, which is why the arm ORDER was
+    chosen before the boot.** The non-Comparable arms run FIRST and print `control size = 24 get(7) = v7`
+    IMMEDIATELY BEFORE the halt -- so the collision setup is demonstrably right and the failure is isolated
+    to the Comparable case rather than to "the probe does not start". And the halt lands at the NINTH put
+    (`put 7 ok, size 8`, then the trap), which is `TREEIFY_THRESHOLD` to the entry.
+  - **WHY NOTHING HAD NOTICED, and it is two short-circuits rather than luck.** The `== String.class` line
+    returns before the call, and the `instanceof Comparable` above it returns before either. The condition is
+    a key that is **Comparable AND not a String**, in a bin of eight, at a table capacity of at least
+    `MIN_TREEIFY_CAPACITY` (64) -- below that HashMap resizes instead of treeifying. **`HashMap<Integer,...>`
+    is exactly that shape**, and so is any map keyed by an ordinary Comparable value class.
+  - **THE ERASURE IS A CORRECT ANSWER FOR THIS CALLER RATHER THAN A DEGRADATION, and it is the decision
+    already recorded for `Field.getGenericType` and `Method.getGenericParameterTypes`.** `comparableClassFor`
+    asks `t instanceof ParameterizedType` FIRST, which is false here, so it returns null -- whereupon HashMap
+    orders the tree by its OWN documented fallback, `tieBreakOrder` (identity hash), instead of by
+    `compareTo`. **`TreeNode.find` with a null `kc` searches BOTH subtrees** (read, not assumed), so every
+    lookup still succeeds; what differs is the tree's ORDER, which no caller can observe.
+  - **THE `instanceof ParameterizedType` ON THAT LINE IS AN instanceof AGAINST A DENIED CLASS, AND IT WAS
+    READ RATHER THAN ASSUMED -- it could have been a second gap behind this one and is not.**
+    `java/lang/reflect/ParameterizedType` falls under the blanket `java/lang/reflect/` deny (only `Type` is
+    narrowed out), so `typeOfClass` answers 0; `VM.instanceOf(ref, 0)` then takes the itable-dir walk, whose
+    loop is `while (type != 0)` and so never compares 0 to 0, and returns FALSE. The `(ParameterizedType) t`
+    checkcast on the same line is short-circuited away. **So the member was the only gap, and the post-fix
+    probe running to completion is what says so rather than the reading.**
+  - **THE ARMS ARE BEHAVIOUR, NOT TREE SHAPE, and that is forced rather than chosen:** `tieBreakOrder` is
+    keyed on `System.identityHashCode`, so the shape differs between two runs of the SAME binary and could
+    never be asserted. What IS asserted is that all 24 keys are found again, that a MISS answers null, that
+    an EQUAL key REPLACES rather than duplicates (a tree that could not find an existing key would insert a
+    second node and the size would grow), and that removal removes exactly one.
+  - **THE REFLECTIVE `table[0]` ARM IS WHAT STOPS THE PROBE BEING VACUOUS.** Stock exposes no API for "did
+    this bin treeify", so without it every behavioural arm would pass over a bin that never treeified at all
+    -- and a map that never treeifies is precisely the state the whole probe exists to leave. It reads
+    `HashMap.table` through `getDeclaredField` + `setAccessible`, which needs
+    `--add-opens java.base/java.util=ALL-UNNAMED` on the host control and no flag on metal.
+  - **THE HOST ORACLE CORRECTED MY EXPECTATION BEFORE ANY BOOT, for the Nth time:** I wrote `TreeNode` where
+    `getName()` gives `java.util.HashMap$TreeNode`, so the simple-name strip leaves `HashMap$TreeNode`. Three
+    arms, wrong `want`, no VM defect among them.
+  - **`LinkedHashMap` IS A STRONGER ASSERTION THAN ANY HashMap ARM CAN MAKE, which is why it is here:** it is
+    the same tree code with a linked list threaded across it, so a rotation that disturbed the list would show
+    in the insertion ORDER and nowhere else. `0,1,...,23` exact.
+  - **THE SUITE EXERCISES THE FEATURE, which is the inverse of the usual split in this file.** `demo/MapDemo`
+    gained a treeify arm -- a nested `Comparable` key, `hashCode()` 0, capacity 128, 24 puts -- so this is
+    gated by the boot suite rather than only by a probe, which is what a defect in STOCK `java.util.HashMap`
+    deserves. Its expected values were taken from a HOST run of the same sequence, not from my arithmetic.
+  - **THE CLOSURE A/B IS A MEASUREMENT, NOT AN ATTRIBUTION, because the control was built and booted.**
+    Control = the same tree with all three files stashed, built through the IDENTICAL target chain and booted
+    on the same host, so `ramfs/` matches to the byte:
+
+    | | control | fix | reading |
+    |---|---|---|---|
+    | batch 2 blobs | +357 | **+357** | ZERO new classes |
+    | batch 2 `pend` / `reach` | 13587 / 2249 | **13589 / 2250** | **`Class.getGenericInterfaces` becoming reachable** |
+    | batch 13 (MapDemo's) | +365blob, `n:imap=147` | **+366blob, `n:imap=148`** | **`demo/MapDemo$Key`** -- one class, one new itable |
+    | batch 64 blobs / `rounds pend reach` | +423 / 4 180 17 | **identical** | |
+    | batch 64 `memo` | 1150 | **1150** | **EQUAL -- the closure itself is identical** |
+    | batch 64 `res` / `unres` | 3032 / 2518 | 3060 / 2546 | +28 each: MapDemo's new call sites |
+    | batch 64 `n:imap synth clinits` / `pc:n` / `sy:n chg` | 158 60 101 / 110 / 74 0 | **identical** | |
+
+    **And the control's batch 2 reads 13587/2249 -- the figure this file already records for the previous
+    increment** -- which is what says the control is sound rather than merely available.
+  - **`reach` WENT UP BY ONE WITH ZERO NEW CLASSES, which is the SAFE direction** by this file's own
+    discriminator: `reach` is the MARKED SET, and a DROP is the danger (it once hid half a closure). One new
+    marked method on an already-pulled class is exactly what adding a reachable method looks like.
+  - **THE NORMALISED LOG DIFF IS 137 LINES OF ~1,100 AND EVERY FAMILY IS ACCOUNTED FOR:** 126 batch lines
+    (63 batches x 2, the counters above), 6 SMP-interleaving lines (`smp jobs`, `per-core tasks`,
+    `steps/core` -- recorded as differing on the SAME binary), the 1 NEW `treeify` arm, the 2 lisp-finale
+    `gc: collections` lines (55 against 57, which **may not be cited from QEMU** per the recorded A/A pair),
+    and 2 QEMU kill lines. **`gc: collections=46` at the churn demo is byte-identical**, which is the figure
+    the census established as the gate.
+  - **AND `diff` REPORTED ZERO DIFFERING LINES FIRST, which is the recorded trap walked into again:** `diff`
+    treats a UART log as BINARY and prints `Binary files ... differ`, so `grep '^[<>]'` found nothing -- a
+    comparison that reports zero on both sides is indistinguishable from one that did not run. `diff -a`.
+    This file records the same thing for `grep`; it is true of `diff` too, and I had it written down.
+  - **A BUILD-PATH TRAP, CAUGHT BY ARITHMETIC THAT DID NOT CLOSE.** The first control was a `git worktree` at
+    HEAD, and its image came out **12,008 bytes SMALLER for identical source**. Cause: a worktree carries
+    none of the GITIGNORED `ramfs/` content -- the WiFi config among it -- so it is a bad control for image
+    size AND for the WiFi finale. Discarded for a stash-in-the-main-tree control, which reproduces the
+    separately measured figure (34,200,344) TO THE BYTE.
+  - **IMAGE: +216 bytes for the member**, measured same-build-path with the probe excluded from BOTH arms. A
+    candidate-to-candidate comparison reads **+12,336** and that is NOT the feature: ~10.0 KB of it is the six
+    `TreeifyProbe` classes, which ship because a default-package probe lands in the classDir, and ~1.7 KB is
+    `MapDemo` + `MapDemo$Key`.
+  - **`getGenericSuperclass` IS DELIBERATELY NOT ADDED BESIDE IT, AND THAT WAS MEASURED RATHER THAN
+    OVERLOOKED:** the deep scan finds it referenced by NOTHING we ship (0 hits over `out/`, the RAMFS jars
+    and stock java.base). Shipping half a pair is how this family has cost a boot ten times, so the decision
+    is on the record instead of implicit.
+  - **THE MEMBER'S OTHER REFERRER IS `sun/reflect/annotation/TypeAnnotationParser`** -- stock's TYPE-annotation
+    parser, which this VM's SYNTHESISED annotation objects never enter (`buildAnnoObject`/`annoTibFor` build
+    them directly). **Stated as a reading rather than a denial**: that package carries no denylist entry of
+    its own, and `java/lang/reflect/` beneath it does.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** This is an overlay method and a
+    demo arm: no codegen, so the byte-for-byte self-hosting fixpoint cannot have moved.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The arms are guest-world reflection and object
+    arithmetic QEMU has already diffed byte-for-byte against a host oracle, so cold DRAM cannot change whether
+    a treeified bin finds its keys. What hardware is asked is a **216-byte layout shift** plus a WIDENED
+    `java/lang/Class` vtable -- a new public virtual on the class every mirror in both worlds shares, so
+    `vtparity`/`itparity` must still agree across the writer-baked and loader-built worlds, and a
+    disagreement prints UNGATED (the OK lines are `LOAD_LOG`-gated, so the absence of `DIFF` IS the
+    assertion). Plus `demo/MapDemo`'s treeify arm building an identity-hash-ordered red-black tree on cold
+    DRAM, under four cores.
+  - **NEXT, MEASURED RATHER THAN GUESSED, AND DELIBERATELY NOT BUNDLED: `java/util/Random.nextDouble()` is
+    referenced by `java/lang/Math`** -- so `Math.random()` traps today, the same shape one class along, with
+    `Random` overlaid and that member dropped. Two unvalidated changes on one card is what this file records
+    as forcing a bisect, so it gets its own probe and its own gate.
+
 - **`arrayElementVarHandle` RUNS, AND THE RECORDED HAZARD IT UNCOVERED WAS UNDERSTATED: AN `int[]` ELEMENT CAS
   WAS SILENTLY WRONG AT AN EVEN INDEX, NOT LOUDLY WRONG (2026-10-02, PI-VALIDATED).**
   The second of the two VarHandle gaps `overlaycheck-deep` named; with it both are closed. The FACTORY is the
