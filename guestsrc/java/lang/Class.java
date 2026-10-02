@@ -763,6 +763,44 @@ public final class Class<T> implements java.lang.reflect.Type
     /** VM native ({@code Loader.nativeBuf} -> {@code VMNatives.classIfaces}): mirror -> Class[]. */
     private static native Class<?>[] interfaces0(Class c);
 
+    /**
+     * The interfaces this class directly declares, as the ERASURES -- the same decision already recorded for
+     * {@code Field.getGenericType} and {@code Method.getGenericParameterTypes}: stock answers a
+     * {@code ParameterizedType} only where a {@code Signature} attribute is present, and this VM reads no
+     * generic signatures, so a {@code Class} (which IS a {@code Type}) is what each element holds.
+     *
+     * <p>NOT A REFLECTION NICETY -- STOCK {@code java.util.HashMap} CALLS THIS WHENEVER A BIN TREEIFIES.
+     * {@code comparableClassFor(Object)} is reached from all three of the tree paths and its body is
+     * {@code if ((c = x.getClass()) == String.class) return c; if ((ts = c.getGenericInterfaces()) != null)
+     * ...}. Dropped from this overlay the member CEASED TO EXIST, so a treeified bin halted the VM:
+     * {@code VIRTUALRESOLVE FAILED java/lang/Class.getGenericInterfaces()} and a {@code DENYLIST TRAP}
+     * blaming a list this class is not on. Nothing had noticed because the {@code == String.class} line
+     * short-circuits before the call and a non-Comparable key never gets past the {@code instanceof} above
+     * it -- the condition is a Comparable, non-String key in a bin of eight at a table capacity of at least
+     * 64, which {@code HashMap<Integer,...>} is.
+     *
+     * <p>THE ERASURE IS A CORRECT ANSWER FOR THAT CALLER, not a degradation: it asks
+     * {@code t instanceof ParameterizedType} first, which is false here, so it returns null and HashMap
+     * orders the tree by its OWN documented fallback ({@code tieBreakOrder}, on identity hash) instead of by
+     * {@code compareTo}. {@code TreeNode.find} with a null {@code kc} searches both subtrees, so every lookup
+     * still succeeds; what differs is the tree's ORDER, which no caller can observe.
+     *
+     * <p>A fresh {@code Type[]} is built rather than returning the {@code Class[]} through array covariance,
+     * for the reason {@code getGenericParameterTypes} records: that would lean on the VM's array-Type
+     * assignability for a cast the CALLER makes, and the loop costs no assumptions.
+     */
+    public java.lang.reflect.Type[] getGenericInterfaces()
+    {
+        Class<?>[] a = interfaces0(this);
+        int n = a == null ? 0 : a.length;
+        java.lang.reflect.Type[] out = new java.lang.reflect.Type[n];
+        for (int i = 0; i < n; i++)
+        {
+            out[i] = a[i];
+        }
+        return out;
+    }
+
     /** {@code com.x.Foo} -> the bytes of {@code Lcom/x/Foo;} -- the form the classfile stores. */
     private static byte[] annoDescriptorOf(Class<?> anno)
     {

@@ -101,5 +101,69 @@ public class MapDemo
         Magic.printStr("newKeySet remove=" + (ks2.remove("a") ? 1 : 0)
                 + " again=" + (ks2.remove("a") ? 1 : 0)
                 + " size=" + ks2.size() + " empty=" + (ks2.isEmpty() ? 1 : 0) + "\n");  // 1,0,1,0
+
+        // A TREEIFIED bin, which is the one HashMap path that calls back into reflection:
+        // comparableClassFor -> Class.getGenericInterfaces(). That member had been dropped from the Class
+        // overlay, so a bin of eight with a Comparable, non-String key HALTED THE VM -- stock java.util code,
+        // in a class every closure carries. Nothing had noticed because the `== String.class` line
+        // short-circuits before the call and a non-Comparable key never gets past the instanceof above it.
+        //
+        // Every Key hashes to 0, so all of them land in bucket 0 whatever the capacity; capacity 128 is above
+        // MIN_TREEIFY_CAPACITY (64), so the ninth put TREEIFIES instead of resizing. The arms are BEHAVIOUR,
+        // not tree shape: with the erasure answer comparableClassFor returns null and HashMap orders the tree
+        // by tieBreakOrder (identity hash), so the shape differs run to run and every lookup must still hold.
+        Map tm = new HashMap(128);
+        int n = 24;
+        for (int i = 0; i < n; i++)
+        {
+            tm.put(new Key(i), "v" + i);
+        }
+        boolean allFound = true;
+        for (int i = 0; i < n; i++)
+        {
+            if (!("v" + i).equals(tm.get(new Key(i))))
+            {
+                allFound = false;
+            }
+        }
+        Object repl = tm.put(new Key(7), "w7");             // an EQUAL key must REPLACE, not duplicate
+        boolean tRemoved = tm.remove(new Key(3)) != null;
+        Magic.printStr("treeify size=" + tm.size() + " found=" + (allFound ? 1 : 0)
+                + " miss=" + (tm.get(new Key(99)) == null ? 1 : 0)
+                + " repl=" + (String) repl + " read=" + (String) tm.get(new Key(7))
+                + " removed=" + (tRemoved ? 1 : 0) + "\n");   // 23,1,1,v7,w7,1
+    }
+
+    /**
+     * A key that is {@code Comparable} and is not a {@code String}: the one shape that reaches
+     * {@code HashMap.comparableClassFor}'s {@code getGenericInterfaces()} call. A fixed {@code hashCode}
+     * makes the collisions exact rather than arithmetic on the table size.
+     */
+    static final class Key implements Comparable<Key>
+    {
+        final int id;
+
+        Key(int id)
+        {
+            this.id = id;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return 0;
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            return (o instanceof Key) && ((Key) o).id == id;
+        }
+
+        @Override
+        public int compareTo(Key o)
+        {
+            return Integer.compare(id, o.id);
+        }
     }
 }
