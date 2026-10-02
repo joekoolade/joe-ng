@@ -80,6 +80,42 @@ public class FloatDemo
         Magic.printStr("f2i -1e30 = " + ((int) f(-1.0e30f)) + " (want -2147483648)\n");
         Magic.printStr("d2i NaN = " + ((int) d(d(0.0) / d(0.0))) + " (want 0)\n");
         Magic.printStr("f2i 2.5 / 2 = " + (((int) f(2.5f)) / 2) + " (want 1)\n");
+
+        // Random's FLOATING-POINT draws, which are the one place in this VM where a double is produced by
+        // library arithmetic rather than by a literal. nextDouble() had been DROPPED from the java/util/Random
+        // overlay, so java.lang.Math.random() -- which is literally that call -- HALTED THE VM.
+        //
+        // The arms are RAW BITS for a FIXED SEED, because this class promises a sequence bit-for-bit the
+        // JDK's: there is exactly one right answer and a rendered decimal could round a one-ULP error away.
+        // The wants came from a host run of the same sequence, not from arithmetic here.
+        java.util.Random rnd = new java.util.Random(42L);
+        double rd0 = rnd.nextDouble();
+        double rd1 = rnd.nextDouble();
+        Magic.printStr("rnd d0bits = " + Double.doubleToRawLongBits(rd0)
+                + " (want 4604728530581845079)\n");
+        Magic.printStr("rnd d1bits = " + Double.doubleToRawLongBits(rd1)
+                + " (want 4604329149490933249)\n");
+        java.util.Random rndf = new java.util.Random(42L);
+        Magic.printStr("rnd f0bits = " + Float.floatToRawIntBits(rndf.nextFloat())
+                + " (want 1060782493)\n");
+
+        // THE DRAW COUNT, which no value arm can see: nextDouble() takes TWO LCG steps (a double has 53
+        // significand bits and next() yields at most 32) and each nextInt() takes one, so the two states must
+        // agree. A one-draw implementation produces a uniform double in range and leaves the stream wrong.
+        java.util.Random rx = new java.util.Random(7L);
+        rx.nextDouble();
+        java.util.Random ry = new java.util.Random(7L);
+        ry.nextInt();
+        ry.nextInt();
+        Magic.printStr("rnd steps2 = " + (rx.nextInt() == ry.nextInt() ? "true" : "false")
+                + " (want true)\n");
+
+        // Math.random() is UNSEEDED, so only its range and its liveness can be asserted -- and reaching it
+        // at all is the point: this is the call that trapped.
+        double m0 = Math.random();
+        double m1 = Math.random();
+        Magic.printStr("Math.random = " + ((m0 >= 0.0 && m0 < 1.0 && m1 >= 0.0 && m1 < 1.0) ? 1 : 0)
+                + " differs = " + (m0 != m1 ? 1 : 0) + " (want 1, 1)\n");
     }
 
     // Opaque to javac's constant folding, so each conversion is a real runtime f2i/d2i/idiv.

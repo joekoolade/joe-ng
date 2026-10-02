@@ -115,8 +115,187 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`Math.random()` HALTED THE VM -- `Random.nextDouble()` WAS DROPPED FROM THE OVERLAY (2026-10-02,
+  PI-VALIDATED).** Named by `make overlaycheck-deep` on the previous increment's own
+  card and MEASURED before a line of the fix was written. `java.lang.Math.random()` is literally
+  `RandomNumberGeneratorHolder.randomNumberGenerator.nextDouble()`, and `StrictMath.random()` is the same, so
+  a member a name-winning overlay does not declare took the commonest random call in Java with it.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`RandomFpProbe`, 19 arms against the HOST ORACLE** | **the member does not COMPILE** | **19 of 19 BYTE-IDENTICAL, and ZERO stated divergences** |
+  | **`Math.random()`** | **`VIRTUALRESOLVE FAILED` + `DENYLIST TRAP` -- THE VM HALTS** | **in range, two calls differ** |
+  | `StrictMath.random()` | the same halt | **in range** |
+  | `new Random(42).nextDouble()` raw bits, three in a row | **the member does not exist** | **`3fe74833a06ff457` / `3fe5dcf778622e01` / `3fd3c20f3f12bbb4`** |
+  | `new Random(42).nextFloat()` raw bits, two in a row | -- | **`3f3a419d` / `3d5fe8a0`** |
+  | **the DRAW COUNT: `nextDouble` = 2 LCG steps, `nextFloat` = 1** | -- | **exact, with a NEGATIVE for each** |
+  | the second draw is really there (low 27 bits of `d * 2^53`) | -- | **non-zero within 100 draws** |
+  | `nextFloat() == (float) nextDouble()` | -- | **false -- they are different algorithms** |
+  | `Random`'s own `<clinit>` | none | **still NONE** -- `javap`'d on the overlay's own class file |
+  | **demo suite, COMPLETE run** (`demo/FloatDemo` gained five arms) | -- | **40 programs**, **43 of 43 markers ZERO, GREPPED ON DISK** |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | deep-scan gaps / `java/util/Random`'s share | 532 / 10 | **530 / 8** |
+  | image (same-build-path, both probes excluded from BOTH arms) | 34,202,328 | **34,202,560 (+232 B, +0.0007%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE DEFECT WAS MEASURED FIRST, AND THE HALT IS AT THE LAST STEP RATHER THAN THE FIRST:**
+
+    ```
+      *** INITIALIZER RUNNING UNDER THE LOADER LOCK: java/lang/Math$RandomNumberGeneratorHolder ***
+      VIRTUALRESOLVE FAILED java/util/Random.nextDouble()D
+    DENYLIST TRAP: call into a pruned (metal-absent) class
+      denied callee:                      <- EMPTY, TRAPWIRE index=-1: a LATE-RESOLUTION failure
+        at java/lang/Math.random(Math.java:897)
+    ```
+
+    `Math$RandomNumberGeneratorHolder.<clinit>` RAN -- so the holder initialises, the `Random` is
+    CONSTRUCTED, and the failure is the one dispatch at the end. The overlay-drops-stock-members trap again,
+    blaming a list `java/util/Random` is not on.
+  - **THE PRE-FIX PROBE'S CONTROLS PASS IMMEDIATELY BEFORE THE HALT, which is what isolates the gap to this
+    one member rather than to `Math` or to the LCG:** `abs(-7) = 7 max = 9 min = 3`, then
+    `nextInt() = -1170105035 nextInt(100) = 63 nextBoolean = true` -- the overlay's existing members, in the
+    JDK's own sequence for seed 42. Then the trap. As with the treeify increment, the full probe cannot
+    COMPILE against the overlay (javac refuses the member), so the pre-fix measurement had to reach the gap
+    THROUGH stock `java.lang.Math`.
+  - **TWO DRAWS, NOT ONE, AND THAT IS THE HALF A VALUE ARM CANNOT CHECK.** A double has 53 significand bits
+    and `next` yields at most 32, so stock takes `next(26) << 27` plus `next(27)` and scales by 2^-53. A
+    single 32-bit draw scaled by 2^-32 is a perfectly uniform double in [0,1) and leaves the stream at the
+    WRONG STATE, so every later draw is wrong -- arbitrarily far from the cause. The probe asserts the state
+    after a draw against a reference `Random` advanced by the same number of `nextInt()` calls (each is one
+    LCG step), **which needs no host-specific constant** and therefore fails for the same reason in both
+    worlds, plus a NEGATIVE arm (one `nextDouble` must NOT leave the state one `nextInt` would) so the
+    positive is not vacuous.
+  - **AND A STRUCTURAL ARM FOR THE SECOND DRAW SPECIFICALLY:** `d * 2^53` is an exact integer, so an
+    implementation keeping only `next(26) << 27` would leave its low 27 bits ZERO on every draw. One draw in
+    a hundred with non-zero low bits is what says the second `next` is really there -- which the bit-exact
+    arms would also catch, but this one says WHY.
+  - **`nextFloat()` RIDES ALONG, AND THE ASYMMETRY IS THE POINT.** A float has 24 significand bits, so stock
+    is a SINGLE draw scaled by 2^-24 -- not `(float) nextDouble()`, which would consume two steps and answer
+    a different value. The arm `nextFloat() == (float) nextDouble()` reads **false** and is what catches that
+    lazy definition; every other arm passes under it. It is included rather than deferred because it is a
+    stock DECLARATION, the same `next(bits)` foundation, one line, and free to get exactly right while the
+    probe is open.
+  - **RAW BITS RATHER THAN RENDERED VALUES, deliberately.** This class promises a sequence bit-for-bit the
+    JDK's for a given seed, so a seeded draw has ONE right answer; comparing `Double.toString(d)` would also
+    be testing the formatter and could round a one-ULP error away. The seven expected constants came from a
+    HOST run of the probe's own sequence, not from arithmetic here.
+  - **NO `<clinit>` APPEARED, AND THAT WAS VERIFIED RATHER THAN ASSUMED -- it is load-bearing.** `DOUBLE_UNIT`
+    (`0x1.0p-53`) and `FLOAT_UNIT` (`0x1.0p-24f`) are COMPILE-TIME CONSTANTS (JLS 4.12.4), so javac inlines
+    them as `ldc2_w`/`ldc` and the overlay still has no initializer -- which matters because one here would
+    have to RUN on metal for a class that sits in many closures, and this overlay has never had one.
+  - **AND `javap` LIED THE FIRST TIME, which is the recorded `oracleIsTheJdk` trap from a new direction.**
+    `javap -p -c -cp out java.util.Random` reports a `static {}` full of `AtomicLong`, `ObjectStreamField`
+    and `Unsafe.objectFieldOffset` -- that is the SEED JDK's `java.util.Random`, because java.base is a NAMED
+    module and the boot loader wins over `out/`. Had I trusted it I would have "found" an initializer the
+    overlay does not have. **`javap` the class FILE (`out/java/util/Random.class`), never the class NAME.**
+  - **EVERY OPCODE THE TWO BODIES EMIT WAS CHECKED AGAINST THE JIT RATHER THAN ASSUMED:** `i2l`, `lshl`,
+    `ladd`, `l2d`, `dmul`, `dreturn`, `i2f`, `fmul`, `freturn` -- all lowered in `compiler/Baseline`. Worth a
+    grep because these are the first FP bodies this overlay has had, and `l2d` in particular is a conversion
+    nothing else in `java/util` reaches.
+  - **THE SUITE EXERCISES THE FEATURE, not merely the layout.** `demo/FloatDemo` gained five arms -- two
+    bit-exact seeded doubles, a bit-exact seeded float, the draw-count equality, and `Math.random`'s range
+    plus liveness -- so this is gated by the boot suite, which is what a defect in `Math.random()` deserves.
+    Their wants came from a host run of the same sequence.
+  - **`nextGaussian` AND `nextExponential` ARE MEASURED OUT, AND MY FIRST REASON FOR LEAVING THEM OUT WAS
+    WRONG.** I was about to record "they need `StrictMath.sqrt`/`log`, two natives this VM does not have".
+    **Read from the JDK 26 source instead: both are PURE JAVA there** (`FdLibm.Sqrt.compute`/
+    `FdLibm.Log.compute`), and `jdk/internal/math` carries no denial -- so feasibility was never the
+    objection. The real one is REACHABILITY: the deep scan finds `nextGaussian`/`nextExponential` referenced
+    by **NOTHING we ship** (0 hits over `out/`, the RAMFS jars and stock java.base). They would also add two
+    instance fields and a rejection loop to a class `SecureRandom` extends. Left open, as the recorded rule
+    prefers over an unmeasured answer.
+  - **THE EIGHT `Random` GAPS THAT REMAIN ARE A DIFFERENT KIND, and that was read off the stock source.**
+    `nextInt(II)`, `nextLong(J)`, `nextLong(JJ)`, `nextDouble(D)`, `nextDouble(DD)`, `nextFloat(F)`,
+    `nextFloat(FF)` are `RandomGenerator` DEFAULT methods that stock `Random` **does not declare** -- the
+    deep scan names `java/util/Random` as their owner only because `ThreadLocalRandom extends Random` and
+    javac records the class it resolved through. Their only referrer is `ThreadLocalRandom`, nothing reached
+    calls them, and stock implements them through `RandomSupport.boundedNext*`, whose rejection logic would
+    have to be ported exactly against this class's bit-exactness promise. Porting that for no measured
+    consumer is the unmeasured complexity this file rejects; the `(Void)` constructor belongs to
+    `Random$RandomWrapper` and is in the same category.
+  - **THE CLOSURE A/B IS A MEASUREMENT, with the control built and booted:** control = the same tree with
+    `guestsrc/java/util/Random.java` and `guestsrc/demo/FloatDemo.java` stashed and the probe out of
+    `JDKTESTS`, through the IDENTICAL target chain so `ramfs/` matches to the byte.
+
+    | | control | fix | reading |
+    |---|---|---|---|
+    | batch 2: EVERY counter but one | -- | **identical** | |
+    | batch 2 `ps:... tab` | 1183 | **1185** | **+2 STATIC CELLS -- the two constants** |
+    | **batch 6** (`demo/FloatDemo`'s) blobs | +353 | **+356** | **+3 classes, and the arm is what pulls them** |
+    | batch 6 `reach` / `pend` / `clinits` | 2227 / 13254 / 100 | 2261 / 13628 / **102** | the new classes' methods marked |
+    | batches 7-21 blobs | -- | **+3 each** | the loader shares state across programs |
+    | batches 22-64 blobs | -- | **identical** | the episode is over |
+    | batch 64 `+blob` / `rounds pend reach` / `memo res unres` / `n:imap synth clinits` / `pc:n` / `sy:n chg` | -- | **ALL IDENTICAL** | every closure, marking and patch counter |
+    | batch 64 `tab` / `jf:n` / `rb:n` / `fp:n` / `deny` / `scan` | 1224 / 883 / 24059 / 46432 / 482k / 74144k | 1226 / 889 / 24145 / 46988 / 486k / 75590k | cumulative WORK counters carrying the +3 episode's offset |
+
+  - **AND A CORRECTION TO MY OWN FIRST READING OF THAT TABLE, caught by diffing FIELD BY FIELD rather than by
+    grepping the counters I expected to move.** I had written that batch 64 was byte-identical; it is not --
+    `tab`, `jf:n`, `rb:n`, `fp:n`, `deny` and `scan` all move. What IS identical is every CLOSURE, MARKING and
+    PATCH counter, which is the claim that matters and is a narrower one. A grep for the fields you predict
+    will move cannot tell you about the ones you did not predict.
+  - **THE +2 STATIC CELLS ARE THE RECORDED MECHANISM MEASURED AGAIN, and they are the one cost of writing the
+    scaling factors as named constants.** A dense static block keys EVERY DECLARED static, so `DOUBLE_UNIT`
+    and `FLOAT_UNIT` get cells no instruction ever loads -- exactly what the `String.format` increment
+    recorded for its seven flag constants ("the mechanism charges for a DECLARATION, not for a read"). It is
+    visible from batch 2, BEFORE `FloatDemo` runs, with `+357blob` and every other counter unchanged, so the
+    attribution is a measurement rather than a reading. 16 bytes of cells; worth it for two named constants,
+    and worth knowing because the same two lines do NOT create a `<clinit>`.
+  - **ONE COUNTER MOVES IN THE DANGEROUS DIRECTION AND IS STATED RATHER THAN ROUNDED AWAY: `reach` at batch
+    22 goes 2228 -> 2223.** `reach` is the MARKED SET and a DROP is the shape this file records as having
+    hidden half a closure once. The reading, consistent with the evidence rather than isolated: `reach` is
+    PER BATCH, work moved EARLIER (batch 6 is +34), `markSettled` skips a class an earlier batch already
+    settled, and batch 64 is identical. **What says nothing was LOST is not that argument but the sweep**:
+    43 markers zero with no `VIRTUALRESOLVE FAILED`, and the normalised log diff carries NO differing
+    program-output line at all beyond the five new arms.
+  - **THE NORMALISED LOG DIFF IS 143 LINES OF ~1,100 AND EVERY FAMILY IS ACCOUNTED FOR:** 126 batch lines
+    (63 x 2, the counters above), 8 SMP-interleaving lines (recorded as differing on the SAME binary), the 5
+    NEW arms, the 2 lisp-finale `gc: collections` lines (57 against 56, which **may not be cited from QEMU**
+    per the recorded A/A pair), and 2 QEMU kill lines. **No other program output differs by a byte**, and
+    `gc: collections=46` at the churn demo is identical -- the figure the census established as the gate.
+  - **THE THREE CLASSES AT BATCH 6 ARE NOT FULLY NAMED, and I am not going to invent the third.**
+    `java/util/Random` is one and `java/lang/Math$RandomNumberGeneratorHolder` is another -- the latter by
+    name, from the pre-fix probe's own `INITIALIZER RUNNING UNDER THE LOADER LOCK` line. The third is
+    unidentified; `load` lines are `LOAD_LOG`-gated, so naming it costs a boot and buys nothing here.
+  - **`compiler: 40 checks` HOLDING IS THE ASSERTION FOR THE WRITER HALF.** Two overlay methods and a demo
+    arm: no codegen, so the byte-for-byte self-hosting fixpoint cannot have moved.
+  - **NOT PI-VALIDATED, AND THE GATE IS NAMED IN ADVANCE.** The arms are 48-bit integer arithmetic and two
+    FP multiplies that QEMU has already diffed byte-for-byte against a host oracle, so cold DRAM cannot
+    change whether seed 42 yields `3fe74833a06ff457`. What hardware is asked is a **232-byte layout shift**
+    plus the first `l2d`/`dmul`/`i2f`/`fmul` sequence this overlay has ever emitted, running on silicon where
+    `CPACR_EL1.FPEN` and the FP register save/restore across the scheduler are real rather than emulated --
+    and `demo/FloatDemo` is IN the suite, so the bit-exact arms are what a Pi boot would read.
+  - **PI-VALIDATED (2026-10-02, `core 166MHz`, full suite, ONE flash for this card AND the treeify card below
+    -- each had its own QEMU gate and probe, so they are separable; neither card's figures are from a solo
+    boot).** The five `demo/FloatDemo` arms are exact on silicon: `rnd d0bits = 4604728530581845079`,
+    `rnd d1bits = 4604329149490933249` (`3fe74833a06ff457` / `3fe5dcf778622e01`), `rnd f0bits = 1060782493`
+    (`3f3a419d`), `rnd steps2 = true`, `Math.random = 1 differs = 1`. The FP arms around them hold too
+    (`f2i`/`d2i` canonicalisation, `MIN/-1 >> 1 = -1073741824`), so the first `l2d`/`dmul`/`i2f`/`fmul`
+    sequence this overlay emits runs correctly with real `CPACR_EL1.FPEN` and FP state across a preemptive
+    four-core scheduler.
+  - **PROVENANCE IS THIS CARD'S OWN COUNTERS, named in advance:** batch 2 `tab=1185` (+2 cells over the
+    control's 1183), batch 6 `+356blob rounds=44 pend=13628 reach=2261 clinits=102` (control `+353`/
+    `2227`/`100`), and batch 64 `tab=1226 jf:n=889 deny=486k` (control `1224`/`883`/`482k`) -- every one
+    the fix arm's QEMU figure. Batch 22 reads `reach=2223`, the same dangerous-direction drop the QEMU A/B
+    recorded, reproducing on hardware -- and every program after it runs clean.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES with the recorded 3/3/1 split:** batch 64 `+423blob`,
+    `rounds=4 pend=180 reach=17`, `memo=1150`, `n:imap=158 synth=60 clinits=101`, and
+    `res=3057 unres=2543 pc:n=109` against QEMU's `3060 / 2546 / 110`.
+  - **THE GATE IS UNMOVED:** `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`,
+    then `55` at the lisp finale; `lisp evals=600 result=610 stable=1`, `sum20 = 210`, `sha256 clone =
+    44cae.../fork-ok`, `bakeMemosDropped=18`, `sync: static seen=18 nomonitor=0`. Plus what QEMU cannot
+    show: `SMP: 4 of 4`, `jobs/core 6/6/6/6`, **`ticks/core c1=50 c2=50 c3=50`**, `sched: 89 preemptions`,
+    `smp sched: 4 of 4`, `smp gc: idleRoots=3/3 marked=0 idleGc=0`, `steps/core 61/60/59/60`,
+    `finish HML` 20/20/20, inversion `HIGH blocked 60ms`, the seventeen-arm boot battery all PASS, ExcDemo's
+    seven-frame trace, `hw rng: RNG200 live` with `two instances differ`, and WPA2 -> DHCP 192.168.1.247 ->
+    DNS -> **`HTTP/1.1 200 OK`, 891 bytes** (example.com changed again: `Last-Modified` 2026-10-02
+    16:11:02 GMT -- the remote page, not the VM), ending `self-build retired`.
+  - **NAMED ABSENCES HOLD:** no `FAULT`, `BOOT RE-ENTERED`, `VIRTUALRESOLVE FAILED`, `DENYLIST TRAP`,
+    `LINK FAILED` or parity `DIFF`; the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines are the known ones,
+    each labelled DENYLISTED. **STATED LIMIT: READ off the pasted capture, not grepped on disk.**
+  - **RNG sample, by position:** `35fc31e7 fdb8eec0 130d57ca`, `count 16 -> 13`, popcount 51 of 96.
+
 - **STOCK `java.util.HashMap` CALLS `Class.getGenericInterfaces()` WHENEVER A BIN TREEIFIES, AND THE OVERLAY
-  HAD DROPPED IT -- SO A TREEIFIED BIN HALTED THE VM (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).**
+  HAD DROPPED IT -- SO A TREEIFIED BIN HALTED THE VM (2026-10-02, PI-VALIDATED).**
   Named by `make overlaycheck-deep`, which is the only instrument that could see it: the one reachable caller
   is STOCK java.base, exactly the population the shallow scan does not walk.
   `HashMap.comparableClassFor(Object)` is reached from all three tree paths (`TreeNode.find`, `putTreeVal`,
@@ -261,6 +440,11 @@ defines the minimum the assembler must encode.
     disagreement prints UNGATED (the OK lines are `LOAD_LOG`-gated, so the absence of `DIFF` IS the
     assertion). Plus `demo/MapDemo`'s treeify arm building an identity-hash-ordered red-black tree on cold
     DRAM, under four cores.
+  - **PI-VALIDATED (2026-10-02, the same flash as the `Math.random()` card above -- full figures there):**
+    `treeify size=23 found=1 miss=1 repl=v7 read=w7 removed=1`, exact on silicon, and no parity `DIFF`
+    anywhere in the boot, so the widened `java/lang/Class` vtable agrees across both worlds on hardware.
+    Batch 13 reads `+369blob n:imap=148` (MapDemo's `Key` class, one itable), and `gc: collections=46` at
+    the churn demo is unmoved.
   - **NEXT, MEASURED RATHER THAN GUESSED, AND DELIBERATELY NOT BUNDLED: `java/util/Random.nextDouble()` is
     referenced by `java/lang/Math`** -- so `Math.random()` traps today, the same shape one class along, with
     `Random` overlaid and that member dropped. Two unvalidated changes on one card is what this file records
