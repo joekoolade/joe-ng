@@ -2041,7 +2041,29 @@ public final class Loader
         // java/lang/invoke/VarHandle itself -- whose <clinit> we DO want (it sets $assertionsDisabled, and
         // leaving that false enables stock's own asserts, the AbstractStringBuilder hazard this file
         // records) -- and VarHandle$AccessMode, whose constants a later toMethodHandle arm would want.
-        return utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBooleans"))
+        // THE BYTE-ARRAY-VIEW FAMILY, blocked by ONE prefix because the whole family wants it -- the six
+        // VarHandleByteArrayAs{Ints,Longs,Shorts,Chars,Floats,Doubles} outer classes, their nested
+        // ArrayHandle/ByteBufferHandle/ByteArrayViewVarHandle, and VarHandleByteArrayBase. Two separate
+        // reasons, and both were read rather than assumed:
+        //
+        //   (1) Each ArrayHandle's <clinit> is `FORM = new VarForm(...)`, exactly like the nine field width
+        //       classes above, and VarForm is DENIED. Same measured-safe argument: vform is read at three
+        //       sites in stock VarHandle, none on the access path.
+        //
+        //   (2) The OUTER class's <clinit> is three statics -- NIO_ACCESS = SharedSecrets.getJavaNioAccess(),
+        //       SCOPED_MEMORY_ACCESS = ScopedMemoryAccess.getScopedMemoryAccess(), and ALIGN. The first two
+        //       serve only the ByteBuffer handle, which nothing here can reach (joe-ng implements
+        //       byteArrayViewVarHandle and NOT byteBufferViewVarHandle). ALIGN is the one an ArrayHandle
+        //       reads, in its bounds check -- and it is `Integer.BYTES - 1`, a compile-time constant
+        //       expression (JLS 15.28) that javac INLINES. VERIFIED WITH javap -c, not inferred: `index`
+        //       opens `iload_1; aload_0; arraylength; iconst_3; isub` with no getstatic ALIGN anywhere. So
+        //       nothing on the access path reads a static of the outer class and blocking it costs nothing.
+        //
+        // A bare "VarHandleByteArray" prefix is safe where a bare "VarHandle" one is not: it cannot catch
+        // stock java/lang/invoke/VarHandle (whose <clinit> we DO want) and it cannot catch VarHandleBytes --
+        // that name diverges at the 'A' of "...ByteArray" vs the 's' of "...Bytes".
+        return utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleByteArray"))
+                || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBooleans"))
                 || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleBytes"))
                 || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleChars"))
                 || utf8HasPrefix(gbase, gThisNameOff, Magic.bytes("java/lang/invoke/VarHandleDoubles"))

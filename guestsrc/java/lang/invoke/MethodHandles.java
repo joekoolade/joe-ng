@@ -11,6 +11,9 @@
  */
 package java.lang.invoke;
 
+import java.nio.ByteOrder;
+import java.util.Objects;
+
 import jdk.internal.misc.Unsafe;
 
 /**
@@ -135,5 +138,78 @@ public final class MethodHandles
         if (type == float.class)   { return new VarHandleFloats.FieldInstanceReadWrite(recv, off); }
         if (type == double.class)  { return new VarHandleDoubles.FieldInstanceReadWrite(recv, off); }
         return new VarHandleReferences.FieldInstanceReadWrite(recv, off, type);
+    }
+
+    /**
+     * A VarHandle viewing a {@code byte[]} as an array of a WIDER primitive -- stock's own
+     * {@code byteArrayViewVarHandle}, which this name-winning overlay had silently dropped.
+     *
+     * <p>WHY IT MATTERS, measured rather than asserted: every multi-byte read on a stock
+     * {@code java.io.DataInputStream} goes {@code readInt -> jdk.internal.util.ByteArray.getInt -> } one of
+     * these handles, and {@code ByteArray.<clinit>} builds all six through this method. Without it
+     * {@code DataInputStream.readInt()} HALTED THE VM -- confirmed on QEMU before this was written:
+     * {@code LINK FAILED: java/lang/invoke/MethodHandles.byteArrayViewVarHandle(...)} followed by a
+     * {@code DENYLIST TRAP} blaming a list {@code MethodHandles} is not even on, which is the
+     * overlay-drops-stock-members trap this file records more than any other. {@code DataOutputStream}'s
+     * {@code write*} family and {@code jdk.internal.util.ByteArrayLittleEndian} go the same way.
+     *
+     * <p>THE SURFACE IS TWO METHODS, AND THAT IS READ OFF THE SHIPPED CLASS RATHER THAN ASSUMED.
+     * {@code javap -s -p} on each generated {@code ArrayHandle} lists exactly {@code index}, {@code get} and
+     * {@code set}: an unaligned {@code byte[]} view has NO atomic access modes at all -- every
+     * {@code getVolatile}/{@code compareAndSet}/{@code getAndAdd} in the template belongs to the sibling
+     * {@code ByteBufferHandle}, which nothing here reaches. So unlike the field handles there is no
+     * half-working atomic half to state a limit about; the whole surface either works or does not.
+     *
+     * <p>NO {@code maybeAdapt}, deliberately: stock wraps the result in one, and that method returns its
+     * argument unchanged unless the {@code VAR_HANDLE_IDENTITY_ADAPT} debug property is set. Its adapting
+     * arm needs {@code filterValue}/{@code MethodHandles.identity}, i.e. the MethodHandle runtime this VM
+     * does not carry -- so copying it would add an unreachable path that could only ever trap.
+     *
+     * <p>WHY THE OUTER CLASS'S {@code <clinit>} IS NOT NEEDED, which is what keeps this small. Those classes
+     * hold three statics -- {@code NIO_ACCESS} (via {@code SharedSecrets.getJavaNioAccess()}),
+     * {@code SCOPED_MEMORY_ACCESS} and {@code ALIGN} -- and the first two serve only the ByteBuffer handle.
+     * {@code ALIGN} is the one an {@code ArrayHandle} reads, in its bounds check, and it is
+     * {@code Integer.BYTES - 1}: a compile-time constant expression (JLS 15.28), so javac INLINES it.
+     * Verified with {@code javap -c}, not inferred -- {@code index} opens
+     * {@code iload_1; aload_0; arraylength; iconst_3; isub}, with no {@code getstatic ALIGN} anywhere. So the
+     * whole {@code VarHandleByteArray*} family is {@code clinitBlocked} and nothing on the access path reads
+     * a static of it.
+     *
+     * @throws IllegalArgumentException      if {@code viewArrayClass} is not an array (stock's exception)
+     * @throws UnsupportedOperationException if its component is not one of short/char/int/long/float/double
+     */
+    public static VarHandle byteArrayViewVarHandle(Class<?> viewArrayClass, ByteOrder byteOrder)
+    {
+        Objects.requireNonNull(byteOrder);
+        return forByteArrayView(viewArrayClass, byteOrder == ByteOrder.BIG_ENDIAN);
+    }
+
+    /**
+     * Stock {@code VarHandles.byteArrayViewHandle}, one branch per generated class.
+     *
+     * <p>{@code byte} and {@code boolean} are ABSENT ON PURPOSE and that is stock's behaviour, not a gap: a
+     * one-byte view of a {@code byte[]} has nothing to do, so the JDK generates no such {@code ArrayHandle}
+     * and throws here. Answering a plausible handle instead would be the silent-wrong-answer shape rule 3
+     * exists to remove.
+     *
+     * <p>{@code getComponentType()} IS LOAD-BEARING, and it only started working one increment ago: it
+     * answered NULL for every primitive array until 2026-09-30, which is also what made
+     * {@code Unsafe.arrayIndexScale(byte[].class)} answer 8. So this factory was not implementable before
+     * that fix, whatever the dispatch could do.
+     */
+    private static VarHandle forByteArrayView(Class<?> viewArrayClass, boolean be)
+    {
+        if (!viewArrayClass.isArray())
+        {
+            throw new IllegalArgumentException("not an array: " + viewArrayClass);
+        }
+        Class<?> c = viewArrayClass.getComponentType();
+        if (c == long.class)   { return new VarHandleByteArrayAsLongs.ArrayHandle(be); }
+        if (c == int.class)    { return new VarHandleByteArrayAsInts.ArrayHandle(be); }
+        if (c == short.class)  { return new VarHandleByteArrayAsShorts.ArrayHandle(be); }
+        if (c == char.class)   { return new VarHandleByteArrayAsChars.ArrayHandle(be); }
+        if (c == double.class) { return new VarHandleByteArrayAsDoubles.ArrayHandle(be); }
+        if (c == float.class)  { return new VarHandleByteArrayAsFloats.ArrayHandle(be); }
+        throw new UnsupportedOperationException();
     }
 }
