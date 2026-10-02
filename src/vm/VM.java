@@ -422,6 +422,12 @@ public final class VM
     // between-batch demand-load heap reclaim only rewinds ITS arena. (It was briefly off during embed-all
     // bring-up, when a single shared bump heap made the reclaim unsafe under the secondaries.)
     static final boolean SMP_ENABLED = true;
+    /**
+     * Tag on a JIT handler's catch-type word meaning "the low bits are the catch class's Utf8 NAME, resolve at
+     * match time" rather than a Type. A Type node is never this high (the address space is far below 2^62), and
+     * 0 already means catch-all, so the three cases cannot be confused. See {@code VMUnwind.findHandlerIn}.
+     */
+    static final long CATCH_BY_NAME = 1L << 62;
     static final long CORE_FLAGS = 0x0304_0000L;          // coreUp[core] lives at CORE_FLAGS + core*8 (above the image)
     // Fixed runtime scratch, relocated to the 48-64 MiB band. The embedded image now carries ALL of
     // java.base (~29 MiB from 0x80000), so the old 7.4 MiB cluster fell INSIDE the image; these addresses

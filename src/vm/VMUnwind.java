@@ -470,7 +470,17 @@ final class VMUnwind
             if (pc >= Magic.load64(e) && pc < Magic.load64(e + 8L))
             {
                 long catchType = Magic.load64(e + 24L);
-                if (catchType == 0L || instanceOf(exc, catchType) != 0)
+                if (catchType == 0L)
+                {
+                    return Magic.load64(e + 16L);       // catch-all: a finally, or catch_type 0
+                }
+                if ((catchType & CATCH_BY_NAME) != 0L)
+                {
+                    // Unresolved when the method compiled: resolve NOW, by name. Not registered means no match
+                    // (see Loader.catchTypeByName) -- never "catch everything", which is what 0 used to say.
+                    catchType = Loader.catchTypeByName(catchType & ~CATCH_BY_NAME);
+                }
+                if (catchType != 0L && instanceOf(exc, catchType) != 0)
                 {
                     return Magic.load64(e + 16L);
                 }

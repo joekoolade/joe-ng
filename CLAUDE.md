@@ -115,6 +115,65 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **THE `java/io/PrintStream` OVERLAY IS DELETED AND STOCK RUNS -- AND GETTING THERE FOUND TWO PRE-EXISTING
+  VM BUGS: A CATCH CLAUSE NAMING A DENIED CLASS CAUGHT EVERYTHING, AND PHASE-A CELLS LEAKED ACROSS A LOADER
+  RESET (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).** Stock `PrintStream` has ZERO natives, so it had no
+  business being overlaid. `System.out`/`err` are now stock `PrintStream`s over a UART `OutputStream`, built by
+  the new `jdk/internal/misc/MetalStdStreams` (a supplied class, NOT an overlay) and seeded by the loader.
+
+  | gate | result |
+  |---|---|
+  | **demo suite, COMPLETE run** | **40 programs**, 20 markers zero incl. `DISPATCH ON UNREGISTERED`, `gc: collections=46` at churn |
+  | `PrintWriterProbe` (19 arms + 2 markers) under STOCK PrintStream | **byte-identical to the host oracle** |
+  | **`CatchDeniedProbe`, 8 arms** | **byte-identical to the host oracle** |
+  | **negative control** (old catch-all semantics restored in the unwinder only) | **exactly 4 arms fail** -- every callee-thrown arm; inline + charset arms unmoved |
+  | closure, last batch | batch 70 `+430blob` (was 64 / `+423`): stock PrintStream's writer stack now loads |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **`MetalStdStreams` IS UNBUFFERED UNDER THE STREAM, deliberately**, where stock puts a 128-byte
+    `BufferedOutputStream`: the VM prints its own diagnostics straight to the UART, and a buffered guest stream
+    would let a fault report print ahead of the program's last line. Stock `PrintStream` already flushes its
+    text buffers on every write, so every print reaches the wire before it returns.
+  - **`StreamEncoder` NOW ENCODES IN ITS CHARSET.** It always emitted UTF-8, invisible while the overlay
+    bypassed it; under stock `PrintStream` that would have made `new PrintStream(out, true, ISO_8859_1)` write
+    UTF-8 (the probe's Latin-1 arm is what checks it).
+  - **BUG 1, CATCH-ALL: a JIT handler's catch type was `typeOfClass(cp)`, and that is 0 for an unregistered
+    class -- 0 being the encoding of CATCH-ALL.** So `catch (NoSuchFileException e)` (denied) caught every
+    exception unwinding into it, ran the wrong handler, and swallowed exceptions meant for callers. Found because
+    a stock `PrintStream` check passed for the WRONG reason (`catch (UnsupportedCharsetException ...)`, then
+    denied, caught this VM's `IllegalArgumentException`). **The fix resolves BY NAME AT MATCH TIME
+    (`VM.CATCH_BY_NAME` tag + `Loader.catchTypeByName`)** -- which is when JVMS resolves a catch class, and
+    exact: a live exception's whole super chain is registered, so an unregistered catch class cannot match. Not
+    "unresolved = never": a catch class pulled LATER must still match. The inline same-method test was already
+    right (`instanceOf(exc, 0)` is false) and its miss falls back to the table. The writer's table is unaffected
+    (it builds a Type for every catch class).
+  - **`UnsupportedCharsetException`/`IllegalCharsetNameException` ARE UN-DENIED (both lists)** -- dependency-free
+    `IllegalArgumentException` subclasses -- and the `Charset` overlay's `forName` throws stock's exception
+    (and `IllegalArgumentException` for null). With catch-all gone this is REQUIRED, not tidy: stock
+    `PrintStream.toCharset` and `String.lookupCharset` catch it to rethrow `UnsupportedEncodingException`.
+  - **BUG 2, CROSS-GENERATION LINKS: `resetLoader` clears `dlTab`/`lzTab` only on a REWINDING reset, and the
+    first reset after reclaim is armed only takes the watermark.** Its phase-A cells survive pointing at bodies
+    compiled against the discarded registry, with that registry's TIBs as immediates -- and `dlCellOf` found
+    them BY NAME. So gen-3 `OutputStreamWriter.<init>` linked to gen-2 `StreamEncoder.forOutputStreamWriter`,
+    `StreamEncoder` was never loaded into gen 3, and its objects belonged to a class the registry had never
+    seen: `DISPATCH ON UNREGISTERED TYPE ... write([CII)V` at `DefaultIfaceDemo`'s first `println`, eleven
+    programs after the reset. **Fix: `DynLink.gen`, and `dlCellOf` skips a cell from an earlier
+    `loaderGen`**, so the caller resolves as for an unloaded class and pulls it; holders of the cell address keep
+    working because the cell is untouched (clearing the table there is unsafe: surviving tasks dispatch through
+    it). Latent for every class; `PrintStream`'s stock writer stack is what first crossed it with a late call.
+  - **THE STD STREAMS ARE RESEEDED PER GENERATION TOO** (`stdSlotNeedsSeed`, `outGen`/`errGen`/`inGen`, and
+    `System.setOut` stamping the program's own stream): the static cell survives a reset, so the object did.
+  - **THREE WRONG MODELS, EACH KILLED BY ONE INSTRUMENT, and the order is the lesson.** (1) "System.out predates
+    the reset" -- my first fix asked whether the stream's CLASS was registered; `PrintStream` is a baked class
+    every registry re-adopts, so the stale stream passed while the `StreamEncoder` inside it was the orphan.
+    (2) "image-side bake memos survive the reset" -- moved `invalidateBakeMemos` to every reset; identical
+    failure, `bakeMemosDropped` unchanged, so it was REVERTED rather than shipped as unmeasured. (3) The
+    instrument that settled it printed `loaderGen=3 outGen=3 ... StreamEncoder reg=-1`: the stream WAS current
+    and its class was never registered -- which pointed at a by-name link into the old world.
+  - **NOT PI-VALIDATED.** Every line the boot prints now goes through stock `PrintStream` -> `BufferedWriter` ->
+    `OutputStreamWriter` -> `StreamEncoder` on four cores (stock `PrintStream` is `synchronized (this)`, so
+    concurrent printing is locked rather than byte-interleaved), so the log printing at all is most of the gate.
+
 - **`new PrintWriter(System.out)` HALTED THE VM -- THE `PrintStream` OVERLAY HAD DROPPED `charset()` AND
   `checkError()`, AND ITS `write(int)`/`flush()` IGNORED A WRAPPED STREAM (2026-10-02, QEMU-GATED -- NOT YET
   PI-VALIDATED).** Picked from `make overlaycheck-deep` by REACHABILITY rather than by count: most of the 530
