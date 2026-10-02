@@ -115,6 +115,54 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`new PrintWriter(System.out)` HALTED THE VM -- THE `PrintStream` OVERLAY HAD DROPPED `charset()` AND
+  `checkError()`, AND ITS `write(int)`/`flush()` IGNORED A WRAPPED STREAM (2026-10-02, QEMU-GATED -- NOT YET
+  PI-VALIDATED).** Picked from `make overlaycheck-deep` by REACHABILITY rather than by count: most of the 530
+  gaps sit behind subsystems this VM denies (method handles, module layers, resource bundles, serialization),
+  and this one sits under the commonest console-Writer idiom in Java. Stock JDK 26 `PrintWriter(OutputStream,
+  boolean)` (line 148) and `OutputStreamWriter(OutputStream)` (line 111) both ask
+  `out instanceof PrintStream ps ? ps.charset() : Charset.defaultCharset()`.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`PrintWriterProbe`, 19 arms + 2 console markers, against the HOST ORACLE** | **3 control arms pass, then `VIRTUALRESOLVE FAILED PrintStream.charset()` -- THE VM HALTS** | **byte-identical, `failures=0`** |
+  | `new PrintWriter(System.out, true).println(...)` | **halts in `PrintWriter.<init>`** | **prints** |
+  | `new OutputStreamWriter(System.out)` | **the same halt** | **prints** |
+  | `PrintStream` over a buffer, `write(int)` | **byte went to the UART, not the buffer** | **`QR|2`** |
+  | `PrintStream` over a `BufferedOutputStream`, `flush()` | **never reached the wrapped stream** | **`0->3`** |
+  | deep-scan gaps | 530 | **526** -- all four `PrintStream` lines gone |
+  | **demo suite, COMPLETE run** | -- | **40 programs**, 21 markers zero, `gc: collections=46` at churn |
+  | closure, batch 64 | -- | **identical** (`+423blob`, `memo=1150 res=3060 unres=2546`, `n:imap=158 synth=60 clinits=101`, `tab=1226`) |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **MEASURED BEFORE THE FIX, WITH THE CONTROLS ISOLATING IT:** writers over a `ByteArrayOutputStream` (not a
+    `PrintStream`, so stock takes `defaultCharset()`) pass, and the first arm wrapping a `PrintStream` halts at
+    `PrintWriter.<init>(PrintWriter.java:148)`. The probe names no missing member, so it compiles against the
+    overlay as it stood -- the `ByteViewProbe` pattern.
+  - **`charset()` ANSWERS WHAT `emit` ACTUALLY WRITES:** UTF-8 by default (`String.getBytes()`), or the charset
+    a new `(OutputStream, boolean, Charset)` constructor was given -- honoured by the encoder, and asserted by
+    BYTES (`é` is one byte `233` under ISO-8859-1, two bytes starting `195` by default), not by name alone. The
+    by-name constructor maps the overlay `Charset.forName`'s `IllegalArgumentException` to the
+    `UnsupportedEncodingException` stock declares.
+  - **`checkError()` IS STOCK'S RULE:** flush, delegate to a wrapped `PrintStream`, else the `trouble` flag,
+    which every swallowed `IOException` now sets (it was dropped on the floor). `setError`/`clearError` beside
+    it. The arm uses a stream that THROWS, so `true` is reachable rather than assumed.
+  - **TWO SILENT WRONG ANSWERS IN THE SAME CLASS, found by reading it while it was open.** `write(int)` wrote to
+    the UART UNCONDITIONALLY, so a capturing `PrintStream` leaked single bytes onto the console and left them out
+    of the capture; and `flush()` was empty, so a buffered wrapped stream never saw its bytes. **Stated limit:
+    no negative control for these two** -- the unfixed build halts before reaching their arms, so they are proven
+    against the host oracle and not shown failing without the fix.
+  - **TWO NEW FIELDS (`charset`, `trouble`) ARE SAFE FOR THE SEEDED STREAMS, checked rather than assumed:**
+    `Loader.seedSystemStreams` sizes the allocation as `16 + fieldCount * 8` and the payload is zeroed, so
+    `System.out`'s `charset` reads null (default) and `trouble` false -- and the `System.out checkError = false`
+    arm says so on metal.
+  - **THE SUITE CLOSURE MOVED BY ONE MARKED METHOD:** batch 2 `reach` 2250 -> 2251 at `+357blob`, the safe
+    direction by this file's discriminator; batch 64 is identical on every closure counter. Every demo prints
+    through this class, so the 40 clean programs are the no-regression half.
+  - **NOT PI-VALIDATED.** Guest-world byte arithmetic QEMU has already diffed against a host oracle; what
+    hardware is asked is a small layout shift in the class every line of the boot goes through, so the log
+    printing at all is most of the gate.
+
 - **`Math.random()` HALTED THE VM -- `Random.nextDouble()` WAS DROPPED FROM THE OVERLAY (2026-10-02,
   PI-VALIDATED).** Named by `make overlaycheck-deep` on the previous increment's own
   card and MEASURED before a line of the fix was written. `java.lang.Math.random()` is literally

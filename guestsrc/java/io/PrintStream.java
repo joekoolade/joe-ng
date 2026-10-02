@@ -11,6 +11,7 @@
  */
 package java.io;
 
+import java.nio.charset.Charset;
 import magic.Magic;
 
 /**
@@ -36,8 +37,9 @@ import magic.Magic;
  * interfaces (the StringBuilder/Appendable trap), and nothing complains: JUnit's ConsoleLauncher simply
  * produced NO OUTPUT AT ALL, having wrapped a System.out that was not an OutputStream.
  *
- * <p>Field-free by design (instance size stays a bare 16-byte header). Numeric overloads route through the
- * already-working {@code Integer.toString}/{@code Long.toString}; only methods a demo actually reaches compile.
+ * <p>Field-light: {@code Loader.seedSystemStreams()} sizes the seeded instance from the declared field count
+ * and the payload is zeroed, so every field reads its default (null / false) for {@code System.out}/{@code err}.
+ * Numeric overloads route through the already-working {@code Integer.toString}/{@code Long.toString}; only methods a demo actually reaches compile.
  */
 public class PrintStream extends java.io.OutputStream
 {
@@ -50,6 +52,15 @@ public class PrintStream extends java.io.OutputStream
      * not assumed, since a garbage value here would be handed to a virtual call.
      */
     private OutputStream out;
+
+    /**
+     * The charset text is encoded in, or NULL for the default (UTF-8, what {@code String.getBytes()} uses).
+     * Null for the seeded {@code System.out}/{@code err} by the same zeroed-payload argument as {@link #out}.
+     */
+    private Charset charset;
+
+    /** Stock's error flag: set when the wrapped stream throws, read by {@link #checkError()}. */
+    private boolean trouble;
 
     public PrintStream()
     {
@@ -74,10 +85,93 @@ public class PrintStream extends java.io.OutputStream
         this.out = out;
     }
 
-    /** The sink: the wrapped stream if there is one, else stock UTF-8 encode + raw bytes to the UART. */
+    /**
+     * Wrap a stream and encode text in the given charset, as stock. Any charset {@code Charset.forName}
+     * answers here works, because each is the exact singleton {@code String.getBytes(Charset)}'s fast paths
+     * compare against by identity.
+     */
+    public PrintStream(OutputStream out, boolean autoFlush, Charset charset)
+    {
+        if (out == null)
+        {
+            throw new NullPointerException("Null output stream");
+        }
+        if (charset == null)
+        {
+            throw new NullPointerException("charset");
+        }
+        this.out = out;
+        this.charset = charset;
+    }
+
+    /**
+     * The by-name form. Stock maps an unknown name to {@code UnsupportedEncodingException}; this overlay's
+     * {@code Charset.forName} reports one as {@code IllegalArgumentException} (its stock exception classes are
+     * denylisted), so that is caught and re-thrown as the exception this constructor declares.
+     */
+    public PrintStream(OutputStream out, boolean autoFlush, String encoding) throws UnsupportedEncodingException
+    {
+        this(out, autoFlush, toCharset(encoding));
+    }
+
+    private static Charset toCharset(String csn) throws UnsupportedEncodingException
+    {
+        if (csn == null)
+        {
+            throw new NullPointerException("charsetName");
+        }
+        try
+        {
+            return Charset.forName(csn);
+        }
+        catch (IllegalArgumentException e)
+        {
+            throw new UnsupportedEncodingException(csn);
+        }
+    }
+
+    /**
+     * The charset this stream encodes text in. Stock {@code PrintWriter(OutputStream, boolean)} and
+     * {@code OutputStreamWriter(OutputStream)} both ask it of any PrintStream they wrap -- i.e. every
+     * {@code new PrintWriter(System.out)} -- so without it the commonest console-Writer idiom in Java halted
+     * the VM. The default answer is UTF-8 because that is what {@link #emit} actually writes.
+     */
+    public Charset charset()
+    {
+        return charset == null ? Charset.defaultCharset() : charset;
+    }
+
+    /**
+     * Stock semantics: flush, then report whether a wrapped stream has thrown (delegating to a wrapped
+     * PrintStream's own flag, as stock does). The UART sink cannot fail, so the seeded streams answer false.
+     */
+    public boolean checkError()
+    {
+        if (out != null)
+        {
+            flush();
+        }
+        if (out instanceof PrintStream ps)
+        {
+            return ps.checkError();
+        }
+        return trouble;
+    }
+
+    protected void setError()
+    {
+        trouble = true;
+    }
+
+    protected void clearError()
+    {
+        trouble = false;
+    }
+
+    /** The sink: the wrapped stream if there is one, else the encoded bytes to the UART. */
     private void emit(String s)
     {
-        byte[] b = s.getBytes();
+        byte[] b = charset == null ? s.getBytes() : s.getBytes(charset);
         if (out == null)
         {
             Magic.printStr(b);
@@ -89,7 +183,8 @@ public class PrintStream extends java.io.OutputStream
         }
         catch (IOException e)
         {
-            // A PrintStream never propagates an IOException -- stock sets an internal error flag instead.
+            // A PrintStream never propagates an IOException -- stock sets its error flag instead.
+            trouble = true;
         }
     }
 
@@ -160,16 +255,45 @@ public class PrintStream extends java.io.OutputStream
         println(String.valueOf(o));
     }
 
-    /** Stream semantics: ONE raw byte on the wire, never re-encoded. */
+    /**
+     * Stream semantics: ONE raw byte, never re-encoded -- to the WRAPPED stream when there is one. It used to
+     * go to the UART unconditionally, so a PrintStream over a capture buffer leaked single bytes onto the
+     * console and left them out of the capture.
+     */
     public void write(int b)
     {
-        byte[] one = new byte[1];
-        one[0] = (byte) b;
-        Magic.printStr(one);
+        if (out == null)
+        {
+            byte[] one = new byte[1];
+            one[0] = (byte) b;
+            Magic.printStr(one);
+            return;
+        }
+        try
+        {
+            out.write(b);
+        }
+        catch (IOException e)
+        {
+            trouble = true;
+        }
     }
 
+    /** The UART is unbuffered, so only a wrapped stream has anything to flush. */
     public void flush()
     {
+        if (out == null)
+        {
+            return;
+        }
+        try
+        {
+            out.flush();
+        }
+        catch (IOException e)
+        {
+            trouble = true;
+        }
     }
 
     public PrintStream printf(String fmt, Object... args)
@@ -418,6 +542,7 @@ public class PrintStream extends java.io.OutputStream
         }
         catch (IOException e)
         {
+            trouble = true;
         }
     }
 
@@ -432,6 +557,7 @@ public class PrintStream extends java.io.OutputStream
             }
             catch (IOException e)
             {
+                trouble = true;
             }
         }
     }
