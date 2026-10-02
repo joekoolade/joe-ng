@@ -115,6 +115,245 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **BYTE-ARRAY-VIEW VarHandles RUN -- `DataInputStream.readInt()` HAD BEEN HALTING THE VM, AND THE SURFACE IS
+  TWO METHODS RATHER THAN THE NINETY THE FIELD HANDLES NEEDED (2026-10-02, PI-VALIDATED).** The open item
+  the VarHandle card left named: `forInstanceField` builds FIELD handles only, so
+  `MethodHandles.byteArrayViewVarHandle` -- a member this name-winning overlay DID NOT DECLARE -- ceased to
+  exist and every call resolved nowhere.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`ByteViewProbe`, 47 arms against the HOST ORACLE** | **the member does not exist** | **47 of 47 BYTE-IDENTICAL** |
+  | **`DataInputStream.readInt()`** | **`LINK FAILED` + `DENYLIST TRAP` -- THE VM HALTS** | **`1020304`** |
+  | `readLong`/`readShort`/`readChar`/`readFloat` | the same halt | **exact, all four** |
+  | `DataOutputStream` writeInt/Long/Short/Char/Double | the same halt | **exact, one 24-byte hex dump** |
+  | six widths x BOTH byte orders | -- | **12 of 12, BE/LE visibly reversed** |
+  | unaligned indices 1/2/3, and the **STRADDLE at 5** | -- | **exact; the straddle is the arm that matters** |
+  | bounds: oob get / oob set / negative / in-bounds control | -- | **AIOOBE x3 + `none`** |
+  | the five REFUSALS (byte[], boolean[], scalar, non-array, null order) | -- | **exact, all stock's own** |
+  | **negative control A** (byte order IGNORED) | -- | **exactly 7 of 47 fail, EVERY ONE little-endian** |
+  | **negative control B** (every width -> the Ints handle) | -- | **ZERO arms run: the resolve REFUSES** |
+  | deep-scan gap `byteArrayViewVarHandle` | present | **GONE** |
+  | **demo suite, COMPLETE run** (byte-exact candidate) | -- | **40 programs**, **38 of 38 markers zero** |
+  | **`gc: collections` at the churn demo** | 46 | **46 -- THE GATE, UNMOVED** |
+  | suite closure: batch 2 / batch 64 / `memo`/`res`/`unres` / `n:imap` | -- | **BYTE-IDENTICAL** |
+  | image (same-build-path, probe excluded from BOTH arms) | 34,175,424 | **34,177,760 (+2,336 B, +0.007%)** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THE DEFECT WAS MEASURED BEFORE A LINE OF THE FIX WAS WRITTEN, and it is core `java.io` rather than a
+    corner.** Every multi-byte read on a stock `DataInputStream` goes
+    `readInt -> jdk.internal.util.ByteArray.getInt -> ` one of these handles, and `ByteArray.<clinit>` builds
+    all six through that factory (BIG-endian; `ByteArrayLittleEndian` builds them little-endian, so real
+    java.base exercises both orders). A pre-fix QEMU boot of a probe that names NO missing member -- it
+    reaches the gap through stock java.base, so it compiles against the overlay as it stands -- gives the
+    diagnosis outright:
+
+    ```
+    LINK FAILED: java/lang/invoke/MethodHandles.byteArrayViewVarHandle(Ljava/lang/Class;Ljava/nio/ByteOrder;)
+                 Ljava/lang/invoke/VarHandle; -- class OK but no body for that name+descriptor
+    DENYLIST TRAP: denied callee: java/lang/invoke/MethodHandles.byteArrayViewVarHandle
+        at ByteViewProbe.main(ByteViewProbe.java:37)
+    ```
+
+    **The overlay-drops-stock-members trap, blaming a denylist `MethodHandles` is not even on** -- and
+    `overlaycheck-deep` had been naming it independently all along, which is a second instrument agreeing
+    before any boot was spent.
+  - **THE SURFACE IS TWO METHODS, READ OFF THE SHIPPED CLASS WITH `javap -s -p` RATHER THAN INFERRED FROM THE
+    FIELD CASE -- and that is why this increment is small.** Each generated `ArrayHandle` declares exactly
+    `index`, `get` and `set`. **EVERY atomic in the template -- getVolatile, compareAndSet, getAndAdd, the
+    whole getAndBitwise family -- belongs to the SIBLING `ByteBufferHandle`**, which nothing here can reach.
+    So unlike the field handles, which needed ~140 derived bodies and left three mode-reflection methods
+    NPEing, there is NO half-working atomic half to state a limit about: the surface either works or does not.
+    I expected to be porting a second ninety-method family and the generated class said otherwise.
+  - **AND THAT IS A COMPLETENESS CLAIM RATHER THAN A SCOPE REDUCTION, confirmed on a STOCK JVM by BEHAVIOUR
+    rather than by the class's method list -- which is worth the ten seconds because the javadoc appears to say
+    otherwise.** `MethodHandles.byteArrayViewVarHandle`'s documentation says the supported atomic update modes
+    "are restricted to aligned addresses", which reads as though a byte-ARRAY view has atomics at an aligned
+    index. It does not: on the real JDK, `isAccessModeSupported` answers **true for GET and SET and false for
+    GET_VOLATILE, COMPARE_AND_SET, GET_AND_ADD and every weak/acquire/release variant**, and calling
+    `getVolatile(b, 0)` -- ALIGNED -- throws `UnsupportedOperationException`. That sentence is about the
+    BYTE BUFFER view. **So joe-ng now has the whole access-mode surface a byte-array view HAS**, not a subset
+    of it, and a probe arm for an atomic mode would have been asserting behaviour stock does not provide.
+  - **ONE DIVERGENCE FOLLOWS FROM THE BLOCKED `FORM`, stated because it is concrete for this family rather than
+    generic.** A caller asking `isAccessModeSupported(GET_VOLATILE)` gets `false` on stock and an **NPE** here,
+    because that method reads `vform` and `FORM` is `clinitBlocked`. Loud rather than silently wrong, which is
+    the trade the VarHandle card already took for the three mode-reflection methods -- this is what it costs on
+    the array-view path specifically.
+  - **THE OUTER CLASS'S `<clinit>` IS NOT ON THE ACCESS PATH, AND `javap -c` IS WHAT SAYS SO.** Those six
+    classes hold three statics -- `NIO_ACCESS` (via `SharedSecrets.getJavaNioAccess()`),
+    `SCOPED_MEMORY_ACCESS` and `ALIGN` -- and the first two serve only the ByteBuffer handle. `ALIGN` is the
+    one an `ArrayHandle` reads, in its bounds check, and it is `Integer.BYTES - 1`: a COMPILE-TIME CONSTANT
+    EXPRESSION (JLS 15.28), so javac INLINES it. Verified rather than inferred -- `index` opens
+    `iload_1; aload_0; arraylength; iconst_3; isub` with **no `getstatic ALIGN` anywhere**. So the whole
+    `VarHandleByteArray*` family is `clinitBlocked` by ONE prefix and nothing on the access path reads a
+    static of it.
+  - **THE ONE REAL RISK WAS THE CLOSURE, AND IT WAS PRICED BY READING CONSTANT POOLS BEFORE THE BOOT.**
+    `ByteBufferHandle` names `java/lang/foreign/MemorySegment`,
+    `jdk/internal/foreign/AbstractMemorySegmentImpl`, `MemorySessionImpl` and `ScopedMemoryAccess` -- the FFM
+    subsystem, i.e. the `Formatter` +357-class shape this file records. It does not arrive:
+    **`java/lang/foreign/` and `jdk/internal/foreign/` are ALREADY denied**, `java/nio/ByteBuffer` is already
+    overlaid, and the measured cost is **+12 classes (361 -> 373)** with **`ScopedMemoryAccess` and `foreign`
+    appearing ZERO times in the boot** -- so `ByteBufferHandle` is never pulled at all.
+  - **AND THE SUITE CLOSURE DOES NOT MOVE BY ONE COUNTER, which is the other half of that.** The +12 belong to
+    a closure that actually CALLS the factory; the suite calls neither it nor `DataInputStream`, so batch 2
+    `+357blob`, batch 64 `+423blob`, `rounds=4 pend=180 reach=17`, `memo=1150 res=3032 unres=2518` and
+    `n:imap=158 synth=60 clinits=101` are byte-identical to the recorded figures.
+  - **A CORRECTION TO MY OWN REASONING, which the boot made rather than an argument.** I wrote that under
+    rule 2 a PULLED class's `<clinit>` RUNS, and concluded `ScopedMemoryAccess.<clinit>` would trap on its
+    `registerNatives()` and needed a denial. **Wrong: joe-ng initializes on first ACTIVE USE**, so an
+    unreached class's initializer never runs however it was pulled -- the lazy-init arc's own property, which
+    I had conflated with "all `<clinit>`s run" (that rule is about none being REJECTED, not about when). No
+    denial was added, and `UNRESOLVED NEW` reads 0.
+  - **NO DENIAL CHANGE AND NO DESCRIPTOR-RULE CHANGE, both checked rather than assumed, and the previous card
+    predicted both.** The allow-list entry in `isDenylisted` is a PREFIX -- `java/lang/invoke/VarHandle` --
+    which already admits `VarHandleByteArrayAsInts`. And the uniform rule rewrites `[` or `L` to
+    `Ljava/lang/Object;` and keeps primitives verbatim, so the site `get:([BI)I` becomes
+    `(LVarHandle;LObject;I)I`, which IS `ArrayHandle.get`'s real descriptor. That card said "what is missing
+    is the factory, not the dispatch"; it was right.
+  - **`getComponentType()` IS LOAD-BEARING AND ONLY STARTED WORKING ONE INCREMENT AGO.** The factory branches
+    on it, and it answered NULL for every primitive array until 2026-09-30 -- the same defect that made
+    `Unsafe.arrayIndexScale(byte[].class)` answer 8. So this was not implementable before that fix, whatever
+    the dispatch could do.
+  - **TWO DISJOINT NEGATIVE CONTROLS, and the second is stronger than failing arms.**
+    - **A, the byte order IGNORED** (the easiest mistake available in this factory): **exactly 7 of 47 fail,
+      every one a LITTLE-ENDIAN arm**, with all 40 others unmoved. **And `int LE get` PASSES IN BOTH STATES**
+      -- it round-trips through the same wrongly-BE handle, so it is a built-in comparison rather than a
+      control. Only running the control says which arms those are.
+    - **B, every width answered with the INTS handle: ZERO arms ran.**
+      `VIRTUALRESOLVE FAILED ...ArrayHandle.set([BIS)V` at the FIRST `short` arm. **That is a stronger
+      property than "the arms fail": the width-typed descriptor resolve makes a wrong-width factory
+      UNREPRESENTABLE rather than silently wrong** -- which is exactly the class of bug the retired overlay
+      had, where one reference-typed body served every width.
+  - **THE STRADDLE ARM IS THE ONE TO WATCH, and it is specific to how joe-ng differs from stock.** `long` at
+    index 5 sits at offset `24 + 5 = 29` and spans `[29,37)`, CROSSING the 8-byte word boundary at 32. Stock
+    splits on alignment (`putLongUnaligned` routes to `putLong`/`putShort`/`putByte`); **joe-ng issues ONE
+    unaligned `Magic.store64` and leaves the straddle to the hardware**, which is permitted for Normal
+    cacheable memory with the alignment check off. Reads are a single unaligned load for the same reason. This
+    arm is what says that is sound, and no index-0 probe could.
+  - **EVERY ARM DUMPS THE WHOLE 16-BYTE ARRAY AS HEX, which is why ONE string catches four defects.** The
+    WIDTH written (a wrong-width handle writes 2 or 8 bytes where 4 belong), the BYTE ORDER, the OFFSET, and
+    any OVERRUN past the intended span. A probe comparing only the value read back would pass over all four
+    -- and a round trip through the implementation's own `set` would pass over a SYMMETRIC error, which is why
+    there are also PURE GET arms against a pre-filled array.
+  - **EVERY REACHABLE `putBits` BRANCH HAS AN ARM, traced through the overlay rather than assumed.** joe-ng's
+    `Unsafe.putBits` has four width arms and this family reaches three: **8** -> one unaligned
+    `Magic.store64` (the long/double arms, and the STRADDLE), **4** -> one unaligned `Magic.store32` (the int
+    arms at index 0/1/2/3, and float via raw int bits), **2** -> TWO `Magic.store8` (short and char, and
+    `writeShort`/`writeChar`). The **1** arm is unreachable by construction, because a `byte[]` view of a
+    `byte[]` does not exist -- and the probe asserts the `UnsupportedOperationException` instead of leaving
+    that silent. **A short-at-an-odd-index arm was considered and is worth nothing**: width 2 takes the
+    two-store8 path regardless of alignment, and a byte store cannot be misaligned, so the existing arms
+    already cover it.
+  - **THE BOUNDS ARMS ASSERT THE THROW, not the absence of a crash**, because an implementation that skipped
+    `index()` would WRITE OUTSIDE THE ARRAY -- the failure this VM is least able to diagnose. The semantics
+    are stock's slightly surprising `checkIndex(index, ba.length - ALIGN)`: a 4-byte array admits index 0 only
+    (`4 - 3 = 1`), and metal agrees byte-for-byte. Those arms passing also MEASURES that stock
+    `Preconditions.AIOOBE_FORMATTER` works here, which was an open question rather than an assumption.
+  - **THE HOST ORACLE CORRECTED FOUR OF MY OWN EXPECTATIONS BEFORE ANY BOOT, which is the whole reason it runs
+    first.** The bounds throw is `ArrayIndexOutOfBoundsException`, not the `IndexOutOfBoundsException`
+    superclass I had written; and `readFloat` of `0x01020304` is `6.301941E-36`, not the `7.447215E-33` I
+    mis-derived. Four wrong `want`s, not one VM defect among them.
+  - **THE ARM COUNT IS 47 AND `grep -c 'check("'` SAYS 43, which is stated because this file records an
+    off-by-one from exactly that confusion.** Two of the 43 calls sit inside a three-iteration loop, so they
+    print six arms rather than two. 47 is the MEASURED printed count.
+  - **STATED LIMIT, FOUND BY THIS PROBE AND DELIBERATELY NOT FIXED: an OBJECT-RETURNING site cannot resolve.**
+    A VarHandle access whose result is DISCARDED compiles to `get:([BI)Ljava/lang/Object;` -- javac's doing,
+    in a void context -- which the uniform rule rewrites to `(LVarHandle;LObject;I)LObject;` against an
+    accessor of `(LVarHandle;LObject;I)I`, so it binds to NOTHING
+    (`VIRTUALRESOLVE FAILED ...ArrayHandle.get([BI)Ljava/lang/Object;`, measured). Stock adapts the return
+    through the VarHandle invoker, which needs the MethodHandle runtime this VM does not carry.
+    - **IT IS DOCUMENTED RATHER THAN ARMED, and that is forced:** the failure is a HALTING denylist trap, so
+      an arm asserting it would END the probe instead of reporting it.
+    - **AND IT IS NARROW, stated so the next reader does not over-read it:** it bites only a PRIMITIVE handle
+      whose value is thrown away, which real code has no reason to do -- a REFERENCE-typed handle returns
+      Object legitimately and resolves fine. **It applies equally to the FIELD handles, so it PREDATES this
+      increment** and was simply never written down.
+    - My own probe walked into it, which is how it was found: the bounds arms passed their access through a
+      `void` lambda. They assign through a cast now, which is what real code does and keeps those arms about
+      BOUNDS.
+  - **STILL OPEN, named with its measured reason rather than left as "the other one": `arrayElementVarHandle`,
+    the deep scan's other gap.** Same shape, same descriptor rule, and newly unblocked by the same
+    `getComponentType` fix -- but deliberately NOT bundled, for two measured reasons. Its ATOMIC modes are
+    known-broken for an element scale below 8 (this file already records it: an `int[]` element is 4-aligned
+    and `LDAXR` needs 8, so the CAS raises an alignment fault the VM turns into a catchable NPE, leaving the
+    array UNTOUCHED), so it would ship a factory whose get/set work and whose atomics do not. And its
+    reachable consumers here are NIL: `AtomicIntegerArray`, `AtomicLongArray` and `AtomicReferenceArray` are
+    all THEMSELVES overlaid, so their stock sites never run, and the rest of its callers are
+    `java/lang/foreign/` and `ConstantBootstraps`. A 2/3-broken factory for no reachable consumer is not this
+    increment -- and two unvalidated changes on one card is what this file records as forcing a bisect.
+    **`byteBufferViewVarHandle` is NOT in that category and needs no note beyond this one**: the deep scan
+    does not name it, so nothing we ship references it at all.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS A BYTE-ARRAY-VIEW HANDLE, and none uses
+    `DataInputStream` either** -- measured, the string appears in `src/classfile/ClassFile.java` in a COMMENT
+    and nowhere else in the tree. So the boot proves NO REGRESSION across the layout change, and
+    `ByteViewProbe`'s 47 arms against a byte-identical host oracle are what prove the feature. Different
+    claims.
+  - **THE `RandomFactory` TRAP FIRED AGAIN AND THE SIZE CAUGHT IT AGAIN -- and this time it is the SUITE image
+    rather than the flash candidate.** `make test` depends on `build`, whose `guest` rule does
+    `rm -rf $(OUT)/jdk`, so the suite image built right after it was **27,984 bytes smaller** than the
+    byte-exact candidate -- the recorded figure TO THE BYTE. That image is missing
+    `out/jdk/test/lib/RandomFactory.class` from its classDir, which nothing in the suite loads, so its RESULT
+    was sound; the image was simply not the one to quote. **Re-run on the byte-exact candidate** rather than
+    carried over, which is what this file's own rule says to do -- and it reproduces every figure: 40
+    programs, **38 of 38 markers at ZERO with the `FAULT` grep ANCHORED, GREPPED ON DISK**,
+    `gc: collections=46` at the churn demo with `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sha256 clone = 44cae...`, `sum20 = 210`,
+    `bakeMemosDropped=18`, `sync: static seen=18 nomonitor=0`, `SMP: 4 of 4`, `smp sched: 4 of 4`,
+    `finish HML`, the closure byte-identical, and the only `UNRESOLVED STATIC`/`TRAP-WIRED` lines being
+    the SEVEN known ones, each labelled DENYLISTED.
+  - **AND I TRUNCATED MY OWN RE-RUN, the recorded self-truncation trap reached from a new direction -- SECOND
+    instance in this arc's harness.** The first suite boot was launched by a SCRIPT that nohup'd QEMU and
+    exited; the re-run I nohup'd INLINE in a tool call, and it died with that call at 39 of 40 programs and
+    three dots into the lisp finale, with NO terminal marker. **A log that stops mid-finale reads exactly like
+    a hang**, and this file records one truncated run being scored as a completed one. It was discarded, not
+    scored, and re-run through a script that detaches properly.
+  - **STATED LIMIT ON THE SUITE RUNS: the host was at load 16.9 at one point, from my own concurrent image
+    builds**, which is the confound this file records three times. It contaminates TIMINGS and not the
+    counters quoted here -- the closure, the marker sweep and `gc: collections=46` are load-independent -- and
+    the lisp finale read **57**, which per the recorded QEMU A/A pair (56 and 57 from an IDENTICAL binary)
+    **may not be cited from this harness** and is not.
+  - **PI-VALIDATED, AND THE GATE NAMED IN ADVANCE HELD IN FULL -- 47 OF 47 ARMS BYTE-IDENTICAL TO THE HOST
+    ORACLE ON SILICON.** `ByteViewProbe done, failures=0` at `core 166MHz` with `mmu on`,
+    `SMP: 4 of 4 cores up` and `smp sched: 4 of 4`. The flash candidate was `cmp`-confirmed onto the card
+    first -- byte-identical to the QEMU-gated image, so it was **booted on its own bytes rather than gated by
+    proxy**, and +11,992 bytes from the outgoing flash (diverging at byte `0x49`) so this boot cannot be
+    scored as a boot of the old one.
+  - **THE ARM THE GATE SINGLED OUT IS THE ONE THAT MATTERS, AND IT IS EXACT:
+    `long BE @5 = 00000000000102030405060708000000`.** That element sits at offset `24 + 5 = 29` and spans
+    `[29,37)`, CROSSING the 8-byte word boundary at 32. Stock splits such a write on alignment; joe-ng issues
+    ONE unaligned `Magic.store64` and leaves the straddle to the hardware. **QEMU cannot price that** -- it
+    takes real Normal-cacheable memory with the alignment check off, which is exactly what this boot supplies,
+    with four cores live. The round-trip arm beside it reads back `102030405060708`.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES, which is one binary on two machines rather than two builds:**
+    batch 1 `+378blob`, `rounds=36 pend=14158 reach=2350`, `n:imap=160 synth=0 clinits=106`, `gc=2`,
+    `pb:probed=378 of=378` -- every counter identical to the QEMU arm, and the EIGHT
+    `INITIALIZER RUNNING UNDER THE LOADER LOCK` lines are the same eight classes in the same order
+    (`AbstractStringBuilder`, `String`, `ByteViewProbe`, `java/nio/ByteOrder`, `DataOutputStream`,
+    `ByteArrayInputStream`, `DataInputStream`, `MethodHandleStatics`).
+  - **AND THE RECORDED 3/3/1 CROSS-HARNESS SPLIT DOES NOT APPEAR, which is stated so its ABSENCE is not read
+    as new.** This file records `res`/`unres`/`pc:n` reading three lower on silicon, attributed to the
+    hardware RNG path being compiled on one harness and not the other. Here all three read **0 on both**: a
+    probe image is ONE batch, so there is no later batch to re-patch and nothing for them to count. The split
+    has nothing to differ on rather than having gone away.
+  - **THE `clinitBlocked` FAMILY IS PROVEN ON SILICON BY TWO ABSENCES.** `UNRESOLVED NEW` reads **0**, so
+    `FORM = new VarForm(...)` never fires in any of the six `ArrayHandle`s; and **no `VarHandleByteArray*`
+    class appears in the `<clinit>`-under-lock list**, so the outer classes' `SharedSecrets.getJavaNioAccess()`
+    and `ScopedMemoryAccess` never run. The `ALIGN`-is-inlined reading that licensed blocking them is what
+    makes the access path still correct, and the 47 arms are what say it is.
+  - **39 OF 39 MARKER PATTERNS AT ZERO, GREPPED ON DISK with the `FAULT` grep ANCHORED** -- including
+    `FAIL ` (no failing arm), `ESR EC=`, `esr=0x`, `BOOT RE-ENTERED`, `DENYLIST TRAP`, `LINK FAILED`,
+    `VIRTUALRESOLVE FAILED`, `CTOR SKIPPED`, `unclaimed pc`, `heap OOM`, `STW TIMEOUT`, `CAP EXCEEDED`,
+    `CLINIT REJECTED` and `ClassCastException`. The only two reports are the known DENYLISTED ones
+    (`CodingErrorAction.REPLACE`, `CharBuffer.wrap`), identical to QEMU. **`TRAP-WIRED` reads 1 while
+    `DENYLIST TRAP` reads 0**, which is the pair to read together: the site was wired and never reached.
+  - **`gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`**, and the
+    seventeen-arm bootstrap battery entirely PASS before `launch`.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT, kept straight: IT IS NOT THE SUITE.** `main=ByteViewProbe`
+    is ONE program in ONE batch with no `net=` line, so it says nothing about the 40 programs or
+    `gc: collections=46` at the churn demo -- those remain QEMU's for this increment, on the separate
+    byte-exact suite candidate. What hardware proves is the FEATURE, which is the inverse of the usual split
+    in this file and is why the probe was the image flashed.
+
 - **STOCK `java/lang/invoke/VarHandle` RUNS ON THE METAL -- THE OVERLAY'S SIX REFERENCE-TYPED OPS WERE
   RESOLVED BY NAME ALONE, SO A HANDLE OVER AN `int` FIELD STORED THE int AS A REFERENCE (2026-09-30;
   THE PI BOOT FOUND A SECOND, OLDER BUG -- FIXED AND PI-VALIDATED 2026-10-01, AND THAT BOOT COMPLETES THE
@@ -384,12 +623,19 @@ defines the minimum the assembler must encode.
   - **AND THE REMOTE PAGE DID NOT MOVE:** `Last-Modified: Mon, 28 Sep 2026 16:19:32 GMT`, byte-identical to
     the figure this file already records, with `http done bytes=998` inside the recorded 997/998 spread
     (`Age:` is a variable-length decimal and read `13129` here -- a reading, not a VM figure).
-  - **STILL OPEN, named rather than left to be re-found:** the 58 ARRAY-VIEW sites. `forInstanceField` builds
-    FIELD handles only, so `ByteArray`/`ByteArrayLittleEndian`/`AbstractMemorySegmentImpl` are unreachable --
-    and the descriptor rule above already covers them, so what is missing is the factory
-    (`VarHandles.byteArrayViewVarHandle`), not the dispatch. Also unimplemented, and deliberately: the three
-    mode-reflection methods that read `vform` (`isAccessModeSupported`, `toMethodHandle`, `accessModeType`),
-    which NPE loudly.
+  - **WAS OPEN, NOW DONE -- the 58 ARRAY-VIEW sites: `byteArrayViewVarHandle` landed 2026-10-02, see the card
+    at the top of this file. This bullet's PREDICTION was right and two of its DETAILS were not.** Right: "the
+    descriptor rule above already covers them, so what is missing is the factory, not the dispatch" -- exactly
+    so, and neither the rule nor the denial needed a line changed. Wrong in two particulars, both corrected by
+    measuring rather than by re-reading: the member to declare is **`MethodHandles.byteArrayViewVarHandle`**
+    (the public one this overlay wins the name of), not the `VarHandles` helper it delegates to; and
+    **`AbstractMemorySegmentImpl` does NOT belong on that list** -- it is the FFM path, reached through a
+    DIFFERENT factory (`memorySegmentViewHandle`), and `java/lang/foreign/`+`jdk/internal/foreign/` are denied
+    anyway. The reachable consumers measured out as `ByteArray`/`ByteArrayLittleEndian` and, through them,
+    **stock `java/io/DataInputStream` and `DataOutputStream`** -- so `readInt()` had been HALTING the VM.
+    **`arrayElementVarHandle` is the gap that remains**, with its own measured reason on the new card.
+    Also unimplemented, and deliberately: the three mode-reflection methods that read `vform`
+    (`isAccessModeSupported`, `toMethodHandle`, `accessModeType`), which NPE loudly.
 
 - **`Class.getComponentType()` ANSWERED NULL FOR EVERY PRIMITIVE ARRAY -- `byte[].class.getComponentType()` WAS
   NULL, AND null IS THE ANSWER FOR "NOT AN ARRAY" (2026-09-30, PI-VALIDATED).** An array
