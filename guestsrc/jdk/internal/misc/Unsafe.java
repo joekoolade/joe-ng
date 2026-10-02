@@ -185,6 +185,23 @@ public final class Unsafe
         return o == null ? offset : Magic.addrOf(o) + offset;
     }
 
+    /**
+     * An INT-WIDTH compare-and-exchange that is correct for BOTH layouts, answering the WITNESSED value.
+     *
+     * <p>This exists for {@code arrayElementVarHandle}: a 4-byte ARRAY ELEMENT cannot be CASed with
+     * {@code Magic.cas64}, which spans two of them. {@code casNarrow} already masks an element inside its
+     * enclosing 8-byte word for widths 1 and 2 and is Pi-validated at every alignment in that window; width 4
+     * is the same mechanism, and {@code casNarrow}'s javadoc carries the proof that it cannot straddle.
+     *
+     * <p>The callers below reach this ONLY for an array base, so the FIELD path keeps its original single
+     * {@code cas64} byte for byte -- which matters because ForkJoinPool, CompletableFuture and AtomicInteger
+     * drive their whole structure through it on every boot.
+     */
+    private int casInt(Object o, long offset, int expected, int x)
+    {
+        return (int) casNarrow(o, offset, expected, x, 4);
+    }
+
     public boolean compareAndSetLong(Object o, long offset, long expected, long x)
     {
         return Magic.cas64(at(o, offset), expected, x);
@@ -192,6 +209,10 @@ public final class Unsafe
 
     public boolean compareAndSetInt(Object o, long offset, int expected, int x)
     {
+        if (isArrayRef(o))
+        {
+            return casInt(o, offset, expected, x) == expected;   // 4-byte element; cas64 would span two
+        }
         return Magic.cas64(at(o, offset), expected, x);   // sign-extended in an 8-byte slot; see above
     }
 
@@ -227,6 +248,10 @@ public final class Unsafe
 
     public int compareAndExchangeInt(Object o, long offset, int expected, int x)
     {
+        if (isArrayRef(o))
+        {
+            return casInt(o, offset, expected, x);           // casNarrow already answers the witnessed value
+        }
         long a = at(o, offset);
         return Magic.cas64(a, expected, x) ? expected : (int) Magic.load64(a);
     }
@@ -269,6 +294,16 @@ public final class Unsafe
 
     public int getAndAddInt(Object o, long offset, int delta)
     {
+        if (isArrayRef(o))
+        {
+            int e;
+            do
+            {
+                e = getInt(o, offset);                   // the ELEMENT, not the enclosing word
+            }
+            while (casInt(o, offset, e, e + delta) != e);
+            return e;
+        }
         long a = at(o, offset);
         int v;
         do
@@ -293,6 +328,16 @@ public final class Unsafe
 
     public int getAndSetInt(Object o, long offset, int x)
     {
+        if (isArrayRef(o))
+        {
+            int e;
+            do
+            {
+                e = getInt(o, offset);                   // the ELEMENT, not the enclosing word
+            }
+            while (casInt(o, offset, e, x) != e);
+            return e;
+        }
         long a = at(o, offset);
         int v;
         do
@@ -349,6 +394,16 @@ public final class Unsafe
 
     public int getAndBitwiseOrInt(Object o, long offset, int mask)
     {
+        if (isArrayRef(o))
+        {
+            int e;
+            do
+            {
+                e = getInt(o, offset);                   // the ELEMENT, not the enclosing word
+            }
+            while (casInt(o, offset, e, e | mask) != e);
+            return e;
+        }
         long a = at(o, offset);
         int v;
         do
@@ -371,6 +426,16 @@ public final class Unsafe
 
     public int getAndBitwiseAndInt(Object o, long offset, int mask)
     {
+        if (isArrayRef(o))
+        {
+            int e;
+            do
+            {
+                e = getInt(o, offset);                   // the ELEMENT, not the enclosing word
+            }
+            while (casInt(o, offset, e, e & mask) != e);
+            return e;
+        }
         long a = at(o, offset);
         int v;
         do
@@ -393,6 +458,16 @@ public final class Unsafe
 
     public int getAndBitwiseXorInt(Object o, long offset, int mask)
     {
+        if (isArrayRef(o))
+        {
+            int e;
+            do
+            {
+                e = getInt(o, offset);                   // the ELEMENT, not the enclosing word
+            }
+            while (casInt(o, offset, e, e ^ mask) != e);
+            return e;
+        }
         long a = at(o, offset);
         int v;
         do
@@ -519,8 +594,30 @@ public final class Unsafe
         putReferenceRelease(o, offset, x);
     }
 
+    /**
+     * THE LAST 4-BYTE WRITE THAT SPANNED TWO ELEMENTS, and the one the accessor increment deliberately left:
+     * its note read "making them ask the object would change a path ForkJoinPool and AtomicInteger run on
+     * every boot, for a case nothing reaches, so the discriminator is available to a FOLLOW-UP". This is that
+     * follow-up -- {@code arrayElementVarHandle} is what makes it reached.
+     *
+     * <p>FOUND BY A PROBE ARM THAT DUMPED THE NEIGHBOUR, not by reading. Plain {@code set} on an array-element
+     * handle passed, because stock's generated body uses the {@code iastore} BYTECODE and never touches
+     * {@code Unsafe} at all; only {@code setVolatile}/{@code setRelease}/{@code setOpaque} come through here,
+     * and they delegate to this. A {@code store64} of a negative int writes its sign extension over the next
+     * element: {@code setVolatile(a, 1, -4)} on {@code {10,20,30,40}} gave {@code 10,-4,-1,40}. An arm reading
+     * back only the element it wrote would have passed.
+     *
+     * <p>Every other narrow put already asked the object -- {@code putByte}/{@code putShort}/{@code putChar}/
+     * {@code putFloat} all route through {@code putBits}. This was the only one left, so the fix is to join
+     * them rather than to invent anything.
+     */
     public void putInt(Object o, long offset, int x)
     {
+        if (isArrayRef(o))
+        {
+            putBits(o, offset, x, 4);          // a 4-byte element; store64 would span two of them
+            return;
+        }
         Magic.store64(at(o, offset), x);
     }
 
@@ -620,15 +717,15 @@ public final class Unsafe
     }
 
     /**
-     * KNOWN WRONG FOR EVERY PRIMITIVE ARRAY, found while adding the accessor surface and recorded rather than
-     * fixed here: {@code Class.getComponentType()} answers NULL for a primitive array on this VM, so this
-     * falls through its {@code c == null} arm and returns 8 where {@code byte[].class} should give 1. Nothing
-     * has noticed because the {@code ARRAY_*_INDEX_SCALE} constants above are assigned directly rather than
-     * computed from it -- so the constants are right and the METHOD is not. The cause is in {@code Class}, not
-     * here: an array Type's element slot is 0 for a primitive element and the element SIZE cannot recover
-     * which primitive it is (byte[] and boolean[] are both 1), so closing it needs the per-atype TIB IDENTITY
-     * trick {@code Class.getName} already uses for array names. Its own increment; {@code arrayKind0} exists
-     * because the bulk moves could not wait for it.
+     * CORRECT NOW, and this comment is kept because its PREMISE EXPIRED rather than because the code changed.
+     * It used to read "KNOWN WRONG FOR EVERY PRIMITIVE ARRAY": {@code Class.getComponentType()} answered NULL
+     * for a primitive array, so this fell through its {@code c == null} arm and returned 8 where
+     * {@code byte[].class} should give 1. That {@code Class} defect was FIXED on 2026-09-30 by recovering the
+     * element kind through the per-atype TIB IDENTITY trick -- exactly the fix this comment predicted -- and
+     * {@code ComponentTypeProbe} measures all eight widths at 1/1/2/2/4/4/8/8 on silicon. A comment outliving
+     * its premise is a trap this project records six times, which is why the correction is recorded here
+     * rather than the text simply deleted: the next reader of {@code arrayElementVarHandle} needs to know this
+     * method is load-bearing and sound, because that factory computes its shift from it.
      */
     public int arrayIndexScale(Class<?> arrayClass)
     {
@@ -1274,13 +1371,34 @@ public final class Unsafe
      * stock's FOUR-byte word and happens to be exactly strong enough for an eight-byte one, which is why it
      * is kept verbatim below rather than widened.
      *
+     * <p>WIDTH 4 NEEDS NO SUCH GUARD, and the reason is arithmetic rather than a borrowed check: a 4-byte
+     * ELEMENT sits at {@code 24 + 4k} off an 8-aligned object, so {@code a & 7} is 0 or 4 and the shift is 0
+     * or 32 -- a 32-bit mask at either shift lies entirely inside the 64-bit word. A 4-byte FIELD is at
+     * {@code 16 + 8*slot}, 8-aligned, and takes the whole-slot branch above. So neither layout can straddle.
+     *
+     * <p>WIDTH 4 IS WHAT MAKES {@code arrayElementVarHandle} SAFE FOR {@code int[]} AND {@code float[]}, and
+     * before it existed those were the one genuinely dangerous case in this file: the int atomics below CAS
+     * the whole 8-byte slot, which is exact for a field and spans TWO elements of a 4-scale array. At an ODD
+     * index that faults loudly (LDAXR wants 8-byte alignment); at an EVEN index it does NOT -- it compares a
+     * sign-extended 32-bit expected value against two packed elements, so it answers a wrong {@code false}
+     * when the neighbour is non-zero and CLOBBERS the neighbour when it is. Both are silent. That is why the
+     * int atomics ask {@code isArrayRef} now.
+     *
      * <p>THE LOOP IS REQUIRED RATHER THAN DEFENSIVE: LDAXR/STLXR may fail SPURIOUSLY -- an interrupt between
      * the load and the store clears the exclusive monitor -- so a single attempt would drop the update on
      * hardware in a way it never does under emulation.
      */
     private long casNarrow(Object o, long offset, long expected, long x, int width)
     {
-        long vmask = width == 1 ? 0xFFL : 0xFFFFL;
+        long vmask = 0xFFFFFFFFL;
+        if (width == 1)
+        {
+            vmask = 0xFFL;
+        }
+        else if (width == 2)
+        {
+            vmask = 0xFFFFL;
+        }
         long a = at(o, offset);
         if (!isArrayRef(o))
         {

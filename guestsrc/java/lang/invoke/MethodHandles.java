@@ -212,4 +212,59 @@ public final class MethodHandles
         if (c == float.class)  { return new VarHandleByteArrayAsFloats.ArrayHandle(be); }
         throw new UnsupportedOperationException();
     }
+
+    /**
+     * A VarHandle over an ARRAY ELEMENT -- stock's own {@code arrayElementVarHandle}, the sibling gap
+     * {@code overlaycheck-deep} named beside {@code byteArrayViewVarHandle}.
+     *
+     * <p>UNLIKE THE BYTE-ARRAY VIEW, THIS CARRIES THE FULL ATOMIC SURFACE. A view's {@code ArrayHandle}
+     * declares only {@code get}/{@code set}; these {@code Array} classes declare the whole access-mode set --
+     * {@code compareAndSet}, {@code compareAndExchange}, {@code weakCompareAndSet}, {@code getAndSet},
+     * {@code getAndAdd} and the three {@code getAndBitwise} forms, in every plain/acquire/release flavour --
+     * read off the generated classes with {@code javap -s}, not assumed from the view case.
+     *
+     * <p>AND THAT SURFACE IS WHY THIS WAS NOT MERELY A FACTORY. joe-ng's int-width atomics were written on
+     * {@code Magic.cas64}, which is exact for a FIELD (a full 8-byte slot) and spans TWO elements of a
+     * 4-scale array. The hazard was not the loud one this project had recorded: at an ODD index the CAS does
+     * fault (LDAXR wants 8-byte alignment) and the array is left untouched, but at an EVEN index it does NOT
+     * -- it compares a sign-extended 32-bit expected value against two packed elements, so it answers a wrong
+     * {@code false} whenever the neighbour is non-zero, and CLOBBERS the neighbour when it is zero. **Both are
+     * SILENT**, and this factory is what would have made them reachable. {@code Unsafe}'s int atomics ask
+     * {@code isArrayRef} now and take the masked {@code casNarrow} path for an array, so all nine element
+     * types work; the FIELD path is unchanged byte for byte, which matters because ForkJoinPool,
+     * CompletableFuture and AtomicInteger run on it every boot.
+     *
+     * <p>{@code arrayIndexScale} IS LOAD-BEARING HERE, and it only became correct on 2026-09-30: the shift
+     * this passes to the handle is {@code 31 - numberOfLeadingZeros(scale)}, so a scale of 8 where 1 belongs
+     * would index every {@code byte[]} element eight bytes apart. That method answered 8 for every primitive
+     * array until {@code Class.getComponentType()} was fixed -- see its own javadoc in {@code Unsafe}, whose
+     * "KNOWN WRONG" text had outlived its premise.
+     *
+     * <p>NO {@code maybeAdapt}, for the reason the byte-array factory records: stock wraps the result in one,
+     * and it returns its argument unchanged unless a debug property is set; its adapting arm needs the
+     * MethodHandle runtime this VM does not carry.
+     *
+     * @throws IllegalArgumentException if {@code arrayClass} is not an array (stock's exception)
+     */
+    public static VarHandle arrayElementVarHandle(Class<?> arrayClass)
+    {
+        if (!arrayClass.isArray())
+        {
+            throw new IllegalArgumentException("not an array: " + arrayClass);
+        }
+        Unsafe u = Unsafe.getUnsafe();
+        int aoffset = (int) u.arrayBaseOffset(arrayClass);
+        int ashift = 31 - Integer.numberOfLeadingZeros(u.arrayIndexScale(arrayClass));
+        Class<?> c = arrayClass.getComponentType();
+        if (!c.isPrimitive())   { return new VarHandleReferences.Array(aoffset, ashift, arrayClass); }
+        if (c == boolean.class) { return new VarHandleBooleans.Array(aoffset, ashift); }
+        if (c == byte.class)    { return new VarHandleBytes.Array(aoffset, ashift); }
+        if (c == short.class)   { return new VarHandleShorts.Array(aoffset, ashift); }
+        if (c == char.class)    { return new VarHandleChars.Array(aoffset, ashift); }
+        if (c == int.class)     { return new VarHandleInts.Array(aoffset, ashift); }
+        if (c == long.class)    { return new VarHandleLongs.Array(aoffset, ashift); }
+        if (c == float.class)   { return new VarHandleFloats.Array(aoffset, ashift); }
+        if (c == double.class)  { return new VarHandleDoubles.Array(aoffset, ashift); }
+        throw new UnsupportedOperationException();
+    }
 }

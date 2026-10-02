@@ -115,6 +115,189 @@ defines the minimum the assembler must encode.
 
 ## Current status
 
+- **`arrayElementVarHandle` RUNS, AND THE RECORDED HAZARD IT UNCOVERED WAS UNDERSTATED: AN `int[]` ELEMENT CAS
+  WAS SILENTLY WRONG AT AN EVEN INDEX, NOT LOUDLY WRONG (2026-10-02, PI-VALIDATED).**
+  The second of the two VarHandle gaps `overlaycheck-deep` named; with it both are closed. The FACTORY is the
+  small half -- nine branches, the same shape as `forInstanceField` -- and the real work is underneath it.
+
+  | gate | before | after |
+  |---|---|---|
+  | **`ArrayElemProbe`, 52 arms against the HOST ORACLE** | **the member does not exist** | **52 of 52 BYTE-IDENTICAL** |
+  | `int[]` CAS at an EVEN index, neighbour NON-ZERO | **`false`, array untouched -- A WRONG ANSWER** | **`true -2,20,30,40`** |
+  | `int[]` CAS at an EVEN index, neighbour ZERO | **`true -2,-1,30,40` -- NEIGHBOUR CLOBBERED** | **`true -2,0,30,40`** |
+  | `int[]` CAS at an ODD index | **`NullPointerException` (alignment fault), probe HALTS** | **`true 10,-3,30,40`** |
+  | `setVolatile`/`setRelease` on an `int[]` | **neighbour clobbered with -1** | **exact** |
+  | getAndAdd / getAndSet / getAndBitwise{Or,And,Xor}, even AND odd | -- | **exact, neighbours asserted** |
+  | all nine element types, get/set | -- | **exact** |
+  | narrow widths (byte/short/char/boolean) + 8-scale (long/double/ref) | correct | **correct -- UNMOVED** |
+  | bounds x4 + two refusals | -- | **AIOOBE x4, IllegalArgumentException x2** |
+  | **negative control** (array routing disabled) | -- | **all THREE failure modes reproduced, two of them SILENT** |
+  | deep-scan gaps `arrayElementVarHandle` + `byteArrayViewVarHandle` | both present | **both GONE** |
+  | host | -- | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **THIS FILE'S OWN RECORD OF THE HAZARD WAS TOO KIND, AND THAT IS THE FINDING.** The Unsafe atomics card
+    says an `int[]` element CAS "raises an alignment fault the VM turns into a catchable `NullPointerException`
+    -- and the array is left **UNTOUCHED**", and calls that "fail-loud with no corruption, the better of the
+    two outcomes". **That is true only at an ODD index.** An `int[]` element sits at `24 + 4k`, so at an EVEN
+    index the address IS 8-aligned, nothing faults, and `Magic.cas64` compares a sign-extended 32-bit
+    `expected` against TWO PACKED ELEMENTS:
+    - neighbour non-zero -> the compare fails -> **a wrong `false`** while the element really did hold the
+      expected value;
+    - neighbour zero -> the compare succeeds and the 8-byte store writes the sign extension over it ->
+      **the neighbour is CLOBBERED**.
+
+    **Both are SILENT.** The earlier card measured the odd-index arm (`diff int[] element`, index 1) and
+    generalised from it; the even-index half was never run. Measured here, in the negative control.
+  - **AND `putInt` WAS THE LAST 4-BYTE WRITE THAT SPANNED TWO ELEMENTS -- the accessor increment left it ON
+    PURPOSE and said so.** Its note: "making them ask the object would change a path ForkJoinPool and
+    AtomicInteger run on every boot, for a case nothing reaches, so the discriminator is available to a
+    FOLLOW-UP rather than spent here." **This is that follow-up**, because `arrayElementVarHandle` is exactly
+    what makes it reached. Every other narrow put already asked the object
+    (`putByte`/`putShort`/`putChar`/`putFloat` all route through `putBits`); `putInt` was the only one left,
+    so the fix joins them rather than inventing anything.
+  - **IT WAS FOUND BY A PROBE ARM THAT DUMPED THE NEIGHBOUR, and the reason plain `set` PASSED is the
+    methodological point.** Stock's generated `VarHandleInts$Array.set` is `aload; checkcast [I; iastore` --
+    the ORDINARY ARRAY-STORE BYTECODE, which joe-ng's JIT lowers at the element's natural width and which
+    never touches `Unsafe` at all. Only `setVolatile`/`setRelease`/`setOpaque` come through
+    `Unsafe.putIntVolatile` -> `putIntRelease` -> `putInt`. So the defect hid behind a passing arm one line
+    above it, and **an arm that read back only the element it wrote would have passed too**:
+    `setVolatile(a, 1, -4)` on `{10,20,30,40}` gave `10,-4,-1,40` -- element right, neighbour destroyed.
+  - **THE FIX MECHANISM ALREADY EXISTED AND IS PI-VALIDATED, which is why this is small rather than risky.**
+    `casNarrow` masks an element inside its enclosing 8-byte word and CASes the whole word in a retry loop,
+    for widths 1 and 2, and the Unsafe card records it validated on silicon at EVERY alignment in that window
+    (`cas short[0..3]`, `cas byte[0..7]`). Width 4 is the same mechanism, and its span proof is ARITHMETIC
+    rather than a borrowed guard: a 4-byte element is at `24 + 4k` off an 8-aligned object, so `a & 7` is 0 or
+    4 and the shift is 0 or 32 -- a 32-bit mask at either shift lies entirely inside the word.
+  - **THE FIELD PATH IS BYTE-FOR-BYTE UNCHANGED, and the diff is the evidence: ONE non-comment line is removed
+    in the whole of `Unsafe.java`** -- the `vmask` ternary, replaced by an if-chain that adds width 4.
+    Every int atomic kept its original `Magic.cas64` body with a guard added ABOVE it. That shape was chosen
+    deliberately: ForkJoinPool, CompletableFuture and AtomicInteger drive their whole structure through those
+    methods on every boot, so a regression there could only come from the added test, not from moved code.
+  - **THE COST IS ONE `isArrayRef` PER INT CAS AND PER `putInt`, and it is stated because that is a hot path.**
+    `isArrayRef` is `arrayKind0`, a native reading the object's TIB and Type -- two loads. The precedent is
+    established rather than invented: the accessor increment already asks the object on EVERY narrow write for
+    exactly this reason, and neither `gc: collections=46` nor the closure moved then.
+  - **SEVEN METHODS FIXED THE WHOLE FAMILY, because stock DERIVES the rest -- read, not assumed.**
+    `compareAndSetInt` and `compareAndExchangeInt` are the roots; `weakCompareAndSetInt*` delegates to the
+    first, `getAndAddInt{Acquire,Release}` and `getAndSetInt{Acquire,Release}` are STOCK'S OWN loops on
+    `getInt` + `weakCompareAndSetInt`, the bitwise Acquire/Release forms delegate to the plain ones, and
+    **every FLOAT atomic derives from the Int one via raw bits** (`compareAndSetFloat` -> `compareAndSetInt`).
+    So `float[]`, the other 4-scale type, rides the same fix for free -- and has its own arms.
+  - **A COMMENT WHOSE PREMISE HAD EXPIRED, CORRECTED AT THE SITE -- SEVENTH recorded instance.**
+    `arrayIndexScale`'s javadoc read "KNOWN WRONG FOR EVERY PRIMITIVE ARRAY ... returns 8 where
+    `byte[].class` should give 1", naming `Class.getComponentType()` answering null as the cause. **That cause
+    was FIXED on 2026-09-30** and the method is now correct (`ComponentTypeProbe` measures all eight widths at
+    1/1/2/2/4/4/8/8 on silicon). It is load-bearing for this factory: the shift is
+    `31 - numberOfLeadingZeros(scale)`, so a scale of 8 where 1 belongs would index every `byte[]` element
+    eight bytes apart. The text is corrected rather than deleted, because the next reader needs to know it is
+    sound.
+  - **NO `Loader` CHANGE AT ALL, checked rather than assumed.** The generated `Array` classes are nested inside
+    the nine width classes, so the existing `clinitBlocked` PREFIXES already cover them
+    (`java/lang/invoke/VarHandleInts` matches `VarHandleInts$Array`), and the denial allow-list prefix
+    `java/lang/invoke/VarHandle` already admits them. `UNRESOLVED NEW` reads 0, which is what says the
+    `FORM = new VarForm(...)` in each is never run.
+  - **UNLIKE THE BYTE-ARRAY VIEW, THESE CARRY THE FULL ATOMIC SURFACE**, read off the generated classes with
+    `javap -s`: `compareAndSet`, `compareAndExchange`, `weakCompareAndSet`, `getAndSet`, `getAndAdd` and the
+    three `getAndBitwise` forms in every plain/acquire/release flavour. That asymmetry is the whole reason the
+    two factories were separate increments rather than one -- the view needed a factory, this needed the
+    atomics underneath it to be correct first.
+  - **THE NEGATIVE CONTROL REPRODUCES ALL THREE MODES, which is what makes the diagnosis a measurement.** With
+    only the eight `isArrayRef` branches disabled (`casNarrow`'s width 4 left in place, so this isolates the
+    ROUTING from the mechanism): `int[] cas @0` reads `false 10,20,30,40`, `int[] cas @0 nb0` reads
+    `true -2,-1,30,40`, and `int[] cas @1` throws `NullPointerException at Unsafe.compareAndSetInt` and halts
+    the probe at arm 21 of 52. **The halt is why this control is a hard stop rather than an N-arms-move
+    count** -- stated, because the two SILENT arms before it are the load-bearing half and the loud one merely
+    ends the run.
+  - **NOTHING PRINTS A SCALE OR A SHIFT, deliberately.** `Object[]` is scale **4 on a host JVM** (compressed
+    oops) and **8 here** (direct 8-byte refs) -- a platform fact this file already records for
+    `ARRAY_OBJECT_INDEX_SCALE` -- so an arm naming either could not have one expected value in both worlds.
+    Behaviour is what is asserted, and it matches.
+  - **THE NARROW AND 8-SCALE WIDTHS ARE THE BUILT-IN COMPARISON, stated because an arm that passes in both
+    states is not a control.** `byte`/`short`/`char`/`boolean` already went through `casNarrow`, and
+    `long`/`double`/reference elements are 8-aligned at 8 scale, so all of those pass with the fix reverted.
+    The arms that MOVE are `int` and `float` -- exactly the two 4-scale types.
+  - **EVERY ACCESS IN THE PROBE IS CAST AND ASSIGNED, which is required rather than tidy** -- the
+    OBJECT-returning-descriptor limit the byte-array-view card records: a VarHandle access whose result is
+    discarded compiles to `(...)Ljava/lang/Object;` and binds to nothing here. That limit is unchanged and
+    still predates both increments.
+  - **THE SUITE GATE HOLDS, on the byte-exact candidate built through the full chain:** 40 programs to
+    `self-build retired`, **38 of 38 markers at ZERO with the `FAULT` grep ANCHORED, GREPPED ON DISK**,
+    **`gc: collections=46` at the churn demo** with `churnMB=625 live=32 intact=32`,
+    `lisp evals=600 result=610 stable=1`, `sha256 clone = 44cae...`, `sum20 = 210`, `bakeMemosDropped=18`,
+    `SMP: 4 of 4`, `smp sched: 4 of 4`, `finish HML`. The lisp finale read 56 and is **NOT cited**, per the
+    recorded QEMU A/A pair. **That suite matters more than usual here**: ForkJoinPool, CompletableFuture and
+    AtomicInteger run on the int atomics and on `putInt` every boot, which is the path this change guards.
+  - **ONE CLOSURE COUNTER MOVED AND IT IS ATTRIBUTABLE RATHER THAN NOISE, which was checked before it was
+    claimed.** Batch 2 goes `pend` 13559 -> 13587 and **`reach` 2245 -> 2249**, with `+357blob`, `n:imap=144`
+    and `clinits=101` IDENTICAL, and **batch 64 byte-identical on every counter**
+    (`+423blob`, `rounds=4 pend=180 reach=17`, `memo=1150 res=3032 unres=2518`, `n:imap=158 synth=60
+    clinits=101`). The reason that is attributable: **`pend=13559 reach=2245` is identical across the previous
+    increment's TWO suite runs, whose binaries differ by 27,984 bytes** -- so this counter is deterministic and
+    layout-insensitive, and a move in it means the closure really changed.
+  - **AND THE DIRECTION IS THE SAFE ONE: `reach` went UP.** `reach` is the MARKED SET, which this file
+    established as the discriminator for telling removed waste from LOST marking -- a DROP is the danger (it
+    once hid half a closure). +4 marked methods with ZERO new classes is what adding reachable code to an
+    already-pulled class looks like. **The reading, consistent with the evidence rather than measured:** the
+    four are `casInt` plus `casNarrow`, `getInt` and `putBits` becoming reachable in batch 2 for the first
+    time, since the int atomics ARE reachable there and now call all four. I can name `casInt` with
+    confidence and do not claim the other three were isolated.
+  - **IMAGE: +1,712 bytes (+0.005%)**, measured same-build-path with the probe excluded from BOTH arms --
+    **and the first figure I wrote here was 25,232, which I had GUESSED rather than measured.** It was wrong by
+    15x, and so was the reason I gave for it ("mostly the nine generated `Array` classes joining the
+    classDir"): those classes were already in the classDir, because the whole of java.base is. The delta is
+    the overlay's new method and the `Unsafe` guards, nothing else. A candidate-to-candidate comparison reads
+    +13,264 and that is NOT the feature -- ~11.5 KB of it is `ArrayElemProbe.class`, which ships because a
+    default-package probe lands in the classDir.
+  - **WHAT THE SUITE CLAIMS AND WHAT IT DOES NOT: NO DEMO CALLS `arrayElementVarHandle`** -- and the
+    `Atomic*Array`s, which are the only java.base classes that would, are all THEMSELVES overlaid, so their
+    stock sites never run. So the boot proves NO REGRESSION on the int-atomic and `putInt` paths the fix
+    guards, which is the half that was at risk, and `ArrayElemProbe`'s 52 arms against a byte-identical host
+    oracle are what prove the feature. Different claims.
+  - **THE `RandomFactory` TRAP FIRED A THIRD TIME IN THIS ARC, AND THE ARITHMETIC CAUGHT IT TO THE BYTE.** The
+    flash candidate came out **14,720 bytes SMALLER** than the outgoing image, which is not a delta the feature
+    can explain. Cause: `make test` -- run only to read the `compiler`/`overlay-check` gates -- depends on
+    `build`, whose `guest` rule does `rm -rf $(OUT)/jdk`, so it purged `out/jdk/test/lib/RandomFactory.class`
+    AFTER the full-chain build. The account closes exactly: `34,187,104 - 27,984 + 1,712 + 11,552 =
+    34,172,384`, against a measured 34,172,384, and rebuilding through the chain put back **+27,984 to the
+    byte**. **The short image's own 52-arm gate was valid for THOSE bytes** -- it was not a wrong result, just
+    not the artifact anyone would rebuild -- so it was DISCARDED and the full-chain candidate re-gated on its
+    own bytes rather than by proxy. **The lesson is the ORDER: read the host gates BEFORE the final build, not
+    after**, because `make test` is the one target that silently un-does the chain.
+  - **PI-VALIDATED, AND THE GATE NAMED IN ADVANCE WAS THE LDAXR/STLXR RETRY LOOP AT WIDTH 4 -- the one thing
+    the emulator structurally cannot price.** `ArrayElemProbe done, failures=0` at `core 166MHz` with
+    `mmu on`, `SMP: 4 of 4 cores up` and `smp sched: 4 of 4`, and **52 of 52 arms BYTE-IDENTICAL to the host
+    oracle** -- and to the QEMU run. A spurious LL/SC failure (an interrupt between the load and the store
+    clearing the exclusive monitor) happens on four live cores and never under emulation, and EVERY
+    `int[]`/`float[]` atomic arm drives that loop: `cas @0`, `cas @0 nb0`, `cas @1`, `gAdd`, `gSet`, the three
+    `gOr`/`gAnd`/`gXor` forms, `cmpExch` and `weakCAS`, at both index parities. The Unsafe card records the
+    same loop being closed on silicon for widths 1 and 2; width 4 is closed now.
+  - **THE THREE ARMS THE INCREMENT TURNS ON ARE EXACT ON SILICON, which is the half that was SILENT before:**
+    `int[] cas @0 = true -2,20,30,40` (pre-fix a wrong `false` with the array untouched),
+    `int[] cas @0 nb0 = true -2,0,30,40` (pre-fix `true -2,-1,30,40`, the neighbour CLOBBERED), and
+    `int[] cas @1 = true 10,-3,30,40` (pre-fix an NPE from the alignment fault). Plus the two `putInt` arms
+    this increment also closed, `setVol = 10,-4,30,40` and `setRel = 10,20,-5,40`, which pre-fix wrote -1 over
+    the next element.
+  - **THE CLOSURE IS EXACT ACROSS HARNESSES, one binary on two machines:** batch 1 `+365blob`,
+    `rounds=34 pend=13983 reach=2297`, `n:imap=152 synth=0 clinits=102`, `gc=2`, `pb:probed=365 of=365` --
+    every counter identical to the QEMU arm, with the same EIGHT `INITIALIZER RUNNING UNDER THE LOADER LOCK`
+    classes in the same order (`AbstractStringBuilder`, `String`, `ArrayElemProbe`, `MethodHandleStatics`,
+    `Boolean`, **`java/lang/invoke/VarHandle`**, `sun/nio/cs/US_ASCII`, `sun/nio/cs/ISO_8859_1`).
+  - **AND THE `clinitBlocked` PREFIXES ARE PROVEN TO COVER THE `Array` CLASSES BY TWO ABSENCES:**
+    `UNRESOLVED NEW` reads **0**, so the `FORM = new VarForm(...)` in each of the nine never runs; and **no
+    `VarHandleInts$Array` or sibling appears in the `<clinit>`-under-lock list**, while stock
+    `java/lang/invoke/VarHandle` itself DOES -- which is exactly the split those prefixes are meant to make.
+  - **39 OF 39 MARKER PATTERNS AT ZERO, GREPPED ON DISK with the `FAULT` grep ANCHORED** -- `^FAIL ` and
+    **`NullPointerException`** among them, the latter being what the pre-fix odd-index CAS threw. The only two
+    reports are the known DENYLISTED ones (`CodingErrorAction.REPLACE`, `CharBuffer.wrap`), identical to QEMU,
+    with `TRAP-WIRED` 1 and `DENYLIST TRAP` 0 -- wired and never reached.
+  - **`gc: collections=3`, `bakeMemosDropped=0`, `idleRoots=9/9 idleMarked=0 idleGc=0`**, and the
+    seventeen-arm bootstrap battery entirely PASS before `launch`.
+  - **WHAT THIS BOOT CLAIMS AND WHAT IT DOES NOT: IT IS NOT THE SUITE.** `main=ArrayElemProbe` is ONE program
+    in ONE batch, so the 40 programs and `gc: collections=46` at the churn demo stay QEMU's for this increment
+    -- which matters more here than usual, because the FIELD path this change guards is what ForkJoinPool,
+    CompletableFuture and AtomicInteger run on, and only the suite exercises it. Hardware proves the FEATURE
+    and the retry loop; the no-regression half is the separate byte-exact suite candidate, already gated.
+
 - **BYTE-ARRAY-VIEW VarHandles RUN -- `DataInputStream.readInt()` HAD BEEN HALTING THE VM, AND THE SURFACE IS
   TWO METHODS RATHER THAN THE NINETY THE FIELD HANDLES NEEDED (2026-10-02, PI-VALIDATED).** The open item
   the VarHandle card left named: `forInstanceField` builds FIELD handles only, so
