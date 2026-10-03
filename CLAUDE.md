@@ -2,7 +2,7 @@
 
 joe-ng is a **metacircular Java VM** whose foundation is a **boot-image writer**
 that turns Java classes into a raw `kernel8.img` running **bare-metal on a
-Raspberry Pi 4 (BCM2711, quad Cortex-A72, AArch64)** with **no OS underneath**.
+Raspberry Pi 4 (BCM2711, quad Cortex-A72, AArch64)** with a metacircular runtime underneath it.
 
 Read `PLAN.md` for the full plan — it is the source of truth. This file is just
 the standing rules and current state so we don't re-litigate them each session.
@@ -20,7 +20,7 @@ the standing rules and current state so we don't re-litigate them each session.
 
 1. **THE GOAL IS A FULLY FUNCTIONAL VM.** Not a minimal one that runs the demos. Where a subsystem is
    currently absent by denial (java/nio/file, java/lang/invoke, sun/security, parts of java.math), the
-   direction of travel is to IMPLEMENT or STUB it, not to prune further.
+   direction of travel is to IMPLEMENT or STUB it, not to prune further. All systems on the deny list will eventually be removed.
 
 2. **ALL `<clinit>`s RUN.** The `clinitCompilable` gate, its per-class allowlist and the
    `CLINIT REJECTED (statics stay null)` outcome are being retired. A skipped initializer is a SILENT WRONG
@@ -67,7 +67,7 @@ the standing rules and current state so we don't re-litigate them each session.
   seed JVM to build the first image, and the image contains compiled copies so
   the VM can parse+compile new classes on the metal (and eventually run the
   writer itself).
-- **No underlying OS.** Bare metal.
+- **No underlying OS.** Bare metal. The OS functions will be implemented as metacircular runtime.
 - **Single privilege level: EL1 (supervisor), no EL0.** Firmware enters at EL2;
   our Java boot code drops to EL1 and everything runs there. Protection is
   language type-safety + verification + GC, not hardware rings. No syscalls, no
