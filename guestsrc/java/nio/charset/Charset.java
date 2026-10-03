@@ -41,10 +41,16 @@ public abstract class Charset
      * {@code StandardCharsets}/ServiceLoader lookup (denylisted on metal). Reached by
      * {@code String.getBytes(String)}/{@code new String(byte[], String)} -> {@code String.lookupCharset}.
      * The returned object is the exact singleton {@code String}'s fast paths compare against by identity, so
-     * encode/decode stays pure-Java. An unrecognized name throws (the cold branch; no test uses it).
+     * encode/decode stays pure-Java. A null name throws {@code IllegalArgumentException} and an unrecognized
+     * one {@code UnsupportedCharsetException}, both as stock -- {@code String.lookupCharset} and
+     * {@code PrintStream.toCharset} CATCH the latter to rethrow {@code UnsupportedEncodingException}.
      */
     public static Charset forName(String csn)
     {
+        if (csn == null)
+        {
+            throw new IllegalArgumentException("Null charset name");
+        }
         if (eq(csn, "UTF-8") || eq(csn, "UTF8") || eq(csn, "unicode-1-1-utf-8"))
         {
             return sun.nio.cs.UTF_8.INSTANCE;
@@ -58,7 +64,7 @@ public abstract class Charset
         {
             return sun.nio.cs.US_ASCII.INSTANCE;
         }
-        throw new IllegalArgumentException(csn);          // UnsupportedCharsetException is denylisted on metal
+        throw new UnsupportedCharsetException(csn);       // what stock throws for a name it does not support
     }
 
     /** Case-insensitive ASCII name match (avoids String.toUpperCase's locale closure). */

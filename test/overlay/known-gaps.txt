@@ -29,8 +29,6 @@ java/util/jar/JarFile#<init>(Ljava/io/File;)V
 #
 # Supertypes an overlay drops. A dropped SUPERCLASS or INTERFACE is as silent as a
 # dropped member and strictly worse: nothing that WRAPS the class can bind to it.
-supertype#java/io/PrintStream#java/io/FilterOutputStream
-supertype#java/io/PrintStream#java/lang/Appendable
 supertype#java/lang/ArithmeticException#java/io/Serializable
 supertype#java/lang/ArrayIndexOutOfBoundsException#java/io/Serializable
 supertype#java/lang/Class#java/io/Serializable
@@ -54,7 +52,6 @@ supertype#java/lang/ReflectiveOperationException#java/io/Serializable
 supertype#java/lang/StackTraceElement#java/io/Serializable
 supertype#java/lang/ThreadGroup#java/lang/Thread$UncaughtExceptionHandler
 supertype#java/lang/Throwable#java/io/Serializable
-supertype#java/lang/invoke/VarHandle#java/lang/constant/Constable
 supertype#java/lang/reflect/AccessibleObject#java/lang/reflect/AnnotatedElement
 supertype#java/lang/reflect/Constructor#java/lang/reflect/AnnotatedElement
 supertype#java/lang/reflect/Constructor#java/lang/reflect/GenericDeclaration

@@ -14,6 +14,7 @@ package sun.nio.cs;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.Writer;
+import java.nio.charset.Charset;
 
 /**
  * A JDK-free {@code sun.nio.cs.StreamEncoder}: the char sink behind {@code OutputStreamWriter} and
@@ -25,10 +26,12 @@ import java.io.Writer;
  * {@code charset == UTF_8.INSTANCE}). Supplying a real CharsetEncoder would mean CharBuffer, ByteBuffer,
  * CoderResult and the whole nio coder protocol.
  *
- * <p>None of that is needed, because <b>joe-ng already encodes UTF-8 correctly</b>: {@code String.getBytes()}
- * is the stock UTF-8 fast path and is what {@code PrintStream} has always used. This routes the same way, so
- * a Writer and a PrintStream produce identical bytes for identical text rather than two encoders that might
- * disagree.
+ * <p>None of that is needed, because <b>{@code String.getBytes(Charset)} already encodes</b> through stock's
+ * pure-Java fast paths for exactly the charsets this VM has (UTF-8, ISO-8859-1, US-ASCII), each selected by
+ * comparing against the singleton by identity. So this encodes with THE CHARSET IT WAS GIVEN -- it used to
+ * encode UTF-8 whatever it was handed, which was invisible while {@code PrintStream} was an overlay that
+ * bypassed it, and is not now that stock {@code PrintStream}'s text goes through an {@code OutputStreamWriter}
+ * built with the stream's own charset.
  *
  * <p>UNBUFFERED, deliberately. Stock buffers into an 8 KiB ByteBuffer and flushes on demand; here every write
  * goes straight to the stream, so {@code flush}/{@code flushBuffer} have nothing to do. That trades throughput
@@ -38,29 +41,34 @@ import java.io.Writer;
 public final class StreamEncoder extends Writer
 {
     private final OutputStream out;
-    private final String encoding;
+    private final Charset cs;
     private volatile boolean closed;
 
-    private StreamEncoder(OutputStream out, String encoding)
+    private StreamEncoder(OutputStream out, Charset cs)
     {
         this.out = out;
-        this.encoding = encoding;
+        this.cs = cs;
     }
 
+    /**
+     * By name, through this VM's {@code Charset.forName}; a null name means the default, which is what stock
+     * {@code OutputStreamWriter(OutputStream)} asks for. An unknown name throws
+     * {@code UnsupportedCharsetException} from {@code forName}, as stock.
+     */
     public static StreamEncoder forOutputStreamWriter(OutputStream out, Object lock, String csn)
     {
-        return new StreamEncoder(out, csn == null ? "UTF-8" : csn);
+        return new StreamEncoder(out, csn == null ? Charset.defaultCharset() : Charset.forName(csn));
     }
 
-    public static StreamEncoder forOutputStreamWriter(OutputStream out, Object lock, java.nio.charset.Charset cs)
+    public static StreamEncoder forOutputStreamWriter(OutputStream out, Object lock, Charset cs)
     {
-        return new StreamEncoder(out, cs == null ? "UTF-8" : cs.name());
+        return new StreamEncoder(out, cs == null ? Charset.defaultCharset() : cs);
     }
 
-    /** The historical name, as stock reports it. */
+    /** The charset's name (stock reports the historical name, e.g. {@code UTF8}; this VM keeps none). */
     public String getEncoding()
     {
-        return closed ? null : encoding;
+        return closed ? null : cs.name();
     }
 
     @Override
@@ -83,7 +91,7 @@ public final class StreamEncoder extends Writer
         {
             return;
         }
-        byte[] b = str.substring(off, off + len).getBytes();   // the stock UTF-8 fast path
+        byte[] b = str.substring(off, off + len).getBytes(cs);   // stock's per-charset fast path
         out.write(b, 0, b.length);
     }
 

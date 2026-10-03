@@ -2483,7 +2483,6 @@ public final class Loader
         // seeded nothing, and a latch set before the work succeeded meant they were never seeded at all.
         // System.out then read null in the third program (the demo suite's PipDemo). launch got this right by
         // accident, re-seeding after every program; doing it deliberately costs a few registry lookups.
-        seedSystemStreams();                                // System.out/err -> UART
         seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start() (needs Runnable loaded)
@@ -2493,6 +2492,7 @@ public final class Loader
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         long argv = buildArgv(argsLine);                    // after loadAll: guestString needs String's TIB
         long buf = globalMethodBuf(className, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         if (buf == 0L)
@@ -2555,6 +2555,8 @@ public final class Loader
         // Metal JavaIOAccess: System.console() does `SharedSecrets.getJavaIOAccess().console()` with NO null
         // check, so an unregistered shim is an NPE from inside java.base rather than a missing feature.
         pullClass(Magic.bytes("jdk/internal/access/MetalJavaIOAccess"));
+        // System.out/err: stock PrintStreams over the UART, built by MetalStdStreams (seedSystemStreams).
+        pullClass(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
         // The atomic scalar wrappers are frequently referenced only by a class literal; force-load them so the
         // literal's Type/mirror + the field registry exist even when nothing instantiates them.
         pullClass(Magic.bytes("java/util/concurrent/atomic/AtomicInteger"));
@@ -2619,7 +2621,6 @@ public final class Loader
         entryPoint(entry, Magic.bytes("main"), Magic.bytes("([Ljava/lang/String;)V"));
         pullSupportClasses();
         loadAll();                                          // reachability-gated JIT of the whole closure
-        seedSystemStreams();                                // System.out/err -> UART
         seedSystemIn();                                     // System.in -> an empty stream (never null)
         seedNetExtendedOptions();                           // Net.EXTENDED_OPTIONS (close() SO_LINGER path)
         buildRunTramp();                                    // enable Thread.start(): the shared Runnable.run()
@@ -2631,6 +2632,7 @@ public final class Loader
         // That is the hazard already recorded for demand-loading inside buildLambdaTib, reached from a
         // different direction.
         seedSystemProps();                                  // System.props -> a real Properties (setProperty)
+        seedSystemStreams();                                // System.out/err -> stock PrintStream over the UART
         // Build the String[] argv AFTER loadAll: guestString needs the loaded String class's TIB, so the argv
         // MUST be built here, not before resetLoader() (that was the "args[i] throws" bug).
         long argv = buildArgv(argsLine);
@@ -3324,6 +3326,7 @@ public final class Loader
 
     private static void resetLoader()
     {
+        loaderGen += 1;                                 // every registry built from here on is a new generation
         if (MIRROR_RESET_WATCH)
         {
             Uart.write(Magic.bytes("\n  LOADER RESET (Class mirrors invalidated)\n"));
@@ -4894,9 +4897,9 @@ public final class Loader
         grew = flagInstByName(Magic.bytes("java/lang/ArithmeticException")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/ClassCastException")) || grew;
         grew = flagInstByName(Magic.bytes("java/lang/NegativeArraySizeException")) || grew;
-        // M2: System.out/err are PrintStream instances allocated by Loader.seedSystemStreams (Heap.alloc, no
-        // bytecode `new`), so RTA can't see the site -> flag it so println/print virtual methods compile + its
-        // vtable fills (else System.out.println dispatches to an unfilled slot -> wrong overload / wild branch).
+        // System.out/err are stock PrintStreams built by MetalStdStreams.newStream, which compiles ON DEMAND in
+        // seedSystemStreams -- after the batch, so RTA never walks its `new`. Flag the class so its virtuals are
+        // marked and its vtable fills in the batch that loads it.
         grew = flagInstByName(Magic.bytes("java/io/PrintStream")) || grew;
         // M4: Class mirrors (Loader.classMirror) and the boot task's lazy Thread (Loader.allocThreadObj) are
         // VM-alloc'd too -> flag them so getName/isInstance/... and getName/run compile + their vtables fill.
@@ -6039,8 +6042,11 @@ public final class Loader
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/CharsetEncoder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coder"))
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/Coding"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/IllegalCharsetName"))
-                || utf8HasPrefix(base, off, Magic.bytes("java/nio/charset/UnsupportedCharset"))
+                // IllegalCharsetNameException / UnsupportedCharsetException are NOT denied: they are plain
+                // IllegalArgumentException subclasses with no dependencies, the Charset overlay throws the
+                // latter as stock does, and stock code CATCHES both (PrintStream.toCharset). While they were
+                // denied, such a catch clause could not name its class -- see the CATCH_BY_NAME note in
+                // emitMethod for what an unresolvable catch class used to do.
                 // java/nio/ByteBuffer is LOADABLE (overlay -> socket temp buffers); CharBuffer stays denied.
                 || utf8HasPrefix(base, off, Magic.bytes("java/nio/CharBuffer"))
                 || utf8HasPrefix(base, off, Magic.bytes("sun/nio/cs/Array"));
@@ -9872,35 +9878,58 @@ public final class Loader
 
 
     /**
-     * Install {@code System.out} / {@code System.err} with a metal {@link java.io.PrintStream} overlay (call
-     * after {@code loadAll} for a batch whose closure includes {@code java/lang/System} + {@code java/io/PrintStream}).
-     * Stock {@code System.initPhase1}/{@code setOut0} that would set these are native-heavy and unrunnable, so we
-     * allocate a bare PrintStream instance (the overlay is field-free — a 16-byte header with just its TIB, no
-     * ctor call needed) and drop it into each static slot. {@code getstatic System.out} then reads a real object
-     * and {@code invokevirtual println} dispatches through the overlay's vtable. No-op if either class is absent.
+     * Install {@code System.out} / {@code System.err} as STOCK {@link java.io.PrintStream}s over the UART,
+     * built by {@code jdk.internal.misc.MetalStdStreams.newStream()} (pulled by {@link #pullSupportClasses}).
+     *
+     * <p>Stock {@code System.initPhase1} that builds them is native-heavy and unrunnable, so the VM calls the
+     * helper once per empty slot and stores what it returns. It used to drop a BARE instance of a
+     * hand-written PrintStream overlay into each slot -- no constructor, no state -- which is why that overlay
+     * had to be field-free and why it silently dropped every stock member it did not declare.
+     *
+     * <p>An ENSURE, not a set: a slot already holding a LIVE stream keeps its identity (a launched program, or
+     * JUnit's {@code System.setOut}, may have replaced it), and nothing happens if the helper is not
+     * registered yet. A stream built before a {@link #resetLoader} is NOT live -- see {@link #stdSlotNeedsSeed}.
+     *
+     * <p>It COMPILES a method, so it runs after {@link #seedSystemProps} for the reason recorded there: a
+     * compile rebuilds the loader's cursor, and a seed after it would stand on the wrong class's state.
      */
     static void seedSystemStreams()
     {
-        int pi = classIndexByName(Magic.bytes("java/io/PrintStream"));
-        if (pi < 0)
-        {
-            return;                                     // not registered yet -- a later launch seeds it
-        }
-        long ptib = clTab[pi].tib;
-        int psize = 16 + clTab[pi].fieldCount * 8;          // field-free overlay -> 16, but honor any fields it declares
         long outSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("out"));
-        if (outSlot != 0L && Magic.load64(outSlot) == 0L)   // ENSURE: an already-seeded stream keeps its identity
-        {
-            long ps = Heap.alloc(psize);
-            Magic.store64(ps + 0L, ptib);               // TIB (vtable for println dispatch)
-            Magic.store64(outSlot, ps);
-        }
         long errSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("err"));
-        if (errSlot != 0L && Magic.load64(errSlot) == 0L)
+        boolean needOut = stdSlotNeedsSeed(outSlot, STD_OUT);
+        boolean needErr = stdSlotNeedsSeed(errSlot, STD_ERR);
+        if (!needOut && !needErr)
         {
-            long ps = Heap.alloc(psize);
-            Magic.store64(ps + 0L, ptib);
-            Magic.store64(errSlot, ps);
+            return;
+        }
+        if (classIndexByName(Magic.bytes("jdk/internal/misc/MetalStdStreams")) < 0)
+        {
+            return;                                     // not registered yet -- a later batch seeds it
+        }
+        long cls = utf8Blob(Magic.bytes("jdk/internal/misc/MetalStdStreams"));
+        long name = utf8Blob(Magic.bytes("newStream"));
+        long desc = utf8Blob(Magic.bytes("()Ljava/io/PrintStream;"));
+        long buf = bufBySigU(cls, name, desc);
+        if (buf == 0L)
+        {
+            buf = compileSigOnDemand(cls, name, desc);  // bodies compile on first call; this IS the first
+        }
+        if (buf == 0L)
+        {
+            // Say so: a null System.out does not fail here, it fails as an NPE at the program's first println.
+            Uart.write(Magic.bytes("\n  SYSTEM STREAMS NOT SEEDED: MetalStdStreams.newStream would not compile\n"));
+            return;
+        }
+        if (needOut)
+        {
+            Magic.store64(outSlot, Magic.call0(buf));
+            setStdGen(STD_OUT);
+        }
+        if (needErr)
+        {
+            Magic.store64(errSlot, Magic.call0(buf));
+            setStdGen(STD_ERR);
         }
     }
 
@@ -9922,6 +9951,19 @@ public final class Loader
         if (slot != 0L)
         {
             Magic.store64(slot, ref);
+            // A stream the PROGRAM installed is current: the seed must not replace it this generation.
+            if (name[0] == 'o')
+            {
+                setStdGen(STD_OUT);
+            }
+            else if (name[0] == 'e')
+            {
+                setStdGen(STD_ERR);
+            }
+            else
+            {
+                setStdGen(STD_IN);
+            }
         }
     }
 
@@ -9953,12 +9995,74 @@ public final class Loader
      * their registered offsets, so no {@code <init>} has to run. Reading answers -1 without ever touching the
      * buffer, since {@code count} is 0.
      */
+    /** Bumped by every {@link #resetLoader}: objects built before it belong to a registry that is gone. */
+    private static int loaderGen;
+
+    /** The {@link #loaderGen} each standard stream was installed in (seeded, or set by the program); -1 none. */
+    private static int outGen = -1;
+    private static int errGen = -1;
+    private static int inGen = -1;
+
+    private static final int STD_OUT = 0;
+    private static final int STD_ERR = 1;
+    private static final int STD_IN = 2;
+
+    private static int stdGen(int which)
+    {
+        if (which == STD_OUT)
+        {
+            return outGen;
+        }
+        return which == STD_ERR ? errGen : inGen;
+    }
+
+    private static void setStdGen(int which)
+    {
+        if (which == STD_OUT)
+        {
+            outGen = loaderGen;
+        }
+        else if (which == STD_ERR)
+        {
+            errGen = loaderGen;
+        }
+        else
+        {
+            inGen = loaderGen;
+        }
+    }
+
+    /**
+     * True if a {@code System.out}/{@code err}/{@code in} slot must be (re)seeded: it is empty, or what it
+     * holds was installed under an EARLIER loader generation.
+     *
+     * <p>The second case is a stream built before a {@link #resetLoader}. The static cell survives the reset
+     * (it is the baked {@code System} block), so the object does too -- built from classes of a registry
+     * that no longer exists. Ordinary vtable calls through it still work, which is why it went unnoticed for
+     * programs at a time; the first call site needing LATE resolution asks the new registry about an old Type
+     * and stops at {@code DISPATCH ON UNREGISTERED TYPE}. Measured: the demo suite died there at
+     * {@code DefaultIfaceDemo}'s first {@code println}, eleven programs after the reset that orphaned it.
+     *
+     * <p>It is a GENERATION and not a "is its class registered?" test, and that was learned the hard way: the
+     * first cut asked about the stream object's own Type, and {@code PrintStream} is a BAKED class whose Type
+     * every new registry adopts again -- so the stale stream passed, while the {@code StreamEncoder} inside it,
+     * a demand-loaded class, was the orphan. Asking about one object of a graph cannot answer for the graph.
+     */
+    private static boolean stdSlotNeedsSeed(long slot, int which)
+    {
+        if (slot == 0L)
+        {
+            return false;                               // no cell: nothing can be seeded
+        }
+        return Magic.load64(slot) == 0L || stdGen(which) != loaderGen;
+    }
+
     static void seedSystemIn()
     {
         long inSlot = staticSlotOf(Magic.bytes("java/lang/System"), Magic.bytes("in"));
-        if (inSlot == 0L || Magic.load64(inSlot) != 0L)
+        if (!stdSlotNeedsSeed(inSlot, STD_IN))
         {
-            return;                                     // unknown slot, or already seeded
+            return;                                     // unknown slot, or a live stream already there
         }
         int bi = classIndexByName(Magic.bytes("java/io/ByteArrayInputStream"));
         if (bi < 0)
@@ -9978,6 +10082,7 @@ public final class Loader
         Magic.store64(obj + posOff, 0L);
         Magic.store64(obj + cntOff, 0L);
         Magic.store64(inSlot, obj);
+        setStdGen(STD_IN);
     }
 
     /**
@@ -10464,7 +10569,20 @@ public final class Loader
             long ms = mBuf[i] + (long) gHStartW[h] * 4L;
             long me = mBuf[i] + (long) gHEndW[h] * 4L;
             long hh = mBuf[i] + (long) gHandlerW[h] * 4L;
-            long ct = gHCatchCp[h] == 0 ? 0L : typeOfClass(gHCatchCp[h]);   // catch-type Type (0 = catch-all)
+            long ct = 0L;                                   // 0 = catch-all (a finally, or catch_type 0)
+            if (gHCatchCp[h] != 0)
+            {
+                ct = typeOfClass(gHCatchCp[h]);
+                if (ct == 0L)
+                {
+                    // The catch class is not registered. This used to store the 0 typeOfClass answers --
+                    // and 0 MEANS CATCH-ALL, so `catch (SomeDeniedException e)` caught EVERY exception.
+                    // Not registered NOW is not not-registered-ever either (a class pulled later can be
+                    // thrown later), so record the NAME and let the unwinder resolve it when an exception
+                    // actually reaches this handler -- which is when JVMS 5.4.3.1 resolves a catch class.
+                    ct = VM.CATCH_BY_NAME | (gbase + gcp[u2(gbase + gcp[gHCatchCp[h]])]);
+                }
+            }
             VM.addJitHandler(ms, me, hh, ct);
             h += 1;
         }
@@ -11394,11 +11512,22 @@ public final class Loader
         // MEASURED at 259k chain steps on a launcher boot, the largest term left in `lookT` once that was
         // fixed. Any two cells matching this predicate share a class AND a name, so they stay in the same
         // bucket under either key and head-insertion order is unchanged -- the same cell still wins.
+        //
+        // AND OF THIS LOADER GENERATION. The table outlives a reset that does not rewind (the first one after
+        // reclaim is armed only takes the watermark), so it can still hold cells for bodies compiled against
+        // the registry that reset discarded -- with that registry's TIBs baked into them as immediates. Found
+        // BY NAME, such a cell links a new caller into the old world, and the class is then never loaded
+        // into the new one: stock OutputStreamWriter.<init> reached the previous generation's
+        // StreamEncoder.forOutputStreamWriter, whose StreamEncoders belonged to a class the current registry
+        // had never registered (DISPATCH ON UNREGISTERED TYPE at the next late-resolved call). A stale cell is
+        // skipped, so the caller resolves as for an unloaded class and pulls it; anything ALREADY holding the
+        // cell's address keeps working, because the cell itself is untouched.
         int k = dlBucket[utf8Hash2(clsBase, clsOff, nameBase, nameOff) & (DLTAB - 1)];
         while (k >= 0)
         {
             dlSteps += 1;
-            if (utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
+            if (dlTab[k].gen == loaderGen
+                    && utf8EqAt(clsBase, clsOff, dlTab[k].blob, dlTab[k].classOff)
                     && utf8EqAt(nameBase, nameOff, dlTab[k].blob, dlTab[k].nameOff)
                     && utf8EqAt(descBase, descOff, dlTab[k].blob, dlTab[k].descOff))
             {
@@ -16568,6 +16697,20 @@ public final class Loader
     }
 
     /** Registry index of the loaded class named by the absolute utf8 run {@code clsU}, or -1. */
+    /**
+     * The Type of the class whose Utf8 name is at {@code clsU}, or 0 if it is not registered -- for a JIT
+     * handler whose catch class was unresolved when the method compiled ({@code VM.CATCH_BY_NAME}).
+     *
+     * <p>0 means NO MATCH there, and that is exact rather than conservative: an exception object exists, so its
+     * class and every superclass are registered. A catch class that is not registered can therefore not be one
+     * of them -- whether it is denied, absent, or simply never loaded.
+     */
+    static long catchTypeByName(long clsU)
+    {
+        int r = regBySigU(clsU);
+        return r < 0 ? 0L : clTab[r].type;
+    }
+
     private static int regBySigU(long clsU)
     {
         return classRegAt(clsU, 0);                      // an absolute {u2 len}{bytes} run: offset 0 of clsU
@@ -16993,6 +17136,7 @@ public final class Loader
                     while (true) { Magic.wfe(); }
                 }
                 d.blob = gbase;
+                d.gen = loaderGen;
                 d.classOff = gThisNameOff;
                 d.nameOff = nameOff;
                 d.descOff = descOff;
