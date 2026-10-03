@@ -92,6 +92,12 @@ public final class ReachScan
 
     static boolean isDenied(String c)
     {
+        // The core of sun/util/locale is narrowed out of the sun/util/ deny (stock Locale runs on it); its
+        // provider/ subtree stays denied. See Loader.isDenylisted.
+        if (c.startsWith("sun/util/locale/") && !c.startsWith("sun/util/locale/provider/"))
+        {
+            return false;
+        }
         // Narrow ALLOW for the VarHandle-as-atomic-field-accessor shim (overlays): java.net.Socket uses a
         // VarHandle for its state/in/out fields. These specific java/lang/invoke classes are allowed; the rest
         // of java/lang/invoke stays denied.
@@ -101,7 +107,8 @@ public final class ReachScan
         // class its numeric conversions reach is DecimalFormatSymbols, for four ASCII symbols. That one IS
         // overlaid, because its whole job is reading locale data through LocaleProviderAdapter ->
         // ResourceBundle. (Keep in sync with Loader.isDenylisted.)
-        if (c.startsWith("java/text/DecimalFormatSymbols"))
+        if (c.startsWith("java/text/DecimalFormatSymbols") || c.startsWith("java/text/ParsePosition")
+                || c.startsWith("sun/text/Normalizer"))
         {
             return false;
         }

@@ -4,6 +4,63 @@ The per-increment record: what each change fixed, how it was measured, and what 
 Moved out of `CLAUDE.md` (2026-10-03), which keeps the standing rules, constraints and working agreements.
 Newest entries are at the top.
 
+- **THE `java/util/Locale` OVERLAY IS DELETED AND STOCK RUNS -- AND IT FOUND FOUR PRE-EXISTING VM BUGS, ONE OF
+  THEM JLS-LEVEL: `String.intern()` WAS IDENTITY AND THERE WAS NO VM-WIDE STRING POOL (2026-10-03, QEMU-GATED --
+  NOT YET PI-VALIDATED).** Stock `Locale` has ZERO natives; it runs on the core of `sun/util/locale`, which is
+  narrowed out of the `sun/util/` denial (its `provider/` subtree stays denied).
+
+  | gate | result |
+  |---|---|
+  | **`LocaleProbe`, 37 lines against the HOST ORACLE** | **BYTE-IDENTICAL** |
+  | `Locale.of("en") == ENGLISH`, `iw` -> `he`, Builder + its `IllformedLocaleException`, `th-TH-u-nu-thai` | exact |
+  | Turkish `"TITLE".toLowerCase(tr)` / `"title".toUpperCase(tr)` | **was the ROOT mapping -> now dotless/dotted i** |
+  | `StringJoiner` `[a, b]` | **was NULL -> exact** |
+  | **demo suite, COMPLETE run** | **40 programs**, 24 markers zero, `churnMB=625 live=32 intact=32`, `lisp evals=600 result=610 stable=1` |
+  | **`gc: collections` at the churn demo** | **47 (control 46) -- MOVED, attributed below** |
+  | host | A64 105, object-model 22, class-reader 171, refmap 14, **compiler 40**, crypto 98, zip 91, `overlay-check 0 new` |
+
+  - **(1) `String.intern()` RETURNED ITS ARGUMENT, AND LITERALS WERE INTERNED PER CLASS ONLY** (the code said "cross-blob
+    interning is not modelled"). So `new String("tr").intern() == "tr"` was false -- and stock `StringLatin1`'s
+    `lang == "tr"` against `Locale`'s interned language never matched: Turkish case mapping took the ROOT path,
+    silently. The wiring's own comment held the expired premise ("no reached java.base code compares by ==").
+    `Loader.poolIntern` is ONE content-keyed table used by literal interning AND the `intern` native, under the
+    loader lock, cleared in `resetLoader` beside `litAnchor` and the parse cache. **Stated limits:** writer-BAKED
+    literals are not in the pool (the case-mapping bodies are guest-compiled -- checked in the symmap), and an
+    `intern()`ed string lives for the launch where stock's table is weak.
+  - **(2) `MetalJavaLangAccess.join`/`concat` RETURNED NULL**, so EVERY `StringJoiner.toString()` with elements
+    answered null VM-wide -- found as `Locale.toLanguageTag()` printing `th-TH-u-null`. `inflateBytesToChars` was a
+    silent no-op too. All three implemented. **38 more `return null;` stubs remain in that class**, which rule 3
+    says should throw -- a named follow-up.
+  - **(3) `Reference.get0`/`refersTo0`/`clear0` WERE UNWIRED**, so `SoftReference.get()` (reached by `BaseLocale`'s
+    `ReferencedKeySet`) trapped. This collector never clears a Reference, so plain access to `referent` (slot 0,
+    +16) is the exact semantics. All three are null-guarded because `VM.forceCompile` calls each native with 0
+    at boot -- `refClear0(0)` would otherwise STORE to address 16.
+  - **(4) `drainPendingInit` LET A NESTED COMPILE'S DRAIN STEAL THE OUTER DRAIN'S ENTRIES.** `StaticProperty.<clinit>`
+    lazily compiled a callee whose drain initialized `BaseLocale` -- which reads `StaticProperty` while it was
+    half-built: an NPE in `BaseLocale.<clinit>`. The drain now snapshots and clears its list first, as
+    `drainPendingPulls` already did; order within a drain is unchanged.
+  - **WRITER: `Locale`, `sun/util/locale/*` and `StaticProperty` are NOT snapshotted (`noSnapshot`).** Their seed-JVM
+    state describes the BUILD HOST -- its default locale and properties -- and `LOCALE_CACHE` is a live host
+    `ConcurrentHashMap`. Their initializers run on metal behind the JVMS 5.5 active-use guard. `StaticProperty` is
+    also on `bakeNoClinit`: scheduled into `VM.initClasses` it NPEs at boot (no System properties exist yet).
+  - **ALSO NARROWED: `java/text/ParsePosition`** (two ints; `forLanguageTag` halted on `UNRESOLVED NEW` without it)
+    **and `sun/text/Normalizer`, OVERLAID from the JDK 26 source** with one change: `getCombiningClass` is EXACT
+    below U+0300 (no nonzero canonical combining class exists there) and THROWS above it, since the ICU data stock
+    reads is not on this VM. Stock Turkish case mapping reaches it through `ConditionalSpecialCasing`. The known
+    `TRAP-WIRED ... sun/text/Normalizer.getCombiningClass` suite line is gone as a result.
+  - **THE COST IS MEASURED AND ACCEPTED: +273 CLASSES IN EVERY BATCH.** Same-chain control on main (stash in this
+    tree, so `ramfs/` matches): batch 2 `+362blob` -> **`+635blob`**, and summed per-batch `tot` across the QEMU
+    suite **23.6 s -> 45.8 s**. Diffing the two arms' batch-2 `load` lists (`LOAD_TRACE` armed for the
+    measurement only): **61 `java/util/regex`** (pulled by real locale code -- `InternalLocaleBuilder` calls
+    `String.replaceAll`, `LanguageTag` calls `String.split`), **75 `java/util/stream`** (`Locale`'s filter API,
+    `ReferencedKeyMap`, `CaseFolding`), ~96 `java/util` views/spliterators/`EnumMap`, 12 `sun/util/locale`. No new
+    denial was added to cut it (rule 1). **The churn gate 46 -> 47 is this closure's allocation**, not a defect: the
+    control reads 46 on the same harness, and the finale reads 56 against 55. **New gate figure for the churn demo:
+    47.** The per-batch base-closure re-pull is the lever if load time matters.
+  - **NOT PI-VALIDATED, gate named in advance:** the closure growth on cold DRAM (+273 blobs in every batch is the
+    biggest closure change since `Formatter`), the string pool under four cores (it is touched from `intern()` on
+    any task, under the loader lock), and the churn figure reading 47 on silicon too.
+
 - **THE `java/io/PrintStream` OVERLAY IS DELETED AND STOCK RUNS -- AND GETTING THERE FOUND TWO PRE-EXISTING
   VM BUGS: A CATCH CLAUSE NAMING A DENIED CLASS CAUGHT EVERYTHING, AND PHASE-A CELLS LEAKED ACROSS A LOADER
   RESET (2026-10-02, QEMU-GATED -- NOT YET PI-VALIDATED).** Stock `PrintStream` has ZERO natives, so it had no

@@ -135,6 +135,59 @@ final class VMNatives
         Magic.dsb();
     }
 
+    /**
+     * {@code java.lang.ref.Reference}'s natives. Stock {@code get0}/{@code refersTo0}/{@code clear0}
+     * ({@code Reference.c} -> {@code JVM_ReferenceGet}/{@code RefersTo}/{@code Clear}) read, compare and null
+     * the {@code referent} field behind the collector's barriers. This collector NEVER clears a Reference --
+     * a referent is traced like any other field, so a weak/soft reference here is strong -- which makes the
+     * plain field access the exact semantics rather than an approximation. {@code referent} is
+     * {@code Reference}'s FIRST declared field over {@code Object}, so it is slot 0, at
+     * {@link #REFERENT_OFFSET}. {@code PhantomReference}'s own {@code refersTo0}/{@code clear0} are the same
+     * operations on the same field.
+     */
+    static final long REFERENT_OFFSET = 16L;
+
+    /** {@code String.intern()}: see {@code Loader.poolIntern}. The pool is shared with literal interning,
+     *  which runs inside compiles, so it is touched only under the loader lock. */
+    static long stringIntern(long str)
+    {
+        if (str == 0L)                                  // VM.forceCompile calls every native with 0 at boot
+        {
+            return 0L;
+        }
+        VM.loaderLock();
+        long r = Loader.poolIntern(str);
+        VM.loaderUnlock();
+        return r;
+    }
+
+    static long refGet0(long ref)
+    {
+        if (ref == 0L)
+        {
+            return 0L;
+        }
+        return Magic.load64(ref + REFERENT_OFFSET);
+    }
+
+    static long refRefersTo0(long ref, long o)
+    {
+        if (ref == 0L)
+        {
+            return 0L;
+        }
+        return Magic.load64(ref + REFERENT_OFFSET) == o ? 1L : 0L;
+    }
+
+    static void refClear0(long ref)
+    {
+        if (ref == 0L)                                  // VM.forceCompile calls it with 0: never store there
+        {
+            return;
+        }
+        Magic.store64(ref + REFERENT_OFFSET, 0L);
+    }
+
     /** {@code System.setOut0(PrintStream)} native: redirect the stream JUnit captures test output through. */
     static void setOut0(long ps)
     {

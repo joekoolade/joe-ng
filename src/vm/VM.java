@@ -1860,6 +1860,10 @@ public final class VM
         if (unsafeFieldOffsetAddr == 0L) { long u = VMNatives.unsafeFieldOffset(0L, 0L); }
         if (noopNativeAddr == 0L) { VMNatives.noopNative(0L); }
         if (unsafeFenceAddr == 0L) { VMNatives.unsafeFence(0L); }
+        if (refGet0Addr == 0L) { long u = VMNatives.refGet0(0L); }
+        if (stringInternAddr == 0L) { long u = VMNatives.stringIntern(0L); }
+        if (refRefersTo0Addr == 0L) { long u = VMNatives.refRefersTo0(0L, 0L); }
+        if (refClear0Addr == 0L) { VMNatives.refClear0(0L); }
         if (arrayKindAddr == 0L) { long u = VMNatives.arrayKindOf(0L); }
         if (setOut0Addr == 0L) { VMNatives.setOut0(0L); }                       // System.setOut0
         if (setErr0Addr == 0L) { VMNatives.setErr0(0L); }                       // System.setErr0
@@ -3318,6 +3322,10 @@ public final class VM
     static long unsafeFieldOffsetAddr; // VMNatives.unsafeFieldOffset(JJ)J — Unsafe.objectFieldOffset(Class,String)
     static long noopNativeAddr;        // VMNatives.noopNative(J)V — a native whose C body does nothing observable here
     static long unsafeFenceAddr;       // VMNatives.unsafeFence(J)V — Unsafe store/load/fullFence
+    static long stringInternAddr;      // VMNatives.stringIntern(J)J — String.intern (the VM-wide pool)
+    static long refGet0Addr;           // VMNatives.refGet0(J)J — Reference.get0
+    static long refRefersTo0Addr;      // VMNatives.refRefersTo0(JJ)J — Reference/PhantomReference.refersTo0
+    static long refClear0Addr;         // VMNatives.refClear0(J)V — Reference/PhantomReference.clear0
     static long arrayKindAddr;          // VMNatives.arrayKindOf(J)J — Unsafe: FIELD slot vs ARRAY element, and primitive vs reference
     static long setOut0Addr;           // VMNatives.setOut0(J)V — System.setOut0(PrintStream)
     static long setErr0Addr;           // VMNatives.setErr0(J)V — System.setErr0(PrintStream)
